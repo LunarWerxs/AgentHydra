@@ -1071,8 +1071,10 @@ The Worker needs redeploying once for the queue routes. Test: `server/tests/clim
 
 ### Two PCs: the desktop chats switch (owner, 2026-10-02)
 
-Beside the queue switch, the Login sync dialog has a second one, off by default and set per PC
-(`POST /api/cli-instances/sync/chats {enabled}`; `shareChats` in `login-sync.json`). On, each pass
+Beside the queue switch, the Login sync dialog has a second one, set per PC and on from setup since
+2026-10-05 (owner: "sync desktop chat should be default on"; `POST /api/cli-instances/sync/chats
+{enabled}`; `chatsOff: true` in `login-sync.json` when turned off, and the `shareChats: false` setup
+wrote there before is not read). On, each pass
 hands the visible Claude Desktop chats to `core/desktop-chat-sync.ts`: compressed, encrypted under the
 sync key, with the PC each came from. The chat pass starts after the logins' part is written and is not
 waited for; a second one never starts while one runs. Its state file `desktop-chat-sync.json` sits

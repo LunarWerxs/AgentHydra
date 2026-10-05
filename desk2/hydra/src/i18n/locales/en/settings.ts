@@ -117,7 +117,7 @@ export default {
   // auto-update section
   autoUpdate: 'Auto-update',
   autoUpdateDescription:
-    'Off by default. When on, AgentHydra periodically checks for a newer version and, if there are no uncommitted local changes, pulls it, reinstalls, rebuilds, and restarts the daemon on its own - no prompt. A dirty working tree is never touched; updates only apply on a clean checkout.',
+    'On by default. AgentHydra periodically checks for a newer version and installs it, then restarts the daemon on its own - no prompt. It waits while work a restart would stop is running. A checkout with uncommitted local changes is never touched; updates only apply on a clean one.',
   autoUpdateToastEnabled: 'Auto-update enabled.',
   autoUpdateToastDisabled: 'Auto-update disabled.',
   autoUpdateToastFailed: 'Failed to save auto-update settings.',

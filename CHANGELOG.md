@@ -7,6 +7,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **AgentHydra installs its own updates by default** (2026-10-05, owner: "we should have it default that AgentHydra auto-updates if there's a new version"). Auto-update was opt-in, so a PC ran an old build until someone opened Settings and clicked Update. The `auto_update_enabled` setting is now seeded on: an install that never chose gets it on its first start of this build, and one turned off in Settings stays off. Nothing else about applying changes: it still waits while work a restart would stop is running, never touches a checkout with local changes, and a packaged build still checks the release's SHA-256 before swapping.
+- **Desktop chat sync is on by default on every PC in a login sync** (2026-10-05, owner: "sync desktop chat should be default on"). Setup used to write `shareChats: false` into `login-sync.json` on every PC, so the switch read as a choice nobody made. The file now records only a PC turned off (`chatsOff: true`), and the old field is not read, so every PC already in a sync starts sharing its visible desktop chats on its first pass after updating. Login sync tests now run against a PC with no desktop chats (`server/tests/no-chats.ts`), since the chat half runs from setup and the real one reads this PC's own Claude Desktop profiles.
+
 ## [1.9.2] - 2026-10-04
 
 ### Changed

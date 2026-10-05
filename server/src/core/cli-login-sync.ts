@@ -50,7 +50,8 @@
 // the store's own `queues` table). It fails apart from the logins: its error is `queueError`, and a
 // queue that cannot sync never stops a login pass.
 //
-// THE DESKTOP CHATS ride the pass too when their toggle is on (`shareChats`, off by default, per PC):
+// THE DESKTOP CHATS ride the pass too unless this PC turned them off (`chatsOff`; on by default since
+// 2026-10-05, owner: "sync desktop chat should be default on"):
 // the visible Claude Desktop chats go up and come down compressed and encrypted, each remembering the
 // PC it came from (core/desktop-chat-sync.ts, the store's `chats` and `chat_chunks`). A chat pass can
 // read tens of MB, so it runs after the logins' part of the pass, not inside it, and at most one at a
@@ -140,8 +141,10 @@ interface SyncConfig {
   pcId?: string
   /** Share this PC's CliMayte queue and read the other PCs'. Absent: off. */
   shareQueue?: boolean
-  /** Share this PC's visible desktop chats and read the other PCs'. Absent: off. */
-  shareChats?: boolean
+  /** This PC's owner turned off sharing its visible desktop chats (and reading the other PCs').
+   *  Absent: on. A config written before 2026-10-05 carries `shareChats` instead, which nothing reads:
+   *  setup wrote false there on every PC, so it records no choice. */
+  chatsOff?: boolean
   excluded: string[]
   state: Record<string, SyncState>
   lastSyncAt: number | null
@@ -303,7 +306,7 @@ function freshConfig(url: string, token: string, key: Buffer): SyncConfig {
     // Setting up again keeps this PC's id and its queue choice.
     pcId: readConfig()?.pcId ?? randomUUID(),
     shareQueue: readConfig()?.shareQueue ?? false,
-    shareChats: readConfig()?.shareChats ?? false,
+    chatsOff: readConfig()?.chatsOff,
     excluded: [],
     state: {},
     lastSyncAt: null,
@@ -401,7 +404,8 @@ export function setQueueSharing(on: boolean): { ok: boolean; message: string } {
 export function setChatSharing(on: boolean): { ok: boolean; message: string } {
   const c = readConfig()
   if (!c) return { ok: false, message: 'Login sync is not set up on this PC.' }
-  c.shareChats = on
+  if (on) delete c.chatsOff
+  else c.chatsOff = true
   c.pcId ??= randomUUID()
   writeConfig(c)
   if (on) void runLoginSync()
@@ -417,7 +421,7 @@ export function setChatSharing(on: boolean): { ok: boolean; message: string } {
 /** Login sync is set up, on, and this PC shares its desktop chats (so reads the others'). */
 export function chatSharingOn(): boolean {
   const c = readConfig()
-  return !!c?.enabled && c.shareChats === true
+  return !!c?.enabled && !c.chatsOff
 }
 
 /** Login sync is set up, on, and this PC shares its CliMayte queue (so reads the others'). */
@@ -1111,7 +1115,7 @@ async function readStoreLogins(l: Live, c: SyncConfig): Promise<Map<string, Stor
     tables: [
       'logins',
       ...(c.shareQueue ? ['queues' as const] : []),
-      ...(c.shareChats ? ['chats' as const] : []),
+      ...(c.chatsOff ? [] : ['chats' as const]),
     ],
   })
   const list = m.view('logins')
@@ -1210,7 +1214,7 @@ export function chatsIdle(): Promise<void> {
  *  overlap, and do not wait for it: the logins' pass is already written and the next one is not held
  *  behind a long read. Its failures are its own: chatsError and one note per message. */
 function chatsPass(l: Live, c: SyncConfig, by: string): void {
-  if (!c.shareChats) {
+  if (c.chatsOff) {
     chatsError = null
     return
   }
@@ -1233,7 +1237,7 @@ function chatsPass(l: Live, c: SyncConfig, by: string): void {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       const now = readConfig()
-      if (!now?.shareChats) return
+      if (!now || now.chatsOff) return
       if (msg !== chatsError) {
         note(now, null, 'error', `Desktop chats: ${msg}`)
         writeConfig(now)
@@ -1272,7 +1276,7 @@ async function pass(): Promise<LoginSyncPassResult> {
   if (now) {
     c.enabled = now.enabled
     c.shareQueue = now.shareQueue
-    c.shareChats = now.shareChats
+    c.chatsOff = now.chatsOff
     c.excluded = now.excluded
   }
   writeConfig(c)
@@ -1441,9 +1445,9 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     lastError: c.lastError,
     shareQueue: c.shareQueue === true,
     queueError,
-    shareChats: c.shareChats === true,
+    shareChats: !c.chatsOff,
     chatsError,
-    chats: c.shareChats === true ? chatSyncRows(CHATS_STATE_PATH) : [],
+    chats: c.chatsOff ? [] : chatSyncRows(CHATS_STATE_PATH),
     logins,
     events: c.events,
   }

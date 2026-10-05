@@ -49,6 +49,7 @@ import { StoreMirror } from '../src/core/login-sync-mirror'
 import { app } from '../src/http-app'
 import '../src/routes/climayte'
 import { base, store, token } from './login-sync-store'
+import './no-chats'
 
 // http-app.ts is ONE object for the whole test process; request through a copy (see
 // queue-patch-guard.test.ts) so it stays open for later files.

@@ -49,6 +49,7 @@ import {
 } from '../src/core/desktop-login-sync'
 import { instancesRoot } from '../src/core/paths'
 import { base, store, token } from './login-sync-store'
+import './no-chats'
 
 const HOST = '.claude.ai'
 const grants = (expiresAt: number) =>

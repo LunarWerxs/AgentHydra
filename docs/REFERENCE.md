@@ -496,7 +496,8 @@ needed to recover already existed and nothing ever called it.
 
 ## Auto-update
 
-Opt-in background self-update (off by default; it restarts the daemon):
+Background self-update, on by default since 2026-10-05 (it restarts the daemon; turn it off in
+Settings or with `{ "enabled": false }`):
 
 ```
 POST /api/update/settings   { "enabled": true, "intervalSecs": 21600 }

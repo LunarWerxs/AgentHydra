@@ -708,6 +708,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // indication why. It writes one key of ~/.claude.json, removes that key when turned off, and
   // never touches another server's entry.
   mcp_register_claude_code: '1',
+  // Unattended auto-update (server/src/auto-update.ts): ON by default since 2026-10-05 (owner: "we
+  // should have it default that AgentHydra auto-updates if there's a new version"; opt-in before).
+  // It still waits while work a restart would lose is in flight and never touches a dirty checkout.
+  // Seeded like the rest, so an install that never chose gets it on its first start of this build;
+  // one turned off in Settings keeps its '0'.
+  auto_update_enabled: '1',
 }
 
 export function getSetting(key: string): string {

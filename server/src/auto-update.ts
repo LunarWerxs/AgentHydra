@@ -10,8 +10,10 @@
  * injected from server/src/index.ts, which owns the shutdown handle. The tray then finds the
  * successor via ~/.agenthydra/runtime.json + /api/health exactly as it does after a manual restart.
  *
- * APPLYING is OFF unless the `auto_update_enabled` setting is explicitly '1' — it restarts the
- * daemon unattended, so it's never on by default. CHECKING is not gated on it and never was meant
+ * APPLYING follows the `auto_update_enabled` setting, ON by default since 2026-10-05 (owner: "we should
+ * have it default that AgentHydra auto-updates if there's a new version"; db.ts seeds it '1', and an
+ * install turned off in Settings keeps its '0'). It restarts the daemon unattended, which is why it
+ * still waits while work a restart would lose is in flight. CHECKING is not gated on it and never was meant
  * to be: the loop runs either way and records the answer (lastUpdateCheck), because "is there a
  * newer version" is worth knowing whether or not you want it installed for you. Before that split,
  * a default install ran no timer at all and the only code that ever asked was the Settings screen's
@@ -83,7 +85,7 @@ export function loadAutoUpdateSettings(): void {
 }
 
 // ── runtime state ────────────────────────────────────────────────────────────────────────────
-let enabled = false // OFF by default — it restarts the daemon → opt-in
+let enabled = true // ON by default (owner, 2026-10-05); loadAutoUpdateSettings reads the saved choice
 let intervalSecs = AUTO_UPDATE_INTERVAL_DEFAULT_S
 let started = false // true only after the daemon finishes booting (startAutoUpdate)
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -95,13 +97,13 @@ let applying = false // an apply is in flight — never overlap checks/applies
  * network round trip — and, more to the point, without the user having to go looking.
  *
  * This is the fix for a real report: someone ran an old version for weeks and was never told. The
- * cause was that `enabled` gated the whole loop, so with auto-APPLY off (the default, because
+ * cause was that `enabled` gated the whole loop, so with auto-APPLY off (the default then, because
  * applying restarts the daemon) NOTHING ran — not even the check — and the only code that ever
  * asked was SettingsView's onMounted. Open Settings and you'd find out; otherwise never.
  *
  * Checking and applying are now separate decisions. The check is cheap and side-effect-free (one
- * GitHub API call, or a `git ls-remote`), so it always runs; applying stays opt-in exactly as
- * before. Nothing about the restart-on-apply behaviour changes.
+ * GitHub API call, or a `git ls-remote`), so it always runs; applying is its own setting (on by
+ * default since 2026-10-05). Nothing about the restart-on-apply behaviour changes.
  */
 let lastCheck: { status: UpdateStatus; at: number } | null = null
 

@@ -4,6 +4,9 @@
 // tests/auto-update.test.ts, adapted for agenthydra's settings-table persistence.
 
 import { afterEach, expect, test } from 'bun:test'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   AUTO_UPDATE_INTERVAL_DEFAULT_S,
   AUTO_UPDATE_INTERVAL_MAX_S,
@@ -189,7 +192,20 @@ test('clampAutoUpdateInterval bounds the cadence', () => {
   expect(clampAutoUpdateInterval(3600)).toBe(3600)
 })
 
-test('disabled by default, and setAutoUpdateEnabled/Interval persist + clamp live', () => {
+test('a database that never chose applies updates by itself (owner, 2026-10-05)', () => {
+  // A fresh database in its own process: this one's setting is rewritten after every case here.
+  const db = join(mkdtempSync(join(tmpdir(), 'ah-autoupdate-')), 'fresh.db')
+  const script =
+    "const a = await import('./server/src/auto-update.ts'); a.loadAutoUpdateSettings(); console.log(a.autoUpdateEnabled())"
+  const r = Bun.spawnSync([process.execPath, '-e', script], {
+    cwd: join(import.meta.dir, '..'),
+    env: { ...process.env, AGENTHYDRA_DB: db },
+  })
+  expect(r.stdout.toString().trim()).toBe('true')
+})
+
+test('setAutoUpdateEnabled/Interval persist + clamp live', () => {
+  setAutoUpdateEnabled(false)
   expect(autoUpdateEnabled()).toBe(false)
   setAutoUpdateEnabled(true)
   expect(autoUpdateEnabled()).toBe(true)
@@ -234,7 +250,7 @@ test('with auto-apply OFF, a check still runs and records what it found', async 
   const r = await runUpdateCheckOnce()
   expect(r.ok).toBe(true)
   expect(r.updateAvailable).toBe(true)
-  // Checking must never apply — applying restarts the daemon and is opt-in.
+  // Checking must never apply — applying restarts the daemon and is its own setting.
   expect(applied).toBe(0)
   expect(lastUpdateCheck()?.status.remoteCommit).toBe('v9.9.9')
 })

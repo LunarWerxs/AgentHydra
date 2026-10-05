@@ -36,6 +36,7 @@ import {
   setLoginSyncExcluded,
 } from '../src/core/cli-login-sync'
 import { base, emptyLogins, store, storeDb, token } from './login-sync-store'
+import './no-chats'
 
 // Scratch dirs from this file, reaped whatever the outcome, even on a throw before or past a test's
 // own try/finally.

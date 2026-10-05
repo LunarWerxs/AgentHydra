@@ -1372,8 +1372,7 @@ function spawnRelaunchSuccessor(): void {
   child.unref()
 }
 
-// --- auto-update loop (opt-in; see server/src/auto-update.ts) ---------------
-// Prime the runtime flags from persisted settings now; the timer itself only starts after boot
+// Auto-update (server/src/auto-update.ts, on by default). Prime the runtime flags from persisted settings now; the timer itself only starts after boot
 // (startAutoUpdate below), one interval out, so a fresh launch is never interrupted.
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
