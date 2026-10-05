@@ -20,3 +20,6 @@ mechanical edits, second opinions. Keep the plan, the hard calls and the final a
   `research`, `critical`) raises the bar.
 - Keys and providers are the user's, in the console (`hswarm ui`); `hswarm_doctor` shows what is ready. Never
   ask the user to paste a key into chat.
+- A task with tools and an absolute `cwd` may run as a CliMayte worker on the owner's Claude subscription when
+  AgentHydra's cost model says so (the result's `selection.route`, ledger provider `climayte`). The caller does
+  not choose it and need not change how it asks.

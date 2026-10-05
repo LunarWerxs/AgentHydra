@@ -128,7 +128,16 @@ not already inside a CliMayte worker (`AGENTHYDRA_CLIMAYTE_WORKER`). On `subscri
 (kind `code` for edit/all, else `review`), polled every 10 s up to the task's `timeout_s`; the worker's report is the
 answer. No answer within 2 s, any error, or a failed or cancelled worker keeps the API route (a failed worker falls back
 once). The route and the decision's reason are in the result's `selection.route`; the ledger line says provider
-`climayte`. Switch it off with `route_via_climayte = false` in `settings.toml` (default on).
+`climayte`.
+
+The decision is AgentHydra's cost model (`docs/COST-MODEL.md`), changed on Hydra Desk 2's Routing page (AgentHydra
+pane, HSwarm tab, Routing) or with `PUT /api/routing/settings`. AgentHydra's routing switch is the main one;
+`route_via_climayte = false` in `settings.toml` (default on) is a local opt-out on this machine. Two more settings
+bound it: `route_via_climayte_max` (default 4) caps the routed tasks running at once, and `route_via_climayte_start_s`
+(default 90) cancels a routed worker that has not started and falls back to the API. A CliMayte worker's own calls
+are never routed (header `x-hswarm-climayte-worker`). The plan prices behind the monthly cost figures are read from
+AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes); the built-in list prices and
+`~/.hswarm/plan.json` are the offline fallback and the override.
 
 ## Isolation
 

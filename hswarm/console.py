@@ -157,10 +157,53 @@ async def _job(b: dict) -> dict:
     return {"status": await hswarm_status(job_id), "results": await hswarm_results(job_id, max_answer_chars=int(b.get("max_answer_chars") or 4000))}
 
 
-async def _jobs(b: dict) -> dict:
-    from .mcp_server import hswarm_jobs
+_CALLER_IDS: dict[str, dict] = {}  # job id -> its full caller ids: the stamp is written once, so it is read once per process
 
-    return {"jobs": await hswarm_jobs(int(b.get("limit") or 20), verbose=True)}  # the jobs page shows `created`
+
+def _caller_ids(job_id: str, live) -> dict:
+    """{session_id, chat_id, instance} in full, from the job's own stamp (the running job in memory, else job.json); "" when unknown."""
+    if job_id in _CALLER_IDS:
+        return _CALLER_IDS[job_id]
+    stamp = live.caller if live is not None else None
+    if live is None:
+        from . import archive
+
+        doc = archive.read_json(job_id, "job.json")
+        stamp = doc.get("caller") if isinstance(doc, dict) else None
+    stamp = stamp if isinstance(stamp, dict) else {}
+    ids = {k: str(stamp.get(k) or "") for k in ("session_id", "chat_id", "instance")}
+    if live is None or live.finished:  # a running job's stamp is already complete, but keep the cache to jobs that are done
+        while len(_CALLER_IDS) >= 1024:
+            _CALLER_IDS.pop(next(iter(_CALLER_IDS)))
+        _CALLER_IDS[job_id] = ids
+    return ids
+
+
+def _with_caller_ids(rows: list[dict], live: dict) -> list[dict]:
+    return [{**r, "caller_ids": _caller_ids(r["job_id"], live.get(r["job_id"]))} for r in rows]
+
+
+async def _jobs(b: dict) -> dict:
+    """GET jobs: newest first, each as hswarm_status answers it plus `caller_ids` {session_id, chat_id, instance} (the full
+    values of the job's stamp, "" when unknown) beside the `caller` key string.
+
+    `limit` (default 20) counts FINISHED jobs only: every RUNNING job is always listed, however many newer finished jobs
+    exist. `state=running` lists only the running jobs; any other `state` value keeps the finished jobs in that state."""
+    from .mcp_server import hswarm_jobs, manager
+
+    limit = int(b.get("limit") or 20)
+    want = str(b.get("state") or "").strip().lower()
+    live = dict(manager().jobs)
+    live_running = {i: j for i, j in live.items() if j.state == "running"}
+    rows = await hswarm_jobs(limit + len(live_running), verbose=True)  # the jobs page shows `created`
+    have = {r["job_id"] for r in rows}
+    rows += [j.summary() for i, j in live_running.items() if i not in have]  # a long job older than the window
+    running = [r for r in rows if r["job_id"] in live_running or r.get("state") == "running"]
+    finished = [r for r in rows if r not in running]
+    if want and want != "running":
+        finished = [r for r in finished if r.get("state") == want]
+    out = running if want == "running" else sorted(running + finished[:limit], key=lambda r: r["job_id"], reverse=True)
+    return {"jobs": await asyncio.to_thread(_with_caller_ids, out, live)}
 
 
 async def _cancel(b: dict) -> dict:

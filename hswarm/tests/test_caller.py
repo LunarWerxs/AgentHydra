@@ -123,3 +123,59 @@ def test_usage_report_with_no_ledger_is_empty_not_fatal(tmp_path, monkeypatch):
     _isolate(monkeypatch, tmp_path)
     rep = usage_report(hours=8)
     assert rep["swarm"]["tasks"] == 0 and rep["swarm"]["callers"] == [] and rep["claude_fanouts"]["decisions"] == 0
+
+
+def _jobs_list(monkeypatch, m, **query):
+    from hswarm import console, mcp_server
+
+    monkeypatch.setattr(mcp_server, "_manager", m)
+    return asyncio.run(console._jobs(query))["jobs"]
+
+
+def test_jobs_list_carries_the_full_caller_ids_of_a_chat_with_no_session(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    from hswarm import shared
+
+    chat = "local_aaaaaaaa-1111-4222-8333-444444444444"
+    monkeypatch.setattr(shared, "ACTIVE", True)
+    token = shared.REQUEST.set({"chat": chat, "instance": "temp9", "cwd": str(tmp_path / "proj")})
+    try:
+        async def go():
+            m = JobManager(client=_FakeClient())
+            task = Task.from_dict({"id": "t0", "prompt": "x", "cwd": str(tmp_path), "tools": "none"}, {}, 0)
+            return m, await m.run_batch([task], label="chat-job")
+
+        m, job = asyncio.run(go())
+    finally:
+        shared.REQUEST.reset(token)
+    rows = _jobs_list(monkeypatch, m)
+    row = next(r for r in rows if r["job_id"] == job.id)
+    assert row["caller"] == "temp9 / local_aa / proj"
+    assert row["caller_ids"] == {"session_id": "", "chat_id": chat, "instance": "temp9"}
+
+
+def test_jobs_list_keeps_a_running_job_older_than_the_limit(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+
+    class _Running:
+        state, finished = "running", False
+        caller = {"session_id": "11111111-2222-4333-8444-555555555555", "chat_id": "", "instance": "temp1"}
+
+        def __init__(self, job_id):
+            self.id = job_id
+
+        def summary(self):
+            return {"job_id": self.id, "state": "running", "finished": False, "caller": "temp1 / 11111111 / proj"}
+
+    for i in range(1, 5):  # four finished jobs, all newer than the running one
+        d = config.JOBS_DIR / f"20260102-00000{i}-aaaa"
+        d.mkdir(parents=True)
+        summary = {"job_id": d.name, "state": "done", "finished": True, "caller": "- / - / -"}
+        (d / "job.json").write_text(json.dumps({"summary": summary, "caller": {}}), encoding="utf-8")
+    m = JobManager(client=_FakeClient())
+    m.jobs["20260101-000001-aaaa"] = _Running("20260101-000001-aaaa")
+    rows = _jobs_list(monkeypatch, m, limit=2)
+    ids = [r["job_id"] for r in rows]
+    assert ids == ["20260102-000004-aaaa", "20260102-000003-aaaa", "20260101-000001-aaaa"]
+    assert rows[-1]["caller_ids"]["session_id"].startswith("11111111-2222")
+    assert [r["job_id"] for r in _jobs_list(monkeypatch, m, limit=2, state="running")] == ["20260101-000001-aaaa"]

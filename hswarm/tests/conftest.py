@@ -31,6 +31,10 @@ def _isolated_home(tmp_path, monkeypatch, request):
     # OpenRouter priced cheaper - live network calls from unit tests, 9 failures and a suite 5x slower
     # (2026-09-17). Routing is exercised on purpose in test_routing.py, which enables it itself.
     monkeypatch.setattr(config, "_PRICE_ROUTING_DEFAULT", False)
+    # Plan prices come from a running AgentHydra when there is one: a unit test must not depend on the owner's.
+    from hswarm import accounts
+
+    monkeypatch.setattr(accounts, "_agenthydra_prices", lambda: {})
     # A task whose routes all failed is re-run after a rest in production (jobs.needs_other_route); with no keys in a
     # unit test nearly every task would sleep through hours of rests. Tests of the rerun turn it on themselves.
     monkeypatch.setattr(config, "DEAD_RERUN_PATIENCE_S", 0.0)

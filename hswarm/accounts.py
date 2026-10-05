@@ -16,7 +16,8 @@ measured", never a guess.
 
 Plan cost: each tier's list price per month, charged per DAY and only on the days that account actually
 did work (owner ask, same message: cost the accounts that were used, not every account that is open).
-~/.hswarm/plan.json overrides anything here, either per tier or as one flat monthly figure:
+AgentHydra's own plan prices (Routing page, GET /api/routing/cost-model) win over those list prices when it answers;
+the table below is only the offline fallback. ~/.hswarm/plan.json overrides anything here, either per tier or as one flat monthly figure:
   {"tier_usd_month": {"max_20x": 200}, "usd_month": null}
 """
 from __future__ import annotations
@@ -26,6 +27,8 @@ import json
 import os
 import re
 import sqlite3
+import time
+import urllib.request
 from pathlib import Path, PureWindowsPath
 
 from . import config
@@ -48,9 +51,36 @@ def plan_config() -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
+_AH_TIER = {"Pro": "pro", "Max 5×": "max_5x", "Max 20×": "max_20x"}  # AgentHydra's plan names -> our tiers
+_AH_TTL_S = 300.0
+_AH_TIMEOUT_S = 2.0
+_ah_cache: tuple[float, dict[str, float]] | None = None
+
+
+def _agenthydra_prices() -> dict[str, float]:
+    """The owner's plan prices from AgentHydra (planPrices on /api/routing/cost-model), per tier; {} when it does not
+    answer within 2 s. Cached for a few minutes, a miss too, so an offline machine pays the timeout once per window."""
+    global _ah_cache
+    if _ah_cache and time.monotonic() - _ah_cache[0] < _AH_TTL_S:
+        return _ah_cache[1]
+    out: dict[str, float] = {}
+    base = os.environ.get("AGENTHYDRA_URL", "http://127.0.0.1:7787").rstrip("/")
+    if base:
+        try:
+            with urllib.request.urlopen(f"{base}/api/routing/cost-model", timeout=_AH_TIMEOUT_S) as r:
+                doc = json.loads(r.read().decode("utf-8"))
+            plans = (doc.get("settings") or {}).get("planPrices") or {}
+            out = {tier: float(plans[name]) for name, tier in _AH_TIER.items() if isinstance(plans.get(name), (int, float)) and plans[name] >= 0}
+        except Exception:  # offline, slow, or an unexpected answer: the built-in table stands
+            out = {}
+    _ah_cache = (time.monotonic(), out)
+    return out
+
+
 def tier_prices() -> dict[str, float]:
+    base = TIER_USD_MONTH | _agenthydra_prices()
     over = plan_config().get("tier_usd_month")
-    return TIER_USD_MONTH | {k: float(v) for k, v in over.items() if isinstance(v, (int, float))} if isinstance(over, dict) else dict(TIER_USD_MONTH)
+    return base | {k: float(v) for k, v in over.items() if isinstance(v, (int, float))} if isinstance(over, dict) else base
 
 
 def tier_usd_month(tier: str) -> float | None:
