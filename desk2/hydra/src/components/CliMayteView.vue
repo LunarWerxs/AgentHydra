@@ -45,7 +45,7 @@ import { useStorage } from '@vueuse/core'
 import {
   computed,
   createApp,
-  getCurrentInstance,
+  h,
   inject,
   onMounted,
   onUnmounted,
@@ -66,6 +66,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
+import { i18n } from '@/i18n'
 import { pii } from '@/composables/usePrivacy'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type {
@@ -281,7 +282,7 @@ async function load(opts: { silent?: boolean } = {}) {
       const first =
         [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCliMayteActive) ??
         groups.value[0]?.items[0]
-      if (first) selectedId.value = first.id
+      if (first) selectedId.value = rowKey(first)
     }
     await loadDetail()
   } catch {
@@ -321,72 +322,43 @@ function select(w: ListRow) {
   if (!w.remote) void loadDetail()
 }
 
-function updateFloatContent() {
-  // Update the float with current workers and time (called by watcher)
-  // The component is reactive, so when data changes, it will update
+/** The float's own app (its window is a separate document): unmounted with the window, however it closed. */
+function unmountFloat() {
+  floatApp?.unmount()
+  floatApp = null
 }
+watch(floatIsOpen, (open) => {
+  if (!open) unmountFloat()
+})
 
 async function toggleFloat() {
   if (floatIsOpen.value) {
-    if (floatApp) {
-      floatApp.unmount()
-      floatApp = null
-    }
+    unmountFloat()
     closeFloat()
-  } else {
-    const instance = getCurrentInstance()
-    const i18n = instance?.appContext.config.globalProperties.$i18n
-
-    const success = await openFloat({
-      running: workers.value.filter((w) => w.status === 'running' || w.status === 'checking'),
-      queued: workers.value.filter(
-        (w) => isCliMayteActive(w) && w.status !== 'running' && w.status !== 'checking',
-      ),
-      now: now.value,
-      onRowClick: (id: string) => {
-        const w = workers.value.find((x) => x.id === id)
-        if (w) select(w)
-      },
-    })
-
-    if (success && pipWindow.value) {
-      const rootElement = pipWindow.value.document.getElementById('pip-root')
-      if (rootElement) {
-        const appData = {
-          workers: workers.value,
-          now: now.value,
-          onRowClick: (id: string) => {
-            const w = workers.value.find((x) => x.id === id)
-            if (w) select(w)
-          },
-        }
-
-        floatApp = createApp({
-          template: `<CliMayteFloat :workers="workers" :now="now" :onRowClick="onRowClick" />`,
-          components: { CliMayteFloat },
-          data() {
-            return appData
-          },
-        })
-
-        if (i18n) {
-          floatApp.use(i18n as any)
-        }
-
-        floatApp.mount(rootElement)
-
-        // Update the app data reactively when workers or now changes
-        watch([workers, now], () => {
-          if (floatApp) {
-            Object.assign(appData, {
-              workers: workers.value,
-              now: now.value,
-            })
-          }
-        })
-      }
-    }
+    return
   }
+  const onRowClick = (id: string) => {
+    const w = workers.value.find((x) => x.id === id)
+    if (w) select(w)
+  }
+  const success = await openFloat({
+    running: workers.value.filter((w) => w.status === 'running' || w.status === 'checking'),
+    queued: workers.value.filter(
+      (w) => isCliMayteActive(w) && w.status !== 'running' && w.status !== 'checking',
+    ),
+    now: now.value,
+    onRowClick,
+  })
+  const root = success ? pipWindow.value?.document.getElementById('pip-root') : null
+  if (!root) return
+  // A render function over this view's own refs, so the float redraws whenever they change. (It was a
+  // template string, which needs Vue's runtime compiler that this build leaves out, fed from a plain
+  // object Vue never saw change; and it asked for the i18n plugin outside setup, where there is none.)
+  floatApp = createApp({
+    render: () => h(CliMayteFloat, { workers: workers.value, now: now.value, onRowClick }),
+  })
+  floatApp.use(i18n)
+  floatApp.mount(root)
 }
 
 /** How long the task has been active: its sessions' running time over every attempt, not the time
@@ -655,6 +627,7 @@ onUnmounted(() => {
   if (clock !== null) window.clearInterval(clock)
   timer = null
   clock = null
+  unmountFloat()
   closeFloat()
 })
 </script>
