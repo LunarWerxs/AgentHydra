@@ -173,5 +173,9 @@ describe('stats card', () => {
       '6,499 sessions from 2 sources over 91 days, $257,672 at API rates.',
       'AgentHydra is still reading sessions (3,248 of 6,499), so these figures will grow.'
     ])
+    // A rescan with every session read is not "still reading".
+    expect(homeFooter({ ...home, coverage: { sessions: 6499, total: 6499, refreshing: true } })).toEqual([
+      '6,499 sessions from 2 sources over 91 days, $257,672 at API rates.'
+    ])
   })
 })

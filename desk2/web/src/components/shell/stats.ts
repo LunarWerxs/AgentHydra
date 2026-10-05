@@ -139,7 +139,9 @@ export function homeFooter(s: HomeStats): string[] {
       ? `${plural(s.sessions, 'session', 'sessions')} from ${plural(sources, 'source', 'sources')} over ${plural(s.activeDays, 'day', 'days')}${cost}`
       : 'No sessions in this range yet.'
   ]
-  if (s.coverage.refreshing)
+  // AgentHydra calls its every-few-minutes rescan "refreshing" too, with every session already read
+  // (seen live: 3,249 of 3,249); only sessions still unread make the figures grow.
+  if (s.coverage.refreshing && s.coverage.sessions < s.coverage.total)
     lines.push(`AgentHydra is still reading sessions (${count(s.coverage.sessions)} of ${count(s.coverage.total)}), so these figures will grow.`)
   return lines
 }
