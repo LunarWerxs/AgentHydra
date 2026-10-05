@@ -219,6 +219,19 @@ interface Resolution {
 }
 
 /**
+ * continuation session id -> the transcripts a search that stopped at MAX_CANDIDATES already read
+ * without finding the uuid, with the size each had then.
+ *
+ * ⛔ WHY (2026-10-04). Without it a capped search started over on every sweep (as often as every
+ * 10 s) and re-read the same nearest 24 transcripts: on the owner's PC four such links re-read
+ * 425 MB a sweep, forever, in step with the page-in spikes behind his "freezes every 30 s". The
+ * uuid was written into the parent before the continuation existed, so a transcript read without it
+ * that has only grown since cannot hold it now; the next pass reads the next 24 instead, and the
+ * search ends exhaustive and is memoized like any other.
+ */
+const searched = new Map<string, Map<string, number>>()
+
+/**
  * Find the transcript that owns `link`, searching the continuation's own project folder.
  *
  * Scoped to that folder because Claude Code keeps a conversation's files under the project key, and
@@ -257,18 +270,30 @@ async function resolveOne(entry: ContinuationLink): Promise<Resolution> {
       }
     },
   )
-  const candidates = stats.filter((c): c is NonNullable<typeof c> => c !== null)
+  // Registered before reading, so a pass that throws on an unreadable file keeps what it learned.
+  const read = searched.get(entry.sessionId) ?? new Map<string, number>()
+  searched.set(entry.sessionId, read)
+  const unread = (c: { path: string; size: number }) => {
+    const was = read.get(c.path)
+    return was === undefined || c.size < was // shrunk means rewritten: read it again
+  }
+  const candidates = stats.filter((c): c is NonNullable<typeof c> => c !== null && unread(c))
   candidates.sort((a, b) => a.distance - b.distance)
   const tried = candidates.slice(0, MAX_CANDIDATES)
   for (const c of tried) {
-    if (await fileContains(c.path, entry.logicalParentUuid, c.size))
+    if (await fileContains(c.path, entry.logicalParentUuid, c.size)) {
+      searched.delete(entry.sessionId)
       return { parent: c.id, exhaustive: true }
+    }
+    read.set(c.path, c.size)
     await tick()
   }
   // Only a search that reached the end of the list proves absence. Stopping at the cap means the
   // parent may be the candidate we never opened, and writing '' for that would leave this
   // conversation duplicated on screen forever — the exact bug this module exists to remove.
-  return { parent: '', exhaustive: tried.length === candidates.length }
+  const exhaustive = tried.length === candidates.length
+  if (exhaustive) searched.delete(entry.sessionId)
+  return { parent: '', exhaustive }
 }
 
 let resolving = false
@@ -315,4 +340,5 @@ export async function resolveContinuations(entries: ContinuationLink[]): Promise
 export function resetContinuationMemoForTests(): void {
   memo = new Map()
   headCache.clear()
+  searched.clear()
 }
