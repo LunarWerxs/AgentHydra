@@ -209,6 +209,12 @@ sidebar on the left stays put, and only the pane on the right changes.
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A
   handoff with no move (same account) is one muted "Continued in a fresh session" line; messages you sent
   that the earlier session never got to stay as yours. Chats already saved read the same way.
+- **A chat moving off a signed-out or full account says so, and sends once.** The sign-in or limit line
+  is a warning that says the chat is moving to another account and your message goes again by itself,
+  instead of a red dead end. The session copy no longer stops the server while it runs (a 555 MB session
+  used to freeze every chat and the window for the whole copy). A message you send during the move waits for it and goes to the new
+  account after the one being sent again; the same message sent again by hand goes once, with a line
+  saying so (owner, 2026-10-05: a chat moved from #103 to #119 went twice).
 - **A chat never claims to be empty when it only failed to load.** A chat whose messages did not load (the
   server restarting or stopped) says "Loading messages…", or why the load failed, and asks again every few
   seconds until they come, instead of "No messages yet" until you opened another chat and came back

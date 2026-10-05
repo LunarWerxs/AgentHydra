@@ -55,6 +55,10 @@ const failed = (error: string): SDKMessage =>
   ({ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [error], duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {}, permission_denials: [], uuid: uuid(), session_id: 's' }) as unknown as SDKMessage
 
 const SID = '8a8a8a8a-1111-4222-8333-444455556666'
+const EXPIRED = 'Failed to authenticate: OAuth session expired and could not be refreshed'
+const rejected = (): SDKMessage =>
+  ({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_791_086_400 }, uuid: uuid(), session_id: 's' }) as unknown as SDKMessage
+const pause = (ms = 30) => new Promise((r) => setTimeout(r, ms))
 
 /** A session on #126 (signed in as far as AgentHydra's list says), with #61 healthy and #70 signed out. */
 async function setup() {
@@ -68,11 +72,24 @@ async function setup() {
   mkdirSync(dirname(file), { recursive: true })
   writeFileSync(file, '{"type":"user"}\n')
   const q = fakeQueries()
-  const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts: async () => [a, c, b] }
+  // A move reads the accounts first: holdMoves keeps it there.
+  const hold = { gate: Promise.resolve() }
+  const listAccounts = async () => {
+    await hold.gate
+    return [a, c, b]
+  }
+  const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts }
   const m = new ChatManager({ home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: SID, cwd, title: 'Outside', configDir: a.configDir })
-  return { m, q, a, b, chat }
+  return { m, q, a, b, chat, hold }
+}
+
+/** Holds the next move at its first step until the answer is called. */
+function holdMoves(hold: { gate: Promise<void> }): () => void {
+  let open!: () => void
+  hold.gate = new Promise<void>((r) => (open = r))
+  return open
 }
 const systemTexts = (items: TranscriptItem[]) => items.flatMap((i) => (i.kind === 'system' ? [i.text] : []))
 const userTexts = (f: { sent: { message: { content: unknown } }[] }) => f.sent.map((s) => JSON.stringify(s.message.content))
@@ -81,7 +98,7 @@ test('an expired login moves the chat to the next healthy account and sends the 
   const { m, q, b, chat } = await setup()
   await m.send(chat.id, 'carry on')
   await waitFor(() => q.all.length === 1)
-  q.last().push(failed('Failed to authenticate: OAuth session expired and could not be refreshed'))
+  q.last().push(failed(EXPIRED))
 
   await waitFor(() => q.all.length === 2)
   expect(q.last().options).toMatchObject({ resume: SID, env: { CLAUDE_CONFIG_DIR: b.configDir } })
@@ -89,6 +106,63 @@ test('an expired login moves the chat to the next healthy account and sends the 
   expect(userTexts(q.last())[0]).toContain('carry on')
   expect(systemTexts(m.listItems(chat.id))).toContain('Moved from #126 (signed out) to #61.')
   expect(m.get(chat.id).account.id).toBe(b.id)
+})
+
+test('the sign-in line says the chat is moving and the message goes again by itself, as a warning', async () => {
+  const { m, q, chat } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(failed(EXPIRED))
+  await waitFor(() => q.all.length === 2)
+  const line = m.listItems(chat.id).find((i) => i.kind === 'system' && i.text.startsWith('Sign-in failed'))
+  expect(line).toMatchObject({ level: 'warn', text: 'Sign-in failed on #126 user126 (Pro): moving this chat to another account and sending your message again.' })
+})
+
+test("a usage limit's line says the same in place of its reset time", async () => {
+  const { m, q, chat } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(rejected())
+  await waitFor(() => q.all.length === 2)
+  const lines = m.listItems(chat.id).filter((i) => i.kind === 'system' && i.text.startsWith('Usage limit reached'))
+  expect(lines).toHaveLength(1)
+  expect(lines[0]).toMatchObject({ level: 'warn', text: 'Usage limit reached (5-hour) on #126 user126 (Pro): moving this chat to another account and sending your message again.' })
+})
+
+test('the same message sent again by hand during a move waits for it and goes once', async () => {
+  const { m, q, chat, hold } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  const open = holdMoves(hold)
+  q.last().push(failed(EXPIRED))
+  await waitFor(() => systemTexts(m.listItems(chat.id)).some((s) => s.startsWith('Sign-in failed')))
+  const again = m.send(chat.id, 'carry on')
+  await pause()
+  open()
+  expect(await again).toEqual({ queued: false })
+  await waitFor(() => q.all.length === 2 && userTexts(q.last()).length > 0)
+  await pause()
+  expect(userTexts(q.all[0]!)).toHaveLength(1)
+  expect(userTexts(q.last())).toHaveLength(1)
+  expect(systemTexts(m.listItems(chat.id))).toContain('That message is already being sent again on #61 after the move, so it was not sent twice.')
+})
+
+test('another message sent during a move waits for it and goes to the new account after the one sent again', async () => {
+  const { m, q, chat, hold } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  const open = holdMoves(hold)
+  q.last().push(failed(EXPIRED))
+  await waitFor(() => systemTexts(m.listItems(chat.id)).some((s) => s.startsWith('Sign-in failed')))
+  const next = m.send(chat.id, 'and then this')
+  await pause()
+  open()
+  await next
+  await waitFor(() => q.all.length === 2 && userTexts(q.last()).length === 2)
+  await pause()
+  expect(userTexts(q.all[0]!)).toHaveLength(1)
+  expect(userTexts(q.last())[0]).toContain('carry on')
+  expect(userTexts(q.last())[1]).toContain('and then this')
 })
 
 test('an error that is not the account is shown where it happened: no move, no resend', async () => {

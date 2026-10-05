@@ -3,9 +3,11 @@
 // terminal ran lives in whichever folder that tool wrote to, usually the default ~/.claude. Resuming
 // from a different folder fails with "No conversation found". So before a chat resumes a session its
 // account's folder does not have, the transcript is copied there (a fork: the original is untouched,
-// each side continues on its own).
+// each side continues on its own). The copy is asynchronous: a session file of hundreds of MB must not
+// hold up the server while it copies.
 
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { copyFile, open, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { encodeProjectDir, findSessionJsonl, readTail, TAIL_BYTES } from './session-jsonl'
@@ -32,7 +34,7 @@ export function projectsRoot(configDir: string | null, home = homedir()): string
  * then resumes with the turns it ran on B. A copy that went its own way is never overwritten. The
  * session's sidecar folder goes along, its missing files also into a copy already there (copySidecar).
  */
-export function seedSession(sessionId: string, cwd: string | null, configDir: string | null, roots: string[], home = homedir(), prefer: string | null = null): SeedResult {
+export async function seedSession(sessionId: string, cwd: string | null, configDir: string | null, roots: string[], home = homedir(), prefer: string | null = null): Promise<SeedResult> {
   const target = projectsRoot(configDir, home)
   const preferred = prefer && !same(prefer, target) ? findSessionJsonl(sessionId, [prefer], cwd) : null
   const source =
@@ -48,17 +50,17 @@ export function seedSession(sessionId: string, cwd: string | null, configDir: st
   // is finished on a later call: copySidecar never overwrites, so running it again is safe.
   if (have) {
     if (!source) return { status: 'present' }
-    copySidecar(source, have, sessionId)
-    if (!olderVersionOf(have, source)) return { status: 'present' }
-    copyThrough(source, have)
+    await copySidecar(source, have, sessionId)
+    if (!(await olderVersionOf(have, source))) return { status: 'present' }
+    await copyThrough(source, have)
     return { status: 'refreshed', from: source, to: have }
   }
   if (!source) return { status: 'missing' }
   const dir = join(target, basename(dirname(source)))
   const to = join(dir, `${sessionId}.jsonl`)
-  copySidecar(source, to, sessionId)
+  await copySidecar(source, to, sessionId)
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
-  copyThrough(source, to)
+  await copyThrough(source, to)
   return { status: 'copied', from: source, to }
 }
 
@@ -69,7 +71,7 @@ export function seedSession(sessionId: string, cwd: string | null, configDir: st
  * config folder. The original stays; an older copy already there (the chat went back) is brought up to
  * date, one that went its own way is left alone. 'present' when `cwd`'s folder already has it.
  */
-export function placeInCwd(sessionId: string, cwd: string, configDir: string | null, home = homedir()): SeedResult {
+export async function placeInCwd(sessionId: string, cwd: string, configDir: string | null, home = homedir()): Promise<SeedResult> {
   const root = projectsRoot(configDir, home)
   const dir = join(root, encodeProjectDir(cwd))
   const to = join(dir, `${sessionId}.jsonl`)
@@ -77,26 +79,28 @@ export function placeInCwd(sessionId: string, cwd: string, configDir: string | n
   const have = existsSync(to) ? to : null
   const source = elsewhere && !same(elsewhere, to) ? elsewhere : null
   if (have) {
-    if (!source || !olderVersionOf(have, source)) return { status: 'present' }
-    copySidecar(source, have, sessionId)
-    copyThrough(source, have)
+    if (!source || !(await olderVersionOf(have, source))) return { status: 'present' }
+    await copySidecar(source, have, sessionId)
+    await copyThrough(source, have)
     return { status: 'refreshed', from: source, to }
   }
   if (!source) return { status: 'missing' }
-  copySidecar(source, to, sessionId)
+  await copySidecar(source, to, sessionId)
   mkdirSync(dir, { recursive: true })
-  copyThrough(source, to)
+  await copyThrough(source, to)
   return { status: 'copied', from: source, to }
 }
 
-/** Copies through a temp name, so a crash mid-copy never leaves half a file that later looks done. */
-function copyThrough(from: string, to: string): void {
-  const tmp = `${to}.${process.pid}.tmp`
+let copies = 0
+
+/** Copies through a temp name of its own, so a crash mid-copy never leaves half a file that later looks done. */
+async function copyThrough(from: string, to: string): Promise<void> {
+  const tmp = `${to}.${process.pid}.${++copies}.tmp`
   try {
-    copyFileSync(from, tmp)
-    renameSync(tmp, to)
+    await copyFile(from, tmp)
+    await rename(tmp, to)
   } catch (err) {
-    rmSync(tmp, { force: true })
+    await rm(tmp, { force: true })
     throw err
   }
 }
@@ -107,44 +111,47 @@ function copyThrough(from: string, to: string): void {
  * Its files the target lacks are copied, none overwritten; a session without one is fine. The transcript
  * names tool-result and workflow files by absolute path into the source folder and is left as written.
  */
-function copySidecar(fromJsonl: string, toJsonl: string, sessionId: string): void {
+async function copySidecar(fromJsonl: string, toJsonl: string, sessionId: string): Promise<void> {
   const from = join(dirname(fromJsonl), sessionId)
-  if (existsSync(from)) copyMissing(from, join(dirname(toJsonl), sessionId))
+  if (existsSync(from)) await copyMissing(from, join(dirname(toJsonl), sessionId))
 }
 
-function copyMissing(from: string, to: string): void {
+async function copyMissing(from: string, to: string): Promise<void> {
   for (const entry of readdirSync(from, { withFileTypes: true })) {
     const src = join(from, entry.name)
     const dst = join(to, entry.name)
-    if (entry.isDirectory()) copyMissing(src, dst)
+    if (entry.isDirectory()) await copyMissing(src, dst)
     else if (entry.isFile() && !existsSync(dst)) {
       mkdirSync(to, { recursive: true })
-      copyThrough(src, dst)
+      await copyThrough(src, dst)
     }
   }
 }
 
 /** True when `newer` was written after `older`, is longer, and starts with every byte of it. */
-function olderVersionOf(older: string, newer: string): boolean {
+async function olderVersionOf(older: string, newer: string): Promise<boolean> {
   const a = statSync(older)
   const b = statSync(newer)
   if (!(b.mtimeMs > a.mtimeMs) || b.size <= a.size) return false
-  const fa = openSync(older, 'r')
-  const fb = openSync(newer, 'r')
+  const fa = await open(older, 'r')
   try {
-    const bufA = Buffer.alloc(1024 * 1024)
-    const bufB = Buffer.alloc(bufA.length)
-    for (let pos = 0; pos < a.size; ) {
-      const want = Math.min(bufA.length, a.size - pos)
-      const na = readSync(fa, bufA, 0, want, pos)
-      const nb = readSync(fb, bufB, 0, want, pos)
-      if (na <= 0 || na !== nb || !bufA.subarray(0, na).equals(bufB.subarray(0, nb))) return false
-      pos += na
+    const fb = await open(newer, 'r')
+    try {
+      const bufA = Buffer.alloc(1024 * 1024)
+      const bufB = Buffer.alloc(bufA.length)
+      for (let pos = 0; pos < a.size; ) {
+        const want = Math.min(bufA.length, a.size - pos)
+        const { bytesRead: na } = await fa.read(bufA, 0, want, pos)
+        const { bytesRead: nb } = await fb.read(bufB, 0, want, pos)
+        if (na <= 0 || na !== nb || !bufA.subarray(0, na).equals(bufB.subarray(0, nb))) return false
+        pos += na
+      }
+      return true
+    } finally {
+      await fb.close()
     }
-    return true
   } finally {
-    closeSync(fa)
-    closeSync(fb)
+    await fa.close()
   }
 }
 

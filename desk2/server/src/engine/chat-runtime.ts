@@ -94,8 +94,9 @@ type PlanItem = Extract<TranscriptItem, { kind: 'plan' }>
 type ToolRequestItem = PermissionItem | QuestionItem | PlanItem
 type RequestItem = ToolRequestItem | ElicitationItem
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
-/** A send no finished turn has answered yet; `uuid` names it to a chat host, which keeps it while a later turn may need it. */
-type Sent = QueuedInput & { uuid?: string }
+/** A send no finished turn has answered yet; `uuid` names it to a chat host, which keeps it while a later turn may need it.
+ *  `replayed`: sent again by a move to another account (replay), so the same text sent by hand meanwhile is not sent twice. */
+type Sent = QueuedInput & { uuid?: string; replayed?: boolean }
 
 /**
  * What a hosted chat's runtime leaves with its host at each ack (SPEC "Chat hosts"), for the server that
@@ -573,7 +574,7 @@ ${swap.real}` }
 
   /** The sends no finished turn has answered: what a turn cut short by a usage limit asked. */
   unansweredSends(): QueuedInput[] {
-    return this.unanswered.map(({ uuid: _u, ...s }) => s)
+    return this.unanswered.map(({ uuid: _u, replayed: _r, ...s }) => s)
   }
 
   /** Sends them again on a fresh start (the chat moved to another account); the transcript already has them. */
@@ -583,10 +584,21 @@ ${swap.real}` }
     this.limitAnnounced = false
     for (const s of sends) {
       const msg = this.input!.push(s)
-      this.unanswered.push({ ...s, uuid: msg.uuid })
+      this.unanswered.push({ ...s, uuid: msg.uuid, replayed: true })
       this.dispatch({ type: 'userSent', now: this.now() })
     }
     this.publishChat()
+  }
+
+  /**
+   * True when a move already sends this message again (replay) and no turn has answered it: the owner sent
+   * it a second time by hand, so it is not sent twice. Each replayed send matches one such message only.
+   */
+  takeReplayed(text: string, images?: ImageRef[]): boolean {
+    const s = this.unanswered.find((u) => u.replayed && u.text.trim() === text.trim() && (u.images?.length ?? 0) === (images?.length ?? 0))
+    if (!s) return false
+    s.replayed = false
+    return true
   }
 
   /** The manager could not carry a limit it took over: the next limit is announced again. */
@@ -951,15 +963,17 @@ ${swap.real}` }
     // A replayed limit was carried (or not) by the server that saw it; one no server saw is carried once adopt is done.
     if (limitedNow && this.replaying && !this.replaySeen) this.missedLimit = { window: limitWindow(msg), signIn }
     const carried = limitedNow && !this.replaying && (this.onLimited?.(limitWindow(msg), signIn) ?? false)
-    if (carried) emissions = emissions.filter((x) => !(x.type === 'notify' && x.reason === 'limited'))
+    if (carried) emissions = emissions.filter((x) => !(x.type === 'notify' && x.reason === 'limited')).map(movingOn)
     this.apply(emissions)
 
     if (limitedNow) {
       if (!announced) {
         const on = (this.ranAs ?? this.chat.account).label
-        const text = signIn ? `Sign-in failed on ${on}: its login needs renewing.` : `Usage limit reached on ${on}.`
+        const failed = signIn ? `Sign-in failed on ${on}` : `Usage limit reached on ${on}`
+        // Carried: the chat moves and the message goes again by itself, so the owner need not send it.
+        const text = carried ? `${failed}: ${MOVING}` : signIn ? `${failed}: its login needs renewing.` : `${failed}.`
         // Keyed by the message, so a replay after a server restart writes the same line, not a second one.
-        this.upsert({ kind: 'system', id: `limit:${(msg as { uuid?: string }).uuid || now}`, ts: now, level: 'error', text })
+        this.upsert({ kind: 'system', id: `limit:${(msg as { uuid?: string }).uuid || now}`, ts: now, level: carried ? 'warn' : 'error', text })
         if (!carried) this.notify('limited', text)
       }
       this.limitAnnounced = true
@@ -1280,6 +1294,14 @@ function assistantText(msg: SDKMessage): string {
   if (typeof content === 'string') return content
   if (!Array.isArray(content)) return ''
   return content.flatMap((b: { type?: string; text?: unknown }) => (b?.type === 'text' && typeof b.text === 'string' ? [b.text] : [])).join('\n')
+}
+
+const MOVING = 'moving this chat to another account and sending your message again.'
+
+/** A limit line of the normalizer's, for a limit the manager carries: it says the chat moves on, as a warning. */
+function movingOn(x: Emission): Emission {
+  if (x.type !== 'upsert' || x.item.kind !== 'system' || !x.item.id.startsWith('rate_limit:')) return x
+  return { ...x, item: { ...x.item, level: 'warn', text: `${x.item.text.replace(/(\. Resets .*)?\.$/, '')}: ${MOVING}` } }
 }
 
 /** The window a rate_limit_event names ('5-hour', 'weekly'...), else null. */

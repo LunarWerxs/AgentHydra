@@ -18,28 +18,28 @@ mkdirSync(join(defaultRoot, slug), { recursive: true })
 writeFileSync(join(defaultRoot, slug, `${SID}.jsonl`), '{"type":"user"}\n{"type":"assistant"}\n')
 
 describe('seedSession', () => {
-  test('copies a transcript into an account folder that lacks it, keeping the project folder name', () => {
-    const r = seedSession(SID, cwd, cliDir, [defaultRoot], home)
+  test('copies a transcript into an account folder that lacks it, keeping the project folder name', async () => {
+    const r = await seedSession(SID, cwd, cliDir, [defaultRoot], home)
     expect(r.status).toBe('copied')
     const to = join(cliDir, 'projects', slug, `${SID}.jsonl`)
     expect(readFileSync(to, 'utf8')).toBe('{"type":"user"}\n{"type":"assistant"}\n')
     expect(existsSync(join(defaultRoot, slug, `${SID}.jsonl`))).toBe(true)
   })
 
-  test('says present when the folder has it, and never overwrites it', () => {
+  test('says present when the folder has it, and never overwrites it', async () => {
     const to = join(cliDir, 'projects', slug, `${SID}.jsonl`)
     writeFileSync(to, 'newer work here\n')
-    expect(seedSession(SID, cwd, cliDir, [defaultRoot], home).status).toBe('present')
+    expect((await seedSession(SID, cwd, cliDir, [defaultRoot], home)).status).toBe('present')
     expect(readFileSync(to, 'utf8')).toBe('newer work here\n')
   })
 
-  test('the default login (configDir null) is the folder under the home it is given', () => {
-    expect(seedSession(SID, cwd, null, [join(cliDir, 'projects')], home).status).toBe('present')
+  test('the default login (configDir null) is the folder under the home it is given', async () => {
+    expect((await seedSession(SID, cwd, null, [join(cliDir, 'projects')], home)).status).toBe('present')
   })
 
-  test('missing when no folder has it, and a bad id never names a file', () => {
-    expect(seedSession('11111111-2222-4333-8444-555555555555', cwd, join(home, 'cli-9'), [defaultRoot], home).status).toBe('missing')
-    expect(seedSession('../escape', cwd, join(home, 'cli-9'), [defaultRoot], home).status).toBe('missing')
+  test('missing when no folder has it, and a bad id never names a file', async () => {
+    expect((await seedSession('11111111-2222-4333-8444-555555555555', cwd, join(home, 'cli-9'), [defaultRoot], home)).status).toBe('missing')
+    expect((await seedSession('../escape', cwd, join(home, 'cli-9'), [defaultRoot], home)).status).toBe('missing')
     expect(existsSync(join(home, 'cli-9'))).toBe(false)
   })
 })
@@ -55,33 +55,33 @@ describe('seedSession: a chat that moved between accounts', () => {
     utimesSync(file(dir), mtimeSec, mtimeSec)
   }
 
-  test('an older copy of the same transcript is refreshed from the newer one (A -> B -> A)', () => {
+  test('an older copy of the same transcript is refreshed from the newer one (A -> B -> A)', async () => {
     write(aDir, 'turn 1\n', 1_000)
     write(bDir, 'turn 1\nturn 2 on B\n', 2_000)
-    const r = seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home)
+    const r = await seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home)
     expect(r).toEqual({ status: 'refreshed', from: file(bDir), to: file(aDir) })
     expect(readFileSync(file(aDir), 'utf8')).toBe('turn 1\nturn 2 on B\n')
     // up to date now: present
-    expect(seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home).status).toBe('present')
+    expect((await seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home)).status).toBe('present')
   })
 
-  test('a copy that went its own way, or a source that is not newer, is kept', () => {
+  test('a copy that went its own way, or a source that is not newer, is kept', async () => {
     write(aDir, 'turn 1\nturn 2 on A\n', 3_000)
     write(bDir, 'turn 1\nturn 2 on B\nturn 3\n', 4_000)
-    expect(seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home).status).toBe('present')
+    expect((await seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home)).status).toBe('present')
     expect(readFileSync(file(aDir), 'utf8')).toBe('turn 1\nturn 2 on A\n')
 
     write(aDir, 'turn 1\n', 5_000)
-    expect(seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home).status).toBe('present')
+    expect((await seedSession(MOVED, cwd, aDir, [join(bDir, 'projects')], home)).status).toBe('present')
     expect(readFileSync(file(aDir), 'utf8')).toBe('turn 1\n')
   })
 
-  test('the folder the chat last ran in is the source, though another copy is newer', () => {
+  test('the folder the chat last ran in is the source, though another copy is newer', async () => {
     const cDir = join(home, 'acct-c')
     const dDir = join(home, 'acct-d')
     write(bDir, 'turn 1\nturn 2 on B\n', 6_000)
     write(dDir, 'someone else\n', 7_000)
-    const r = seedSession(MOVED, cwd, cDir, [join(dDir, 'projects')], home, join(bDir, 'projects'))
+    const r = await seedSession(MOVED, cwd, cDir, [join(dDir, 'projects')], home, join(bDir, 'projects'))
     expect(r).toEqual({ status: 'copied', from: file(bDir), to: file(cDir) })
     expect(readFileSync(file(cDir), 'utf8')).toBe('turn 1\nturn 2 on B\n')
   })
@@ -97,16 +97,16 @@ describe('seedSession: the sidecar folder goes along', () => {
   }
   const sidecar = ['subagents/agent-a1.jsonl', 'subagents/agent-a1.meta.json', 'tool-results/r1.txt', 'workflows/w1/run.js', 'custom-title.json']
 
-  test('a copy takes the sub-agent transcripts, tool results, workflows and title with it', () => {
+  test('a copy takes the sub-agent transcripts, tool results, workflows and title with it', async () => {
     const src = join(home, 'side-src-1')
     const dst = join(home, 'side-dst-1')
     put(at(src, `${SIDE}.jsonl`), 'turn 1\n')
     for (const f of sidecar) put(at(src, SIDE, f), `from ${f}`)
-    expect(seedSession(SIDE, cwd, dst, [join(src, 'projects')], home).status).toBe('copied')
+    expect((await seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).status).toBe('copied')
     for (const f of sidecar) expect(readFileSync(at(dst, SIDE, f), 'utf8')).toBe(`from ${f}`)
   })
 
-  test('a refresh adds only the files the target lacks, and keeps its own', () => {
+  test('a refresh adds only the files the target lacks, and keeps its own', async () => {
     const src = join(home, 'side-src-2')
     const dst = join(home, 'side-dst-2')
     put(at(dst, `${SIDE}.jsonl`), 'turn 1\n', 1_000)
@@ -114,44 +114,44 @@ describe('seedSession: the sidecar folder goes along', () => {
     put(at(src, `${SIDE}.jsonl`), 'turn 1\nturn 2\n', 2_000)
     put(at(src, SIDE, 'custom-title.json'), '{"title":"named at the source"}')
     put(at(src, SIDE, 'tool-results', 'r2.txt'), 'turn 2 output')
-    expect(seedSession(SIDE, cwd, dst, [join(src, 'projects')], home).status).toBe('refreshed')
+    expect((await seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).status).toBe('refreshed')
     expect(readFileSync(at(dst, SIDE, 'custom-title.json'), 'utf8')).toBe('{"title":"named on this account"}')
     expect(readFileSync(at(dst, SIDE, 'tool-results', 'r2.txt'), 'utf8')).toBe('turn 2 output')
   })
 
-  test('a copy already there without its sidecar (made before sidecars went along) gets it, its transcript untouched', () => {
+  test('a copy already there without its sidecar (made before sidecars went along) gets it, its transcript untouched', async () => {
     const src = join(home, 'side-src-4')
     const dst = join(home, 'side-dst-4')
     put(at(dst, `${SIDE}.jsonl`), 'turn 1\nturn 2 here\n', 2_000)
     put(at(src, `${SIDE}.jsonl`), 'turn 1\n', 1_000)
     for (const f of sidecar) put(at(src, SIDE, f), `from ${f}`)
-    expect(seedSession(SIDE, cwd, dst, [join(src, 'projects')], home).status).toBe('present')
+    expect((await seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).status).toBe('present')
     for (const f of sidecar) expect(readFileSync(at(dst, SIDE, f), 'utf8')).toBe(`from ${f}`)
     expect(readFileSync(at(dst, `${SIDE}.jsonl`), 'utf8')).toBe('turn 1\nturn 2 here\n')
   })
 
-  test('a copy whose sidecar fails partway leaves no transcript, so the next call finishes it', () => {
+  test('a copy whose sidecar fails partway leaves no transcript, so the next call finishes it', async () => {
     const src = join(home, 'side-src-5')
     const dst = join(home, 'side-dst-5')
     put(at(src, `${SIDE}.jsonl`), 'turn 1\n')
     for (const f of sidecar) put(at(src, SIDE, f), `from ${f}`)
     // a file where the subagents folder must go makes the sidecar copy throw
     put(at(dst, SIDE, 'subagents'), 'in the way')
-    expect(() => seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).toThrow()
+    await expect(seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).rejects.toThrow()
     expect(existsSync(at(dst, `${SIDE}.jsonl`))).toBe(false)
 
     rmSync(at(dst, SIDE, 'subagents'))
-    expect(seedSession(SIDE, cwd, dst, [join(src, 'projects')], home).status).toBe('copied')
+    expect((await seedSession(SIDE, cwd, dst, [join(src, 'projects')], home)).status).toBe('copied')
     for (const f of sidecar) expect(readFileSync(at(dst, SIDE, f), 'utf8')).toBe(`from ${f}`)
     expect(readFileSync(at(dst, `${SIDE}.jsonl`), 'utf8')).toBe('turn 1\n')
   })
 
-  test('a session without one is copied alone, and no empty folder is made', () => {
+  test('a session without one is copied alone, and no empty folder is made', async () => {
     const LONE = '8d8d8d8d-1111-4222-8333-444455556666'
     const src = join(home, 'side-src-3')
     const dst = join(home, 'side-dst-3')
     put(at(src, `${LONE}.jsonl`), 'turn 1\n')
-    expect(seedSession(LONE, cwd, dst, [join(src, 'projects')], home).status).toBe('copied')
+    expect((await seedSession(LONE, cwd, dst, [join(src, 'projects')], home)).status).toBe('copied')
     expect(existsSync(at(dst, `${LONE}.jsonl`))).toBe(true)
     expect(existsSync(at(dst, LONE))).toBe(false)
   })

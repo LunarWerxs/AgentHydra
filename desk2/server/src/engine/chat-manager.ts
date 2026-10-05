@@ -184,6 +184,10 @@ interface Entry {
   pastSessions?: string[]
   /** The accounts the message in flight has failed on or moved through (carryToAnotherAccount); cleared by the next send. */
   moved?: string[]
+  /** Set while carryToAnotherAccount moves the chat: a send waits for it (then it goes to the new account, after the replay). */
+  moving?: Promise<void>
+  /** The session copy under way (seedResume): a second start waits for it instead of copying onto the same file. */
+  seeding?: Promise<string | null>
   /** The owner named this chat (or it was named once already): the generated title never replaces it. */
   titled?: boolean
   /** The ids of its own background tasks still running that count toward backgroundActive (long-lived ones do not). */
@@ -577,10 +581,22 @@ export class ChatManager {
       this.autoTitle(e, text)
     }
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, text, images, opts)
+    // Awaited only when there is something to wait for: a new chat's first send starts its process at once.
+    if (e.moving) {
+      while (e.moving) await e.moving
+      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+    }
+    // Sent again by hand while the move was sending it already (the owner saw the limit line): once is enough.
+    if (e.runtime?.takeReplayed(text, images)) {
+      this.systemLine(id, 'move-dup', 'info', `That message is already being sent again on ${accountName(e.chat.account)} after the move, so it was not sent twice.`)
+      return { queued: false }
+    }
     if (!e.runtime?.running) {
       // A cold start is a new process: the tasks the last one started ended with it.
       if (this.endTasks(e)) this.changed(e.chat)
-      const cannot = this.seedResume(e)
+      const seeding = this.seedResume(e)
+      const cannot = seeding ? await seeding : null
+      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
       if (cannot) throw new ChatError(409, cannot)
     }
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
@@ -594,10 +610,11 @@ export class ChatManager {
    * now and its start, hooks and MCP servers are over by the time the message is sent. A chat that is running,
    * a worker's, or one whose session cannot resume is left as it is.
    */
-  warm(id: string): { started: boolean } {
+  async warm(id: string): Promise<{ started: boolean }> {
     const e = this.entry(id)
-    if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived) return { started: false }
-    if (this.seedResume(e)) return { started: false }
+    if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived || e.moving) return { started: false }
+    if (await this.seedResume(e)) return { started: false }
+    if (this.chats.get(id) !== e || e.runtime?.running || e.moving) return { started: false }
     if (this.endTasks(e)) this.changed(e.chat)
     const started = this.runtimeOf(e).warm()
     if (started) this.timings.sdkWarmed(id)
@@ -1498,7 +1515,14 @@ export class ChatManager {
     const tried = (e.moved ??= [e.chat.account.id])
     if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
     if (tried.length > MAX_MOVES) return false
-    void this.moveChat(e, rt, signIn, window).catch((err) => this.moveFailed(e, rt, `Could not move this chat to another account: ${err instanceof Error ? err.message : String(err)}`))
+    let done!: () => void
+    e.moving = new Promise<void>((r) => (done = r))
+    void this.moveChat(e, rt, signIn, window)
+      .catch((err) => this.moveFailed(e, rt, `Could not move this chat to another account: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => {
+        e.moving = undefined
+        done()
+      })
     return true
   }
 
@@ -1516,12 +1540,14 @@ export class ChatManager {
     tried.push(next.id)
     chat.account = accountRef(next)
     chat.accountAuto = true
-    const cannot = this.seedResume(e)
+    // Said before the session copy, which can take a while on a long chat.
+    this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
+    this.changed(chat)
+    const cannot = await this.seedResume(e)
     if (cannot) {
       this.moveFailed(e, rt, cannot)
       return
     }
-    this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
     if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
     await rt.close()
     if (this.chats.get(chat.id) !== e) return
@@ -1668,17 +1694,22 @@ export class ChatManager {
    * "No conversation found". The folder the chat last ran in is the source (also after a restart): its
    * copy has the latest turns. Answers why the session cannot resume, or null: a session Hydra Desk never
    * ran (adopted from outside, or a fork of one) that no folder on this machine has, said in the
-   * transcript too. One it ran was written by its own process, so a resume is never refused here.
+   * transcript too. One it ran was written by its own process, so a resume is never refused here. Null
+   * (no promise) when the chat has no session yet: nothing to copy.
    */
-  private seedResume(e: Entry): string | null {
-    const chat = e.chat
+  private seedResume(e: Entry): Promise<string | null> | null {
     // A fork not started yet resumes (and forks) the session it came from.
-    const sessionId = chat.sessionId ?? chat.forkedFrom
+    const sessionId = e.chat.sessionId ?? e.chat.forkedFrom
     if (!sessionId) return null
+    return (e.seeding ??= this.seedNow(e, sessionId).finally(() => (e.seeding = undefined)))
+  }
+
+  private async seedNow(e: Entry, sessionId: string): Promise<string | null> {
+    const chat = e.chat
     const ranIn = ranInOf(e)
     const prefer = ranIn === undefined ? null : projectsRoot(ranIn)
     try {
-      const r = seedSession(sessionId, chat.cwd, chat.account.configDir, this.bridge.sessionRoots(), undefined, prefer)
+      const r = await seedSession(sessionId, chat.cwd, chat.account.configDir, this.bridge.sessionRoots(), undefined, prefer)
       if (r.status === 'copied') {
         this.systemLine(chat.id, 'seed', 'info', `Copied this session into ${chat.account.label}'s folder to continue it under that login. The original is unchanged.`)
       } else if (r.status === 'refreshed') {
@@ -1693,7 +1724,7 @@ export class ChatManager {
     }
     // The CLI resumes from the project folder of the cwd it starts in: after a move the transcript is copied under the new folder's name.
     try {
-      placeInCwd(sessionId, chat.cwd, chat.account.configDir)
+      await placeInCwd(sessionId, chat.cwd, chat.account.configDir)
     } catch (err) {
       console.warn(`[desk] chat ${chat.id}: could not place session ${sessionId} under ${chat.cwd}: ${err instanceof Error ? err.message : String(err)}`)
     }
