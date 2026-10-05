@@ -10,11 +10,9 @@
  * host files edited in the working tree for hours held a Desk 2 and CliMayte push that touched none of
  * them).
  *
- * A drifted file blocks the push when the push could carry it:
- *   - a commit in the push changed it, or
- *   - it has no uncommitted change, so the drift is what the branch itself holds.
- * A drifted file with an uncommitted change that no pushed commit touches is someone's work in
- * progress: the remote keeps the copy it had. It is named and left alone.
+ * A drifted file blocks the push only when a commit in the push changes it. Drift the push does not
+ * change (someone's uncommitted work, or a copy already on the remote) is named and left alone: the
+ * remote keeps the copy it had, and whoever changes that file next is held to the kit.
  * Any other failure of the kit check (nothing it calls drifted) still refuses the push.
  *
  * It never reimplements the kit's path rules: it runs `sync.mjs --check --app <key>` and reads that
@@ -40,6 +38,14 @@ const norm = (p) => p.replace(/\\/g, "/").toLowerCase();
 const git = (args) => execFileSync("git", args, { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 const lines = (s) => s.split("\n").map((l) => l.trim()).filter(Boolean);
 
+// The kit's report names files under the main checkout (kit.config.json's fixed paths), while this push
+// may run from a linked worktree: both sides are compared as paths inside the repo.
+const mainRoot = norm(resolve(git(["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim(), ".."));
+const inRepo = (abs) => {
+  const n = norm(abs);
+  return n.startsWith(`${mainRoot}/`) ? n.slice(mainRoot.length + 1) : n;
+};
+
 // Files the push changes: every commit it sends that the remote does not have yet.
 const pushed = new Set();
 const ZERO = /^0+$/;
@@ -47,17 +53,8 @@ for (const line of lines(readFileSync(0, "utf8"))) {
   const [, localSha] = line.split(/\s+/);
   if (!localSha || ZERO.test(localSha)) continue; // a deletion sends no files
   for (const p of lines(git(["log", "--name-only", "--format=", localSha, "--not", `--remotes=${remote}`])))
-    pushed.add(norm(resolve(REPO, p)));
+    pushed.add(norm(p));
 }
-
-// Files with an uncommitted change (staged or not, untracked included).
-// Porcelain lines start with two status columns and a space, the first often a space: never trimmed.
-const dirty = new Set(
-  git(["status", "--porcelain", "--untracked-files=all"])
-    .split("\n")
-    .filter((l) => l.length > 3)
-    .map((l) => norm(resolve(REPO, l.slice(3).replace(/^.* -> /, "").replace(/^"|"$/g, "")))),
-);
 
 let failed = false;
 for (const app of apps) {
@@ -78,11 +75,11 @@ for (const app of apps) {
     failed = true;
     continue;
   }
-  const carried = drifted.filter((p) => pushed.has(norm(p)) || !dirty.has(norm(p)));
+  const carried = drifted.filter((p) => pushed.has(inRepo(p)));
   const inProgress = drifted.filter((p) => !carried.includes(p));
   if (inProgress.length)
     console.error(
-      [`› kit drift in uncommitted work this push does not carry (${app}), left alone:`, ...inProgress.map((p) => `    ${p}`)].join("\n"),
+      [`› kit drift this push does not change (${app}), left alone:`, ...inProgress.map((p) => `    ${p}`)].join("\n"),
     );
   if (carried.length) {
     console.error(
