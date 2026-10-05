@@ -1614,7 +1614,7 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
   signed-out reason. That run found the `Failed to authenticate: OAuth session expired` wording,
   which is now classified `auth`.
 - Proven 2026-09-30: a quick-add sign-in completed by the owner renamed the new instance to
-  `abdoamdah3@gmail.com (pro)` (#83), and a real task restricted to #83 finished `done` with the
+  its account's address with `(pro)` after it (#83), and a real task restricted to #83 finished `done` with the
   result `OK` in 6 s. Quick add then got its sign-in window (`core/signin-window.ts`, driving
   `orchestrator/scripts/lib/signin_window.py`): Add account opens a new private window with
   zendriver (the owner's chosen engine; `python -m pip install zendriver`) on a throwaway profile,

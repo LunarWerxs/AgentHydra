@@ -11,6 +11,8 @@ import type { SidebarOrder } from './logic'
 const ORDER_KEY = 'hydra-desk.sidebar.order'
 /** The rows remembered, the desk list's and the cloud list's together; the cloud's own, at the end, go first. */
 const MAX_ROWS = 6000
+/** The groups remembered: keys are only ever added, so the oldest (last) go once there are this many. */
+const MAX_GROUPS = 1000
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
 const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((k, i) => k === b[i])
@@ -31,7 +33,7 @@ function createOrder() {
     if (same(next.groups, order.value.groups) && same(next.rows, order.value.rows)) return
     order.value = next
     try {
-      storage?.setItem(ORDER_KEY, JSON.stringify({ groups: next.groups, rows: next.rows.slice(0, MAX_ROWS) }))
+      storage?.setItem(ORDER_KEY, JSON.stringify({ groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS) }))
     } catch {
       // storage full or blocked: the order holds for this window only
     }
