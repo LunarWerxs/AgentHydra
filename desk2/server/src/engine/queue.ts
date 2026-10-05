@@ -132,7 +132,7 @@ export class QueueManager {
     const saved = this.load()
     if (saved) {
       this.recover(saved, chats)
-      this.save()
+      this.save(this.state())
     }
     this.kick()
   }

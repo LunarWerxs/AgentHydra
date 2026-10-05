@@ -108,8 +108,6 @@ import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t, locale } = useI18n()
-// The one text this view adds (the copy's English messages are not edited from here).
-i18n.global.mergeLocaleMessage('en', { climayte: { showOlder: 'Show older' } })
 const openView = inject(OPEN_VIEW, () => {})
 const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
 
