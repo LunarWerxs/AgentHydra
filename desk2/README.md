@@ -55,8 +55,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   share the task's chat. However deep a chain goes, a running task still shows (past three steps in, at
   the third step's indent), and so does every finished task above it: the server keeps those past its
   "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
-  the desk so the tasks show. When the other PC's AgentHydra is too old to say which chat started its
-  running tasks, one quiet line at the top of the list says how many are not shown there, and why.
+  the desk so the tasks show. Every task AgentHydra's CliMayte list shows running is in the sidebar
+  (owner, 2026-10-05: "Is one smaller than six?"): one no row in the list started sits at the top, under
+  a heading for its PC ("On CornuCopia", "On this PC") with one line saying why: that PC's AgentHydra is
+  too old to say which chat started it, nothing says, or that chat is not in the list. Once it can say, the
+  task moves under its chat.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.

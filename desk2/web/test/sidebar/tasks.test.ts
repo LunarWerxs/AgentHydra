@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CliMayteWorker } from '@shared/protocol'
-import { nestTasks, unplacedRemote, type TaskNode } from '../../src/components/sidebar/tasks'
+import { nestTasks, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -64,6 +64,8 @@ test("a session's running tasks sit under it, a manager's wave under the manager
   expect(tasks.byRow.has('cloud:s-mgr2')).toBe(false)
   const listed = [...tasks.byRow.values()].flat().map((n) => n.worker.id)
   expect(listed.length).toBe(new Set(listed).size)
+  // Every running task is under a row or drawn as one, so none is listed again at the top.
+  expect(tasks.unplaced).toEqual([])
 })
 
 test('a running task deep in a chain is still listed, at the deepest indent, with the finished task above it', () => {
@@ -129,25 +131,39 @@ test("another PC's tasks sit under the chat that spawned them there, a wave unde
   expect(listOf(tasks.byRow.get('external:s-remote-chat'))).toEqual(['1:OTHER-PC:w-1', '2:OTHER-PC:w-2'])
 })
 
-// (owner, 2026-10-05: "there are currently running tasks in the cloud on the other computer. But it does not show me them")
-test("another PC's running tasks with no session or origin are counted per PC, so the sidebar can say why they are missing", () => {
+// (owner, 2026-10-05, AgentHydra's CliMayte list against Desk's sidebar: "Is one smaller than six? Yes ... Why?")
+test('a running task no row lists is still shown, at the top, per PC with the reason, and every running task is shown once', () => {
   const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
   const workers = [
-    worker('a1', 1, { ...bare, pc: 'PC-B' }),
-    worker('a2', 2, { ...bare, pc: 'PC-A' }),
-    worker('a3', 3, { ...bare, pc: 'PC-B' }),
-    // Placed: it says where it came from.
-    worker('a4', 4, { pc: 'PC-A', originSessionId: 's-chat' }),
-    worker('a5', 5, { ...bare, pc: 'PC-A', originWorkerId: 'w-mgr' }),
-    worker('a6', 6, { pc: 'PC-B' }),
-    // Finished: nothing to show.
-    worker('a7', 7, { ...bare, pc: 'PC-A', status: 'done', active: false }),
-    // This PC's own.
-    worker('a8', 8, bare)
+    // Under its chat, as before.
+    worker('placed', 1, { originSessionId: 's-chat' }),
+    // Its chat is not in the list: the finished manager above it comes too.
+    worker('mgr', 2, { originSessionId: 's-hidden', status: 'done', active: false }),
+    worker('kid', 3, { originWorkerId: 'mgr', originSessionId: 's-mgr' }),
+    // Nothing says which chat started it.
+    worker('loose', 4, { originSessionId: null }),
+    // Another PC's older AgentHydra sends no session or origin.
+    worker('old1', 5, { ...bare, pc: 'PC-B' }),
+    worker('old2', 6, { ...bare, pc: 'PC-B' }),
+    worker('old-done', 7, { ...bare, pc: 'PC-B', status: 'done', active: false }),
+    // Another PC's newer one, from a chat the list does not show.
+    worker('new', 8, { pc: 'PC-B', originSessionId: 's-there' }),
+    // A Desk chat that runs as a worker, still queued: drawn as its row.
+    worker('queued-chat', 9, { ...bare, status: 'queued' })
   ]
-  expect(unplacedRemote(workers)).toEqual([
-    { pc: 'PC-B', count: 2 },
-    { pc: 'PC-A', count: 1 }
+  const rows = [
+    { key: 'chat:1', sessionIds: ['s-chat'] },
+    { key: 'chat:2', sessionIds: [], workerId: 'queued-chat' }
+  ]
+  const tasks = nestTasks(rows, workers)
+  expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:placed'])
+  expect(tasks.unplaced.map((g) => [g.pc, g.reason, listOf(g.nodes)])).toEqual([
+    [null, 'not-listed', ['1:here:mgr', '2:here:kid']],
+    [null, 'no-origin', ['1:here:loose']],
+    ['PC-B', 'old-pc', ['1:PC-B:old1', '1:PC-B:old2']],
+    ['PC-B', 'not-listed', ['1:PC-B:new']]
   ])
-  expect(unplacedRemote([worker('a9', 9, { pc: 'PC-A', originSessionId: 's-x' })])).toEqual([])
+  const shown = [...[...tasks.byRow.values()].flat(), ...tasks.unplaced.flatMap((g) => g.nodes)].map((n) => n.worker)
+  const running = workers.filter((w) => w.active && w.id !== 'queued-chat')
+  expect(shown.filter((w) => w.active).sort((a, b) => a.startedAt! - b.startedAt!)).toEqual(running)
 })

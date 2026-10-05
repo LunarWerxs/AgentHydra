@@ -6,7 +6,8 @@ import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
-import type { TaskNode } from '@/components/sidebar/tasks'
+import RunningBadge from '@/components/sidebar/RunningBadge.vue'
+import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
 import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, sessionShape, SHAPE_LABELS } from './logic'
 import { useCloud } from './store'
 
@@ -33,6 +34,9 @@ function toggleGroup(key: string) {
   if (!next.delete(key)) next.add(key)
   collapsed.value = next
 }
+
+/** The running tasks under a group's rows, for its heading while it is folded. */
+const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id))) : 0)
 
 const now = ref(Date.now())
 let timer: ReturnType<typeof setInterval> | null = null
@@ -103,6 +107,7 @@ const ROW =
             />
           </button>
         </Tip>
+        <RunningBadge v-if="collapsed.has(g.key) && runningInGroup(g.rows)" :count="runningInGroup(g.rows)" />
         <span class="flex-1" />
         <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />

@@ -11,8 +11,10 @@ import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
+import { Cloud } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
-import { nestTasks, showTasks, unplacedRemote, type NestedTasks, type NestRow } from './tasks'
+import RunningBadge from './RunningBadge.vue'
+import { nestTasks, runningIn, showTasks, unplacedText, type NestedTasks, type NestRow } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -191,16 +193,14 @@ const emptyText = computed(() =>
 
 // Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
 // desk list, the rows each draws) lists the CliMayte tasks it handed out under it, a manager's wave one step
-// further in, each task once (tasks.ts). Tasks appear only there, another PC's under its chat too (the chat
-// sync brings that chat here with the same session id); one whose row the filter, the search or the list
-// leaves out is not shown (owner, 2026-10-04: "Under the chat which spawned them. Not as its own stand
-// alone table"). The other PCs' tasks: the desk store keeps them apart from src.workers so they never count
-// as this PC's (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
+// further in, each task once (tasks.ts), another PC's under its chat too (the chat sync brings that chat here
+// with the same session id; owner, 2026-10-04: "Under the chat which spawned them. Not as its own stand alone
+// table"). A running task no drawn row lists (its PC does not say which chat started it, or the filter, the
+// search or the list leaves that chat out) is still shown, at the top, per PC with the reason: every task
+// AgentHydra's CliMayte list shows running is here (owner, 2026-10-05: "Is one smaller than six?"). The other
+// PCs' tasks: the desk store keeps them apart from src.workers so they never count as this PC's
+// (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
 const remoteWorkers = computed(() => src.remoteWorkers?.value ?? [])
-// Another PC's running tasks its older AgentHydra sends with no origin sit under no row: one line per PC
-// says why (owner, 2026-10-05: "there are currently running tasks in the cloud on the other computer. But it
-// does not show me them").
-const unplaced = computed(() => (showTasks.value ? unplacedRemote(remoteWorkers.value) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
@@ -218,6 +218,8 @@ const nesting = computed<NestedTasks | null>(() => {
   return nestTasks(rows, workers)
 })
 const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
+/** The running tasks under a desk-list group's rows, for its heading while it is folded. */
+const runningInGroup = (g: ChatGroup) => runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
@@ -437,10 +439,17 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </div>
 
-        <template v-if="!hydraModel">
-          <p v-for="u in unplaced" :key="u.pc" role="status" class="px-1.5 pt-1 text-[12px] leading-4 text-text-muted">
-            {{ u.count }} running {{ u.count === 1 ? 'task' : 'tasks' }} on {{ u.pc }} {{ u.count === 1 ? 'is' : 'are' }} not shown: its AgentHydra is too old to say which chat started them. Update it there.
-          </p>
+        <template v-if="!hydraModel && nesting">
+          <section v-for="g in nesting.unplaced" :key="`${g.pc ?? ''}|${g.reason}`" :aria-label="`${unplacedText(g).title}: CliMayte tasks not under a chat`">
+            <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
+              <Cloud v-if="g.pc" class="size-3 shrink-0" aria-hidden="true" />
+              <span class="truncate">{{ unplacedText(g).title }}</span>
+              <span class="flex-1" />
+              <span class="tnum">{{ unplacedText(g).count }}</span>
+            </header>
+            <p class="px-1.5 pb-1 text-[11px] leading-4 text-text-muted">{{ unplacedText(g).note }}</p>
+            <TaskRows :nodes="g.nodes" :selected-id="selectedExternalId" :now="now" @open="openTask" />
+          </section>
         </template>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
@@ -478,6 +487,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 />
               </button>
             </Tip>
+            <RunningBadge v-if="collapsed.has(group.key) && runningInGroup(group)" class="ml-1" :count="runningInGroup(group)" />
             <span class="flex-1" />
             <Tip v-if="group.cwd" :label="`New session in ${group.label}`">
               <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: group.cwd })">
