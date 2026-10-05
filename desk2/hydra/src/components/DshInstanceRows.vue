@@ -12,7 +12,7 @@
 // its authentication, so "launch" and "open" are daemon actions that open the window on the machine
 // the daemon runs on and answer with an outcome. See server/src/core/dsh-instances.ts.
 import { Copy, Pencil, Play, Square, Trash2 } from '@lucide/vue'
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
@@ -136,6 +136,9 @@ function rowModel(inst: DshInstance): InstanceRowModel {
   }
 }
 
+// Built once per data change, so a row whose instance did not change keeps the same model and does not redraw.
+const rowModels = computed(() => new Map(instances.value.map((inst) => [inst.id, rowModel(inst)])))
+
 async function onNameSubmit(name: string): Promise<void> {
   const dialog = nameDialog.value
   if (!dialog) return
@@ -205,7 +208,7 @@ defineExpose({ openCreate, refresh })
 </script>
 
 <template>
-  <InstanceRow v-for="inst in instances" :key="inst.id" :columns="columns" :row="rowModel(inst)">
+  <InstanceRow v-for="inst in instances" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
     <template #primary>
       <Button
         size="sm"

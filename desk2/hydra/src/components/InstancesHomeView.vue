@@ -19,7 +19,7 @@ import {
   Zap,
 } from '@lucide/vue'
 import { useDocumentVisibility, useElementVisibility } from '@vueuse/core'
-import { type Component, computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { type Component, computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
@@ -35,7 +35,6 @@ import {
   getCliMayteTotals,
   getSessions,
   listCliMayteWorkers,
-  type SessionSummary,
 } from '@/lib/api'
 import { seriesColor } from '@/lib/chart'
 import { isCliMayteActive, modelName, tokenTotal } from '@/lib/climayte-status'
@@ -95,26 +94,16 @@ const swarmRows = computed(() =>
 )
 
 const totals = ref<CliMayteTotals | null>(null)
-const workers = ref<CliMayteWorkerView[]>([])
-const sessions = ref<SessionSummary[]>([])
+// Replaced whole on each refresh, never edited in place: shallow, so a long list gets no deep proxies.
+const workers = shallowRef<CliMayteWorkerView[]>([])
+// The page only reads each session's last activity, so that is all that is kept.
+const sessionTimes = shallowRef<number[]>([])
 const failed = ref(false)
 const refreshing = ref(false)
 /** Wall clock for the "last hour" cuts, taken at each refresh so a tile never changes between them. */
 const asOf = ref(Date.now())
 
-function poolLine(which: 'desktop' | 'cli'): string {
-  const rows =
-    which === 'cli'
-      ? cliInstances.value.map((i) => ({
-          signedIn: i.loggedIn,
-          planLabel: i.planLabel,
-          usage: snapshotFor(`cli:${i.id}`),
-        }))
-      : desktopInstances.value.map((i) => ({
-          signedIn: !!i.account,
-          planLabel: i.account?.planLabel,
-          usage: snapshotFor(`desktop:${i.dir}`),
-        }))
+function poolLine(rows: { signedIn: boolean; planLabel?: string | null; usage: ReturnType<typeof snapshotFor> }[]): string {
   const pct = (w: 'session' | 'weekAll') => {
     const p = pooledRemaining(
       rows.map((r) => ({ signedIn: r.signedIn, planLabel: r.planLabel, limit: r.usage?.[w] })),
@@ -124,6 +113,25 @@ function poolLine(which: 'desktop' | 'cli'): string {
   }
   return t('instances.home.poolLine', { session: pct('session'), week: pct('weekAll') })
 }
+// Each pool depends on its own instance list only, so a poll of the other one does not redo it.
+const desktopPool = computed(() =>
+  poolLine(
+    desktopInstances.value.map((i) => ({
+      signedIn: !!i.account,
+      planLabel: i.account?.planLabel,
+      usage: snapshotFor(`desktop:${i.dir}`),
+    })),
+  ),
+)
+const cliPool = computed(() =>
+  poolLine(
+    cliInstances.value.map((i) => ({
+      signedIn: i.loggedIn,
+      planLabel: i.planLabel,
+      usage: snapshotFor(`cli:${i.id}`),
+    })),
+  ),
+)
 
 async function load() {
   if (refreshing.value) return
@@ -139,7 +147,9 @@ async function load() {
       workers.value = v
     }),
     getSessions(1000, '', 'hide', '24h').then((v) => {
-      sessions.value = v
+      const times = v.map((s) => s.last_activity_at)
+      const old = sessionTimes.value
+      if (times.length !== old.length || times.some((x, i) => x !== old[i])) sessionTimes.value = times
     }),
   ])
   failed.value = results.some((r) => r.status === 'rejected')
@@ -148,7 +158,7 @@ async function load() {
 }
 
 const sessionsSince = (ms: number) =>
-  sessions.value.filter((s) => s.last_activity_at >= asOf.value - ms).length
+  sessionTimes.value.filter((at) => at >= asOf.value - ms).length
 const workersTouched = computed(() =>
   workers.value.filter((w) => w.updatedAt >= asOf.value - HOUR_MS),
 )
@@ -224,7 +234,7 @@ const sessionSeries = computed(() => [
 ])
 const sessionHours = computed(() =>
   countPerHour(
-    sessions.value.map((s) => s.last_activity_at),
+    sessionTimes.value,
     asOf.value,
     HOURS,
   ).map((n, i) => ({ label: hourLabels.value[i] ?? '', values: [n] })),
@@ -263,7 +273,7 @@ const tiles = computed<Tile[]>(() => {
       icon: Monitor,
       value: String(desktopInstances.value.length),
       label: t('instances.home.desktopTitle'),
-      sub: `${t('instances.home.desktopSignedIn', { n: signedDesktop })} · ${poolLine('desktop')}`,
+      sub: `${t('instances.home.desktopSignedIn', { n: signedDesktop })} · ${desktopPool}`,
       to: 'instances',
     },
     {
@@ -271,7 +281,7 @@ const tiles = computed<Tile[]>(() => {
       icon: Terminal,
       value: String(cliInstances.value.length),
       label: t('instances.home.cliTitle'),
-      sub: `${t('instances.home.cliSignedIn', { n: signedCli })} · ${poolLine('cli')}`,
+      sub: `${t('instances.home.cliSignedIn', { n: signedCli })} · ${cliPool}`,
       to: 'cli',
     },
     {
@@ -323,7 +333,7 @@ const tiles = computed<Tile[]>(() => {
     {
       key: 'day',
       icon: Layers,
-      value: String(sessions.value.length),
+      value: String(sessionTimes.value.length),
       label: t('instances.home.sessionsDay'),
       to: 'analytics',
     },
@@ -430,7 +440,7 @@ onUnmounted(stop)
       >
         <h3 class="mb-1 flex items-center gap-2 text-xs font-semibold">
           {{ $t('instances.home.chartSessions') }}
-          <span class="text-3xs font-normal text-muted-foreground tabular-nums">{{ sessions.length }}</span>
+          <span class="text-3xs font-normal text-muted-foreground tabular-nums">{{ sessionTimes.length }}</span>
         </h3>
         <HourBars :hours="sessionHours" :series="sessionSeries" height-class="h-[5.5rem]" />
       </section>

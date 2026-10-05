@@ -165,8 +165,13 @@ const { usageMode, toggle: toggleUsageMode, now } = useUsageMode(true)
 // and DeepSeek rows below them keep their own order.
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
+// The sort compares time left, which is the reset instant minus one shared "now", so a frozen "now" gives
+// the same order as the ticking one. Sorting on the tick would redraw every row every 15 s for nothing.
+const sortNow = ref(new Date())
+
 /** "Now" while it runs, else "3h ago" since it was last seen running on this PC (owner,
- *  2026-09-30: last running, not last launched). Reads the shared clock so the cell ticks. */
+ *  2026-09-30: last running, not last launched). Reads the shared clock, and the row model calls it
+ *  from a getter, so only the cell that draws the label ticks, not the whole table. */
 function lastRunningLabel(inst: CMInstance): string {
   void now.value
   return inst.isRunning ? t('instances.lastRunningNow') : timeAgo(inst.lastRunningAt)
@@ -273,7 +278,7 @@ const sortColumns: SortableColumn<CMInstance>[] = [
   { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
   { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
   // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
-  ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), now),
+  ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), sortNow),
   // By the instant, not the "3h ago" text, so the order is true across units.
   {
     key: 'lastActive',
@@ -672,7 +677,9 @@ function rowModel(inst: CMInstance): InstanceRowModel {
     lastRunning:
       inst.isRunning || inst.lastRunningAt
         ? {
-            label: lastRunningLabel(inst),
+            get label() {
+              return lastRunningLabel(inst)
+            },
             running: inst.isRunning,
             title: lastRunningExact(inst),
           }
@@ -735,8 +742,19 @@ async function onCreateFor(provider: Provider) {
 //
 // Returns an ARRAY (0 or 1) rather than an object, purely so the template can `v-for` over it and
 // get a properly-typed local binding — Vue has no `v-let`, and this avoids `!` assertions.
+const linkedClisByDir = computed(() => {
+  const byDir = new Map<string, CliInstance[]>()
+  for (const c of cliInstances.value) {
+    if (c.associatedDesktopDir == null) continue
+    const list = byDir.get(c.associatedDesktopDir)
+    if (list) list.push(c)
+    else byDir.set(c.associatedDesktopDir, [c])
+  }
+  return byDir
+})
+const NO_CLIS: CliInstance[] = []
 function linkedClis(dir: string): CliInstance[] {
-  return cliInstances.value.filter((c) => c.associatedDesktopDir === dir)
+  return linkedClisByDir.value.get(dir) ?? NO_CLIS
 }
 /** The 0-or-1 linked CLI login as a nullable, for `v-if` branching in the actions menu. */
 function linkedCliFor(dir: string): CliInstance | null {
@@ -923,7 +941,7 @@ async function onOpen(inst: CMInstance) {
     toast.success(t('instances.toastOpened'))
     // A successful isolated launch is live proof the install is manageable — re-check so a stale
     // "MSIX-only / not installed" banner clears itself instead of waiting on a manual Refresh.
-    if (desktopWarning.value) void refreshDesktopInstall(true)
+    if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
   }
   // Prefer the server's failure message — it explains the MSIX-only case (same convention
   // as the create dialog surfacing result.message).
@@ -1050,7 +1068,7 @@ async function onCreateSubmit(name: string) {
       createOpen.value = false
       if (result.needsBrowserDance) toast.info(t('instances.browserDanceBody'))
       // Same self-heal as onOpen: a successful create disproves a stale "not manageable" verdict.
-      if (desktopWarning.value) void refreshDesktopInstall(true)
+      if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
     } else {
       createError.value = result?.message ?? t('instances.toastCreateFailed')
     }
@@ -1177,7 +1195,7 @@ const {
   moveAllBusy,
   moveShowClosed,
   instLabel,
-  moveTargetsFor,
+  moveTargetsFor: moveTargetsForUncached,
   prepareMoveAll,
   runMoveAll,
   openChatFromMoveDialog,
@@ -1190,6 +1208,26 @@ const {
     chatCountsAt = 0
   },
 })
+
+// Each row's move targets, worked out once per list or toggle change and only for rows whose menu asks.
+const moveTargetsOf = computed(() => {
+  void instances.value
+  void moveShowClosed.value
+  const cache = new Map<string, ReturnType<typeof moveTargetsForUncached>>()
+  return (from: CMInstance) => {
+    let targets = cache.get(from.dir)
+    if (!targets) {
+      targets = moveTargetsForUncached(from)
+      cache.set(from.dir, targets)
+    }
+    return targets
+  }
+})
+// The move dialog's chats by project, grouped once per plan rather than on every render.
+const moveAllGroups = computed(() => groupByProject(moveAll.value?.plan.chats ?? []))
+// One model per drawn row, rebuilt only when the rows or the facts they read change, so a row whose data
+// did not change gets the same prop and does not redraw.
+const rowModels = computed(() => new Map(visibleRows.value.map((inst) => [inst.dir, rowModel(inst)])))
 
 function openDeleteDialog(inst: CMInstance) {
   deleteTarget.value = inst
@@ -1257,7 +1295,7 @@ onMounted(() => {
   startCliPolling()
   refreshDesktopInstall()
   desktopInstallTimer = window.setInterval(() => {
-    if (desktopWarning.value) void refreshDesktopInstall(true)
+    if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
   }, 60_000)
   // A probe or a resolve that never answers must not hold the order (or the warning) for good.
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
@@ -1443,7 +1481,7 @@ onUnmounted(() => {
             v-for="inst in visibleRows"
             :key="inst.dir"
             :columns="columns"
-            :row="rowModel(inst)"
+            :row="rowModels.get(inst.dir)!"
             :menu-open="rowMenuOpen === inst.dir"
             @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >
@@ -1648,11 +1686,11 @@ onUnmounted(() => {
                     {{ $t('instances.moveChatsShowNotRunning') }}
                   </DropdownMenuCheckboxItem>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem v-if="moveTargetsFor(inst).length === 0" disabled>
+                  <DropdownMenuItem v-if="moveTargetsOf(inst).length === 0" disabled>
                     {{ moveShowClosed || instances.length <= 1 ? $t('instances.moveChatsNoTargets') : $t('instances.moveChatsNoRunningTargets') }}
                   </DropdownMenuItem>
                   <DropdownMenuItem
-                    v-for="to in moveTargetsFor(inst)"
+                    v-for="to in moveTargetsOf(inst)"
                     :key="to.dir"
                     :disabled="moveAllBusy"
                     @click="prepareMoveAll(inst, to)"
@@ -1777,7 +1815,7 @@ onUnmounted(() => {
         <!-- Grouped by project, largest group first, so the SHAPE of the move is visible before the
              click. Each row opens that chat in Sessions (filtered to it, selected). -->
         <ul class="scroll-slim max-h-56 space-y-2 overflow-y-auto text-xs">
-          <li v-for="g in groupByProject(moveAll?.plan.chats ?? [])" :key="g.project">
+          <li v-for="g in moveAllGroups" :key="g.project">
             <div class="mb-1 flex items-center justify-between gap-2 text-2xs font-medium text-muted-foreground">
               <span class="truncate">{{ g.project }}</span>
               <span class="shrink-0">{{ $t('instances.moveChatsGroupCount', { n: g.sessions.length }) }}</span>
