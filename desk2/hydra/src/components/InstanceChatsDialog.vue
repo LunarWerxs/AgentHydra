@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ArrowRightLeft } from '@lucide/vue'
-import { ref, watch } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -41,7 +41,7 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const busy = ref(false)
 const error = ref<string | null>(null)
-const rows = ref<ChatListRow[]>([])
+const rows = shallowRef<ChatListRow[]>([])
 const total = ref(0)
 const counts = ref<ChatListResult['counts'] | null>(null)
 // Archived is the resting state of a Claude Desktop chat and therefore the majority of any

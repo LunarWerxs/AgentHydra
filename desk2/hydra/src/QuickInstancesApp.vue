@@ -12,7 +12,7 @@ import {
   Terminal,
   X,
 } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import QuickInstanceFilter from '@/components/QuickInstanceFilter.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -57,16 +57,21 @@ import { applyWindowSizeHint } from '@/lib/window-size-hint'
 // --window-size and saved geometry. Honor the daemon's one-shot URL hint just like the full shell.
 applyWindowSizeHint()
 
-const claude = ref<CMInstance[]>([])
-const claudeCli = ref<CliInstance[]>([])
-const codex = ref<CodexInstance[]>([])
+// The lists are only ever replaced whole, so they are shallow; a poll that brings the same data writes nothing.
+const claude = shallowRef<CMInstance[]>([])
+const claudeCli = shallowRef<CliInstance[]>([])
+const codex = shallowRef<CodexInstance[]>([])
+/** Writes `next` into `target` only when it differs from what is there. */
+function assignIfChanged<T>(target: { value: T }, next: T): void {
+  if (JSON.stringify(target.value) !== JSON.stringify(next)) target.value = next
+}
 const loading = ref(true)
 const refreshing = ref(false)
 const error = ref<string | null>(null)
 const notice = ref<string | null>(null)
 const busy = ref(new Set<string>())
 const resolvingAccounts = ref(new Set<string>())
-const usageSnapshots = ref(new Map<string, UsageSnapshot>())
+const usageSnapshots = shallowRef(new Map<string, UsageSnapshot>())
 const lightweightServer = ref(false)
 const lastAccountResolveAt = new Map<string, number>()
 
@@ -266,7 +271,7 @@ async function refresh(silent = false): Promise<void> {
     const previousAccounts = new Map(
       claude.value.map((instance) => [instance.dir, instance.account]),
     )
-    claude.value = desktopRows.map((instance) => {
+    assignIfChanged(claude, desktopRows.map((instance) => {
       // Carry a previously resolved identity forward (the list omits it) — unless the instance has
       // since been signed into a different account, in which case it is dropped rather than shown.
       const next = {
@@ -274,15 +279,19 @@ async function refresh(silent = false): Promise<void> {
         account: instance.account ?? previousAccounts.get(instance.dir) ?? null,
       }
       return loginChanged(next) ? { ...instance, account: instance.account ?? null } : next
-    })
-    claudeCli.value = cliRows
-    codex.value = codexRows
+    }))
+    assignIfChanged(claudeCli, cliRows)
+    assignIfChanged(codex, codexRows)
     // A signed-out account's kept reading under its live one (usage-cache.ts lastKnownUsage).
-    if (usageResult)
-      usageSnapshots.value = new Map([
+    if (usageResult) {
+      const merged = new Map([
         ...Object.entries(usageResult.lastKnown ?? {}),
         ...Object.entries(usageResult.cache),
       ])
+      if (JSON.stringify([...merged]) !== JSON.stringify([...usageSnapshots.value])) {
+        usageSnapshots.value = merged
+      }
+    }
     error.value = null
     void hydrateClaudeAccounts(claude.value, !silent)
   } catch (cause) {

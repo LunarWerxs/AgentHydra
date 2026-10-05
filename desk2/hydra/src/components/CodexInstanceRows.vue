@@ -133,8 +133,8 @@ async function refreshWithUsage() {
 /** The Refresh button's spinner: the list re-read or the usage checks that follow it. */
 const refreshing = computed(() => loading.value || refreshingUsage.value)
 
-// The shared clock every countdown cell on the tab formats against, so the whole tab ticks together.
-const { now } = useUsageMode(true)
+// Holds the shared clock while these rows are mounted; each row's own countdown cells read it.
+useUsageMode(true)
 /** The one fact the status dot reports: is the thing this row launches actually up? With the
  *  desktop surface switched off in Settings there is no desktop to be up, so the dot falls back to
  *  the CLI's own fact — signed in or not. */
@@ -203,6 +203,10 @@ const filterFacts = (instance: CodexInstance): InstanceFacts => ({
   signedIn: instance.loggedIn,
 })
 
+// The sort compares time left, which is the reset instant minus one shared "now", so a frozen "now" gives
+// the same order as the ticking one. Sorting on the tick would redraw every row every 15 s for nothing.
+const sortNow = ref(new Date())
+
 const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (instance: CodexInstance) => instance.id,
@@ -219,7 +223,7 @@ const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
     ...quotaSortColumns(
       usageFor,
       (instance: CodexInstance) => instance.account?.planLabel ?? undefined,
-      now,
+      sortNow,
     ),
   ],
 })
@@ -439,6 +443,20 @@ const moveTargetsFor = (from: CodexInstance) =>
     moveShowClosed.value,
     moveLabel,
   )
+// Each row's move targets, worked out once per list or toggle change and only for rows whose menu asks.
+const moveTargetsOf = computed(() => {
+  void instances.value
+  void moveShowClosed.value
+  const cache = new Map<string, CodexInstance[]>()
+  return (from: CodexInstance) => {
+    let targets = cache.get(from.id)
+    if (!targets) {
+      targets = moveTargetsFor(from)
+      cache.set(from.id, targets)
+    }
+    return targets
+  }
+})
 async function prepareMove(from: CodexInstance, to: CodexInstance) {
   if (moveBusy.value) return
   moveBusy.value = true
@@ -519,6 +537,9 @@ onUnmounted(() => {
 // `refresh` is the old section's Refresh button (list, then every ChatGPT login's usage, then the
 // list again); `refreshing` and `hiddenByFilter` feed the combined header's spinner and filter note.
 // visibleCount: the combined table's heading counts the rows actually drawn (filter included).
+// One model per drawn row, rebuilt only when the rows or the facts they read change, so a row whose data
+// did not change gets the same prop and does not redraw.
+const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
 const visibleCount = computed(() => visibleRows.value.length)
 defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter, visibleCount })
 </script>
@@ -528,7 +549,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
     v-for="instance in visibleRows"
     :key="instance.id"
     :columns="columns"
-    :row="rowModel(instance)"
+    :row="rowModels.get(instance.id)!"
   >
     <template #primary>
       <span v-if="instance.isExternal" class="whitespace-nowrap text-3xs text-muted-foreground">
@@ -586,7 +607,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
             {{ $t('instances.moveChatsShowNotRunning') }}
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem v-if="moveTargetsFor(instance).length === 0" disabled>
+          <DropdownMenuItem v-if="moveTargetsOf(instance).length === 0" disabled>
             {{
               moveShowClosed
                 ? $t('instances.moveChatsNoTargets')
@@ -594,7 +615,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
             }}
           </DropdownMenuItem>
           <DropdownMenuItem
-            v-for="to in moveTargetsFor(instance)"
+            v-for="to in moveTargetsOf(instance)"
             :key="to.id"
             @click="prepareMove(instance, to)"
           >
