@@ -161,6 +161,12 @@ sidebar on the left stays put, and only the pane on the right changes.
   and its turn goes on; a task the process no longer runs is marked stopped at once. A CliMayte chat's
   worker takes no message to stop one command, so its Stop stops that worker, turn and all (the dialog
   says so); CliMayte workers in the list are cancelled through AgentHydra as before.
+- **Change project.** For a message sent to, or typed in, the wrong folder (owner, 2026-10-05). A message
+  of yours has ⋯ in its hover toolbar: Change project, then a recent folder (all but this one) or Other
+  folder…, starts a new chat there that sends the same text and pictures with this chat's model, effort,
+  permissions and CliMayte setting, and opens it; this chat stays as it is, reply and all. An unsent draft
+  gets a ⋯ on the box's top-right corner: the same menu moves the text and pictures, unsent, into that
+  folder's new-session box (below anything already waiting there) and opens it, leaving this box empty.
 - **A CliMayte move reads as one line.** When CliMayte moves a chat to another account, the chat shows
   "CliMayte moved this chat from #164 to #153." and nothing else for it: the prompt the new session was
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A

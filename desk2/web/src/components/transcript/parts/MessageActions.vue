@@ -1,15 +1,19 @@
 <script setup lang="ts">
 // The toolbar under a message (role=toolbar "Message actions"): 24px muted buttons, hidden until the
-// message row is hovered. Hydra Desk has Copy, Resend, Fork and the time; the real app's Rewind, Pin and
+// message row is hovered. Hydra Desk has Copy, Resend, Fork, "..." and the time; the real app's Rewind, Pin and
 // Read aloud need server routes Hydra Desk does not have yet. Resend sends a prompt again as a new message
 // at the end of the chat (queued if a turn is running); it does not rewind what came after it. Fork (a
 // message of yours) opens a new chat cut just before that message, the message waiting unsent in its box.
+// "..." (a message of yours) has Change project: a new chat in the folder chosen sends the same text and
+// pictures and opens; this chat is left as it is, the message and its reply still in it.
 import { computed, ref } from 'vue'
 import { RotateCcw } from '@lucide/vue'
 import type { ImageRef, SendMessageRequest } from '@shared/protocol'
-import { icons } from '@/lib/icons'
+import { icons, shellGlyphs } from '@/lib/icons'
 import { buildCopyHtml } from '@/lib/clipboard-images'
 import type { DraftImage } from '@/components/composer/draft-images'
+import ChangeProjectMenu from '@/components/composer/ChangeProjectMenu.vue'
+import { movedChat } from '@/components/composer/change-project'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 
@@ -43,6 +47,13 @@ const forkLabel = computed(() =>
     : forkState.value === 'failed'
       ? `Fork failed${forkError.value ? `: ${forkError.value}` : ''}`
       : 'Fork: a new chat from just before this message'
+)
+
+const moreOpen = ref(false)
+const moveState = ref<'idle' | 'moving' | 'failed'>('idle')
+const moveError = ref('')
+const moreLabel = computed(() =>
+  moveState.value === 'moving' ? 'Sending to the other project…' : moveState.value === 'failed' ? `Change project failed${moveError.value ? `: ${moveError.value}` : ''}` : 'More'
 )
 
 /** A message with pictures copies them too: text/plain stays the text, text/html adds the pictures. */
@@ -101,6 +112,23 @@ async function resend() {
   setTimeout(() => (resendState.value = 'idle'), 1500)
 }
 
+/** Change project: the message, pictures and all, starts a new chat in that folder, which opens. */
+async function moveTo(cwd: string) {
+  const r = props.resend
+  if (!r || moveState.value === 'moving') return
+  moveState.value = 'moving'
+  try {
+    const images = r.images?.length ? await Promise.all(r.images.map(withBytes)) : []
+    const from = desk.chats.value.find((c) => c.id === ctx.chatId.value) ?? null
+    await desk.createChat(movedChat(from, cwd, { text: r.text, images }))
+    moveState.value = 'idle'
+  } catch (err) {
+    moveError.value = err instanceof Error ? err.message : String(err)
+    moveState.value = 'failed'
+    setTimeout(() => (moveState.value = 'idle'), 4000)
+  }
+}
+
 async function fork() {
   if (!props.itemId || forkState.value === 'forking') return
   forkState.value = 'forking'
@@ -124,7 +152,7 @@ async function fork() {
     role="toolbar"
     aria-label="Message actions"
     class="tx-actions"
-    :class="[align === 'end' ? 'justify-end' : 'justify-start', pinned && 'tx-actions-pinned']"
+    :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle') && 'tx-actions-pinned']"
   >
     <time v-if="align === 'end'" class="tx-actions-time">{{ time }}</time>
     <button type="button" class="tx-action" :aria-label="copied ? 'Copied' : 'Copy'" :title="copied ? 'Copied' : 'Copy'" @click="copy">
@@ -152,6 +180,11 @@ async function fork() {
     >
       <component :is="icons.fork" class="size-4" :class="forkState === 'failed' && 'text-danger-text'" />
     </button>
+    <ChangeProjectMenu v-if="canResend" v-model:open="moreOpen" :current="ctx.cwd.value" header="Send it in a new chat in" @choose="moveTo">
+      <button type="button" class="tx-action" :aria-label="moreLabel" :title="moreLabel" :disabled="moveState === 'moving'">
+        <component :is="shellGlyphs.rowMore" class="size-4" :class="moveState === 'failed' && 'text-danger-text'" />
+      </button>
+    </ChangeProjectMenu>
     <slot />
     <time v-if="align !== 'end'" class="tx-actions-time">{{ time }}</time>
   </div>

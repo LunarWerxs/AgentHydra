@@ -3,7 +3,7 @@
 // "Composer"): 768 wide, gap 6, top to bottom: Hydra Desk's status row (pending, queued;
 // ours), the repo strip, the box, the toolbar row below the box.
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { composerIcons, icons } from '@/lib/icons'
+import { composerIcons, icons, shellGlyphs } from '@/lib/icons'
 import type {
   ChatStatus,
   ChatSummary,
@@ -67,6 +67,8 @@ import NewSessionBar from './NewSessionBar.vue'
 import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
 import RepoStrip from './RepoStrip.vue'
+import ChangeProjectMenu from './ChangeProjectMenu.vue'
+import { joinDrafts } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
 import { openLightbox } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
@@ -519,6 +521,21 @@ watch(
     if (dir && !props.chat && !props.demo) newCwd.value = dir
   }
 )
+
+// The box's "..." corner: Change project moves an unsent draft, pictures and all, to the new-session box of the
+// folder chosen (below whatever already waits there) and opens it; this chat's box is left empty.
+const moveOpen = ref(false)
+function moveDraft(path: string) {
+  const to = draftSlot(null, path)
+  saveDraft(storage, to, joinDrafts(loadDraft(storage, to), text.value))
+  saveDraftImages(to, [...draftImages(to), ...images.value])
+  if (draftTimer) clearTimeout(draftTimer)
+  text.value = ''
+  images.value = []
+  saveDraft(storage, slot.value, '')
+  saveDraftImages(slot.value, [])
+  shell.select({ kind: 'new', cwd: path })
+}
 
 watch(cwd, () => {
   mentionDirsFor = null
@@ -1003,7 +1020,7 @@ onBeforeUnmount(() => {
       <!-- The box -->
       <div
         v-show="!request"
-        class="relative z-[1] rounded-[var(--radius-12)] bg-[var(--bg-popover)] p-2 transition-[box-shadow,background-color] duration-200 ease-[var(--ease-composer)]"
+        class="group/box relative z-[1] rounded-[var(--radius-12)] bg-[var(--bg-popover)] p-2 transition-[box-shadow,background-color] duration-200 ease-[var(--ease-composer)]"
         :class="
           dragging
             ? 'shadow-[inset_0_0_0_2px_var(--accent)]'
@@ -1013,6 +1030,24 @@ onBeforeUnmount(() => {
         @dragleave="dragging = false"
         @drop.prevent="onDrop"
       >
+        <!-- "..." on the box's corner (a chat's unsent draft): Change project -->
+        <ChangeProjectMenu
+          v-if="chat && !demo && (hasContent || moveOpen)"
+          v-model:open="moveOpen"
+          :current="cwd"
+          header="Move this draft to a new chat in"
+          @choose="moveDraft"
+        >
+          <button
+            type="button"
+            aria-label="More"
+            title="More"
+            class="absolute -right-2.5 -top-2.5 z-10 flex size-6 items-center justify-center rounded-full bg-[var(--bg-popover)] text-[var(--text-2)] shadow-[var(--shadow-menu-ringed)] transition-opacity duration-150 hover:text-[var(--text)] focus-visible:opacity-100 group-focus-within/box:opacity-100 group-hover/box:opacity-100"
+            :class="moveOpen ? 'opacity-100' : 'opacity-0'"
+          >
+            <component :is="shellGlyphs.rowMore" class="size-4" />
+          </button>
+        </ChangeProjectMenu>
         <!-- Slash command menu -->
         <div
           v-if="slashOpen"
