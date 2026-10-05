@@ -1,5 +1,5 @@
-// Gallery-only data for the shell: the same folders and rows as the real screenshots
-// (docs/reference/real/sidebar.png), plus one row for each Hydra Desk status cue.
+// Gallery-only data for the shell: rows laid out like the real screenshots
+// (docs/reference/real/sidebar.png) with invented titles and folders, plus one row for each Hydra Desk status cue.
 import { ref } from 'vue'
 import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
 import { cliMayteWorkerFixtures, settingsFixtures, transcriptFixtures } from '@/dev/fixtures'
@@ -50,28 +50,28 @@ function chat(
   }
 }
 
-const C = 'C:/Users/jacob/Desktop/Project/connections'
-const N = 'C:/Users/jacob/Desktop/nexuscode-2d'
-const P = 'C:/Users/jacob/Desktop/ParamountJacob'
+const C = 'C:/Users/me/Desktop/Project/connections'
+const N = 'C:/Users/me/Desktop/nexuscode-2d'
+const P = 'C:/Users/me/Desktop/audio-lab'
 
 export function demoChats(): ChatSummary[] {
   const now = Date.now()
   return [
-    chat('pc', 'PC performance issues', C, 'working', 1, {
+    chat('pc', 'Slow build investigation', C, 'working', 1, {
       activity: 'Bash: bun test',
       turnStartedAt: now - 3 * MIN - 12_000,
       climayteActive: 2
     }),
-    chat('ccd', 'Claude Code desktop replacement', C, 'idle', 2),
-    chat('ucp', 'Unified connections product consolidation plan', C, 'needs_you', 3, { unread: true, pendingCount: 1 }),
-    chat('avg', 'Apple vs Google design philosophy', C, 'idle', 4),
-    chat('csm', 'Connections Studio Marketplace UX review', C, 'limited', 5, {
+    chat('ccd', 'Desktop client rewrite plan', C, 'idle', 2),
+    chat('usb', 'Unified settings and billing consolidation plan', C, 'needs_you', 3, { unread: true, pendingCount: 1 }),
+    chat('nvw', 'Native vs web design trade-offs', C, 'idle', 4),
+    chat('mkt', 'Plugin marketplace onboarding UX review', C, 'limited', 5, {
       limitResetsAt: now + 2 * 60 * MIN,
       model: 'claude-sonnet-5-5'
     }),
-    chat('cg', 'Crazy Games resubmission readiness', N, 'idle', 6, { unread: true }),
+    chat('game', 'Game store resubmission readiness', N, 'idle', 6, { unread: true }),
     chat('err', 'Shader cache rebuild', N, 'error', 7, { lastError: 'API Error: 500 Internal server error' }),
-    chat('ymca', 'YMCA tune isolation model', P, 'closed', 60),
+    chat('stem', 'Audio stem isolation model', P, 'closed', 60),
     chat('pin', 'Hydra Desk release checklist', C, 'idle', 9, { pinned: true }),
     chat('sue', 'Kit sync for the composer', C, 'idle', 12, { account: { id: '35', label: '#35 sue (Max 5x)', configDir: null, number: 35 } }),
     chat('old', 'Old notes', P, 'closed', 900, { archived: true })
@@ -128,7 +128,7 @@ export function demoExternal(): ExternalSession[] {
   })
   return [
     ext('x-run', 'Level editor export bug', N, 'desktop', 'working', 2.5),
-    ext('x-stale', 'Paramount tune sweep', P, 'cli', 'stale', 3000),
+    ext('x-stale', 'Audio model tuning sweep', P, 'cli', 'stale', 3000),
     ext('x-cm', 'CliMayte worker (hidden)', C, 'climayte', 'working', 1)
   ]
 }
@@ -146,8 +146,8 @@ export function demoSearchHits(): SearchHit[] {
     score: 1
   })
   return [
-    hit('s-ccd', 'Claude Code desktop replacement', C, '…the sidebar search should use the websocket bridge to AgentHydra…', 2),
-    hit('x-stale', 'Paramount tune sweep', P, 'The websocket reconnect loop backs off to 30 s, then the sweep resumes…', 3000),
+    hit('s-ccd', 'Desktop client rewrite plan', C, '…the sidebar search should use the websocket bridge to AgentHydra…', 2),
+    hit('x-stale', 'Audio model tuning sweep', P, 'The websocket reconnect loop backs off to 30 s, then the sweep resumes…', 3000),
     hit('h-old1', 'Flaky websocket test in CI', N, '…bun test passes locally but the websocket test times out on the runner…', 60 * 24 * 3, 'desktop'),
     hit('h-old2', 'Export pipeline notes', N, 'Search found the shader cache rebuild in an old Codex session…', 60 * 24 * 40, 'codex')
   ]
@@ -227,7 +227,7 @@ export const demoComposerApi: ComposerApi = {
   rememberFolder: async () => [C, N, P],
   forgetFolder: async () => [C, N, P],
   pickFolder: async () => null,
-  browse: async (path) => ({ path: path ?? C, parent: 'C:/Users/jacob/Desktop/Project', dirs: [] }),
+  browse: async (path) => ({ path: path ?? C, parent: 'C:/Users/me/Desktop/Project', dirs: [] }),
   accounts: async () => demoAccounts(),
   pickAccount: async () => demoAccounts()[0]!,
   mcpServers: async () => [

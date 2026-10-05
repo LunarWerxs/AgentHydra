@@ -3,7 +3,7 @@ import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { chatFixtures } from '@/dev/fixtures'
 
 const now = Date.now()
-const CWD = 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk'
+const CWD = 'C:/Users/me/Desktop/Project/Agent Hydra/desk'
 let seq = 0
 const t = (secondsAgo: number) => now - secondsAgo * 1000 + seq++
 

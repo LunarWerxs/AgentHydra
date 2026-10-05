@@ -122,7 +122,7 @@ describe('markdown as Claude Code draws it', () => {
     const cached = renderMarkdown(`![shot](${url})`)
     expect(cached).toContain(`<button type="button" class="md-img" data-zoom="${url}"`)
     expect(cached).toContain(`<img src="${url}" alt="shot" loading="lazy">`)
-    const local = renderMarkdown('![after](C:/Users/jacob/shots/after.png)')
+    const local = renderMarkdown('![after](C:/Users/me/shots/after.png)')
     expect(local).toContain('class="md-file-chip"')
     expect(local).not.toContain('<img')
     const remote = renderMarkdown('![x](https://example.com/x.png)')

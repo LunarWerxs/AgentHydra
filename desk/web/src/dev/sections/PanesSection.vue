@@ -9,9 +9,9 @@ import { PANE_API, type PaneApi } from '@/components/panes/api'
 import { accountFixtures, settingsFixtures } from '../fixtures'
 
 // Fixture answers for every call the panes make, so the gallery needs no server.
-const REPO = 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk'
-const CLEAN = 'C:/Users/jacob/clean-repo'
-const NOT_REPO = 'C:/Users/jacob/Downloads'
+const REPO = 'C:/Users/me/Desktop/Project/Agent Hydra/desk'
+const CLEAN = 'C:/Users/me/clean-repo'
+const NOT_REPO = 'C:/Users/me/Downloads'
 
 const status: GitStatus = {
   isRepo: true,

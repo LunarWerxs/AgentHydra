@@ -7,10 +7,12 @@
 //   (pid + userData) is checked first and the socket is always closed in a finally block.
 //   Any debugger attach inside a script must detach itself in its own finally.
 import { readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 
 const PORT = 19330
 const PID = 64264
-const PROFILE = 'c:/users/jacob/.claude-instances/eek'
+const PROFILE = join(homedir(), '.claude-instances', 'eek').split('\\').join('/').toLowerCase()
 
 const [script, out] = process.argv.slice(2)
 if (!script) throw new Error('usage: harvest.ts <script.js> [outfile]')

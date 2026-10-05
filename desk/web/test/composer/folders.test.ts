@@ -5,7 +5,7 @@ describe('folder menu rows', () => {
   it('show names only; folders sharing a name get as much parent path as tells them apart', () => {
     const rows = folderRows(
       [
-        'C:\\Users\\jacob\\Desktop\\Project\\Agent Hydra\\desk\\web',
+        'C:\\Users\\me\\Desktop\\Project\\Agent Hydra\\desk\\web',
         'D:\\NEWProjects\\Connections',
         'D:\\NEWProjects\\web',
         'C:\\a\\x\\api',

@@ -4,7 +4,7 @@ Jacob, 2026-10-04: "This should work with CliMayte, which means CliMayte should 
 Codex, and any model that we have on our PC that is accessible."
 
 This is a scoping plan. Nothing here is built yet. Paths without a prefix are in AgentHydra
-(`C:/Users/jacob/Desktop/Project/Agent Hydra`, Michael's repo, read-only for us). Paths starting
+(`C:/Users/me/Desktop/Project/Agent Hydra`, Michael's repo, read-only for us). Paths starting
 `desk/` are Hydra Desk's own. Every observation was made on 2026-10-04 with GET requests to
 127.0.0.1:7787 or with read-only commands, and none of them printed a name, an email or a key.
 

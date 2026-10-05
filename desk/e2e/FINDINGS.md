@@ -80,7 +80,7 @@ plus the CLAUDE.md files it loads (defect 2), plus the MCP tool lists.
    "Rules for a CliMayte worker" text, which says the FIRST action is `prompt_get climayte_worker`. So
    an interactive Hydra Desk chat on those accounts is told it is a headless worker. In the e2e the
    model obeyed "Do not use any tools", but on a normal prompt it can follow the worker rules.
-   Separately, a cwd under `C:\Users\jacob` also loads `C:\Users\jacob\.claude\CLAUDE.md` as an
+   Separately, a cwd under `C:\Users\me` also loads `C:\Users\me\.claude\CLAUDE.md` as an
    ancestor project file. **Not fixed:** this is a design call (which instructions a Desk chat should
    get, and whether to drop `'user'` or point to Jacob's own `~/.claude` instructions), and it is too
    big for this piece.

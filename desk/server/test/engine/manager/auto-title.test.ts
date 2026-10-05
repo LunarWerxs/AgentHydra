@@ -60,7 +60,7 @@ test('a new chat gets the generated title, a user rename wins, a failure keeps t
 })
 
 test('cleanTitle keeps 6 words at most, drops quotes and the trailing period', () => {
-  expect(cleanTitle('"crazy games resubmission readiness check for the portal."\nmore')).toBe('Crazy games resubmission readiness check for')
+  expect(cleanTitle('"indie games resubmission readiness check for the portal."\nmore')).toBe('Indie games resubmission readiness check for')
   expect(cleanTitle('   ')).toBeNull()
 })
 

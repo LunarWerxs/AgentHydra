@@ -4,6 +4,7 @@
 `docs/reference/tools/harvest.ts` connects to the Node inspector on 127.0.0.1:19330, checks pid 47660, finds the Code tab webContents and runs a script through `executeJavaScript` (helpers in `page-lib.js`). Run: `bun docs/reference/tools/harvest.ts <script.js> [outfile]`. Screenshots use `capturePage`. The CDP debugger was never attached; the socket is closed in a `finally` on every run.
 
 ## Captured (PNG, full resolution, DPR 1)
+The screenshots stay on the PC that took them and are gitignored: they show real chats, and this repo is public.
 whole-window, sidebar, sidebar-selected-row-and-hover (selected row; hover read from CSS), top-bar-header (+ -left, -right), transcript-user-message, transcript-assistant-text, transcript-inline-code, transcript-tool-row-collapsed, composer-idle, composer-strip-above-box, composer-dock, menu-permission-mode, menu-model, menu-effort, menu-plus, sidebar-more, new-session-screen (+ -sidebar, -stats-card, -tip-and-composer), restored-check (proof the original chat row is selected again).
 Also: tokens.json, dom-outline.json (structure only), DESIGN.md, SPEC.md token table and Sidebar / Transcript / Composer values marked measured.
 

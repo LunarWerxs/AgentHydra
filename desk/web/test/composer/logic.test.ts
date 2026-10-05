@@ -131,7 +131,7 @@ describe('images', () => {
 
 describe('labels', () => {
   it('folder name handles both slash styles and a trailing slash', () => {
-    expect(folderName('C:\\Users\\jacob\\desk\\')).toBe('desk')
+    expect(folderName('C:\\Users\\me\\desk\\')).toBe('desk')
     expect(folderName('/home/j/connections')).toBe('connections')
   })
 })

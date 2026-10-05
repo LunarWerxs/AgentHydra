@@ -1,13 +1,13 @@
 // What the real captures in docs/reference/real show, as Hydra Desk data: sidebar rows with their dot
-// states, transcripts with the same words, the repo strip numbers and the composer draft. Times hang off
+// states, transcripts of the same shape (invented words), the repo strip numbers and the composer draft. Times hang off
 // PARITY_NOW so every render is identical.
 import type { AccountInfo, ChatStatus, ChatSummary, TranscriptItem } from '@shared/protocol'
 import { PARITY_NOW } from './clock'
 
 const MIN = 60_000
-const C = 'C:/Users/jacob/Desktop/Project/connections'
-const N = 'C:/Users/jacob/Desktop/nexuscode-2d'
-const P = 'C:/Users/jacob/Desktop/ParamountJacob'
+const C = 'C:/Users/me/Desktop/Project/connections'
+const N = 'C:/Users/me/Desktop/nexuscode-2d'
+const P = 'C:/Users/me/Desktop/audio-lab'
 
 type Row = [id: string, title: string, cwd: string, status: ChatStatus, extra?: Partial<ChatSummary>]
 
@@ -48,42 +48,42 @@ function chats(rows: Row[]): ChatSummary[] {
 /** user/window.webp: solid grey = running, blue = unread, amber = needs you, ring = idle. */
 export const windowChats = (): ChatSummary[] =>
   chats([
-    ['avg', 'Apple vs Google design philosophy', C, 'working'],
-    ['lambda', 'Lambda teardown and AWS leftovers', C, 'working'],
-    ['csm', 'Connections Studio Marketplace UX review', C, 'idle', { unread: true }],
-    ['ccd', 'Claude Code desktop replacement', C, 'idle'],
-    ['linktree', 'Linktree shops page review', C, 'needs_you'],
-    ['ucp', 'Unified connections product consolidation plan', C, 'idle'],
+    ['nvw', 'Native vs web design trade-offs', C, 'working'],
+    ['cfn', 'Cloud function teardown and leftovers', C, 'working'],
+    ['mkt', 'Plugin marketplace onboarding UX review', C, 'idle', { unread: true }],
+    ['ccd', 'Desktop client rewrite plan', C, 'idle'],
+    ['store', 'Storefront landing page review', C, 'needs_you'],
+    ['usb', 'Unified settings and billing consolidation plan', C, 'idle'],
     ['sui', 'Screen UI polish', N, 'working'],
-    ['cg', 'Crazy Games resubmission readiness', N, 'needs_you'],
-    ['ymca', 'YMCA tune isolation model', P, 'idle']
+    ['game', 'Game store resubmission readiness', N, 'needs_you'],
+    ['stem', 'Audio stem isolation model', P, 'idle']
   ])
 
 /** user/sidebar-crop.png: a later moment of the same window, with its own order and states. */
 export const sidebarUserChats = (): ChatSummary[] =>
   chats([
     ['ahs', 'Agent Hydra subprocess issue', C, 'working'],
-    ['csm', 'Connections Studio Marketplace UX review', C, 'working'],
-    ['ccd', 'Claude Code desktop replacement', C, 'working'],
-    ['avg', 'Apple vs Google design philosophy', C, 'working'],
-    ['lambda', 'Lambda teardown and AWS leftovers', C, 'working'],
-    ['linktree', 'Linktree shops page review', C, 'needs_you'],
-    ['ucp', 'Unified connections product consolidation plan', C, 'idle'],
+    ['mkt', 'Plugin marketplace onboarding UX review', C, 'working'],
+    ['ccd', 'Desktop client rewrite plan', C, 'working'],
+    ['nvw', 'Native vs web design trade-offs', C, 'working'],
+    ['cfn', 'Cloud function teardown and leftovers', C, 'working'],
+    ['store', 'Storefront landing page review', C, 'needs_you'],
+    ['usb', 'Unified settings and billing consolidation plan', C, 'idle'],
     ['sui', 'Screen UI polish', N, 'working'],
-    ['cg', 'Crazy Games resubmission readiness', N, 'needs_you'],
-    ['ymca', 'YMCA tune isolation model', P, 'idle']
+    ['game', 'Game store resubmission readiness', N, 'needs_you'],
+    ['stem', 'Audio stem isolation model', P, 'idle']
   ])
 
 /** whole-window.png, sidebar.png and the composer/menu captures taken with it. */
 export const harvestChats = (): ChatSummary[] =>
   chats([
-    ['pc', 'PC performance issues', C, 'working'],
-    ['ccd', 'Claude Code desktop replacement', C, 'idle'],
-    ['ucp', 'Unified connections product consolidation plan', C, 'idle'],
-    ['avg', 'Apple vs Google design philosophy', C, 'idle'],
-    ['csm', 'Connections Studio Marketplace UX review', C, 'idle'],
-    ['cg', 'Crazy Games resubmission readiness', N, 'idle', { unread: true }],
-    ['ymca', 'YMCA tune isolation model', P, 'working']
+    ['pc', 'Slow build investigation', C, 'working'],
+    ['ccd', 'Desktop client rewrite plan', C, 'idle'],
+    ['usb', 'Unified settings and billing consolidation plan', C, 'idle'],
+    ['nvw', 'Native vs web design trade-offs', C, 'idle'],
+    ['mkt', 'Plugin marketplace onboarding UX review', C, 'idle'],
+    ['game', 'Game store resubmission readiness', N, 'idle', { unread: true }],
+    ['stem', 'Audio stem isolation model', P, 'working']
   ])
 
 export function parityAccounts(): AccountInfo[] {
@@ -121,7 +121,7 @@ export function parityAccounts(): AccountInfo[] {
 
 type Usage = [id: string, name: string, plan: string | null, fiveHour: number | null, weekly: number | null, signedIn?: boolean]
 
-/** The accounts of ours-accounts-popup.png (Jacob's 42, cut to 14), in AgentHydra's order, not sorted. */
+/** The accounts of ours-accounts-popup.png (42 accounts, cut to 14), in AgentHydra's order, not sorted. */
 export function popoverAccounts(): AccountInfo[] {
   const rows: Usage[] = [
     ['default', 'Default login', null, null, null],
@@ -176,56 +176,57 @@ function tool(id: string, name: string, input: Record<string, unknown>, failed =
 const user = (id: string, text: string): TranscriptItem => ({ id, ts: at(40), kind: 'user', text })
 const say = (id: string, text: string): TranscriptItem => ({ id, ts: at(20), kind: 'assistant_text', text })
 
-// The window's long user message. Its first lines are scrolled out of view in the reference; the opening
-// sentence here is invented, the rest is the visible text word for word.
+// The window's long user message and its reply. The words are invented (this repo is public, so no
+// real chat goes in it); they keep the reference's length and shape: a run-on message that folds, then
+// a reply with bold lead-ins, a list, three '###' headings and a closing NEED line.
 const WINDOW_USER =
-  "Okay, are we in sync with Agent Hydra, and has Michael built a better version of this already? And is CliMayte's account picking smart or is it, " +
-  "mate not intelligent? What I mean by that is shouldn't it see oh yeah there's already three chats running on the friggin' pro account let's not throw eight others on there because pro accounts have virtually no usage " +
-  "And let's maybe throw it at oh a account with more usage. Are you not smart in your usage deployments? Do you not consider that it's a stinking pro account and thus has very little usage? " +
-  "But if it's a 5x or a max, shouldn't those be considered? If not, please make sure it is in the distribution and concurrent chats of the suggested available in these accounts so " +
-  "we don't have to change as often and cannot burn our cash tokens as often. So like make sure the picker reads the plan size and what is already running before it picks. " +
-  'And what do you mean by subscription logins?'
+  "Quick check before we go further: is our copy up to date with the main repo, and did anyone already build this somewhere else? And how does the scheduler choose an account, " +
+  "is it actually smart about it? It feels like it keeps stacking jobs on the smallest plan even when three are already running there, and those small plans run out in no time " +
+  "while the bigger plans sit mostly idle. Shouldn't it look at plan size first and send heavy jobs to the account with the most room? " +
+  "And if it's a 5x or a 20x, shouldn't that count for more? Please make sure plan size and what is already running both go into the choice, so " +
+  "we switch accounts less often and waste less of the quota we pay for. So basically: read the plan size and the current load before it picks. " +
+  'And what did you mean earlier by subscription logins?'
 
-const WINDOW_REPLY = `Yes, we're now in sync with Agent Hydra, and Michael hasn't built a better version. The Agent Hydra checkout was 110 commits behind. It's caught up to his latest, with nothing behind and nothing ahead. Those 110 commits are speed, analytics and usage-tracking work, and none is a desktop app. My first "no" was checked against the stale copy, so I re-checked, and it still holds.
+const WINDOW_REPLY = `Yes, the copy is now up to date, and nobody had built this elsewhere. The checkout was 110 commits behind. It's caught up now, with nothing behind and nothing ahead. Those 110 commits are speed, analytics and usage-tracking work, and none is a desktop app. My first answer was checked against the stale copy, so I checked again, and it still holds.
 
-**The manager:** Michael did build one, the CliMayte wave manager, and that is the one that broke on me. Hydra Desk is not a copy of it, and I've stopped using it.
+**The old manager:** there was an earlier wave manager for workers, and that is the one that kept failing. This app is not a copy of it, and I've stopped using it.
 
-**Is CliMayte smart about accounts?** Yes, it already does what you describe:
+**Does the scheduler weigh accounts?** Yes, it already does what you describe:
 
 - A Max 5x counts as 5 Pros and a Max 20x as 20.
 - It counts the workers already running on an account.
 - It caps workers per account, 4 per Pro window scaled by plan, and 2 for a group on a Pro.
 - It skips accounts someone is using and follows each account's weekly pace.
 
-**The weak spot was my own code.** Hydra Desk's account picker only looked at the lowest 5-hour usage. It ignored plan size and how many chats were already on an account. A worker is fixing that now to follow Michael's same rules, with chat caps of 1 on a Pro, 5 on a Max 5x and 20 on a Max 20x.
+**The weak spot was this app's own picker.** It only looked at the lowest 5-hour usage. It ignored plan size and how many chats were already on an account. A worker is fixing that now to follow the scheduler's rules, with chat caps of 1 on a Pro, 5 on a Max 5x and 20 on a Max 20x.
 
-**Why there are still lots of moves:** you have about 40 accounts and only two are big, one Max 20x and one Max 5x. Pro windows are tiny, so heavy work on a Pro runs out in minutes.
+**Why there are still lots of moves:** most of the accounts are small and only two are big, one Max 20x and one Max 5x. Pro windows are tiny, so heavy work on a Pro runs out in minutes.
 
-**What I meant by "subscription logins":**
+**What "subscription logins" means:**
 
-- To talk to Claude, a program has to sign in. Your Pro and Max accounts are plan sign-ins, the paid plans AgentHydra already holds. The other option is an API key, a separate pay-per-use key from Anthropic's developer site.
-- Hydra Desk uses your plan sign-ins, the same way Claude Desktop does today, so it costs you nothing extra.
-- Anthropic's rules say apps built with their developer kit should use an API key, not plan sign-ins. For a personal tool like yours that's a grey area, and the risk is Anthropic flagging an account.
+- To talk to Claude, a program has to sign in. A Pro or Max plan is one kind of sign-in. The other option is an API key, a separate pay-per-use key from the developer console.
+- This app uses plan sign-ins, the same way the desktop app does, so it costs nothing extra.
+- The developer kit's terms ask apps built on it to use an API key, not plan sign-ins. For a personal tool that is a grey area, and the risk is an account being flagged.
 - Stay on plan sign-ins, or move to an API key?
 
-**Faster from here:** no manager layer (done), and I start each next piece the moment one lands. Tasks stay small enough to finish on one account. A fresh chat per task also helps, because this one is huge.
+**Faster from here:** no manager layer (done), and each next piece starts the moment one lands. Tasks stay small enough to finish on one account. A fresh chat per task also helps, because this one is long.
 
 ### What I did
 
-- Caught Agent Hydra up and re-checked it.
-- Read how CliMayte places work.
-- Found the weak account picker in my code and started a worker to fix it.
-- Answered your login question in plain English.
+- Brought the checkout up to date and checked it again.
+- Read how the scheduler places work.
+- Found the weak picker in this app and started a worker to fix it.
+- Answered the login question in plain English.
 
 ### Am I 100% done?
 
-No. Four workers are running: three making the look match, and the picker fix. Nothing has reported back yet.
+No. Four workers are running: three on the visual match, one on the picker fix. Nothing has reported back yet.
 
 ### Do I recommend anything else?
 
-Stay on your plan sign-ins for now. It's your call and easy to change later.
+Stay on plan sign-ins for now. It's easy to change later.
 
-🔴 NEED: Say "stay" or "API key." I'm holding the real-chat test until you do.`
+🔴 NEED: Say "stay" or "API key." The live-chat test waits on that answer.`
 
 /** user/window.webp: the collapsed long user message, one folded tool run, the formatted reply. */
 export function windowItems(): TranscriptItem[] {
@@ -235,7 +236,7 @@ export function windowItems(): TranscriptItem[] {
     ...bash.slice(0, 3),
     tool('wg1', 'Grep', { pattern: 'pickAccount' }),
     tool('wg2', 'Grep', { pattern: 'planWeight' }),
-    tool('wr', 'Read', { file_path: 'C:/Users/jacob/Desktop/Project/Agent Hydra/src/climayte/index.ts' }),
+    tool('wr', 'Read', { file_path: 'C:/Users/me/Desktop/Project/Agent Hydra/src/climayte/index.ts' }),
     ...bash.slice(3),
     tool('wm1', 'mcp__agenthydra__list_usage', {}),
     tool('wm2', 'mcp__agenthydra__climayte_status', {}),
@@ -243,38 +244,38 @@ export function windowItems(): TranscriptItem[] {
   ]
 }
 
-const HARVEST_BEFORE = `The window shell, sidebar and composer are next. Next I build, run the full check, and open the real window to prove it.
+const HARVEST_BEFORE = `The shell, the sidebar and the composer come next. After that I build, run the full check, and open the window to prove it.
 
 ### Do I recommend anything else?
 
 Nothing right now.`
 
-const HARVEST_LIST = `Pieces are landing fast: 10 of the 14 are already committed in the private repo, but none are verified yet. I'll check each one when the wave finishes.
+const HARVEST_LIST = `Pieces are landing quickly: 10 of the 14 are committed, but none is verified yet. I'll check each one when the wave finishes.
 
 - **Finished:**
   - the project skeleton
   - the chat engine's core logic
-  - the Agent Hydra link (accounts, other chats, active CliMayte workers)
+  - the link to the account manager (accounts, other chats, active workers)
   - git status and diff
   - the window shell with the status sidebar
-  - the CliMayte panel and the "Elsewhere" list
+  - the worker panel and the "Elsewhere" list
   - the composer
   - the diff pane, settings and accounts popover
-  - the launcher (a "Hydra Desk" icon is already on your desktop; I haven't opened it yet)
+  - the launcher (its desktop icon is in place; I haven't opened it yet)
 - **Still building:** the live chat runtime and the transcript view. The chat manager waits on the runtime.
 - **Queued behind those:** the real-account test of the engine, and the real-window test.
 
-**1-to-1 with Claude Desktop:** my first look was only rough measurements from a few small screenshots. I've sent a worker to take exact measurements from your running Claude Desktop, read-only. It will gather full-resolution screenshots of each part, every color, size, font and label, and the exact items in each menu. It will not type, send or delete anything, and it puts your selected chat back where it was.
+**Matching the desktop app:** my first pass used rough measurements from a few small screenshots. A worker is now taking exact measurements from the running desktop app, read-only: full-resolution screenshots of each part, every color, size, font and label, and the exact items in each menu. It will not type, send or delete anything, and it leaves the selected chat where it was.
 
-The window's visual match is judged against those measurements. Once the first build is verified, I'll run a second pass that puts the two apps side by side and fixes every difference. After that we improve on it, starting with the working/needs-you status that Claude Desktop hides.
+The visual match is judged against those measurements. Once the first build is verified, a second pass puts the two apps side by side and fixes every difference. After that we improve on it, starting with the working/needs-you status the desktop app hides.
 
 ### What I did
 
-Checked the wave (10 of 14 pieces committed, 2 building, the rest queued) and started a read-only measurement of the real Claude Desktop so the copy is exact.
+Checked the wave (10 of 14 pieces committed, 2 building, the rest queued) and started a read-only measurement of the desktop app so the copy is exact.
 
 ### Am I 100% done?
 
-No. The build is still running and nothing is verified yet. Next I check the proof on each piece, run the full test and build, and open the window to compare it with Claude Desktop.
+No. The build is still running and nothing is verified yet. Next I check the proof on each piece, run the full test and build, and open the window to compare the two.
 
 ### Do I recommend anything else?
 
@@ -284,15 +285,15 @@ Nothing right now.`
 export function harvestItems(): TranscriptItem[] {
   return [
     say('ha0', HARVEST_BEFORE),
-    user('hu', 'how we looking and rmeovber I want to to have basicly a 1-1 claude cde desktop ui as there is clean we can imprive from ther'),
+    user('hu', 'how is it going? remember the goal: a 1-to-1 copy of the desktop UI first, then we improve on it'),
     tool('hb1', 'Bash', { command: 'git log --oneline -14' }),
     tool('hm1', 'mcp__agenthydra__climayte_status', {}),
-    say('ha1', "10 of 14 pieces are already committed, and I'm keeping your 1-1 requirement in mind. Now grabbing real, high-resolution screenshots of the live Claude Code Desktop so the workers can copy the actual UI instead of rough measurements."),
+    say('ha1', "10 of 14 pieces are committed, and the 1-to-1 goal stands. Next I take high-resolution screenshots of the running desktop app so the workers copy the real UI instead of rough measurements."),
     tool('hb2', 'Bash', { command: 'powershell -File shot.ps1' }),
     tool('hb3', 'Bash', { command: 'powershell -File shot.ps1 -Half' }),
     tool('hb4', 'Bash', { command: 'ls tmp' }),
-    tool('hr1', 'Read', { file_path: 'C:/Users/jacob/Desktop/Project/Agent Hydra/desk/tmp/screen-half.png' }),
-    say('ha2', "I'm extracting the real Claude Desktop's exact measurements—colors, spacing, fonts, labels—read-only, so the replica matches 1-to-1 instead of using approximations. I'll pass that data to a CliMayte worker while the build wave continues."),
+    tool('hr1', 'Read', { file_path: 'C:/Users/me/Desktop/Project/Agent Hydra/desk/tmp/screen-half.png' }),
+    say('ha2', "Now measuring the desktop app exactly (colors, spacing, fonts, labels), read-only, so the copy matches 1-to-1 instead of approximately. A worker gets that data while the build wave continues."),
     tool('hm2', 'mcp__agenthydra__climayte_run', { tasks: [] }),
     say('ha3', HARVEST_LIST)
   ]
@@ -301,5 +302,5 @@ export function harvestItems(): TranscriptItem[] {
 export const WINDOW_GIT = { branch: 'main', added: 15832, removed: 4769 }
 export const HARVEST_GIT = { branch: 'main', added: 13658, removed: 4852 }
 export const WINDOW_DRAFT = 'stay on plan logins'
-export const HARVEST_DRAFT = 'how we looking'
+export const HARVEST_DRAFT = 'how is it going'
 export const CWD = C
