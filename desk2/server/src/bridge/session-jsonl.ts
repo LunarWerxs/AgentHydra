@@ -133,8 +133,11 @@ interface Memo {
   /** Bytes the kept records took in the file. */
   bytes: number
   items: TranscriptItem[]
+  /** The file's last FINGERPRINT bytes before `offset`: a file rewritten in place no longer has them there. */
+  tail: Buffer
 }
 const memo = new Map<string, Memo>()
+const FINGERPRINT = 64
 
 /** Reads [from, size) of a file. */
 function readFrom(path: string, from: number, size: number): Buffer {
@@ -157,15 +160,31 @@ function readFrom(path: string, from: number, size: number): Buffer {
  * A session file's items. An open chat is polled every few seconds and a running one grows all the time,
  * so the file is read once and then only from where the last read stopped: the new complete lines are
  * parsed and added to the records kept (the newest TAIL_BYTES of them), and the items are made from
- * those. A file that shrank or was replaced starts over; one that did not change costs a stat.
+ * those. A file that shrank, was replaced or was rewritten in place starts over; one that did not change
+ * costs a stat.
  */
 export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
   const st = statSync(path)
   let m = memo.get(path)
   if (m && m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino) return m.items
   if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
-  let from = m?.offset ?? Math.max(0, st.size - TAIL_BYTES)
-  const buf = readFrom(path, from, st.size)
+  let from = 0
+  let buf: Buffer | null = null
+  if (m) {
+    // The bytes just before where the last read stopped are read again and must still be the same: a file
+    // rewritten in place to the same size or more is read from the start, not continued.
+    const back = m.tail.length
+    const read = readFrom(path, m.offset - back, st.size)
+    if (read.length >= back && read.subarray(0, back).equals(m.tail)) {
+      buf = read.subarray(back)
+      from = m.offset
+    } else m = undefined
+  }
+  if (!buf) {
+    from = Math.max(0, st.size - TAIL_BYTES)
+    buf = readFrom(path, from, st.size)
+  }
+  const prevTail = m?.tail ?? Buffer.alloc(0)
   let start = 0
   if (!m && from > 0) {
     // The read starts mid-file: its first line may be cut, so it is left out.
@@ -173,7 +192,7 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
     start = nl < 0 ? buf.length : nl + 1
     from += start
   }
-  const fresh = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [] }
+  const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
   // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
   // not valid UTF-8 (decoded, such a byte would count as three).
   for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
@@ -186,6 +205,10 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   }
   // The last line may still be being written: it counts when it already parses, but is read again next time.
   const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
+  // buf[0, start) is what the file holds just before the new offset; a short one goes on from the old tail.
+  const seg = buf.subarray(Math.max(0, start - FINGERPRINT), start)
+  const joined = seg.length >= FINGERPRINT ? seg : Buffer.concat([prevTail, seg])
+  fresh.tail = Buffer.from(joined.subarray(Math.max(0, joined.length - FINGERPRINT)))
   while (fresh.bytes > TAIL_BYTES && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
   fresh.size = st.size
   fresh.mtimeMs = st.mtimeMs
