@@ -423,7 +423,7 @@ html.desk-hidden *::after {
   }
 }
 
-/* --- width-animated bars (UsageBar, charts/BarRows) --------------------------------------------
+/* --- width transition (side-list/SideBar collapse; bars use transform, not this) --------------------------------------------
    Tailwind ships no named transition for width, and width is a layout property, so transition-all
    would also animate everything else on the element. A real utility (not a plain class) so it sits
    in the utilities layer and still reads the duration-* / ease-* set beside it, exactly as

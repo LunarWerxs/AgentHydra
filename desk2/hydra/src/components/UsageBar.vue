@@ -105,9 +105,9 @@ const TEXT = 'text-foreground'
       :aria-valuetext="ariaLabel ?? label"
     >
       <div
-        class="absolute inset-y-0 left-0 w-(--bar-w) transition-width duration-500 ease-out"
+        class="absolute inset-y-0 start-0 w-full origin-left rtl:origin-right scale-x-(--bar-w) transition-transform duration-500 ease-out"
         :class="FILL[props.variant]"
-        :style="{ '--bar-w': `${width}%` }"
+        :style="{ '--bar-w': width / 100 }"
       />
       <!-- One label, layered over the fill (see TEXT above for why it is neutral rather than the
            hue): no second copy, no "is it legible at 47%?", and no blend mode fighting the palette.
