@@ -3,8 +3,8 @@
 // over in a very compact way, all of these CliMayte running tasks ... if they have a manager, they would
 // tab once more and be under the manager"), another PC's too (owner, 2026-10-04: "I was hoping you'd stick
 // the climayte chats as sub items in the HD2 sidebar. Under the chat which spawned them. Not as its own
-// stand alone table"). A running task no drawn row spawned is still listed, at the top of the list, per PC
-// with the reason, never hidden (owner, 2026-10-05, counting AgentHydra's six against Desk's one: "Is one
+// stand alone table"). A running task no drawn row spawned is still listed, at the top of the list, one block
+// per PC with a stand-in row for the chat that started it, never hidden (owner, 2026-10-05, counting AgentHydra's six against Desk's one: "Is one
 // smaller than six? Yes ... Why?"). Pure, so the window and the tests share it.
 import { ref, watch } from 'vue'
 import type { CliMayteWorker } from '@shared/protocol'
@@ -30,27 +30,34 @@ export interface TaskNode {
 }
 
 /**
- * Why a running task sits under no row: its PC does not say which chat started it (another PC's older
- * AgentHydra sends no session, origin or wave for any task), nothing here does (a task no chat started, or
- * one whose dispatcher is gone), or the chat that started it is not in the list (the filter, the search or
- * the time period leaves it out).
+ * One chat that started running tasks no drawn row lists, as the sidebar stands in for it: its title, why it
+ * is here (the note behind its ⓘ), the CliMayte worker it is when it is a Desk chat run as a worker (so its
+ * own status shows and a click opens it), and the tasks that follow it, one step in.
  */
-export type UnplacedReason = 'old-pc' | 'no-origin' | 'not-listed'
-
-/** The running tasks of one PC that no drawn row lists, for one reason, with the finished tasks above them. */
-export interface UnplacedTasks {
-  /** The PC that runs them; null for this PC. */
-  pc: string | null
-  reason: UnplacedReason
+export interface UnplacedChat {
+  key: string
+  title: string
+  note: string
+  worker: CliMayteWorker | null
   nodes: TaskNode[]
+}
+
+/** Every unplaced chat of one PC; null for this PC. The sidebar heads it once. */
+export interface UnplacedTasks {
+  pc: string | null
+  chats: UnplacedChat[]
 }
 
 export interface NestedTasks {
   /** Each drawn row's tasks, flattened in order; a row with none is absent. */
   byRow: Map<string, TaskNode[]>
-  /** Every running task no row lists (nor draws as itself), this PC's first, then each other PC's. */
+  /** Every running task no row lists (nor draws as itself), one block per PC: this PC's first, then each other PC's in first-seen order. */
   unplaced: UnplacedTasks[]
 }
+
+/** The group both Hydra Desk and Desk 2 run each chat's worker in (server/src/engine/chat-manager.ts). */
+const DESK_GROUP = 'hydra-desk'
+const NOT_LISTED = 'The chat that started them is not in this list: the filter, the search or the time period leaves it out.'
 
 /** The deepest indent: a task further down is still listed, at this one. */
 const MAX_DEPTH = 3
@@ -187,7 +194,9 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     const path = new Set([keyOf(w)])
     for (;;) {
       const parent = parentKey(top)
-      const up = parent ? byKey.get(parent) : undefined
+      // Its dispatcher, else the worker whose session (an earlier one too) dispatched it, on its own PC.
+      const bySess = !parent && top.originSessionId ? bySession.get(top.originSessionId) : undefined
+      const up = parent ? byKey.get(parent) : bySess?.pc === top.pc ? bySess : undefined
       if (!up || shown.has(keyOf(up)) || path.has(keyOf(up))) break
       path.add(keyOf(up))
       top = up
@@ -199,31 +208,63 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
   // sends a session for every task that has started.
   const oldPcs = new Set(workers.filter((w) => w.pc).map((w) => w.pc!))
   for (const w of workers) if (w.pc && (w.sessionId || w.sessions?.length || w.originSessionId || w.originWorkerId)) oldPcs.delete(w.pc)
-  const groups = new Map<string, UnplacedTasks>()
+  const blocks = new Map<string, UnplacedTasks>()
+  const chatsByKey = new Map<string, UnplacedChat>()
+  /** The first non-empty title of the chat each origin stands for, as its PC sent it. */
+  const titles = new Map<string, string>()
+  for (const r of roots) if (r.originSessionId && r.originTitle && !titles.has(`${r.pc ?? ''}|${r.originSessionId}`)) titles.set(`${r.pc ?? ''}|${r.originSessionId}`, r.originTitle)
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
-    const nodes = [{ worker: r, depth: 1 }, ...walk(sessionsOf(r), new Set([keyOf(r)]), 2, seen)]
-    const reason: UnplacedReason = r.originSessionId ? 'not-listed' : r.pc && oldPcs.has(r.pc) ? 'old-pc' : 'no-origin'
-    const key = `${r.pc ?? ''}|${reason}`
-    const g = groups.get(key) ?? { pc: r.pc ?? null, reason, nodes: [] }
-    g.nodes.push(...nodes)
-    groups.set(key, g)
+    const pc = r.pc ?? null
+    const where = pc ? `on ${pc}` : ''
+    // A Hydra Desk chat run as a worker on a PC whose chat list is not here: it is the chat.
+    const deskChat = r.group === DESK_GROUP && !r.originSessionId && !r.originWorkerId
+    const below = walk(sessionsOf(r), new Set([keyOf(r)]), deskChat ? 1 : 2, seen)
+    let key: string
+    let make: () => Omit<UnplacedChat, 'key' | 'nodes'>
+    if (deskChat) {
+      key = `desk:${keyOf(r)}`
+      make = () => ({
+        title: r.title,
+        worker: r,
+        note: pc ? `This chat runs on ${pc} and is not in this PC's session list, so it is listed here with its tasks.` : NOT_LISTED
+      })
+    } else if (r.originSessionId) {
+      const sid = r.originSessionId
+      key = `origin:${pc ?? ''}|${sid}`
+      make = () => {
+        const wording = pc ? `A chat ${where}` : 'A chat'
+        const named = titles.get(`${pc ?? ''}|${sid}`)
+        return {
+          title: named ?? `${wording} · ${sid.slice(0, 8)}`,
+          worker: null,
+          note: pc ? `${named ?? wording} is ${where} and is not in this PC's session list, so its tasks are listed here under it.` : NOT_LISTED
+        }
+      }
+    } else if (pc && oldPcs.has(pc)) {
+      key = `old:${pc}`
+      make = () => ({ title: 'Unknown chat', worker: null, note: `${pc}'s AgentHydra is too old to say which chat started these tasks. Update it there and they move under their chats.` })
+    } else {
+      key = `none:${pc ?? ''}`
+      make = () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })
+    }
+    let chat = chatsByKey.get(`${pc ?? ''}|${key}`)
+    if (!chat) {
+      chat = { key: `${pc ?? ''}|${key}`, ...make(), nodes: [] }
+      chatsByKey.set(chat.key, chat)
+      const block = blocks.get(pc ?? '') ?? { pc, chats: [] }
+      block.chats.push(chat)
+      blocks.set(pc ?? '', block)
+    }
+    chat.nodes.push(...(deskChat ? [] : [{ worker: r, depth: 1 }]), ...below)
   }
-  const unplaced = [...groups.values()].sort((a, b) => Number(!!a.pc) - Number(!!b.pc))
+  const unplaced = [...blocks.values()].sort((a, b) => Number(!!a.pc) - Number(!!b.pc))
   return { byRow: lists, unplaced }
 }
 
-/** A block of tasks under no row, as the sidebar heads it: the PC, how many run, and why they are there. */
-export function unplacedText(g: UnplacedTasks): { title: string; count: number; note: string } {
-  const count = g.nodes.filter((n) => n.worker.active).length
-  const one = count === 1
-  const them = one ? 'it' : 'them'
-  const note =
-    g.reason === 'old-pc'
-      ? `Not under ${one ? 'its chat' : 'their chats'}: ${g.pc}'s AgentHydra is too old to say which chat started ${them}. Update it there and ${one ? 'it moves under its chat' : 'they move under their chats'}.`
-      : g.reason === 'no-origin'
-        ? `Not under a chat: nothing here says which chat started ${them}.`
-        : `Not under ${one ? 'its chat' : 'their chats'}: the chat that started ${them} is not in this list.`
-  return { title: g.pc ? `On ${g.pc}` : 'On this PC', count, note }
+/** A PC's block of unplaced chats as the sidebar heads it: the PC and how many of its tasks run (a running Desk chat counts). */
+export function unplacedHeading(b: UnplacedTasks): { title: string; count: number } {
+  const count = b.chats.reduce((n, c) => n + runningIn([c.nodes]) + (c.worker?.active ? 1 : 0), 0)
+  return { title: b.pc ? `On ${b.pc}` : 'On this PC', count }
 }
 
 /** How many of these lists' tasks run: a folded group's heading shows it (RunningBadge.vue). */

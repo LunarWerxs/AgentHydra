@@ -11,10 +11,10 @@ import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
-import { Cloud, Info } from '@lucide/vue'
+import { Cloud, Info, LoaderCircle, MessageSquare } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
 import RunningBadge from './RunningBadge.vue'
-import { nestTasks, runningIn, showTasks, unplacedText, type NestedTasks, type NestRow } from './tasks'
+import { nestTasks, runningIn, showTasks, unplacedHeading, type NestedTasks, type NestRow } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -487,20 +487,36 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </div>
 
         <template v-if="!hydraModel && nesting">
-          <section v-for="g in nesting.unplaced" :key="`${g.pc ?? ''}|${g.reason}`" :aria-label="`${unplacedText(g).title}: CliMayte tasks not under a chat`">
-            <!-- Why they are not under a chat sits behind the ⓘ (owner, 2026-10-05: "remove this ... text and put it in a info note"). -->
+          <section v-for="g in nesting.unplaced" :key="g.pc ?? ''" :aria-label="`${unplacedHeading(g).title}: CliMayte tasks not under a chat`">
+            <!-- One heading per PC; each chat that started its tasks has a stand-in row, its reason behind the ⓘ (owner, 2026-10-05: "remove this ... text and put it in a info note"). -->
             <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
               <Cloud v-if="g.pc" class="size-3 shrink-0" aria-hidden="true" />
-              <span class="truncate">{{ unplacedText(g).title }}</span>
-              <Tip :label="unplacedText(g).note" align="start" :delay="100">
-                <button type="button" class="flex size-4 shrink-0 items-center justify-center rounded-[4px] hover:text-text-2" :aria-label="unplacedText(g).note">
-                  <Info class="size-3" aria-hidden="true" />
-                </button>
-              </Tip>
+              <span class="truncate">{{ unplacedHeading(g).title }}</span>
               <span class="flex-1" />
-              <span class="tnum">{{ unplacedText(g).count }}</span>
+              <span class="tnum">{{ unplacedHeading(g).count }}</span>
             </header>
-            <TaskRows :nodes="g.nodes" :selected-id="selectedExternalId" @open="openTask" />
+            <template v-for="c in g.chats" :key="c.key">
+              <div
+                class="flex h-[22px] min-w-0 items-center gap-1 rounded-[var(--radius-6)] pl-1.5 pr-1 text-[12px] leading-4 text-text-2"
+                :class="c.worker ? 'cursor-default hover:bg-fill-hover' : ''"
+                :role="c.worker ? 'button' : undefined"
+                :tabindex="c.worker ? 0 : undefined"
+                @click="c.worker && openTask(c.worker)"
+                @keydown.enter="c.worker && openTask(c.worker)"
+              >
+                <LoaderCircle v-if="c.worker?.status === 'running'" class="size-3 shrink-0 animate-[spin_2.5s_linear_infinite] text-accent-text" aria-hidden="true" />
+                <MessageSquare v-else class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate">{{ c.title }}</span>
+                <Tip :label="c.note" align="start" :delay="100">
+                  <button type="button" class="flex size-4 shrink-0 items-center justify-center rounded-[4px] text-text-muted hover:text-text-2" :aria-label="c.note" @click.stop>
+                    <Info class="size-3" aria-hidden="true" />
+                  </button>
+                </Tip>
+              </div>
+              <div v-if="c.nodes.length" class="ml-1.5">
+                <TaskRows :nodes="c.nodes" :selected-id="selectedExternalId" @open="openTask" />
+              </div>
+            </template>
           </section>
         </template>
 

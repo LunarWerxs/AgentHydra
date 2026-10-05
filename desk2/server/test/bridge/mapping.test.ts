@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { mapAccounts } from '../../src/bridge/accounts'
-import { activeFor, mapWorkers, workersOfChat } from '../../src/bridge/climayte'
+import { activeFor, mapRemoteWorker, mapWorkers, workersOfChat } from '../../src/bridge/climayte'
 import { mapExternal, tailToItems, workerDetailToItems } from '../../src/bridge/external'
 import { fixture, freshState, NOW } from './fake-hydra'
 
@@ -229,5 +229,18 @@ describe('transcripts', () => {
     expect(items[1]).toMatchObject({ kind: 'user', text: 'Build the thing. Done means the tests pass.' })
     expect(items[3]).toMatchObject({ kind: 'tool_use', name: 'Read', input: { file_path: 'C:\\Users\\me\\Desktop\\Project\\alpha\\SPEC.md' } })
     expect(items[4]).toMatchObject({ kind: 'tool_use', name: 'Bash', input: { command: 'bun test' }, status: 'done' })
+  })
+})
+
+describe('another PC's worker', () => {
+  const base = {
+    id: 'w-r1', title: 'Remote task', group: null, status: 'running', kind: null, model: null, effort: null, account: null,
+    createdAt: 1, updatedAt: 2, activeS: 1, costUsd: null, lastActivity: null, error: null, verdict: null,
+  }
+
+  test('the title of the chat that started it and its earlier sessions pass through; an older PC sends neither', () => {
+    const mapped = mapRemoteWorker({ ...base, originSessionId: 's-chat', originTitle: 'Example chat', sessions: ['s-1', 's-2'] }, 'OTHER-PC', new Map())
+    expect(mapped).toMatchObject({ originTitle: 'Example chat', sessions: ['s-1', 's-2'], pc: 'OTHER-PC' })
+    expect(mapRemoteWorker(base, 'OTHER-PC', new Map())).toMatchObject({ originTitle: null, sessions: [] })
   })
 })

@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import type { CliMayteWorker } from '@shared/protocol'
-import { nestTasks, type TaskNode } from '../../src/components/sidebar/tasks'
+import { nestTasks, unplacedHeading, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -132,7 +132,7 @@ test("another PC's tasks sit under the chat that spawned them there, a wave unde
 })
 
 // (owner, 2026-10-05, AgentHydra's CliMayte list against Desk's sidebar: "Is one smaller than six? Yes ... Why?")
-test('a running task no row lists is still shown, at the top, per PC with the reason, and every running task is shown once', () => {
+test('a running task no row lists is still shown, at the top, one block per PC with a stand-in per chat, and every running task is shown once', () => {
   const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
   const workers = [
     // Under its chat, as before.
@@ -160,14 +160,12 @@ test('a running task no row lists is still shown, at the top, per PC with the re
   ]
   const tasks = nestTasks(rows, workers)
   expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:placed'])
-  expect(tasks.unplaced.map((g) => [g.pc, g.reason, listOf(g.nodes)])).toEqual([
-    [null, 'not-listed', ['1:here:mgr', '2:here:kid']],
-    [null, 'no-origin', ['1:here:loose', '1:here:orphan']],
-    ['PC-OLD', 'old-pc', ['1:PC-OLD:old1', '1:PC-OLD:old2']],
-    ['PC-NEW', 'not-listed', ['1:PC-NEW:new']],
-    ['PC-NEW', 'no-origin', ['1:PC-NEW:new-loose']]
+  expect(tasks.unplaced.map((b) => [b.pc, b.chats.map((c) => [c.title, c.worker, listOf(c.nodes)])])).toEqual([
+    [null, [['A chat · s-hidden', null, ['1:here:mgr', '2:here:kid']], ['No chat', null, ['1:here:loose', '1:here:orphan']]]],
+    ['PC-OLD', [['Unknown chat', null, ['1:PC-OLD:old1', '1:PC-OLD:old2']]]],
+    ['PC-NEW', [['A chat on PC-NEW · s-there', null, ['1:PC-NEW:new']], ['No chat', null, ['1:PC-NEW:new-loose']]]]
   ])
-  const shown = [...[...tasks.byRow.values()].flat(), ...tasks.unplaced.flatMap((g) => g.nodes)].map((n) => n.worker)
+  const shown = [...[...tasks.byRow.values()].flat(), ...tasks.unplaced.flatMap((b) => b.chats.flatMap((c) => c.nodes))].map((n) => n.worker)
   const running = workers.filter((w) => w.active && w.id !== 'queued-chat')
   expect(shown.filter((w) => w.active).sort((a, b) => a.startedAt! - b.startedAt!)).toEqual(running)
 })
@@ -183,4 +181,49 @@ test("a worker that handed off is two rows' session, and its tasks are listed on
   expect([...tasks.byRow.keys()]).toEqual(['external:s-new'])
   expect(listOf(tasks.byRow.get('external:s-new'))).toEqual(['1:here:k1', '1:here:k2'])
   expect(tasks.unplaced).toEqual([])
+})
+
+test("one block per PC however different its tasks' reasons, and the heading counts what runs", () => {
+  const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
+  const tasks = nestTasks([], [
+    worker('a', 1, { ...bare, pc: 'PC-X' }),
+    worker('b', 2, { ...bare, pc: 'PC-X', originSessionId: 's-gone-1234' }),
+    worker('c', 3, { ...bare, pc: 'PC-Y' }),
+    worker('d', 4, { ...bare })
+  ])
+  expect(tasks.unplaced.map((b) => [b.pc, b.chats.length])).toEqual([[null, 1], ['PC-X', 2], ['PC-Y', 1]])
+  expect(unplacedHeading(tasks.unplaced[1]!)).toEqual({ title: 'On PC-X', count: 2 })
+  expect(unplacedHeading(tasks.unplaced[0]!).title).toBe('On this PC')
+})
+
+test("three tasks from one unlisted chat on another PC share one stand-in, titled as that PC titles it, else by a short id", () => {
+  const from = { pc: 'PC-X', originSessionId: '0123456789abcdef' }
+  const named = nestTasks([], [
+    worker('t1', 1, { ...from }),
+    worker('t2', 2, { ...from, originTitle: 'Example refactor chat' }),
+    worker('t3', 3, { ...from })
+  ])
+  const [block] = named.unplaced
+  expect(block!.chats.map((c) => [c.title, listOf(c.nodes)])).toEqual([['Example refactor chat', ['1:PC-X:t1', '1:PC-X:t2', '1:PC-X:t3']]])
+  expect(block!.chats[0]!.note).toContain("is on PC-X and is not in this PC's session list")
+  const plain = nestTasks([], [worker('t1', 1, { ...from }), worker('t2', 2, { ...from })])
+  expect(plain.unplaced[0]!.chats.map((c) => c.title)).toEqual(['A chat on PC-X · 01234567'])
+})
+
+test("a Desk chat running as a worker on another PC is its own stand-in, with its task one step in", () => {
+  const chat = worker('desk-chat', 1, { pc: 'PC-X', group: 'hydra-desk', title: 'Example Desk chat' })
+  const tasks = nestTasks([], [chat, worker('task', 2, { pc: 'PC-X', originWorkerId: 'desk-chat', originSessionId: 's-desk-chat' })])
+  const [c] = tasks.unplaced[0]!.chats
+  expect(tasks.unplaced[0]!.chats).toHaveLength(1)
+  expect(c!.title).toBe('Example Desk chat')
+  expect(c!.worker).toBe(chat)
+  expect(listOf(c!.nodes)).toEqual(['1:PC-X:task'])
+  expect(unplacedHeading(tasks.unplaced[0]!).count).toBe(2)
+})
+
+test("a task dispatched from a remote worker's earlier session sits under that worker", () => {
+  const mgr = worker('mgr', 1, { pc: 'PC-X', originSessionId: 's-chat-abcd', sessionId: 's-new', sessions: ['s-old', 's-new'] })
+  const kid = worker('kid', 2, { pc: 'PC-X', originSessionId: 's-old' })
+  const tasks = nestTasks([], [mgr, kid])
+  expect(tasks.unplaced[0]!.chats.map((c) => listOf(c.nodes))).toEqual([['1:PC-X:mgr', '2:PC-X:kid']])
 })

@@ -202,6 +202,8 @@ export interface AhRemoteWorker {
   originSessionId?: string | null
   originWorkerId?: string | null
   wave?: string | null
+  originTitle?: string | null
+  sessions?: string[]
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
