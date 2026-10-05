@@ -78,12 +78,8 @@ import { usePushPanel } from '@/shell/usePushPanel'
 
 // Each tab's view loads the first time its tab opens, so the pane starts with the shell and the one
 // view in front of it, not the whole graph (charts included).
-// The builder's state is module-level, so it stays unmounted until the first open, then stays.
-const { open: builderOpen } = useBuilder()
-const builderEverOpened = ref(false)
-watch(builderOpen, (o) => {
-  if (o) builderEverOpened.value = true
-}, { immediate: true })
+// The builder is loaded and mounted on the first request; useBuilder opens it once it is there.
+const { requested: builderEverOpened, builderMounted } = useBuilder()
 const AutomationSettings = defineAsyncComponent(() => import('@/components/AutomationSettings.vue'))
 const QueueBuilder = defineAsyncComponent(() => import('@/components/QueueBuilder.vue'))
 const QueueView = defineAsyncComponent(() => import('@/components/QueueView.vue'))
@@ -674,7 +670,7 @@ onUnmounted(stopAvailabilityPolling)
       </main>
     </div>
 
-    <QueueBuilder v-if="builderEverOpened" />
+    <QueueBuilder v-if="builderEverOpened" @vue:mounted="builderMounted" />
 
     <!-- queue: a push-in drawer so the list rides alongside whatever you're doing -->
     <Sidebar
