@@ -186,3 +186,49 @@ test('a connected window gets the poller broadcasts', async () => {
   }
   expect(seen.has('hello')).toBe(true)
 })
+
+/** A window on /ws, keeping each event it gets. */
+function openWindow(desk: DeskServer): { ws: WebSocket; events: ServerEvent[]; until(ok: () => boolean, what: string): Promise<void> } {
+  const ws = new WebSocket(`${desk.url.replace('http', 'ws')}/ws`)
+  const events: ServerEvent[] = []
+  ws.onmessage = (e) => events.push(JSON.parse(String(e.data)) as ServerEvent)
+  const until = async (ok: () => boolean, what: string) => {
+    const end = Date.now() + 5000
+    while (!ok()) {
+      if (Date.now() > end) throw new Error(`${what}: only saw ${events.map((e) => e.type).join(', ')}`)
+      await Bun.sleep(20)
+    }
+  }
+  return { ws, events, until }
+}
+
+test('a window joining one already open gets the newest lists at once, not at their next change', async () => {
+  const f = await startFakeHydra()
+  fakes.push(f)
+  const desk = await boot(f.url)
+  const LISTS = ['accounts.update', 'bridge.status', 'climayte.update', 'external.update']
+  const has = (w: { events: ServerEvent[] }, type: string) => w.events.some((e) => e.type === type)
+  const a = openWindow(desk)
+  const b: { w: ReturnType<typeof openWindow> | null } = { w: null }
+  try {
+    await a.until(() => LISTS.every((t) => has(a, t)), 'first window')
+    // A change after the first send: the joining window must get this one, not the first.
+    f.state.workers[1].status = 'running'
+    const running = (w: { events: ServerEvent[] }) =>
+      w.events.some((e) => e.type === 'climayte.update' && e.workers.some((x) => x.id === 'w-00000002' && x.status === 'running'))
+    await a.until(() => running(a), 'the change')
+
+    b.w = openWindow(desk)
+    const w = b.w
+    await w.until(() => LISTS.every((t) => has(w, t)), 'joining window')
+    expect(has(w, 'hello')).toBe(true)
+    expect(running(w)).toBe(true)
+    // The outside sessions the open window has now, not an empty or first list.
+    const lastOf = (x: { events: ServerEvent[] }) => x.events.filter((e) => e.type === 'external.update').at(-1)
+    expect(lastOf(w)).toEqual(lastOf(a))
+    expect((lastOf(w) as Extract<ServerEvent, { type: 'external.update' }>).sessions.length).toBeGreaterThan(0)
+  } finally {
+    a.ws.close()
+    b.w?.ws.close()
+  }
+})

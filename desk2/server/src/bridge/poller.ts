@@ -109,11 +109,13 @@ export function createPoller(o: PollerOptions) {
   return {
     tick,
     /**
-     * A window just connected: it gets the last status and lists on its own, then a poll runs now
-     * rather than at the next interval, and anything newer goes to every window as usual.
+     * A window just connected: while others were being served it gets the last status and lists on its
+     * own (they are one poll old at most); then a poll runs now rather than at the next interval, and
+     * anything newer goes to every window as usual. After a spell with none, `latest` may be an hour
+     * old, and that poll sends everything fresh anyway (sent is cleared), so nothing is replayed.
      */
     welcome(send: (event: ServerEvent) => void): void {
-      for (const e of latest.values()) send(e)
+      if (clients > 0) for (const e of latest.values()) send(e)
       void tick()
     },
     start(): void {

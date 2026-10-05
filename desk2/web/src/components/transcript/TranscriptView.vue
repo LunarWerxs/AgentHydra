@@ -238,8 +238,11 @@ function revealActive() {
   if (!el || !activeRange) return
   const box = activeRange.getBoundingClientRect()
   const view = el.getBoundingClientRect()
-  if (box.top >= view.top + 48 && box.bottom <= view.bottom - 48) return
-  el.scrollTop += box.top - view.top - el.clientHeight / 3
+  // The session header and its Find bar lie over the top: a match under them is not in view.
+  const inset = props.insetTop ?? 0
+  const top = view.top + inset
+  if (box.top >= top + 48 && box.bottom <= view.bottom - 48) return
+  el.scrollTop += box.top - top - (el.clientHeight - inset) / 3
   scrollTop.value = lastTop = el.scrollTop
 }
 // Keyed by value: the header hands a fresh object whenever the items poll in, and that must not scroll.

@@ -33,7 +33,7 @@ import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId
 import { saveDraft } from '@/components/composer/logic'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { rememberView, restoreView } from '@/lib/view-memory'
-import { readCache, writeCache } from '@/lib/list-cache'
+import { readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
 import { reportAtPaint, reportTiming } from '@/lib/timing'
 
@@ -70,8 +70,8 @@ let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
 const store = reactive<DeskStoreState>({
   chats: [],
   itemsByChat: new Map(),
-  external: readCache<ExternalSession[]>('external') ?? [],
-  workers: readCache<CliMayteWorker[]>('workers') ?? [],
+  external: readListCache<ExternalSession>('external') ?? [],
+  workers: readListCache<CliMayteWorker>('workers') ?? [],
   accounts: [],
   settings: null,
   connected: false,

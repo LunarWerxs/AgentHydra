@@ -148,22 +148,21 @@ function saveOrder(next: SidebarOrder) {
   }
 }
 
-// Hydra Desk 2: with the chrome bar's CliMayte button on, each row lists the CliMayte tasks it handed out
-// under it (a manager's wave one step further in), and a task's own row folds into that list (tasks.ts).
+// Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
+// desk list, the rows each draws) lists the CliMayte tasks it handed out under it, a manager's wave one step
+// further in, each task once (tasks.ts).
 const nesting = computed(() => {
   if (!showTasks.value) return null
+  if (cloud.on.value) return nestTasks(cloud.sessions.value.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] })), src.workers.value)
+  const ours = new Set(src.chats.value.map((c) => c.sessionId).filter(Boolean))
   const rows: NestRow[] = [
-    ...src.chats.value.map((c) => ({ key: `chat:${c.id}`, sessionIds: c.sessionId ? [c.sessionId] : [], hideable: false })),
-    ...src.external.value.map((s) => ({ key: `external:${s.id}`, sessionIds: [s.id], hideable: s.source === 'climayte' })),
-    ...(cloud.on.value ? cloud.sessions.value.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id], hideable: false })) : [])
+    ...src.chats.value.map((c) => ({ key: `chat:${c.id}`, sessionIds: c.sessionId ? [c.sessionId] : [] })),
+    // As groupChats draws them: a CliMayte worker's own session and a session that is one of ours are not rows.
+    ...src.external.value.filter((s) => s.source !== 'climayte' && !ours.has(s.id)).map((s) => ({ key: `external:${s.id}`, sessionIds: [s.id] }))
   ]
   return nestTasks(rows, src.workers.value)
 })
-const tasksOf = (key: string) => nesting.value?.tasks.get(key) ?? null
-const shownExternal = computed(() => {
-  const hidden = nesting.value?.hidden
-  return hidden?.size ? src.external.value.filter((s) => !hidden.has(`external:${s.id}`)) : src.external.value
-})
+const tasksOf = (key: string) => nesting.value?.get(key) ?? null
 function openTask(w: CliMayteWorker) {
   if (w.sessionId) src.select({ kind: 'external', id: w.sessionId })
   else openWorkerInHydra(w.id)
@@ -173,7 +172,7 @@ function openTask(w: CliMayteWorker) {
 const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
 
 const groups = computed(() =>
-  groupChats(src.chats.value, { query: query.value, filter: filter.value, external: shownExternal.value, order: order.value })
+  groupChats(src.chats.value, { query: query.value, filter: filter.value, external: src.external.value, order: order.value })
 )
 // What the plain list shows is the order from now on, so a new group or row keeps the place it appeared in;
 // a row that just turned orange goes to the top of its group.

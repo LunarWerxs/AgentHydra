@@ -11,12 +11,10 @@ const storage = typeof localStorage === 'undefined' ? null : localStorage
 export const showTasks = ref(storage?.getItem(KEY) === '1')
 watch(showTasks, (v) => storage?.setItem(KEY, v ? '1' : '0'))
 
-/** A sidebar row tasks can sit under: its key, the session ids it stands for, and whether a row that is
- *  itself a task (an outside session that is a worker's) may be folded into the row it came from. */
+/** A sidebar row tasks can sit under: its key and the session ids it stands for. */
 export interface NestRow {
   key: string
   sessionIds: readonly string[]
-  hideable: boolean
 }
 
 /** One task under a row: depth 1 under the row itself, 2 under a manager in it, and so on. */
@@ -28,13 +26,14 @@ export interface TaskNode {
 const MAX_DEPTH = 3
 
 /**
- * Each row's tasks, flattened in order, and the rows to leave out because their task is already shown
- * under the row that handed it out. A task is under a row when the row's session dispatched it, or when
- * the task's dispatcher is the worker that row's session belongs to (a Desk chat that runs as a CliMayte
- * worker, a manager's own session); a manager's wave goes under the manager. Only tasks that can still
- * change are listed, and a finished manager only while a task under it still runs.
+ * Each row's tasks, flattened in order, for the rows the sidebar draws. A task is under a row when the
+ * row's session dispatched it, or when the task's dispatcher is the worker that row's session belongs to
+ * (a Desk chat that runs as a CliMayte worker, a manager's own session); a manager's wave goes under the
+ * manager. Only tasks that can still change are listed, and a finished manager only while a task under
+ * it still runs. Each task is listed once: a row that is itself a task listed under another row lists
+ * nothing of its own, since its tasks are already there under it.
  */
-export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[]): { tasks: Map<string, TaskNode[]>; hidden: Set<string> } {
+export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[]): Map<string, TaskNode[]> {
   const sessionsOf = (w: CliMayteWorker) => new Set([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])])
   const bySession = new Map<string, CliMayteWorker>()
   for (const w of workers) for (const s of sessionsOf(w)) bySession.set(s, w)
@@ -50,36 +49,52 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
       })
       .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
   }
-  function walk(sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>, nested: Set<string>): TaskNode[] {
+  function walk(sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>): TaskNode[] {
     if (depth > MAX_DEPTH) return []
     const out: TaskNode[] = []
     for (const w of kidsOf(sessions, self)) {
       if (seen.has(w.id)) continue
       seen.add(w.id)
-      const below = walk(sessionsOf(w), new Set([w.id]), depth + 1, seen, nested)
+      const below = walk(sessionsOf(w), new Set([w.id]), depth + 1, seen)
       if (!w.active && !below.length) continue
-      nested.add(w.id)
       out.push({ worker: w, depth }, ...below)
     }
     return out
   }
 
-  const tasks = new Map<string, TaskNode[]>()
-  const nested = new Set<string>()
+  const lists = new Map<string, TaskNode[]>()
+  /** The worker a row's own session belongs to, if any. */
+  const own = new Map<string, string>()
+  /** Per worker, the rows whose list has it. */
+  const listedBy = new Map<string, string[]>()
   for (const r of rows) {
-    const sessions = new Set(r.sessionIds)
     const self = new Set(r.sessionIds.flatMap((s) => (bySession.has(s) ? [bySession.get(s)!.id] : [])))
-    const list = walk(sessions, self, 1, new Set(self), nested)
-    if (list.length) tasks.set(r.key, list)
+    const first = [...self][0]
+    if (first) own.set(r.key, first)
+    const list = walk(new Set(r.sessionIds), self, 1, new Set(self))
+    if (!list.length) continue
+    lists.set(r.key, list)
+    for (const n of list) listedBy.set(n.worker.id, [...(listedBy.get(n.worker.id) ?? []), r.key])
   }
-  const hidden = new Set<string>()
-  for (const r of rows) {
-    if (!r.hideable) continue
-    const own = r.sessionIds.map((s) => bySession.get(s)).find(Boolean)
-    if (own && nested.has(own.id)) {
-      hidden.add(r.key)
-      tasks.delete(r.key)
+
+  // From the outermost rows in: a row whose worker a kept row lists is dropped; one that no row lists,
+  // or whose every lister was dropped, is kept. Data that loops (two managers naming each other) has no
+  // outermost row: the first row still open is kept to break it.
+  const kept = new Set<string>()
+  const dropped = new Set<string>()
+  let open = rows.map((r) => r.key)
+  while (open.length) {
+    const still: string[] = []
+    for (const key of open) {
+      const id = own.get(key)
+      const by = (id ? (listedBy.get(id) ?? []) : []).filter((k) => k !== key)
+      if (by.some((k) => kept.has(k))) dropped.add(key)
+      else if (by.every((k) => dropped.has(k))) kept.add(key)
+      else still.push(key)
     }
+    if (still.length === open.length) kept.add(still.shift()!)
+    open = still
   }
-  return { tasks, hidden }
+  for (const key of dropped) lists.delete(key)
+  return lists
 }

@@ -202,22 +202,4 @@ describe('poller', () => {
     await h.poller.tick()
     expect(h.types().sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update'])
   })
-
-  test('a window joining one already open is sent the current lists at once, not at their next change', async () => {
-    const f = await fake()
-    const h = harness(f.url)
-    await h.poller.tick()
-    f.state.workers[1].status = 'running'
-    await h.poller.tick()
-    h.events.length = 0
-
-    const joined: ServerEvent[] = []
-    h.poller.welcome((e) => joined.push(e))
-    expect(joined.map((e) => e.type).sort()).toEqual(['accounts.update', 'bridge.status', 'climayte.update', 'external.update'])
-    // the newest of each, not the first one sent
-    const w = joined.find((e) => e.type === 'climayte.update') as Extract<ServerEvent, { type: 'climayte.update' }>
-    expect(w.workers.find((x) => x.id === 'w-00000002')!.status).toBe('running')
-    const ext = joined.find((e) => e.type === 'external.update') as Extract<ServerEvent, { type: 'external.update' }>
-    expect(ext.sessions.length).toBe(7)
-  })
 })

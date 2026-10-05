@@ -35,7 +35,8 @@ function createCloud() {
   const answered = ref('')
   // A reload starts from the last answer to the same filters, then asks again.
   const cached = readCache<CachedCloud>('cloud')
-  const fresh = cached?.query === cloudQuery(effectiveScopes(scopes.value, ''), '') ? cached.list : null
+  const fresh =
+    cached?.query === cloudQuery(effectiveScopes(scopes.value, ''), '') && Array.isArray(cached.list?.sessions) ? cached.list : null
   const sessions = ref<CloudSession[]>(fresh?.sessions ?? [])
   const thisPc = ref(fresh?.thisPc ?? 'This PC')
   const instances = ref<CloudInstance[]>([])

@@ -68,11 +68,15 @@ export const deskInstanceAsk = ref<{ num: number; kind: 'desktop' | 'cli' } | nu
 /** Desk asked for a CliMayte task (CliMayteView opens it once its list is in). */
 export const deskWorkerAsk = ref<string | null>(null)
 
-/** The row of instance #num once the tab shows it, or null after `ms`. */
+/** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
+ *  (App.vue's view Transition keeps it mounted while the next comes in). */
 export async function findInstanceRow(num: number, ms: number): Promise<HTMLElement | null> {
   const end = Date.now() + ms
   for (;;) {
-    const el = document.querySelector<HTMLElement>(`[data-instance-num="${num}"]`)
+    const el =
+      [...document.querySelectorAll<HTMLElement>(`[data-instance-num="${num}"]`)].find(
+        (x) => !x.closest('.view-fade-leave-active'),
+      ) ?? null
     if (el || Date.now() >= end) return el
     await new Promise((r) => setTimeout(r, 100))
   }

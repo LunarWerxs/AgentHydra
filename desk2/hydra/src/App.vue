@@ -56,6 +56,7 @@ import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
 import {
   deskInstanceAsk,
+  deskWorkerAsk,
   EMBEDDED,
   findInstanceRow,
   flashRow,
@@ -110,6 +111,10 @@ if (EMBEDDED) {
     { immediate: true },
   )
 }
+// Desk's sidebar asked for a CliMayte task: on its tab, which opens it (CliMayteView takes the ask).
+watch(deskWorkerAsk, (id) => {
+  if (id) view.value = 'climayte'
+})
 // Desk's session header asked for an account's row in Instances: its table (desktop or CLI), else the
 // other one, scrolled to and marked.
 watch(deskInstanceAsk, async (ask) => {

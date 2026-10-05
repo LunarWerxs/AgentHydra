@@ -30,7 +30,7 @@ function worker(id: string, at: number, o: Partial<CliMayteWorker>): CliMayteWor
   }
 }
 
-test("a session's running tasks sit under it, a manager's wave under the manager, each shown once", () => {
+test("a session's running tasks sit under it, a manager's wave under the manager, each task listed once", () => {
   const done = { status: 'done', active: false }
   const workers = [
     // The Desk chat runs as a CliMayte worker itself: its session is the chat's, never a task of its own.
@@ -44,21 +44,33 @@ test("a session's running tasks sit under it, a manager's wave under the manager
     worker('inner', 7, { originWorkerId: 'chat', originSessionId: 's-chat' }),
     // A manager that finished while a task of its wave still runs is kept for it.
     worker('mgr2', 8, { originSessionId: 's-other', ...done }),
-    worker('wave2', 9, { originWorkerId: 'mgr2', originSessionId: 's-mgr2' })
+    worker('wave2', 9, { originWorkerId: 'mgr2', originSessionId: 's-mgr2' }),
+    // A manager dispatched from a session no row stands for: its wave stays under its own row.
+    worker('mgr3', 10, { originSessionId: 's-gone' }),
+    worker('wave3', 11, { originWorkerId: 'mgr3', originSessionId: 's-mgr3' })
   ]
-  const rows = [
-    { key: 'chat:c', sessionIds: ['s-chat'], hideable: false },
-    { key: 'external:s-direct', sessionIds: ['s-direct'], hideable: true },
-    { key: 'external:s-mgr', sessionIds: ['s-mgr'], hideable: true },
-    { key: 'external:s-wave1', sessionIds: ['s-wave1'], hideable: true },
-    { key: 'external:s-other', sessionIds: ['s-other'], hideable: true },
-    { key: 'external:s-wave2', sessionIds: ['s-wave2'], hideable: true }
-  ]
-  const { tasks, hidden } = nestTasks(rows, workers)
+  // The cloud list's rows: the managers' own sessions are rows there too.
+  const rows = ['s-chat', 's-mgr', 's-other', 's-mgr2', 's-wave2', 's-mgr3'].map((s) => ({ key: `cloud:${s}`, sessionIds: [s] }))
+  const tasks = nestTasks(rows, workers)
   const shape = (key: string) => tasks.get(key)?.map((n) => `${n.depth}:${n.worker.id}`)
-  expect(shape('chat:c')).toEqual(['1:direct', '1:mgr', '2:wave1', '1:inner'])
-  expect(shape('external:s-other')).toEqual(['1:mgr2', '2:wave2'])
-  // A task shown under the row that handed it out is not also a row of its own.
-  expect([...hidden].sort()).toEqual(['external:s-direct', 'external:s-mgr', 'external:s-wave1', 'external:s-wave2'])
-  expect(tasks.has('external:s-mgr')).toBe(false)
+  expect(shape('cloud:s-chat')).toEqual(['1:direct', '1:mgr', '2:wave1', '1:inner'])
+  expect(shape('cloud:s-other')).toEqual(['1:mgr2', '2:wave2'])
+  expect(shape('cloud:s-mgr3')).toEqual(['1:wave3'])
+  // A row that is itself a task listed under another row does not list its tasks again.
+  expect(tasks.has('cloud:s-mgr')).toBe(false)
+  expect(tasks.has('cloud:s-mgr2')).toBe(false)
+  const listed = [...tasks.values()].flat().map((n) => n.worker.id)
+  expect(listed.length).toBe(new Set(listed).size)
+})
+
+test('managers that name each other still give each row an answer, each task once', () => {
+  const workers = [
+    worker('a', 1, { originWorkerId: 'b' }),
+    worker('b', 2, { originWorkerId: 'a' }),
+    worker('kid', 3, { originWorkerId: 'a' })
+  ]
+  const tasks = nestTasks([{ key: 'cloud:s-a', sessionIds: ['s-a'] }, { key: 'cloud:s-b', sessionIds: ['s-b'] }], workers)
+  const listed = [...tasks.values()].flat().map((n) => n.worker.id)
+  expect(listed).toContain('kid')
+  expect(listed.length).toBe(new Set(listed).size)
 })

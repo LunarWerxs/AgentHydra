@@ -23,6 +23,12 @@ export function readCache<T>(key: string): T | null {
   }
 }
 
+/** A cached list, or null when there is none or what is kept is not a list (another build's, a hand edit). */
+export function readListCache<T>(key: string): T[] | null {
+  const value = readCache<unknown>(key)
+  return Array.isArray(value) ? (value as T[]) : null
+}
+
 /** Kept until the next write; a full or blocked storage just goes without. */
 export function writeCache(key: string, value: unknown): void {
   try {
