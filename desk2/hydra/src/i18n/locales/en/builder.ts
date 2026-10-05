@@ -12,8 +12,6 @@ export default {
   sessionPickerSearch: 'Search by title, folder, or id…',
   sessionPickerEmpty: 'No matching sessions.',
   sessionPickerCopied: 'Copied',
-  sessionPickerCopyId: 'Copy session id',
-  sessionPickerRemove: 'Remove {title}',
   titleLabel: 'Title',
   titlePlaceholder: 'what this run is for',
   titleOverrideLabel: 'Title (optional)',

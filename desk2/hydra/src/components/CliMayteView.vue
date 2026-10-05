@@ -348,12 +348,7 @@ async function toggleFloat() {
   // template string, which needs Vue's runtime compiler that this build leaves out, fed from a plain
   // object Vue never saw change; and it asked for the i18n plugin outside setup, where there is none.)
   floatApp = createApp({
-    render: () => h(CliMayteFloat, {
-        workers: workers.value,
-        now: now.value,
-        listedAt: listedAt.value,
-        onRowClick,
-      }),
+    render: () => h(CliMayteFloat, { workers: workers.value, now: now.value, onRowClick }),
   })
   floatApp.use(i18n)
   floatApp.mount(root)

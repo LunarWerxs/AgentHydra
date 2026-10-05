@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import SideListRow from '@/components/side-list/SideListRow.vue'
+import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { CliMayteWorkerView } from '@/lib/api'
 import { isCliMayteActive, modelName } from '@/lib/climayte-status'
 
@@ -10,7 +11,6 @@ const props = withDefaults(
   defineProps<{
     workers: CliMayteWorkerView[]
     now: number
-    listedAt: number
     onRowClick?: (workerId: string) => void
   }>(),
   {
@@ -19,6 +19,9 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
+// The shared list's read time (the same one the main view counts from), not a prop: the float is
+// drawn by a render function in another window, and this is module state both read.
+const { listedAt } = useCliMayteData()
 
 const running = computed(() =>
   props.workers.filter((w) => w.status === 'running' || w.status === 'checking'),
@@ -33,7 +36,7 @@ const queued = computed(() =>
 const totalActive = computed(() => running.value.length + queued.value.length)
 
 const activeS = (w: CliMayteWorkerView): number => {
-  return w.ranS + (w.status === 'running' ? Math.max(0, (props.now - props.listedAt) / 1000) : 0)
+  return w.ranS + (w.status === 'running' ? Math.max(0, (props.now - listedAt.value) / 1000) : 0)
 }
 
 function activeLabel(totalS: number): string {

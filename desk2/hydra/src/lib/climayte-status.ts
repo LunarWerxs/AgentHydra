@@ -102,7 +102,7 @@ export const climayteStatusMeta = (
 ): CliMayteStatusMeta =>
   status === 'waiting' && hold === 'wave' ? CLIMAYTE_WAVE_HOLD : CLIMAYTE_STATUS[status]
 
-export const CLIMAYTE_OUTCOME: Record<
+const OUTCOME_TABLE: Record<
   CliMayteAttemptOutcome,
   { variant: BadgeVariants['variant']; label: string }
 > = {
@@ -120,9 +120,12 @@ export const CLIMAYTE_OUTCOME: Record<
   cancelled: { variant: 'outline', label: 'climayte.outcomeCancelled' },
 }
 
-/** The table row for an outcome from the daemon; one this build does not know reads as an error. */
-export const outcomeMeta = (o: CliMayteAttemptOutcome) =>
-  Object.hasOwn(CLIMAYTE_OUTCOME, o) ? CLIMAYTE_OUTCOME[o] : CLIMAYTE_OUTCOME.error
+/** The outcome table. An outcome from the daemon that this build does not know (a daemon update)
+ *  reads as an error instead of undefined, so no list render throws on it; Object.keys still lists
+ *  only the known ones. */
+export const CLIMAYTE_OUTCOME: typeof OUTCOME_TABLE = new Proxy(OUTCOME_TABLE, {
+  get: (t, k) => (Object.hasOwn(t, k) ? t[k as CliMayteAttemptOutcome] : t.error),
+})
 
 /** Why a task that has already run is queued again, as an i18n key and its values; null for one
  *  that simply has not started. Without it a task moving accounts after a limit looked exactly like
@@ -272,7 +275,7 @@ function failedHow(w: CliMayteStoryTask): CliMayteStoryLine[] {
   }
   const counts = [...tally]
     .sort((a, b) => b[1] - a[1])
-    .map(([outcome, n]) => ({ n, label: outcomeMeta(outcome).label }))
+    .map(([outcome, n]) => ({ n, label: CLIMAYTE_OUTCOME[outcome].label }))
   const [only] = counts
   const how: CliMayteStoryLine[] = [
     !only
