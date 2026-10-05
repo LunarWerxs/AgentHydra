@@ -5,6 +5,7 @@
 // `storeDebounceMs`, `climaytePollMs`, `openFolder`, `pickFolder`, `queueSettleMs`, `queueRetryMs` and
 // `shutdown` (tests).
 
+import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type { Context, Hono } from 'hono'
@@ -21,6 +22,7 @@ import {
   parseCreate,
   parseElicitation,
   parseImport,
+  parseImportDesk,
   parsePatch,
   parsePermission,
   parsePlan,
@@ -142,6 +144,10 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   app.post('/api/chats', (c) => answer(c, async () => manager.create(parseCreate(await body(c)))))
   // Before /api/chats/:id so 'import' is never read as a chat id.
   app.post('/api/chats/import', (c) => answer(c, async () => manager.importSession(parseImport(await body(c)))))
+  // Hydra Desk's own chats (desk/, ~/.hydra-desk unless HYDRA_DESK_IMPORT_FROM names another data folder) copied in.
+  app.post('/api/chats/import-desk', (c) =>
+    answer(c, async () => manager.importDesk(process.env.HYDRA_DESK_IMPORT_FROM || join(homedir(), '.hydra-desk'), parseImportDesk(await body(c)).ids)),
+  )
   app.get('/api/chats/:id', (c) => answer(c, () => manager.get(c.req.param('id'))))
   app.get('/api/chats/:id/items', (c) =>
     answer(c, async () => {

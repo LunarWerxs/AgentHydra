@@ -152,6 +152,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   it no longer shows black above it. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
   the first run the launcher asks the old Edge app window to close and the host copies the page's saved
   settings (the sidebar order and filters among them) from the old window profile.
+- **Desk's chats, brought over.** `POST /api/chats/import-desk` (body `{}` for every chat, or
+  `{"ids": [...]}`) copies Hydra Desk's own chats (`~/.hydra-desk`, or the folder `HYDRA_DESK_IMPORT_FROM`
+  names) into Desk 2 while both run: each chat Desk 2 does not have yet, as Desk saved it (title, folder,
+  account, CliMayte worker, archived), with its transcript and the pictures it names. A chat already here
+  is left alone, so running it again adds only the new ones (owner, 2026-10-05: "I would love for all of
+  these to be transferred to Hydro Desk 2"). A CliMayte chat is the same worker in both windows, so a
+  message from either continues it. A chat Desk moved to a fresh session keeps its earlier sessions as its
+  own, so they are not listed again as outside sessions, and a chat changes folder as in Desk: only when
+  its session really relocated, never for a moment's cd into the home folder.
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens

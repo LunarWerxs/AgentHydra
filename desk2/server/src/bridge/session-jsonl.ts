@@ -120,6 +120,39 @@ export function lastCwd(path: string): string | null {
   return null
 }
 
+/**
+ * The `cwd` of the first whole line written at or after byte `offset` that has one (reads at most 256 KB
+ * from there): the folder the session was in when its next turn began. Null when no such line exists yet.
+ */
+export function firstCwdFrom(path: string, offset: number): string | null {
+  const size = statSync(path).size
+  if (offset >= size) return null
+  const len = Math.min(size - offset, 256 * 1024)
+  const buf = Buffer.alloc(len)
+  const fd = openSync(path, 'r')
+  let read = 0
+  try {
+    while (read < len) {
+      const n = readSync(fd, buf, read, len - read, offset + read)
+      if (n <= 0) break
+      read += n
+    }
+  } finally {
+    closeSync(fd)
+  }
+  for (const raw of buf.subarray(0, read).toString('utf8').split('\n')) {
+    const line = raw.trim()
+    if (!line) continue
+    try {
+      const rec = JSON.parse(line) as { cwd?: unknown }
+      if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd
+    } catch {
+      // a line still being written, or the offset fell mid-line
+    }
+  }
+  return null
+}
+
 const MEMO_MAX = 8
 
 /** One session file as last read: the records of its complete lines, and where the next read starts. */

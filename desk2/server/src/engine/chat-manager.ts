@@ -8,8 +8,8 @@
 // permission / question / plan requests, patches, deletes, and keeps climayteActive current.
 
 import { randomUUID } from 'node:crypto'
-import { existsSync, statSync } from 'node:fs'
-import { basename, isAbsolute, resolve } from 'node:path'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { basename, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig, Query } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AccountInfo,
@@ -40,15 +40,15 @@ import type { AhWorker } from '../bridge/client'
 import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
-import { findSessionJsonl, lastCwd } from '../bridge/session-jsonl'
-import { movedOutOf } from './cwd-move'
+import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
+import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { mediaCache, toStoredImage } from '../media/cache'
 import { SessionMetaStore } from './session-meta'
-import { ChatStore } from './store'
+import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
@@ -166,14 +166,18 @@ interface Entry {
   /** The config folder the chat's last process ran under (null = the default login), kept across restarts:
    *  its copy of the session has the latest turns. Undefined: Hydra Desk never ran it. */
   ranIn?: string | null
+  /** The sessions this chat ran before a move started a fresh one (oldest first, Hydra Desk's handoff): still its own, never "Elsewhere". */
+  pastSessions?: string[]
   /** The accounts the message in flight has failed on or moved through (carryToAnotherAccount); cleared by the next send. */
   moved?: string[]
   /** The owner named this chat (or it was named once already): the generated title never replaces it. */
   titled?: boolean
   /** The ids of its own background tasks still running that count toward backgroundActive (long-lived ones do not). */
   bgTasks?: Set<string>
-  /** A CliMayte chat: the worker's updatedAt when its session's folder was last looked at (cwd-move). */
-  cwdAt?: number
+  /** A folder the session ended its last turn in, outside the chat's own (cwd-move): the move happens only if the next turn begins and ends there. `offset` is the transcript's size at that turn end. */
+  cwdPending?: { target: string; file: string; offset: number }
+  /** The owner's latest message (cwd-move: a move it asked for needs no second turn). */
+  lastAsk?: string
   /** The folder the chat's worker was last started or sent into; a different chat.cwd is a move to pass on. */
   workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile (memory only, never in the Desk file). */
@@ -215,7 +219,7 @@ interface ResolvedAccount {
 }
 
 /** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown }
+type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown }
 
 export class ChatManager {
   readonly store: ChatStore
@@ -259,14 +263,8 @@ export class ChatManager {
     // A test that fakes the query gets no title queries unless it fakes the generator too.
     this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env)) : o.titleGenerator
     for (const stored of this.store.loadChats()) {
-      const { forkAt, ranIn, ...chat } = stored as StoredRecord
-      this.chats.set(chat.id, {
-        chat,
-        runtime: null,
-        query: null,
-        forkAt: typeof forkAt === 'string' ? forkAt : undefined,
-        ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
-      })
+      const e = entryOf(stored as StoredRecord)
+      this.chats.set(e.chat.id, e)
     }
     // Our own chats are not "Elsewhere".
     this.bridge.setExcludeSessionIds(() => this.sessionIds())
@@ -314,8 +312,48 @@ export class ChatManager {
     return e.sent?.length ? [...items, ...e.sent] : items
   }
 
+  /**
+   * Copies another Hydra Desk's chats into this one (Desk 2 from the first Desk: `otherHome` is its data folder,
+   * ~/.hydra-desk): every chat not here yet, as it was saved there (title, folder, account, worker, archived),
+   * with its Desk file and the pictures that names. A chat already here is left as it is; `ids` limits it to those
+   * chats. Both apps then list it: a CliMayte chat is the same worker in both, so a message from either goes on.
+   */
+  importDesk(otherHome: string, ids?: string[]): { imported: string[]; already: string[] } {
+    const from = resolve(otherHome)
+    if (from.toLowerCase() === resolve(this.store.home).toLowerCase()) throw new ChatError(400, "that is this Hydra Desk's own data folder")
+    let rows: unknown
+    try {
+      rows = JSON.parse(readFileSync(join(from, 'chats.json'), 'utf8'))
+    } catch (err) {
+      throw new ChatError(404, `no Hydra Desk chats in ${from}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    if (!Array.isArray(rows)) throw new ChatError(400, `${join(from, 'chats.json')} is not a chat list`)
+    const wanted = ids ? new Set(ids) : null
+    const imported: string[] = []
+    const already: string[] = []
+    for (const row of rows as StoredRecord[]) {
+      if (!row || typeof row.id !== 'string' || !/^[\w-]+$/.test(row.id) || (wanted && !wanted.has(row.id))) continue
+      if (this.chats.has(row.id)) {
+        already.push(row.id)
+        continue
+      }
+      const items = join(from, 'chats', `${row.id}.jsonl`)
+      const target = this.store.itemsFile(row.id)
+      if (existsSync(items) && !existsSync(target)) {
+        copyFileSync(items, target)
+        copyMedia(readFileSync(items, 'utf8'), join(from, 'media'), join(this.store.home, 'media'))
+      }
+      const e = entryOf(fromStored(row as StoredChat) as StoredRecord)
+      this.chats.set(e.chat.id, e)
+      this.emitEvent({ type: 'chat.upsert', chat: { ...e.chat } })
+      imported.push(row.id)
+    }
+    if (imported.length) this.store.saveChats(this.stored())
+    return { imported, already }
+  }
+
   sessionIds(): string[] {
-    return [...this.chats.values()].flatMap((e) => (e.chat.sessionId ? [e.chat.sessionId] : []))
+    return [...this.chats.values()].flatMap((e) => [...(e.pastSessions ?? []), ...(e.chat.sessionId ? [e.chat.sessionId] : [])])
   }
 
   async commands(id: string): Promise<SlashCommandInfo[]> {
@@ -478,6 +516,7 @@ export class ChatManager {
   async send(id: string, text: string, images?: ImageRef[], opts: SendOptions = {}): Promise<{ queued: boolean }> {
     const e = this.entry(id)
     if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
+    e.lastAsk = text
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, text, images, opts)
     if (!e.runtime?.running) {
       const cannot = this.seedResume(e)
@@ -604,6 +643,12 @@ export class ChatManager {
     if (p.pinned !== undefined) chat.pinned = p.pinned
     if (p.archived !== undefined) chat.archived = p.archived
     if (p.group !== undefined) chat.group = p.group
+    // Put in another folder by hand: the next turn resumes the session there (seedResume / the worker's next send).
+    const relocated = p.cwd !== undefined && p.cwd.toLowerCase() !== chat.cwd.toLowerCase()
+    if (p.cwd !== undefined) {
+      chat.cwd = p.cwd
+      e.cwdPending = undefined
+    }
     if (p.delegateToCliMayte !== undefined) chat.delegateToCliMayte = p.delegateToCliMayte
     // An account takes effect at the next runtime start (buildOptions reads chat.account); see below.
     if (resolved) {
@@ -627,7 +672,7 @@ export class ChatManager {
     if (p.permissionMode !== undefined) await this.runtimeOf(e).setPermissionMode(p.permissionMode)
     // The process keeps the login it started under: it ends once its turn is over (a limited or idle
     // one at once), so the next send starts under the chosen account and resumes the session there.
-    if (live?.startedAs && live.startedAs.id !== chat.account.id) await live.closeWhenIdle()
+    if (live && (relocated || (live.startedAs && live.startedAs.id !== chat.account.id))) await live.closeWhenIdle()
     chat.updatedAt = this.now()
     this.changed(chat)
     this.accountNote(id, resolved?.note ?? null)
@@ -865,9 +910,8 @@ export class ChatManager {
     }
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive, newReply, ok: next.status !== 'error' })
     if (!e.workerLive) this.clearTasks(e)
-    // The worker cd'd out of the chat's folder: the sidebar follows (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
-    if (w.sessionId && e.cwdAt !== w.updatedAt) {
-      e.cwdAt = w.updatedAt
+    // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
+    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
       this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
     }
     // A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again).
@@ -1045,17 +1089,41 @@ export class ChatManager {
     if (this.noteCwd(e, findSessionJsonl(e.chat.sessionId, [root, ...this.bridge.sessionRoots()], e.chat.cwd))) void e.runtime?.closeWhenIdle()
   }
 
-  /** Moves the chat to the folder `file` (its session's transcript) says it is in, when that is outside its own: stored cwd, one muted line, the sidebar update. */
+  /**
+   * A turn ended: moves the chat to the folder `file` (its session's transcript) says it ended in, when that
+   * is a folder a chat can live in outside its own (movedOutOf) AND either the owner's message asked for that
+   * move or the previous turn also ended there and this one began there (its first line's cwd). Otherwise the
+   * folder is only remembered as pending. Moving: stored cwd, one muted line, the sidebar update.
+   */
   private noteCwd(e: Entry, file: string | null): boolean {
+    const pending = e.cwdPending
+    const ask = e.lastAsk
+    e.cwdPending = undefined
+    e.lastAsk = undefined
     if (!file) return false
     let observed: string | null
+    let size: number
     try {
       observed = lastCwd(file)
+      size = statSync(file).size
     } catch {
       return false
     }
     const target = movedOutOf(e.chat.cwd, observed)
     if (!target) return false
+    let held = false
+    if (pending && pending.file === file && pending.target.toLowerCase() === target.toLowerCase()) {
+      try {
+        const began = firstCwdFrom(file, pending.offset)
+        held = began !== null && resolve(began).toLowerCase() === target.toLowerCase()
+      } catch {
+        held = false
+      }
+    }
+    if (!held && !askedToMove(ask, target)) {
+      e.cwdPending = { target, file, offset: size }
+      return false
+    }
     e.chat.cwd = target
     this.systemLine(e.chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
     this.changed(e.chat)
@@ -1177,10 +1245,11 @@ export class ChatManager {
 
   private stored(): ChatSummary[] {
     return [...this.chats.values()].map((e) => {
-      if (!e.forkAt && e.ranIn === undefined) return e.chat
+      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions) return e.chat
       const record: StoredRecord = { ...e.chat }
       if (e.forkAt) record.forkAt = e.forkAt
       if (e.ranIn !== undefined) record.ranIn = e.ranIn
+      if (e.pastSessions) record.pastSessions = e.pastSessions
       return record
     })
   }
@@ -1329,6 +1398,30 @@ export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity'>): 
 }
 
 const forkTitle = (title: string): string => `${title} (fork)`
+
+/** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
+function entryOf(stored: StoredRecord): Entry {
+  const { forkAt, ranIn, pastSessions, ...chat } = stored
+  return {
+    chat,
+    runtime: null,
+    query: null,
+    forkAt: typeof forkAt === 'string' ? forkAt : undefined,
+    ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
+    pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
+  }
+}
+
+/** Copies the pictures a Desk file names (/api/media/<sha256>.<ext>, content-addressed) that `to` does not have. */
+function copyMedia(text: string, from: string, to: string): void {
+  const names = new Set([...text.matchAll(/\/api\/media\/([0-9a-f]{64}\.[a-z0-9]+)/g)].map((m) => m[1]!))
+  if (!names.size) return
+  mkdirSync(to, { recursive: true })
+  for (const name of names) {
+    const src = join(from, name)
+    if (existsSync(src) && !existsSync(join(to, name))) copyFileSync(src, join(to, name))
+  }
+}
 
 /** A request item no runtime can answer any more (copied into a fork, or left by a dead process) is expired. */
 function settled(item: TranscriptItem): TranscriptItem {
@@ -1497,7 +1590,15 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd']
+
+/** POST /api/chats/import-desk: `ids`, the chats to copy (every one when absent). */
+export function parseImportDesk(body: unknown): { ids?: string[] } {
+  const b = body === undefined || body === null ? {} : obj(body)
+  if (b.ids === undefined) return {}
+  if (!Array.isArray(b.ids) || b.ids.some((x) => typeof x !== 'string')) throw new ChatError(400, 'ids must be a list of chat ids')
+  return { ids: b.ids as string[] }
+}
 
 export function parsePatch(body: unknown): ChatPatch {
   const b = obj(body)
@@ -1526,6 +1627,11 @@ export function parsePatch(body: unknown): ChatPatch {
   }
   const group = optGroup(b)
   if (group !== undefined) p.group = group
+  const cwd = optString(b, 'cwd')
+  if (cwd !== undefined) {
+    if (isUncOrDevicePath(cwd)) throw new ChatError(400, `cwd must be a local folder, not a share or device path: ${JSON.stringify(cwd)}`)
+    p.cwd = checkCwd(cwd)
+  }
   return p
 }
 

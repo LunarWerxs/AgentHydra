@@ -241,3 +241,27 @@ test('after a restart a chat switched to another account resumes from the folder
   expect(second.last().options).toMatchObject({ resume: id, env: { CLAUDE_CONFIG_DIR: w.b.configDir } })
   expect(systemTexts(second.m.listItems(chat.id)).some((s) => s.startsWith("Copied this session into #132 user132 (Pro)'s folder"))).toBe(true)
 })
+
+test("a chat saved with past sessions (Hydra Desk's handoff moved it to a fresh one) keeps them as its own: never Elsewhere, saved again", async () => {
+  const w = world()
+  const id = '7b7b7b7b-1111-4222-8333-444455556666'
+  const first = boot(w)
+  const chat = await first.m.create({ cwd: w.cwd, prompt: 'remember this', accountId: w.a.id })
+  await waitFor(() => first.all.length === 1)
+  first.last().push(init(id))
+  await waitFor(() => first.m.get(chat.id).sessionId === id)
+  managers.splice(managers.indexOf(first.m), 1)
+  await first.m.closeAll()
+  // the chat as Hydra Desk (desk/) saves it after a handoff, copied into this home
+  const file = join(w.home, 'chats.json')
+  const rows = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>[]
+  writeFileSync(file, JSON.stringify(rows.map((r) => (r.id === chat.id ? { ...r, pastSessions: ['old-session', 7] } : r))))
+
+  const second = boot(w)
+  expect(second.m.sessionIds().sort()).toEqual([id, 'old-session'].sort())
+  await second.m.patch(chat.id, { pinned: true })
+  managers.splice(managers.indexOf(second.m), 1)
+  await second.m.closeAll()
+  const saved = (JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>[]).find((r) => r.id === chat.id)
+  expect(saved).toMatchObject({ pinned: true, pastSessions: ['old-session'] })
+})

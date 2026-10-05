@@ -196,8 +196,7 @@ test('a send after the chat moved folders passes the new folder to the worker, o
   await m.send(chat.id, 'same folder')
   expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'same folder' })
 
-  b.state.rows[0]!.updatedAt = 999
-  await m.syncWorkers(chat.id)
+  await m.patch(chat.id, { cwd: other })
   expect(m.get(chat.id).cwd).toBe(other)
   await m.send(chat.id, 'now here')
   expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'now here', cwd: other })
