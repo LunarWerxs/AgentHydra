@@ -99,6 +99,7 @@ function startResize(e: PointerEvent) {
     <div
       class="sessions-sidebar-w flex h-full min-h-0 flex-col transition-opacity duration-200"
       :class="collapsed ? 'pointer-events-none opacity-0' : 'opacity-100'"
+      :inert="collapsed || undefined"
     >
       <SideList :groups="groups" :empty="empty" v-bind="$attrs">
         <template v-if="$slots.header" #header><slot name="header" /></template>

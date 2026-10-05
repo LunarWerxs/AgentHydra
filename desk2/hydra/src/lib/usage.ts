@@ -102,10 +102,10 @@ export function pctDetail(pct: number): string {
 /** "3m ago" style relative time for a snapshot's `capturedAt`, English fallback (see
  *  lib/relativeTime.ts, the shared LunarWerx formatter). Used for the popover's
  *  "checked <x> ago" line. */
-export function usageCheckedAgo(capturedAt: string): string {
+export function usageCheckedAgo(capturedAt: string, now: Date = new Date()): string {
   const ms = Date.parse(capturedAt)
   if (!Number.isFinite(ms)) return '—'
-  return formatAgo(Date.now(), ms)
+  return formatAgo(now.getTime(), ms)
 }
 
 const moneyFormats = new Map<string, Intl.NumberFormat>()

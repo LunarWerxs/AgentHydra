@@ -202,7 +202,12 @@ function monitorStateLabelKey(state: MonitorStateName): string {
       :icon="SlidersHorizontal"
       :label="$t('settings.advanced')"
       clickable
+      role="button"
+      tabindex="0"
+      :aria-expanded="schedAdvancedOpen"
       @click="schedAdvancedOpen = !schedAdvancedOpen"
+      @keydown.enter.prevent="schedAdvancedOpen = !schedAdvancedOpen"
+      @keydown.space.prevent="schedAdvancedOpen = !schedAdvancedOpen"
     >
       <template #control>
         <ChevronDown
@@ -214,16 +219,16 @@ function monitorStateLabelKey(state: MonitorStateName): string {
     <ExpandTransition :open="schedAdvancedOpen">
       <div class="grid grid-cols-3 gap-3 px-3.5 pb-3.5 pt-2.5">
         <div class="space-y-1.5">
-          <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.spacingLabel') }}</label>
-          <Input v-model="sched.spacing_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
+          <label for="sched-spacing" class="text-xs font-medium text-muted-foreground">{{ $t('settings.spacingLabel') }}</label>
+          <Input id="sched-spacing" v-model="sched.spacing_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
         </div>
         <div class="space-y-1.5">
-          <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.pollLabel') }}</label>
-          <Input v-model="sched.poll_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
+          <label for="sched-poll" class="text-xs font-medium text-muted-foreground">{{ $t('settings.pollLabel') }}</label>
+          <Input id="sched-poll" v-model="sched.poll_seconds" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
         </div>
         <div class="space-y-1.5">
-          <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.maxConcurrentLabel') }}</label>
-          <Input v-model="sched.max_concurrent" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
+          <label for="sched-max-concurrent" class="text-xs font-medium text-muted-foreground">{{ $t('settings.maxConcurrentLabel') }}</label>
+          <Input id="sched-max-concurrent" v-model="sched.max_concurrent" type="number" :disabled="!HEADLESS_QUEUEING_ENABLED" @change="saveScheduler" />
         </div>
       </div>
     </ExpandTransition>
@@ -254,7 +259,12 @@ function monitorStateLabelKey(state: MonitorStateName): string {
           :icon="SlidersHorizontal"
           :label="$t('settings.advanced')"
           clickable
+          role="button"
+          tabindex="0"
+          :aria-expanded="monitorAdvancedOpen"
           @click="monitorAdvancedOpen = !monitorAdvancedOpen"
+          @keydown.enter.prevent="monitorAdvancedOpen = !monitorAdvancedOpen"
+          @keydown.space.prevent="monitorAdvancedOpen = !monitorAdvancedOpen"
         >
           <template #control>
             <ChevronDown
@@ -266,12 +276,12 @@ function monitorStateLabelKey(state: MonitorStateName): string {
         <ExpandTransition :open="monitorAdvancedOpen">
           <div class="grid grid-cols-2 gap-3 px-3.5 pb-3.5 pt-2.5">
             <div class="space-y-1.5">
-              <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorMaxAttemptsLabel') }}</label>
-              <Input v-model="monitorMaxAttempts" type="number" min="1" @change="saveMonitorSettings" />
+              <label for="monitor-max-attempts" class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorMaxAttemptsLabel') }}</label>
+              <Input id="monitor-max-attempts" v-model="monitorMaxAttempts" type="number" min="1" @change="saveMonitorSettings" />
             </div>
             <div class="space-y-1.5">
-              <label class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorBufferLabel') }}</label>
-              <Input v-model="monitorResumeBufferMin" type="number" min="0" @change="saveMonitorSettings" />
+              <label for="monitor-buffer-min" class="text-xs font-medium text-muted-foreground">{{ $t('settings.monitorBufferLabel') }}</label>
+              <Input id="monitor-buffer-min" v-model="monitorResumeBufferMin" type="number" min="0" @change="saveMonitorSettings" />
             </div>
           </div>
         </ExpandTransition>

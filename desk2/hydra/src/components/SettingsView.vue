@@ -35,6 +35,7 @@ import { usePanels } from '@/composables/usePanels'
 import { piiName } from '@/composables/usePrivacy'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
+import { useUsageMode } from '@/composables/useUsageMode'
 import type { MonitorStateName, SearchIndexStatus, SyncStatus } from '@/lib/api'
 import * as api from '@/lib/api'
 import { bindSignInNudgeStatus, nudgeOnSettingsChange } from '@/lib/sign-in-nudge'
@@ -481,12 +482,13 @@ async function onDisconnect() {
   }
 }
 
+const { now: clockNow } = useUsageMode(true)
 const syncedLabel = computed(() => {
   const iso = syncStatus.value.lastSyncedAt
   if (!iso) return t('settings.cloudSyncNeverSynced')
   const ts = Date.parse(iso)
   if (Number.isNaN(ts)) return t('settings.cloudSyncNeverSynced')
-  const seconds = Math.round((Date.now() - ts) / 1000)
+  const seconds = Math.round((clockNow.value.getTime() - ts) / 1000)
   if (seconds < 10) return t('settings.cloudSyncSyncedNow')
   const minutes = Math.round(seconds / 60)
   const hours = Math.round(minutes / 60)
@@ -511,7 +513,12 @@ watch(themeMode, () => {
   if (!syncStatus.value.enabled || !syncStatus.value.connected) return
   clearTimeout(syncPushTimer)
   syncPushTimer = setTimeout(() => {
-    void api.setSync({ appearance: currentAppearance() }).then(absorbSyncResult)
+    void api
+      .setSync({ appearance: currentAppearance() })
+      .then(absorbSyncResult)
+      .catch((e) => {
+        syncError.value = e instanceof Error ? e.message : String(e)
+      })
   }, 800)
 })
 

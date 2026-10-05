@@ -145,7 +145,7 @@ export default {
   // scheduler section
   scheduler: 'Scheduler',
   schedulerHint:
-    "When enabled, the scheduler automatically spawns real claude runs for queued items; this spends the selected account's quota and acts on real repositories. Leave it off to dispatch items manually with the Run button.",
+    "When enabled, the scheduler automatically spawns real claude runs for queued items; this spends the selected account's quota and acts on real repositories. Leave it off.",
   // AH-12: AgentHydra never runs a chat nobody can see (headless-policy.ts's headlessRunsAllowed()
   // is hardcoded false). It exists to spawn those runs automatically, so it can never
   // actually dispatch anything in this build. Read alongside web/src/lib/headless.ts's

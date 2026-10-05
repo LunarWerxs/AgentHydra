@@ -67,7 +67,7 @@ const variant = computed(() => {
 })
 const stale = computed(() => isStaleSnap(props.snapshot))
 const checkedAgo = computed(() =>
-  props.snapshot ? usageCheckedAgo(props.snapshot.capturedAt) : '',
+  props.snapshot ? usageCheckedAgo(props.snapshot.capturedAt, now.value) : '',
 )
 // Explains a "—" cell instead of showing it silently (see the usage-check `reason` DTO field).
 const reasonMessage = computed(() => {
@@ -118,7 +118,7 @@ const appSplit = computed(
       .map((row) => `${row.label} ${Math.round(row.pct)}%`)
       .join(' · ') || null,
 )
-const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt) : ''))
+const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt, now.value) : ''))
 
 // Paid extra usage ON: past its limits this account BILLS instead of stopping. The owner never
 // wants that paid, so the popover says so and offers the switch that turns it off at claude.ai

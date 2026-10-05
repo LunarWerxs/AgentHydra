@@ -708,6 +708,7 @@ const survivalAverage = computed(() => {
                     ? 'bg-muted text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
                 "
+                :aria-pressed="(g === 'month') === groupedByMonth"
                 @click="timeGrain = g"
               >{{ g === 'day' ? $t('analytics.grainDay') : $t('analytics.grainMonth') }}</button>
             </span>
@@ -885,6 +886,7 @@ const survivalAverage = computed(() => {
                     ? 'bg-accent text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
                 "
+                :aria-pressed="whenGrain === g"
                 @click="whenGrain = g"
               >{{ g === 'calendar' ? $t('analytics.grainCalendar') : $t('analytics.grainHour') }}</button>
             </span>

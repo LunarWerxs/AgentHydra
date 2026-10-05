@@ -129,6 +129,7 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21]
             :key="h"
             class="size-(--hg-cell) shrink-0 rounded-xs bg-muted"
             :class="hover === d * 24 + (h - 1) ? 'ring-1 ring-foreground/40' : ''"
+            role="img"
             :aria-label="cellLabel(d * 24 + (h - 1))"
             @mouseenter="onEnter(d * 24 + (h - 1), $event)"
             @mousemove="tip = { x: $event.clientX, y: $event.clientY }"

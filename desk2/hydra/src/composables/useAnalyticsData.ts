@@ -79,7 +79,7 @@ async function loadSpend(wantQuiet = false): Promise<void> {
   } catch {
     if (mine === latestSpend && !quiet) spend.value = null
   } finally {
-    if (mine === latestSpend && !quiet) {
+    if (mine === latestSpend) {
       spendBusy = false
       settle()
     }
@@ -119,7 +119,7 @@ async function loadAnalytics(wantQuiet = false): Promise<void> {
   } catch {
     if (mine === latest && !quiet) activity.value = null
   } finally {
-    if (mine === latest && !quiet) {
+    if (mine === latest) {
       pageBusy = false
       settle()
     }

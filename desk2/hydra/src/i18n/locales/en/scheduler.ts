@@ -7,7 +7,7 @@ export default {
   onTooltip:
     'The scheduler is on: queued items dispatch automatically, respecting your spacing and concurrency limits. A spinner means a run is executing now; a countdown is the next scheduled item.',
   offTooltip:
-    'The scheduler is off; nothing runs on its own. Turn it on here, or press Run on a queued item.',
+    'The scheduler is off, and dispatch is disabled in this build, so nothing runs on its own.',
   clickToToggle: 'Click to turn it on or off.',
   // The chip's popover: the on/off switch used to be a Settings row three clicks away, even though
   // the chip beside it already reported the state it controls.
