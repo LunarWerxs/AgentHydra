@@ -128,14 +128,14 @@ const label = computed(() => {
 })
 
 const tooltip = computed(() => {
-  // Policy (headless.ts): dispatch is off in this build, so the switch is disabled and nothing
-  // dispatches on its own: say only that, with no click-to-toggle sentence.
-  const toggle = HEADLESS_QUEUEING_ENABLED ? ` ${t('scheduler.clickToToggle')}` : ''
+  // Policy (headless.ts): dispatch is off in this build, so the on tooltip says nothing runs on its
+  // own; the switch still works, so every tooltip keeps the click-to-toggle sentence.
+  const toggle = ` ${t('scheduler.clickToToggle')}`
   if (state.value === 'unavailable') {
     return `${t('scheduler.unavailableHint', { reason: schedulerStatus.error.value ?? '' })}${toggle}`
   }
   if (!HEADLESS_QUEUEING_ENABLED) {
-    return enabled.value ? t('scheduler.onDisabledTooltip') : t('scheduler.offTooltip')
+    return `${enabled.value ? t('scheduler.onDisabledTooltip') : t('scheduler.offTooltip')}${toggle}`
   }
   return `${enabled.value ? t('scheduler.onTooltip') : t('scheduler.offTooltip')}${toggle}`
 })
@@ -195,7 +195,7 @@ const tone = computed(() => {
             </div>
             <Switch
               :model-value="enabled"
-              :disabled="toggling || !HEADLESS_QUEUEING_ENABLED"
+              :disabled="toggling"
               :aria-label="$t('scheduler.enabledLabel')"
               @update:model-value="setEnabled"
             />
