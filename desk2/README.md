@@ -117,7 +117,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   chats goes to the stand-in, never a guess). Desk 2's server reads the jobs with the CliMayte workers on
   one poller (`server/src/bridge/poller.ts`, jobs at most every 10 s) and pushes them to every window
   (`swarm.update`); HSwarm stamps each job with its caller's full ids, and a Claude Desktop chat's id
-  (`local_...`) is turned into its session through AgentHydra's chat list. With the cloud on, the other
+  (`local_...`) is turned into its session and title through AgentHydra's chat list, archived chats
+  included (a finished job's chat is often archived by the time it is listed). With the cloud on, the other
   PC's jobs (shared in its queue snapshot) show under that PC's chats or in its "On <PC>" block. A job
   click opens that job on AgentHydra's HSwarm page.
 - **A list or a count per kind.** The Filter menu's Sub-items choose, per kind, whether a row shows its

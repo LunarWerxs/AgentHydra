@@ -234,9 +234,9 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     return chatFor(pc, `origin:${pc ?? ''}|${sid}`, () => {
       const wording = pc ? `A chat on ${pc}` : 'A chat'
       return {
-        title: named || `${wording} · ${sid.slice(0, 8)}`,
+        title: named || `${wording} · ${sid.replace(/^local_/, '').slice(0, 8)}`,
         worker: null,
-        note: pc ? `${named || wording} is on ${pc} and is not in this PC's session list, so its tasks are listed here under it.` : NOT_LISTED
+        note: pc ? `${named || 'This chat'} is on ${pc} and is not in this PC's session list, so its tasks are listed here under it.` : NOT_LISTED
       }
     })
   }

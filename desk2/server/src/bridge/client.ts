@@ -423,7 +423,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     health: () => get<{ ok: boolean; version?: string }>('/api/health'),
     agentStatus: () => get<AhAgentStatus[]>('/api/agent-status'),
     liveSessions: async () => (await get<{ count: number; sessions: AhLiveSession[] }>('/api/sessions/live')).sessions,
-    chats: async () => (await get<{ rows: AhChatRow[] }>('/api/chats?limit=1000')).rows,
+    /** The unarchived chats; `include` adds the archived ones (newest 1000 in all), for a job whose chat was archived since. */
+    chats: async (archived: 'hide' | 'include' = 'hide') =>
+      (await get<{ rows: AhChatRow[] }>(`/api/chats?limit=1000${archived === 'include' ? '&archived=include' : ''}`)).rows,
     /** The transcript index of the last 24 hours (its default window), newest first. */
     sessions: () => get<AhSessionRow[]>('/api/sessions?limit=200&period=24h'),
     cliInstances: () => get<AhCliInstance[]>('/api/cli-instances'),

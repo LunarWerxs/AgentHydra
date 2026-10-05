@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The HSwarm tab: the pages of lib/hswarm-pages.ts, one shown at a time (CliMayte, HSwarm's own tree).
 // Each page stays built behind the others, so what it holds (and its warm data) survives a switch.
-// In Desk the tab's one sidebar is made here: an entry per page, and under the entry of the page on
-// screen that page's own rows; its header (title, buttons, search, footer) is that page's.
+// In Desk the tab's one sidebar is made here: the page entries at the top, then the rows of the page on
+// screen; its header (title, buttons, search, footer) is that page's.
 import { type Component, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SidebarModel, SidebarRow } from '@desk/shared/hydra-embed'
@@ -28,21 +28,22 @@ function mounted(id: string): boolean {
   return seen.has(id)
 }
 
+// The page on screen is marked by its icon in the accent colour (the model's `selected` stays the page's own).
 function entryRow(id: string, labelKey: string, icon: (typeof HSWARM_PAGES)[number]['icon']): SidebarRow {
-  const on = hswarmPage.value === id
-  return { key: PAGE_KEY_PREFIX + id, label: t(labelKey), icon, branch: on ? 'open' : 'closed' }
+  const label = t(labelKey)
+  return hswarmPage.value === id
+    ? { key: PAGE_KEY_PREFIX + id, label, status: { icon, tone: 'accent', label } }
+    : { key: PAGE_KEY_PREFIX + id, label, icon }
 }
 
 useDeskSidebarHost(
   (parts) => {
     const model = parts.get(hswarmPage.value)?.()
     if (!model) return null
-    // Entries in order; the page on screen puts its own sections right after its entry.
-    const sections: SidebarModel['sections'] = []
-    for (const p of HSWARM_PAGES) {
-      sections.push({ key: PAGE_KEY_PREFIX + p.id, rows: [entryRow(p.id, p.labelKey, p.icon)] })
-      if (p.id === hswarmPage.value) sections.push(...model.sections)
-    }
+    // The entries together at the top, then the page on screen's own sections: under its entry they pushed
+    // the next entries below CliMayte's whole task list.
+    const entries = { key: `${PAGE_KEY_PREFIX}entries`, rows: HSWARM_PAGES.map((p) => entryRow(p.id, p.labelKey, p.icon)) }
+    const sections: SidebarModel['sections'] = [entries, ...model.sections]
     return { ...model, sections }
   },
   (_view, e) => {

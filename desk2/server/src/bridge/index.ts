@@ -193,13 +193,14 @@ export function createBridge(opts: BridgeOptions = {}) {
       .catch(() => [])
   }
 
-  /** Chat id -> session id and title, from AgentHydra's /api/chats: how a job a Desktop chat started (it has a chat
-   *  id and no session id) finds its row. Read at most once per CHATS_FRESH_MS; a failed read keeps the last map. */
+  /** Chat id -> session id and title, from AgentHydra's /api/chats, archived chats included (a finished job's chat is
+   *  often archived by now): how a job a Desktop chat started (it has a chat id and no session id) finds its row and
+   *  its title. Read at most once per CHATS_FRESH_MS; a failed read keeps the last map. */
   let chatIndex: { at: number; map: ChatIndex } | null = null
   async function chatsIndex(): Promise<ChatIndex> {
     if (chatIndex && now() - chatIndex.at < CHATS_FRESH_MS) return chatIndex.map
     try {
-      const rows = await client.chats()
+      const rows = await client.chats('include')
       chatIndex = { at: now(), map: new Map(rows.map((r) => [r.chatId, { sessionId: r.sessionId, title: r.title || null }])) }
     } catch {
       chatIndex = { at: now(), map: chatIndex?.map ?? new Map() }

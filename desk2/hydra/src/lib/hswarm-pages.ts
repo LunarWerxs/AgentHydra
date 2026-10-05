@@ -1,5 +1,5 @@
 // The HSwarm tab is a list of pages (Hydra Desk 2, owner 2026-10-05: CliMayte moves into HSwarm and shows
-// as an entry of its sidebar). Desk's sidebar lists them at the top, each page's own rows under its entry.
+// as an entry of its sidebar). Desk's sidebar lists them together at the top, the open page's rows below.
 // A page is data here (Routing was added so): one more line in HSWARM_PAGES and its component.
 import { ref } from 'vue'
 import type { EmbedIcon } from '@desk/shared/hydra-embed'
