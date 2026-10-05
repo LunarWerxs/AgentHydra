@@ -29,8 +29,9 @@ const max = computed(() =>
   Math.max(1, ...props.rows.map((r) => r.value), ...(props.more ?? []).map((r) => r.value)),
 )
 const shown = computed(() => (expanded.value ? [...props.rows, ...(props.more ?? [])] : props.rows))
-const colorFor = (key: string) =>
-  props.mono ? 'var(--viz-seq)' : seriesColor(key, props.order ?? props.rows.map((r) => r.key))
+// The colour order is built once per rows change, not once per row per render.
+const colorOrder = computed(() => props.order ?? props.rows.map((r) => r.key))
+const colorFor = (key: string) => (props.mono ? 'var(--viz-seq)' : seriesColor(key, colorOrder.value))
 </script>
 
 <template>
@@ -45,8 +46,8 @@ const colorFor = (key: string) =>
       <!-- 6px track, 4px rounded end anchored at the baseline: a thin mark, per the mark spec -->
       <div class="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          class="h-full w-(--bar-w) rounded-full bg-(--bar-color) transition-width duration-300"
-          :style="{ '--bar-w': `${Math.max(1.5, (row.value / max) * 100)}%`, '--bar-color': colorFor(row.key) }"
+          class="h-full w-full origin-left scale-x-(--bar-w) rounded-full bg-(--bar-color) transition-transform duration-300"
+          :style="{ '--bar-w': Math.max(0.015, row.value / max), '--bar-color': colorFor(row.key) }"
         ></div>
       </div>
     </li>
