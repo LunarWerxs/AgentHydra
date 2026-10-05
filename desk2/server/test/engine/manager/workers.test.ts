@@ -215,6 +215,8 @@ test("a person's plain send to a running worker goes now; the queue's own dispat
   }
   expect(await m.send(chat.id, 'and then commit', undefined, { now: true })).toEqual({ queued: true })
   expect(bubble('and then commit')).toMatchObject({ queued: true })
+  // ...and the chat says why, not only the server log
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'system')).toEqual([expect.objectContaining({ level: 'warn', text: expect.stringMatching(/waits for the current task.*needs its update/s) })])
 })
 
 test('a new worker chat asks for chat mode and forces no model or effort', async () => {

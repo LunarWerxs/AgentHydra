@@ -525,6 +525,33 @@ test('the chats closing after the queue stopped do not clear what the next start
   expect(t.q.state().held).toEqual({ c1: 'restart' })
 })
 
+test('a chat held by the restart that turns out still working is released; its message waits for that turn', async () => {
+  const t = setup(chat('c1', 'working'))
+  t.q.add({ kind: 'message', chatId: 'c1', text: 'after this turn' })
+  t.restart()
+  expect(t.q.state().held).toEqual({ c1: 'restart' })
+  // the host took the chat over: its turn kept running through the restart
+  t.fake.setStatus('c1', 'working', { turnStartedAt: 1 })
+  expect(t.q.state().held).toEqual({})
+  await t.clock.advance(0)
+  expect(t.items()[0]).toMatchObject({ state: 'waiting', reason: REASON.turn })
+  t.fake.setStatus('c1', 'idle', { turnStartedAt: null })
+  await t.clock.advance(SETTLE)
+  expect(t.texts()).toEqual(['after this turn'])
+})
+
+test('a CliMayte chat working at the restart is not held: its worker runs on, and the message waits for it', async () => {
+  const t = setup(chat('c1', 'working', { workerId: 'w-1' }))
+  t.q.add({ kind: 'message', chatId: 'c1', text: 'for the worker' })
+  t.restart()
+  expect(t.q.state().held).toEqual({})
+  t.fake.setStatus('c1', 'working', { turnStartedAt: 1 })
+  expect(t.items()[0]).toMatchObject({ state: 'waiting' })
+  t.fake.setStatus('c1', 'idle', { turnStartedAt: null })
+  await t.clock.advance(SETTLE)
+  expect(t.texts()).toEqual(['for the worker'])
+})
+
 test('a missing or unreadable queue.json is an empty queue with the defaults; items of chats gone are dropped', async () => {
   const t = setup(chat('c1'))
   expect(t.q.state()).toEqual({ items: [], paused: false, sendMode: 'immediate', maxNewChats: 2, held: {}, rev: 0 })

@@ -660,7 +660,8 @@ export class ChatManager {
       try {
         if (await this.deliverHeldNow(e, standIn, text)) queued = false
       } catch (err) {
-        console.warn(`[desk] ${chat.id}: the message stays held, it could not go now: ${err instanceof Error ? err.message : String(err)}`)
+        const why = err instanceof Error ? err.message : String(err)
+        this.systemLine(chat.id, 'send-now', 'warn', `Your message waits for the current task to end: CliMayte could not send it now (${why}). Its Send now tries again.`)
       }
       if (this.chats.get(chat.id) !== e) return { queued }
     }

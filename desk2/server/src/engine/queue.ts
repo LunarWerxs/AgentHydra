@@ -285,6 +285,9 @@ export class QueueManager {
     // Latched on the change: a stop's leftover CLI sends can turn it working and idle again, and an
     // error goes 'closed' after idling; neither releases it.
     if ((c.status === 'stopped' || c.status === 'error') && !this.held[c.id] && this.messages(c.id).some((i) => i.state === 'waiting')) touched = this.hold(c)
+    // A turn the restart was held for that turns out still running (the host took the chat over): its
+    // messages wait for that turn to end, as a busy chat's do.
+    if (this.held[c.id] === 'restart' && LIVE.has(c.status)) touched = this.release(c.id)
     const live = LIVE.has(c.status) && this.messages(c.id).some((i) => i.state !== 'failed')
     if (live !== this.wasLive.has(c.id)) {
       if (live) this.wasLive.add(c.id)
@@ -681,7 +684,8 @@ export class QueueManager {
   /**
    * The saved queue as this start finds it: every chat is 'closed' now. A message whose chat is gone is
    * dropped. One that was being sent went out when the chat's transcript has its uuid (dropped), else it
-   * waits again. A chat that was working when the server ended is held until resumed.
+   * waits again. A chat that was working when the server ended is held until resumed or seen working
+   * again; a CliMayte chat is not, as its worker runs on in AgentHydra through a restart.
    */
   private recover(saved: QueueFile, chats: Map<string, ChatSummary>): void {
     this.paused = saved.paused
@@ -710,8 +714,9 @@ export class QueueManager {
       }
       this.items.push(item)
     }
-    for (const [id, why] of Object.entries(saved.held)) if (chats.has(id)) this.held[id] = why
-    for (const id of saved.wasLive) if (chats.has(id) && !this.held[id]) this.held[id] = 'restart'
+    const worker = (id: string) => chats.get(id)?.workerId !== undefined
+    for (const [id, why] of Object.entries(saved.held)) if (chats.has(id) && !(why === 'restart' && worker(id))) this.held[id] = why
+    for (const id of saved.wasLive) if (chats.has(id) && !this.held[id] && !worker(id)) this.held[id] = 'restart'
     for (const [id, why] of Object.entries(this.held)) {
       for (const i of this.messages(id)) if (i.state === 'waiting') this.set(i, 'held', holdReason(why, chats.get(id) ?? null))
       if (!this.messages(id).some((i) => i.state !== 'failed')) delete this.held[id]
