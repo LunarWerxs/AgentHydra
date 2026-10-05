@@ -214,7 +214,7 @@ export interface FindHit {
 
 function searchable(i: TranscriptItem): string | null {
   if (i.parentToolUseId) return null
-  if (i.kind === 'user' || i.kind === 'assistant_text' || i.kind === 'thinking' || i.kind === 'system') return i.text
+  if (i.kind === 'user' || i.kind === 'note' || i.kind === 'assistant_text' || i.kind === 'thinking' || i.kind === 'system') return i.text
   return null
 }
 

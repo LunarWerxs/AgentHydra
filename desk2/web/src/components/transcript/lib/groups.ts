@@ -61,7 +61,8 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
   const settledAt = (it: TranscriptItem) =>
     it.kind === 'task' && it.status !== 'running' && it.durationMs !== undefined ? it.ts + it.durationMs : undefined
   items.forEach((it, i) => {
-    if (it.kind === 'user') {
+    // A program's note starts a turn as a message does.
+    if (it.kind === 'user' || it.kind === 'note') {
       lastUser = i
       turnStart = Math.max(turnStart, it.ts)
     }
@@ -76,6 +77,8 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
       if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { text: it.text, images: it.images }))
       prompt = p
     }
+    // A reply to a note has no prompt of the person's to send again.
+    if (it.kind === 'note') prompt = null
     if (folds(it)) {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
@@ -93,7 +96,7 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
   for (let i = out.length - 1; i >= 0; i--) {
     const r = out[i]
     if (r.kind !== 'item') continue
-    if (r.item.kind === 'user') seenText = false
+    if (r.item.kind === 'user' || r.item.kind === 'note') seenText = false
     else if (r.item.kind === 'assistant_text' && !seenText) {
       seenText = true
       r.endOfTurn = !r.item.streaming

@@ -67,6 +67,7 @@ import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
 import RepoStrip from './RepoStrip.vue'
 import { Tip } from '@/components/ui/tooltip'
+import { openLightbox } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
 import PermissionCard from '@/components/transcript/parts/PermissionCard.vue'
@@ -1056,11 +1057,13 @@ onBeforeUnmount(() => {
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
-              <img
-                :src="img.url"
-                :alt="img.name"
-                class="size-[120px] rounded-[var(--radius-8)] border border-[#444444] bg-[var(--bg-page)] object-contain"
-              />
+              <button type="button" class="block cursor-zoom-in" :aria-label="`Open ${img.name}`" @click="openLightbox(img.url, img.name)">
+                <img
+                  :src="img.url"
+                  :alt="img.name"
+                  class="size-[120px] rounded-[var(--radius-8)] border border-[#444444] bg-[var(--bg-page)] object-contain"
+                />
+              </button>
             </Tip>
             <button
               type="button"

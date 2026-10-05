@@ -138,6 +138,16 @@ describe('ChatStore items', () => {
     expect(store.loadItems('c3').map((i) => i.id)).toEqual(['b'])
   })
 
+  test("a user item saved before notes existed loads as a note with the same id; the person's stays theirs", () => {
+    const store = new ChatStore(home())
+    store.appendItem('c1', { kind: 'user', id: 'u1', ts: 1, text: 'fix the build' })
+    store.appendItem('c1', { kind: 'user', id: 'u2', ts: 2, text: '[AgentHydra · CliMayte] Not from the user. Ping 7, 1 update' })
+    expect(store.loadItems('c1')).toEqual([
+      { kind: 'user', id: 'u1', ts: 1, text: 'fix the build' },
+      { kind: 'note', id: 'u2', ts: 2, from: 'AgentHydra · CliMayte', text: 'Ping 7, 1 update' },
+    ])
+  })
+
   test('chat ids cannot escape the folder', () => {
     expect(() => new ChatStore(home()).appendItem('../x', text('a', 'x'))).toThrow()
   })

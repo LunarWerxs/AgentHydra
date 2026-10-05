@@ -126,6 +126,8 @@ interface ItemBase {
 
 export type TranscriptItem =
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean })
+  /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
+  | (ItemBase & { kind: 'note'; from: string; text: string })
   | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean })
   | (ItemBase & { kind: 'thinking'; text: string; streaming?: boolean })
   | (ItemBase & {

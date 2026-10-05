@@ -22,7 +22,7 @@ import {
 } from '@shared/protocol'
 import { cut, describeToolActivity } from './describe'
 import { resetsAtMs, type NotifyReason } from './status'
-import { classifyUserText, taskItemFrom, taskKindOf } from './system-text'
+import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurn } from './system-text'
 import { MEDIA_ROUTE, mediaCache, RENDERABLE, type MediaCache } from '../media/cache'
 
 export type Emission =
@@ -418,10 +418,12 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         }
       }
     }
-    if (opts.echoUserText && (userText.length || images.length)) {
+    if (userText.length || images.length) {
       const item: Extract<TranscriptItem, { kind: 'user' }> = { kind: 'user', id: uuid, ts: now(), text: userText.join('\n\n') }
       if (images.length) item.images = images
-      out.push({ type: 'upsert', item })
+      // Live, a program's note still shows (the runtime writes only the person's own prompts).
+      if (opts.echoUserText) out.push({ type: 'upsert', item: userTurn(item, media) })
+      else if (noteOf(item.text)) out.push({ type: 'upsert', item: userTurn(item, null) })
     }
     let finishedMain = false
     for (const b of content) {

@@ -1,8 +1,12 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
+import { createMediaCache, type MediaCache } from '../../src/media/cache'
 import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
-import { classifyUserText, taskItemFrom, type InjectedPart } from '../../src/engine/system-text'
+import { classifyUserText, noteOf, taskItemFrom, userTurn, type InjectedPart } from '../../src/engine/system-text'
 
 // Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
@@ -279,5 +283,70 @@ describe("taskItemFrom", () => {
   test("a notice with a duration and no start seen started that long before it, so it settles at the notice", () => {
     const item = taskItemFrom({ taskId: "t2", status: "completed", description: "", summary: "", taskKind: "workflow", durationMs: 40_000 }, undefined, 100_000)
     expect(item).toMatchObject({ ts: 60_000, durationMs: 40_000 })
+  })
+})
+
+// A note AgentHydra types into a session (server/src/climayte-ping.ts shape), with invented content.
+const PING = '[AgentHydra · CliMayte] Not from the user. Ping 3-4, 2 updates since 09:00:\n• worker 12 finished: tests pass\n• worker 13 waits on a reply'
+
+describe('notes and picture lines', () => {
+  const temps: string[] = []
+  afterEach(() => {
+    for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
+  })
+  function png(): { media: MediaCache; file: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'desk-note-'))
+    temps.push(dir)
+    const file = join(dir, 'shot.png')
+    writeFileSync(file, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]))
+    return { media: createMediaCache(join(dir, 'media')), file }
+  }
+  const user = (text: string, over: Partial<Extract<TranscriptItem, { kind: 'user' }>> = {}): Extract<TranscriptItem, { kind: 'user' }> => ({
+    kind: 'user',
+    id: 'u1',
+    ts: 5,
+    text,
+    ...over,
+  })
+
+  test('noteOf reads the sender and the body; the person\'s text, or the words further in, are not a note', () => {
+    expect(noteOf(PING)).toEqual({ from: 'AgentHydra · CliMayte', text: 'Ping 3-4, 2 updates since 09:00:\n• worker 12 finished: tests pass\n• worker 13 waits on a reply' })
+    expect(noteOf('please fix the build')).toBeNull()
+    expect(noteOf('he wrote "[AgentHydra] Not from the user." in the log')).toBeNull()
+  })
+
+  test('a note keeps its id, time and sub-agent and is never a user item', () => {
+    const note = userTurn(user(PING, { parentToolUseId: null, queued: true }), null)
+    expect(note).toEqual({ kind: 'note', id: 'u1', ts: 5, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: noteOf(PING)!.text })
+  })
+
+  test('a picture line becomes the picture once, a missing file stays as text, plain text is the same item', () => {
+    const { media, file } = png()
+    const turn = userTurn(user(`look at this\n[Image: source: ${file}]\n[Image: source: ${file}]\n[Image: source: C:/Users/me/gone.png]`), media)
+    expect(turn.kind).toBe('user')
+    const u = turn as Extract<TranscriptItem, { kind: 'user' }>
+    expect(u.text).toBe('look at this\n[Image: source: C:/Users/me/gone.png]')
+    expect(u.images).toHaveLength(1)
+    expect(u.images![0]).toMatchObject({ mediaType: 'image/png', name: 'shot.png' })
+    expect(u.images![0].url).toStartWith('/api/media/')
+    const plain = user('nothing to change')
+    expect(userTurn(plain, media)).toBe(plain)
+  })
+
+  test('history and the tail show a ping as a note and the person\'s message as theirs', () => {
+    const history = historyToItems([rec('user', 'start'), rec('user', PING)])
+    expect(history.map((i) => i.kind)).toEqual(['user', 'note'])
+    const tail = tailToItems({
+      session_id: 's1',
+      source: 'claude',
+      title: 't',
+      cwd: 'C:/x',
+      events: [
+        { role: 'user', kind: 'text', text: 'go', tool_name: null, timestamp: '2026-10-03T10:00:00Z' },
+        { role: 'user', kind: 'text', text: PING, tool_name: null, timestamp: '2026-10-03T10:00:01Z' },
+      ],
+    })
+    expect(tail.map((i) => i.kind)).toEqual(['user', 'note'])
+    expect(tail[1]).toMatchObject({ from: 'AgentHydra · CliMayte' })
   })
 })

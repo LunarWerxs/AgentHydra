@@ -5,6 +5,8 @@
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
+import { userTurn } from './system-text'
+import { mediaCache } from '../media/cache'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
 const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
@@ -143,7 +145,12 @@ export class ChatStore {
     // Parsed afresh on every call: callers keep and change the items they get, so a shared object would leak between them.
     const out = new Map(cached.lines)
     for (const [id, line] of cached.tail) out.set(id, line)
-    return [...out.values()].map((line) => JSON.parse(line) as TranscriptItem)
+    // A user item saved before notes and picture lines were read is shown as it reads now (same id).
+    const media = mediaCache(this.home)
+    return [...out.values()].map((line) => {
+      const item = JSON.parse(line) as TranscriptItem
+      return item.kind === 'user' ? userTurn(item, media) : item
+    })
   }
 
   /** Drops the chat's transcript file (the caller drops it from the list and saves). */

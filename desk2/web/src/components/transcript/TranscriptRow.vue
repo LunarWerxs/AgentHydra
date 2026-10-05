@@ -5,6 +5,7 @@ import type { TranscriptItem } from '@shared/protocol'
 import { formatElapsed, isSendFileTool, toolFamily } from './lib/tools'
 import type { TurnPrompt } from './lib/groups'
 import UserMessage from './parts/UserMessage.vue'
+import NoteRow from './parts/NoteRow.vue'
 import MarkdownBlock from './parts/MarkdownBlock.vue'
 import ThinkingRow from './parts/ThinkingRow.vue'
 import ToolRow from './parts/ToolRow.vue'
@@ -47,6 +48,8 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 
 <template>
   <UserMessage v-if="item.kind === 'user'" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
+
+  <NoteRow v-else-if="item.kind === 'note'" :item="item" />
 
   <div v-else-if="item.kind === 'assistant_text'" class="group/message-row relative flex flex-col gap-1" :class="nested && 'tx-nested'">
     <MarkdownBlock :text="item.text" :streaming="item.streaming" />

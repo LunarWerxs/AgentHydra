@@ -16,7 +16,6 @@ import TranscriptRow from './TranscriptRow.vue'
 import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
 import TaskGroup from './parts/TaskGroup.vue'
-import Lightbox from './parts/Lightbox.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
 import './transcript.css'
 
@@ -345,6 +344,5 @@ watch(
         <ArrowDown class="size-5 mix-blend-luminosity" />
       </button>
     </Transition>
-    <Lightbox />
   </div>
 </template>

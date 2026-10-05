@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, defineComponent, h, onBeforeUnmount, onMounted, provide, ref } from 'vue'
 import DeskFrame from '@/components/shell/DeskFrame.vue'
 import TitleTips from '@/components/ui/tooltip/TitleTips.vue'
+import Lightbox from '@/components/transcript/parts/Lightbox.vue'
 import { SHELL_SOURCE } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import { COMPOSER_API } from '@/components/composer/api'
@@ -51,4 +52,6 @@ const DemoFrame = defineAsyncComponent(async () => {
     <DeskFrame v-else />
     <TitleTips />
   </div>
+  <!-- One full-size picture viewer for every view: a transcript's pictures and the composer's attachments -->
+  <Lightbox />
 </template>

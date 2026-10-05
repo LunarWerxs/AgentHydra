@@ -4,9 +4,12 @@
 // classifier used by every path that turns messages into transcript items (the live SDK stream, a
 // session's .jsonl, AgentHydra's tail).
 
-import type { TranscriptItem } from '@shared/protocol'
+import type { ImageRef, TranscriptItem } from '@shared/protocol'
+import type { MediaCache } from '../media/cache'
 
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
+type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+type NoteItem = Extract<TranscriptItem, { kind: 'note' }>
 
 /** A <task-notification>, read: the fields the task item carries. Never the raw XML or the result blob. */
 export interface TaskNotice {
@@ -198,4 +201,38 @@ export function taskItemFrom(n: TaskNotice, prev: TaskItem | undefined, ts: numb
   else if (prev?.status === 'running' && n.status && n.status !== 'running') item.durationMs = Math.max(0, ts - prev.ts)
   if (!prev && n.durationMs !== undefined) item.ts = Math.max(0, ts - n.durationMs)
   return item
+}
+
+/** A program's message typed in as a user turn: `[AgentHydra · CliMayte] Not from the user. Ping 3, ...`. */
+const NOTE = /^\s*\[([^\]\n]{1,80})\]\s+Not from the user\.?[ \t]*\n?/
+/** A picture named by its file, the form Claude Code (and a Desk worker's message) uses. */
+const PICTURE_LINE = /^[ \t]*\[Image: source: ([^\]\n]+)\][ \t]*(?:\r?\n|$)/gm
+
+/** Who sent a note and what it says; null when the text is the person's. */
+export function noteOf(text: string): { from: string; text: string } | null {
+  const m = NOTE.exec(text)
+  return m ? { from: m[1].trim(), text: text.slice(m[0].length).trim() } : null
+}
+
+/**
+ * A user item as the transcript shows it: a note when a program sent it; else the person's, each
+ * `[Image: source: <path>]` line whose file is a picture shown as that picture instead of the line.
+ * A line naming a missing file or a non-picture stays as text.
+ */
+export function userTurn(item: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+  const note = noteOf(item.text)
+  if (note) {
+    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
+    return { ...rest, kind: 'note', from: note.from, text: note.text }
+  }
+  if (!media || !item.text.includes('[Image: source: ')) return item
+  const images: ImageRef[] = [...(item.images ?? [])]
+  const text = item.text.replace(PICTURE_LINE, (line, path: string) => {
+    const ref = media.fileRef(path.trim())
+    if (!ref?.url) return line
+    if (!images.some((i) => i.url === ref.url)) images.push(ref)
+    return ''
+  })
+  if (images.length === (item.images?.length ?? 0) && text === item.text) return item
+  return { ...item, text: text.trim(), ...(images.length ? { images } : {}) }
 }

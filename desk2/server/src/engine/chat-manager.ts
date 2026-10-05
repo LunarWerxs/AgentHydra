@@ -550,7 +550,9 @@ export class ChatManager {
     // A worker takes text: each picture is saved in the media cache and named by a line
     // `[Image: source: <path>]` (the form Claude Code uses, so the model opens it with Read).
     const shown = images?.length ? images.map((img) => toStoredImage(img, mediaCache(this.store.home))) : undefined
-    if (images?.length) text = answersWithPictures({ m: text }, { m: images }, mediaCache(this.store.home)).m!
+    // The stand-in keeps what the person typed: the worker's copy reads with its picture lines shown as pictures.
+    const said = text
+    if (images?.length) text =answersWithPictures({ m: text }, { m: images }, mediaCache(this.store.home)).m!
     while (e.starting) await e.starting
     const chat = e.chat
     if (this.chats.get(chat.id) !== e) throw new ChatError(404, `no chat ${chat.id}`)
@@ -558,7 +560,7 @@ export class ChatManager {
     const queued = busy(chat)
     // The message shows at once: the worker's JSONL has it only once its CLI runs and the poll reads it.
     const ts = this.now()
-    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
+    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
     const sentAt = this.now()

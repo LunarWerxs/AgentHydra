@@ -37,6 +37,15 @@ describe('groupRows', () => {
     const end = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.id, r.endOfTurn]] : [])))
     expect(end).toEqual({ u1: false, t1: false, t2: true, u2: false, t3: false })
   })
+
+  test("a program's note starts a turn of its own, and its reply has no prompt of the person's to send again", () => {
+    const note: TranscriptItem = { id: 'n', ts: 1, kind: 'note', from: 'AgentHydra', text: 'Ping 1' }
+    const rows = groupRows([user('u1'), text('t1'), note, text('t2')])
+    const end = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.id, r.endOfTurn]] : [])))
+    expect(end).toEqual({ u1: false, t1: true, n: false, t2: true })
+    const t2 = rows.find((r) => r.id === 't2')
+    expect(t2?.kind === 'item' && t2.prompt).toBeNull()
+  })
 })
 
 describe('rowGap', () => {
