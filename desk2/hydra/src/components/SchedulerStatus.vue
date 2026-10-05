@@ -5,7 +5,7 @@
 // this actually run?"). Reads the same polled data the queue uses; a 1s local tick keeps the
 // countdown live between polls.
 import { CircleAlert, Loader2, PowerOff, SlidersHorizontal } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -13,6 +13,7 @@ import { Switch } from '@/components/ui/switch'
 import { useData } from '@/composables/useData'
 import { usePanels } from '@/composables/usePanels'
 import * as api from '@/lib/api'
+import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
@@ -43,13 +44,12 @@ function openAdvanced() {
 
 // Local clock so the "next in 4m 12s" text ticks every second, not only on the 2s queue poll.
 const now = ref(Date.now())
-let timer: number | undefined
-onMounted(() => {
-  timer = window.setInterval(() => {
-    now.value = Date.now()
-  }, 1000)
-})
-onBeforeUnmount(() => window.clearInterval(timer))
+let stopTick: (() => void) | null = null
+function stopClock() {
+  stopTick?.()
+  stopTick = null
+}
+onBeforeUnmount(stopClock)
 
 const enabled = computed(() => !!scheduler.value?.enabled)
 const runningCount = computed(() => queue.value.filter((q) => q.status === 'running').length)
@@ -66,6 +66,20 @@ const nextAtMs = computed<number | null>(() => {
     .filter((ms) => Number.isFinite(ms) && ms > now.value)
   return future.length ? Math.min(...future) : null
 })
+
+// The clock only runs while a future item exists, so a countdown can be on screen.
+watch(
+  () => nextAtMs.value !== null,
+  (ticking) => {
+    if (!ticking) return stopClock()
+    if (stopTick) return
+    now.value = Date.now()
+    stopTick = visibleInterval(() => {
+      now.value = Date.now()
+    }, 1000)
+  },
+  { immediate: true },
+)
 
 /** "5s" · "4m 12s" · "2h 05m" · "1d 3h" — compact, coarsens as it grows. */
 function humanizeUntil(ms: number): string {

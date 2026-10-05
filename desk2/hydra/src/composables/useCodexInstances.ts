@@ -2,6 +2,7 @@ import { ref } from 'vue'
 import type { CodexInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const instances = ref<CodexInstance[]>([])
 const loading = ref(false)
@@ -36,16 +37,16 @@ async function refresh(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = false
 }
 
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 function startPolling() {
-  if (pollTimer !== null) return
+  if (stopPoll) return
   void refresh()
-  pollTimer = window.setInterval(() => void refresh({ silent: true }), 5000)
+  stopPoll = visibleInterval(() => void refresh({ silent: true }), 5000)
 }
 
 function stopPolling() {
-  if (pollTimer !== null) window.clearInterval(pollTimer)
-  pollTimer = null
+  stopPoll?.()
+  stopPoll = null
 }
 
 async function create(name: string) {

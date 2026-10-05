@@ -52,6 +52,20 @@ export function useCliMayteFloat() {
     }
   }
 
+  let pendingSize: { width: number; height: number } | null = null
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+  const flushSize = () => {
+    if (saveTimer !== null) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    if (pendingSize) {
+      saveSize(pendingSize.width, pendingSize.height)
+      pendingSize = null
+    }
+  }
+
   const open = async (state: CliMayteFloatState): Promise<boolean> => {
     if (!('documentPictureInPicture' in window)) {
       return false
@@ -78,13 +92,16 @@ export function useCliMayteFloat() {
       window_.document.body.appendChild(root)
 
       window_.addEventListener('pagehide', () => {
+        flushSize()
         pipWindow.value = null
         isOpen.value = false
         floatState.value = null
       })
 
       window_.addEventListener('resize', () => {
-        saveSize(window_.innerWidth, window_.innerHeight)
+        pendingSize = { width: window_.innerWidth, height: window_.innerHeight }
+        if (saveTimer !== null) clearTimeout(saveTimer)
+        saveTimer = setTimeout(flushSize, 300)
       })
 
       return true
@@ -94,6 +111,7 @@ export function useCliMayteFloat() {
   }
 
   const close = () => {
+    flushSize()
     if (pipWindow.value) {
       pipWindow.value.close()
       pipWindow.value = null

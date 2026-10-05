@@ -108,6 +108,8 @@ export function usageCheckedAgo(capturedAt: string): string {
   return formatAgo(Date.now(), ms)
 }
 
+const moneyFormats = new Map<string, Intl.NumberFormat>()
+
 /** "$246.11"; "—" for an amount claude.ai did not report (never "$0.00", which is a claim). The
  *  currency code comes from claude.ai, and Intl throws on one it does not know; a table row must
  *  never die of that. */
@@ -117,10 +119,13 @@ export function formatMoney(
 ): string {
   if (amount == null) return '—'
   try {
-    return new Intl.NumberFormat(undefined, {
-      style: 'currency',
-      currency: currency ?? 'USD',
-    }).format(amount)
+    const code = currency ?? 'USD'
+    let fmt = moneyFormats.get(code)
+    if (!fmt) {
+      fmt = new Intl.NumberFormat(undefined, { style: 'currency', currency: code })
+      moneyFormats.set(code, fmt)
+    }
+    return fmt.format(amount)
   } catch {
     return `${amount.toFixed(2)} ${currency}`
   }

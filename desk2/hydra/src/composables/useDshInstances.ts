@@ -6,6 +6,7 @@
 import { ref } from 'vue'
 import { type DshInstance, listDshInstances } from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const instances = ref<DshInstance[]>([])
 /** True until the first read settles, so a table can show skeletons rather than "none found". */
@@ -25,23 +26,23 @@ async function refresh(): Promise<void> {
 
 // Reference-counted: every caller that starts polling stops it again, and the timer runs while at
 // least one of them is mounted, so two views on screen share one timer instead of doubling it.
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 let pollers = 0
 
 function startPolling(): void {
   pollers++
-  if (pollTimer !== null) return
+  if (stopPoll) return
   void refresh()
   // Slow on purpose: nothing here changes without a person doing something, and the only live fact
   // (is a server up) costs a connect probe per home.
-  pollTimer = window.setInterval(() => void refresh(), 15_000)
+  stopPoll = visibleInterval(() => void refresh(), 15_000)
 }
 
 function stopPolling(): void {
   pollers = Math.max(0, pollers - 1)
-  if (pollers > 0 || pollTimer === null) return
-  window.clearInterval(pollTimer)
-  pollTimer = null
+  if (pollers > 0 || !stopPoll) return
+  stopPoll()
+  stopPoll = null
 }
 
 export function useDshInstances() {

@@ -3,9 +3,10 @@
 // the desktop table's per-account figures (the CLI list carries its own).
 
 import type { AccountTokens } from '@agenthydra/server/types'
-import { useIntervalFn, useStorage } from '@vueuse/core'
-import { ref } from 'vue'
+import { useStorage } from '@vueuse/core'
+import { onScopeDispose, ref } from 'vue'
 import { listDesktopInstanceTokens } from '@/lib/api'
+import { visibleInterval } from '@/lib/visible-poll'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 import { registerSharedPref } from './useSharedPrefs'
 
@@ -23,11 +24,14 @@ export function useDesktopAccountTokens() {
   const byDir = ref<Record<string, AccountTokens | null>>({})
   const load = async () => {
     try {
-      byDir.value = await listDesktopInstanceTokens()
+      const next = await listDesktopInstanceTokens()
+      if (JSON.stringify(next) !== JSON.stringify(byDir.value)) byDir.value = next
     } catch {
       // Keep the last figures; the next tick asks again.
     }
   }
-  useIntervalFn(load, 60_000, { immediateCallback: true })
+  void load()
+  const stop = visibleInterval(() => void load(), 60_000)
+  onScopeDispose(stop)
   return byDir
 }

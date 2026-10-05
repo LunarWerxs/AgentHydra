@@ -7,6 +7,7 @@
 
 import { ref } from 'vue'
 import { getHealth, restartDaemon } from '@/lib/api'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const POLL_MS = 60_000
 
@@ -15,7 +16,7 @@ const bootCommit = ref<string | null>(null)
 const diskCommit = ref<string | null>(null)
 const restarting = ref(false)
 const restartError = ref<string | null>(null)
-let timer: number | null = null
+let stopPoll: (() => void) | null = null
 
 async function refresh(): Promise<void> {
   try {
@@ -60,14 +61,14 @@ async function restart(): Promise<void> {
 }
 
 function start(): void {
-  if (timer !== null) return
+  if (stopPoll) return
   void refresh()
-  timer = window.setInterval(() => void refresh(), POLL_MS)
+  stopPoll = visibleInterval(() => void refresh(), POLL_MS)
 }
 
 function stop(): void {
-  if (timer !== null) window.clearInterval(timer)
-  timer = null
+  stopPoll?.()
+  stopPoll = null
 }
 
 export function useRunningCode() {
