@@ -61,13 +61,13 @@ const kit = ref<Kit | null>(null)
 const scores = ref<Scores>({})
 const error = ref('')
 const loading = ref(false)
+const scoresLoading = ref(false)
 let latest = 0
 
 async function load() {
   const mine = ++latest
   loading.value = true
   error.value = ''
-  scores.value = {}
   const base = { source: 'hswarm', from: rollingDaysFrom(range.value), tz: localTz() }
   try {
     const [byModel, byDayModel] = await Promise.all([
@@ -119,7 +119,10 @@ async function load() {
       })),
     }
   } catch (err) {
-    if (mine === latest) error.value = err instanceof Error ? err.message : String(err)
+    if (mine === latest) {
+      error.value = err instanceof Error ? err.message : String(err)
+      scores.value = {}
+    }
   } finally {
     if (mine === latest) loading.value = false
   }
@@ -128,6 +131,7 @@ async function load() {
 
 // Thumbs scoring and edit survival stay HSwarm's: slow to compute, so they join in after the page has painted.
 async function loadScores(mine: number) {
+  scoresLoading.value = true
   try {
     const stats: { models: Array<{ model: string; scored: number; survival: number | null }> } =
       await apiCall(`model-stats?days=${range.value}`)
@@ -137,6 +141,9 @@ async function loadScores(mine: number) {
     )
   } catch {
     // Without HSwarm's scoring the survival panel simply stays empty.
+    if (mine === latest) scores.value = {}
+  } finally {
+    if (mine === latest) scoresLoading.value = false
   }
 }
 onMounted(load)
@@ -219,6 +226,7 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
       </div>
     </CardHeader>
     <CardContent>
+      <p v-if="kit && !error && (loading || scoresLoading)" class="pb-2 text-center text-xs text-muted-foreground">{{ t('hswarm.v.overview.loading') }}</p>
       <p v-if="error" class="text-xs text-destructive">{{ t('hswarm.v.overview.results.failed') }} {{ error }}</p>
       <p v-else-if="!kit && loading" class="py-4 text-center text-xs text-muted-foreground">{{ t('hswarm.v.overview.loading') }}</p>
       <div v-else-if="models.length === 0" class="py-4 text-center">

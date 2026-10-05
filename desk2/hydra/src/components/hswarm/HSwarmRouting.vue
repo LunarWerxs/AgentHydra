@@ -54,7 +54,8 @@ const enabledModels = props.state.models?.filter((m: any) => m.enabled) || []
 
 async function handleDailyCapChange() {
   try {
-    const value = dailyCap.value === '' ? undefined : parseFloat(dailyCap.value)
+    const value = dailyCap.value === '' ? undefined : parseFloat(String(dailyCap.value))
+    if ((value ?? null) === (props.state.options?.daily_cap_usd ?? null)) return
     await apiCall('options', {
       method: 'POST',
       body: JSON.stringify({ daily_cap_usd: value }),
@@ -353,8 +354,8 @@ async function handlePreview() {
                 </p>
               </div>
               <Switch
-                :checked="state.options?.routing || false"
-                @update:checked="handleRoutingToggle"
+                :model-value="!!state.options?.routing"
+                @update:model-value="handleRoutingToggle"
               />
             </div>
 

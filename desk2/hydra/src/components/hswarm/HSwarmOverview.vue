@@ -74,7 +74,7 @@ interface AskResult {
 }
 
 const props = defineProps<{ state: HswarmState }>()
-defineEmits<{ changed: [] }>()
+defineEmits<{ changed: []; open: [path: string[]] }>()
 
 const { t } = useI18n()
 const { apiCall } = useHswarmApi()
@@ -274,7 +274,7 @@ const doctorJson = computed(() => (doctor.value?.data ? JSON.stringify(doctor.va
 
 const spendChartData = computed(() => {
   return spendDays.value.map((d) => ({
-    at: new Date(d.date).getTime(),
+    at: new Date(d.date + 'T00:00:00').getTime(),
     value: d.tokens,
   }))
 })
@@ -283,7 +283,7 @@ const outcomeChartData = computed(() => {
   const data = spendDays.value.map((d) => {
     const total = d.ok + d.error
     return {
-      at: new Date(d.date).getTime(),
+      at: new Date(d.date + 'T00:00:00').getTime(),
       value: total > 0 ? (d.error / total) * 100 : 0,
     }
   })
@@ -472,7 +472,7 @@ function formatPercent(value: number): string {
               class="shrink-0"
               size="sm"
               :variant="idx === checklist.nextIncomplete ? 'default' : 'outline'"
-              @click="$emit('changed')"
+              @click="$emit('open', [step.action])"
             >
               {{ idx === 0 ? t('hswarm.v.overview.action0') : idx === 1 ? t('hswarm.v.overview.action1') : t('hswarm.v.overview.action2') }}
             </Button>

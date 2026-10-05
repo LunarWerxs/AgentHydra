@@ -471,8 +471,9 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
           <div class="flex items-center gap-2 flex-shrink-0">
             <Label class="text-sm">{{ t('hswarm.v.providers.enabled') }}</Label>
             <Switch
-              :checked="selectedProviderData.enabled"
-              @update:checked="
+              :model-value="!!selectedProviderData.enabled"
+              :aria-label="t('hswarm.v.providers.useProvider', { name: selectedProviderData.name })"
+              @update:model-value="
                 (v: boolean) => setProviderEnabled(selectedProviderData.name, v)
               "
             />

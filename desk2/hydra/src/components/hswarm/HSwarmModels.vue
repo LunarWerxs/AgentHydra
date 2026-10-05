@@ -317,7 +317,7 @@ onMounted(() => {
         </div>
       </div>
       <div class="flex-1" />
-      <a href="#" class="text-xs text-primary hover:underline">
+      <a href="#" class="text-xs text-primary hover:underline" @click.prevent="emit('open', ['routing'])">
         {{ t('hswarm.v.models.seeAutoRouting') }}
       </a>
     </div>

@@ -159,7 +159,7 @@ onMounted(() => {
     </Alert>
 
     <!-- Clients table -->
-    <Card size="sm" v-if="!loading && !error">
+    <Card size="sm" v-if="!error && (clients.length || !loading)">
       <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
         <div>
           <CardTitle>{{ t('hswarm.v.clients.agents') }}</CardTitle>
@@ -233,7 +233,7 @@ onMounted(() => {
     </Card>
 
     <!-- Loading state -->
-    <div v-if="loading" class="flex items-center justify-center py-4">
+    <div v-if="loading && !clients.length" class="flex items-center justify-center py-4">
       <div class="text-muted-foreground">{{ t('hswarm.loading') }}</div>
     </div>
 

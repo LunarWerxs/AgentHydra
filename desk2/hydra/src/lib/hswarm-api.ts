@@ -103,7 +103,6 @@ async function fetchState() {
     if (error.value !== null) error.value = null
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load state'
-    state.value = null
   } finally {
     loading.value = false
   }
