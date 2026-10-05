@@ -7,7 +7,7 @@
 // per PC with a stand-in row for the chat that started it, never hidden (owner, 2026-10-05, counting AgentHydra's six against Desk's one: "Is one
 // smaller than six? Yes ... Why?"). Pure, so the window and the tests share it.
 import { ref, watch } from 'vue'
-import type { CliMayteWorker } from '@shared/protocol'
+import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
 
 const KEY = 'hydra-desk.sidebar.tasks'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
@@ -40,6 +40,8 @@ export interface UnplacedChat {
   note: string
   worker: CliMayteWorker | null
   nodes: TaskNode[]
+  /** The running HSwarm jobs its chat called, after its tasks (kept apart from `nodes`: a count per kind is each one's length). */
+  jobs: SwarmJob[]
 }
 
 /** Every unplaced chat of one PC; null for this PC. The sidebar heads it once. */
@@ -53,6 +55,8 @@ export interface NestedTasks {
   byRow: Map<string, TaskNode[]>
   /** Every running task no row lists (nor draws as itself), one block per PC: this PC's first, then each other PC's in first-seen order. */
   unplaced: UnplacedTasks[]
+  /** Each drawn row's HSwarm jobs, newest first, drawn after its tasks (kept apart from `byRow`); a row with none is absent. */
+  jobsByRow: Map<string, SwarmJob[]>
 }
 
 /** The group both Hydra Desk and Desk 2 run each chat's worker in (server/src/engine/chat-manager.ts). */
@@ -77,7 +81,8 @@ const MAX_DEPTH = 3
  * goes in `unplaced` under the topmost of its dispatchers no row lists either, so every running task is
  * shown once.
  */
-export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[]): NestedTasks {
+/** `jobs` nest under `o.jobRows` (default `rows`): a list that draws no jobs under its rows passes none. */
+export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[] = [], o: { jobRows?: readonly NestRow[] } = {}): NestedTasks {
   const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
   /** The worker that dispatched it, on its own PC. */
   const parentKey = (w: CliMayteWorker) => (w.originWorkerId ? (w.pc ? `${w.pc}:${w.originWorkerId}` : w.originWorkerId) : null)
@@ -213,6 +218,17 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
   /** The first non-empty title of the chat each origin stands for, as its PC sent it. */
   const titles = new Map<string, string>()
   for (const r of roots) if (r.originSessionId && r.originTitle && !titles.has(`${r.pc ?? ''}|${r.originSessionId}`)) titles.set(`${r.pc ?? ''}|${r.originSessionId}`, r.originTitle)
+  const chatFor = (pc: string | null, key: string, make: () => Omit<UnplacedChat, 'key' | 'nodes' | 'jobs'>): UnplacedChat => {
+    let chat = chatsByKey.get(`${pc ?? ''}|${key}`)
+    if (!chat) {
+      chat = { key: `${pc ?? ''}|${key}`, ...make(), nodes: [], jobs: [] }
+      chatsByKey.set(chat.key, chat)
+      const block = blocks.get(pc ?? '') ?? { pc, chats: [] }
+      block.chats.push(chat)
+      blocks.set(pc ?? '', block)
+    }
+    return chat
+  }
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const pc = r.pc ?? null
     const where = pc ? `on ${pc}` : ''
@@ -220,7 +236,7 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     const deskChat = r.group === DESK_GROUP && !r.originSessionId && !r.originWorkerId
     const below = walk(sessionsOf(r), new Set([keyOf(r)]), deskChat ? 1 : 2, seen)
     let key: string
-    let make: () => Omit<UnplacedChat, 'key' | 'nodes'>
+    let make: () => Omit<UnplacedChat, 'key' | 'nodes' | 'jobs'>
     if (deskChat) {
       key = `desk:${keyOf(r)}`
       make = () => ({
@@ -247,27 +263,59 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
       key = `none:${pc ?? ''}`
       make = () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })
     }
-    let chat = chatsByKey.get(`${pc ?? ''}|${key}`)
-    if (!chat) {
-      chat = { key: `${pc ?? ''}|${key}`, ...make(), nodes: [] }
-      chatsByKey.set(chat.key, chat)
-      const block = blocks.get(pc ?? '') ?? { pc, chats: [] }
-      block.chats.push(chat)
-      blocks.set(pc ?? '', block)
-    }
+    const chat = chatFor(pc, key, make)
     chat.nodes.push(...(deskChat ? [] : [{ worker: r, depth: 1 }]), ...below)
   }
+  // HSwarm jobs: under the first row that has the caller's session (the job's id may be the 8-character prefix the
+  // jobs list stamps), else a running one under a stand-in for its caller, on this PC (a CliMayte task of that chat, if any, shares it).
+  const jobsByRow = new Map<string, SwarmJob[]>()
+  const rowOfSession = new Map<string, string>()
+  for (const r of o.jobRows ?? rows) for (const s of r.sessionIds) if (!rowOfSession.has(s)) rowOfSession.set(s, r.key)
+  const rowsByPrefix = new Map<string, string>()
+  for (const [s, key] of rowOfSession) if (!rowsByPrefix.has(s.slice(0, 8))) rowsByPrefix.set(s.slice(0, 8), key)
+  const rowFor = (id: string | null | undefined): string | undefined => {
+    if (!id) return undefined
+    const exact = rowOfSession.get(id)
+    if (exact || id.length > 8) return exact
+    return rowsByPrefix.get(id)
+  }
+  for (const j of [...jobs].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))) {
+    const row = rowFor(j.callerSessionId) ?? rowFor(j.callerHostSessionId)
+    if (row) {
+      jobsByRow.set(row, [...(jobsByRow.get(row) ?? []), j])
+      continue
+    }
+    if (!j.active) continue
+    const sid = j.callerSessionId ?? j.callerHostSessionId
+    const sameChat = sid ? [...chatsByKey.values()].find((c) => c.key.startsWith('|origin:|') && c.key.slice('|origin:|'.length).startsWith(sid)) : undefined
+    const chat =
+      sameChat ??
+      (sid
+        ? chatFor(null, `origin:|${sid}`, () => ({ title: `A chat · ${sid.slice(0, 8)}`, worker: null, note: NOT_LISTED }))
+        : chatFor(null, 'none:', () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })))
+    chat.jobs.push(j)
+  }
   const unplaced = [...blocks.values()].sort((a, b) => Number(!!a.pc) - Number(!!b.pc))
-  return { byRow: lists, unplaced }
+  return { byRow: lists, unplaced, jobsByRow }
 }
 
 /** A PC's block of unplaced chats as the sidebar heads it: the PC and how many of its tasks run (a running Desk chat counts). */
 export function unplacedHeading(b: UnplacedTasks): { title: string; count: number } {
-  const count = b.chats.reduce((n, c) => n + runningIn([c.nodes]) + (c.worker?.active ? 1 : 0), 0)
+  const count = b.chats.reduce((n, c) => n + runningIn([c.nodes], [c.jobs]) + (c.worker?.active ? 1 : 0), 0)
   return { title: b.pc ? `On ${b.pc}` : 'On this PC', count }
 }
 
 /** How many of these lists' tasks run: a folded group's heading shows it (RunningBadge.vue). */
-export function runningIn(lists: readonly (readonly TaskNode[] | null | undefined)[]): number {
+export function runningIn(lists: readonly (readonly TaskNode[] | null | undefined)[], jobLists: readonly (readonly SwarmJob[] | null | undefined)[] = []): number {
+  return runningTasksIn(lists) + runningJobsIn(jobLists)
+}
+
+/** How many of these lists' CliMayte tasks run. */
+export function runningTasksIn(lists: readonly (readonly TaskNode[] | null | undefined)[]): number {
   return lists.reduce((n, l) => n + (l?.filter((t) => t.worker.active).length ?? 0), 0)
+}
+
+/** How many of these lists' HSwarm jobs run. */
+export function runningJobsIn(lists: readonly (readonly SwarmJob[] | null | undefined)[]): number {
+  return lists.reduce((n, l) => n + (l?.filter((j) => j.active).length ?? 0), 0)
 }

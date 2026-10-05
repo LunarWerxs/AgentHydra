@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch } from '@shared/protocol'
+import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch, SwarmJob } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -10,7 +10,8 @@ import { useShellSource } from '@/components/shell/source'
 import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
-import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
+import { useSwarmJobs } from '@/lib/swarm-jobs'
+import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Cloud, EyeOff, Info, LoaderCircle, MessageSquare } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
@@ -233,11 +234,15 @@ const emptyText = computed(() =>
 // other PCs' tasks only with the cloud on (owner, 2026-10-05: "when cloud is turned off, it shouldn't show
 // these"): the desk store keeps them apart from src.workers so they never count as this PC's
 // (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
+// HSwarm's jobs, read only while the task toggle is on (lib/swarm-jobs.ts). The cloud list draws no jobs under its
+// rows, so there a running one goes in the unplaced block.
+const swarmJobs = useSwarmJobs(showTasks)
 const remoteWorkers = computed(() => (cloud.on.value ? (src.remoteWorkers?.value ?? []) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
-  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers)
+  const jobs = swarmJobs.value
+  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs, { jobRows: [] })
   // The rows the desk list draws, as groupChats picks them (never a CliMayte worker's own session, nor a
   // session that is one of our chats); a row in a folded group still holds its tasks, and the group's heading
   // counts the running ones (RunningBadge). A chat stands for its worker by id too, so one still queued (no
@@ -249,15 +254,16 @@ const nesting = computed<NestedTasks | null>(() => {
         : { key: `external:${e.id}`, sessionIds: [e.session.id] }
     )
   )
-  return nestTasks(rows, workers)
+  return nestTasks(rows, workers, jobs)
 })
 const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
+const jobsOf = (key: string) => nesting.value?.jobsByRow.get(key) ?? null
 /** The running tasks under a desk-list group's rows, and its rows that run, for its heading while it is folded. */
 const foldedRunning = computed(() => {
   const out = new Map<string, { tasks: number; chats: number }>()
   for (const g of groupList.value) {
     if (!collapsed.value.has(g.key)) continue
-    const tasks = runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
+    const tasks = runningIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)), g.entries.map((e) => jobsOf(`${e.kind}:${e.id}`)))
     const chats = g.entries.filter(entryRunning).length
     if (tasks || chats) out.set(g.key, { tasks, chats })
   }
@@ -267,6 +273,8 @@ const foldedRunning = computed(() => {
 const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
 const sessionRunning = (id: string) => runningSessions.value.has(id)
 const deskDots = computed(() => deskGlyphs(src.chats.value, src.external.value))
+/** An HSwarm job opens AgentHydra's HSwarm tab (the copy cannot open one job). */
+const openJob = (j: SwarmJob) => openSwarmInHydra(j.id)
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
@@ -539,8 +547,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                   </button>
                 </Tip>
               </div>
-              <div v-if="c.nodes.length" class="ml-1.5">
-                <TaskRows :nodes="c.nodes" :selected-id="selectedExternalId" @open="openTask" />
+              <div v-if="c.nodes.length || c.jobs.length" class="ml-1.5">
+                <TaskRows :nodes="c.nodes" :jobs="c.jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
               </div>
             </template>
           </section>
@@ -635,7 +643,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => act({ kind: 'external', session: entry.session }, item)"
                 @rename="(title: string | null) => attempt('The change', src.updateSessionMeta(entry.id, { title }))"
               />
-              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`)!" :selected-id="selectedExternalId" @open="openTask" />
+              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`) || jobsOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`) ?? []" :jobs="jobsOf(`${entry.kind}:${entry.id}`) ?? []" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
             </div>
           </TransitionGroup>
         </section>

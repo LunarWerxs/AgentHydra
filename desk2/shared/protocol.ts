@@ -357,6 +357,26 @@ export interface CliMayteWorker {
   pc?: string | null
 }
 
+/**
+ * One HSwarm job (AgentHydra's proxy of HSwarm, GET /api/hswarm/api/jobs), for the sidebar: it sits under the chat
+ * that called HSwarm. The jobs list stamps the caller as a key ('<instance> / <8 chars of its session> / <folder>'),
+ * so `callerSessionId` is that 8-character prefix (a full id when the answer carries the whole stamp) and
+ * `callerHostSessionId` is set only then; the window matches a row by prefix.
+ */
+// GET /api/swarm/jobs answers SwarmJob[].
+export interface SwarmJob {
+  id: string
+  title: string // the job's label, else its id
+  status: string // HSwarm's own: running, done, cancelled
+  active: boolean // still running
+  startedAt: number | null
+  endedAt: number | null // null while active
+  tasks: { total: number; done: number; failed: number }
+  model: string | null
+  callerSessionId: string | null
+  callerHostSessionId: string | null
+}
+
 export interface AccountInfo extends AccountRef {
   email: string | null
   plan: string | null // 'Pro', 'Max 5x', 'Max 20x', ...

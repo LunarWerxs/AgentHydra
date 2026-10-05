@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, type Component } from 'vue'
-import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, LoaderCircle } from '@lucide/vue'
-import type { CliMayteWorker } from '@shared/protocol'
+import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, LoaderCircle, Network } from '@lucide/vue'
+import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
 import { useClock } from '@/lib/clock'
 import { elapsedLabel } from './logic'
@@ -12,8 +12,12 @@ import { rowLeave } from '@/lib/row-leave'
 // lines, one step in per level, with a guide line down their left. A task with a session opens its live
 // transcript in Desk; one still queued (no session yet), or one on another PC (named by a cloud mark; its
 // session is that PC's), opens on CliMayte's tab in AgentHydra.
-const props = defineProps<{ nodes: TaskNode[]; selectedId: string | null }>()
-const emit = defineEmits<{ open: [worker: CliMayteWorker] }>()
+// HSwarm jobs the chat called follow its tasks, as lines of the same size with a network mark and their progress.
+const props = defineProps<{ nodes: TaskNode[]; jobs?: SwarmJob[]; selectedId: string | null }>()
+const emit = defineEmits<{ open: [worker: CliMayteWorker]; 'open-job': [job: SwarmJob] }>()
+
+const jobTip = (j: SwarmJob) =>
+  [j.title, `HSwarm job · ${j.status} · ${j.tasks.done}/${j.tasks.total} tasks${j.tasks.failed ? `, ${j.tasks.failed} failed` : ''}`, modelName(j.model), 'Click to open it on HSwarm'].filter(Boolean).join('\n')
 // Only these lines redraw on the tick, not the list around them.
 const now = useClock()
 
@@ -60,7 +64,7 @@ const hot = ref<string | null>(null)
 </script>
 
 <template>
-  <TransitionGroup tag="div" class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks" :css="false" @leave="rowLeave">
+  <TransitionGroup tag="div" class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks and HSwarm jobs" :css="false" @leave="rowLeave">
     <button
       v-for="{ n, key, status, own, base } in lines"
       :key="key"
@@ -87,6 +91,20 @@ const hot = ref<string | null>(null)
       </span>
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
+    </button>
+    <button
+      v-for="j in props.jobs ?? []"
+      :key="`swarm:${j.id}`"
+      type="button"
+      :title="jobTip(j)"
+      class="flex h-[22px] w-full min-w-0 cursor-default items-center gap-1 rounded-r-[var(--radius-6)] pl-1 pr-1 text-left text-[12px] leading-4 text-text-2 transition-colors duration-[var(--dur-fast)] hover:bg-fill-hover"
+      @click="emit('open-job', j)"
+    >
+      <Network class="size-3 shrink-0" :class="j.active ? 'text-accent-text' : j.tasks.failed ? 'text-danger-text' : 'text-text-muted'" aria-hidden="true" />
+      <span class="sr-only">HSwarm job, {{ j.status }}:</span>
+      <span class="min-w-0 flex-1 truncate">{{ j.title }}</span>
+      <span v-if="j.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(j.model) }}</span>
+      <span class="shrink-0 text-[11px] text-text-muted tnum">{{ j.tasks.done }}/{{ j.tasks.total }}</span>
     </button>
   </TransitionGroup>
 </template>

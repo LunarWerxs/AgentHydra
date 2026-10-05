@@ -11,8 +11,9 @@
 // AgentHydra down never throws out of a list: accounts fall back to the default login, sessions and
 // workers to []. Writes (cancel, send) and a single transcript read do throw a BridgeError.
 
-import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
+import { JOBS_ASKED, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED } from './climayte'
 import {
   BridgeError,
@@ -188,6 +189,19 @@ export function createBridge(opts: BridgeOptions = {}) {
       .remoteQueues()
       .then((answer) => mapRemote(answer, { all }))
       .catch(() => [])
+  }
+
+  /** HSwarm's running jobs and its newest finished ones; HSwarm down, off or without the route is none. One read
+   *  serves every window for SWARM_FRESH_MS, so HSwarm is asked at most that often, and only while a window asks. */
+  let lastJobs: { at: number; jobs: Promise<SwarmJob[]> } | null = null
+  function swarmJobs(): Promise<SwarmJob[]> {
+    if (lastJobs && now() - lastJobs.at < SWARM_FRESH_MS) return lastJobs.jobs
+    const jobs = client
+      .hswarmJobs(JOBS_ASKED)
+      .then(mapSwarmJobs)
+      .catch(() => [])
+    lastJobs = { at: now(), jobs }
+    return jobs
   }
 
   /** This PC's workers and the other PCs' (`pc` set), as the window lists them. */
@@ -500,6 +514,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     search,
     sessionRoots,
     workers,
+    swarmJobs,
     activeWorkersFor,
     /** This PC's workers from the last read (by the poller or a route), without asking AgentHydra; never another PC's. */
     lastWorkers: (): CliMayteWorker[] => lastWorkers?.workers ?? [],

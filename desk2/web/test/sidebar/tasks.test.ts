@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { CliMayteWorker } from '@shared/protocol'
+import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
 import { nestTasks, unplacedHeading, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
@@ -226,4 +226,39 @@ test("a task dispatched from a remote worker's earlier session sits under that w
   const kid = worker('kid', 2, { pc: 'PC-X', originSessionId: 's-old' })
   const tasks = nestTasks([], [mgr, kid])
   expect(tasks.unplaced[0]!.chats.map((c) => listOf(c.nodes))).toEqual([['1:PC-X:mgr', '2:PC-X:kid']])
+})
+
+// HSwarm jobs: nested under the row of the session that called HSwarm, apart from the CliMayte tasks.
+function swarmJob(id: string, o: Partial<SwarmJob> = {}): SwarmJob {
+  return { id, title: id, status: 'running', active: true, startedAt: 1, endedAt: null, tasks: { total: 4, done: 1, failed: 0 }, model: null, callerSessionId: null, callerHostSessionId: null, ...o }
+}
+
+test("an HSwarm job sits under the row of its caller's session, or of its host session, apart from the CliMayte tasks", () => {
+  const rows = [
+    { key: 'chat:a', sessionIds: ['11111111-2222-4333-8444-555555555555'] },
+    { key: 'chat:b', sessionIds: ['66666666-7777-4888-8999-000000000000'] }
+  ]
+  const workers = [worker('w1', 1, { originSessionId: '11111111-2222-4333-8444-555555555555' })]
+  const jobs = [
+    swarmJob('j-session', { callerSessionId: '11111111-2222-4333-8444-555555555555' }),
+    swarmJob('j-prefix', { callerSessionId: '66666666', status: 'done', active: false }),
+    swarmJob('j-host', { callerSessionId: 'ffffffff-0000-4000-8000-000000000000', callerHostSessionId: '66666666-7777-4888-8999-000000000000', startedAt: 5 })
+  ]
+  const nested = nestTasks(rows, workers, jobs)
+  expect(listOf(nested.byRow.get('chat:a'))).toEqual(['1:here:w1'])
+  expect(nested.jobsByRow.get('chat:a')?.map((j) => j.id)).toEqual(['j-session'])
+  expect(nested.jobsByRow.get('chat:b')?.map((j) => j.id)).toEqual(['j-host', 'j-prefix'])
+  expect(nested.byRow.has('chat:b')).toBe(false)
+  expect(nested.unplaced).toEqual([])
+})
+
+test('a running HSwarm job no row has goes to the unplaced block of this PC under its caller, a finished one is not shown', () => {
+  const jobs = [swarmJob('j-lost', { callerSessionId: '99999999' }), swarmJob('j-old', { callerSessionId: '99999999', status: 'done', active: false })]
+  const nested = nestTasks([{ key: 'chat:a', sessionIds: ['s-a'] }], [], jobs)
+  expect(nested.jobsByRow.size).toBe(0)
+  expect(nested.unplaced).toHaveLength(1)
+  const [block] = nested.unplaced
+  expect(block!.pc).toBeNull()
+  expect(block!.chats.map((c) => [c.title, c.jobs.map((j) => j.id), c.nodes.length])).toEqual([['A chat · 99999999', ['j-lost'], 0]])
+  expect(unplacedHeading(block!).count).toBe(1)
 })
