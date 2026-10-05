@@ -47,7 +47,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 </script>
 
 <template>
-  <UserMessage v-if="item.kind === 'user'" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
+  <UserMessage v-if="item.kind === 'user'" :id="item.id" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
 
   <NoteRow v-else-if="item.kind === 'note'" :item="item" />
 

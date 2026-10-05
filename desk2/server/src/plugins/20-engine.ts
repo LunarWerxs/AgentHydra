@@ -21,6 +21,7 @@ import {
   type ManagerBridge,
   parseCreate,
   parseElicitation,
+  parseFork,
   parseImport,
   parseImportDesk,
   parsePatch,
@@ -56,6 +57,17 @@ function jsonlStream(items: readonly unknown[]): ReadableStream<Uint8Array> {
 async function body(c: Context): Promise<unknown> {
   try {
     return await c.req.json()
+  } catch {
+    throw new ChatError(400, 'the body must be JSON')
+  }
+}
+
+/** A body that may be left out: none is an empty object. */
+async function optionalBody(c: Context): Promise<unknown> {
+  const text = await c.req.text()
+  if (!text.trim()) return {}
+  try {
+    return JSON.parse(text)
   } catch {
     throw new ChatError(400, 'the body must be JSON')
   }
@@ -211,7 +223,12 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
   )
   app.patch('/api/chats/:id', (c) => answer(c, async () => manager.patch(c.req.param('id'), parsePatch(await body(c)))))
-  app.post('/api/chats/:id/fork', (c) => answer(c, () => manager.fork(c.req.param('id'))))
+  app.post('/api/chats/:id/fork', (c) =>
+    answer(c, async () => {
+      const { at } = parseFork(await optionalBody(c))
+      return at ? manager.forkBefore(c.req.param('id'), at) : manager.fork(c.req.param('id'))
+    }),
+  )
   app.patch('/api/external/sessions/:id/meta', (c) => answer(c, async () => manager.patchSessionMeta(c.req.param('id'), parseSessionMeta(await body(c)))))
   app.delete('/api/chats/:id', (c) =>
     answer(c, async () => {

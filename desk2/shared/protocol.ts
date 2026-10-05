@@ -451,6 +451,12 @@ export interface ImportSessionRequest {
   configDir?: string | null
   title?: string
   fork?: boolean // a new chat that forks the session at its first message; the original stays listed
+  at?: string // with fork: the owner's message (its transcript item id) the fork leaves out, with all after it
+}
+
+/** POST /api/chats/:id/fork. No `at`: a copy of the whole chat; with it, the chat cut just before that message of the owner's (its item id). */
+export interface ForkChatRequest {
+  at?: string
 }
 
 export interface SlashCommandInfo {

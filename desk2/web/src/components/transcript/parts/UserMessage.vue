@@ -48,7 +48,7 @@ function watchColumn(column: Element, f: Fitter) {
 <script setup lang="ts">
 // The real user bubble: right aligned, at most 85% of the column and only as wide as its longest line,
 // padding 8/12, radius 10, white 5%, 14/20 text,
-// entering with code-user-bubble-enter; the actions toolbar (time, Copy, Resend) under it, shown on hover.
+// entering with code-user-bubble-enter; the actions toolbar (time, Copy, Resend, Fork) under it, shown on hover.
 // A long message is clamped with a fade and a "Show more" link inside the bubble. Pictures sent with it
 // sit above the bubble as 8px-rounded tiles that open in the lightbox.
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -56,7 +56,7 @@ import type { ImageRef } from '@shared/protocol'
 import MessageActions from './MessageActions.vue'
 import ImageTiles from './ImageTiles.vue'
 
-const props = defineProps<{ text: string; ts: number; images?: ImageRef[]; queued?: boolean }>()
+const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean }>()
 // Only a message that just arrived animates in; one scrolled back into view does not.
 const fresh = Date.now() - props.ts < 2000
 
@@ -125,6 +125,6 @@ watch(() => props.text, () => nextTick(fit))
       </button>
     </div>
     <div v-if="queued" class="flex h-6 items-center text-[13px] text-text-muted">Queued, sends when this turn ends</div>
-    <MessageActions v-else :text="text" :ts="ts" align="end" :resend="{ text, images }" />
+    <MessageActions v-else :text="text" :ts="ts" align="end" :resend="{ text, images }" :item-id="id" />
   </div>
 </template>

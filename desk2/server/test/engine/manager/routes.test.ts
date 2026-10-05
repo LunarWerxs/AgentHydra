@@ -464,6 +464,10 @@ describe('the row menu routes', () => {
     expect(none.status).toBe(409)
     expect(none.body.error).toMatch(/no Claude Code session/)
     expect((await call(t.desk, 'POST', '/api/chats/nope/fork')).status).toBe(404)
+    // at a message (fork-at.test.ts): only one of the owner's
+    const notYours = await call(t.desk, 'POST', `/api/chats/${src.id}/fork`, { at: srcItems.find((i) => i.kind !== 'user')!.id })
+    expect(notYours.status).toBe(400)
+    expect(notYours.body.error).toMatch(/no message .* of yours/)
   })
 
   test('fork: its first message takes the source as it stood when forked, also after a restart', async () => {

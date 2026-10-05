@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type { AccountInfo, ExternalSession, ServerEvent, TranscriptItem } from '@shared/protocol'
 import { externalChat, externalChatId, isExternalChatId, resumable, sessionOfChatId, whereLabel } from '../../src/components/external/logic'
+import { draftImages } from '../../src/components/composer/draft-images'
 
 const session = (over: Partial<ExternalSession> = {}): ExternalSession => ({
   id: 's1',
@@ -250,6 +251,40 @@ describe('the row menu through the store', () => {
     await desk.forkChat('c1')
     expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual(['POST /api/chats/c1/fork'])
     expect(desk.selected.value).toEqual({ kind: 'chat', id: 'fork-1' })
+  })
+
+  test("Fork at a message of a chat sends that message's id and opens the new chat with the message waiting in its box", async () => {
+    const drafts = new Map<string, string>()
+    g.localStorage = { getItem: (k: string) => drafts.get(k) ?? null, setItem: (k: string, v: string) => void drafts.set(k, v), removeItem: (k: string) => void drafts.delete(k) }
+    try {
+      const picture = { id: 'p1', name: 'shot.png', mediaType: 'image/png', dataBase64: 'AAAA', url: 'data:image/png;base64,AAAA' }
+      calls.length = 0
+      await desk.forkAt('c1', 'u-7:0', { text: 'try the other way', images: [picture] })
+      expect(calls).toEqual([{ path: '/api/chats/c1/fork', method: 'POST', body: { at: 'u-7:0' } }])
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'fork-1' })
+      expect(drafts.get('hydra-desk:draft:fork-1')).toBe('try the other way')
+      expect(draftImages('fork-1')).toEqual([picture])
+    } finally {
+      delete g.localStorage
+    }
+  })
+
+  test('Fork at a message of an outside session imports it as a fork cut there, by its session id or its stand-in id', async () => {
+    push({ type: 'accounts.update', accounts: [account('cli-7', 7)] })
+    push({ type: 'external.update', sessions: [session({ id: 'f2', accountId: 'cli-7' })] })
+    for (const id of ['f2', 'ext:f2']) {
+      calls.length = 0
+      await desk.forkAt(id, 'u-3:0', { text: 'again from here' })
+      expect(calls).toEqual([
+        {
+          path: '/api/chats/import',
+          method: 'POST',
+          body: { sessionId: 'f2', cwd: 'C:/work/alpha', title: 'Level editor export bug', configDir: 'C:/cli/cli-7', fork: true, at: 'u-3:0' }
+        }
+      ])
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'new-1' })
+    }
+    await expect(desk.forkAt('ext:gone', 'u-1:0', { text: 'x' })).rejects.toThrow('This session is no longer listed.')
   })
 
   test("an outside session's marks go to its meta route and show at once", async () => {

@@ -17,6 +17,7 @@ import type {
   PlanDecision,
   ChatPatch,
   ImportSessionRequest,
+  ForkChatRequest,
   SearchHit,
   SessionMeta,
   SessionMetaPatch,
@@ -33,6 +34,7 @@ import { movedOrder } from '@/components/composer/queue'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
 import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
 import { saveDraft } from '@/components/composer/logic'
+import { saveDraftImages, type DraftImage } from '@/components/composer/draft-images'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { rememberView, restoreView } from '@/lib/view-memory'
 import { readCache, readListCache, writeCache } from '@/lib/list-cache'
@@ -511,9 +513,9 @@ async function pickLanding(): Promise<AccountRef | null> {
  * Imports an outside session under the account picked for it in the title bar, else the CLI instance
  * that holds it (in place); else the server places it at the import, as it places a new chat: the pick
  * is fresh, never the expired default login, and the chat stays Auto so a usage limit moves it. With
- * `fork`, as a new chat that forks it at its first message.
+ * `fork`, as a new chat that forks it at its first message; with `at` too, cut just before that message of the owner's.
  */
-async function importOutside(s: ExternalSession, fork = false): Promise<ChatSummary> {
+async function importOutside(s: ExternalSession, fork = false, at?: string): Promise<ChatSummary> {
   const pickedId = externalPatches.get(s.id)?.accountId
   const picked = pickedId && pickedId !== 'auto' ? store.accounts.find((a) => a.id === pickedId) : undefined
   if (!picked && s.accountId && !store.accounts.some((a) => a.id === s.accountId)) throw new Error(`Hydra Desk does not list the account ${s.accountId} yet.`)
@@ -527,7 +529,8 @@ async function importOutside(s: ExternalSession, fork = false): Promise<ChatSumm
       cwd: s.cwd ?? undefined,
       title: s.title,
       ...(account ? { configDir: account.configDir } : {}),
-      ...(fork ? { fork: true } : {})
+      ...(fork ? { fork: true } : {}),
+      ...(at ? { at } : {})
     } satisfies ImportSessionRequest)
   })
 }
@@ -759,6 +762,28 @@ export function useDesk() {
       const s = findExternal(sessionId)
       if (!s) throw new Error('This session is no longer listed.')
       const chat = await importOutside(s, true)
+      landChat(chat)
+      return chat
+    },
+
+    /**
+     * Fork at a message of the owner's (its hover toolbar): a new chat cut just before it, listed and opened
+     * with the message's text and pictures waiting unsent in its box. An outside session is imported as that fork.
+     */
+    async forkAt(chatId: string, itemId: string, message: { text: string; images?: DraftImage[] }): Promise<ChatSummary> {
+      // An outside session's transcript names it by its session id, its stand-in chat by the external id.
+      const outside = store.chats.some((c) => c.id === chatId) ? undefined : findExternal(isExternalChatId(chatId) ? sessionOfChatId(chatId) : chatId)
+      if (!outside && isExternalChatId(chatId)) throw new Error('This session is no longer listed.')
+      const chat = outside
+        ? await importOutside(outside, true, itemId)
+        : await fetchJson<ChatSummary>(`/chats/${chatId}/fork`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ at: itemId } satisfies ForkChatRequest)
+          })
+      // In the box before the chat opens: its composer loads the draft when it changes to this chat.
+      saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
+      saveDraftImages(chat.id, message.images ?? [])
       landChat(chat)
       return chat
     },

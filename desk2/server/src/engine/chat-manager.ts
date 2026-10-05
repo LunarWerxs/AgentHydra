@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
-import { basename, isAbsolute, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig, Query } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AccountInfo,
@@ -21,6 +21,7 @@ import type {
   DeskSettings,
   Effort,
   ElicitationAnswer,
+  ForkChatRequest,
   ImageRef,
   ImportSessionRequest,
   McpStatus,
@@ -39,7 +40,7 @@ import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import type { AhWorker } from '../bridge/client'
 import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
-import { forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
+import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
 import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
@@ -737,6 +738,107 @@ export class ChatManager {
     return { ...chat }
   }
 
+  /**
+   * A fork that leaves out one of the owner's messages and all after it, as Claude Code forks: a new closed
+   * chat with the history before message `at`, whose first message resumes the session cut at the entry
+   * before it. A CliMayte chat forks so too, its fork a chat of its own on the account whose folder has
+   * that session (CliMayte resumes nothing). A message that opened its session forks to a fresh chat.
+   */
+  async forkBefore(id: string, at: string): Promise<ChatSummary> {
+    const se = this.entry(id)
+    const src = se.chat
+    const items = this.listItems(id)
+    const index = items.findIndex((i) => i.id === at)
+    const msg = items[index]
+    if (msg?.kind !== 'user') throw new ChatError(400, `this chat has no message ${JSON.stringify(at)} of yours to fork at`)
+    const found = this.findCut(await this.sessionsOf(se), src.cwd, msg, items.slice(index + 1), [src.account, se.runtime?.startedAs])
+    if (!found) throw new ChatError(409, CUT_NOT_FOUND)
+    const fresh = found.cut === null
+    const now = this.now()
+    const { workerId, workerIds: _, ...rest } = src
+    const chat: ChatSummary = {
+      ...rest,
+      id: randomUUID(),
+      sessionId: null,
+      forkedFrom: fresh ? null : found.sessionId,
+      title: forkTitle(src.title),
+      status: 'closed',
+      activity: null,
+      turnStartedAt: null,
+      lastError: null,
+      limitResetsAt: null,
+      unread: false,
+      pinned: false,
+      archived: false,
+      createdAt: now,
+      updatedAt: now,
+      costUsd: 0,
+      pendingCount: 0,
+      queuedCount: 0,
+      climayteActive: 0,
+    }
+    if (workerId !== undefined && fresh) {
+      // Nothing to resume: a CliMayte chat again, its worker started by the first message.
+      chat.workerId = null
+      chat.account = { ...CLIMAYTE_ACCOUNT }
+      chat.model = WORKER_MODEL
+    } else if (workerId !== undefined) {
+      chat.account = await this.accountForConfigDir(found.configDir)
+      chat.accountAuto = true
+    }
+    for (const item of items.slice(0, index)) this.store.appendItem(chat.id, settled(item))
+    this.chats.set(chat.id, { chat, runtime: null, query: null, ...(fresh ? {} : { forkAt: found.cut as string, ranIn: found.configDir }) })
+    this.changed(chat)
+    return { ...chat }
+  }
+
+  /** The sessions a chat's transcript was read from, newest first: its own, the one it forked, those it ran before a move, a worker's before each handoff. */
+  private async sessionsOf(e: Entry): Promise<string[]> {
+    const chat = e.chat
+    const w = chat.workerId ? (await this.bridge.workersByIds([chat.workerId]).catch(() => []))[0] : undefined
+    const oldestFirst = [...(e.pastSessions ?? []), chat.forkedFrom, ...(w?.sessions ?? []), w?.sessionId, chat.sessionId]
+    return [...new Set(oldestFirst.filter((s): s is string => !!s))].reverse()
+  }
+
+  /**
+   * Where a fork that leaves out the owner's message `msg` cuts: the session file it is in (`sessions`
+   * newest first), the entry before it (null: the message opened that session) and the config folder of
+   * that file. The message is its entry's uuid, else its text; the same words sent again are told apart by
+   * how many come after it (`after`). Null when no file has it: a fork is never cut at a guess.
+   */
+  private findCut(sessions: string[], cwd: string, msg: UserItem, after: TranscriptItem[], accounts: (AccountRef | null | undefined)[]): Cut | null {
+    const roots = [...accounts.flatMap((a) => (a ? [projectsRoot(a.configDir)] : [])), ...this.bridge.sessionRoots()]
+    const reads = sessions.flatMap((sessionId) => {
+      const file = findSessionJsonl(sessionId, roots, cwd)
+      if (!file) return []
+      try {
+        return [{ sessionId, file, ...cutsBefore(file, msg.id, msg.text) }]
+      } catch (err) {
+        console.warn(`[desk] could not read session ${sessionId} for a fork: ${err instanceof Error ? err.message : String(err)}`)
+        return []
+      }
+    })
+    const cutIn = (r: (typeof reads)[number], cut: string | null): Cut => {
+      const root = dirname(dirname(r.file))
+      const isDefault = resolve(root).toLowerCase() === resolve(projectsRoot(null)).toLowerCase()
+      return { sessionId: r.sessionId, cut, configDir: isDefault ? null : dirname(root) }
+    }
+    const byId = reads.find((r) => r.byId !== undefined)
+    if (byId) return cutIn(byId, byId.byId ?? null)
+    const text = squash(msg.text)
+    let later = after.filter((i) => i.kind === 'user' && squash(i.text) === text).length
+    for (const kind of ['exact', 'loose'] as const) {
+      if (!reads.some((r) => r[kind].length)) continue
+      for (const r of reads) {
+        const cuts = r[kind]
+        if (later < cuts.length) return cutIn(r, cuts[cuts.length - 1 - later] ?? null)
+        later -= cuts.length
+      }
+      return null
+    }
+    return null
+  }
+
   /** Changes Hydra Desk's marks on an outside session; the poller's next list carries them. */
   patchSessionMeta(sessionId: string, p: SessionMetaPatch): SessionMeta {
     if (!/^[\w-]{1,100}$/.test(sessionId)) throw new ChatError(400, `bad session id ${JSON.stringify(sessionId)}`)
@@ -745,7 +847,8 @@ export class ChatManager {
 
   /**
    * Adopts a session run elsewhere: a closed chat with its history; the next send resumes it. With
-   * `fork` the chat forks it at its first message instead, and the original stays listed as it is.
+   * `fork` the chat forks it at its first message instead, and the original stays listed as it is; with
+   * `at` too the fork leaves out that message of the owner's and all after it (forkBefore).
    */
   async importSession(req: ImportSessionRequest): Promise<ChatSummary> {
     const adopted = () => (req.fork ? undefined : [...this.chats.values()].find((e) => e.chat.sessionId === req.sessionId))
@@ -784,6 +887,15 @@ export class ChatManager {
     // chats on one session would have two CLIs appending to one transcript.
     const raced = adopted()
     if (raced) return { ...raced.chat }
+    let cut: Cut | null = null
+    if (req.fork && req.at) {
+      const index = items.findIndex((i) => i.id === req.at)
+      const msg = items[index]
+      if (msg?.kind !== 'user') throw new ChatError(400, loadError ?? `session ${req.sessionId} has no message ${JSON.stringify(req.at)} of yours to fork at`)
+      cut = this.findCut([req.sessionId], cwd, msg, items.slice(index + 1), [account])
+      if (!cut) throw new ChatError(409, CUT_NOT_FOUND)
+      items = items.slice(0, index)
+    }
 
     const settings = this.settingsOf()
     const now = this.now()
@@ -793,7 +905,7 @@ export class ChatManager {
     const chat: ChatSummary = {
       id: randomUUID(),
       sessionId: req.fork ? null : req.sessionId,
-      forkedFrom: req.fork ? req.sessionId : null,
+      forkedFrom: req.fork && cut?.cut !== null ? req.sessionId : null,
       group: meta?.group ?? null,
       title: req.fork ? forkTitle(title) : title,
       cwd,
@@ -823,9 +935,9 @@ export class ChatManager {
     if (loadError) {
       this.store.appendItem(chat.id, { kind: 'system', id: `import:${now}`, ts: now, level: 'warn', text: `The earlier history could not be loaded: ${loadError}` })
     }
-    // A fork of an outside session is cut where it stands now, as fork() cuts one of ours.
-    const forkAt = req.fork ? this.forkPointOf(req.sessionId, cwd, [account]) : undefined
-    this.chats.set(chat.id, { chat, runtime: null, query: null, forkAt })
+    // A fork of an outside session is cut where it stands now, as fork() cuts one of ours, or before the message it forks at.
+    if (cut) this.chats.set(chat.id, { chat, runtime: null, query: null, ...(cut.cut === null ? {} : { forkAt: cut.cut, ranIn: cut.configDir }) })
+    else this.chats.set(chat.id, { chat, runtime: null, query: null, forkAt: req.fork ? this.forkPointOf(req.sessionId, cwd, [account]) : undefined })
     this.refreshClimayte()
     this.changed(chat)
     this.accountNote(chat.id, note)
@@ -1401,6 +1513,17 @@ export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity'>): 
 
 const forkTitle = (title: string): string => `${title} (fork)`
 
+/** Where a fork at one of the owner's messages resumes (findCut). */
+interface Cut {
+  sessionId: string
+  /** The entry before the message; null when it opened the session (the fork starts fresh). */
+  cut: string | null
+  /** The config folder of the file it was found in (null = the default ~/.claude): the fork's first start copies the session from there. */
+  configDir: string | null
+}
+
+const CUT_NOT_FOUND = 'Could not find this message in its session file, so there is no telling where the fork would start.'
+
 /** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
 function entryOf(stored: StoredRecord): Entry {
   const { forkAt, ranIn, pastSessions, ...chat } = stored
@@ -1669,5 +1792,13 @@ export function parseImport(body: unknown): ImportSessionRequest {
   if (title !== undefined) req.title = title
   const fork = optBool(b, 'fork')
   if (fork !== undefined) req.fork = fork
+  const at = optString(b, 'at')
+  if (at?.trim()) req.at = at.trim()
   return req
+}
+
+/** A fork's request: an empty body forks the whole chat. */
+export function parseFork(body: unknown): ForkChatRequest {
+  const at = optString(obj(body), 'at')
+  return at?.trim() ? { at: at.trim() } : {}
 }

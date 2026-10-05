@@ -5,7 +5,7 @@
 // account's folder does not have, the transcript is copied there (a fork: the original is untouched,
 // each side continues on its own).
 
-import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { encodeProjectDir, findSessionJsonl, readTail, TAIL_BYTES } from './session-jsonl'
@@ -174,4 +174,58 @@ export function forkPoint(sessionId: string, cwd: string | null, roots: string[]
     if (size <= max) break
   }
   return null
+}
+
+/** Where a fork that leaves out one of the owner's messages may cut a transcript (cutsBefore). */
+export interface Cuts {
+  /** The entry before the one whose uuid is the message's id: null when that one opened the session, undefined when no entry has it. */
+  byId: string | null | undefined
+  /** The entry before each of the owner's prompts whose text is the message's, oldest first. */
+  exact: (string | null)[]
+  /** The same for prompts that hold its text among more (a merged or annotated prompt). */
+  loose: (string | null)[]
+}
+
+const squashText = (s: string): string => s.replace(/\s+/g, ' ').trim()
+
+/**
+ * Reads a whole transcript for the entry before the owner's message `id` (a fork at it resumes there,
+ * resumeSessionAt, and so leaves the message out). Hydra Desk names a message by its entry's uuid
+ * (`<uuid>:<n>` for a part of a split one); an older one, or a queued message merged into the turn, only
+ * by its text, so those prompts are listed too and the caller picks among them.
+ */
+export function cutsBefore(file: string, id: string, text: string): Cuts {
+  const uuid = id.split(':')[0]!
+  const want = squashText(text)
+  const cuts: Cuts = { byId: undefined, exact: [], loose: [] }
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!(uuid && line.includes(uuid)) && !(want && line.includes('"type":"user"'))) continue
+    let rec: { type?: unknown; uuid?: unknown; parentUuid?: unknown; isSidechain?: unknown; isMeta?: unknown; message?: { content?: unknown } }
+    try {
+      rec = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (rec.isSidechain === true) continue
+    const parent = typeof rec.parentUuid === 'string' ? rec.parentUuid : null
+    if (uuid && rec.uuid === uuid) return { byId: parent, exact: [], loose: [] }
+    if (rec.type !== 'user' || rec.isMeta === true || !want) continue
+    const said = promptText(rec.message?.content)
+    if (said === null) continue
+    if (said === want) cuts.exact.push(parent)
+    else if (said.includes(want)) cuts.loose.push(parent)
+  }
+  return cuts
+}
+
+/** A user entry's text when the owner wrote it (a string, or text and picture blocks), squashed; null for a tool result. */
+function promptText(content: unknown): string | null {
+  if (typeof content === 'string') return squashText(content)
+  if (!Array.isArray(content)) return null
+  const parts: string[] = []
+  for (const block of content as { type?: unknown; text?: unknown }[]) {
+    if (block?.type === 'tool_result') return null
+    if (block?.type === 'text' && typeof block.text === 'string') parts.push(block.text)
+  }
+  return squashText(parts.join('\n'))
 }

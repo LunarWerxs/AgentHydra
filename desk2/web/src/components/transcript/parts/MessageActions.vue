@@ -1,13 +1,15 @@
 <script setup lang="ts">
 // The toolbar under a message (role=toolbar "Message actions"): 24px muted buttons, hidden until the
-// message row is hovered. Hydra Desk has Copy, Resend and the time; the real app's Rewind, Fork, Pin and
+// message row is hovered. Hydra Desk has Copy, Resend, Fork and the time; the real app's Rewind, Pin and
 // Read aloud need server routes Hydra Desk does not have yet. Resend sends a prompt again as a new message
-// at the end of the chat (queued if a turn is running); it does not rewind what came after it.
+// at the end of the chat (queued if a turn is running); it does not rewind what came after it. Fork (a
+// message of yours) opens a new chat cut just before that message, the message waiting unsent in its box.
 import { computed, ref } from 'vue'
 import { RotateCcw } from '@lucide/vue'
 import type { ImageRef, SendMessageRequest } from '@shared/protocol'
 import { icons } from '@/lib/icons'
 import { buildCopyHtml } from '@/lib/clipboard-images'
+import type { DraftImage } from '@/components/composer/draft-images'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 
@@ -18,6 +20,8 @@ const props = defineProps<{
   pinned?: boolean
   /** The prompt the Resend button sends again; no button without one. */
   resend?: { text: string; images?: ImageRef[] } | null
+  /** The message's transcript id: a message of yours with one has Fork. */
+  itemId?: string
 }>()
 const copied = ref(false)
 const time = computed(() => new Date(props.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))
@@ -28,6 +32,17 @@ const canResend = computed(() => !!props.resend && !ctx.readOnly.value && !!ctx.
 const resendState = ref<'idle' | 'sending' | 'sent' | 'failed'>('idle')
 const resendLabel = computed(() =>
   resendState.value === 'sent' ? 'Sent again' : resendState.value === 'failed' ? 'Resend failed' : 'Resend this prompt'
+)
+
+const canFork = computed(() => !!props.itemId && !ctx.readOnly.value && !!ctx.chatId.value)
+const forkState = ref<'idle' | 'forking' | 'failed'>('idle')
+const forkError = ref('')
+const forkLabel = computed(() =>
+  forkState.value === 'forking'
+    ? 'Forking…'
+    : forkState.value === 'failed'
+      ? `Fork failed${forkError.value ? `: ${forkError.value}` : ''}`
+      : 'Fork: a new chat from just before this message'
 )
 
 /** A message with pictures copies them too: text/plain stays the text, text/html adds the pictures. */
@@ -85,6 +100,23 @@ async function resend() {
   }
   setTimeout(() => (resendState.value = 'idle'), 1500)
 }
+
+async function fork() {
+  if (!props.itemId || forkState.value === 'forking') return
+  forkState.value = 'forking'
+  try {
+    const refs = props.resend?.images?.length ? await Promise.all(props.resend.images.map(withBytes)) : []
+    const images: DraftImage[] = refs.flatMap(({ name, mediaType, dataBase64 }) =>
+      dataBase64 ? [{ id: crypto.randomUUID(), name: name ?? 'Image', mediaType, dataBase64, url: `data:${mediaType};base64,${dataBase64}` }] : []
+    )
+    await desk.forkAt(ctx.chatId.value, props.itemId, { text: props.text, images })
+    forkState.value = 'idle'
+  } catch (err) {
+    forkError.value = err instanceof Error ? err.message : String(err)
+    forkState.value = 'failed'
+    setTimeout(() => (forkState.value = 'idle'), 4000)
+  }
+}
 </script>
 
 <template>
@@ -108,6 +140,17 @@ async function resend() {
       @click="resend"
     >
       <component :is="resendState === 'sent' ? icons.check : RotateCcw" class="size-4" :class="resendState === 'failed' && 'text-danger-text'" />
+    </button>
+    <button
+      v-if="canFork"
+      type="button"
+      class="tx-action"
+      :aria-label="forkLabel"
+      :title="forkLabel"
+      :disabled="forkState === 'forking'"
+      @click="fork"
+    >
+      <component :is="icons.fork" class="size-4" :class="forkState === 'failed' && 'text-danger-text'" />
     </button>
     <slot />
     <time v-if="align !== 'end'" class="tx-actions-time">{{ time }}</time>
