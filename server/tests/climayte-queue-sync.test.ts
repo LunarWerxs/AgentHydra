@@ -36,6 +36,7 @@ import {
   setQueueSharing,
 } from '../src/core/cli-login-sync'
 import {
+  buildSnapshot,
   fitSnapshot,
   LIVE_GATE_MS,
   openQueue,
@@ -44,6 +45,7 @@ import {
   resetQueueSync,
   sealQueue,
   syncQueue,
+  warmOriginTitles,
 } from '../src/core/climayte-queue-sync'
 import { StoreMirror } from '../src/core/login-sync-mirror'
 import { app } from '../src/http-app'
@@ -121,6 +123,77 @@ describe('the queue snapshot', () => {
     const build = { version: '1.2.3', commit: 'abc1234', date: '2026-10-02T18:40:00.000Z' }
     expect(openQueue(key, pc, sealQueue(key, { ...snapshot(pc, []), build }))?.build).toEqual(build)
     expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.build).toBeUndefined()
+  })
+
+  test('a chat-dispatched worker carries the chat’s title and its earlier sessions, never a path', async () => {
+    resetQueueSync()
+    const base = {
+      cwd: 'C:/secret/path',
+      prompt: 'the private prompt',
+      pending: [],
+      model: null,
+      effort: null,
+      accounts: null,
+      status: 'running',
+      accountId: null,
+      attempts: [],
+      result: null,
+      error: null,
+      lastActivity: null,
+      costUsd: 0,
+      turns: 0,
+      moves: 0,
+      retries: 0,
+      notBefore: null,
+      createdAt: 1,
+      updatedAt: 2,
+    }
+    workers.set('w-titled', {
+      ...base,
+      id: 'w-titled',
+      group: 'g-t',
+      title: 'a task',
+      sessionId: 's-now',
+      sessions: ['s-old-1', 's-old-2'],
+      origin: {
+        kind: 'chat',
+        sessionId: 's-chat-title',
+        home: 'C:/secret/home',
+        transcript: 'C:/secret/home/t.jsonl',
+        how: 'binding',
+      },
+    } as any)
+    workers.set('w-by-worker', {
+      ...base,
+      id: 'w-by-worker',
+      group: 'g-t',
+      title: 'its task',
+      origin: { kind: 'worker', workerId: 'w-titled' },
+    } as any)
+    try {
+      const find = (id: string) =>
+        buildSnapshot(randomUUID(), 'T').workers.find((w) => w.id === id)!
+      // Before any lookup the title is unknown, not missing.
+      expect(find('w-titled')).toMatchObject({
+        originTitle: null,
+        sessions: ['s-old-1', 's-old-2'],
+      })
+      await warmOriginTitles(1_000, async (id) =>
+        id === 's-chat-title' ? `  Example chat  ` : null,
+      )
+      const snap = buildSnapshot(randomUUID(), 'T')
+      expect(snap.workers.find((w) => w.id === 'w-titled')).toMatchObject({
+        originSessionId: 's-chat-title',
+        originTitle: 'Example chat',
+        sessions: ['s-old-1', 's-old-2'],
+      })
+      expect(find('w-by-worker')).toMatchObject({ originTitle: null, sessions: [] })
+      expect(JSON.stringify(snap)).not.toContain('secret')
+    } finally {
+      workers.delete('w-titled')
+      workers.delete('w-by-worker')
+      resetQueueSync()
+    }
   })
 
   test('over the cap the oldest finished workers go first and every active one stays', () => {

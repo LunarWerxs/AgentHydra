@@ -44,6 +44,13 @@ export interface RemoteWorker {
   originSessionId?: string | null
   originWorkerId?: string | null
   wave?: string | null
+  /** The worker's earlier session ids, oldest first (ids only; empty when none): a task dispatched from
+   *  an older session still matches its worker. Absent from an older AgentHydra's snapshot. */
+  sessions?: string[]
+  /** The dispatching chat's title as this PC's session list shows it (trimmed, at most 120 characters;
+   *  null when unknown or when a worker dispatched it), for a PC that does not list that chat. Never
+   *  the origin's Claude home or transcript path. */
+  originTitle?: string | null
 }
 
 /** This PC's newest live reading of one account, as shared. */

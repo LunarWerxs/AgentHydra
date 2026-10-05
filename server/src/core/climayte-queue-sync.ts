@@ -11,7 +11,8 @@
 // WHAT A SNAPSHOT HOLDS: the workers that are queued, running, waiting or checking, and the ones
 // finished in the last 24 hours, each cut down to what a reader of the list needs (RemoteWorker:
 // never the prompt, results, logs or paths; its session, origin and wave ids, so the other PC draws it
-// under the chat that spawned it), and this PC's newest live usage reading per account. It
+// under the chat that spawned it, that chat's title as this PC's session list shows it, and the
+// worker's earlier session ids: still never a prompt, a path or a Claude home), and this PC's newest live usage reading per account. It
 // is gzipped, then AES-256-GCM encrypted under the sync's own key with `climayte-queue:<pc>` as
 // associated data, so a blob cannot be passed off as another PC's. Over the store's 256 KB cap the
 // oldest finished workers go first; the active ones never do.
@@ -70,6 +71,56 @@ const aad = (pc: string): Buffer => Buffer.from(`climayte-queue:${pc}`, 'utf8')
 
 const isFinished = (s: string): boolean => s === 'done' || s === 'failed' || s === 'cancelled'
 
+const TITLE_MAX = 120
+/** Most chat titles one pass looks up, and how long a miss waits before it is tried again. */
+export const TITLE_LOOKUPS_PER_PASS = 10
+export const TITLE_RETRY_MS = 10 * 60_000
+
+/** Chat session id -> its title as the session list shows it (null: not found). Only read by
+ *  buildSnapshot; filled by warmOriginTitles at the start of a queue pass. */
+const titleCache = new Map<string, { title: string | null; at: number }>()
+
+export type TitleLookup = (sessionId: string) => Promise<string | null | undefined>
+
+/** One session's title from the session index (sessions.ts getSession, the list's own scan cache). */
+const indexTitle: TitleLookup = async (sessionId) =>
+  (await (await import('../sessions')).getSession(sessionId))?.title
+
+const cleanTitle = (t: string | null | undefined): string | null => {
+  const c = typeof t === 'string' ? t.trim().slice(0, TITLE_MAX).trim() : ''
+  return c || null
+}
+
+/** Looks up the titles of up to TITLE_LOOKUPS_PER_PASS chat origins not cached yet (a miss is cached as
+ *  null and retried after TITLE_RETRY_MS), active workers first. A lookup that throws is a miss. */
+export async function warmOriginTitles(
+  now = Date.now(),
+  lookup: TitleLookup = indexTitle,
+): Promise<void> {
+  const todo: string[] = []
+  const rank = [...workers.values()].sort(
+    (a, b) =>
+      Number(isFinished(a.status)) - Number(isFinished(b.status)) || b.updatedAt - a.updatedAt,
+  )
+  for (const w of rank) {
+    const id = w.origin?.kind === 'chat' ? w.origin.sessionId : null
+    if (!id || todo.includes(id)) continue
+    const c = titleCache.get(id)
+    if (c && (c.title !== null || now - c.at < TITLE_RETRY_MS)) continue
+    todo.push(id)
+    if (todo.length >= TITLE_LOOKUPS_PER_PASS) break
+  }
+  for (const id of todo) {
+    let title: string | null = null
+    try {
+      title = cleanTitle(await lookup(id))
+    } catch {
+      // a miss
+    }
+    titleCache.set(id, { title, at: now })
+  }
+}
+
 function reduce(w: CliMayteWorker, now: number): RemoteWorker {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const v = w.verdicts?.at(-1)?.verdict
@@ -101,6 +152,8 @@ function reduce(w: CliMayteWorker, now: number): RemoteWorker {
           : null,
     originWorkerId: byWorker,
     wave: w.wave ?? null,
+    sessions: [...(w.sessions ?? [])],
+    originTitle: o?.kind === 'chat' ? (titleCache.get(o.sessionId)?.title ?? null) : null,
   }
 }
 
@@ -236,6 +289,7 @@ const sentBy = new Map<string, { shape: string; volatile: string; live: string; 
 
 export function resetQueueSync(): void {
   sentBy.clear()
+  titleCache.clear()
 }
 
 const hash = (value: unknown): string =>
@@ -263,6 +317,8 @@ const shapePrint = (snap: QueueSnapshot): string =>
       w.account,
       w.createdAt,
       w.verdict,
+      w.sessions,
+      w.originTitle,
     ]),
   )
 
@@ -362,6 +418,11 @@ export async function syncQueueDetail(
 ): Promise<{ moved: boolean; uploaded: boolean }> {
   let moved = false
   let uploaded = false
+  try {
+    await warmOriginTitles(now)
+  } catch {
+    // titles are a nicety: never fail the pass
+  }
   const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null
