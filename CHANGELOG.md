@@ -7,10 +7,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-10-05
+
 ### Changed
 
 - **AgentHydra installs its own updates by default** (2026-10-05, owner: "we should have it default that AgentHydra auto-updates if there's a new version"). Auto-update was opt-in, so a PC ran an old build until someone opened Settings and clicked Update. The `auto_update_enabled` setting is now seeded on: an install that never chose gets it on its first start of this build, and one turned off in Settings stays off. Nothing else about applying changes: it still waits while work a restart would stop is running, never touches a checkout with local changes, and a packaged build still checks the release's SHA-256 before swapping.
 - **Desktop chat sync is on by default on every PC in a login sync** (2026-10-05, owner: "sync desktop chat should be default on"). Setup used to write `shareChats: false` into `login-sync.json` on every PC, so the switch read as a choice nobody made. The file now records only a PC turned off (`chatsOff: true`), and the old field is not read, so every PC already in a sync starts sharing its visible desktop chats on its first pass after updating. Login sync tests now run against a PC with no desktop chats (`server/tests/no-chats.ts`), since the chat half runs from setup and the real one reads this PC's own Claude Desktop profiles.
+- **Another PC's CliMayte tasks can sit under the chat that started them** (2026-10-04). The queue snapshot each PC shares through login sync now carries ids only for a task's session, the chat or worker that dispatched it, and its wave (never a prompt, path or Claude home), so Hydra Desk 2 on the other PC draws each task under its chat instead of in a list apart. A PC still on 1.9.x sends none of these, so its tasks stay unplaced until it updates.
+
+### Fixed
+
+- **A daemon that restarts itself keeps its own identity, and one that dies at startup says why** (2026-10-05). A relaunched daemon loaded its config before applying the identity it was handed, so a side-run's successor read the machine's own store; the identity now applies first. An exit or a throw before file logging starts now leaves a line in `daemon.log` (code, pid, arguments): on 2026-10-05 four revives of a stalled daemon each exited within 0.4 s and wrote nothing.
 
 ## [1.9.2] - 2026-10-04
 
