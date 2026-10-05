@@ -24,6 +24,7 @@ import {
   sessionScopeQuery,
   WIDE_SCOPES,
 } from '@/lib/session-scopes'
+import { usePanels } from './usePanels'
 import { registerSharedPref } from './useSharedPrefs'
 import { storedSelection } from './useStoredSelection'
 
@@ -228,8 +229,15 @@ async function refreshSessions() {
 // request that resolves last is still discarded, which is what stops a slow poll from resurrecting
 // a row a post-mutation refresh had already dropped.
 let queueGeneration = 0
+let lastQueueFetch = 0
+const { queueOpen } = usePanels()
+function schedulerCounts() {
+  const s = scheduler.value
+  return `${s?.running_count ?? ''}/${s?.queued_count ?? ''}`
+}
 async function refreshQueue() {
   const gen = ++queueGeneration
+  lastQueueFetch = Date.now()
   queueStatus.loading.value = true
   const r = await guard(api.getQueue(), queueStatus)
   if (gen !== queueGeneration) return
@@ -276,11 +284,15 @@ function startPolling() {
   refreshIncidents()
   refreshAccounts()
   refreshScheduler()
-  // queue + scheduler are cheap and change often while runs are active
-  fastTimer = window.setInterval(() => {
+  // The scheduler answer is tiny, so it stays at 2 s. The queue answer carries every item with its
+  // whole prompt, so it is fetched only when the scheduler's counts moved, at 2 s while the drawer
+  // is open or something runs, and otherwise every 15 s as a safety net for edits made elsewhere.
+  fastTimer = window.setInterval(async () => {
     if (document.hidden) return
-    refreshQueue()
-    refreshScheduler()
+    const before = schedulerCounts()
+    await refreshScheduler()
+    const live = queueOpen.value || (scheduler.value?.running_count ?? 0) > 0
+    if (live || schedulerCounts() !== before || Date.now() - lastQueueFetch >= 15000) refreshQueue()
   }, 2000)
   // Incidents change only on a new failure or an ack/resolve click (both already re-fetch on their
   // own), so the slow cadence is plenty.
