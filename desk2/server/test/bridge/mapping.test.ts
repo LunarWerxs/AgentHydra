@@ -232,7 +232,7 @@ describe('transcripts', () => {
   })
 })
 
-describe('another PC's worker', () => {
+describe('a worker of another PC', () => {
   const base = {
     id: 'w-r1', title: 'Remote task', group: null, status: 'running', kind: null, model: null, effort: null, account: null,
     createdAt: 1, updatedAt: 2, activeS: 1, costUsd: null, lastActivity: null, error: null, verdict: null,
