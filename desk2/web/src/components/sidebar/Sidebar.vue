@@ -10,6 +10,7 @@ import { useShellSource } from '@/components/shell/source'
 import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
+import { actionError } from '@/lib/action-error'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -373,7 +374,7 @@ const deleting = ref<ChatSummary | null>(null)
 const groupNames = computed(() => groupChoices(src.chats.value, src.external.value))
 const stateOf = (row: Row): RowState => (row.kind === 'chat' ? chatRow(row.chat) : externalRow(row.session))
 // A row action that failed says so under the list, with the server's reason, until the next one.
-const rowError = ref<string | null>(null)
+const rowError = actionError
 function attempt(what: string, run: Promise<unknown>) {
   rowError.value = null
   void run.catch((err: unknown) => (rowError.value = `${what} failed: ${err instanceof Error ? err.message : String(err)}`))
@@ -438,7 +439,7 @@ function confirmGroup() {
   naming.value = null
   if (row && groupName.value && groupName.value.length <= GROUP_MAX) mark(row, { group: moveTarget(stateOf(row), groupName.value) })
 }
-async function confirmDelete() {
+function confirmDelete() {
   const chat = deleting.value
   deleting.value = null
   if (!chat) return
@@ -708,6 +709,12 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </div>
         </section>
         </template>
+        <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
+          <span class="min-w-0 flex-1">{{ rowError }}</span>
+          <button type="button" aria-label="Dismiss" class="shrink-0 rounded-[4px] px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
+            <component :is="icons.dismiss" class="size-3" />
+          </button>
+        </p>
       </div>
     </div>
 

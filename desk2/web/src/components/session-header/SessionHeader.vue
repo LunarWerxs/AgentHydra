@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronUp, Coins, Copy, FileText, Hash, MessagesSquare, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
+import { actionError } from '@/lib/action-error'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import {
@@ -173,6 +174,9 @@ function say(text: string, bad = false) {
   if (noteTimer) clearTimeout(noteTimer)
   noteTimer = setTimeout(() => (note.value = null), 3500)
 }
+watch(actionError, (text) => {
+  if (text) say(text, true)
+})
 async function clip(text: string, done: string) {
   try {
     await navigator.clipboard.writeText(text)
