@@ -105,9 +105,9 @@ const ROW =
               class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
               :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
             />
+            <RunningBadge v-if="collapsed.has(g.key) && runningInGroup(g.rows)" class="ml-0.5" :count="runningInGroup(g.rows)" />
           </button>
         </Tip>
-        <RunningBadge v-if="collapsed.has(g.key) && runningInGroup(g.rows)" :count="runningInGroup(g.rows)" />
         <span class="flex-1" />
         <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />

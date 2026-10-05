@@ -140,16 +140,19 @@ test('a running task no row lists is still shown, at the top, per PC with the re
     // Its chat is not in the list: the finished manager above it comes too.
     worker('mgr', 2, { originSessionId: 's-hidden', status: 'done', active: false }),
     worker('kid', 3, { originWorkerId: 'mgr', originSessionId: 's-mgr' }),
-    // Nothing says which chat started it.
+    // Nothing here says which chat started it.
     worker('loose', 4, { originSessionId: null }),
-    // Another PC's older AgentHydra sends no session or origin.
-    worker('old1', 5, { ...bare, pc: 'PC-B' }),
-    worker('old2', 6, { ...bare, pc: 'PC-B' }),
-    worker('old-done', 7, { ...bare, pc: 'PC-B', status: 'done', active: false }),
-    // Another PC's newer one, from a chat the list does not show.
-    worker('new', 8, { pc: 'PC-B', originSessionId: 's-there' }),
+    // A PC whose older AgentHydra sends no session or origin for any task.
+    worker('old1', 5, { ...bare, pc: 'PC-OLD' }),
+    worker('old2', 6, { ...bare, pc: 'PC-OLD' }),
+    worker('old-done', 7, { ...bare, pc: 'PC-OLD', status: 'done', active: false }),
+    // A PC whose AgentHydra does: one task from a chat the list does not show, one no chat started.
+    worker('new', 8, { pc: 'PC-NEW', originSessionId: 's-there' }),
+    worker('new-loose', 9, { ...bare, pc: 'PC-NEW', status: 'queued' }),
     // A Desk chat that runs as a worker, still queued: drawn as its row.
-    worker('queued-chat', 9, { ...bare, status: 'queued' })
+    worker('queued-chat', 10, { ...bare, status: 'queued' }),
+    // Its dispatcher is gone from the list: nothing here names its chat.
+    worker('orphan', 11, { originWorkerId: 'gone', originSessionId: null })
   ]
   const rows = [
     { key: 'chat:1', sessionIds: ['s-chat'] },
@@ -159,11 +162,25 @@ test('a running task no row lists is still shown, at the top, per PC with the re
   expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:placed'])
   expect(tasks.unplaced.map((g) => [g.pc, g.reason, listOf(g.nodes)])).toEqual([
     [null, 'not-listed', ['1:here:mgr', '2:here:kid']],
-    [null, 'no-origin', ['1:here:loose']],
-    ['PC-B', 'old-pc', ['1:PC-B:old1', '1:PC-B:old2']],
-    ['PC-B', 'not-listed', ['1:PC-B:new']]
+    [null, 'no-origin', ['1:here:loose', '1:here:orphan']],
+    ['PC-OLD', 'old-pc', ['1:PC-OLD:old1', '1:PC-OLD:old2']],
+    ['PC-NEW', 'not-listed', ['1:PC-NEW:new']],
+    ['PC-NEW', 'no-origin', ['1:PC-NEW:new-loose']]
   ])
   const shown = [...[...tasks.byRow.values()].flat(), ...tasks.unplaced.flatMap((g) => g.nodes)].map((n) => n.worker)
   const running = workers.filter((w) => w.active && w.id !== 'queued-chat')
   expect(shown.filter((w) => w.active).sort((a, b) => a.startedAt! - b.startedAt!)).toEqual(running)
+})
+
+test("a worker that handed off is two rows' session, and its tasks are listed once, under the row on its current session", () => {
+  const workers = [
+    worker('handed', 1, { sessionId: 's-new', sessions: ['s-old', 's-new'] }),
+    worker('k1', 2, { originWorkerId: 'handed', originSessionId: 's-new' }),
+    // Dispatched from its first session, before the handoff.
+    worker('k2', 3, { originSessionId: 's-old' })
+  ]
+  const tasks = nestTasks([{ key: 'external:s-old', sessionIds: ['s-old'] }, { key: 'external:s-new', sessionIds: ['s-new'] }], workers)
+  expect([...tasks.byRow.keys()]).toEqual(['external:s-new'])
+  expect(listOf(tasks.byRow.get('external:s-new'))).toEqual(['1:here:k1', '1:here:k2'])
+  expect(tasks.unplaced).toEqual([])
 })

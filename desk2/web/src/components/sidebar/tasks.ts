@@ -31,8 +31,9 @@ export interface TaskNode {
 
 /**
  * Why a running task sits under no row: its PC does not say which chat started it (another PC's older
- * AgentHydra sends no session, origin or wave), nothing does (a task no chat started), or the chat that
- * started it is not in the list (the filter, the search or the time period leaves it out).
+ * AgentHydra sends no session, origin or wave for any task), nothing here does (a task no chat started, or
+ * one whose dispatcher is gone), or the chat that started it is not in the list (the filter, the search or
+ * the time period leaves it out).
  */
 export type UnplacedReason = 'old-pc' | 'no-origin' | 'not-listed'
 
@@ -110,21 +111,37 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
   const drawn = new Set<string>()
   /** Per worker, the rows whose list has it. */
   const listedBy = new Map<string, string[]>()
-  for (const r of rows) {
+  const selves = rows.map((r) => {
     const self = new Set(r.sessionIds.flatMap((s) => (bySession.has(s) ? [keyOf(bySession.get(s)!)] : [])))
     // A Desk chat's worker is this PC's: its id is its key.
     if (r.workerId && byKey.has(r.workerId)) self.add(r.workerId)
+    return self
+  })
+  // One row lists a worker's tasks: a worker that handed off has two sessions, so two rows can stand for
+  // it; the one on its current session (else the first) lists them, the other lists nothing.
+  const owner = new Map<string, string>()
+  rows.forEach((r, i) => {
+    for (const k of selves[i]!) {
+      const current = byKey.get(k)?.sessionId
+      if (!owner.has(k) || (current && r.sessionIds.includes(current))) owner.set(k, r.key)
+    }
+  })
+  rows.forEach((r, i) => {
+    const self = selves[i]!
     const first = [...self][0]
     if (first) own.set(r.key, first)
     for (const k of self) drawn.add(k)
-    const list = walk(new Set(r.sessionIds), self, 1, new Set(self))
-    if (!list.length) continue
+    if (self.size && ![...self].some((k) => owner.get(k) === r.key)) return
+    // Its own sessions, and every session of the workers it stands for.
+    const sessions = new Set([...r.sessionIds, ...[...self].flatMap((k) => [...sessionsOf(byKey.get(k)!)])])
+    const list = walk(sessions, self, 1, new Set(self))
+    if (!list.length) return
     lists.set(r.key, list)
     for (const n of list) {
       const key = keyOf(n.worker)
       listedBy.set(key, [...(listedBy.get(key) ?? []), r.key])
     }
-  }
+  })
 
   // From the outermost rows in: a row whose worker a kept row lists is dropped; one that no row lists,
   // or whose every lister was dropped, is kept. Data that loops (two managers naming each other) has no
@@ -164,11 +181,14 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     if (!roots.includes(top)) roots.push(top)
   }
   const seen = new Set([...shown, ...roots.map(keyOf)])
+  // Another PC whose AgentHydra predates sharing sessions and origins sends none for any task; a newer one
+  // sends a session for every task that has started.
+  const oldPcs = new Set(workers.filter((w) => w.pc).map((w) => w.pc!))
+  for (const w of workers) if (w.pc && (w.sessionId || w.sessions?.length || w.originSessionId || w.originWorkerId)) oldPcs.delete(w.pc)
   const groups = new Map<string, UnplacedTasks>()
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const nodes = [{ worker: r, depth: 1 }, ...walk(sessionsOf(r), new Set([keyOf(r)]), 2, seen)]
-    const told = !!(r.originSessionId || r.originWorkerId)
-    const reason: UnplacedReason = told ? 'not-listed' : r.pc && !r.sessionId ? 'old-pc' : 'no-origin'
+    const reason: UnplacedReason = r.originSessionId ? 'not-listed' : r.pc && oldPcs.has(r.pc) ? 'old-pc' : 'no-origin'
     const key = `${r.pc ?? ''}|${reason}`
     const g = groups.get(key) ?? { pc: r.pc ?? null, reason, nodes: [] }
     g.nodes.push(...nodes)
@@ -187,7 +207,7 @@ export function unplacedText(g: UnplacedTasks): { title: string; count: number; 
     g.reason === 'old-pc'
       ? `Not under ${one ? 'its chat' : 'their chats'}: ${g.pc}'s AgentHydra is too old to say which chat started ${them}. Update it there and ${one ? 'it moves under its chat' : 'they move under their chats'}.`
       : g.reason === 'no-origin'
-        ? `Not under a chat: nothing says which chat started ${them}.`
+        ? `Not under a chat: nothing here says which chat started ${them}.`
         : `Not under ${one ? 'its chat' : 'their chats'}: the chat that started ${them} is not in this list.`
   return { title: g.pc ? `On ${g.pc}` : 'On this PC', count, note }
 }

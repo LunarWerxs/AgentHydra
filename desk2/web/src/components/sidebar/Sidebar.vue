@@ -206,8 +206,9 @@ const nesting = computed<NestedTasks | null>(() => {
   const workers = [...src.workers.value, ...remoteWorkers.value]
   if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers)
   // The rows the desk list draws, as groupChats picks them (never a CliMayte worker's own session, nor a
-  // session that is one of our chats); a row in a collapsed group still holds its tasks. A chat stands for
-  // its worker by id too, so one still queued (no session yet) is not listed again as a task.
+  // session that is one of our chats); a row in a folded group still holds its tasks, and the group's heading
+  // counts the running ones (RunningBadge). A chat stands for its worker by id too, so one still queued (no
+  // session yet) is not listed again as a task.
   const rows: NestRow[] = groupList.value.flatMap((g) =>
     g.entries.map((e) =>
       e.kind === 'chat'
@@ -485,9 +486,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                   class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
                   :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
                 />
+                <RunningBadge v-if="collapsed.has(group.key) && runningInGroup(group)" class="ml-0.5" :count="runningInGroup(group)" />
               </button>
             </Tip>
-            <RunningBadge v-if="collapsed.has(group.key) && runningInGroup(group)" class="ml-1" :count="runningInGroup(group)" />
             <span class="flex-1" />
             <Tip v-if="group.cwd" :label="`New session in ${group.label}`">
               <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: group.cwd })">
