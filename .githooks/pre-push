@@ -5,7 +5,8 @@
 # 1. Refuse a push to a PUBLIC remote unless AGENTHYDRA_PUSH_PUBLIC=1 is set for this command.
 #    The heading is printed either way; the rule is announce-then-do.
 # 2. Refuse a release tag (v*.*.*) while docs/todo/TODO.md has an open section. No override.
-# 3. Run the host-only lane GitHub structurally cannot: `check:local` (kit drift), on every push.
+# 3. Run the host-only lane GitHub structurally cannot: kit drift in what the push carries
+#    (check-kit-sync-pushed.mjs, the same report `check:local` reads), on every push.
 #    A release tag in the push also needs CI to have passed on the exact commit the tag points to:
 #    `gh` is asked for a ci.yml run on that sha whose conclusion is success. When there is one, only
 #    `check:local` runs, because every other lane of `check:deep` (Biome, i18n, every typecheck,
@@ -83,9 +84,16 @@ if ! command -v bun >/dev/null 2>&1; then
   exit 1
 fi
 
+# The kit drift lane judges what this push carries (check-kit-sync-pushed.mjs), not every file in a
+# working tree other sessions are editing: `check:local` over the whole tree let one session's
+# unfinished edit to a synced file block every other session's push.
+kit_drift() {
+  printf '%s\n' "$refs" | node .githooks/check-kit-sync-pushed.mjs "$remote" agenthydra orchestrator
+}
+
 if [ -z "$release_commits" ] && [ -z "$unpeeled" ]; then
-  echo "› check:local (kit drift)…" >&2
-  bun run check:local || exit 1
+  echo "› kit drift (what this push carries)…" >&2
+  kit_drift || exit 1
   exit 0
 fi
 
@@ -123,8 +131,8 @@ else
 fi
 
 if [ -z "$why" ]; then
-  echo "› check:local (kit drift; CI already ran every other check:deep lane on this commit)…" >&2
-  bun run check:local || exit 1
+  echo "› kit drift (what this push carries; CI already ran every other check:deep lane on this commit)…" >&2
+  kit_drift || exit 1
 else
   echo "pre-push: CI not confirmed, so the full check:deep runs (25+ minutes): $why." >&2
   bun run check:deep || exit 1
