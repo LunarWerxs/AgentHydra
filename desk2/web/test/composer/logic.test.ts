@@ -16,6 +16,7 @@ import {
   filterSlashCommands,
   folderName,
   loadDraft,
+  prAsk,
   saveDraft,
   slashQuery,
   validateImage,
@@ -133,6 +134,15 @@ describe('labels', () => {
   it('folder name handles both slash styles and a trailing slash', () => {
     expect(folderName('C:\\Users\\me\\desk\\')).toBe('desk')
     expect(folderName('/home/j/connections')).toBe('connections')
+  })
+
+  it('Create PR asks for a new branch off the default one, and a PR without gh when gh is missing', () => {
+    for (const draft of [false, true]) {
+      const ask = prAsk(draft)
+      expect(ask).toContain('default branch, move it to a new branch')
+      expect(ask).toContain('another GitHub tool you have if gh is not installed')
+      expect(ask.includes('draft pull request')).toBe(draft)
+    }
   })
 })
 

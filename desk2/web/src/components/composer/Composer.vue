@@ -49,6 +49,7 @@ import {
   draftSlot,
   modelTriggerLabel,
   nextTip,
+  prAsk,
   type Tip as TipInfo
 } from './logic'
 import { dataUrlToFile, parseCopiedImages } from '@/lib/clipboard-images'
@@ -322,10 +323,7 @@ function openDiff() {
 }
 function createPr(draft: boolean) {
   if (!props.chat) return
-  const ask = draft
-    ? 'Commit the changes on this branch and open a draft pull request for it.'
-    : 'Commit the changes on this branch and open a pull request for it.'
-  desk.send(props.chat.id, { text: ask }).catch((e) => showNotice(`Not sent: ${errText(e)}`))
+  desk.send(props.chat.id, { text: prAsk(draft) }).catch((e) => showNotice(`Not sent: ${errText(e)}`))
 }
 
 function openCliMayte() {

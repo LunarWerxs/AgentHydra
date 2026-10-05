@@ -244,6 +244,19 @@ export function formatCount(n: number): string {
   return n.toLocaleString('en-US')
 }
 
+/**
+ * What Create PR asks the chat. A chat often works on the default branch, so the work moves to a new
+ * branch first; and gh is not on every PC, so any other GitHub tool the chat has will do.
+ */
+export function prAsk(draft: boolean): string {
+  return (
+    `Open a ${draft ? 'draft ' : ''}pull request for the work in this folder. ` +
+    'If it is on the default branch, move it to a new branch first. ' +
+    'Commit what is not committed, push the branch, and open the pull request with gh, ' +
+    'or with another GitHub tool you have if gh is not installed. Reply with its link.'
+  )
+}
+
 /** The suggested next prompt the empty box shows in place of its placeholder: only between turns. */
 export function shownSuggestion(suggestion: string | null | undefined, s: { empty: boolean; busy: boolean }): string {
   const t = suggestion?.trim() ?? ''
