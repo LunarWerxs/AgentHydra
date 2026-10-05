@@ -18,7 +18,7 @@ export function openBackgroundTasks(taskId?: string | null): void {
   window.dispatchEvent(new CustomEvent<OpenTasksDetail>(OPEN_TASKS_EVENT, { detail: { taskId: taskId ?? null } }))
 }
 
-/** Finished workers and tasks cleared from view (the panel's trash), shared with the agents chip. */
+/** Finished workers and tasks cleared from view (the panel's trash), kept across reloads. */
 export const cleared = ref<Set<string>>(loadDismissed())
 
 export function clearFinished(keys: string[]): void {

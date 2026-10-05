@@ -287,7 +287,7 @@ function togglePane(p: RightPane) {
 }
 const onOpenDiff = () => (pane.value = 'diff')
 const onOpenCliMayte = () => (pane.value = 'climayte')
-// Background tasks (the inline row, the agents chip, desk.openBackgroundTasks()) takes the right pane's place.
+// Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
 // Open or closed (and expanded) is remembered per chat: switching chats shows each one's own state.
 type TasksState = { focus: string | null; expanded: boolean }
 const viewKey = computed(() => {

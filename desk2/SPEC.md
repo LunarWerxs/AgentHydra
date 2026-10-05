@@ -402,7 +402,7 @@ origin is a worker that belongs (recursively, cycle-safe). The match is kept in 
 (stored in chats.json, never volatile): every worker ever matched, running and finished, so finished ones
 stay listed after AgentHydra's recent-finished window drops them (the bridge re-reads those ids with
 `?ids=` and merges them into the worker list). The web filters by `workerIds`: the Background tasks panel
-opens on 'This chat' ('All' stays one click away, remembered in localStorage), and the composer's agents chip,
+opens on 'This chat' ('All' stays one click away, remembered in localStorage), and
 the inline 'N running tasks' row and the CliMayte pane's 'only this chat' box use the same list.
 
 ### Chats are CliMayte workers
