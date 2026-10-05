@@ -5,7 +5,7 @@
 // of TICKED values, every value ticked is "no narrowing", none ticked is the server's `none`. Source,
 // instance, queued work, usage limits, archived and the time period are applied by AgentHydra; shape
 // and computer narrow the rows already fetched.
-import type { CloudSession } from '@shared/protocol'
+import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
 import { folderKey, folderLabel, NO_FOLDER } from '../sidebar/logic'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
@@ -189,6 +189,9 @@ export function sessionShape(s: Pick<CloudSession, 'messageCount' | 'createdAt' 
 /** The PC a row came from: the chat sync's name for another PC's chat, else this one. */
 export const pcOf = (s: Pick<CloudSession, 'fromPc'>, thisPc: string): string => s.fromPc ?? thisPc
 
+/** The words of the cloud icon on another PC's chat, in both lists (AgentHydra's Sessions tab says the same). */
+export const fromPcLabel = (pc: string): string => `From ${pc}, through the chat sync`
+
 /** Every PC the rows name, this one first. */
 export function pcsIn(rows: Pick<CloudSession, 'fromPc'>[], thisPc: string): string[] {
   const others = [...new Set(rows.map((r) => r.fromPc).filter((p): p is string => !!p && p !== thisPc))].sort()
@@ -204,31 +207,72 @@ export interface CloudGroup {
 
 export const RESULTS_LABEL = 'Best matches first'
 
+/** Where the desk list (the cloud button off) puts a session: under its folder ('' for none), or in the group it was moved to. */
+export interface DeskPlace {
+  cwd: string
+  group: string | null
+}
+
+/**
+ * Where the desk list puts each session it shows, by session id: a Desk chat by its session, and the
+ * outside sessions groupChats (sidebar/logic.ts) lists, which leaves out CliMayte's own workers and a
+ * session that already is one of our chats.
+ */
+export function deskPlaces(
+  chats: Pick<ChatSummary, 'sessionId' | 'cwd' | 'group'>[],
+  external: Pick<ExternalSession, 'id' | 'cwd' | 'group' | 'source'>[]
+): Map<string, DeskPlace> {
+  const out = new Map<string, DeskPlace>()
+  for (const c of chats) if (c.sessionId) out.set(c.sessionId, { cwd: c.cwd, group: c.group })
+  for (const s of external) if (s.source !== 'climayte' && !out.has(s.id)) out.set(s.id, { cwd: s.cwd ?? '', group: s.group })
+  return out
+}
+
+const newestFirst = (a: CloudSession, b: CloudSession) => b.lastActivityAt - a.lastActivityAt
+
 /**
  * The rows the list shows, grouped by folder like the rest of the sidebar: the shape and computer filters
- * applied, groups ordered by their newest row, rows newest first. A search's answer (`ranked`) keeps
- * AgentHydra's order instead, best match first (a title hit before a folder hit before letters in order),
- * as one group.
+ * applied, groups ordered by their newest row, rows newest first. A session the desk list shows (`desk`,
+ * deskPlaces) sits where it sits there, so turning the cloud on moves nothing (owner, 2026-10-04: a chat
+ * jumped to another folder's group): under its desk row's folder, or in the group it was moved to, which
+ * joins a folder group of the same name as in groupChats. Every other row goes under the folder AgentHydra
+ * gives, the one it started in (server bridge/cloud.ts). A search's answer (`ranked`) keeps AgentHydra's
+ * order instead, best match first (a title hit before a folder hit before letters in order), as one group.
  */
 export function groupCloud(
   rows: CloudSession[],
   s: { shape: readonly CloudShape[]; pcs: string[] | null },
   thisPc: string,
-  ranked = false
+  ranked = false,
+  desk: ReadonlyMap<string, DeskPlace> = new Map()
 ): CloudGroup[] {
   const shown = rows.filter((r) => s.shape.includes(sessionShape(r)) && (s.pcs === null || s.pcs.includes(pcOf(r, thisPc))))
   if (ranked) return shown.length ? [{ key: 'cloud:results', label: RESULTS_LABEL, cwd: null, rows: shown }] : []
   const byFolder = new Map<string, CloudGroup>()
-  for (const r of [...shown].sort((a, b) => b.lastActivityAt - a.lastActivityAt)) {
-    const key = r.cwd ? folderKey(r.cwd) : ''
-    let g = byFolder.get(key)
-    if (!g) {
-      g = { key: `cloud:${key}`, label: r.cwd ? folderLabel(r.cwd) : NO_FOLDER, cwd: r.cwd, rows: [] }
-      byFolder.set(key, g)
-    }
+  const byGroup = new Map<string, CloudGroup>()
+  // Rows come newest first, so a group's label is its newest row's spelling.
+  const add = (map: Map<string, CloudGroup>, id: string, label: string, cwd: string | null, r: CloudSession) => {
+    const g: CloudGroup = map.get(id) ?? { key: `cloud:${id}`, label, cwd, rows: [] }
+    map.set(id, g)
     g.rows.push(r)
   }
-  return [...byFolder.values()]
+  for (const r of [...shown].sort(newestFirst)) {
+    const place = desk.get(r.id)
+    // Moved-to groups ignore case, like folders.
+    if (place?.group) add(byGroup, `group:${place.group.toLowerCase()}`, place.group, null, r)
+    else {
+      const cwd = place ? place.cwd || null : r.cwd
+      add(byFolder, cwd ? folderKey(cwd) : '', cwd ? folderLabel(cwd) : NO_FOLDER, cwd, r)
+    }
+  }
+  const groups = [...byFolder.values()]
+  for (const g of byGroup.values()) {
+    const folder = groups.find((f) => f.cwd && f.label.toLowerCase() === g.label.toLowerCase())
+    if (folder) folder.rows.push(...g.rows)
+    else groups.push(g)
+  }
+  for (const g of groups) g.rows.sort(newestFirst)
+  return groups.sort((a, b) => b.rows[0]!.lastActivityAt - a.rows[0]!.lastActivityAt)
 }
 
 /** A filter's right-hand text in the menu: All, None, the one name, or the first and a count. */

@@ -14,6 +14,7 @@ const session = (over: Partial<ExternalSession> = {}): ExternalSession => ({
   model: 'claude-opus-5-5',
   accountId: null,
   canResume: true,
+  fromPc: null,
   pinned: false,
   archived: false,
   unread: false,

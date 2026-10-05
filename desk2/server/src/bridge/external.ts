@@ -120,6 +120,7 @@ export function mapExternal(
       model: w.reportedModel ?? w.model ?? null,
       accountId: w.accountId,
       canResume: false,
+      fromPc: null, // a worker runs on this PC's CLI accounts
       ...UNMARKED,
     })
   }
@@ -151,6 +152,8 @@ export function mapExternal(
       model: null,
       accountId,
       canResume: canResume({ status, source }),
+      // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
+      fromPc: row?.from_pc || null,
       ...UNMARKED,
     })
   }

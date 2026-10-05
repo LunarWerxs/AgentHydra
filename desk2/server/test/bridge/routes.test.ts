@@ -5,10 +5,11 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { ServerEvent } from '@shared/protocol'
+import type { CliMayteWorker, ServerEvent } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../src/index'
 import { createBridge } from '../../src/bridge'
-import { deadUrl, type FakeHydra, startFakeHydra } from './fake-hydra'
+import { RECENT_FINISHED } from '../../src/bridge/climayte'
+import { deadUrl, type FakeHydra, remoteAnswer, startFakeHydra } from './fake-hydra'
 
 const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '10-bridge.ts')
 const temps: string[] = []
@@ -71,6 +72,56 @@ test('the REST rows answer from AgentHydra', async () => {
   expect(await call(desk, '/api/climayte/workers/w-00000001/cancel', post())).toEqual({ status: 200, body: { ok: true } })
   expect((await call(desk, '/api/climayte/workers/w-00000001/cancel', post())).status).toBe(409)
   expect(f.posts.map((p) => p.path).filter((p) => p !== '/api/corch/place-chat')).toEqual(['/api/corch/workers/w-00000001/send', '/api/corch/cancel', '/api/corch/cancel'])
+})
+
+test("the other PCs' CliMayte workers join the list under their PC's name, and never count as this PC's", async () => {
+  const f = await startFakeHydra()
+  fakes.push(f)
+  f.state.remote = remoteAnswer(RECENT_FINISHED + 3)
+  // A PC gone quiet (off or asleep): its last snapshot still says its tasks run.
+  const quiet = remoteAnswer().pcs[0]
+  f.state.remote.pcs.push({ ...quiet, pc: '00000000-0000-4000-8000-0000000000bb', name: 'QUIET-PC', stale: true, workers: quiet.workers.map((w: any) => ({ ...w, id: `${w.id}-quiet` })) })
+  const desk = await boot(f.url)
+  const local = ['w-00000001', 'w-00000002', 'w-00000003', 'w-00000004']
+  const ids = (list: CliMayteWorker[]) => list.map((w) => w.id).sort()
+
+  const list = (await call(desk, '/api/climayte/workers')).body as CliMayteWorker[]
+  expect(ids(list.filter((w) => !w.pc))).toEqual(local)
+  const remote = list.filter((w) => w.pc)
+  // The quiet PC's tasks are not shown as running for as long as it stays away.
+  expect(remote.some((w) => w.pc === 'QUIET-PC')).toBe(false)
+  // Every active one, and only the newest finished ones, as this PC's list keeps.
+  expect(ids(remote.filter((w) => w.active))).toEqual(['w-00000001', 'w-remote-q'])
+  expect(remote.filter((w) => !w.active)).toHaveLength(RECENT_FINISHED)
+  expect(remote.some((w) => w.id === 'w-remote-done-0')).toBe(true)
+  expect(remote.some((w) => w.id === `w-remote-done-${RECENT_FINISHED + 2}`)).toBe(false)
+  // Its id repeats one of this PC's; it stays its own row, with nothing that ties it to a chat here.
+  expect(remote.find((w) => w.id === 'w-00000001')).toMatchObject({
+    pc: 'OTHER-PC',
+    account: '#7',
+    status: 'running',
+    active: true,
+    cwd: null,
+    sessionId: null,
+    originSessionId: null,
+    originWorkerId: null,
+    endedAt: null,
+  })
+  expect(remote.find((w) => w.id === 'w-remote-q')!.account).toBeNull()
+  // The login's name (an email here) never leaves the server.
+  expect(JSON.stringify(list)).not.toContain('someone@example.com')
+
+  // The engine matches chats to lastWorkers() and counts them: this PC's alone.
+  const b = createBridge({ url: f.url })
+  await b.workers()
+  expect(ids(b.lastWorkers())).toEqual(local)
+  expect(b.lastWorkers().some((w) => w.pc)).toBe(false)
+
+  // An AgentHydra without the route (404), or one whose route fails, leaves this PC's list whole.
+  for (const answer of [null, 'the shared store is unreachable']) {
+    f.state.remote = answer
+    expect(ids((await call(desk, '/api/climayte/workers')).body)).toEqual(local)
+  }
 })
 
 test('AgentHydra down: lists stay answerable, writes say 503', async () => {

@@ -4,6 +4,12 @@
 // column definitions (lib/instance-table.ts). The default slot is the table's bodies: one <tbody> of
 // InstanceRow per provider, so a kind differs only in the columns it lists and the rows it hands over.
 // The skeleton stands in for a provider's rows only while they load; the other bodies stay drawn.
+//
+// `widths` holds a column at one width from the first paint. The table lays out by content, so a
+// column whose cells fill in as the stats load (a "—" that becomes a chip and a bar, a spinner
+// beside a number) used to widen as each one landed and every other column snapped sideways with
+// it (owner, 2026-10-04). A width is a floor sized for the column's final content and its header:
+// Name still takes the rest, and a cell that somehow outgrows it widens the column, never spills.
 import type { Component } from 'vue'
 import SortButton from '@/components/SortButton.vue'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -18,7 +24,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import type { SortDirection } from '@/composables/useSortable'
-import type { InstanceColumn } from '@/lib/instance-table'
+import type { InstanceColumn, InstanceColumnKey } from '@/lib/instance-table'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -32,8 +38,10 @@ withDefaults(
     skeletonRows?: number
     /** Drawn after the bodies when there is nothing to list (or the filter took every row). */
     empty?: { icon: Component; title: string; hint: string } | null
+    /** A CSS width per column key, padding included; a column left out sizes to its content. */
+    widths?: Partial<Record<InstanceColumnKey, string>>
   }>(),
-  { skeletonRows: 3, empty: null },
+  { skeletonRows: 3, empty: null, widths: undefined },
 )
 const emit = defineEmits<{ sort: [key: string] }>()
 const { enabled: tooltipsEnabled } = useTooltipConfig()
@@ -47,6 +55,7 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
           v-for="col in columns"
           :key="col.key"
           :class="col.headClass"
+          :style="{ width: widths?.[col.key] }"
           :title="col.title && tooltipsEnabled ? $t(col.title) : undefined"
         >
           <span v-if="!col.sortable" class="inline-flex items-center gap-0.5">{{ $t(col.label) }}</span>

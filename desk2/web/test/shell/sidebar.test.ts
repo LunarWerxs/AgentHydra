@@ -94,7 +94,7 @@ describe('sidebar groups', () => {
 
   it('Archived lists only the archived chats, by folder, a pinned one included', () => {
     const list = [...chats, chat('zp', { archived: true, pinned: true, cwd: 'C:\\work\\Beta', updatedAt: 70 })]
-    const g = groupChats(list, { filter: 'archived', external: [{ id: 'e', title: 'Ext', cwd: 'C:/work/alpha', source: 'desktop', instance: null, status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, pinned: false, archived: false, unread: false, group: null }] })
+    const g = groupChats(list, { filter: 'archived', external: [{ id: 'e', title: 'Ext', cwd: 'C:/work/alpha', source: 'desktop', instance: null, status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null }] })
     expect(g.pinned).toBeNull()
     expect(g.archived).toBeNull()
     expect(g.folders.map((f) => [f.label, ids(f)])).toEqual([
@@ -133,7 +133,7 @@ describe('sidebar groups', () => {
 
 describe('sessions running elsewhere in the same list', () => {
   function ext(id: string, over: Partial<ExternalSession> = {}): ExternalSession {
-    return { id, title: `Ext ${id}`, cwd: 'C:/work/alpha', source: 'desktop', instance: null, status: 'idle', activity: null, lastActivityAt: 20, model: null, accountId: null, canResume: false, pinned: false, archived: false, unread: false, group: null, ...over }
+    return { id, title: `Ext ${id}`, cwd: 'C:/work/alpha', source: 'desktop', instance: null, status: 'idle', activity: null, lastActivityAt: 20, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null, ...over }
   }
 
   it('merges them into the folder groups by activity, newest first', () => {
@@ -281,6 +281,7 @@ describe('row menu', () => {
     model: null,
     accountId: null,
     canResume: true,
+    fromPc: null,
     pinned: false,
     archived: false,
     unread: false,

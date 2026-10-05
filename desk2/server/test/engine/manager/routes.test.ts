@@ -344,7 +344,7 @@ describe('chat routes', () => {
       { kind: 'assistant_text', id: 'a1', ts: 2, text: 'hello from elsewhere' },
     ]
     const b = fakeBridge({
-      external: [{ id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, pinned: false, archived: false, unread: false, group: null }],
+      external: [{ id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null }],
       items: { 'ext-1': history },
     })
     const t = await boot({ bridge: b })
@@ -507,7 +507,7 @@ describe('the row menu routes', () => {
 
   test('outside sessions: the marks live in Hydra Desk home, are applied to the list and survive a restart', async () => {
     const outsideCwd = temp('desk-outside-')
-    const ext: ExternalSession = { id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: true, pinned: false, archived: false, unread: false, group: null }
+    const ext: ExternalSession = { id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'idle', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: true, fromPc: null, pinned: false, archived: false, unread: false, group: null }
     const first = await boot({ bridge: fakeBridge({ external: [ext], items: { 'ext-1': [] } }) })
 
     const res = await call<SessionMeta>(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { title: ' Renamed here ', pinned: true, group: ' Ops ' })
@@ -531,7 +531,7 @@ describe('the row menu routes', () => {
 
   test('fork of an outside session: a new chat that forks it, the original still listed', async () => {
     const outsideCwd = temp('desk-outside-')
-    const ext: ExternalSession = { id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'working', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, pinned: false, archived: false, unread: false, group: null }
+    const ext: ExternalSession = { id: 'ext-1', title: 'Desktop chat', cwd: outsideCwd, source: 'desktop', instance: '#68', status: 'working', activity: null, lastActivityAt: 1, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null }
     const history: TranscriptItem[] = [{ kind: 'user', id: 'u1', ts: 1, text: 'from the desktop app' }]
     const b = fakeBridge({ external: [ext], items: { 'ext-1': history } })
     const t = await boot({ bridge: b })

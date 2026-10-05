@@ -12,7 +12,7 @@ import { useCloud } from '@/components/cloud/store'
 import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
 import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
 import TaskRows from './TaskRows.vue'
-import { nestTasks, showTasks, type NestRow } from './tasks'
+import { nestTasks, showTasks, type NestedTasks, type NestRow } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -148,26 +148,6 @@ function saveOrder(next: SidebarOrder) {
   }
 }
 
-// Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
-// desk list, the rows each draws) lists the CliMayte tasks it handed out under it, a manager's wave one step
-// further in, each task once (tasks.ts).
-const nesting = computed(() => {
-  if (!showTasks.value) return null
-  if (cloud.on.value) return nestTasks(cloud.sessions.value.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] })), src.workers.value)
-  const ours = new Set(src.chats.value.map((c) => c.sessionId).filter(Boolean))
-  const rows: NestRow[] = [
-    ...src.chats.value.map((c) => ({ key: `chat:${c.id}`, sessionIds: c.sessionId ? [c.sessionId] : [] })),
-    // As groupChats draws them: a CliMayte worker's own session and a session that is one of ours are not rows.
-    ...src.external.value.filter((s) => s.source !== 'climayte' && !ours.has(s.id)).map((s) => ({ key: `external:${s.id}`, sessionIds: [s.id] }))
-  ]
-  return nestTasks(rows, src.workers.value)
-})
-const tasksOf = (key: string) => nesting.value?.get(key) ?? null
-function openTask(w: CliMayteWorker) {
-  if (w.sessionId) src.select({ kind: 'external', id: w.sessionId })
-  else openWorkerInHydra(w.id)
-}
-
 // While AgentHydra is open, a tab of it with a sidebar of its own (CliMayte, HSwarm) has it drawn here.
 const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
 
@@ -225,6 +205,36 @@ const filtering = computed(() => query.value.trim() !== '' || filter.value !== '
 const emptyText = computed(() =>
   query.value.trim() ? 'No matching sessions' : filter.value === 'archived' ? 'No archived sessions' : 'No sessions yet'
 )
+
+// Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
+// desk list, the rows each draws) lists the CliMayte tasks it handed out under it, a manager's wave one step
+// further in, each task once (tasks.ts). The running tasks no drawn row holds (another PC's, or one from a
+// session the filter, the search or the list leaves out) head the list in a CliMayte block of their own.
+// The other PCs' tasks: the desk store keeps them apart from src.workers so they never count as this PC's
+// (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
+const remoteWorkers = computed(() => src.remoteWorkers?.value ?? [])
+const nesting = computed<NestedTasks | null>(() => {
+  if (!showTasks.value) return null
+  const workers = [...src.workers.value, ...remoteWorkers.value]
+  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers)
+  // The rows the desk list draws, as groupChats picks them (never a CliMayte worker's own session, nor a
+  // session that is one of our chats); a row in a collapsed group still holds its tasks. A chat stands for
+  // its worker by id too, so one still queued (no session yet) is not listed again as a task.
+  const rows: NestRow[] = groupList.value.flatMap((g) =>
+    g.entries.map((e) =>
+      e.kind === 'chat'
+        ? { key: `chat:${e.id}`, sessionIds: e.chat.sessionId ? [e.chat.sessionId] : [], workerId: e.chat.workerId }
+        : { key: `external:${e.id}`, sessionIds: [e.session.id] }
+    )
+  )
+  return nestTasks(rows, workers)
+})
+const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
+/** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
+function openTask(w: CliMayteWorker) {
+  if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
+  else openWorkerInHydra(w.id)
+}
 
 // The chosen chat lands visibly: its group opens and its row scrolls into view (a new chat is the
 // first row of its group). One the filter or the search hides (a chat started while Archived is on)
@@ -438,6 +448,21 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <component :is="icons.dismiss" class="size-3.5" />
           </button>
         </div>
+
+        <!-- CliMayte button on: the running tasks no row below holds, or a line saying none runs anywhere -->
+        <template v-if="nesting && !hydraModel">
+          <section v-if="nesting.unplaced.length" aria-label="CliMayte">
+            <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
+              <span class="truncate">CliMayte</span>
+              <span class="flex-1" />
+              <span class="tnum">{{ nesting.unplaced.length }}</span>
+            </header>
+            <div class="flex flex-col gap-[1.5px] pt-[1.5px]">
+              <TaskRows :nodes="nesting.unplaced" :selected-id="selectedExternalId" :now="now" @open="openTask" />
+            </div>
+          </section>
+          <p v-else-if="!nesting.byRow.size" class="flex h-[34px] items-center pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">No CliMayte tasks running</p>
+        </template>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 

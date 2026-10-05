@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { Cloud } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import type { TaskNode } from '@/components/sidebar/tasks'
-import { modelName, pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
+import { fromPcLabel, modelName, pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -36,14 +37,19 @@ onMounted(() => (timer = setInterval(() => (now.value = Date.now()), 30_000)))
 onBeforeUnmount(() => timer && clearInterval(timer))
 
 const thisPc = computed(() => cloud.thisPc.value)
+/** The other PC's name on a chat the chat sync brought from it; null for this PC's rows. */
+const otherPc = (r: CloudSession) => (r.fromPc && r.fromPc !== thisPc.value ? r.fromPc : null)
 const sourceName = (s: string) => SOURCE_LABELS[s as CloudSource] ?? s
 function tooltip(r: CloudSession): string {
+  const pc = otherPc(r)
   return [
     r.title,
     [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc.value)}`].filter(Boolean).join(' · '),
+    pc && fromPcLabel(pc),
     [modelName(r.model), r.effort].filter(Boolean).join(' · '),
     `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages${r.archived ? ' · archived' : ''}`,
-    r.cwd
+    r.cwd,
+    r.lastCwd && `Now in ${r.lastCwd}`
   ]
     .filter(Boolean)
     .join('\n')
@@ -109,6 +115,7 @@ const ROW =
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
+            <!-- Another PC's chat leads with a cloud, as AgentHydra's Sessions tab draws it (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
             <span class="flex size-6 shrink-0 items-center justify-center">
               <span
                 v-if="cloud.selectMode.value"
@@ -117,14 +124,11 @@ const ROW =
               >
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
-              <span
-                v-else
-                class="size-1.5 rounded-full"
-                :class="r.fromPc && r.fromPc !== thisPc ? 'bg-accent' : r.archived ? 'border border-text-muted' : 'bg-text-muted'"
-              />
+              <Cloud v-else-if="otherPc(r)" role="img" :aria-label="fromPcLabel(otherPc(r)!)" class="size-3.5 text-text-muted" />
+              <span v-else class="size-1.5 rounded-full" :class="r.archived ? 'border border-text-muted' : 'bg-text-muted'" />
             </span>
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
-            <span v-if="r.fromPc && r.fromPc !== thisPc" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
+            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
           </div>

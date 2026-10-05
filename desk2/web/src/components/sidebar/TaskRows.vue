@@ -1,14 +1,15 @@
 <script setup lang="ts">
 import { type Component } from 'vue'
-import { CircleCheck, CircleX, Clock, Hourglass, ListChecks, LoaderCircle } from '@lucide/vue'
+import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, LoaderCircle } from '@lucide/vue'
 import type { CliMayteWorker } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
 import { elapsedLabel } from './logic'
 import type { TaskNode } from './tasks'
 
-// The CliMayte tasks under one sidebar row (components/sidebar/tasks.ts): 22px lines, one step in per
-// level, with a guide line down their left. A task with a session opens its live transcript in Desk;
-// one still queued (no session yet) opens on CliMayte's tab in AgentHydra.
+// The CliMayte tasks under one sidebar row, or the ones no row holds (components/sidebar/tasks.ts): 22px
+// lines, one step in per level, with a guide line down their left. A task with a session opens its live
+// transcript in Desk; one still queued (no session yet), or one on another PC (named by a cloud mark),
+// opens on CliMayte's tab in AgentHydra.
 defineProps<{ nodes: TaskNode[]; selectedId: string | null; now: number }>()
 const emit = defineEmits<{ open: [worker: CliMayteWorker] }>()
 
@@ -21,10 +22,14 @@ const STATUS: Record<string, { icon: Component; tone: string; spin?: boolean; la
   failed: { icon: CircleX, tone: 'text-danger-text', label: 'Failed' }
 }
 const statusOf = (w: CliMayteWorker) => STATUS[w.status] ?? { icon: Clock, tone: 'text-text-muted', label: w.status }
+const onPc = (pc: string) => `On ${pc}`
+// Another PC's task may share its id with one of this PC's.
+const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
 
 function tip(w: CliMayteWorker, now: number): string {
   return [
     w.title,
+    w.pc ? onPc(w.pc) : null,
     [statusOf(w).label, w.account, [modelName(w.model), w.effort].filter(Boolean).join(' · ')].filter(Boolean).join(' · '),
     w.startedAt ? `Started ${elapsedLabel(w.startedAt, now)} ago` : null,
     w.lastActivity,
@@ -39,7 +44,7 @@ function tip(w: CliMayteWorker, now: number): string {
   <div class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks">
     <button
       v-for="n in nodes"
-      :key="n.worker.id"
+      :key="keyOf(n.worker)"
       type="button"
       :title="tip(n.worker, now)"
       :aria-current="n.worker.sessionId && selectedId === n.worker.sessionId ? 'page' : undefined"
@@ -51,6 +56,12 @@ function tip(w: CliMayteWorker, now: number): string {
       <component :is="statusOf(n.worker).icon" class="size-3 shrink-0" :class="[statusOf(n.worker).tone, statusOf(n.worker).spin ? 'animate-spin' : '']" aria-hidden="true" />
       <span class="sr-only">{{ statusOf(n.worker).label }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ n.worker.title }}</span>
+      <!-- Another PC's task: a little cloud, its PC in the tooltip, so the title keeps the room (owner,
+           2026-10-02, of CliMayte's list: "it just shows ones from my other computer with a little cloud icon"). -->
+      <span v-if="n.worker.pc" class="flex shrink-0 items-center" :title="onPc(n.worker.pc)">
+        <Cloud class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
+        <span class="sr-only">{{ onPc(n.worker.pc) }}</span>
+      </span>
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
     </button>

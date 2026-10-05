@@ -88,6 +88,7 @@ export const PARITY_SCENES: Record<string, ParityScene> = {
         model: 'claude-opus-5-5',
         accountId: 'cli-68',
         canResume: false,
+        fromPc: null,
         pinned: false,
         archived: false,
         unread: false,

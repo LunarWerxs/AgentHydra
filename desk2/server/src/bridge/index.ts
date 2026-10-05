@@ -4,13 +4,17 @@
 // session ids with `bridge().setExcludeSessionIds(fn)` so they are not listed as "Elsewhere". Which
 // account anything runs on is CliMayte's to decide; Hydra Desk keeps no placement of its own.
 //
+// The worker list the window gets also carries the other PCs' workers (`pc` set, GET /api/corch/remote),
+// so the sidebar can show every running task; everything that counts or acts on workers here (accounts in
+// use, a chat's workers, activeWorkersFor, lastWorkers) reads this PC's alone.
+//
 // AgentHydra down never throws out of a list: accounts fall back to the default login, sessions and
 // workers to []. Writes (cancel, send) and a single transcript read do throw a BridgeError.
 
 import { existsSync } from 'node:fs'
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
-import { activeFor, mapWorkers, RECENT_FINISHED } from './climayte'
+import { activeFor, byRecency, mapRemote, mapWorkers, RECENT_FINISHED } from './climayte'
 import {
   BridgeError,
   createClient,
@@ -144,7 +148,18 @@ export function createBridge(opts: BridgeOptions = {}) {
     return client.workers(all ? {} : { limit: RECENT_FINISHED })
   }
 
+  /** The other PCs' workers. An AgentHydra without the route (404), one that fails, or sharing off is none:
+   *  never a failure of this PC's list. */
+  function remoteWorkers(all = false): Promise<CliMayteWorker[]> {
+    return client
+      .remoteQueues()
+      .then((answer) => mapRemote(answer, { all }))
+      .catch(() => [])
+  }
+
+  /** This PC's workers and the other PCs' (`pc` set), as the window lists them. */
   async function workers(o: { all?: boolean } = {}): Promise<CliMayteWorker[]> {
+    const remote = remoteWorkers(o.all)
     try {
       const raw = await rawWorkers(o.all)
       // Workers matched to a chat that AgentHydra's recent-finished window dropped stay listed under it.
@@ -153,8 +168,10 @@ export function createBridge(opts: BridgeOptions = {}) {
       if (missing.length) raw.push(...(await client.workersByIds(missing).catch(() => [])))
       const list = mapWorkers(raw)
       if (list.some((w) => w.active)) workerTokens.apply(list, raw, await instanceDirs())
+      // This PC's alone: the engine matches chats to these and counts them, and their ids may repeat the other PCs'.
       lastWorkers = { at: now(), workers: list }
-      return list
+      const others = await remote
+      return others.length ? [...list, ...others].sort(byRecency) : list
     } catch (err) {
       if (unreachable(err)) {
         lastWorkers = { at: now(), workers: [] }
@@ -356,7 +373,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     sessionRoots,
     workers,
     activeWorkersFor,
-    /** The last worker list read (by the poller or a route), without asking AgentHydra. */
+    /** This PC's workers from the last read (by the poller or a route), without asking AgentHydra; never another PC's. */
     lastWorkers: (): CliMayteWorker[] => lastWorkers?.workers ?? [],
     cancelWorker,
     sendToWorker,

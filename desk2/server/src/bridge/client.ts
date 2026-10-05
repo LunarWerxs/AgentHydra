@@ -79,6 +79,8 @@ export interface AhSessionRow {
   last_role: 'user' | 'assistant' | null
   instance: string | null
   instance_num: number | null
+  /** The other PC's name on a Desktop chat the chat sync took from it; absent on this PC's rows. */
+  from_pc?: string
 }
 
 export interface AhUsageLimit {
@@ -167,6 +169,35 @@ export interface AhWorker {
 
 /** GET /api/corch/workers/:id: the view plus its last 60 event lines (summarizeEvent). */
 export type AhWorkerDetail = AhWorker & { events: string[] }
+
+/**
+ * One worker of another PC's shared queue (climayte-queue-sync.ts reduce()). It deliberately carries no
+ * prompt, folder, session or origin; `account.name` is often the login's email and is never shown.
+ */
+export interface AhRemoteWorker {
+  id: string
+  title: string
+  group: string | null
+  status: string
+  kind: string | null
+  model: string | null
+  effort: string | null
+  account: { id: string; num: number | null; name: string } | null
+  createdAt: number
+  updatedAt: number
+  activeS: number
+  costUsd: number | null
+  lastActivity: string | null
+  error: string | null
+  verdict: 'pass' | 'fail' | null
+}
+
+/** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
+export interface AhRemoteQueues {
+  /** Queue sharing is off on this PC: `pcs` is then empty. */
+  enabled: boolean
+  pcs: { pc: string; name: string; at: number; stale: boolean; workers: AhRemoteWorker[] }[]
+}
 
 export interface AhTailEvent {
   role: 'user' | 'assistant'
@@ -296,6 +327,8 @@ export function createClient(opts: HydraClientOptions = {}) {
     workers: (q: WorkerListQuery = {}) =>
       get<AhWorker[]>(`/api/corch/workers${q.limit === undefined ? '' : `?limit=${q.limit}`}`),
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
+    /** The other PCs' CliMayte queues (read-only: AgentHydra cancels and sends only to this PC's workers). */
+    remoteQueues: () => get<AhRemoteQueues>('/api/corch/remote'),
     tail: (sessionId: string, limit = 120) =>
       get<AhTail>(`/api/sessions/${enc(sessionId)}/tail?limit=${limit}&thinking=1`),
     /** The search behind its search_sessions MCP tool: every store, newest-active first (it has no folder filter). */

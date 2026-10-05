@@ -24,6 +24,40 @@ export interface FakeState {
   tail: any
   /** What GET /api/sessions/search answers (its results, when an array, cut to `limit`); a string answers that error with a 500. */
   search: any
+  /** What GET /api/corch/remote answers; null answers 404 (an AgentHydra without the route), a string that error with a 500. */
+  remote: any
+}
+
+/**
+ * The other PCs' queues in AgentHydra's shape (routes/climayte.ts GET /api/corch/remote), made up: one PC with a
+ * running worker whose id repeats one of this PC's, a queued one, and `finished` done ones. The account name is
+ * email-shaped on purpose: it must never reach the window.
+ */
+export function remoteAnswer(finished = 0): any {
+  const account = { id: 'cli-remote-7', num: 7, name: 'someone@example.com' }
+  const worker = (id: string, status: string, at: number, extra: Record<string, unknown> = {}) => ({
+    id, title: `Remote ${id}`, group: 'g-remote', status, kind: null, model: 'opus', effort: 'xhigh', account,
+    createdAt: at, updatedAt: at + 1000, activeS: 1, costUsd: null, lastActivity: null, error: null, verdict: null, ...extra,
+  })
+  return {
+    enabled: true,
+    pcs: [
+      {
+        pc: '00000000-0000-4000-8000-0000000000aa',
+        name: 'OTHER-PC',
+        at: NOW,
+        stale: false,
+        workers: [
+          worker('w-00000001', 'running', NOW - 60_000),
+          worker('w-remote-q', 'queued', NOW - 30_000, { account: null }),
+          ...Array.from({ length: finished }, (_, i) => worker(`w-remote-done-${i}`, 'done', NOW - 3_600_000 - i * 1000, { verdict: 'pass' })),
+        ],
+        build: null,
+        behind: false,
+        behindNote: null,
+      },
+    ],
+  }
 }
 
 /** A SessionSearchResponse in AgentHydra's shape (types.ts): two recorded sessions and one the index has no row for. */
@@ -56,6 +90,7 @@ export function freshState(): FakeState {
     detail: fixture('corch-worker-detail'),
     tail: fixture('tail'),
     search: searchAnswer(),
+    remote: null,
   }
 }
 
@@ -113,6 +148,11 @@ export async function startFakeHydra(state: FakeState = freshState()): Promise<F
       return s ? json(s) : json({ error: 'session not found' }, 404)
     }
     if (p === '/api/cli-instances') return json(state.instances)
+    if (p === '/api/corch/remote') {
+      if (state.remote === null) return json({ error: 'not found' }, 404)
+      if (typeof state.remote === 'string') return json({ error: state.remote }, 500)
+      return json(state.remote)
+    }
     if (p === '/api/corch/workers') {
       const limit = u.searchParams.get('limit')
       if (limit === null) return json(state.workers)

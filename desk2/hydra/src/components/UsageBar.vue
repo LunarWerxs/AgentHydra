@@ -110,9 +110,10 @@ const TEXT = 'text-foreground'
         :style="{ '--bar-w': `${width}%` }"
       />
       <!-- One label, layered over the fill (see TEXT above for why it is neutral rather than the
-           hue): no second copy, no "is it legible at 47%?", and no blend mode fighting the palette. -->
+           hue): no second copy, no "is it legible at 47%?", and no blend mode fighting the palette.
+           Tabular figures, so a countdown ticking from "4h 59m" to "4h 58m" does not re-centre. -->
       <span
-        class="absolute inset-0 flex items-center justify-center whitespace-nowrap px-1.5 text-3xs font-medium"
+        class="absolute inset-0 flex items-center justify-center whitespace-nowrap px-1.5 text-3xs font-medium tabular-nums"
         :class="TEXT"
       >
         {{ label }}

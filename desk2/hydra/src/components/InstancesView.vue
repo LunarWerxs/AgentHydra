@@ -27,6 +27,7 @@ import {
   Unlink,
   UserRound,
 } from '@lucide/vue'
+import { useStorage } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -78,6 +79,7 @@ import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSo
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
 import { piiDisplayName, piiName } from '@/composables/usePrivacy'
+import type { SortableColumn } from '@/composables/useSortable'
 import { useDesktopAccountTokens, useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
@@ -99,7 +101,12 @@ import {
   shortDisplayName,
 } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
-import { type InstanceRowModel, instanceColumns, nameTooltipFor } from '@/lib/instance-table'
+import {
+  type InstanceColumnKey,
+  type InstanceRowModel,
+  instanceColumns,
+  nameTooltipFor,
+} from '@/lib/instance-table'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { tokenPartsFor } from '@/lib/token-window'
@@ -111,6 +118,7 @@ import IconTooltip from '@/shell/IconTooltip.vue'
 const {
   instances,
   loading,
+  resolvingAccounts,
   busyDirs,
   startPolling,
   stopPolling,
@@ -175,7 +183,7 @@ function lastRunningExact(inst: CMInstance): string | undefined {
 // much quota is left. It runs AFTER the sort — it removes or greys rows, it never reorders them.
 // Its provider choice decides which providers' rows the table draws at all (see "which providers
 // the table draws" below).
-const { providerShown, showProvider } = useInstanceFilter()
+const { providerShown, showProvider, visible: filterVisible } = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
  *  it has a window that is open or shut, and an account with a plan and a quota reading. */
@@ -192,38 +200,110 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
 const tokenWindow = useDesktopTokenWindow()
 const accountTokens = useDesktopAccountTokens()
 
-const { toggleSort, indicatorFor, visibleRows, isDimmed } = useInstanceSource({
-  rows: () => instances.value,
+// --- rows keep their place while the stats load --------------------------------------------------
+// Owner, 2026-10-04: the table "still does this whole, like, mass rearranging things as it loads
+// the stats ... widths change and everything, and kind of just snap their way through it". The
+// facts a row's cells and its sort read do not arrive together: the list, the usage cache, each
+// account's cached identity, the tokens, then the live account checks (four at a time) and the
+// catch-up usage probes, each landing on its own. useSortable waits for a quiet moment before it
+// moves rows (its SETTLED ORDER note), but a load is a string of arrivals further apart than that
+// wait, so the rows moved once per arrival. Three things stop it:
+//   1. The Claude rows are drawn once the quick facts are in (see "first draw" below), so the first
+//      order is sorted on real numbers. Until then the skeleton stands in, as many rows tall as the
+//      table, so the Codex and DeepSeek rows drawn under it do not jump when it goes.
+//   2. While the slow facts stream in, the sort reads each row's value as it was when the row was
+//      first sorted (`holdable`), so nothing moves; once they are in, the rows settle once.
+//   3. Memory and tokens move on every poll, so their order is taken when you sort by one or press
+//      Refresh, never by the poll; the other columns go on following useSortable's settled order.
+// A sort you click applies at once, with the numbers on screen, in every phase.
+
+type SortValue = string | number | boolean | null | undefined
+
+/** The longest the first draw waits for its quick facts once the list is in. */
+const FIRST_DRAW_MAX_MS = 1200
+/** The longest the order is held for the slow facts (and the account warning held back). */
+const LOAD_HOLD_MAX_MS = 15_000
+/** Figures that change on every poll: re-sorted on a sort click or a Refresh only. */
+const RESORT_ON_ASK = new Set(['memory', 'tokens'])
+
+/** The Claude rows are handed to the sort once this is set; it never unsets. */
+const rowsReady = ref(false)
+/** Set while the load's slow facts are still arriving. */
+const holding = ref(true)
+/** Bumped to take the held values afresh: a Refresh, and the end of the load. */
+const holdEpoch = ref(0)
+/** The active sort column's values, one per row, as first read. Plain, not reactive: it is a
+ *  memo the sort reads through, and only the active column's accessor ever runs. */
+let held: { key: string; asked: string; values: Map<string, SortValue> } | null = null
+
+/**
+ * A sort column that reads each row's value once and keeps it while the order is held. Anything
+ * you ask for starts a fresh memo, so it sorts by what is on screen now: another column or
+ * direction, another tokens span in the Tokens header, a Refresh (holdEpoch). A row that arrives
+ * later is read when it is first sorted.
+ */
+function holdable(column: SortableColumn<CMInstance>): SortableColumn<CMInstance> {
+  const live = column.accessor
+  const always = RESORT_ON_ASK.has(column.key)
+  return {
+    ...column,
+    accessor: (inst) => {
+      if (!always && !holding.value) {
+        // A live column is sorting now, so the memo is dropped: going back to Memory or Tokens
+        // afterwards must read them afresh, not reuse the figures from the last time they sorted.
+        held = null
+        return live(inst)
+      }
+      const asked = `${desktopSortDirection.value}|${tokenWindow.value}|${holdEpoch.value}`
+      if (!held || held.key !== column.key || held.asked !== asked)
+        held = { key: column.key, asked, values: new Map() }
+      if (!held.values.has(inst.dir)) held.values.set(inst.dir, live(inst))
+      return held.values.get(inst.dir)
+    },
+  }
+}
+
+const sortColumns: SortableColumn<CMInstance>[] = [
+  { key: 'status', accessor: (i: CMInstance) => i.isRunning },
+  // sort by what the cell actually shows (the display label, falling back to folder name)
+  { key: 'name', accessor: (i: CMInstance) => displayName(i) },
+  // Sort by what the cell actually shows (see accountCellName).
+  { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
+  { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
+  { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
+  // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
+  ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), now),
+  // By the instant, not the "3h ago" text, so the order is true across units.
+  {
+    key: 'lastActive',
+    accessor: (i: CMInstance) =>
+      i.isRunning
+        ? Number.MAX_SAFE_INTEGER
+        : i.lastRunningAt
+          ? Date.parse(i.lastRunningAt)
+          : undefined,
+  },
+  {
+    key: 'tokens',
+    accessor: (i: CMInstance) =>
+      tokenPartsFor(accountTokens.value[i.dir], tokenWindow.value)?.total,
+    first: 'desc',
+  },
+]
+
+const {
+  toggleSort,
+  indicatorFor,
+  visibleRows,
+  isDimmed,
+  hiddenByFilter: claudeFiltered,
+} = useInstanceSource({
+  // Empty until the first draw's facts are in, so the first order the sort commits is a real one.
+  rows: () => (rowsReady.value ? instances.value : []),
   rowKey: (i: CMInstance) => i.dir,
   facts: filterFacts,
   persisted: { key: desktopSortKey, direction: desktopSortDirection },
-  columns: [
-    { key: 'status', accessor: (i: CMInstance) => i.isRunning },
-    // sort by what the cell actually shows (the display label, falling back to folder name)
-    { key: 'name', accessor: (i: CMInstance) => displayName(i) },
-    // Sort by what the cell actually shows (see accountCellName).
-    { key: 'pid', accessor: (i: CMInstance) => i.pid ?? undefined },
-    { key: 'uptime', accessor: (i: CMInstance) => (i.isRunning ? i.startTime : null) },
-    { key: 'memory', accessor: (i: CMInstance) => i.memoryBytes ?? undefined },
-    // By plan size (Pro 1, Max 5x 5, Max 20x 20), not the label's spelling; no plan sorts last.
-    ...quotaSortColumns(usageFor, (i: CMInstance) => planSize(i.account?.planLabel), now),
-    // By the instant, not the "3h ago" text, so the order is true across units.
-    {
-      key: 'lastActive',
-      accessor: (i: CMInstance) =>
-        i.isRunning
-          ? Number.MAX_SAFE_INTEGER
-          : i.lastRunningAt
-            ? Date.parse(i.lastRunningAt)
-            : undefined,
-    },
-    {
-      key: 'tokens',
-      accessor: (i: CMInstance) =>
-        tokenPartsFor(accountTokens.value[i.dir], tokenWindow.value)?.total,
-      first: 'desc',
-    },
-  ],
+  columns: sortColumns.map(holdable),
 })
 
 /**
@@ -271,14 +351,18 @@ function accountCellName(inst: CMInstance): string | null {
 }
 
 // 'warning' turns the row's account yellow with a mark (InstanceRow loginStale): the live login
-// check failed and the account shown is the last known one.
+// check failed and the account shown is the last known one. Not before that check has answered:
+// the first draw shows each account from the identity cache ('cache'), and the live checks land
+// four at a time over the next second or two, so every row went yellow with a mark on each load and
+// then cleared one by one. Until this tab's first resolve pass is over (accountsSettled), a cached
+// account is drawn plain; one the live check could not confirm turns yellow when the pass ends.
 function accountBadgeVariant(inst: CMInstance) {
   switch (inst.account?.status) {
     case 'live':
       return 'success' as const
     case 'cache':
     case 'offline':
-      return 'warning' as const
+      return accountsSettled.value ? ('warning' as const) : ('ghost' as const)
     case 'loggedout':
       return 'outline' as const
     default:
@@ -298,6 +382,8 @@ async function handleRefresh() {
     ...(codexEnabled.value ? [refreshRows(codexRows.value, () => refreshCodex())] : []),
     ...(dshEnabled.value ? [refreshRows(dshRows.value, () => refreshDsh())] : []),
   ])
+  // A Refresh you pressed is a moment to re-sort: memory and tokens take their order afresh.
+  holdEpoch.value++
 }
 
 async function onCheckUsage(inst: CMInstance) {
@@ -331,6 +417,7 @@ const {
 } = useAppSettings()
 const {
   cliInstances,
+  loading: cliLoading,
   startPolling: startCliPolling,
   stopPolling: stopCliPolling,
   checkUsage: checkCliUsage,
@@ -352,6 +439,89 @@ const claudeShown = computed(() => showDesktopInstances.value && providerShown('
 const codexShown = computed(() => codexEnabled.value && providerShown('codex'))
 const dshShown = computed(() => dshEnabled.value && providerShown('deepseek'))
 
+// --- first draw: the Claude rows wait for the quick facts ----------------------------------------
+// See "rows keep their place while the stats load" above. The quick facts are the list, the usage
+// cache (one local read), every account's cached identity (about 25ms for the lot), the CLI list
+// (the linked-CLI mark on the name's line) and, while the table is sorted by tokens, the tokens.
+// FIRST_DRAW_MAX_MS after the list is in, the rows draw with whatever has arrived, and what is
+// still missing lands in place under the held order. A tab opened again already holds the lists,
+// so it draws at once (the CLI list is only waited for on a cold open, where it loads alongside).
+const listLoaded = ref(instances.value.length > 0)
+const coldOpen = !listLoaded.value
+const cliListLoaded = ref(cliInstances.value.length > 0)
+const tokensLoaded = ref(false)
+/** The account warning waits for this tab's first resolve pass (see accountBadgeVariant). A tab
+ *  opened again finds identities this table has already checked live (a row says 'live'): those
+ *  are the checks' answers, so they show at once instead of going plain and then yellow. */
+const accountsSettled = ref(
+  !resolvingAccounts.value && instances.value.some((i) => i.account?.status === 'live'),
+)
+// refreshInstances starts its resolve pass (setting resolvingAccounts) before it returns, so a list
+// that lands with no pass running needed none: every identity on screen is a live check's answer.
+watch(loading, (now, was) => {
+  if (!was || now) return
+  listLoaded.value = true
+  if (!resolvingAccounts.value) accountsSettled.value = true
+})
+watch(resolvingAccounts, (now, was) => {
+  if (was && !now) accountsSettled.value = true
+})
+watch(cliLoading, (now, was) => {
+  if (was && !now) cliListLoaded.value = true
+})
+watch(
+  accountTokens,
+  () => {
+    tokensLoaded.value = true
+  },
+  { once: true },
+)
+const firstDrawFactsIn = computed(
+  () =>
+    instances.value.length === 0 ||
+    (usageHydrated.value &&
+      (cliListLoaded.value || !coldOpen) &&
+      instances.value.every((i) => i.account != null) &&
+      (desktopSortKey.value !== 'tokens' || tokensLoaded.value)),
+)
+const firstDrawTimedOut = ref(false)
+let firstDrawTimer: number | undefined
+watch(
+  [listLoaded, firstDrawFactsIn, firstDrawTimedOut],
+  ([listIn, factsIn, timedOut]) => {
+    if (rowsReady.value || !listIn) return
+    if (factsIn || timedOut) {
+      rowsReady.value = true
+      window.clearTimeout(firstDrawTimer)
+    } else if (firstDrawTimer === undefined) {
+      firstDrawTimer = window.setTimeout(() => {
+        firstDrawTimedOut.value = true
+      }, FIRST_DRAW_MAX_MS)
+    }
+  },
+  { immediate: true },
+)
+
+/** The skeleton stands in until the first draw, as many rows tall as the list will draw (the rows
+ *  a hiding filter leaves, or, before the list is in, as many as the table drew last time), so the
+ *  Codex and DeepSeek rows under it stay where they are when the Claude rows replace it. */
+const lastRowCount = useStorage('agenthydra.instances.desktopRowCount', 0)
+const claudeSkeleton = computed(() => claudeShown.value && !rowsReady.value)
+const skeletonRows = computed(() =>
+  Math.min(
+    instances.value.length
+      ? filterVisible(instances.value, filterFacts).length
+      : lastRowCount.value || 4,
+    30,
+  ),
+)
+watch(
+  () => visibleRows.value.length,
+  (n) => {
+    if (n > 0) lastRowCount.value = n
+  },
+)
+
 /**
  * What CodexInstanceRows and DshInstanceRows hand this table through defineExpose. `refresh` and
  * `visibleCount` are optional: a component that filters its own rows can say how many it drew, and
@@ -361,6 +531,8 @@ interface ProviderRowsHandle {
   openCreate: () => void
   refresh?: () => unknown
   visibleCount?: number
+  /** Rows the filter took out of this provider (Codex says so; DeepSeek filters none). */
+  hiddenByFilter?: number
 }
 /** The gear's dialog: this tab's own settings (InstanceSettings.vue). */
 const instanceSettingsOpen = ref(false)
@@ -373,23 +545,26 @@ function refreshRows(rows: ProviderRowsHandle | null, list: () => unknown): unkn
   return rows?.refresh ? rows.refresh() : list()
 }
 
-// Rows per provider: every row Settings lets this tab list, and the rows actually drawn.
+// Rows per provider: every row Settings lets this tab list, and the rows the filter (its provider
+// choice included) takes out. Counted from the lists, not from the rows on screen: the Claude rows
+// wait for their first draw and the Codex rows for the usage cache (see "first draw"), and counting
+// what is drawn read "0 of 15, 15 hidden by filter" for that moment, a heading that came and went.
 const claudeTotal = computed(() => (showDesktopInstances.value ? instances.value.length : 0))
 const codexTotal = computed(() => (codexEnabled.value ? codexInstances.value.length : 0))
 const dshTotal = computed(() => (dshEnabled.value ? dshInstances.value.length : 0))
-const claudeDrawn = computed(() => (claudeShown.value ? visibleRows.value.length : 0))
-const codexDrawn = computed(() =>
-  codexShown.value ? (codexRows.value?.visibleCount ?? codexInstances.value.length) : 0,
+const claudeHidden = computed(() => (claudeShown.value ? claudeFiltered.value : claudeTotal.value))
+const codexHidden = computed(() =>
+  codexShown.value ? (codexRows.value?.hiddenByFilter ?? 0) : codexTotal.value,
 )
-const dshDrawn = computed(() =>
-  dshShown.value ? (dshRows.value?.visibleCount ?? dshInstances.value.length) : 0,
+const dshHidden = computed(() =>
+  dshShown.value ? (dshRows.value?.hiddenByFilter ?? 0) : dshTotal.value,
 )
 const totalRows = computed(() => claudeTotal.value + codexTotal.value + dshTotal.value)
-const shownRows = computed(() => claudeDrawn.value + codexDrawn.value + dshDrawn.value)
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
-const hiddenByFilter = computed(() => totalRows.value - shownRows.value)
+const hiddenByFilter = computed(() => claudeHidden.value + codexHidden.value + dshHidden.value)
+const shownRows = computed(() => totalRows.value - hiddenByFilter.value)
 /** Every row filtered away. The table is not empty (there ARE instances), so the empty state has to
  *  explain the filter rather than tell the user to create their first instance. */
 const allHiddenByFilter = computed(() => totalRows.value > 0 && shownRows.value === 0)
@@ -404,6 +579,34 @@ const lastProvider = computed<Provider>(() =>
 // The same InstanceTable and InstanceRow the CLI tab draws (components/InstanceTable.vue). The Codex
 // and DeepSeek row components get this column list and hand the shared row their own models.
 const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode.value }))
+
+/**
+ * Each column's width, padding included, sized for its FINAL content in this compact table, its
+ * header (sort arrow and hint included) and its first-load skeleton, whichever is widest. The
+ * table lays out by content, so without these every column widened as its cells filled in (a "—"
+ * turning into a chip and a bar, a plan badge, "9.5 GB" becoming "1023 MB") and the rest snapped
+ * sideways (owner, 2026-10-04). They are floors at the content's own size, not padding: columns
+ * still size to their content and Name keeps the rest (owner, 2026-10-03: "the tables are not
+ * properly columning"). Status keeps its w-10 from the column list; Name takes what is left.
+ *   pid: six mono digits; uptime: "23h 59m" under "Uptime" and its sort arrow
+ *   memory: "1023 MB" under "Memory" and its sort arrow
+ *   5h / Week: the 2.75rem usage chip, a 0.375rem gap and the 5rem reset bar
+ *   usage: its 3.5rem skeleton (the chip is 2.75rem); plan: a "Max 20x" badge
+ *   last active: "Last active" with its hint ("10/12/2025" fits under it)
+ *   tokens: "Tokens · Week"; actions: Launch or Focus beside the menu button (Codex rows too)
+ */
+const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
+  pid: '3.5rem',
+  uptime: '4.25rem',
+  memory: '4.5rem',
+  session: '9rem',
+  weekly: '9rem',
+  usage: '4.25rem',
+  plan: '4.75rem',
+  lastActive: '5.5rem',
+  tokens: '5.5rem',
+  actions: '7.25rem',
+}
 
 /** What the shared row draws for one Claude desktop instance. */
 function rowModel(inst: CMInstance): InstanceRowModel {
@@ -466,11 +669,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
   }
 }
 
-/** Keyed off the rows actually drawn, across every provider, not off the instance lists: with the
- *  filter on, it can empty a table that still has instances behind it, and that must not land as a
- *  blank table with no explanation. */
+/** Keyed off the rows the filter leaves, across every provider, not off the instance lists: with
+ *  the filter on, it can empty a table that still has instances behind it, and that must not land
+ *  as a blank table with no explanation. Not while the skeleton stands in, and no longer while a
+ *  Refresh re-reads the list: an empty table's message vanished and came back on every Refresh. */
 const emptyState = computed(() =>
-  shownRows.value > 0 || (claudeShown.value && loading.value)
+  shownRows.value > 0 || claudeSkeleton.value
     ? null
     : allHiddenByFilter.value
       ? {
@@ -610,6 +814,7 @@ async function onRefreshAllUsage() {
     ])
   } finally {
     refreshingAllUsage.value = false
+    holdEpoch.value++
   }
 }
 
@@ -634,6 +839,8 @@ async function onRefreshAllUsage() {
 // is the exact herd this replaced.
 const didInitialDesktopUsage = ref(false)
 const didInitialCliUsage = ref(false)
+/** The desktop catch-up's probes are still landing: the held order waits for them. */
+const desktopCatchupRunning = ref(false)
 // Aborts both catch-ups if the tab is left while they are still trickling through the queue.
 const catchupSignal = { aborted: false }
 watch(
@@ -643,7 +850,12 @@ watch(
     didInitialDesktopUsage.value = true
     const due = selectUsageCatchup(list as CMInstance[], usageFor)
     if (due.length) {
-      void runUsageCatchup(due, (i) => checkDesktop(i.dir), { signal: catchupSignal })
+      desktopCatchupRunning.value = true
+      void runUsageCatchup(due, (i) => checkDesktop(i.dir), { signal: catchupSignal }).finally(
+        () => {
+          desktopCatchupRunning.value = false
+        },
+      )
     }
   },
   { immediate: true },
@@ -663,6 +875,31 @@ watch(
     if (due.length) {
       void runUsageCatchup(due, (i) => checkCliUsage(i.id), { signal: catchupSignal })
     }
+  },
+  { immediate: true },
+)
+
+// --- the end of the load: the held order is let go ----------------------------------------------
+// The slow facts are in once this tab's first resolve pass is over, the desktop catch-up's probes
+// have landed and the tokens have answered. The held order is let go then (or LOAD_HOLD_MAX_MS
+// after the tab opened, whichever comes first) and the rows settle once, on all of it.
+let loadHoldTimer: number | undefined
+function releaseHold(): void {
+  window.clearTimeout(loadHoldTimer)
+  accountsSettled.value = true
+  if (!holding.value) return
+  holding.value = false
+  holdEpoch.value++
+}
+watch(
+  () =>
+    rowsReady.value &&
+    accountsSettled.value &&
+    tokensLoaded.value &&
+    didInitialDesktopUsage.value &&
+    !desktopCatchupRunning.value,
+  (done) => {
+    if (done) releaseHold()
   },
   { immediate: true },
 )
@@ -1009,6 +1246,8 @@ onMounted(() => {
   desktopInstallTimer = window.setInterval(() => {
     if (desktopWarning.value) void refreshDesktopInstall(true)
   }, 60_000)
+  // A probe or a resolve that never answers must not hold the order (or the warning) for good.
+  if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
 })
 onUnmounted(() => {
   stopPolling()
@@ -1019,6 +1258,8 @@ onUnmounted(() => {
   // slow queue of network requests open behind you.
   catchupSignal.aborted = true
   if (desktopInstallTimer !== null) window.clearInterval(desktopInstallTimer)
+  window.clearTimeout(firstDrawTimer)
+  window.clearTimeout(loadHoldTimer)
 })
 </script>
 
@@ -1030,13 +1271,16 @@ onUnmounted(() => {
          One table for every provider's desktop instances, so the heading is a title, not a
          collapse toggle, and carries no provider logo (each row carries its own). The count covers
          every provider and reads "x of y" once the filter is hiding rows, so it never silently
-         disagrees with the number of instances that exist. -->
+         disagrees with the number of instances that exist. No count while the skeleton stands in:
+         it read "(0)" and then jumped to the real number. -->
     <InstanceSectionHeader
       :title="$t('instances.title')"
       :count="
-        hiddenByFilter > 0
-          ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
-          : totalRows
+        claudeSkeleton
+          ? null
+          : hiddenByFilter > 0
+            ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
+            : totalRows
       "
       :refresh-label="$t('instances.refresh')"
       :refresh-hint="$t('instances.refreshHint')"
@@ -1046,7 +1290,7 @@ onUnmounted(() => {
     >
       <template #meta>
         <span
-          v-if="hiddenByFilter > 0"
+          v-if="hiddenByFilter > 0 && !claudeSkeleton"
           class="text-xs font-normal text-muted-foreground"
         >
           {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
@@ -1168,8 +1412,9 @@ onUnmounted(() => {
         :columns="columns"
         :indicator-for="indicatorFor"
         density="compact"
-        :skeleton="claudeShown && loading && visibleRows.length === 0"
-        :skeleton-rows="4"
+        :skeleton="claudeSkeleton"
+        :skeleton-rows="skeletonRows"
+        :widths="COLUMN_WIDTHS"
         :empty="emptyState"
         @sort="toggleSort"
       >
@@ -1476,7 +1721,9 @@ onUnmounted(() => {
           data-slot="table-body"
           :class="lastProvider === 'codex' ? '[&_tr:last-child]:border-0' : undefined"
         >
-          <CodexInstanceRows ref="codexRows" :columns="columns" />
+          <!-- Mounted once the usage cache is read, so the Codex rows' first order is sorted on
+               their numbers rather than reshuffled a moment later when the numbers land. -->
+          <CodexInstanceRows v-if="usageHydrated" ref="codexRows" :columns="columns" />
         </tbody>
         <!-- Hideable in Settings → Providers like Codex (owner, 2026-09-30): someone who never
              uses DeepSeek should not have to scroll past its rows. -->

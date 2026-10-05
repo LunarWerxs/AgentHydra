@@ -3,7 +3,8 @@
 import { computed, ref, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
 import { readCache, writeCache } from '@/lib/list-cache'
-import { cloudQuery, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
+import { useShellSource } from '@/components/shell/source'
+import { cloudQuery, deskPlaces, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
 
 /** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
 interface CachedCloud {
@@ -110,8 +111,16 @@ function createCloud() {
     searchTimer = setTimeout(() => on.value && void refresh(), SEARCH_DEBOUNCE_MS)
   })
 
+  // The chats and outside sessions the desk list draws, read the way Sidebar reads them (the Gallery's
+  // fixture source, else the desk store): a session it shows sits in the same group here (logic.ts groupCloud).
+  // The first useCloud() runs in a component's setup, where the source can be injected.
+  const desk = useShellSource()
+  const placed = computed(() => deskPlaces(desk.chats.value, desk.external.value))
+
   const searching = computed(() => !!answered.value.trim())
-  const groups = computed(() => groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, searching.value))
+  const groups = computed(() =>
+    groupCloud(sessions.value, effectiveScopes(scopes.value, answered.value), thisPc.value, searching.value, placed.value)
+  )
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
 
   function toggleSelected(id: string) {

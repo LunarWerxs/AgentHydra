@@ -195,16 +195,21 @@ function onRootOpenChange(v: boolean): void {
 <template>
   <Popover :open="open" @update:open="onRootOpenChange">
     <PopoverTrigger as-child>
+      <!-- One box for every state (owner, 2026-10-04: the table "snaps" as its stats load). The
+           chip is as wide as its widest label ("Limit"), so "—" becoming "42%" does not grow it,
+           and the spinner of a running check sits over the label instead of beside it, so a check
+           does not grow it either: in a 5h or Week cell the bar beside the chip stays put. -->
       <Badge
         :variant="variant"
-        class="cursor-pointer"
+        class="relative min-w-11 cursor-pointer tabular-nums"
         :dimmed="stale"
         :title="noData ? reasonMessage : undefined"
+        :aria-busy="checking || undefined"
         @mouseenter="onEnter"
         @mouseleave="onLeave"
       >
-        <Loader2 v-if="checking" class="animate-spin" />
-        <span>{{ label }}</span>
+        <Loader2 v-if="checking" class="absolute animate-spin" />
+        <span :class="checking ? 'opacity-0' : undefined">{{ label }}</span>
       </Badge>
     </PopoverTrigger>
     <!-- trap-focus off + open-auto-focus prevented: this opens on HOVER now, and a popover that

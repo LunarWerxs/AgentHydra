@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
+import { Cloud } from '@lucide/vue'
 import type { ExternalSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
+import { fromPcLabel } from '@/components/cloud/logic'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -22,8 +24,10 @@ const glyph = computed(() => externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
 const menu = computed(() => rowMenu(externalRow(props.session), props.groups))
 const menuOpen = ref(false)
+// A Desktop chat AgentHydra's chat sync took from another PC: a cloud beside the status dot, as the cloud list draws it.
+const fromPc = computed(() => (props.session.fromPc ? fromPcLabel(props.session.fromPc) : null))
 const tooltip = computed(() =>
-  [props.session.title, `${glyph.value.label} · ${source.value}${props.session.instance ? ` ${props.session.instance}` : ''}`, props.session.activity]
+  [props.session.title, `${glyph.value.label} · ${source.value}${props.session.instance ? ` ${props.session.instance}` : ''}`, fromPc.value, props.session.activity]
     .filter(Boolean)
     .join('\n')
 )
@@ -84,6 +88,8 @@ function run(item: RowMenuItem) {
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>
+          <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
+          <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
           <input
             v-if="renaming"
             ref="input"

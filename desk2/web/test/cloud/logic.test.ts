@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudQuery, effectiveScopes, groupCloud } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudQuery, deskPlaces, effectiveScopes, groupCloud } from '../../src/components/cloud/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
 // own scope spelling. A wrong spelling does not fail loudly there: an unknown value falls back to a
@@ -35,6 +35,7 @@ describe('groupCloud', () => {
     id,
     title: id,
     cwd,
+    lastCwd: null,
     source: 'claude',
     instance: null,
     lastActivityAt,
@@ -56,5 +57,28 @@ describe('groupCloud', () => {
 
   test("a search's answer keeps AgentHydra's best-match order", () => {
     expect(groupCloud(rows, all, 'PC', true).map((g) => g.rows.map((r) => r.id))).toEqual([['old-match', 'new-match', 'mid-match']])
+  })
+
+  // Turning the cloud on must not move a chat to another group: a session the desk list shows sits where
+  // it sits there, whatever folder AgentHydra says it works in now.
+  test('a session the desk list shows keeps its desk group: its folder, or the group it was moved to', () => {
+    const cloudRows = [
+      row('went-deeper', 'D:/work/alpha/inner', 5),
+      row('moved-away', 'D:/work/beta', 4),
+      row('plain', 'D:/work/alpha', 3),
+      row('moved-to-folder', 'D:/work/gamma', 2)
+    ]
+    const desk = deskPlaces(
+      [{ sessionId: 'went-deeper', cwd: 'D:\\work\\alpha', group: null }],
+      [
+        { id: 'moved-away', cwd: 'D:/work/beta', group: 'Reading', source: 'desktop' },
+        // A moved-to group named like a folder group joins it, as on the desk list.
+        { id: 'moved-to-folder', cwd: 'D:/work/gamma', group: 'ALPHA', source: 'cli' }
+      ]
+    )
+    expect(groupCloud(cloudRows, all, 'PC', false, desk).map((g) => [g.label, g.rows.map((r) => r.id)])).toEqual([
+      ['alpha', ['went-deeper', 'plain', 'moved-to-folder']],
+      ['Reading', ['moved-away']]
+    ])
   })
 })

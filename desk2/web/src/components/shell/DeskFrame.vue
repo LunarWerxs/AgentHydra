@@ -12,7 +12,7 @@ import SettingsView from '@/components/panes/SettingsView.vue'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
-import { OPEN_HYDRA_EVENT, hydraOpen } from '@/components/hydra/api'
+import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
@@ -265,7 +265,12 @@ function toggleCloud() {
 }
 function toggleTasks() {
   showTasks.value = !showTasks.value
-  if (showTasks.value) toggleSidebar(true)
+  if (!showTasks.value) return
+  toggleSidebar(true)
+  // An AgentHydra tab with a list of its own (CliMayte, HSwarm) has the sidebar while it is open, so the
+  // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
+  // does nothing in the sidebar").
+  if (hydraOpen.value && hydraSidebar.value) toggleHydra(false)
 }
 
 // Right pane

@@ -49,6 +49,7 @@ interface DeskStoreState {
   itemsByChat: Map<string, TranscriptItem[]>
   external: ExternalSession[]
   workers: CliMayteWorker[]
+  remoteWorkers: CliMayteWorker[]
   accounts: AccountInfo[]
   settings: DeskSettings | null
   connected: boolean
@@ -65,13 +66,22 @@ let wsReconnectDelay = 1000
 const maxReconnectDelay = 30000
 let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
+/**
+ * The server's one worker list, split by PC. This PC's (`workers`) feed every count, panel, card and Stop
+ * button; the other PCs' (`pc` set: no session, no origin, ids that may repeat ours, nothing here can stop
+ * them) feed only the sidebar's CliMayte rows.
+ */
+function splitWorkers(list: CliMayteWorker[]): Pick<DeskStoreState, 'workers' | 'remoteWorkers'> {
+  return { workers: list.filter((w) => !w.pc), remoteWorkers: list.filter((w) => !!w.pc) }
+}
+
 // Outside sessions and CliMayte workers start from this browser's last copy (lib/list-cache.ts), so a
 // reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
   chats: [],
   itemsByChat: new Map(),
   external: readListCache<ExternalSession>('external') ?? [],
-  workers: readListCache<CliMayteWorker>('workers') ?? [],
+  ...splitWorkers(readListCache<CliMayteWorker>('workers') ?? []),
   accounts: [],
   settings: null,
   connected: false,
@@ -232,7 +242,7 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'climayte.update':
-      store.workers = event.workers
+      Object.assign(store, splitWorkers(event.workers))
       writeCache('workers', event.workers)
       break
 
@@ -490,6 +500,8 @@ export function useDesk() {
     itemsByChat: computed(() => store.itemsByChat),
     external: computed(allExternal),
     workers: computed(() => store.workers),
+    /** The other PCs' CliMayte workers, for the sidebar's CliMayte rows only (splitWorkers). */
+    remoteWorkers: computed(() => store.remoteWorkers),
     accounts: computed(() => store.accounts),
     settings: computed(() => store.settings),
     connected: computed(() => store.connected),

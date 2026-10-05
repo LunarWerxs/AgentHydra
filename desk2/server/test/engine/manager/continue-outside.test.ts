@@ -95,6 +95,7 @@ const outside = (id: string, source: ExternalSession['source'], cwd: string): Ex
   model: null,
   accountId: null,
   canResume: false,
+  fromPc: null,
   pinned: false,
   archived: false,
   unread: false,

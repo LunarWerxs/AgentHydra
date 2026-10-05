@@ -173,11 +173,13 @@ function onContextMenu(e: MouseEvent): void {
       <TableCell v-else-if="col.key === 'pid'">
         <span class="mono text-muted-foreground">{{ row.pid ?? '—' }}</span>
       </TableCell>
+      <!-- Tabular figures: these two change on every poll, and proportional digits made the text
+           shuffle in place each time. -->
       <TableCell v-else-if="col.key === 'uptime'">
-        <span class="text-muted-foreground">{{ row.uptime ?? '—' }}</span>
+        <span class="tabular-nums text-muted-foreground">{{ row.uptime ?? '—' }}</span>
       </TableCell>
       <TableCell v-else-if="col.key === 'memory'">
-        <span class="text-muted-foreground">{{ row.memory ?? '—' }}</span>
+        <span class="tabular-nums text-muted-foreground">{{ row.memory ?? '—' }}</span>
       </TableCell>
 
       <!-- A bar, not a bare number: usage mode is for scanning many rows at once for the ones up

@@ -230,6 +230,8 @@ export interface ExternalSession {
   accountId: string | null
   /** Idle in someone else's window and a Claude Code session: the composer can carry it on. */
   canResume: boolean
+  /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
+  fromPc: string | null
   // Hydra Desk's own marks (its session-meta overlay; the session's files are never touched). The title above is the overlay's when renamed.
   pinned: boolean
   archived: boolean
@@ -269,7 +271,10 @@ export interface SearchHit {
 export interface CloudSession {
   id: string // the session id
   title: string
+  /** The folder the session started in, where Claude Desktop and the desk list show it (server bridge/cloud.ts startFolder). */
   cwd: string | null
+  /** The folder it last worked in when that is not `cwd` (it moved into a subfolder); null when it never left. */
+  lastCwd: string | null
   source: string // AgentHydra's: claude, codex, opencode, hermes, dsh, zswarm, foreign
   instance: string | null // the desktop or CLI instance folder it ran under; null = the default login
   lastActivityAt: number
@@ -319,6 +324,12 @@ export interface CliMayteWorker {
   tokens: number | null // tokens it has spent, when AgentHydra or its transcript says
   verdict: string | null
   error: string | null
+  /**
+   * The other PC's name when the worker runs there (AgentHydra's shared queue, GET /api/corch/remote);
+   * absent or null = this PC. Such a worker has no folder, session or origin, its id may equal one of this
+   * PC's, and nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
+   */
+  pc?: string | null
 }
 
 export interface AccountInfo extends AccountRef {

@@ -154,6 +154,15 @@ describe('external sessions', () => {
     expect(hoursLater.find((x) => x.id === sid(3))!.status).toBe('stale')
   })
 
+  // The desk list's cloud icon (ExternalRow) is drawn from this: nothing else carries AgentHydra's mark there.
+  test("a Desktop chat the chat sync brought from another PC carries that PC's name; this PC's and workers carry none", () => {
+    const synced = { ...inputs, sessions: inputs.sessions.map((r) => (r.session_id === sid(3) ? { ...r, from_pc: 'OTHER-PC' } : r)) }
+    const by = new Map(mapExternal(synced, new Set(), NOW).map((x) => [x.id, x]))
+    expect(by.get(sid(3))?.fromPc).toBe('OTHER-PC')
+    expect(by.get(sid(1))?.fromPc).toBeNull()
+    expect(by.get(sid(500))?.fromPc).toBeNull()
+  })
+
   test("Hydra Desk's own chats are left out", () => {
     const list = mapExternal(inputs, new Set([sid(1), sid(500)]), NOW)
     expect(list.map((x) => x.id)).not.toContain(sid(1))

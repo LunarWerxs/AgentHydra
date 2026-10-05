@@ -1,8 +1,9 @@
 // CliMayte workers through AgentHydra (GET /api/corch/workers, POST /api/corch/cancel,
-// POST /api/corch/workers/:id/send), mapped to the protocol's CliMayteWorker.
+// POST /api/corch/workers/:id/send), and the other PCs' read-only ones (GET /api/corch/remote), mapped to
+// the protocol's CliMayteWorker.
 
 import type { CliMayteWorker } from '@shared/protocol'
-import type { AhTokens, AhWorker } from './client'
+import type { AhRemoteQueues, AhRemoteWorker, AhTokens, AhWorker } from './client'
 
 /** How many finished workers the default list keeps beside every active one (SPEC REST row). */
 export const RECENT_FINISHED = 20
@@ -64,24 +65,74 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>): CliM
 }
 
 /** Active workers first (newest first), then finished ones by when they last changed. */
+export const byRecency = (a: CliMayteWorker, b: CliMayteWorker): number =>
+  a.active !== b.active
+    ? a.active
+      ? -1
+      : 1
+    : a.active
+      ? (b.startedAt ?? 0) - (a.startedAt ?? 0)
+      : (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
+
 export function mapWorkers(raw: AhWorker[]): CliMayteWorker[] {
   const byId = new Map(raw.map((w) => [w.id, w]))
-  return raw
-    .map((w) => mapWorker(w, byId))
-    .sort((a, b) =>
-      a.active !== b.active
-        ? a.active
-          ? -1
-          : 1
-        : a.active
-          ? (b.startedAt ?? 0) - (a.startedAt ?? 0)
-          : (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),
-    )
+  return raw.map((w) => mapWorker(w, byId)).sort(byRecency)
 }
 
-/** The active workers a chat dispatched (by its Claude Code session id). */
+/**
+ * One worker of another PC (`pc`: that PC's name). AgentHydra shares no folder, session or origin for it,
+ * so it sits under no chat and opens on CliMayte's tab; its account is '#<num>' and never the login's
+ * name (often an email).
+ */
+export function mapRemoteWorker(w: AhRemoteWorker, pc: string): CliMayteWorker {
+  const active = isActiveWorkerStatus(w.status)
+  const num = w.account?.num
+  return {
+    id: w.id,
+    title: w.title,
+    description: null,
+    group: w.group || null,
+    status: w.status,
+    active,
+    account: typeof num === 'number' ? `#${num}` : null,
+    model: w.model ?? null,
+    effort: w.effort ?? null,
+    kind: w.kind ?? null,
+    cwd: null,
+    sessionId: null,
+    originSessionId: null,
+    originWorkerId: null,
+    sessions: [],
+    startedAt: w.createdAt ?? null,
+    endedAt: active ? null : (w.updatedAt ?? null),
+    lastActivityAt: w.updatedAt ?? null,
+    lastActivity: w.lastActivity ?? null,
+    usedPct: null,
+    tokens: null,
+    verdict: w.verdict ?? null,
+    error: w.error ?? null,
+    pc,
+  }
+}
+
+/**
+ * The other PCs' workers: every active one and, unless `all`, only the RECENT_FINISHED newest finished
+ * ones, as this PC's list keeps (each PC shares its last day, which can be hundreds). Sharing off, or no
+ * answer, is none. A stale PC (off, asleep or not syncing; AgentHydra counts its workers for nothing) is
+ * left out: its last snapshot would show its tasks running for as long as it stays away.
+ */
+export function mapRemote(answer: AhRemoteQueues | null | undefined, o: { all?: boolean } = {}): CliMayteWorker[] {
+  if (!answer?.enabled || !Array.isArray(answer.pcs)) return []
+  const list = answer.pcs.flatMap((p) =>
+    !p.stale && Array.isArray(p.workers) ? p.workers.map((w) => mapRemoteWorker(w, p.name || 'another PC')) : [],
+  )
+  const finished = list.filter((w) => !w.active).sort(byRecency)
+  return [...list.filter((w) => w.active), ...(o.all ? finished : finished.slice(0, RECENT_FINISHED))].sort(byRecency)
+}
+
+/** The active workers a chat dispatched (by its Claude Code session id); never another PC's. */
 export function activeFor(workers: CliMayteWorker[], originSessionId: string): CliMayteWorker[] {
-  return workers.filter((w) => w.active && w.originSessionId === originSessionId)
+  return workers.filter((w) => w.active && !w.pc && w.originSessionId === originSessionId)
 }
 
 /** What ties workers to a Desk chat: its current session, the worker it runs as, and the workers matched before. */
@@ -96,9 +147,11 @@ export interface ChatWorkerRef {
  * chat has had (its sessionId, and for a worker-backed chat that worker's sessionId and every id in its `sessions`: a
  * handoff gives the worker a new session and keeps the old ones), when its origin is the chat's own worker, or when its
  * origin is a worker that (through any depth, cycle-safe) belongs. Workers already matched (`workerIds`) still count,
- * so a chain survives AgentHydra dropping a middle worker from its list.
+ * so a chain survives AgentHydra dropping a middle worker from its list. Another PC's workers never belong: their
+ * ids may equal this PC's (the chat's matched `workerIds` among them).
  */
-export function workersOfChat(workers: readonly CliMayteWorker[], chat: ChatWorkerRef): CliMayteWorker[] {
+export function workersOfChat(all: readonly CliMayteWorker[], chat: ChatWorkerRef): CliMayteWorker[] {
+  const workers = all.filter((w) => !w.pc)
   const byId = new Map(workers.map((w) => [w.id, w]))
   const own = chat.workerId ? byId.get(chat.workerId) : undefined
   const sessions = new Set<string>()
