@@ -13,6 +13,7 @@ export default {
   askModelAuto: 'auto (cheapest that qualifies)',
   askButton: 'Ask',
   askAsking: 'Asking…',
+  clear: 'Clear result',
   askSuccess: 'Answer received',
   askEmpty: 'Please type a question',
   askFailed: 'Failed to get an answer',
