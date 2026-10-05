@@ -427,13 +427,19 @@ function syncCaret() {
 
 // Text box: grows to the real max-h 384 (max-h-96), then scrolls
 const MAX_TEXT_HEIGHT = 384
+// One measure per frame however many keystrokes or resizes asked for it.
+let growFrame = 0
 function autoGrow() {
-  const el = textarea.value
-  if (!el) return
-  el.style.height = 'auto'
-  const full = el.scrollHeight
-  el.style.height = Math.min(full, MAX_TEXT_HEIGHT) + 'px'
-  el.style.overflowY = full > MAX_TEXT_HEIGHT ? 'auto' : 'hidden'
+  if (growFrame) return
+  growFrame = requestAnimationFrame(() => {
+    growFrame = 0
+    const el = textarea.value
+    if (!el) return
+    el.style.height = 'auto'
+    const full = el.scrollHeight
+    el.style.height = Math.min(full, MAX_TEXT_HEIGHT) + 'px'
+    el.style.overflowY = full > MAX_TEXT_HEIGHT ? 'auto' : 'hidden'
+  })
 }
 
 // The box's text and pictures are kept per chat, and per folder for a new session (draftSlot): moving to
@@ -924,6 +930,7 @@ onBeforeUnmount(() => {
   }
   recognition?.stop()
   window.removeEventListener('resize', autoGrow)
+  cancelAnimationFrame(growFrame)
 })
 </script>
 

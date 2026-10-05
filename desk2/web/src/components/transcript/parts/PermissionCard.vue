@@ -24,6 +24,7 @@ const reason = ref('')
 const label = computed(() => toolLabel(props.item.toolName))
 const arg = computed(() => keyArgument(props.item.toolName, props.item.input, ctx.cwd.value))
 const diff = computed(() => toolDiff(props.item.toolName, props.item.input))
+const inputJson = computed(() => JSON.stringify(props.item.input, null, 2))
 const command = computed(() => (typeof props.item.input.command === 'string' ? props.item.input.command : null))
 const answered = computed(() => {
   switch (props.item.state) {
@@ -121,7 +122,7 @@ function startDeny() {
     <div class="mx-3 mt-2 overflow-hidden rounded-md border border-border bg-bg-page">
       <pre v-if="command" class="whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
       <DiffView v-else-if="diff" :id="`${item.id}:diff`" :diff="diff" :max-lines="24" />
-      <OutputBlock v-else :id="`${item.id}:in`" :text="JSON.stringify(item.input, null, 2)" :max-lines="12" />
+      <OutputBlock v-else :id="`${item.id}:in`" :text="inputJson" :max-lines="12" />
     </div>
     <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-2 px-3 py-2.5">
       <template v-if="!denying">

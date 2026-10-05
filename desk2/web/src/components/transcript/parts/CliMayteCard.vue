@@ -15,6 +15,7 @@ const ctx = useTranscript()
 const desk = useDesk()
 const open = computed(() => ctx.isOpen(props.item.id))
 const info = computed(() => parseCliMayte(props.item.name, props.item.input, props.item.result?.text))
+const inputJson = computed(() => JSON.stringify(props.item.input, null, 2))
 const workers = computed(() => {
   const all = desk.workers.value as CliMayteWorker[]
   return info.value.workerIds.map((id) => ({ id, worker: all.find((w) => w.id === id) ?? null }))
@@ -55,7 +56,7 @@ function dot(w: CliMayteWorker | null): string {
       </div>
     </div>
     <div v-if="open" class="border-t border-brand/20">
-      <OutputBlock :id="`${item.id}:in`" :text="JSON.stringify(item.input, null, 2)" :max-lines="16" />
+      <OutputBlock :id="`${item.id}:in`" :text="inputJson" :max-lines="16" />
       <OutputBlock
         v-if="item.result"
         :id="item.id"
