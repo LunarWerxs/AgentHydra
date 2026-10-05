@@ -10,6 +10,7 @@ import type { MediaCache } from '../media/cache'
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
 type NoteItem = Extract<TranscriptItem, { kind: 'note' }>
+type SystemItem = Extract<TranscriptItem, { kind: 'system' }>
 
 /** A <task-notification>, read: the fields the task item carries. Never the raw XML or the result blob. */
 export interface TaskNotice {
@@ -216,14 +217,50 @@ export function noteOf(text: string): { from: string; text: string } | null {
   return m ? { from: m[1].trim(), text: text.slice(m[0].length).trim() } : null
 }
 
+/** The note AgentHydra's continuationPrompt (server/src/climayte-lib.ts) puts between the task and the rest. */
+const CONTINUED = /\n\n---\nAn earlier session already worked on this task (on this account|on another account) and ([^.\n]*)\. Continue from its handoff below/
+const HANDOFF_MARK = '\n\n--- HANDOFF ---\n'
+/** The messages that session did not get to, `- <message>` each. */
+const CONTINUED_MESSAGES = /\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n([\s\S]*?)\n\n--- HANDOFF ---\n/
+const CONTINUED_WHY: [RegExp, string][] = [
+  [/conversation had grown large/, 'the conversation had grown long'],
+  [/orchestrator asked/, 'it was asked to hand off'],
+  [/usage limit/, 'the account neared its usage limit'],
+]
+
 /**
- * A user item as the transcript shows it: a note when a program sent it; else the person's, each
+ * The first prompt of a session CliMayte continued from a handoff: the task again, a note to the new session,
+ * the messages the old one did not get to, and the whole handoff. Only those messages are the person's;
+ * `line` says in a few words that the chat went on in a fresh session. Null when the text is not one.
+ * 2026-10-05: every such handoff showed the owner the whole prompt as his own message ("I don't want to see
+ * the chat that they send to move me over to a new account").
+ */
+export function continuationOf(text: string): { messages: string | null; line: string } | null {
+  const m = CONTINUED.exec(text)
+  if (!m || !text.includes(HANDOFF_MARK, m.index)) return null
+  const list = CONTINUED_MESSAGES.exec(text.slice(m.index))?.[1]?.trim() ?? ''
+  // One message is shown as written; several stay the list they were sent as.
+  const messages = list ? (list.startsWith('- ') && !list.includes('\n- ') ? list.slice(2).trim() : list) : null
+  const why = CONTINUED_WHY.find(([re]) => re.test(m[2]))?.[1]
+  const where = m[1] === 'on another account' ? ' on another account' : ''
+  return { messages: messages || null, line: `Continued in a fresh session${where}${why ? `: ${why}` : ''}.` }
+}
+
+/**
+ * A user item as the transcript shows it: a note when a program sent it; a handoff's continuation as the
+ * messages it carries, or one muted line when it carries none; else the person's, each
  * `[Image: source: <path>]` line whose file is a picture shown as that picture instead of the line.
  * A line naming a missing file or a non-picture stays as text.
  */
-export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
+export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem {
+  const continued = continuationOf(raw.text)
+  if (continued && !continued.messages) {
+    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = raw
+    return { ...rest, kind: 'system', level: 'info', text: continued.line }
+  }
+  const said = continued?.messages ? { ...raw, text: continued.messages } : raw
   // A message sent now reads as the person typed it, without the preface that told the worker why its turn ended.
-  const item = SENT_NOW.test(raw.text) ? { ...raw, text: raw.text.replace(SENT_NOW, '') } : raw
+  const item = SENT_NOW.test(said.text) ? { ...said, text: said.text.replace(SENT_NOW, '') } : said
   const note = noteOf(item.text)
   if (note) {
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item

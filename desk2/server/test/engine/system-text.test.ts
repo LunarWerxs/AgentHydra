@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { createMediaCache, type MediaCache } from '../../src/media/cache'
 import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
-import { classifyUserText, noteOf, taskItemFrom, userTurn, type InjectedPart } from '../../src/engine/system-text'
+import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, type InjectedPart } from '../../src/engine/system-text'
 
 // Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
@@ -355,5 +355,53 @@ describe('notes and picture lines', () => {
     })
     expect(tail.map((i) => i.kind)).toEqual(['user', 'note'])
     expect(tail[1]).toMatchObject({ from: 'AgentHydra · CliMayte' })
+  })
+})
+
+/** A continuation prompt as AgentHydra's continuationPrompt (server/src/climayte-lib.ts) writes one; invented text. */
+function continued(o: { messages?: string[]; account?: string; ended?: string } = {}): string {
+  const more = o.messages?.length
+    ? `\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n${o.messages.map((m) => `- ${m}`).join('\n')}`
+    : ''
+  return (
+    'Please tidy the example garden plan.\n\n---\n' +
+    `An earlier session already worked on this task ${o.account ?? 'on this account'} and ${o.ended ?? 'handed off because its conversation had grown large'}. ` +
+    'Continue from its handoff below (also saved at C:/Users/me/.agenthydra/corch/handoffs/w-1.md). Its full transcript is at C:/Users/me/x.jsonl ' +
+    'if you need a detail the handoff left out (read it with the Read or Grep tools; it is JSON lines). Do not redo steps it reports finished.' +
+    `${more}\n\n--- HANDOFF ---\n# Handoff\n\n## Goal\nTidy the plan.\n- step one done`
+  )
+}
+
+describe("a handoff's continuation prompt", () => {
+  const user = (text: string): Extract<TranscriptItem, { kind: 'user' }> => ({ kind: 'user', id: 'u9', ts: 7, text, parentToolUseId: null })
+
+  test("with no messages it is one muted line saying why, never the task and handoff as a message of the person's", () => {
+    expect(userTurn(user(continued()), null)).toEqual({ kind: 'system', id: 'u9', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' })
+    expect(continuationOf(continued({ account: 'on another account', ended: 'wound down before its usage limit' }))?.line).toBe(
+      'Continued in a fresh session on another account: the account neared its usage limit.',
+    )
+  })
+
+  test("the messages it carries are the person's: one as written, several as the list they were sent as", () => {
+    const one = userTurn(user(continued({ messages: ['why did it stop?\nsecond line'] })), null)
+    expect(one).toMatchObject({ kind: 'user', id: 'u9', text: 'why did it stop?\nsecond line' })
+    const two = userTurn(user(continued({ messages: ['first ask', 'second ask'] })), null)
+    expect(two).toMatchObject({ kind: 'user', text: '- first ask\n- second ask' })
+  })
+
+  test("a message that only quotes the words is the person's as it stands", () => {
+    const quoted = 'what does "An earlier session already worked on this task on this account and" mean?'
+    expect(continuationOf(quoted)).toBeNull()
+    expect(userTurn(user(quoted), null)).toEqual(user(quoted))
+  })
+
+  test('AgentHydra still writes the words this reads', () => {
+    const lib = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-lib.ts'), 'utf8')
+    // Source text: each `\\n` is the backslash and n its template literal holds.
+    expect(lib).toContain('\\n\\n---\\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below')
+    expect(lib).toContain("\\n\\nThe orchestrator also sent these messages, which the earlier session did not get to:\\n${messages.map((m) => `- ${m}`).join('\\n')}")
+    expect(lib).toContain('\\n\\n--- HANDOFF ---\\n${handoff}')
+    for (const ended of ['handed off because its conversation had grown large', 'handed off when the orchestrator asked it to', 'wound down before its usage limit'])
+      expect(lib).toContain(`'${ended}'`)
   })
 })
