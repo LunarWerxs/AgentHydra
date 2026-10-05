@@ -28,12 +28,8 @@ import {
 } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
-import AutomationSettings from '@/components/AutomationSettings.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
-import QueueBuilder from '@/components/QueueBuilder.vue'
-import QueueView from '@/components/QueueView.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
-import SettingsView from '@/components/SettingsView.vue'
 import ShortcutSheet from '@/components/ShortcutSheet.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -46,6 +42,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { useBuilder } from '@/composables/useBuilder'
 import { useData } from '@/composables/useData'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
@@ -81,6 +78,16 @@ import { usePushPanel } from '@/shell/usePushPanel'
 
 // Each tab's view loads the first time its tab opens, so the pane starts with the shell and the one
 // view in front of it, not the whole graph (charts included).
+// The builder's state is module-level, so it stays unmounted until the first open, then stays.
+const { open: builderOpen } = useBuilder()
+const builderEverOpened = ref(false)
+watch(builderOpen, (o) => {
+  if (o) builderEverOpened.value = true
+}, { immediate: true })
+const AutomationSettings = defineAsyncComponent(() => import('@/components/AutomationSettings.vue'))
+const QueueBuilder = defineAsyncComponent(() => import('@/components/QueueBuilder.vue'))
+const QueueView = defineAsyncComponent(() => import('@/components/QueueView.vue'))
+const SettingsView = defineAsyncComponent(() => import('@/components/SettingsView.vue'))
 const AnalyticsView = defineAsyncComponent(() => import('@/components/AnalyticsView.vue'))
 const CliView = defineAsyncComponent(() => import('@/components/CliView.vue'))
 const HSwarmTab = defineAsyncComponent(() => import('@/components/HSwarmTab.vue'))
@@ -667,7 +674,7 @@ onUnmounted(stopAvailabilityPolling)
       </main>
     </div>
 
-    <QueueBuilder />
+    <QueueBuilder v-if="builderEverOpened" />
 
     <!-- queue: a push-in drawer so the list rides alongside whatever you're doing -->
     <Sidebar

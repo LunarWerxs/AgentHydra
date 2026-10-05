@@ -170,7 +170,7 @@ watch([open, editItem], ([isOpen]) => {
   form.account_id = ''
   form.fork = false
   form.not_before_local = ''
-})
+}, { immediate: true }) // mounted on first open, when open is already true
 
 // Select items may not carry an empty-string value (the machinery drops them — an ''-valued
 // "Ambient" option silently never rendered, so you couldn't switch BACK to Ambient), so Ambient
