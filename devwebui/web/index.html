@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="DevWebUI" />
+    <!-- Standalone DevWebUI mark; swapped to the light-background variant on light browser chrome.
+         icon.svg (the dark-UI variant) is the default for dark chrome + older browsers. -->
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/svg+xml" href="/icon-light.svg" media="(prefers-color-scheme: light)" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+    <title>DevWebUI</title>
+    <script>
+      // No-flash theme boot: apply the stored theme before Vue mounts. MUST match the
+      // shared kit composable (lib/theme.ts) — same key `lunarwerx-theme`, same resolve
+      // logic, default dark. See kit README "Theme boot snippet".
+      (() => {
+        try {
+          const mode = localStorage.getItem("lunarwerx-theme") || "dark";
+          const dark =
+            mode === "dark" ||
+            (mode === "system" && matchMedia("(prefers-color-scheme: dark)").matches);
+          const html = document.documentElement;
+          html.classList.toggle("dark", dark);
+          html.dataset.theme = mode;
+          html.style.colorScheme = dark ? "dark" : "light";
+        } catch (_) {
+          // best-effort: localStorage/matchMedia can throw (private mode, disabled storage) —
+          // fall through to the default dark styling already in CSS rather than block boot
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

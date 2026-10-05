@@ -1,0 +1,66 @@
+{
+  "name": "devwebui",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GUI + MCP control plane for your local dev servers. Click to start/stop/restart; agents drive the same daemon over MCP.",
+  "license": "MIT",
+  "author": "LunarWerx Studios (https://lunarwerx.com/)",
+  "homepage": "https://devwebui.github.io",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/LunarWerxs/devwebui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/LunarWerxs/devwebui/issues"
+  },
+  "keywords": [
+    "dev-server",
+    "process-manager",
+    "mcp",
+    "model-context-protocol",
+    "developer-tools",
+    "localhost",
+    "bun",
+    "vue",
+    "ai-agents"
+  ],
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "bin": {
+    "devwebui": "./server/src/cli.ts"
+  },
+  "scripts": {
+    "prepare": "git config core.hooksPath .githooks || true",
+    "cli": "bun server/src/cli.ts",
+    "dev": "bun server/src/dev.ts",
+    "daemon": "bun server/src/index.ts",
+    "mcp": "bun server/src/mcp.ts",
+    "build": "bun run --cwd web build",
+    "dist": "bun run scripts/build.ts",
+    "start": "bun server/src/index.ts",
+    "test": "bun test tests server/tests",
+    "test:web": "bun run --cwd web test",
+    "check:kit": "node ../../lunarwerx-ui/sync.mjs --check --app devwebui",
+    "//check:local": "Checks that CANNOT run on GitHub, so localci and the .githooks/pre-push gate run them on the host instead. check:kit compares this app's kit-managed copies against lunarwerx-ui, a PRIVATE sibling repo a public repo's CI can never check out. Without this its only enforcement is the pre-commit hook, which --no-verify skips and which silently no-ops on any machine without the sibling checkout.",
+    "check:local": "bun run check:kit",
+    "check:libtypes": "bun run scripts/check-lib-types.mjs",
+    "check:spawntimeout": "bun run scripts/check-spawn-test-timeout.mjs",
+    "typecheck": "bun run --cwd web typecheck && tsc --noEmit -p server/tsconfig.json && bun run check:libtypes",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "optionalDependencies": {
+    "@cnct/connect": "^1.5.2"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.13",
+    "typescript": "^6.0.3"
+  }
+}

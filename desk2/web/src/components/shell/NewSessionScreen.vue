@@ -2,8 +2,9 @@
 import type { ChatSummary } from '@shared/protocol'
 import StatsCard from './StatsCard.vue'
 
-// The new-session screen above the composer: greeting and the stats card, in the 768px column.
-// The composer below it owns the env pills (folder, branch) and the model chip.
+// The new-session screen above the composer: greeting and the stats card, centred both ways in the space
+// above the composer (Jacob, 2026-10-05). The composer below it owns the env pills (folder, branch) and the
+// model chip.
 defineProps<{ name: string; chats: ChatSummary[] }>()
 
 // The Claude spark as drawn in new-session-screen.png: twelve uneven rays round a solid core, 22px, #d97757.
@@ -18,16 +19,18 @@ const ray = ([deg, length]: [number, number]) => {
 </script>
 
 <template>
-  <div class="min-h-0 flex-1 overflow-y-auto px-4">
-    <div class="mx-auto w-full max-w-[768px] pb-6 pt-[11px]">
-      <h1 class="flex items-center gap-[7px] text-[22px] font-normal leading-7 text-text">
+  <!-- m-auto rather than justify-center: when the window is too short the column starts at the top and
+       scrolls, instead of its top being cut off. -->
+  <div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
+    <div class="m-auto flex w-full max-w-[768px] flex-col items-center py-6">
+      <h1 class="flex items-center justify-center gap-[7px] text-center text-[22px] font-normal leading-7 text-text">
         <svg class="relative top-px size-[22px] shrink-0 text-[#d97757]" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
           <circle cx="12" cy="12" r="3.6" stroke="none" />
           <line v-for="r in RAYS" :key="r[0]" x1="12" y1="12" v-bind="ray(r)" />
         </svg>
         <span>What’s up next{{ name ? `, ${name}` : '' }}?</span>
       </h1>
-      <StatsCard class="ml-2.5 mt-[46px]" :chats="chats" />
+      <StatsCard class="mt-[46px]" :chats="chats" />
     </div>
   </div>
 </template>

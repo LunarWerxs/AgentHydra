@@ -1,0 +1,15 @@
+{
+  "checks": {
+    "account-scoped-storage-keys": {
+      "$reason": "Device-level by design, none holding one account's data. DevWebUI is a single-owner local daemon dashboard with no in-app accounts. devwebui.pairedKey: this browser's pairing key for the local daemon (server/src/local-auth.ts), a per-device credential issued to this origin, not to an account (web/src/api.ts). devwebui.viewMode.v2 / devwebui.viewMode (legacy, read-only migration): table vs cards layout preference. devwebui.sortKey.v2 / devwebui.sortDir.v2: process list ordering. devwebui.statusFilter: which status buckets the list shows. All four are display preferences (web/src/store.ts).",
+      "deviceGlobalAllow": [
+        "devwebui.pairedKey",
+        "devwebui.viewMode.v2",
+        "devwebui.viewMode",
+        "devwebui.sortKey.v2",
+        "devwebui.sortDir.v2",
+        "devwebui.statusFilter"
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+/* DevWebUI brand accent: indigo. Overrides the neutral --primary/--ring from
+   base.css (light + dark). Part of the shared kit; do not edit the in-app copy. */
+:root {
+  --primary: oklch(0.511 0.23 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.511 0.23 277);
+  --sidebar-primary: oklch(0.511 0.23 277);
+  --sidebar-ring: oklch(0.511 0.23 277);
+}
+.dark {
+  --primary: oklch(0.623 0.19 277);
+  --primary-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.623 0.19 277);
+  --sidebar-primary: oklch(0.623 0.19 277);
+  --sidebar-ring: oklch(0.623 0.19 277);
+}

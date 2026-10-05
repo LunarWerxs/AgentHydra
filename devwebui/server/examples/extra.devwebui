@@ -1,0 +1,20 @@
+{
+  "name": "Extra Service",
+  "processes": [
+    {
+      "id": "db",
+      "name": "Mock DB",
+      "command": "node heartbeat.mjs db 4330",
+      "color": "#a855f7",
+      "port": 4330,
+      "autostart": true
+    },
+    {
+      "id": "cache",
+      "name": "Mock Cache",
+      "command": "node heartbeat.mjs cache 4331",
+      "color": "#ec4899",
+      "port": 4331
+    }
+  ]
+}

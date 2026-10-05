@@ -14,7 +14,8 @@ preload = ["./tests/setup.ts"]
 # desk/ (Hydra Desk) runs its own suite from its own folder (`bun test ./server/test ./web/test`
 # inside desk/), with its own tsconfig and preload; the root suite must not pick its tests up. desk2/ (Hydra Desk 2,
 # Michael's copy of desk/ from 2026-10-04) is the same.
-pathIgnorePatterns = ["**/tmp/**", "**/desk/**", "**/desk2/**"]
+# devwebui/ (a copy of LunarWerxs/DevWebUI that runs Hydra Desk 2's servers panel) runs its own suite from its own folder too.
+pathIgnorePatterns = ["**/tmp/**", "**/desk/**", "**/desk2/**", "**/devwebui/**"]
 
 # NO LINKER SETTING. An isolated linker backed by a global store was tried here on 2026-08-07 and
 # reverted the same day: it installs fine on a machine whose global store is already warm, and fails

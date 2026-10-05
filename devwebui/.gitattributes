@@ -1,0 +1,27 @@
+# Normalize line endings: store LF in the repo, check out LF on every OS, so
+# contributors on Windows/macOS/Linux never see spurious whole-file CRLF diffs.
+* text=auto eol=lf
+
+# Windows-native scripts keep CRLF in the working tree (safest for cmd/PowerShell).
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.vbs   text eol=crlf
+# POSIX shell stays LF.
+*.sh    text eol=lf
+
+# Binary / non-diffable assets — never normalize or line-diff these.
+*.lnk   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+
+# Generated / vendored — keep diffs quiet and GitHub's language stats accurate.
+bun.lock                       linguist-generated=true
+web/src/components/ui/**        linguist-vendored=true

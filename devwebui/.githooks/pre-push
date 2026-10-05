@@ -1,0 +1,21 @@
+#!/bin/sh
+# DevWebUI pre-push gate: run the host-only lane GitHub structurally cannot, `check:local` (kit drift).
+# Enable once with:  git config core.hooksPath .githooks  (package.json's prepare does this)
+# Bypass a single push with:  git push --no-verify
+#
+# check:kit compares the kit-managed copies against lunarwerx-ui, a PRIVATE sibling checkout at the
+# same path check:kit reads. Without it, as on every contributor's machine and in CI, this says so
+# and steps aside: the lane cannot run there at all. With it, a missing bun is refused rather than
+# skipped, because a push is not cheap to redo the way a commit is.
+kit=../../lunarwerx-ui/sync.mjs
+if [ ! -f "$kit" ]; then
+  echo "pre-push: no lunarwerx-ui kit checkout at $kit, so the host-only kit lane cannot run here; skipped." >&2
+  exit 0
+fi
+if ! command -v bun >/dev/null 2>&1; then
+  echo "pre-push: the lunarwerx-ui kit is checked out but bun is not on PATH, so check:local cannot run. Refused; install bun." >&2
+  exit 1
+fi
+
+echo "› check:local (kit drift)…" >&2
+bun run check:local || exit 1

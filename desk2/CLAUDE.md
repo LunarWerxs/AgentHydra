@@ -20,6 +20,10 @@ between server/ and web/.
   and Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.
+- `../devwebui/` is a whole copy of Michael's DevWebUI (LunarWerxs/DevWebUI at 69c766dc, copied 2026-10-05),
+  kept as its own project beside AgentHydra and Desk: its only job here is the servers and browser pane a
+  chat opens (start/stop the project's localhost servers, show one). It keeps its own package.json, tests
+  and tooling; the root suite and biome skip it, as they skip desk/ and desk2/.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp

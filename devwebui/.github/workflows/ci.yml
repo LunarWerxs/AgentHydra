@@ -1,0 +1,134 @@
+name: CI
+
+# rust-ci-speed: ci not applied: misc/tray-host-native is the LunarWerx kit's tray host, synced from
+# lunarwerx-ui, which builds and tests it (.github/workflows/tray-host.yml); this copy is not built here.
+
+on:
+  push:
+    branches: [main]
+    # A docs-only change cannot break the gate. No branch protection requires this workflow's checks.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+
+  # Manual runs, so a commit can be verified without a dummy push. Added 2026-08-06 during a
+  # GitHub Actions incident whose recovery plan was to throttle webhook triggers: pushes landed on
+  # main and produced no run at all, leaving nothing to gate a release on.
+  workflow_dispatch:
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A commit already green on this workflow (a manual run on a ci/ branch before landing) is not
+  # gated again on its push to main. Push only: a dispatch or a PR always runs the gate. Fails open:
+  # if the API call errors, this job fails and `ci` still runs.
+  already:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      verified: ${{ steps.check.outputs.verified }}
+    steps:
+      - name: Has this workflow already passed on this exact commit?
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          wf="${GITHUB_WORKFLOW_REF%%@*}"; wf="${wf##*/}"
+          earlier="$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/actions/workflows/$wf/runs?head_sha=$GITHUB_SHA&status=success&per_page=10" \
+            | python3 -c 'import json,sys,os; me=int(os.environ["GITHUB_RUN_ID"]); print(next((r["html_url"] for r in json.load(sys.stdin).get("workflow_runs", []) if int(r["id"]) != me), ""))')" || earlier=""  # fail open: an API error means the gate runs
+          if [ -n "$earlier" ]; then
+            echo "::notice::$GITHUB_SHA already passed this workflow: $earlier. The gate is skipped."
+            echo "verified=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "no earlier green run of this workflow on $GITHUB_SHA: the gate runs."
+            echo "verified=0" >> "$GITHUB_OUTPUT"
+          fi
+
+  ci:
+    needs: already
+    # `already` is skipped off push, and may fail: the gate runs then (empty output != '1').
+    if: ${{ !cancelled() && needs.already.outputs.verified != '1' }}
+    timeout-minutes: 60
+    name: lint · typecheck · build · test (${{ matrix.os }})
+    # The shipped artifact is a per-OS `bun --compile` binary (see scripts/build.ts /
+    # release.yml), so run the full suite on all three rather than just Linux.
+    #
+    # rust-ci-speed: windows-per-change not applied: this workflow builds no Rust; the Windows leg is the only
+    # place the daemon's Windows-only paths (bun:ffi metrics, the tray -SelfTest) and the Windows binary run,
+    # it costs about 2 min, and there is no separate Linux lint/clippy/docs job to move it under.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint + format (Biome)
+        run: bun run lint
+
+      - name: Typecheck (web + server)
+        run: bun run typecheck
+
+      # Fails if a test that spawns a subprocess inherits bun's 5s default timeout. Such a test
+      # measures the RUNNER, not its own assertions: the equivalent suite in AgentHydra takes 533ms
+      # locally and took 5083.99ms on windows-latest, failing a run 84ms over the line and passing
+      # again on re-run. Four tests here were in that state until 2026-08-09, the subtlest being one
+      # that reads as pure existsSync checks but calls `git ls-files` once per file through a
+      # helper — which is why the check resolves helpers transitively. See its header.
+      - name: Guardrail (subprocess tests must set an explicit timeout)
+        run: bun run check:spawntimeout
+
+      - name: Build (i18n gate + vue-tsc + vite)
+        run: bun run build
+
+      # Two runners, two suites, deliberately scoped so they never scan each other's files:
+      # `bun test` owns the daemon suites (tests/, server/tests/), Vitest owns web/src.
+      # Unscoped, `bun test` also picked up web/src/*.test.ts and ran Vitest specs under Bun —
+      # which happens to pass today and would break the moment a spec uses a Vitest-only API.
+      - name: Test (daemon)
+        run: bun run test
+
+      - name: Test (web)
+        run: bun run test:web
+
+      - name: Build release binary
+        run: bun run dist # scripts/build.ts — web build + `bun build --compile`
+
+      - name: Smoke-test the compiled binary
+        shell: bash
+        run: |
+          if [ -f dist/devwebui.exe ]; then bin=dist/devwebui.exe; else bin=dist/devwebui; fi
+          bun run scripts/smoke-release.ts "$bin"
+
+    # NOTE: the windows-latest leg exercises the daemon's Windows-only metrics path
+    # (bun:ffi, instead of the pidusage fallback used on Linux/macOS) AND the tray's
+    # Windows -SelfTest (tests/launcher.test.ts's `test.skipIf(!isWin)` cases run
+    # automatically here, skip on ubuntu/macos) — no extra CI wiring needed, the
+    # suite's own platform guards do the right thing per OS.
