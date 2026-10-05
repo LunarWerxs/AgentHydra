@@ -522,11 +522,12 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       >
         <div class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]" :inert="hydraOpen" :aria-hidden="hydraOpen || undefined">
           <div
-            class="relative col-start-1 row-start-1 min-w-0 pt-0.5"
+            class="col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
             :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
             :style="{ paddingLeft: `${titlePad}px` }"
           >
             <ShellHeader
+              class="min-w-0 flex-1"
               :chat="isNew ? null : chat"
               :title="viewTitle"
               :pane="pane"
@@ -548,8 +549,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             <p
               v-if="actionError && (!sidebarOpen || cloud.on.value)"
               role="alert"
-              class="pointer-events-none absolute top-0.5 flex h-8 max-w-[28%] items-center truncate text-[12px] leading-4 text-danger-text"
-              :style="{ left: `${titlePad}px` }"
+              class="pointer-events-none flex h-8 max-w-[28%] shrink-0 items-center truncate pr-3 text-[12px] leading-4 text-danger-text"
             >
               {{ actionError }}
             </p>
