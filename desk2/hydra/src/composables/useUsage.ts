@@ -14,6 +14,7 @@ import type { UsageSnapshot } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileMap, sameData } from '@/lib/reconcile'
 import { isNoDataSnap, type UsageReason } from '@/lib/usage'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const snapshots = ref<Map<string, UsageSnapshot>>(new Map())
 /** A signed-out account's last reading (server usage-cache.ts lastKnownUsage), shown in its row
@@ -32,6 +33,8 @@ const reasons = ref<Map<string, UsageReason>>(new Map())
 const checking = ref<Set<string>>(new Set())
 const hydrated = ref(false)
 const lastError = ref<string | null>(null)
+/** JSON text of the last usage cache hydrate() fetched; a poll tick that matches it writes nothing. */
+let lastHydrateText: string | null = null
 
 function guard<T>(p: Promise<T>): Promise<T | undefined> {
   return p.catch((e) => {
@@ -68,9 +71,15 @@ function setReason(key: string, reason: UsageReason) {
 /** Bulk-hydrate from the server's whole usage cache (a plain read of cached snapshots — it checks
  *  nothing). Safe to call more than once; a later call just re-syncs, and an unchanged cache
  *  assigns nothing. */
-async function hydrate(): Promise<void> {
+async function hydrate(skipSame = false): Promise<void> {
   const res = await guard(api.getUsageCache())
   if (res) {
+    const text = JSON.stringify(res)
+    if (skipSame && text === lastHydrateText) {
+      hydrated.value = true
+      return
+    }
+    lastHydrateText = text
     snapshots.value = reconcileMap(snapshots.value, Object.entries(res.cache))
     lastKnown.value = reconcileMap(lastKnown.value, Object.entries(res.lastKnown ?? {}))
     if (lastAutoRefreshAt.value !== res.lastAutoRefreshAt)
@@ -91,17 +100,17 @@ async function hydrate(): Promise<void> {
 /** Matches useInstances.ts's list poll — the Instances screen refreshes as one thing. */
 const HYDRATE_INTERVAL_MS = 4000
 
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 
 function startPolling(): void {
-  if (pollTimer !== null) return
+  if (stopPoll) return
   void hydrate()
-  pollTimer = window.setInterval(() => void hydrate(), HYDRATE_INTERVAL_MS)
+  stopPoll = visibleInterval(() => void hydrate(true), HYDRATE_INTERVAL_MS)
 }
 
 function stopPolling(): void {
-  if (pollTimer !== null) window.clearInterval(pollTimer)
-  pollTimer = null
+  stopPoll?.()
+  stopPoll = null
 }
 
 /** `snap`, unless its row's usage was cleared after it was taken. */

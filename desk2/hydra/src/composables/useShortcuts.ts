@@ -78,12 +78,12 @@ function install(): void {
     // The page's shortcuts stand down under an overlay. Escape is the one that bit: the Sessions
     // page's Escape ran first and called preventDefault, and reka closes a dialog on Escape only
     // when nothing prevented it, so no dialog on that page closed on Escape (2026-10-02).
-    if (document.querySelector(OVERLAY_OPEN)) return
     const chord = chordOf(e)
     const hit = registry.value.find((s) => s.keys === chord)
     if (!hit) return
     // An unmodified chord while typing is a character the user meant to type.
     if (isTyping(e.target) && !chord.startsWith('mod+')) return
+    if (document.querySelector(OVERLAY_OPEN)) return
     e.preventDefault()
     hit.run()
   })

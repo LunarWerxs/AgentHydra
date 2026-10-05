@@ -14,6 +14,7 @@
 
 import { useStorage } from '@vueuse/core'
 import { computed, onUnmounted, ref } from 'vue'
+import { visibleInterval } from '@/lib/visible-poll'
 import { registerSharedPref } from './useSharedPrefs'
 
 /**
@@ -44,7 +45,7 @@ registerSharedPref('agenthydra.instances.usageMode2', usageMode)
 // that shows countdowns is mounted.
 
 const now = ref(new Date())
-let tickTimer: ReturnType<typeof setInterval> | null = null
+let stopTick: (() => void) | null = null
 let tickUsers = 0
 
 /** 15s, not 1s: the countdown is coarse above a minute (see lib/usage-reset.formatCountdown), so a
@@ -53,17 +54,17 @@ const TICK_MS = 15_000
 
 function retainTick(): void {
   tickUsers += 1
-  if (tickTimer) return
-  tickTimer = setInterval(() => {
+  if (stopTick) return
+  stopTick = visibleInterval(() => {
     now.value = new Date()
   }, TICK_MS)
 }
 
 function releaseTick(): void {
   tickUsers = Math.max(0, tickUsers - 1)
-  if (tickUsers > 0 || !tickTimer) return
-  clearInterval(tickTimer)
-  tickTimer = null
+  if (tickUsers > 0 || !stopTick) return
+  stopTick()
+  stopTick = null
 }
 
 /**

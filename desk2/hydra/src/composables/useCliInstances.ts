@@ -7,6 +7,7 @@ import { ref } from 'vue'
 import type { CliInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
+import { visibleInterval } from '@/lib/visible-poll'
 import { useUsage } from './useUsage'
 
 const cliInstances = ref<CliInstance[]>([])
@@ -46,17 +47,17 @@ async function refreshCliInstances(opts: { silent?: boolean } = {}) {
   if (!opts.silent) loading.value = false
 }
 
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 
 function startPolling() {
-  if (pollTimer !== null) return
+  if (stopPoll) return
   refreshCliInstances()
-  pollTimer = window.setInterval(() => refreshCliInstances({ silent: true }), 5000)
+  stopPoll = visibleInterval(() => refreshCliInstances({ silent: true }), 5000)
 }
 
 function stopPolling() {
-  if (pollTimer !== null) window.clearInterval(pollTimer)
-  pollTimer = null
+  stopPoll?.()
+  stopPoll = null
 }
 
 /** Create a new CLI instance (a fresh isolated `CLAUDE_CONFIG_DIR`). */

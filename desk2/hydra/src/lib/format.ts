@@ -127,12 +127,16 @@ export function formatBytes(n: number | null | undefined): string {
   return `${exp === 0 ? value : value.toFixed(value < 10 ? 1 : 0)} ${units[exp]}`
 }
 
+let compactFormat: Intl.NumberFormat | null = null
+
 /** A large count, shortened for a dense meta row ("1.2M", "845K", "312"). */
 export function formatCompact(n: number): string {
   if (!Number.isFinite(n)) return '—'
-  return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(
-    n,
-  )
+  compactFormat ??= new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  })
+  return compactFormat.format(n)
 }
 
 /** A dollar figure for display: the kit's formatter (lib/kit.ts). */

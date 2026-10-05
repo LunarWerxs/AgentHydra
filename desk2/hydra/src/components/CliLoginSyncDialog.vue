@@ -39,6 +39,7 @@ import {
   setupLoginSync,
 } from '@/lib/api'
 import { bytes, timeAgo } from '@/lib/format'
+import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const open = defineModel<boolean>('open', { default: false })
@@ -55,31 +56,34 @@ const token = ref('')
 
 async function load() {
   try {
-    status.value = await getLoginSync()
+    const next = await getLoginSync()
+    // An unchanged payload keeps the old object so the lists do not re-render.
+    if (JSON.stringify(next) !== JSON.stringify(status.value)) status.value = next
   } catch (err) {
     toast.error(err instanceof Error ? err.message : String(err))
   }
 }
 
 // Fresh while it is open: a pass runs every 30 s on the server.
-let timer: number | null = null
+let stopPoll: (() => void) | null = null
 watch(
   open,
   (isOpen) => {
-    if (timer !== null) window.clearInterval(timer)
-    timer = null
+    stopPoll?.()
+    stopPoll = null
     if (!isOpen) return
     choosing.value = false
     code.value = ''
     url.value = ''
     token.value = ''
     void load()
-    timer = window.setInterval(() => void load(), 5_000)
+    stopPoll = visibleInterval(() => void load(), 15_000)
   },
   { immediate: true },
 )
 onUnmounted(() => {
-  if (timer !== null) window.clearInterval(timer)
+  stopPoll?.()
+  stopPoll = null
 })
 
 async function act(fn: () => Promise<{ ok: boolean; message: string }>) {

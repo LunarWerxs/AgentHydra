@@ -12,6 +12,7 @@ import { ref } from 'vue'
 import { toast } from 'vue-sonner'
 import type { ResetEvent } from '@/lib/api'
 import * as api from '@/lib/api'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const events = ref<ResetEvent[]>([])
 const lastError = ref<string | null>(null)
@@ -23,7 +24,7 @@ const toasted = new Set<string>()
 /** 30s — an event that already reached the OS a moment ago; this is the catch-up path, not the
  *  primary one, so a tight poll would buy nothing. */
 const POLL_MS = 30_000
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 
 async function guard<T>(fn: () => Promise<T>): Promise<T | null> {
   try {
@@ -126,7 +127,7 @@ async function raiseBatch(batch: ResetEvent[], t: Translate): Promise<void> {
 async function refresh(t?: Translate): Promise<void> {
   const list = await guard(() => api.getResetEvents())
   if (!list) return
-  events.value = list
+  if (JSON.stringify(list) !== JSON.stringify(events.value)) events.value = list
   if (!t) return
   await raiseBatch(list, t)
 }
@@ -143,15 +144,15 @@ async function test(): Promise<api.NotifyDeliveryResult | null> {
 }
 
 function startPolling(t: Translate): void {
-  if (pollTimer !== null) return
+  if (stopPoll) return
   void refresh(t)
-  pollTimer = window.setInterval(() => void refresh(t), POLL_MS)
+  stopPoll = visibleInterval(() => void refresh(t), POLL_MS)
 }
 
 function stopPolling(): void {
-  if (pollTimer === null) return
-  window.clearInterval(pollTimer)
-  pollTimer = null
+  if (!stopPoll) return
+  stopPoll()
+  stopPoll = null
 }
 
 export function useNotifications() {
