@@ -13,7 +13,7 @@ import { existsSync, openSync, readdirSync, readSync, closeSync, statSync } from
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { historyToItems, parseJsonl } from '../engine/normalize'
+import { type HistoryFold, historyFold, parseJsonl } from '../engine/normalize'
 
 /** How much of a transcript's end is read: enough for a long session's recent turns. */
 export const TAIL_BYTES = 8 * 1024 * 1024
@@ -77,23 +77,27 @@ export function findSessionJsonl(sessionId: string, roots: string[], cwd?: strin
   return hits.reduce((a, b) => (b.mtime > a.mtime ? b : a)).path
 }
 
-/** The last `max` bytes of a file as text (the first line may be cut; parseJsonl skips it). */
-export function readTail(path: string, max = TAIL_BYTES): string {
-  const size = statSync(path).size
-  const start = Math.max(0, size - max)
-  const buf = Buffer.alloc(size - start)
+/** Bytes [from, to) of a file. */
+function readRange(path: string, from: number, to: number): Buffer {
+  const buf = Buffer.alloc(Math.max(0, to - from))
   const fd = openSync(path, 'r')
   try {
     let read = 0
     while (read < buf.length) {
-      const n = readSync(fd, buf, read, buf.length - read, start + read)
+      const n = readSync(fd, buf, read, buf.length - read, from + read)
       if (n <= 0) break
       read += n
     }
-    return buf.subarray(0, read).toString('utf8')
+    return buf.subarray(0, read)
   } finally {
     closeSync(fd)
   }
+}
+
+/** The last `max` bytes of a file as text (the first line may be cut; parseJsonl skips it). */
+export function readTail(path: string, max = TAIL_BYTES): string {
+  const size = statSync(path).size
+  return readRange(path, Math.max(0, size - max), size).toString('utf8')
 }
 
 /**
@@ -127,20 +131,7 @@ export function lastCwd(path: string): string | null {
 export function firstCwdFrom(path: string, offset: number): string | null {
   const size = statSync(path).size
   if (offset >= size) return null
-  const len = Math.min(size - offset, 256 * 1024)
-  const buf = Buffer.alloc(len)
-  const fd = openSync(path, 'r')
-  let read = 0
-  try {
-    while (read < len) {
-      const n = readSync(fd, buf, read, len - read, offset + read)
-      if (n <= 0) break
-      read += n
-    }
-  } finally {
-    closeSync(fd)
-  }
-  for (const raw of buf.subarray(0, read).toString('utf8').split('\n')) {
+  for (const raw of readRange(path, offset, Math.min(size, offset + 256 * 1024)).toString('utf8').split('\n')) {
     const line = raw.trim()
     if (!line) continue
     try {
@@ -154,17 +145,56 @@ export function firstCwdFrom(path: string, offset: number): string | null {
 }
 
 const MEMO_MAX = 8
-const memo = new Map<string, { sig: string; items: TranscriptItem[] }>()
+/** How far past where its read began a followed file may grow before its tail is read afresh: bounds what one file holds. */
+const REFOLD_BYTES = TAIL_BYTES + TAIL_BYTES / 2
 
-/** A session file's items, remembered by size and mtime: an open outside chat polled every few seconds costs a stat. */
+interface Followed {
+  sig: string
+  /** The byte its read began at, and the byte after the last whole line taken in. */
+  start: number
+  offset: number
+  fold: HistoryFold
+  items: TranscriptItem[]
+}
+const memo = new Map<string, Followed>()
+
+/** Takes the whole lines of `buf` (read from byte `at`) into the fold; a last line still being written waits for the next read. */
+function takeLines(f: Followed, buf: Buffer, at: number): void {
+  let used = buf.lastIndexOf(10) + 1
+  const records = used ? parseJsonl(buf.toString('utf8', 0, used)) : []
+  const rest = buf.toString('utf8', used).trim()
+  if (rest.startsWith('{')) {
+    try {
+      records.push(JSON.parse(rest))
+      used = buf.length
+    } catch {
+      // still being written
+    }
+  }
+  f.fold.add(records)
+  f.offset = at + used
+}
+
+/**
+ * A session file's items: the last TAIL_BYTES when first read, then only what was appended since. A
+ * working session's .jsonl grows every few seconds, and a read of its whole tail at each poll was 8 MB
+ * re-read and re-parsed per working chat every 3 s. A file that shrank was rewritten and is read again.
+ */
 export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
   const st = statSync(path)
   const sig = `${st.size}:${st.mtimeMs}`
-  const hit = memo.get(path)
-  if (hit && hit.sig === sig) return hit.items
-  const items = historyToItems(parseJsonl(readTail(path)), { cwd: cwd ?? null })
-  memo.delete(path)
-  memo.set(path, { sig, items })
+  const key = `${path}\n${cwd ?? ''}`
+  let f = memo.get(key)
+  if (f && f.sig === sig) return f.items
+  if (!f || st.size < f.offset || st.size - f.start > REFOLD_BYTES) {
+    const start = Math.max(0, st.size - TAIL_BYTES)
+    f = { sig, start, offset: start, fold: historyFold({ cwd: cwd ?? null }), items: [] }
+  }
+  takeLines(f, readRange(path, f.offset, st.size), f.offset)
+  f.sig = sig
+  f.items = f.fold.items()
+  memo.delete(key)
+  memo.set(key, f)
   if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value!)
-  return items
+  return f.items
 }

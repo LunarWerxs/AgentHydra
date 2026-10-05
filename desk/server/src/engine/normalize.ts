@@ -685,38 +685,56 @@ const STALE_TASK_MS = 24 * 3_600_000
  * takes the last one seen.
  */
 export function historyToItems(records: Iterable<unknown>, o: HistoryOptions = {}): TranscriptItem[] {
+  const fold = historyFold(o)
+  fold.add(records)
+  return fold.items()
+}
+
+/** historyToItems in steps: records added in file order over any number of calls give the same items as one call with all of them. */
+export interface HistoryFold {
+  add(records: Iterable<unknown>): void
+  items(): TranscriptItem[]
+}
+
+export function historyFold(o: HistoryOptions = {}): HistoryFold {
   let clock = 0
   const n = createNormalizer({ now: () => clock, cwd: o.cwd ?? null, echoUserText: true, media: o.media })
   const items = new Map<string, TranscriptItem>()
-  for (const r of records) {
-    const rec = r as Loose
-    if (!rec || typeof rec !== 'object' || rec.isSidechain === true) continue
-    const t = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
-    if (Number.isFinite(t)) clock = t
-    let msg: Loose | null = null
-    if (rec.type === 'user' || rec.type === 'assistant') msg = rec
-    else if (rec.type === 'system' && rec.subtype === 'compact_boundary') {
-      const meta = (rec.compactMetadata ?? {}) as Loose
-      msg = { ...rec, compact_metadata: { trigger: meta.trigger, pre_tokens: meta.preTokens, post_tokens: meta.postTokens } }
-    } else if (rec.type === 'attachment' && queuedNotification(rec)) {
-      msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: queuedNotification(rec) } }
-    } else if (rec.type === 'system' && rec.subtype === 'local_command') {
-      msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: str(rec.content) } }
-    } else if (rec.type === 'system' && (rec.subtype === 'informational' || String(rec.subtype).startsWith('model_refusal'))) msg = rec
-    if (!msg) continue
-    for (const e of n.handle(msg as unknown as SDKMessage)) {
-      if (e.type !== 'upsert') continue
-      const prev = items.get(e.item.id)
-      items.set(e.item.id, prev ? { ...e.item, ts: prev.ts } : e.item)
-    }
+  return {
+    add(records) {
+      for (const r of records) {
+        const rec = r as Loose
+        if (!rec || typeof rec !== 'object' || rec.isSidechain === true) continue
+        const t = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
+        if (Number.isFinite(t)) clock = t
+        let msg: Loose | null = null
+        if (rec.type === 'user' || rec.type === 'assistant') msg = rec
+        else if (rec.type === 'system' && rec.subtype === 'compact_boundary') {
+          const meta = (rec.compactMetadata ?? {}) as Loose
+          msg = { ...rec, compact_metadata: { trigger: meta.trigger, pre_tokens: meta.preTokens, post_tokens: meta.postTokens } }
+        } else if (rec.type === 'attachment' && queuedNotification(rec)) {
+          msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: queuedNotification(rec) } }
+        } else if (rec.type === 'system' && rec.subtype === 'local_command') {
+          msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: str(rec.content) } }
+        } else if (rec.type === 'system' && (rec.subtype === 'informational' || String(rec.subtype).startsWith('model_refusal'))) msg = rec
+        if (!msg) continue
+        for (const e of n.handle(msg as unknown as SDKMessage)) {
+          if (e.type !== 'upsert') continue
+          const prev = items.get(e.item.id)
+          items.set(e.item.id, prev ? { ...e.item, ts: prev.ts } : e.item)
+        }
+      }
+    },
+    items() {
+      // The file ends mid-turn: what was still streaming is what it is.
+      const cutoff = (o.now ?? Date.now)() - STALE_TASK_MS
+      return [...items.values()].map((it) => {
+        if ((it.kind === 'assistant_text' || it.kind === 'thinking') && it.streaming) return { ...it, streaming: false }
+        if (it.kind === 'task' && it.status === 'running' && it.ts < cutoff) return { ...it, status: 'stopped' as const }
+        return it
+      })
+    },
   }
-  // The file ends mid-turn: what was still streaming is what it is.
-  const cutoff = (o.now ?? Date.now)() - STALE_TASK_MS
-  return [...items.values()].map((it) => {
-    if ((it.kind === 'assistant_text' || it.kind === 'thinking') && it.streaming) return { ...it, streaming: false }
-    if (it.kind === 'task' && it.status === 'running' && it.ts < cutoff) return { ...it, status: 'stopped' as const }
-    return it
-  })
 }
 
 /** Parses .jsonl text (a whole file or a tail that may start mid-line) into records; bad lines are skipped. */

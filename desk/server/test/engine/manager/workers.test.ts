@@ -110,6 +110,30 @@ test('an open chat is served from the Desk file without reading any account fold
   expect(b2.state.workerReads).toBe(0)
 })
 
+test('a working chat reads its Desk file once, not at every poll', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  const store = (m as unknown as { store: { loadItems: (id: string) => unknown } }).store
+  const load = store.loadItems.bind(store)
+  let reads = 0
+  store.loadItems = (id) => {
+    reads++
+    return load(id)
+  }
+  for (const text of ['one', 'two', 'three']) {
+    b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 2, text }]
+    await m.syncWorkers(chat.id)
+  }
+  expect(reads).toBeLessThanOrEqual(1)
+  expect(m.listItems(chat.id).find((i) => i.id === 'a-1')).toMatchObject({ text: 'three' })
+})
+
 test('a sent message shows at once, before the worker has it, and its worker copy replaces it', async () => {
   const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
   temps.push(home)

@@ -845,7 +845,9 @@ export class ChatManager {
     e.workerLive = isActiveWorkerStatus(w.status)
 
     // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those.
-    this.deskItems(e)
+    // The Desk file is read once, to seed `emitted`: this runs every 3 s for each working chat, and
+    // re-reading and re-parsing the whole file each time only to drop the result was pure disk and CPU.
+    if (!e.emitted) this.deskItems(e)
     const rescan = e.readAccount !== w.accountId
     const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan })
     if (this.chats.get(chat.id) !== e) return

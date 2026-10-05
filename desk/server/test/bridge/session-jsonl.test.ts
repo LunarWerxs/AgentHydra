@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { claudeProjectRoots, encodeProjectDir, findSessionJsonl, readTail, sessionJsonlItems } from '../../src/bridge/session-jsonl'
+import { historyToItems, parseJsonl } from '../../src/engine/normalize'
 
 const temps: string[] = []
 const temp = () => {
@@ -84,5 +85,48 @@ describe('outside session .jsonl', () => {
     const items = sessionJsonlItems(f)
     expect(items.map((i) => i.kind)).toEqual(['user', 'assistant_text'])
     expect((items[1] as Extract<TranscriptItem, { kind: 'assistant_text' }>).text).toBe(ANSWER)
+  })
+
+  test('a growing file read after every append gives the items one read of the whole file gives', () => {
+    const at = (s: number) => new Date(Date.UTC(2026, 9, 3, 11, 0, s)).toISOString()
+    const recs = [
+      { type: 'user', uuid: 'u1', timestamp: at(0), message: { role: 'user', content: 'list the files' } },
+      { type: 'assistant', uuid: 'a1', timestamp: at(1), message: { id: 'msg_1', role: 'assistant', content: [{ type: 'thinking', thinking: 'ls will do' }] } },
+      { type: 'assistant', uuid: 'a2', timestamp: at(2), message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }] } },
+      { type: 'user', uuid: 'u2', timestamp: at(3), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'a.ts\nb.ts' }] } },
+      { type: 'assistant', uuid: 'a3', timestamp: at(4), message: { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: ANSWER }] } },
+    ].map((r) => JSON.stringify(r))
+    const upTo = (n: number): TranscriptItem[] => historyToItems(parseJsonl(recs.slice(0, n).join('\n')))
+    const f = join(temp(), `${SID}.jsonl`)
+    // Whole lines, a last line with no newline yet, and a line cut mid-write.
+    writeFileSync(f, `${recs[0]}\n${recs[1]}`)
+    expect(sessionJsonlItems(f)).toEqual(upTo(2))
+    appendFileSync(f, `\n${recs[2]}\n${recs[3]!.slice(0, 40)}`)
+    expect(sessionJsonlItems(f)).toEqual(upTo(3))
+    appendFileSync(f, `${recs[3]!.slice(40)}\n${recs[4]}\n`)
+    expect(sessionJsonlItems(f)).toEqual(upTo(5))
+    expect(upTo(5).map((i) => i.kind)).toEqual(['user', 'thinking', 'tool_use', 'assistant_text'])
+  })
+
+  test('after the first read only the appended bytes are read', () => {
+    const f = join(temp(), `${SID}.jsonl`)
+    const said = (): unknown[] => sessionJsonlItems(f).map((i) => (i as { text?: string }).text)
+    const first = JSON.stringify({ type: 'user', uuid: 'u1', timestamp: '2026-10-03T12:00:00Z', message: { role: 'user', content: 'AAAA' } })
+    writeFileSync(f, `${first}\n`)
+    expect(said()).toEqual(['AAAA'])
+    // The first line changes in place (same length), then a line is appended: a read from the start would see BBBB.
+    const fd = openSync(f, 'r+')
+    writeSync(fd, first.replace('AAAA', 'BBBB'), 0)
+    closeSync(fd)
+    appendFileSync(f, `${JSON.stringify({ type: 'user', uuid: 'u2', timestamp: '2026-10-03T12:00:01Z', message: { role: 'user', content: 'next' } })}\n`)
+    expect(said()).toEqual(['AAAA', 'next'])
+  })
+
+  test('a file that shrank was rewritten and is read again', () => {
+    const f = join(temp(), `${SID}.jsonl`)
+    writeFileSync(f, lines())
+    expect(sessionJsonlItems(f).length).toBe(2)
+    writeFileSync(f, `${JSON.stringify({ type: 'user', uuid: 'u9', timestamp: '2026-10-03T12:00:00Z', message: { role: 'user', content: 'fresh' } })}\n`)
+    expect(sessionJsonlItems(f).map((i) => (i as { text?: string }).text)).toEqual(['fresh'])
   })
 })
