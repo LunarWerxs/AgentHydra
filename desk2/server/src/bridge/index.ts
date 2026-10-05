@@ -288,8 +288,12 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** Every projects folder a session's transcript can be in, as of the last instance read. */
+  let sessionRootsRead: { at: number; dirs: string[]; roots: string[] } | null = null
   function sessionRoots(): string[] {
-    return claudeProjectRoots(knownCliDirs, home)
+    if (sessionRootsRead && sessionRootsRead.dirs === knownCliDirs && now() - sessionRootsRead.at < ROOTS_FRESH_MS) return sessionRootsRead.roots
+    const roots = claudeProjectRoots(knownCliDirs, home)
+    sessionRootsRead = { at: now(), dirs: knownCliDirs, roots }
+    return roots
   }
 
   async function externalItems(sessionId: string): Promise<TranscriptItem[]> {
