@@ -4,6 +4,7 @@ import {
   accountFace,
   chatRow,
   elapsedLabel,
+  entryRunning,
   externalGlyph,
   externalRename,
   externalRow,
@@ -20,6 +21,7 @@ import {
   revealChat,
   rowMenu,
   rowPatch,
+  runningSessionIds,
   shortcutItem,
   statusGlyph,
   type ChatGroup,
@@ -139,6 +141,14 @@ describe('sessions running elsewhere in the same list', () => {
   it('merges them into the folder groups by activity, newest first', () => {
     const g = groupChats([chat('a1', { updatedAt: 10 }), chat('a2', { updatedAt: 30 })], { external: [ext('e', { lastActivityAt: 20 })] })
     expect(g.folders[0]!.entries.map((e) => `${e.kind}:${e.id}`)).toEqual(['chat:a2', 'external:e', 'chat:a1'])
+  })
+
+  it("a folded group's green count is the rows whose turn runs, ours and elsewhere's, never one waiting on you", () => {
+    const chats = [chat('w', { status: 'working', sessionId: 's-w' }), chat('s', { status: 'starting' }), chat('q', { status: 'needs_you', sessionId: 's-q' }), chat('i')]
+    const external = [ext('e-run', { status: 'working' }), ext('e-ask', { status: 'needs_you' }), ext('e-idle')]
+    expect(groupChats(chats, { external }).folders[0]!.entries.filter(entryRunning).map((e) => e.id).sort()).toEqual(['e-run', 's', 'w'])
+    // The cloud list knows a row by its session: a running chat with none yet has nothing to match.
+    expect([...runningSessionIds(chats, external)].sort()).toEqual(['e-run', 's-w'])
   })
 
   it('skips CliMayte workers and sessions that already are one of our chats; no cwd goes under No folder', () => {
