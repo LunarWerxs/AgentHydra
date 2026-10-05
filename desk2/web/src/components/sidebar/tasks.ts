@@ -81,8 +81,7 @@ const MAX_DEPTH = 3
  * goes in `unplaced` under the topmost of its dispatchers no row lists either, so every running task is
  * shown once.
  */
-/** `jobs` nest under `o.jobRows` (default `rows`): a list that draws no jobs under its rows passes none. */
-export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[] = [], o: { jobRows?: readonly NestRow[] } = {}): NestedTasks {
+export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[] = []): NestedTasks {
   const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
   /** The worker that dispatched it, on its own PC. */
   const parentKey = (w: CliMayteWorker) => (w.originWorkerId ? (w.pc ? `${w.pc}:${w.originWorkerId}` : w.originWorkerId) : null)
@@ -229,71 +228,65 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
     }
     return chat
   }
+  /** The row that stands for a chat no drawn row lists: titled `named` when its title is known, else by its short id; no chat id at all is `No chat`. One for tasks and jobs alike. */
+  const standIn = (pc: string | null, sid: string | null, named?: string | null): UnplacedChat => {
+    if (!sid) return chatFor(pc, `none:${pc ?? ''}`, () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' }))
+    return chatFor(pc, `origin:${pc ?? ''}|${sid}`, () => {
+      const wording = pc ? `A chat on ${pc}` : 'A chat'
+      return {
+        title: named || `${wording} · ${sid.slice(0, 8)}`,
+        worker: null,
+        note: pc ? `${named || wording} is on ${pc} and is not in this PC's session list, so its tasks are listed here under it.` : NOT_LISTED
+      }
+    })
+  }
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const pc = r.pc ?? null
-    const where = pc ? `on ${pc}` : ''
     // A Hydra Desk chat run as a worker on a PC whose chat list is not here: it is the chat.
     const deskChat = r.group === DESK_GROUP && !r.originSessionId && !r.originWorkerId
     const below = walk(sessionsOf(r), new Set([keyOf(r)]), deskChat ? 1 : 2, seen)
-    let key: string
-    let make: () => Omit<UnplacedChat, 'key' | 'nodes' | 'jobs'>
+    let chat: UnplacedChat
     if (deskChat) {
-      key = `desk:${keyOf(r)}`
-      make = () => ({
+      chat = chatFor(pc, `desk:${keyOf(r)}`, () => ({
         title: r.title,
         worker: r,
         note: pc ? `This chat runs on ${pc} and is not in this PC's session list, so it is listed here with its tasks.` : NOT_LISTED
-      })
+      }))
     } else if (r.originSessionId) {
-      const sid = r.originSessionId
-      key = `origin:${pc ?? ''}|${sid}`
-      make = () => {
-        const wording = pc ? `A chat ${where}` : 'A chat'
-        const named = titles.get(`${pc ?? ''}|${sid}`)
-        return {
-          title: named ?? `${wording} · ${sid.slice(0, 8)}`,
-          worker: null,
-          note: pc ? `${named ?? wording} is ${where} and is not in this PC's session list, so its tasks are listed here under it.` : NOT_LISTED
-        }
-      }
+      chat = standIn(pc, r.originSessionId, titles.get(`${pc ?? ''}|${r.originSessionId}`))
     } else if (pc && oldPcs.has(pc)) {
-      key = `old:${pc}`
-      make = () => ({ title: 'Unknown chat', worker: null, note: `${pc}'s AgentHydra is too old to say which chat started these tasks. Update it there and they move under their chats.` })
+      chat = chatFor(pc, `old:${pc}`, () => ({ title: 'Unknown chat', worker: null, note: `${pc}'s AgentHydra is too old to say which chat started these tasks. Update it there and they move under their chats.` }))
     } else {
-      key = `none:${pc ?? ''}`
-      make = () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })
+      chat = standIn(pc, null)
     }
-    const chat = chatFor(pc, key, make)
     chat.nodes.push(...(deskChat ? [] : [{ worker: r, depth: 1 }]), ...below)
   }
-  // HSwarm jobs: under the first row that has the caller's session (the job's id may be the 8-character prefix the
-  // jobs list stamps), else a running one under a stand-in for its caller, on this PC (a CliMayte task of that chat, if any, shares it).
+  // HSwarm jobs: under the one row that has the caller's session (a job's id may be the 8-character prefix the jobs
+  // list stamps: a prefix two rows share places nothing, never a guessed row), else under a stand-in for its caller,
+  // finished or running, on the job's PC (a CliMayte task of that chat, if any, shares it).
   const jobsByRow = new Map<string, SwarmJob[]>()
   const rowOfSession = new Map<string, string>()
-  for (const r of o.jobRows ?? rows) for (const s of r.sessionIds) if (!rowOfSession.has(s)) rowOfSession.set(s, r.key)
-  const rowsByPrefix = new Map<string, string>()
-  for (const [s, key] of rowOfSession) if (!rowsByPrefix.has(s.slice(0, 8))) rowsByPrefix.set(s.slice(0, 8), key)
+  for (const r of rows) for (const s of r.sessionIds) if (!rowOfSession.has(s)) rowOfSession.set(s, r.key)
+  const rowsByPrefix = new Map<string, Set<string>>()
+  for (const [s, key] of rowOfSession) rowsByPrefix.set(s.slice(0, 8), (rowsByPrefix.get(s.slice(0, 8)) ?? new Set()).add(key))
   const rowFor = (id: string | null | undefined): string | undefined => {
     if (!id) return undefined
     const exact = rowOfSession.get(id)
     if (exact || id.length > 8) return exact
-    return rowsByPrefix.get(id)
+    const same = rowsByPrefix.get(id)
+    return same?.size === 1 ? [...same][0] : undefined
+  }
+  /** The stand-in of a job's chat: the one a task of that chat made (its id may be a prefix of the task's), else its own. */
+  const standInOfJob = (j: SwarmJob): UnplacedChat => {
+    const sid = j.callerSessionId ?? j.callerHostSessionId
+    if (!sid) return standIn(j.pc, null)
+    const mine = [...chatsByKey.values()].filter((c) => c.key.startsWith(`${j.pc ?? ''}|origin:${j.pc ?? ''}|`) && c.key.slice(`${j.pc ?? ''}|origin:${j.pc ?? ''}|`.length).startsWith(sid))
+    return mine.length === 1 ? mine[0]! : standIn(j.pc, sid, j.callerTitle)
   }
   for (const j of [...jobs].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))) {
     const row = rowFor(j.callerSessionId) ?? rowFor(j.callerHostSessionId)
-    if (row) {
-      jobsByRow.set(row, [...(jobsByRow.get(row) ?? []), j])
-      continue
-    }
-    if (!j.active) continue
-    const sid = j.callerSessionId ?? j.callerHostSessionId
-    const sameChat = sid ? [...chatsByKey.values()].find((c) => c.key.startsWith('|origin:|') && c.key.slice('|origin:|'.length).startsWith(sid)) : undefined
-    const chat =
-      sameChat ??
-      (sid
-        ? chatFor(null, `origin:|${sid}`, () => ({ title: j.callerTitle || `A chat · ${sid.slice(0, 8)}`, worker: null, note: NOT_LISTED }))
-        : chatFor(null, 'none:', () => ({ title: 'No chat', worker: null, note: 'Not under a chat: nothing here says which chat started them.' })))
-    chat.jobs.push(j)
+    if (row) jobsByRow.set(row, [...(jobsByRow.get(row) ?? []), j])
+    else standInOfJob(j).jobs.push(j)
   }
   const unplaced = [...blocks.values()].sort((a, b) => Number(!!a.pc) - Number(!!b.pc))
   return { byRow: lists, unplaced, jobsByRow }

@@ -59,3 +59,9 @@ test("a badge's tooltip lists 8 titles then how many more, and says what a click
   expect(tip.slice(1, 9)).toEqual(titles.slice(0, 8))
   expect(tip.slice(9)).toEqual(['+3 more', 'Click to list them'])
 })
+
+test('a cloud row in Count mode shows an HSwarm badge for the jobs placed under it', () => {
+  const nested = nestTasks([{ key: 'cloud:s-chat', sessionIds: ['s-chat'] }], [], [job('x'), job('y', { active: false })])
+  const sub = rowSubItems('cloud:s-chat', nested.byRow.get('cloud:s-chat'), nested.jobsByRow.get('cloud:s-chat'), { tasks: 'count', jobs: 'count' }, new Set())
+  expect(sub.badges.map((b) => [b.kind, b.running, b.total])).toEqual([['jobs', 1, 2]])
+})

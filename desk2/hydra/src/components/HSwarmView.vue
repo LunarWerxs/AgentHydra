@@ -24,7 +24,7 @@ import {
   Server,
   X,
 } from '@lucide/vue'
-import { type Component, computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { type Component, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -35,6 +35,7 @@ import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { hswarmJobAsk } from '@/lib/hswarm-pages'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmJobs from './hswarm/HSwarmJobs.vue'
@@ -651,6 +652,19 @@ useDeskSidebar(
       else if (e.id === 'add-model') select('models', { adding: true })
     }
   },
+)
+
+// Desk asked for one job (its sidebar's job rows): selected once the jobs list is in, which shows its detail
+// (HSwarmJobs opens the job it is given). The job is selected even when the list shows only the newest few.
+watch(
+  [hswarmJobAsk, jobs],
+  () => {
+    const id = hswarmJobAsk.value
+    if (!id || !jobs.value) return
+    hswarmJobAsk.value = null
+    select(`jobs/${enc(id)}`)
+  },
+  { immediate: true },
 )
 
 onMounted(async () => {

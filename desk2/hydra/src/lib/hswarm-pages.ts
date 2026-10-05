@@ -39,6 +39,9 @@ function readPage(): string {
 /** The page on screen in the HSwarm tab, remembered across reloads. */
 export const hswarmPage = ref<string>(readPage())
 
+/** A job Desk's sidebar asked to open (App.vue sets it from deskSwarmAsk); the HSwarm page takes it and clears it. */
+export const hswarmJobAsk = ref<string | null>(null)
+
 /** Shows a page (the tab itself is chosen by the caller: view.value = 'hswarm'). */
 export function showHSwarmPage(id: string): void {
   if (!parseHSwarmPage(id)) return

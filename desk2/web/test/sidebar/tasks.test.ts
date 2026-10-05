@@ -233,6 +233,7 @@ function swarmJob(id: string, o: Partial<SwarmJob> = {}): SwarmJob {
   return { id, title: id, status: 'running', active: true, startedAt: 1, endedAt: null, tasks: { total: 4, done: 1, failed: 0, cancelled: 0 }, callerSessionId: null, callerHostSessionId: null, callerTitle: null, pc: null, ...o }
 }
 
+// (The old rule dropped a finished job with no drawn chat; it now sits under its stand-in like a finished task.)
 test("an HSwarm job sits under the row of its caller's session, or of its host session, apart from the CliMayte tasks", () => {
   const rows = [
     { key: 'chat:a', sessionIds: ['11111111-2222-4333-8444-555555555555'] },
@@ -252,13 +253,59 @@ test("an HSwarm job sits under the row of its caller's session, or of its host s
   expect(nested.unplaced).toEqual([])
 })
 
-test('a running HSwarm job no row has goes to the unplaced block of this PC under its caller, a finished one is not shown', () => {
-  const jobs = [swarmJob('j-lost', { callerSessionId: '99999999' }), swarmJob('j-old', { callerSessionId: '99999999', status: 'done', active: false })]
+test('an HSwarm job no row has goes under its stand-in on this PC, finished or running, titled from callerTitle else by short id', () => {
+  const jobs = [
+    swarmJob('j-lost', { callerSessionId: '99999999' }),
+    swarmJob('j-old', { callerSessionId: '99999999', status: 'done', active: false }),
+    swarmJob('j-named', { callerSessionId: '11111111-2222-3333-4444-555555555555', callerTitle: 'Example chat', status: 'done', active: false })
+  ]
   const nested = nestTasks([{ key: 'chat:a', sessionIds: ['s-a'] }], [], jobs)
   expect(nested.jobsByRow.size).toBe(0)
   expect(nested.unplaced).toHaveLength(1)
   const [block] = nested.unplaced
   expect(block!.pc).toBeNull()
-  expect(block!.chats.map((c) => [c.title, c.jobs.map((j) => j.id), c.nodes.length])).toEqual([['A chat · 99999999', ['j-lost'], 0]])
+  expect(block!.chats.map((c) => [c.title, c.jobs.map((j) => j.id), c.nodes.length])).toEqual([
+    ['A chat · 99999999', ['j-lost', 'j-old'], 0],
+    ['Example chat', ['j-named'], 0]
+  ])
+  // Only the running one counts in the heading.
   expect(unplacedHeading(block!).count).toBe(1)
+})
+
+test('a job and a task of the same unlisted chat share one stand-in, whether the job has the full id or its prefix', () => {
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const nested = nestTasks([], [worker('w1', 1, { originSessionId: sid })], [swarmJob('j-full', { callerSessionId: sid }), swarmJob('j-prefix', { callerSessionId: '11111111', status: 'done', active: false })])
+  const chats = nested.unplaced.flatMap((b) => b.chats)
+  expect(chats.map((c) => [c.nodes.length, c.jobs.map((j) => j.id)])).toEqual([[1, ['j-full', 'j-prefix']]])
+})
+
+test('an 8-character prefix that two rows share places the job under its stand-in, not under a guessed row', () => {
+  const rows = [
+    { key: 'chat:a', sessionIds: ['abcdef12-0000-4000-8000-000000000001'] },
+    { key: 'chat:b', sessionIds: ['abcdef12-0000-4000-8000-000000000002'] }
+  ]
+  const nested = nestTasks(rows, [], [swarmJob('j-amb', { callerSessionId: 'abcdef12' })])
+  expect(nested.jobsByRow.size).toBe(0)
+  expect(nested.unplaced[0]!.chats.map((c) => [c.title, c.jobs.map((j) => j.id)])).toEqual([['A chat · abcdef12', ['j-amb']]])
+})
+
+test('in the cloud list (rows keyed cloud:<id>) a job sits under the cloud row of its caller session', () => {
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const rows = [{ key: `cloud:${sid}`, sessionIds: [sid] }]
+  const nested = nestTasks(rows, [], [swarmJob('j-cloud', { callerSessionId: sid })])
+  expect(nested.jobsByRow.get(`cloud:${sid}`)?.map((j) => j.id)).toEqual(['j-cloud'])
+  expect(nested.unplaced).toEqual([])
+})
+
+test("the other PC's job goes under the row that has its session, else into that PC's block", () => {
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const other = swarmJob('j-other', { callerSessionId: sid, pc: 'Other-PC' })
+  const placed = nestTasks([{ key: 'cloud:x', sessionIds: [sid] }], [], [other])
+  expect(placed.jobsByRow.get('cloud:x')?.map((j) => j.id)).toEqual(['j-other'])
+  const lost = nestTasks([], [], [other, swarmJob('j-here', { callerSessionId: sid })])
+  expect(lost.unplaced.map((b) => [b.pc, b.chats.map((c) => c.jobs.map((j) => j.id))])).toEqual([
+    [null, [['j-here']]],
+    ['Other-PC', [['j-other']]]
+  ])
+  expect(unplacedHeading(lost.unplaced[1]!).title).toBe('On Other-PC')
 })

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { Cloud, EyeOff } from '@lucide/vue'
-import type { CliMayteWorker, CloudSession } from '@shared/protocol'
+import type { CliMayteWorker, CloudSession, SwarmJob } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import RowAge from '@/lib/RowAge.vue'
@@ -33,6 +33,9 @@ const props = defineProps<{
   tasksOf?: (id: string) => TaskNode[] | null
   /** The tasks of a row whose lines are drawn (Count mode leaves them out until its badge is opened); `tasksOf` still counts every one. */
   shownOf?: (id: string) => TaskNode[] | null
+  /** The HSwarm jobs a row's chat started (they count in a folded group's heading); `shownJobsOf` has those whose lines are drawn. */
+  jobsOf?: (id: string) => SwarmJob[] | null
+  shownJobsOf?: (id: string) => SwarmJob[] | null
   /** Whether a row's session runs now, for a folded group's heading. */
   running?: (id: string) => boolean
   /** The desk row's dot (running, needs you, idle): the row here draws the same one. */
@@ -40,7 +43,7 @@ const props = defineProps<{
   /** A row's right-click menu: its desk row's, or the cloud-only one (Sidebar.vue cloudMenu). */
   menuFor?: (row: CloudSession) => RowMenuEntry[]
 }>()
-const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; action: [row: CloudSession, item: RowMenuItem] }>()
+const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
 
 const cloud = useCloud()
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
@@ -58,7 +61,7 @@ function toggleGroup(key: string) {
 }
 
 /** The running tasks under a group's rows, and its rows that run, for its heading while it is folded. */
-const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id))) : 0)
+const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id)), rows.map((r) => props.jobsOf?.(r.id))) : 0)
 const chatsRunningIn = (rows: readonly CloudSession[]) => (props.running ? rows.filter((r) => props.running!(r.id)).length : 0)
 const foldedRunning = computed(() => {
   const out = new Map<string, { tasks: number; chats: number }>()
@@ -218,7 +221,7 @@ const ROW =
           </ContextMenu>
           </span>
         </Tip>
-        <TaskRows v-if="(props.shownOf ?? props.tasksOf)?.(r.id)?.length" :nodes="(props.shownOf ?? props.tasksOf)!(r.id)!" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" />
+        <TaskRows v-if="(props.shownOf ?? props.tasksOf)?.(r.id)?.length || (props.shownJobsOf ?? props.jobsOf)?.(r.id)?.length" :nodes="(props.shownOf ?? props.tasksOf)?.(r.id) ?? []" :jobs="(props.shownJobsOf ?? props.jobsOf)?.(r.id) ?? []" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" @open-job="(j: SwarmJob) => emit('open-job', j)" />
         </div>
       </TransitionGroup>
     </section>

@@ -53,7 +53,7 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
-import { showHSwarmPage } from '@/lib/hswarm-pages'
+import { hswarmJobAsk, showHSwarmPage } from '@/lib/hswarm-pages'
 import {
   deskInstanceAsk,
   deskWorkerAsk,
@@ -139,10 +139,11 @@ function openClimayte() {
 watch(deskWorkerAsk, (id) => {
   if (id) openClimayte()
 })
-// Desk's sidebar asked for an HSwarm job: the HSwarm tab (the copy cannot open one job).
+// Desk's sidebar asked for an HSwarm job: the HSwarm tab on its own page, which selects that job (HSwarmView takes the ask).
 watch(deskSwarmAsk, (ask) => {
   if (!ask) return
   deskSwarmAsk.value = null
+  hswarmJobAsk.value = ask.job ?? null
   showHSwarmPage('hswarm')
   view.value = 'hswarm'
 })

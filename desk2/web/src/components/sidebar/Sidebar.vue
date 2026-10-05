@@ -238,14 +238,14 @@ const emptyText = computed(() =>
 // these"): the desk store keeps them apart from src.workers so they never count as this PC's
 // (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
 // HSwarm's jobs, pushed by the server into the desk store (lib/swarm-jobs.ts); the other PCs' only with the cloud on.
-// The cloud list draws no jobs under its rows, so there a running one goes in the unplaced block.
+// The cloud list draws them under its rows as the desk list does (a job whose caller no row has goes in the unplaced block).
 const swarmJobs = useSwarmJobs(cloud.on)
 const remoteWorkers = computed(() => (cloud.on.value ? (src.remoteWorkers?.value ?? []) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
   const jobs = swarmJobs.value
-  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs, { jobRows: [] })
+  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs)
   // The rows the desk list draws, as groupChats picks them (never a CliMayte worker's own session, nor a
   // session that is one of our chats); a row in a folded group still holds its tasks, and the group's heading
   // counts the running ones (RunningBadge). A chat stands for its worker by id too, so one still queued (no
@@ -279,7 +279,7 @@ const foldedRunning = computed(() => {
 const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
 const sessionRunning = (id: string) => runningSessions.value.has(id)
 const deskDots = computed(() => deskGlyphs(src.chats.value, src.external.value))
-/** An HSwarm job opens AgentHydra's HSwarm tab (the copy cannot open one job). */
+/** An HSwarm job opens on AgentHydra's HSwarm page, selected in its list (the id goes to App.vue's deskSwarmAsk watch). */
 const openJob = (j: SwarmJob) => openSwarmInHydra(j.id)
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
@@ -565,7 +565,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :running="sessionRunning" :glyph="(id: string) => deskDots.get(id)" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask">
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsOf(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="(id: string) => deskDots.get(id)" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>
