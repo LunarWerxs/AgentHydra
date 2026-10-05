@@ -236,6 +236,20 @@ export function runningSessionIds(chats: Pick<ChatSummary, 'sessionId' | 'status
   ])
 }
 
+/** The desk rows' dots that move (running, needs you) by session id: the cloud list draws the same dot on those rows. */
+export function movingGlyphs(
+  chats: Pick<ChatSummary, 'sessionId' | 'status' | 'unread'>[],
+  external: Pick<ExternalSession, 'id' | 'status' | 'unread'>[]
+): Map<string, StatusGlyph> {
+  const out = new Map<string, StatusGlyph>()
+  for (const [id, g] of [
+    ...chats.map((c) => [c.sessionId, statusGlyph(c)] as const),
+    ...external.map((s) => [s.id, externalGlyph(s)] as const)
+  ])
+    if (id && g.motion !== 'none' && !out.has(id)) out.set(id, g)
+  return out
+}
+
 /**
  * The row order after rows turned orange (Jacob, 2026-10-04: a chat that finishes and needs checking
  * goes to the top of its project, the latest one first; nothing else moves). `wasOrange` is each row's

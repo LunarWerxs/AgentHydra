@@ -150,13 +150,23 @@ describe('external sessions', () => {
 
   test('without a hook row the transcript age decides: idle, then stale after 2 h', () => {
     const noHooks = { ...inputs, agentStatus: [] }
+    // a session only the index knows (written 16 s before NOW) stays listed, idle, for 10 minutes after its last write
+    expect(mapExternal(noHooks, new Set(), NOW + 5 * 60_000).find((x) => x.id === sid(4))).toMatchObject({ source: 'cli', status: 'idle' })
     const later = mapExternal(noHooks, new Set(), NOW + 10 * 60_000)
     expect(later.find((x) => x.id === sid(3))!.status).toBe('idle')
     expect(later.some((x) => x.status === 'needs_you')).toBe(false)
-    // the 30-second index rows have aged out of the list
+    // and then leaves it
     expect(later.some((x) => x.id === sid(4))).toBe(false)
     const hoursLater = mapExternal(noHooks, new Set(), NOW + 3 * 3600_000)
     expect(hoursLater.find((x) => x.id === sid(3))!.status).toBe('stale')
+  })
+
+  // While 30 s was the whole window, an HSwarm job came and went with each burst of writes (owner, 2026-10-05).
+  test("HSwarm's job transcripts stay out of the list however fresh; one asked for by id is still found", () => {
+    const job = { ...inputs.sessions.find((r) => r.session_id === sid(4))!, session_id: sid(900), source: 'zswarm', last_activity_at: NOW - 5_000 }
+    const withJob = { ...inputs, sessions: [...inputs.sessions, job] }
+    expect(mapExternal(withJob, new Set(), NOW).some((x) => x.id === sid(900))).toBe(false)
+    expect(mapExternal({ ...withJob, wanted: new Set([sid(900)]) }, new Set(), NOW).find((x) => x.id === sid(900))).toMatchObject({ source: 'other', status: 'working' })
   })
 
   // The desk list's cloud icon (ExternalRow) is drawn from this: nothing else carries AgentHydra's mark there.

@@ -14,9 +14,12 @@
 //
 // WHICH SESSIONS. The union, deduplicated by session id, in this order of precedence: active CliMayte
 // workers, live Claude Desktop chats (/api/chats), the live registry (/api/sessions/live), hook rows
-// that say working or blocked, and any indexed transcript written in the last 30 s (a CLI or Codex
-// session outside ~/.claude), or of any age when it is the one session asked for by id. Minus the
-// session ids of Hydra Desk's own chats.
+// that say working or blocked, and any indexed transcript written in the last 10 minutes (a CLI or Codex
+// session outside ~/.claude; working for its first 30 s, idle after), or of any age when it is the one
+// session asked for by id. Minus the session ids of Hydra Desk's own chats, and minus HSwarm's job
+// transcripts (source 'zswarm'), which have their own tab. Both rules are against rows popping in and out
+// (owner, 2026-10-05): an HSwarm job writes in bursts, and while 30 s was the whole window, each burst
+// put it in the list and each pause of 30 s took it out again.
 
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { MAX_TOOL_RESULT_CHARS } from '@shared/protocol'
@@ -27,6 +30,8 @@ import { classifyUserText, taskItemFrom } from '../engine/system-text'
 
 /** A transcript written this recently is working (when no hook says otherwise). */
 export const WORKING_WINDOW_MS = 30_000
+/** A session only the transcript index knows stays listed this long after its last write, idle after the first 30 s. */
+export const LISTED_AFTER_WRITE_MS = 10 * 60 * 1000
 /** No activity for this long is stale. */
 export const STALE_AFTER_MS = 2 * 60 * 60 * 1000
 
@@ -165,7 +170,8 @@ export function mapExternal(
   for (const h of hooks.values())
     if (h.state !== 'done') fromIndex(h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
   for (const s of inp.sessions)
-    if (now - s.last_activity_at <= WORKING_WINDOW_MS || inp.wanted?.has(s.session_id)) fromIndex(s.session_id, sessionSource(s.source), {})
+    if (inp.wanted?.has(s.session_id) || (s.source !== 'zswarm' && now - s.last_activity_at <= LISTED_AFTER_WRITE_MS))
+      fromIndex(s.session_id, sessionSource(s.source), {})
 
   return [...out.values()].sort(
     (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),

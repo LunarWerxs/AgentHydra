@@ -36,12 +36,21 @@ sidebar on the left stays put, and only the pane on the right changes.
   (and their groups after the desk's groups), each kept where it first appeared. Those rows lead with a
   cloud icon, their tooltip saying where they come from; a chat that came over from the other PC through
   AgentHydra's chat sync also shows that PC's name (the desk list marks it with the same cloud), and each
-  row shows its AgentHydra instance number (#37), as AgentHydra's rows do. A session the desk list does
+  row shows its AgentHydra instance number (#37), as AgentHydra's rows do. A row the desk list shows keeps
+  its dot, and the dot moves as it does there: gray and pulsing while the session works, orange while it
+  waits on you (owner, 2026-10-05: "the gray dots in the sidebar should pulse when they're working"). A session the desk list does
   not show goes under the folder it
   started in, which is where Claude Desktop files it, even after it moved into a subfolder. Clicking one opens its
   transcript on the right. Search looks through every session, archived ones included, from all time,
   and shows the best matches first. The cloud button again goes back to the desk list. It replaces
   AgentHydra's Sessions tab.
+- **Rows that go away fade.** A row leaving either sidebar list, a CliMayte task line, or a folder whose last
+  row left fades out and then folds shut, so the rows under it slide up instead of jumping (owner,
+  2026-10-05). Rows a search or a filter hides go at once, and so does everything while the window is
+  hidden or asks for reduced motion. Rows also stopped popping in and out: an outside session only
+  AgentHydra's transcript index knows (a Codex session, a CLI outside `~/.claude`) stays listed for 10
+  minutes after its last write, idle after the first 30 s, instead of leaving 30 s after each write, and
+  HSwarm's job transcripts stay out of the desk list (HSwarm has its own tab), as they do in the cloud list.
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,

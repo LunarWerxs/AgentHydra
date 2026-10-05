@@ -5,6 +5,7 @@ import type { CliMayteWorker } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
 import { elapsedLabel } from './logic'
 import type { TaskNode } from './tasks'
+import { rowLeave } from '@/lib/row-leave'
 
 // The CliMayte tasks under one sidebar row, the chat that spawned them (components/sidebar/tasks.ts): 22px
 // lines, one step in per level, with a guide line down their left. A task with a session opens its live
@@ -44,7 +45,7 @@ function tip(w: CliMayteWorker, now: number): string {
 </script>
 
 <template>
-  <div class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks">
+  <TransitionGroup tag="div" class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks" :css="false" @leave="rowLeave">
     <button
       v-for="n in nodes"
       :key="keyOf(n.worker)"
@@ -68,5 +69,5 @@ function tip(w: CliMayteWorker, now: number): string {
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
     </button>
-  </div>
+  </TransitionGroup>
 </template>

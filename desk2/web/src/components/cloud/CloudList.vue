@@ -8,6 +8,8 @@ import { relativeTime } from '@/components/sidebar/search'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
 import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
+import { glyphDotClass, type StatusGlyph } from '@/components/sidebar/logic'
+import { leaveUnlessFiltered } from '@/lib/row-leave'
 import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, sessionShape, SHAPE_LABELS } from './logic'
 import { useCloud } from './store'
 
@@ -26,10 +28,13 @@ const props = defineProps<{
   tasksOf?: (id: string) => TaskNode[] | null
   /** Whether a row's session runs now, for a folded group's heading. */
   running?: (id: string) => boolean
+  /** The desk row's dot while it moves (running, needs you): the row here draws the same one. */
+  glyph?: (id: string) => StatusGlyph | undefined
 }>()
 const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker] }>()
 
 const cloud = useCloud()
+const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
 const collapsed = ref(new Set<string>())
 function toggleGroup(key: string) {
   const next = new Set(collapsed.value)
@@ -65,6 +70,12 @@ function tooltip(r: CloudSession): string {
     .filter(Boolean)
     .join('\n')
 }
+/** A row the desk list shows keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
+function dotClass(r: CloudSession): string {
+  if (r.archived) return 'border border-text-muted'
+  const g = props.glyph?.(r.id)
+  return g ? glyphDotClass(g) : 'bg-text-muted'
+}
 function onRow(r: CloudSession) {
   if (cloud.selectMode.value) cloud.toggleSelected(r.id)
   else emit('open', r)
@@ -98,6 +109,7 @@ const ROW =
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
     </p>
 
+    <TransitionGroup :css="false" @leave="rowLeave">
     <section v-for="(g, gi) in cloud.groups.value" :key="g.key" :aria-label="g.label">
       <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted">
         <Tip :label="g.cwd ?? ''" align="start">
@@ -115,8 +127,8 @@ const ROW =
         <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />
       </header>
-      <div v-if="!collapsed.has(g.key)" class="flex flex-col gap-[1.5px] pt-[1.5px]">
-        <template v-for="r in g.rows" :key="r.id">
+      <TransitionGroup v-if="!collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
+        <div v-for="r in g.rows" :key="r.id" class="flex flex-col gap-[1.5px]">
         <Tip :label="tooltip(r)" side="right" align="start">
           <div
             role="button"
@@ -138,7 +150,7 @@ const ROW =
               </span>
               <Cloud v-else-if="!cloud.onDesk(r.id)" role="img" :aria-label="cloudOnlyLabel(r, thisPc)" class="size-3.5 text-text-muted" />
               <Cloud v-else-if="otherPc(r)" role="img" :aria-label="fromPcLabel(otherPc(r)!)" class="size-3.5 text-text-muted" />
-              <span v-else class="size-1.5 rounded-full" :class="r.archived ? 'border border-text-muted' : 'bg-text-muted'" />
+              <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
@@ -147,9 +159,10 @@ const ROW =
           </div>
         </Tip>
         <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" :now="now" @open="(w: CliMayteWorker) => emit('open-task', w)" />
-        </template>
-      </div>
+        </div>
+      </TransitionGroup>
     </section>
+    </TransitionGroup>
 
     <div v-if="cloud.selectMode.value" class="sticky bottom-0 mt-2 flex items-center gap-1 rounded-[var(--radius-6)] bg-bg-popover px-1.5 py-1 text-[12px] text-text-2 shadow-(--shadow-popover)">
       <span class="flex-1">{{ cloud.selected.value.size }} selected</span>

@@ -37,6 +37,8 @@ function createCloud() {
   // The search the rows answer, not what the box says now: until a search's answer arrives the rows are
   // still the plain list, and they keep their folder groups.
   const answered = ref('')
+  // The whole question the rows answer (filters and search), so a list can tell rows a new answer left out.
+  const answeredQuery = ref('')
   // A reload starts from the last answer to the same filters, then asks again.
   const cached = readCache<CachedCloud>('cloud')
   const fresh =
@@ -70,6 +72,7 @@ function createCloud() {
       if (!asked.trim()) writeCache('cloud', { query, list } satisfies CachedCloud)
       sessions.value = list.sessions
       answered.value = asked
+      answeredQuery.value = query
       thisPc.value = list.thisPc
       error.value = null
       loaded.value = true
@@ -160,6 +163,8 @@ function createCloud() {
     scopes,
     search,
     sessions,
+    /** The filters and search the rows answer: a change means rows went because the question changed. */
+    answeredQuery,
     thisPc,
     instances,
     loading,

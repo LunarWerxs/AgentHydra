@@ -48,12 +48,14 @@ import {
   revealChat,
   rowPatch,
   runningSessionIds,
+  movingGlyphs,
   type ChatGroup,
   type RowMenuItem,
   type RowState,
   type SidebarFilter
 } from './logic'
 import { useSidebarOrder } from './order'
+import { leaveUnlessFiltered } from '@/lib/row-leave'
 
 // The real sidebar: 288 wide on #111111, 36px left free at the top for the chrome bar, the New row (the
 // real app's Projects, Artifacts, Customize and More rows are left out on purpose), then Pinned and one
@@ -189,6 +191,7 @@ const groupList = computed<ChatGroup[]>(() => {
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
 const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active')
+const rowLeave = leaveUnlessFiltered([query, filter])
 const emptyText = computed(() =>
   query.value.trim() ? 'No matching sessions' : filter.value === 'archived' ? 'No archived sessions' : 'No sessions yet'
 )
@@ -228,6 +231,7 @@ const chatsRunningIn = (g: ChatGroup) => g.entries.filter(entryRunning).length
 /** The cloud list's rows that run: the ones the desk knows as running. */
 const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
 const sessionRunning = (id: string) => runningSessions.value.has(id)
+const movingDots = computed(() => movingGlyphs(src.chats.value, src.external.value))
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
@@ -467,13 +471,15 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" @open="openCloud" @open-task="openTask">
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :running="sessionRunning" :glyph="(id: string) => movingDots.get(id)" @open="openCloud" @open-task="openTask">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>
         </CloudList>
 
         <template v-else>
+        <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
+        <TransitionGroup :css="false" @leave="rowLeave">
         <section v-for="(group, gi) in groupList" :key="group.key" :aria-label="group.label">
           <header
             class="group/head flex h-[34px] items-center gap-0 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted"
@@ -511,7 +517,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
             </template>
           </header>
-          <div v-if="!collapsed.has(group.key)" class="flex flex-col gap-[1.5px] pt-[1.5px]">
+          <TransitionGroup v-if="!collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
               :key="`${entry.kind}:${entry.id}`"
@@ -539,8 +545,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               />
               <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`)!" :selected-id="selectedExternalId" :now="now" @open="openTask" />
             </div>
-          </div>
+          </TransitionGroup>
         </section>
+        </TransitionGroup>
 
         <div v-if="groupList.length === 0" class="flex items-center gap-1 px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
           <span class="flex-1">{{ emptyText }}</span>

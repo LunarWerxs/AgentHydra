@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **Hydra Desk 2's sidebar rows fade out and fold shut when they go, and the cloud list's dots move** (2026-10-05, owner: "if a chat gets removed in the sidebar, instead of disappearing, it should, like, fade out and then slightly animate closed"; "the gray dots in the sidebar should pulse when they're working"). A row leaving the desk list or the cloud list, a CliMayte task line, or a folder whose last row left fades for 160 ms and then closes over 180 ms, so the rows below slide up. Rows a search or filter hides still go at once, as does everything in a hidden window or with reduced motion asked for. In the cloud list a row the desk list shows had a still gray dot whatever the session was doing; it now pulses like the desk list's, gray while the session works and orange while it waits on you.
+
+### Fixed
+
+- **Rows in Hydra Desk 2's desk list no longer pop in and out by themselves** (2026-10-05, owner: "things just keep kind of, like, popping in and popping out for no reason"). Besides the live chats and sessions, the desk list showed any transcript written in the last 30 seconds. HSwarm's jobs write theirs in bursts, so each job appeared with every burst and vanished 30 seconds into every pause. HSwarm's jobs are now left out of the desk list, as the cloud list already left them out (HSwarm has its own tab), and another session only the transcript index knows (a Codex session, a CLI outside `~/.claude`) stays listed, idle, for 10 minutes after its last write instead of 30 seconds.
+
 ## [1.10.0] - 2026-10-05
 
 ### Changed
