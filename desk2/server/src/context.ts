@@ -15,6 +15,8 @@ export interface ServerContext {
   /** Replaces the provider of the `hello` event each window gets on connect (the engine registers one). */
   registerHello(fn: HelloProvider): void
   wsClientCount(): number
+  /** Runs fn for each window that connects, after its `hello`; `send` reaches that window alone. */
+  onConnect(fn: (send: (event: ServerEvent) => void) => void): void
   /** Runs fn when the server stops (close runtimes, stop pollers). */
   onStop(fn: () => void | Promise<void>): void
   /** Whatever createServer({ deps }) was given: tests inject fakes here, plugins read them first. */

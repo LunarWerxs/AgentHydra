@@ -14,6 +14,7 @@ import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
 import { OPEN_HYDRA_EVENT, hydraOpen } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
+import { showTasks } from '@/components/sidebar/tasks'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
 import { OPEN_TASKS_EVENT, type OpenTasksDetail } from '@/components/tasks/api'
 import ChromeBar from './ChromeBar.vue'
@@ -103,7 +104,7 @@ const greetingName = computed(() => {
 const SIDEBAR_KEY = 'hydra-desk.sidebar.width'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 const savedWidth = Number(storage?.getItem(SIDEBAR_KEY))
-const sidebarWidth = ref(savedWidth >= 220 && savedWidth <= 420 ? savedWidth : 288)
+const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? savedWidth : 288)
 // Open or hidden (header toggle, Ctrl+B), remembered; the width animates 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
@@ -223,8 +224,9 @@ const openThinking = computed(() => (showThinking.value ? items.value.filter((i)
 
 // Hydra Desk 2: AgentHydra slides in over the chat side (the sidebar stays), pushing the chat out to the
 // left; the same button or the pane's own "← Desk" button slides the chat back. While it is open the
-// sidebar is AgentHydra's session list (the cloud list, turned on for it and off again after unless it
-// was already on), and a session clicked there opens in AgentHydra. Picking anything of Desk's own in
+// sidebar is the list of AgentHydra's current tab where it has one (CliMayte's tasks, HSwarm's tree:
+// components/hydra/HydraSidebar.vue), else AgentHydra's session list (the cloud list, turned on for it
+// and off again after unless it was already on); a session clicked there opens on Desk's side. Picking anything of Desk's own in
 // the sidebar slides the chat back. The cloud button turns the sidebar's list into every session of
 // both PCs on its own too (components/cloud).
 const cloud = useCloud()
@@ -260,6 +262,10 @@ function toggleCloud() {
   cloud.on.value = !cloud.on.value
   cloudForHydra = false
   if (cloud.on.value) toggleSidebar(true)
+}
+function toggleTasks() {
+  showTasks.value = !showTasks.value
+  if (showTasks.value) toggleSidebar(true)
 }
 
 // Right pane
@@ -387,9 +393,9 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Cloud, after Forward and
-// AgentHydra, ends at 198).
-const CHROME_COLLAPSED = 206
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (CliMayte, after Forward,
+// AgentHydra and Cloud, ends at 230).
+const CHROME_COLLAPSED = 238
 const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 
@@ -403,8 +409,10 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       :can-forward="canForward"
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
+      :tasks-on="showTasks"
       @hydra="toggleHydra()"
       @cloud="toggleCloud"
+      @tasks="toggleTasks"
       @new="src.select({ kind: 'new' })"
       @search="openSearch"
       @toggle-sidebar="toggleSidebar()"

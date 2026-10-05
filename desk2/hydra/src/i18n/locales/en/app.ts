@@ -1,6 +1,8 @@
 // App shell strings: top bar tabs, queue toggle, settings toggle, the one-time rebrand notice.
 export default {
   tabSessions: 'Sessions',
+  // Hydra Desk 2 asked for an account's row in Instances and neither table shows it (lib/desk-embed.ts).
+  deskInstanceMissing: 'Instance #{num} is not in the Instances tables',
   tabInstances: 'Instances',
   queue: 'Queue',
   settings: 'Settings',

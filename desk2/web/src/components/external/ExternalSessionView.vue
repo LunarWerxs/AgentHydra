@@ -17,8 +17,10 @@ import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, wh
 // message imports and resumes it (on the CLI instance that holds it, else as a copy under the account
 // it lands on), a quiet line over it saying which; working there, a quiet line until it settles.
 // Anything else (Codex, CliMayte workers) stays read-only: nothing here can resume it.
-// Hydra Desk 2: AgentHydra's session header sits over the transcript (components/session-header), and
-// its Display choices pick what the transcript shows.
+// Hydra Desk 2: AgentHydra's session header lies over the top of the transcript (components/session-header):
+// it slides away and back on a transform, and the transcript keeps its first row clear of it with a top
+// inset rather than shrinking, so folding it lays nothing out again. Its Display choices pick what the
+// transcript shows.
 const props = defineProps<{ sessionId: string }>()
 
 const src = useShellSource()
@@ -34,6 +36,8 @@ const isWorking = computed(() => session.value?.status === 'working' || session.
 const usable = computed(() => !!session.value && resumable(session.value))
 const shown = computed(() => displayItems(items.value, displayPrefs.value))
 const find = ref<{ query: string; active: FindHit | null } | null>(null)
+/** How much of the top the session header (and its Find bar) covers right now. */
+const inset = ref(0)
 const standIn = computed(() =>
   session.value?.canResume ? externalChat(session.value, src.accounts.value, desk.externalPatch(session.value.id), desk.landingOf(session.value.id)) : null
 )
@@ -104,14 +108,35 @@ onUnmounted(stopPolling)
 
 <template>
   <div class="flex h-full flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]">
-    <SessionHeader :session-id="sessionId" :session="session ?? null" :items="items" :shown="shown" @update:find="(f) => (find = f)" />
-    <div v-if="loading" class="flex flex-1 items-center justify-center text-[var(--text-muted)]">Loading transcript…</div>
-    <div v-else-if="error && !items.length" class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <div class="font-medium">Could not load this session</div>
-      <div class="text-[var(--text-muted)]">{{ error }}</div>
-    </div>
-    <div v-else class="min-h-0 flex-1 overflow-hidden">
-      <TranscriptView :chat-id="sessionId" :items="shown" :read-only="!standIn" :chat="standIn" :find="find" :compact="displayPrefs.compact" />
+    <!-- The header is clipped here: folded, it slides up out of this box, never over the title bar. -->
+    <div class="relative min-h-0 flex-1 overflow-hidden">
+      <SessionHeader
+        :session-id="sessionId"
+        :session="session ?? null"
+        :items="items"
+        :shown="shown"
+        @update:find="(f) => (find = f)"
+        @update:inset="(h: number) => (inset = h)"
+      />
+      <div v-if="loading" class="flex h-full items-center justify-center text-[var(--text-muted)]" :style="{ paddingTop: `${inset}px` }">Loading transcript…</div>
+      <div
+        v-else-if="error && !items.length"
+        class="flex h-full flex-col items-center justify-center gap-1 px-6 text-center"
+        :style="{ paddingTop: `${inset}px` }"
+      >
+        <div class="font-medium">Could not load this session</div>
+        <div class="text-[var(--text-muted)]">{{ error }}</div>
+      </div>
+      <TranscriptView
+        v-else
+        :chat-id="sessionId"
+        :items="shown"
+        :read-only="!standIn"
+        :chat="standIn"
+        :find="find"
+        :compact="displayPrefs.compact"
+        :inset-top="inset"
+      />
     </div>
 
     <template v-if="standIn">

@@ -33,6 +33,7 @@ import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId
 import { saveDraft } from '@/components/composer/logic'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { rememberView, restoreView } from '@/lib/view-memory'
+import { readCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
 import { reportAtPaint, reportTiming } from '@/lib/timing'
 
@@ -64,11 +65,13 @@ let wsReconnectDelay = 1000
 const maxReconnectDelay = 30000
 let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
 
+// Outside sessions and CliMayte workers start from this browser's last copy (lib/list-cache.ts), so a
+// reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
   chats: [],
   itemsByChat: new Map(),
-  external: [],
-  workers: [],
+  external: readCache<ExternalSession[]>('external') ?? [],
+  workers: readCache<CliMayteWorker[]>('workers') ?? [],
   accounts: [],
   settings: null,
   connected: false,
@@ -225,10 +228,12 @@ function handleServerEvent(event: ServerEvent) {
 
     case 'external.update':
       store.external = event.sessions
+      writeCache('external', event.sessions)
       break
 
     case 'climayte.update':
       store.workers = event.workers
+      writeCache('workers', event.workers)
       break
 
     case 'accounts.update':

@@ -99,6 +99,8 @@ export default {
   hideFinished: 'Hide finished',
   hiddenCount: '{n} hidden',
   allHidden: 'Nothing is queued or running. {n} finished tasks are hidden.',
+  // Hydra Desk 2's sidebar lists every open task and the newest finished ones (CliMayteView.vue).
+  deskShowMore: 'Show {n} more ({total} older not shown)',
   offloadedReread:
     'Re-reading a conversation into an empty cache when a run picks it up again (after a move, a limit, a handoff or a gap) took {share}% of what they used: {pct}% of a Pro 5-hour window.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',

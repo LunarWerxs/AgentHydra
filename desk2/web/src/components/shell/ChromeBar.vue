@@ -1,17 +1,18 @@
 <script setup lang="ts">
 import { Cloud } from '@lucide/vue'
-import { shellGlyphs } from '@/lib/icons'
+import { shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu, Hide sidebar, Back,
 // Forward (28px, r7). The real app's Chat / Code mode switch is left out: Hydra Desk is Code only.
-// Hydra Desk 2 adds two after Forward: AgentHydra (slides AgentHydra in beside the sidebar) and Cloud
-// (the sidebar lists every session of both PCs). Each shows when it is on: AgentHydra pressed, Cloud blue.
+// Hydra Desk 2 adds three after Forward: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the
+// sidebar lists every session of both PCs) and CliMayte (each session's running CliMayte tasks listed
+// under it, sidebar/tasks.ts). Each shows when it is on: AgentHydra pressed, Cloud and CliMayte blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
-defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: [] }>()
+defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: []; tasks: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -69,6 +70,11 @@ const BTN = `${BTN_SHAPE} text-text`
       <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
       <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
         <Cloud class="size-4" />
+      </button>
+    </Tip>
+    <Tip :label="tasksOn ? 'Hide the CliMayte tasks under each session' : 'CliMayte: the running tasks under each session'">
+      <button type="button" :class="[BTN_SHAPE, tasksOn ? 'text-accent-text' : 'text-text']" aria-label="CliMayte tasks in the sidebar" :aria-pressed="!!tasksOn" @click="emit('tasks')">
+        <component :is="shellIcons.climayte" class="size-4" />
       </button>
     </Tip>
   </div>

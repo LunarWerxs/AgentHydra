@@ -86,6 +86,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@agenthydra/server': fileURLToPath(new URL('../../server/src', import.meta.url)),
+      '@desk/shared': fileURLToPath(new URL('../shared', import.meta.url)),
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },

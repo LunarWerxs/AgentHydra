@@ -5,6 +5,7 @@ import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
+import type { ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
 import { type HelloProvider, type Plugin, type ServerContext, setContext } from './context'
 import { createSettingsStore, SettingsError } from './settings'
@@ -110,6 +111,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const hub = createWsHub()
   const settings = createSettingsStore(home)
   const stopHooks: (() => void | Promise<void>)[] = []
+  const connectHooks: ((send: (event: ServerEvent) => void) => void)[] = []
   let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, chats: [], settings: settings.get() })
 
   const ctx: ServerContext = {
@@ -121,6 +123,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
       hello = fn
     },
     wsClientCount: hub.clientCount,
+    onConnect: (fn) => void connectHooks.push(fn),
     onStop: (fn) => void stopHooks.push(fn),
     deps: opts.deps ?? {},
   }
@@ -179,6 +182,13 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
           hub.send(ws, await hello())
         } catch (err) {
           console.error('[ws] hello provider failed:', err)
+        }
+        for (const fn of connectHooks) {
+          try {
+            fn((event) => hub.send(ws, event))
+          } catch (err) {
+            console.error('[ws] connect hook failed:', err)
+          }
         }
       },
       message() {

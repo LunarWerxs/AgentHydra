@@ -15,6 +15,8 @@ export interface AhSessionRow {
   message_count: number
   last_activity_at: number
   instance: string | null
+  /** 'cli:<id>', 'codex:<id>' or 'desktop:<dir>' where the row's own store names its instance; null for a Claude Desktop row. */
+  instance_ref?: string | null
   instance_num?: number | null
   model?: string | null
   effort?: string | null
@@ -79,6 +81,14 @@ export const SOURCE_TONE: Record<string, string> = {
   hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#F5C067]',
   dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]',
   zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]'
+}
+
+/** Where the account chip takes you in AgentHydra: the row's instance by its number, on the CLI table for
+ *  a CLI instance's session and the desktop table (Claude Desktop, Codex) otherwise; null without one. */
+export function instanceTarget(row: Pick<AhSessionRow, 'instance_num' | 'instance_ref'> | null): { num: number; kind: 'desktop' | 'cli' } | null {
+  const num = row?.instance_num
+  if (!num || num < 1) return null
+  return { num, kind: row.instance_ref?.startsWith('cli:') ? 'cli' : 'desktop' }
 }
 
 export function sourceName(row: Pick<AhSessionRow, 'source' | 'tool'>): string {

@@ -54,7 +54,15 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
-import { openInDesk, showSessionsInDesk } from '@/lib/desk-embed'
+import {
+  deskInstanceAsk,
+  EMBEDDED,
+  findInstanceRow,
+  flashRow,
+  openInDesk,
+  publishSidebar,
+  showSessionsInDesk,
+} from '@/lib/desk-embed'
 import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -88,6 +96,36 @@ const { view } = useUiPrefs()
 // cloud list is the same thing): Desk opens the chat in its own view (lib/desk-embed.ts).
 watch(pendingSessionJump, (j) => {
   if (j) openInDesk(takeSessionJump() ?? j)
+})
+
+// In Desk, CliMayte and HSwarm draw their sidebar in Desk's own (lib/desk-embed.ts useDeskSidebar); any
+// other tab has none, so Desk shows its cloud list beside it.
+const DESK_SIDEBAR_VIEWS: readonly AppView[] = ['climayte', 'hswarm']
+if (EMBEDDED) {
+  watch(
+    view,
+    (v) => {
+      if (!DESK_SIDEBAR_VIEWS.includes(v)) publishSidebar(null)
+    },
+    { immediate: true },
+  )
+}
+// Desk's session header asked for an account's row in Instances: its table (desktop or CLI), else the
+// other one, scrolled to and marked.
+watch(deskInstanceAsk, async (ask) => {
+  if (!ask) return
+  deskInstanceAsk.value = null
+  const other = ask.kind === 'cli' ? 'desktop' : 'cli'
+  for (const [tab, wait] of [
+    [ask.kind, 4000],
+    [other, 2500],
+  ] as const) {
+    view.value = tab
+    const row = await findInstanceRow(ask.num, wait)
+    if (row) return flashRow(row)
+  }
+  view.value = ask.kind
+  toast(t('app.deskInstanceMissing', { num: ask.num }))
 })
 
 // The shell's own bindings — global, so they are on every view and lead the `?` sheet. Registered

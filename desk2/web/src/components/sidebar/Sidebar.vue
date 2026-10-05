@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ChatSummary, CloudSession, ExternalSession, SessionMetaPatch } from '@shared/protocol'
+import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -9,6 +9,10 @@ import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 import CloudList from '@/components/cloud/CloudList.vue'
 import { useCloud } from '@/components/cloud/store'
+import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
+import { hydraOpen, hydraSidebar, openWorkerInHydra } from '@/components/hydra/api'
+import TaskRows from './TaskRows.vue'
+import { nestTasks, showTasks, type NestRow } from './tasks'
 import ChatRow from './ChatRow.vue'
 import SidebarTools from './SidebarTools.vue'
 import ExternalRow from './ExternalRow.vue'
@@ -57,7 +61,8 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-const MIN_WIDTH = 220
+// 240, not the real app's 220: the chrome bar over it carries Hydra Desk 2's three extra buttons.
+const MIN_WIDTH = 240
 const MAX_WIDTH = 420
 
 const src = useShellSource()
@@ -143,8 +148,32 @@ function saveOrder(next: SidebarOrder) {
   }
 }
 
+// Hydra Desk 2: with the chrome bar's CliMayte button on, each row lists the CliMayte tasks it handed out
+// under it (a manager's wave one step further in), and a task's own row folds into that list (tasks.ts).
+const nesting = computed(() => {
+  if (!showTasks.value) return null
+  const rows: NestRow[] = [
+    ...src.chats.value.map((c) => ({ key: `chat:${c.id}`, sessionIds: c.sessionId ? [c.sessionId] : [], hideable: false })),
+    ...src.external.value.map((s) => ({ key: `external:${s.id}`, sessionIds: [s.id], hideable: s.source === 'climayte' })),
+    ...(cloud.on.value ? cloud.sessions.value.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id], hideable: false })) : [])
+  ]
+  return nestTasks(rows, src.workers.value)
+})
+const tasksOf = (key: string) => nesting.value?.tasks.get(key) ?? null
+const shownExternal = computed(() => {
+  const hidden = nesting.value?.hidden
+  return hidden?.size ? src.external.value.filter((s) => !hidden.has(`external:${s.id}`)) : src.external.value
+})
+function openTask(w: CliMayteWorker) {
+  if (w.sessionId) src.select({ kind: 'external', id: w.sessionId })
+  else openWorkerInHydra(w.id)
+}
+
+// While AgentHydra is open, a tab of it with a sidebar of its own (CliMayte, HSwarm) has it drawn here.
+const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
+
 const groups = computed(() =>
-  groupChats(src.chats.value, { query: query.value, filter: filter.value, external: src.external.value, order: order.value })
+  groupChats(src.chats.value, { query: query.value, filter: filter.value, external: shownExternal.value, order: order.value })
 )
 // What the plain list shows is the order from now on, so a new group or row keeps the place it appeared in;
 // a row that just turned orange goes to the top of its group.
@@ -395,7 +424,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
       <div class="min-h-0 flex-1 overflow-y-auto pr-[2px] pt-1 [scrollbar-width:none]">
-        <div v-if="searchOpen" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
+        <div v-if="searchOpen && !hydraModel" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
           <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="icons.search" class="size-4" /></span>
           <input
             ref="searchInput"
@@ -411,7 +440,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </div>
 
-        <CloudList v-if="cloud.on.value" :selected-id="selectedExternalId" @open="openCloud">
+        <HydraSidebar v-if="hydraModel" :model="hydraModel" />
+
+        <CloudList v-else-if="cloud.on.value" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" @open="openCloud" @open-task="openTask">
           <template #tools>
             <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
           </template>
@@ -480,6 +511,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => act({ kind: 'external', session: entry.session }, item)"
                 @rename="(title: string | null) => attempt('The change', src.updateSessionMeta(entry.id, { title }))"
               />
+              <TaskRows v-if="tasksOf(`${entry.kind}:${entry.id}`)" :nodes="tasksOf(`${entry.kind}:${entry.id}`)!" :selected-id="selectedExternalId" :now="now" @open="openTask" />
             </div>
           </div>
         </section>

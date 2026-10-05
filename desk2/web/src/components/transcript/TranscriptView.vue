@@ -32,6 +32,8 @@ const props = defineProps<{
   find?: { query: string; active: { itemId: string; nth: number } | null } | null
   /** Tighter gaps between rows (the session header's Compact layout). */
   compact?: boolean
+  /** How much of the top something lying over the transcript covers (Hydra Desk 2's session header): the first row starts below it. */
+  insetTop?: number
 }>()
 
 const desk = useDesk()
@@ -259,6 +261,22 @@ watch(activeKey, () => {
 })
 watch([visible, () => props.find?.query, activeKey], () => nextTick(paintFind), { flush: 'post' })
 
+// The header over the top folding or unfolding changes the inset: what is on screen stays where it is
+// (the header slides over it or off it) unless the list is at its top, where the first row follows it.
+// Pinned to the bottom, the bottom stays.
+watch(
+  () => props.insetTop ?? 0,
+  (now, before) => {
+    const el = scroller.value
+    if (!el || now === before) return
+    if (pinned.value) return scrollToBottom()
+    if (el.scrollTop <= 0 && now > before) return
+    el.scrollTop += now - before
+    scrollTop.value = lastTop = el.scrollTop
+  },
+  { flush: 'post' },
+)
+
 // A different chat starts at its bottom.
 watch(
   () => props.chatId,
@@ -283,7 +301,7 @@ watch(
       @wheel.passive="onWheel"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
-      <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] pt-5 @max-[560px]:px-4">
+      <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">No messages yet</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">

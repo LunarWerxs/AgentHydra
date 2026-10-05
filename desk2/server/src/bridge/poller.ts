@@ -1,6 +1,9 @@
 // While at least one window is connected: every 3 s read outside sessions and CliMayte workers, every
 // 30 s the accounts, and broadcast each list only when it changed. bridge.status goes out when
 // AgentHydra goes up or down (and on the first poll after a window connects). Down = empty lists.
+// A window that connects is sent the last of each at once (welcome): broadcasts carry changes only, so
+// a window joining one already open, or reloaded before the old one closed, would otherwise show no
+// sessions until one of them next changed (Michael, 2026-10-04: a refresh showed none).
 
 import type { ServerEvent } from '@shared/protocol'
 import { DEFAULT_ACCOUNT_INFO } from './accounts'
@@ -28,10 +31,17 @@ export function createPoller(o: PollerOptions) {
   let up: boolean | null = null
   let accountsAt = 0
   const sent = new Map<string, string>()
+  /** The newest event of each type, for a window that connects later (welcome). */
+  const latest = new Map<string, ServerEvent>()
+
+  function remember(event: ServerEvent): void {
+    latest.set(event.type, event)
+  }
 
   /** Broadcast when the payload differs from the last one sent for this event type. */
   function emitIfChanged(event: ServerEvent): void {
     const json = JSON.stringify(event)
+    remember(event)
     if (sent.get(event.type) === json) return
     sent.set(event.type, json)
     o.broadcast(event)
@@ -55,7 +65,9 @@ export function createPoller(o: PollerOptions) {
     const flipped = isUp !== up
     if (flipped) {
       up = isUp
-      o.broadcast({ type: 'bridge.status', up: isUp, url: o.bridge.url })
+      const status: ServerEvent = { type: 'bridge.status', up: isUp, url: o.bridge.url }
+      remember(status)
+      o.broadcast(status)
     }
 
     if (!isUp) {
@@ -96,6 +108,14 @@ export function createPoller(o: PollerOptions) {
 
   return {
     tick,
+    /**
+     * A window just connected: it gets the last status and lists on its own, then a poll runs now
+     * rather than at the next interval, and anything newer goes to every window as usual.
+     */
+    welcome(send: (event: ServerEvent) => void): void {
+      for (const e of latest.values()) send(e)
+      void tick()
+    },
     start(): void {
       if (timer) return
       timer = setInterval(() => void tick(), fastMs)

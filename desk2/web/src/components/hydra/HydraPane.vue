@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, RefreshCw } from '@lucide/vue'
+import type { AhMessage } from '@shared/hydra-embed'
 import { Tip } from '@/components/ui/tooltip'
+import { attachHydraFrame, hydraReady, hydraSidebar } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
 // and talking to the one AgentHydra daemon through it, so it can be changed here without touching
 // AgentHydra. The copy has no Sessions tab: the sidebar's cloud list is the session list, and a chat the
-// copy asks to open (ah:open-session) or its session tiles (ah:show-sessions) come back to Desk. The frame
-// loads the first time the pane opens and then stays, so going back and forth keeps AgentHydra where it was.
+// copy asks to open (ah:open-session) or its session tiles (ah:show-sessions) come back to Desk. A tab
+// with a sidebar of its own hands it over (ah:sidebar) and Desk's sidebar draws it (shared/hydra-embed.ts).
+// The frame loads the first time the pane opens and then stays, so going back and forth keeps AgentHydra
+// where it was.
 const props = defineProps<{ open: boolean; /** Left padding of the title strip (the chrome bar lies over it when the sidebar is hidden). */ padLeft: number }>()
 const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': [] }>()
 
@@ -38,18 +42,25 @@ watch(
   },
   { immediate: true }
 )
+// A new frame (first open, Reload) starts unheard: what Desk says is held until it is ready.
+watch(frame, (f) => attachHydraFrame(f?.contentWindow ?? null), { flush: 'post' })
 
 function onMessage(e: MessageEvent) {
-  if (e.origin !== window.location.origin || e.source !== frame.value?.contentWindow) return
-  const m = e.data as { type?: string; session_id?: unknown } | null
-  if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
+  if (e.origin !== window.location.origin || !frame.value || e.source !== frame.value.contentWindow) return
+  const m = e.data as AhMessage | null
+  if (m?.type === 'ah:ready') hydraReady()
+  else if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
+  else if (m?.type === 'ah:sidebar') hydraSidebar.value = m.model && Array.isArray(m.model.sections) ? m.model : null
 }
 onMounted(() => {
   void readStatus()
   window.addEventListener('message', onMessage)
 })
-onBeforeUnmount(() => window.removeEventListener('message', onMessage))
+onBeforeUnmount(() => {
+  window.removeEventListener('message', onMessage)
+  attachHydraFrame(null)
+})
 
 function reload() {
   void readStatus()

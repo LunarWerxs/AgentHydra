@@ -13,8 +13,11 @@ sidebar on the left stays put, and only the pane on the right changes.
 
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Back and Forward, slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
-  to the left as AgentHydra comes in). While it is open the sidebar is the cloud list below. The copy
-  has no Sessions tab: the cloud list is the session list, and a session clicked there slides the chat
+  to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
+  CliMayte it is CliMayte's task list and on HSwarm its tree, drawn in Desk's look (the copy describes
+  them in `shared/hydra-embed.ts` and hides its own; a click goes back to it), and on every other tab
+  the cloud list below. CliMayte's waves move to the top of its task column. The copy has no Sessions
+  tab: the cloud list is the session list, and a session clicked there slides the chat
   back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
   to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
   same way. Every other AgentHydra tab (CliMayte, Instances, Analytics, HSwarm) is there as usual.
@@ -32,9 +35,19 @@ sidebar on the left stays put, and only the pane on the right changes.
   transcript on the right. Search looks through every session, archived ones included, from all time,
   and shows the best matches first. The cloud button again goes back to the desk list. It replaces
   AgentHydra's Sessions tab.
+- **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
+  chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
+  each (status, title, model, how long it has run); a task a manager started sits one step further in,
+  under its manager. A task with a session opens it; one without opens it on AgentHydra's CliMayte tab.
+  A CliMayte worker's own session row is folded under the chat that started it rather than listed twice.
+- **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
+  away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
+  instead of waiting for the next change.
 - **The session header.** Over a session opened from the cloud list (or any session running outside
-  Desk) sits what AgentHydra's Sessions tab said about it: the product, the short id (click to copy),
-  the instance number and account (its address in the tooltip), the folder, the git branch, turns,
+  Desk) sits one bar, across the whole pane, with what AgentHydra's Sessions tab said about it, each
+  fact in its own colour: the product, the short id (click to copy), the instance number and account
+  (its address in the tooltip; click to see that account's row in AgentHydra's Instances, the desktop or
+  CLI table, marked), the folder (click to open it), the git branch, turns,
   tokens and cost (the breakdown in the tooltip; a "+" when a model has no published price), the model
   and effort, and any credentials the transcript printed (redacted). Its buttons are Find (Ctrl + F;
   Enter and Shift + Enter step through the matches, marked in the transcript), Copy session file
@@ -42,7 +55,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   address), Display (only what I typed, tool activity, reasoning, compact layout), the session file
   (open it, save it as Markdown, a web page or the raw .jsonl, copy the file itself, copy its path), and
   for Claude sessions Reopen in a terminal and Migrate to another account. The title bar's panel icon
-  folds it away and back. It reads AgentHydra through Desk 2's `/ah/api`.
+  slides it up out of view and back down; it lies over the top of the transcript, so the page never
+  re-lays out while it moves. The chat title in the title bar is centred. It reads AgentHydra through
+  Desk 2's `/ah/api`.
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens

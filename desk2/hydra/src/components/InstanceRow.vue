@@ -94,6 +94,7 @@ function onContextMenu(e: MouseEvent): void {
   <TableRow
     :variant="row.dimmed ? 'faded' : 'default'"
     class="group/row"
+    :data-instance-num="row.num"
     @contextmenu="onContextMenu"
   >
     <template v-for="col in columns" :key="col.key">

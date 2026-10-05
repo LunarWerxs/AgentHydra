@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Copy, FileText, Search, ShieldAlert, X, ChevronUp, ChevronDown } from '@lucide/vue'
+import { ChevronDown, ChevronUp, Coins, Copy, FileText, Hash, MessagesSquare, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -21,6 +21,7 @@ import { folderLabel } from '@/components/sidebar/logic'
 import { modelName } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import { useShellSource } from '@/components/shell/source'
+import { showInstanceInHydra } from '@/components/hydra/api'
 import { ah } from './ah'
 import {
   accountName,
@@ -32,6 +33,7 @@ import {
   hasFile,
   instanceFor,
   instanceName,
+  instanceTarget,
   sourceName,
   SOURCE_TONE,
   turnCount,
@@ -47,10 +49,15 @@ import {
 import { displayPrefs, headerOpen } from './state'
 
 // Hydra Desk 2's session header, over an outside session's transcript: what AgentHydra's Sessions tab
-// said and offered about the open session, which this replaces (Michael, 2026-10-04). The source, the
-// id, the account, the folder, turns, tokens and cost, credentials it printed; Find, Copy file location,
-// Copy ID, the ⋯ menu (account, display, session file, terminal, migrate) and Close. The title bar's
-// toggle folds it away; Find (Ctrl + F) works either way.
+// said and offered about the open session, which this replaces (Michael, 2026-10-04). One bar across the
+// whole pane: on the left the facts, each its own colour (the source, the id, the account, the folder,
+// the branch, turns, tokens and cost, the model, credentials it printed), on the right Find, Copy file
+// location, Copy ID, the ⋯ menu (account, display, session file, terminal, migrate) and Close. The
+// folder chip opens the folder; the account chip shows that account in AgentHydra's Instances.
+//
+// It lies over the top of the transcript rather than above it, and the title bar's toggle slides it up
+// out of view and back on a transform (GPU only, nothing laid out per frame); the transcript keeps its
+// first row clear of it through the inset this reports (update:inset). Find (Ctrl + F) works either way.
 const props = defineProps<{
   sessionId: string
   session: ExternalSession | null
@@ -59,7 +66,11 @@ const props = defineProps<{
   /** What the transcript shows (the display filters applied): what Find searches. */
   shown: TranscriptItem[]
 }>()
-const emit = defineEmits<{ 'update:find': [find: { query: string; active: FindHit | null } | null] }>()
+const emit = defineEmits<{
+  'update:find': [find: { query: string; active: FindHit | null } | null]
+  /** How much of the transcript's top the header and its Find bar cover now. */
+  'update:inset': [px: number]
+}>()
 
 const src = useShellSource()
 const cloud = useCloud()
@@ -109,16 +120,33 @@ watch(inst, async (i) => {
 })
 const account = computed(() => {
   const r = row.value
-  if (!r || r.source !== 'claude' || !r.instance) return null
-  const i = inst.value
-  return { name: accountName(i, r.instance), email: i?.account?.email?.trim() || null, instance: i }
+  if (!r?.instance || (r.source !== 'claude' && !r.instance_num)) return null
+  const i = r.source === 'claude' ? inst.value : null
+  return { name: r.source === 'claude' ? accountName(i, r.instance) : r.instance, email: i?.account?.email?.trim() || null, instance: i }
 })
+// The chip shows the account in AgentHydra's Instances, on its own row.
+const target = computed(() => instanceTarget(row.value))
 const accountTip = computed(() => {
   const a = account.value
   if (!a) return ''
-  if (a.email) return a.email
-  return a.instance ? 'No address resolved for this account yet. It may be signed out' : 'This account is not in the instance list right now'
+  const who =
+    a.email ??
+    (a.instance || row.value?.source !== 'claude' ? 'No address resolved for this account yet. It may be signed out' : 'This account is not in the instance list right now')
+  return target.value ? `${who}. Click to show it in AgentHydra's Instances` : who
 })
+function showAccount() {
+  const t = target.value
+  if (t) showInstanceInHydra(t.num, t.kind)
+}
+async function openFolder() {
+  const path = cwd.value
+  if (!path) return
+  try {
+    await src.revealFolder(path)
+  } catch {
+    say("Couldn't open the folder", true)
+  }
+}
 
 const title = computed(() => row.value?.title || props.session?.title || 'Session')
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
@@ -299,74 +327,145 @@ onBeforeUnmount(() => {
 const secretsOpen = ref(false)
 const close = () => src.select({ kind: 'new' })
 
+// What the header covers: its own height while it is unfolded, and the Find bar's under it.
+const headEl = ref<HTMLElement | null>(null)
+const findEl = ref<HTMLElement | null>(null)
+const headH = ref(0)
+const findH = ref(0)
+let sizes: ResizeObserver | null = null
+function measure() {
+  headH.value = headEl.value?.offsetHeight ?? 0
+  findH.value = findEl.value?.offsetHeight ?? 0
+}
+onMounted(() => {
+  sizes = new ResizeObserver(measure)
+  if (headEl.value) sizes.observe(headEl.value)
+  measure()
+})
+watch(findEl, (el, old) => {
+  if (old) sizes?.unobserve(old)
+  if (el) sizes?.observe(el)
+  measure()
+})
+onBeforeUnmount(() => sizes?.disconnect())
+const inset = computed(() => (headerOpen.value ? headH.value : 0) + (findOpen.value ? findH.value : 0))
+watch(inset, (px) => emit('update:inset', px), { immediate: true })
+
 // The colour is apart so the ⋯ button's blue (a display filter is on) replaces it rather than racing it.
 const BTN_SHAPE =
-  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
+  'flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
-const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1 hover:bg-fill-hover hover:text-text-2'
+// Each fact its own colour (Michael, 2026-10-04: "a little bit more color"); the clickable ones brighten on hover.
+const CHIP = 'flex h-[22px] min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-[12px] leading-4 transition-colors duration-[60ms]'
+const TONE = {
+  id: 'bg-[var(--fill-secondary)] text-text-2 hover:bg-[var(--fill-secondary-hover)] hover:text-text',
+  account: 'bg-[#8B5CF6]/14 text-[#C4B5FD]',
+  accountLink: 'bg-[#8B5CF6]/14 text-[#C4B5FD] hover:bg-[#8B5CF6]/26',
+  folder: 'bg-[#F59E0B]/12 text-[#FCD34D] hover:bg-[#F59E0B]/24',
+  branch: 'bg-[#22C55E]/12 text-[#86EFAC]',
+  turns: 'bg-[#0EA5E9]/12 text-[#7DD3FC]',
+  usage: 'bg-[#10B981]/12 text-[#6EE7B7]',
+  model: 'bg-[#2A78D6]/16 text-[#93C5FD]',
+  secrets: 'bg-warning-bg text-warning-text hover:brightness-125'
+}
 </script>
 
 <template>
-  <div class="relative shrink-0">
-    <section v-if="headerOpen" class="border-b border-border px-4 py-1" aria-label="Session details" data-testid="session-header">
-      <div class="mx-auto flex w-full max-w-[840px] items-center gap-2 px-5 text-[12px] leading-4 text-text-muted">
-        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-1 gap-y-0.5">
+  <!-- Over the top of the transcript (ExternalSessionView clips it). Folded, the stack moves up by the
+       header's height, so the Find bar takes its place; the header fades out and leaves the tab order. -->
+  <div class="pointer-events-none absolute inset-x-0 top-0 z-10">
+    <div
+      class="transition-transform duration-[220ms] ease-[var(--ease-snap)] motion-reduce:transition-none"
+      :style="{ transform: headerOpen ? 'translateY(0)' : `translateY(${-headH}px)` }"
+    >
+      <section
+        ref="headEl"
+        class="pointer-events-auto flex min-h-9 items-center gap-3 border-b border-border bg-bg-page py-1 pl-3 pr-2 transition-[opacity,visibility] duration-[220ms] motion-reduce:transition-none"
+        :class="headerOpen ? 'visible opacity-100' : 'invisible opacity-0'"
+        :inert="!headerOpen || undefined"
+        aria-label="Session details"
+        data-testid="session-header"
+      >
+        <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <span
             v-if="row"
-            class="flex h-[18px] shrink-0 items-center rounded-[var(--radius-6)] border px-1.5 text-[11px] font-medium"
+            class="flex h-[22px] shrink-0 items-center rounded-[var(--radius-6)] border px-1.5 text-[12px] font-medium"
             :class="SOURCE_TONE[row.source] ?? 'border-border bg-[var(--fill-secondary)] text-text-2'"
           >{{ sourceName(row) }}</span>
           <Tip label="Copy session id">
-            <button type="button" :class="CHIP" class="font-mono" :aria-label="`Session ${sessionId}, copy id`" @click="copyId">{{ shortId }}</button>
+            <button type="button" :class="[CHIP, TONE.id]" class="font-mono" :aria-label="`Session ${sessionId}, copy id`" @click="copyId">
+              <Hash class="size-3 shrink-0 opacity-70" />{{ shortId }}
+            </button>
           </Tip>
           <Tip v-if="account" :label="accountTip">
-            <span :class="CHIP" class="cursor-default">
-              <span v-if="row?.instance_num" class="tnum text-text-2">#{{ row.instance_num }}</span>
-              <span class="truncate">{{ account.name }}</span>
+            <button
+              v-if="target"
+              type="button"
+              :class="[CHIP, TONE.accountLink]"
+              :aria-label="`Account ${account.name}, show it in AgentHydra's Instances`"
+              @click="showAccount"
+            >
+              <UserRound class="size-3.5 shrink-0" />
+              <span v-if="row?.instance_num" class="tnum opacity-80">#{{ row.instance_num }}</span>
+              <span class="max-w-48 truncate">{{ account.name }}</span>
+            </button>
+            <span v-else :class="[CHIP, TONE.account]" class="cursor-default" tabindex="0">
+              <UserRound class="size-3.5 shrink-0" />
+              <span class="max-w-48 truncate">{{ account.name }}</span>
             </span>
           </Tip>
-          <span v-else-if="row?.instance_num" :class="CHIP" class="tnum cursor-default">#{{ row.instance_num }}</span>
-          <Tip v-if="cwd" :label="cwd">
-            <span :class="CHIP" class="cursor-default">
-              <component :is="newSessionGlyphs.folder" class="size-3.5" />
+          <Tip v-else-if="target" label="Show this account in AgentHydra's Instances">
+            <button type="button" :class="[CHIP, TONE.accountLink]" class="tnum" :aria-label="`Instance #${target.num}, show it in AgentHydra's Instances`" @click="showAccount">
+              <UserRound class="size-3.5 shrink-0" />#{{ target.num }}
+            </button>
+          </Tip>
+          <Tip v-if="cwd" :label="`Open ${cwd}`">
+            <button type="button" :class="[CHIP, TONE.folder]" :aria-label="`Folder ${folderLabel(cwd)}, open it`" @click="openFolder">
+              <component :is="newSessionGlyphs.folder" class="size-3.5 shrink-0" />
               <span class="max-w-48 truncate">{{ folderLabel(cwd) }}</span>
-            </span>
+            </button>
           </Tip>
           <Tip v-if="row?.git_branch && row.git_branch !== 'HEAD'" label="Git branch">
-            <span :class="CHIP" class="cursor-default">
-              <component :is="newSessionGlyphs.branch" class="size-3.5" />
+            <span :class="[CHIP, TONE.branch]" class="cursor-default" tabindex="0">
+              <component :is="newSessionGlyphs.branch" class="size-3.5 shrink-0" />
               <span class="max-w-40 truncate">{{ row.git_branch }}</span>
             </span>
           </Tip>
           <Tip :label="turnsTip">
-            <span :class="CHIP" class="tnum cursor-default">{{ turns }} {{ turns === 1 ? 'turn' : 'turns' }}</span>
+            <span :class="[CHIP, TONE.turns]" class="tnum cursor-default" tabindex="0">
+              <MessagesSquare class="size-3.5 shrink-0" />{{ turns }} {{ turns === 1 ? 'turn' : 'turns' }}
+            </span>
           </Tip>
           <Tip v-if="usageText" :label="usageTip">
-            <span :class="CHIP" class="tnum cursor-default" aria-label="Tokens and cost">{{ usageText }}</span>
+            <span :class="[CHIP, TONE.usage]" class="tnum cursor-default" tabindex="0" aria-label="Tokens and cost">
+              <Coins class="size-3.5 shrink-0" />{{ usageText }}
+            </span>
           </Tip>
-          <span v-if="model" :class="CHIP" class="cursor-default">{{ model }}</span>
+          <span v-if="model" :class="[CHIP, TONE.model]" class="cursor-default">
+            <Sparkles class="size-3.5 shrink-0" />{{ model }}
+          </span>
           <Tip v-if="secrets && secrets.count > 0" :label="`This session printed ${secrets.count} thing${secrets.count === 1 ? '' : 's'} that look like credentials. Click for the list.`">
-            <button type="button" :class="CHIP" class="text-warning-text" @click="secretsOpen = true">
-              <ShieldAlert class="size-3.5" />
+            <button type="button" :class="[CHIP, TONE.secrets]" @click="secretsOpen = true">
+              <ShieldAlert class="size-3.5 shrink-0" />
               <span class="tnum">{{ secrets.count }} {{ secrets.count === 1 ? 'secret' : 'secrets' }}</span>
             </button>
           </Tip>
         </div>
 
-        <div class="flex shrink-0 items-center gap-0.5">
+        <div class="flex shrink-0 items-center gap-0.5 self-start">
           <Tip label="Find in session (Ctrl + F)">
-            <button type="button" :class="BTN" aria-label="Find in session" :aria-pressed="findOpen" @click="findOpen ? closeFind() : openFind()">
-              <Search class="size-3.5" />
+            <button type="button" :class="findOpen ? `${BTN_SHAPE} text-accent-text` : BTN" aria-label="Find in session" :aria-pressed="findOpen" @click="findOpen ? closeFind() : openFind()">
+              <Search class="size-4" />
             </button>
           </Tip>
           <Tip v-if="row && hasFile(row.source)" label="Copy session file location">
             <button type="button" :class="BTN" aria-label="Copy session file location" @click="copyLocation()">
-              <FileText class="size-3.5" />
+              <FileText class="size-4" />
             </button>
           </Tip>
           <Tip label="Copy session id">
             <button type="button" :class="BTN" aria-label="Copy session id" @click="copyId">
-              <Copy class="size-3.5" />
+              <Copy class="size-4" />
             </button>
           </Tip>
           <Tip :label="filtered ? 'Part of this transcript is hidden by a display filter' : 'More actions'">
@@ -378,13 +477,16 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" :class="MENU_CONTENT" class="min-w-56" @open-auto-focus="focusFirstItem">
-                  <template v-if="account">
-                    <DropdownMenuItem :class="MENU_ITEM" :disabled="!account.instance" @select="bringAccount">
-                      {{ account.instance?.isRunning ? 'Bring this account to the front' : 'Open this account' }}
+                  <template v-if="account || target">
+                    <DropdownMenuItem v-if="target" :class="MENU_ITEM" @select="showAccount">Show this account in Instances</DropdownMenuItem>
+                    <DropdownMenuItem v-if="account?.instance" :class="MENU_ITEM" @select="bringAccount">
+                      {{ account.instance.isRunning ? 'Bring this account to the front' : 'Open this account' }}
                     </DropdownMenuItem>
-                    <DropdownMenuItem :class="MENU_ITEM" :disabled="!account.email" @select="copyEmail">Copy the account address</DropdownMenuItem>
+                    <DropdownMenuItem v-if="account" :class="MENU_ITEM" :disabled="!account.email" @select="copyEmail">Copy the account address</DropdownMenuItem>
                     <DropdownMenuSeparator :class="MENU_SEPARATOR" />
                   </template>
+                  <DropdownMenuItem v-if="cwd" :class="MENU_ITEM" @select="openFolder">Open the folder</DropdownMenuItem>
+                  <DropdownMenuSeparator v-if="cwd" :class="MENU_SEPARATOR" />
 
                   <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[12px] font-medium text-text-muted">Display</DropdownMenuLabel>
                   <DropdownMenuItem role="menuitemcheckbox" :aria-checked="displayPrefs.humanOnly" :class="MENU_ITEM" @select="setDisplay('humanOnly')">
@@ -463,34 +565,34 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
           </Tip>
           <Tip label="Close this session">
             <button type="button" :class="BTN" aria-label="Close this session" @click="close">
-              <X class="size-3.5" />
+              <X class="size-4" />
             </button>
           </Tip>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <div v-if="findOpen" class="border-b border-border px-4 py-1" role="search">
-      <div class="mx-auto flex w-full max-w-[840px] items-center gap-1 px-5 text-[12px] leading-4">
-        <Search class="size-3.5 shrink-0 text-text-muted" />
-        <input
-          ref="findInput"
-          v-model="query"
-          aria-label="Find in this session"
-          placeholder="Find in this session…"
-          class="h-6 min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text outline-none placeholder:text-text-muted"
-          @keydown="onFindKey"
-        />
-        <span class="shrink-0 tnum text-text-muted" role="status">{{ query.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
-        <Tip label="Previous match (Shift + Enter)">
-          <button type="button" :class="BTN" aria-label="Previous match" :disabled="!hits.length" @click="step(-1)"><ChevronUp class="size-3.5" /></button>
-        </Tip>
-        <Tip label="Next match (Enter)">
-          <button type="button" :class="BTN" aria-label="Next match" :disabled="!hits.length" @click="step(1)"><ChevronDown class="size-3.5" /></button>
-        </Tip>
-        <Tip label="Close find (Esc)">
-          <button type="button" :class="BTN" aria-label="Close find" @click="closeFind"><X class="size-3.5" /></button>
-        </Tip>
+      <div v-if="findOpen" ref="findEl" class="pointer-events-auto border-b border-border bg-bg-page py-1 pl-3 pr-2" role="search">
+        <div class="flex w-full items-center gap-1 text-[12px] leading-4">
+          <Search class="size-3.5 shrink-0 text-text-muted" />
+          <input
+            ref="findInput"
+            v-model="query"
+            aria-label="Find in this session"
+            placeholder="Find in this session…"
+            class="h-6 min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text outline-none placeholder:text-text-muted"
+            @keydown="onFindKey"
+          />
+          <span class="shrink-0 tnum text-text-muted" role="status">{{ query.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
+          <Tip label="Previous match (Shift + Enter)">
+            <button type="button" :class="BTN" aria-label="Previous match" :disabled="!hits.length" @click="step(-1)"><ChevronUp class="size-4" /></button>
+          </Tip>
+          <Tip label="Next match (Enter)">
+            <button type="button" :class="BTN" aria-label="Next match" :disabled="!hits.length" @click="step(1)"><ChevronDown class="size-4" /></button>
+          </Tip>
+          <Tip label="Close find (Esc)">
+            <button type="button" :class="BTN" aria-label="Close find" @click="closeFind"><X class="size-4" /></button>
+          </Tip>
+        </div>
       </div>
     </div>
 
@@ -498,8 +600,9 @@ const CHIP = 'flex h-5 min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius
       <p
         v-if="note"
         role="status"
-        class="absolute right-6 top-full z-10 mt-1 max-w-[70%] truncate rounded-[var(--radius-10)] bg-bg-popover px-2.5 py-1 text-[12px] leading-4 shadow-(--shadow-menu-ringed)"
+        class="pointer-events-auto absolute right-3 max-w-[70%] truncate rounded-[var(--radius-10)] bg-bg-popover px-2.5 py-1 text-[12px] leading-4 shadow-(--shadow-menu-ringed)"
         :class="note.bad ? 'text-danger-text' : 'text-text-2'"
+        :style="{ top: `${inset + 6}px` }"
       >
         {{ note.text }}
       </p>

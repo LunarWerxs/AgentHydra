@@ -134,4 +134,5 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   })
   poller.start()
   ctx.onStop(poller.stop)
+  ctx.onConnect(poller.welcome)
 }

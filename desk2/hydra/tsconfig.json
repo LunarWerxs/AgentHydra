@@ -20,7 +20,7 @@
     "types": ["vite/client", "bun"],
     "baseUrl": ".",
     // @agenthydra/server: AgentHydra's own server types, the contract with the daemon this copy talks to.
-    "paths": { "@/*": ["./src/*"], "@agenthydra/server/*": ["../../server/src/*"] }
+    "paths": { "@/*": ["./src/*"], "@agenthydra/server/*": ["../../server/src/*"], "@desk/shared/*": ["../shared/*"] }
   },
   "include": ["src", "vite.config.ts", "env.d.ts"]
 }

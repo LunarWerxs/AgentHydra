@@ -105,7 +105,14 @@ const PANE_BTN =
 </script>
 
 <template>
-  <header class="flex h-8 min-w-0 items-center pl-1 pr-3 text-[13px] leading-[19.5px]">
+  <!-- Three columns: the title in the middle one, centred on the pane (Michael, 2026-10-04), with each side
+       column at least as wide as the buttons on the right so a long title stops short of them. -->
+  <header
+    class="grid h-8 min-w-0 grid-cols-[minmax(var(--side),1fr)_minmax(0,auto)_minmax(var(--side),1fr)] items-center pl-1 pr-3 text-[13px] leading-[19.5px]"
+    :style="{ '--side': chat ? '116px' : external ? '26px' : '0px' }"
+  >
+    <span aria-hidden="true" />
+    <div class="col-start-2 flex min-w-0 items-center">
     <template v-if="chat">
       <span class="flex size-6 shrink-0 items-center justify-center text-text" aria-hidden="true">
         <component :is="shellGlyphs.local" class="size-4" />
@@ -190,11 +197,10 @@ const PANE_BTN =
         </DropdownMenuContent>
       </DropdownMenu>
     </template>
-    <span v-else-if="title" class="px-1 font-medium text-text">{{ title }}</span>
+    <span v-else-if="title" class="truncate px-1 font-medium text-text">{{ title }}</span>
+    </div>
 
-    <span class="flex-1" />
-
-    <div v-if="chat" class="flex shrink-0 items-center gap-1">
+    <div v-if="chat" class="col-start-3 flex shrink-0 items-center gap-1 justify-self-end">
       <Tip label="Terminal (not in Hydra Desk)">
         <button type="button" :class="PANE_BTN" aria-label="Terminal" aria-disabled="true">
           <component :is="shellGlyphs.terminal" class="size-4" />
@@ -229,7 +235,7 @@ const PANE_BTN =
       </Tip>
     </div>
     <Tip v-else-if="external" :label="headerOpen ? 'Hide session details' : 'Show session details'">
-      <button type="button" :class="PANE_BTN" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
+      <button type="button" :class="PANE_BTN" class="col-start-3 justify-self-end" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
         <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
       </button>
     </Tip>

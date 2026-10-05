@@ -17,10 +17,22 @@
 // The totals and "What works" (the scorecard) live in the one stats card above the task
 // (OffloadStatsCard.vue), shared with HSwarm, so the sidebar header is only the title, the filter
 // and the waves.
+//
+// In Hydra Desk 2 the task list is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04:
+// one sidebar for everything): this view describes it, row for row as the SideBar below says it, and
+// hides its own; the waves move to the top of the task column, and Desk can ask for a task by id.
 import {
+  Ban,
   Check,
+  CircleCheck,
+  CircleX,
+  Clock,
   Cloud,
   CloudOff,
+  Hourglass,
+  ListChecks,
+  LoaderCircle,
+  type LucideIcon,
   Network,
   PictureInPicture2,
   RefreshCw,
@@ -55,6 +67,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
 import { pii } from '@/composables/usePrivacy'
+import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type {
   CliMayteRemotePc,
   CliMayteRemoteWorker,
@@ -73,12 +86,16 @@ import {
 } from '@/lib/api'
 import { OPEN_VIEW } from '@/lib/app-view'
 import {
+  climayteFailedStory,
   climayteQueuedNote,
   climayteRunLabel,
+  climayteStatusMeta,
+  climayteStoryLines,
   climayteVerdictMark,
   firstLine,
   isCliMayteActive,
 } from '@/lib/climayte-status'
+import { deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import type { SideListGroup } from '@/lib/side-list'
@@ -449,6 +466,178 @@ function runTag(w: CliMayteWorkerView): { text: string; differs: boolean } | nul
   }
 }
 
+// Hydra Desk 2: the list as Desk's sidebar draws it (shared/hydra-embed.ts), saying per row what
+// SideListRow and CliMayteStatusBadge say here.
+const STATUS_ICON = new Map<LucideIcon, EmbedIcon>([
+  [Clock, 'clock'],
+  [LoaderCircle, 'loader'],
+  [Hourglass, 'hourglass'],
+  [ListChecks, 'list-checks'],
+  [CircleCheck, 'circle-check'],
+  [CircleX, 'circle-x'],
+  [Ban, 'ban'],
+  [Network, 'network'],
+])
+const VARIANT_TONE: Record<string, EmbedTone> = {
+  info: 'info',
+  success: 'success',
+  warning: 'warning',
+  destructive: 'danger',
+}
+function deskStatus(w: ListRow): SidebarRow['status'] {
+  const meta = climayteStatusMeta(w.status, w.hold)
+  const story = climayteFailedStory(w, workers.value)
+  const said = story
+    ? climayteStoryLines(story, (key, values) => t(key, values)).join('\n')
+    : t(meta.hint)
+  return {
+    icon: STATUS_ICON.get(meta.icon) ?? 'clock',
+    tone: VARIANT_TONE[meta.variant ?? ''] ?? 'muted',
+    spin: meta.spin,
+    label: `${t(meta.label)}: ${said}`,
+  }
+}
+function deskRow(w: ListRow): SidebarRow {
+  const tag = runTag(w)
+  const mark = verdictMark(w)
+  return {
+    key: rowKey(w),
+    label: w.title,
+    status: deskStatus(w),
+    badge: w.remote ? { icon: 'cloud', label: remoteLabel(w) } : undefined,
+    chip: w.priority
+      ? {
+          text: t('climayte.rowPriority', { n: w.priority }),
+          hint: t('climayte.rowPriorityHint', { n: w.priority }),
+        }
+      : undefined,
+    tag: tag ? { text: tag.text, tone: tag.differs ? 'warning' : 'muted' } : undefined,
+    time: activeLabel(activeS(w)),
+    mark: mark
+      ? {
+          icon: mark.kind === 'pass' ? 'check' : mark.kind === 'retry' ? 'retry' : 'x',
+          tone: mark.kind === 'pass' ? 'success' : mark.kind === 'retry' ? 'warning' : 'danger',
+          label: mark.label,
+          hint: mark.hint,
+        }
+      : undefined,
+    dim: !!w.remote?.stale,
+    hint: rowHint(w),
+  }
+}
+// Desk's list: every task that can still change and the open one, then the newest finished ones up to
+// a page; "Show more" adds a page. All 1,754 of a busy queue were 1.3 MB per update and 23k nodes in
+// Desk's sidebar (2026-10-04), redrawn while any task ran.
+const DESK_PAGE = 150
+const deskLimit = ref(DESK_PAGE)
+const deskGroups = computed(() => {
+  let finished = 0
+  let cut = 0
+  const out: { group: string; items: ListRow[] }[] = []
+  for (const g of groups.value) {
+    const items = g.items.filter((w) => {
+      if (isCliMayteActive(w) || rowKey(w) === selectedId.value) return true
+      if (finished < deskLimit.value) {
+        finished++
+        return true
+      }
+      cut++
+      return false
+    })
+    if (items.length) out.push({ group: g.group, items })
+  }
+  return { groups: out, cut }
+})
+useDeskSidebar(
+  'climayte',
+  () => ({
+    view: 'climayte',
+    title: t('climayte.title'),
+    icon: 'network',
+    count: rows.value.length || undefined,
+    info: t('climayte.subtitle'),
+    warn: remoteNotes.value.length
+      ? remoteNotes.value.map((n) => pii(n.note)).join('\n')
+      : undefined,
+    buttons: [
+      ...(hasPictureInPictureAPI.value
+        ? [{ id: 'pip', icon: 'pip' as const, label: t('climayte.floatButton'), on: floatIsOpen.value }]
+        : []),
+      {
+        id: 'refresh',
+        icon: 'refresh' as const,
+        label: t('climayte.refresh'),
+        spin: loading.value,
+        disabled: loading.value,
+      },
+    ],
+    banner:
+      loaded.value && unreachable.value
+        ? { text: t('climayte.staleBanner'), tone: 'warning', icon: 'cloud-off' }
+        : undefined,
+    switches: rows.value.length
+      ? [
+          {
+            id: 'hideFinished',
+            label: t('climayte.hideFinished'),
+            note: hiddenCount.value > 0 ? t('climayte.hiddenCount', { n: hiddenCount.value }) : undefined,
+            on: hideFinished.value,
+          },
+        ]
+      : undefined,
+    sections: deskGroups.value.groups.map((g) => ({
+      key: g.group,
+      label: g.group,
+      rows: g.items.map(deskRow),
+    })),
+    selected: selectedId.value,
+    empty: !loaded.value
+      ? undefined
+      : rows.value.length
+        ? t('climayte.allHidden', { n: hiddenCount.value })
+        : t('climayte.emptyTitle'),
+    loading: !loaded.value && loading.value,
+    footer: deskGroups.value.cut
+      ? [
+          {
+            id: 'more',
+            icon: 'plus',
+            label: t('climayte.deskShowMore', {
+              n: Math.min(DESK_PAGE, deskGroups.value.cut),
+              total: deskGroups.value.cut,
+            }),
+          },
+        ]
+      : undefined,
+  }),
+  (e) => {
+    if (e.action === 'select') {
+      const w = rows.value.find((r) => rowKey(r) === e.key)
+      if (w) select(w)
+    } else if (e.action === 'button') {
+      if (e.id === 'refresh') void load()
+      else if (e.id === 'pip') void toggleFloat()
+      else if (e.id === 'more') deskLimit.value += DESK_PAGE
+    } else if (e.action === 'switch' && e.id === 'hideFinished') hideFinished.value = e.on
+  },
+)
+
+// Desk asked for a task (its sidebar's task rows): opened once the list is in, shown even when
+// "Hide finished" would hide it.
+watch(
+  [deskWorkerAsk, loaded],
+  () => {
+    const id = deskWorkerAsk.value
+    if (!id || !loaded.value) return
+    deskWorkerAsk.value = null
+    const w = workers.value.find((x) => x.id === id) ?? remoteRows.value.find((x) => x.id === id)
+    if (!w) return
+    if (hideFinished.value && !isCliMayteActive(w)) hideFinished.value = false
+    select(w)
+  },
+  { immediate: true },
+)
+
 onMounted(() => {
   void load()
   // Keeps a running task's active time honest between the slow idle polls.
@@ -474,7 +663,7 @@ onUnmounted(() => {
   <div class="flex h-full min-h-0">
     <!-- The same sidebar as the Sessions tab (SideBar.vue: rail, resize, grouped rows): a header
          that never scrolls (title, counter, hide finished, waves) over the task list. -->
-    <SideBar storage-key="agenthydra.climayte" :groups="sideGroups" :empty="!groups.length">
+    <SideBar v-if="!EMBEDDED" storage-key="agenthydra.climayte" :groups="sideGroups" :empty="!groups.length">
         <template #header>
     <header class="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2 pe-11">
       <div class="flex min-w-0 flex-1 flex-col gap-1">
@@ -613,6 +802,15 @@ onUnmounted(() => {
     </SideBar>
 
     <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
+      <!-- In Desk the list is in Desk's sidebar, so the waves head the task column instead. -->
+      <CliMayteWaves
+        v-if="EMBEDDED"
+        class="mb-2 shrink-0"
+        :waves="waves"
+        :workers="workers"
+        :now="now"
+        @select-worker="selectManager"
+      />
       <OffloadStatsCard
         class="mb-2 shrink-0"
         :totals="totals"

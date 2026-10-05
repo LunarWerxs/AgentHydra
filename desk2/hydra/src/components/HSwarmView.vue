@@ -3,6 +3,10 @@
 // left-handed sidebar"). A tree on the left (Overview, Providers > each provider > its models, All models,
 // Routing & roles, Clients > each client, Jobs > recent jobs, Help) picks what the right pane shows; each
 // page is its own component in ./hswarm/. Below 900px the tree is a drawer, as in the console.
+//
+// In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04: one
+// sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
+// and hides its own, and Desk's clicks come back to select, toggle and star here.
 import {
   AlertCircle,
   ChevronRight,
@@ -27,6 +31,9 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: used as a component in the template, which Biome cannot see; a type-only import left the search box an unstyled <input>
 import { Input } from '@/components/ui/input'
+import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
+import { API_BASE } from '@/lib/api'
+import { EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmJobs from './hswarm/HSwarmJobs.vue'
@@ -505,7 +512,7 @@ const brokenAv = ref(new Set<string>())
 function avatarUrl(name: string) {
   const p = state.value?.providers?.find((x: any) => x.name === name)
   if (p?.icon !== 'ok' || brokenAv.value.has(name)) return null
-  return `/api/hswarm/ui/favicon/${enc(name)}?v=${enc(String(p.icon_v ?? ''))}`
+  return `${API_BASE}/api/hswarm/ui/favicon/${enc(name)}?v=${enc(String(p.icon_v ?? ''))}`
 }
 const initials = (name: string) => name.slice(0, 2).toUpperCase()
 function onAvError(n: TreeNode) {
@@ -526,8 +533,115 @@ async function askIcons() {
   }
 }
 
+// Hydra Desk 2: the tree as Desk's sidebar draws it (shared/hydra-embed.ts).
+const DOT_TONE: Record<Dot, EmbedTone | 'hollow'> = {
+  ok: 'success',
+  warn: 'warning',
+  nokey: 'hollow',
+  off: 'muted',
+  run: 'info',
+  bad: 'danger',
+}
+const ICON_NAME = new Map<Component, EmbedIcon>([
+  [LayoutGrid, 'grid'],
+  [PiggyBank, 'piggy-bank'],
+  [Server, 'server'],
+  [Cpu, 'cpu'],
+  [Route, 'route'],
+  [Plug, 'plug'],
+  [Layers, 'layers'],
+  [Info, 'info'],
+])
+function deskRow(r: TreeRow): SidebarRow {
+  const n = r.n
+  const [before, hit] = n.more ? ['', ''] : hl(n.label)
+  return {
+    key: r.id,
+    label: n.label,
+    depth: r.depth,
+    hit: hit ? [before.length, before.length + hit.length] : undefined,
+    branch: r.hasKids ? (r.open ? 'open' : 'closed') : undefined,
+    status: n.dot ? { dot: DOT_TONE[n.dot], pulse: n.dot === 'run', label: n.dotTitle } : undefined,
+    avatar: n.av ? { src: avatarUrl(n.av) ?? undefined, text: initials(n.av) } : undefined,
+    icon: !n.av && n.icon ? ICON_NAME.get(n.icon) : undefined,
+    count: n.count ?? undefined,
+    meta: n.meta || undefined,
+    star:
+      n.model && (n.star || n.auto)
+        ? {
+            text: n.star ? `★${n.star}` : '☆',
+            on: !!n.star,
+            label: n.star ? t('hswarm.nav.priority', { n: n.star }) : t('hswarm.nav.starIt'),
+            busy: starBusy.value === n.model,
+          }
+        : undefined,
+    dim: n.dim,
+    italic: n.more,
+    hint: n.dotTitle,
+  }
+}
+const running = computed(() => !!status.value?.running && !!state.value)
+useDeskSidebar(
+  'hswarm',
+  () => ({
+    view: 'hswarm',
+    title: t('app.tabHswarm'),
+    icon: 'network',
+    buttons: [
+      { id: 'help', icon: 'info', label: t('hswarm.help'), on: sel.value === 'help', disabled: !running.value },
+      {
+        id: 'refresh',
+        icon: 'refresh',
+        label: t('hswarm.refresh'),
+        spin: isRefreshing.value,
+        disabled: !status.value?.running || isRefreshing.value,
+      },
+    ],
+    search: running.value
+      ? { value: query.value, placeholder: t('hswarm.nav.search'), label: t('hswarm.nav.searchAria') }
+      : undefined,
+    legend: running.value
+      ? [
+          { dot: 'success', label: t('hswarm.nav.ready') },
+          { dot: 'warning', label: t('hswarm.nav.resting') },
+          { dot: 'hollow', label: t('hswarm.nav.noKey') },
+          { dot: 'muted', label: t('hswarm.nav.off') },
+        ]
+      : undefined,
+    legendNote: status.value?.running ? t('hswarm.nav.port', { port: status.value.port }) : undefined,
+    sections: running.value ? [{ key: 'tree', rows: rows.value.map(deskRow) }] : [],
+    selected: sel.value,
+    empty: !running.value
+      ? loading.value
+        ? undefined
+        : t('hswarm.notRunning')
+      : t('hswarm.nav.nothingMatches', { q: query.value }),
+    loading: loading.value && !state.value,
+    footer: hasKeys.value
+      ? [
+          { id: 'add-provider', icon: 'plus', label: t('hswarm.addProvider') },
+          { id: 'add-model', icon: 'plus', label: t('hswarm.addModel') },
+        ]
+      : undefined,
+  }),
+  (e) => {
+    const row = 'key' in e ? rows.value.find((r) => r.id === e.key) : undefined
+    if (e.action === 'select' && row) select(row.sel)
+    else if (e.action === 'toggle' && row?.hasKids) toggle(row.id)
+    else if (e.action === 'star' && row) void toggleStar(row.n)
+    else if (e.action === 'search') query.value = e.value
+    else if (e.action === 'button') {
+      if (e.id === 'help') select('help')
+      else if (e.id === 'refresh') void handleRefresh()
+      else if (e.id === 'add-provider') select('providers', { adding: true })
+      else if (e.id === 'add-model') select('models', { adding: true })
+    }
+  },
+)
+
 onMounted(async () => {
-  window.addEventListener('keydown', onGlobalKey)
+  // In Desk the tree's search is Desk's, so "/" is left to the page.
+  if (!EMBEDDED) window.addEventListener('keydown', onGlobalKey)
   await fetchStatus()
   if (status.value?.running) {
     await fetchState()
@@ -559,7 +673,7 @@ async function handleRefresh() {
   <div class="flex h-full flex-col">
     <!-- Below 900px the tree is a drawer: a thin strip holds its button and the status -->
     <div
-      v-if="status?.running && state"
+      v-if="!EMBEDDED && status?.running && state"
       class="flex items-center gap-2 border-b border-border px-2 py-1 min-[900px]:hidden"
     >
       <Button
@@ -594,12 +708,13 @@ async function handleRefresh() {
     <!-- Main content: the tree on the left, the selected page on the right -->
     <div v-else-if="status?.running && state" class="relative flex min-h-0 flex-1">
       <div
-        v-if="navOpen"
+        v-if="navOpen && !EMBEDDED"
         class="fixed inset-0 z-20 bg-black/40 min-[900px]:hidden"
         aria-hidden="true"
         @click="navOpen = false"
       />
       <nav
+        v-if="!EMBEDDED"
         :aria-label="t('hswarm.nav.label')"
         class="flex min-h-0 shrink-0 flex-col border-e border-border bg-sidebar max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:start-0 max-[899px]:z-30 max-[899px]:w-[min(86vw,340px)] max-[899px]:transition-transform min-[900px]:w-(--tree-w)"
         :class="navOpen ? '' : 'max-[899px]:-translate-x-full max-[899px]:invisible'"
@@ -752,6 +867,7 @@ async function handleRefresh() {
         </div>
       </nav>
       <div
+        v-if="!EMBEDDED"
         role="separator"
         aria-orientation="vertical"
         :aria-label="t('hswarm.nav.resize')"

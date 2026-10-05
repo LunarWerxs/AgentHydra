@@ -2,7 +2,14 @@
 // AgentHydra answered, the search box and the multi-select. Fetched on demand and every 30 s while shown.
 import { computed, ref, watch } from 'vue'
 import type { CloudInstance, CloudList, CloudSession } from '@shared/protocol'
+import { readCache, writeCache } from '@/lib/list-cache'
 import { cloudQuery, effectiveScopes, groupCloud, parseScopes, pcsIn, type CloudScopes } from './logic'
+
+/** The last plain (unsearched) answer and the query it answered, for the next reload (lib/list-cache.ts). */
+interface CachedCloud {
+  query: string
+  list: CloudList
+}
 
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 const ON_KEY = 'hydra-desk.cloud.on'
@@ -26,12 +33,15 @@ function createCloud() {
   // The search the rows answer, not what the box says now: until a search's answer arrives the rows are
   // still the plain list, and they keep their folder groups.
   const answered = ref('')
-  const sessions = ref<CloudSession[]>([])
-  const thisPc = ref('This PC')
+  // A reload starts from the last answer to the same filters, then asks again.
+  const cached = readCache<CachedCloud>('cloud')
+  const fresh = cached?.query === cloudQuery(effectiveScopes(scopes.value, ''), '') ? cached.list : null
+  const sessions = ref<CloudSession[]>(fresh?.sessions ?? [])
+  const thisPc = ref(fresh?.thisPc ?? 'This PC')
   const instances = ref<CloudInstance[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
-  const loaded = ref(false)
+  const loaded = ref(!!fresh)
   const selectMode = ref(false)
   const selected = ref(new Set<string>())
 
@@ -50,7 +60,9 @@ function createCloud() {
     loading.value = true
     try {
       const asked = search.value
-      const list = await getJson<CloudList>(`/cloud/sessions?${cloudQuery(effectiveScopes(scopes.value, asked), asked)}`)
+      const query = cloudQuery(effectiveScopes(scopes.value, asked), asked)
+      const list = await getJson<CloudList>(`/cloud/sessions?${query}`)
+      if (!asked.trim()) writeCache('cloud', { query, list } satisfies CachedCloud)
       sessions.value = list.sessions
       answered.value = asked
       thisPc.value = list.thisPc

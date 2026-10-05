@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import type { CloudSession } from '@shared/protocol'
+import type { CliMayteWorker, CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { relativeTime } from '@/components/sidebar/search'
+import TaskRows from '@/components/sidebar/TaskRows.vue'
+import type { TaskNode } from '@/components/sidebar/tasks'
 import { modelName, pcOf, SOURCE_LABELS, sessionShape, SHAPE_LABELS, type CloudSource } from './logic'
 import { useCloud } from './store'
 
@@ -13,8 +15,12 @@ import { useCloud } from './store'
 // select mode it ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this
 // is (Michael, 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the
 // first folder's header, as on the desk list, or alone in a header while there is no folder to show.
-const props = defineProps<{ selectedId: string | null }>()
-const emit = defineEmits<{ open: [row: CloudSession] }>()
+const props = defineProps<{
+  selectedId: string | null
+  /** With the chrome bar's CliMayte button on: the tasks a row handed out, listed under it (sidebar/tasks.ts). */
+  tasksOf?: (id: string) => TaskNode[] | null
+}>()
+const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker] }>()
 
 const cloud = useCloud()
 const collapsed = ref(new Set<string>())
@@ -92,7 +98,8 @@ const ROW =
         <slot v-if="gi === 0" name="tools" />
       </header>
       <div v-if="!collapsed.has(g.key)" class="flex flex-col gap-[1.5px] pt-[1.5px]">
-        <Tip v-for="r in g.rows" :key="r.id" :label="tooltip(r)" side="right" align="start">
+        <template v-for="r in g.rows" :key="r.id">
+        <Tip :label="tooltip(r)" side="right" align="start">
           <div
             role="button"
             tabindex="0"
@@ -122,6 +129,8 @@ const ROW =
             <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
           </div>
         </Tip>
+        <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" :now="now" @open="(w: CliMayteWorker) => emit('open-task', w)" />
+        </template>
       </div>
     </section>
 
