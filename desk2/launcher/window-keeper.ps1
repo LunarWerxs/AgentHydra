@@ -31,7 +31,7 @@ Add-Type -Namespace HydraDesk -Name Placement -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-[DllImport("user32.dll")] public static extern IntPtr MonitorFromRect(ref RECT r, uint flags);
+[DllImport("user32.dll")] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
 [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr ctx);
 '@
 
@@ -97,13 +97,21 @@ try {
           $wp.showCmd = if ($s.maximized) { 3 } else { 1 }  # SW_SHOWMAXIMIZED / SW_SHOWNORMAL
           $wp.flags = 0
           [void][HydraDesk.Placement]::SetWindowPlacement($h, [ref]$wp)
-          # Then the rectangle it had on screen (a snapped one included), on a monitor that is still
-          # there; SetWindowPlacement above already pulled an off-screen window back onto one.
+          # Then the rectangle it had on screen (a snapped one included), only while both ends of its title
+          # bar are still on a monitor: one left mostly on a monitor since unplugged could not be dragged
+          # back. SetWindowPlacement above already pulled an off-screen window back onto one.
           $w = $s.window
           if (-not $s.maximized -and $w -and $w.right -gt $w.left -and $w.bottom -gt $w.top) {
             $rect = New-Object HydraDesk.Placement+RECT
             $rect.Left = [int]$w.left; $rect.Top = [int]$w.top; $rect.Right = [int]$w.right; $rect.Bottom = [int]$w.bottom
-            if ([HydraDesk.Placement]::MonitorFromRect([ref]$rect, 0) -ne [IntPtr]::Zero) {  # 0 = MONITOR_DEFAULTTONULL
+            $onMonitor = {
+              param([int]$x, [int]$y)
+              $pt = New-Object HydraDesk.Placement+POINT
+              $pt.X = $x; $pt.Y = $y
+              [HydraDesk.Placement]::MonitorFromPoint($pt, 0) -ne [IntPtr]::Zero  # 0 = MONITOR_DEFAULTTONULL
+            }
+            # 16 px in: past the invisible resize border a window's rectangle includes, inside its title bar.
+            if ((& $onMonitor ($rect.Left + 16) ($rect.Top + 16)) -and (& $onMonitor ($rect.Right - 16) ($rect.Top + 16))) {
               # 0x14 = SWP_NOZORDER | SWP_NOACTIVATE
               [void][HydraDesk.Placement]::SetWindowPos($h, [IntPtr]::Zero, $rect.Left, $rect.Top, $rect.Right - $rect.Left, $rect.Bottom - $rect.Top, 0x14)
             }

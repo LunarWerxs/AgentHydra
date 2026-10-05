@@ -216,7 +216,7 @@ const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? null
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
 function openTask(w: CliMayteWorker) {
   if (w.sessionId && !w.pc) src.select({ kind: 'external', id: w.sessionId })
-  else openWorkerInHydra(w.id)
+  else openWorkerInHydra(w.id, w.pc)
 }
 
 // The chosen chat lands visibly: its group opens and its row scrolls into view (a new chat is the

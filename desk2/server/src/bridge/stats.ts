@@ -179,7 +179,8 @@ export function createHomeStats(client: HydraClient, now: () => number = Date.no
       {
         spend: spend.value,
         activity: take('activity', activity, (a) => Array.isArray(a?.hours)),
-        climayte: take('climayte', climayte, (c) => typeof c?.tasks === 'number'),
+        // Every figure the tile shows, or none: a part left out is a dash with its reason, never a made-up 0.
+        climayte: take('climayte', climayte, (c) => [c?.tasks, c?.sessions, c?.costUsd, c?.limitHits].every((v) => typeof v === 'number')),
         hswarm: take('hswarm', hswarm, (h) => typeof h?.total?.tasks === 'number'),
         missing,
       },

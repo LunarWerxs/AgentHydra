@@ -14,7 +14,7 @@
 import { existsSync } from 'node:fs'
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
-import { activeFor, byRecency, mapRemote, mapWorkers, RECENT_FINISHED } from './climayte'
+import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED } from './climayte'
 import {
   BridgeError,
   createClient,
@@ -150,6 +150,23 @@ export function createBridge(opts: BridgeOptions = {}) {
     return client.workers(all ? {} : { limit: RECENT_FINISHED })
   }
 
+  /** Adds the finished workers a running one hangs from (its dispatcher, a wave's manager, a few links up)
+   *  that AgentHydra's recent-finished window dropped: the sidebar places the running one through them. */
+  async function addAncestors(raw: AhWorker[]): Promise<void> {
+    for (let round = 0; round < 3; round++) {
+      const { ids, waves } = missingAncestors(raw)
+      if (!ids.length && !waves.length) return
+      const found = await Promise.all([
+        ids.length ? client.workersByIds(ids).catch(() => []) : [],
+        ...waves.map((wave) => client.workers({ group: `mgr-${wave}` }).catch(() => [])),
+      ])
+      const have = new Set(raw.map((w) => w.id))
+      const fresh = found.flat().filter((w) => !have.has(w.id))
+      if (!fresh.length) return
+      raw.push(...fresh)
+    }
+  }
+
   /** The other PCs' workers. An AgentHydra without the route (404), one that fails, or sharing off is none:
    *  never a failure of this PC's list. */
   function remoteWorkers(all = false): Promise<CliMayteWorker[]> {
@@ -168,6 +185,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       const have = new Set(raw.map((w) => w.id))
       const missing = extraWorkerIds().filter((id) => !have.has(id))
       if (missing.length) raw.push(...(await client.workersByIds(missing).catch(() => [])))
+      if (!o.all) await addAncestors(raw)
       const list = mapWorkers(raw)
       if (list.some((w) => w.active)) workerTokens.apply(list, raw, await instanceDirs())
       // This PC's alone: the engine matches chats to these and counts them, and their ids may repeat the other PCs'.

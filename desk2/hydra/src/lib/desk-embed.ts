@@ -65,8 +65,8 @@ export function useDeskSidebar(
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: 'desktop' | 'cli' } | null>(null)
-/** Desk asked for a CliMayte task (CliMayteView opens it once its list is in). */
-export const deskWorkerAsk = ref<string | null>(null)
+/** Desk asked for a CliMayte task (CliMayteView opens it once its list is in); `pc` names another PC's. */
+export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
 
 /** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
  *  (App.vue's view Transition keeps it mounted while the next comes in). */
@@ -98,7 +98,7 @@ if (EMBEDDED) {
     if (!m || typeof m !== 'object' || typeof m.type !== 'string') return
     if (m.type === 'desk:sidebar') sidebarHandlers.get(m.view)?.(m)
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
-    else if (m.type === 'desk:open-worker') deskWorkerAsk.value = m.id
+    else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
   })
   tellDesk({ type: 'ah:ready' })
 }

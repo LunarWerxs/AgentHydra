@@ -128,6 +128,44 @@ test("the other PCs' CliMayte workers join the list under their PC's name, and n
   }
 })
 
+// The sidebar places a running task under its chat through the workers it hangs from, so the recent-finished
+// cut never drops one of those, on this PC or another.
+test("a running task's finished dispatcher, or its wave's failed manager, stays listed past the recent-finished cut", async () => {
+  const f = await startFakeHydra()
+  fakes.push(f)
+  const sid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const base = f.state.workers[0]
+  const finished = (id: string, extra: Record<string, unknown> = {}) => ({ ...base, id, status: 'done', ...extra })
+  f.state.workers.push(
+    // Newer finished work than the two below fills the window AgentHydra keeps.
+    ...Array.from({ length: RECENT_FINISHED }, (_, i) => finished(`w-filler-${i}`, { sessionId: sid(800 + i) })),
+    finished('w-parent', { sessionId: sid(700), origin: { kind: 'chat', sessionId: sid(1) } }),
+    { ...base, id: 'w-child', sessionId: sid(701), origin: { kind: 'worker', workerId: 'w-parent' } },
+    finished('w-mgr', { status: 'failed', kind: 'manage', wave: 'wv-gone', group: 'mgr-wv-gone', sessionId: sid(702) }),
+    { ...base, id: 'w-wave', sessionId: sid(703), kind: 'code', wave: 'wv-gone', origin: undefined },
+  )
+  const answer = remoteAnswer(RECENT_FINISHED + 3)
+  const [mgr] = answer.pcs[0].workers
+  answer.pcs[0].workers.push(
+    { ...mgr, id: 'w-remote-parent', status: 'done', kind: null, wave: null, sessionId: 'r-parent', createdAt: 1, updatedAt: 2 },
+    { ...mgr, id: 'w-remote-kid', kind: null, wave: null, sessionId: 'r-kid', originSessionId: null, originWorkerId: 'w-remote-parent' },
+  )
+  f.state.remote = answer
+  const desk = await boot(f.url)
+
+  const list = (await call(desk, '/api/climayte/workers')).body as CliMayteWorker[]
+  const here = (id: string) => list.find((w) => !w.pc && w.id === id)
+  expect(here('w-parent')).toBeDefined()
+  expect(here('w-child')).toMatchObject({ originWorkerId: 'w-parent', originSessionId: sid(700) })
+  expect(here('w-wave')).toMatchObject({ originWorkerId: 'w-mgr', originSessionId: sid(702) })
+  expect(f.gets).toContain('/api/corch/workers?ids=w-parent')
+  expect(f.gets).toContain('/api/corch/workers?group=mgr-wv-gone')
+  const remote = list.filter((w) => w.pc)
+  expect(remote.some((w) => w.id === 'w-remote-parent')).toBe(true)
+  // Still only the newest finished ones besides it.
+  expect(remote.filter((w) => !w.active)).toHaveLength(RECENT_FINISHED + 1)
+})
+
 test('AgentHydra down: lists stay answerable, writes say 503', async () => {
   const url = deadUrl()
   const desk = await boot(url)

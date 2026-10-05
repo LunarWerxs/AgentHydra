@@ -52,7 +52,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   Not as its own stand alone table"): a task a manager's wave runs, which AgentHydra records with only its
   wave, goes under that manager, and the other PC's tasks (a little cloud, the PC in its tooltip) go under
   their chat when it is in the list, which takes that PC's chat sync and an AgentHydra there new enough to
-  share the task's chat. Turning it on while an AgentHydra tab with its own list is open slides back to
+  share the task's chat. However deep a chain goes, a running task still shows (past three steps in, at
+  the third step's indent), and so does every finished task above it: the server keeps those past its
+  "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
   the desk so the tasks show.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
@@ -89,7 +91,8 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **The window comes back where it was.** Closing Desk 2 and opening it again puts the window back at
   the size and place it had, a snapped one included: Windows keeps a snapped window's floating size apart
   from where it sits, so the launcher's window keeper saves the rectangle on screen too
-  (`~/.hydra-desk-2/window.json`) and puts the window back on it, if that monitor is still there.
+  (`~/.hydra-desk-2/window.json`) and puts the window back on it while both ends of its title bar are
+  still on a monitor (otherwise Windows' own placement, pulled onto a monitor that is there).
 - **More in the Filter menu.** The sidebar's Filter button now holds what AgentHydra's Sessions ⋯ menu
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens

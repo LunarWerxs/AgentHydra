@@ -599,10 +599,13 @@ useDeskSidebar(
 watch(
   [deskWorkerAsk, loaded],
   () => {
-    const id = deskWorkerAsk.value
-    if (!id || !loaded.value) return
+    const ask = deskWorkerAsk.value
+    if (!ask || !loaded.value) return
     deskWorkerAsk.value = null
-    const w = workers.value.find((x) => x.id === id) ?? remoteRows.value.find((x) => x.id === id)
+    // Another PC's ids may repeat this PC's: its task is looked for among that PC's rows only.
+    const w = ask.pc
+      ? remoteRows.value.find((x) => x.id === ask.id && x.remote?.name === ask.pc)
+      : workers.value.find((x) => x.id === ask.id)
     if (!w) return
     if (hideFinished.value && !isCliMayteActive(w)) hideFinished.value = false
     select(w)

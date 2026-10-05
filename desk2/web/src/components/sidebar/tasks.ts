@@ -22,7 +22,7 @@ export interface NestRow {
   workerId?: string | null
 }
 
-/** One task in a list: depth 1 under the row itself, 2 under a manager in it, and so on. */
+/** One task in a list: depth 1 under the row itself, 2 under a manager in it, and so on up to MAX_DEPTH. */
 export interface TaskNode {
   worker: CliMayteWorker
   depth: number
@@ -33,6 +33,7 @@ export interface NestedTasks {
   byRow: Map<string, TaskNode[]>
 }
 
+/** The deepest indent: a task further down is still listed, at this one. */
 const MAX_DEPTH = 3
 
 /**
@@ -68,8 +69,8 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
       })
       .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))
   }
+  // `seen` ends it: each task is walked once, however deep or looped the data.
   function walk(sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>): TaskNode[] {
-    if (depth > MAX_DEPTH) return []
     const out: TaskNode[] = []
     for (const w of kidsOf(sessions, self)) {
       const key = keyOf(w)
@@ -77,7 +78,7 @@ export function nestTasks(rows: readonly NestRow[], workers: readonly CliMayteWo
       seen.add(key)
       const below = walk(sessionsOf(w), new Set([key]), depth + 1, seen)
       if (!w.active && !below.length) continue
-      out.push({ worker: w, depth }, ...below)
+      out.push({ worker: w, depth: Math.min(depth, MAX_DEPTH) }, ...below)
     }
     return out
   }

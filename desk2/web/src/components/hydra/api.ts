@@ -47,8 +47,8 @@ export function showInstanceInHydra(num: number, kind: 'desktop' | 'cli'): void 
   openHydra()
 }
 
-/** Slides AgentHydra in on a CliMayte task, open on the CliMayte tab. */
-export function openWorkerInHydra(id: string): void {
-  tellHydra({ type: 'desk:open-worker', id })
+/** Slides AgentHydra in on a CliMayte task, open on the CliMayte tab; `pc` for another PC's. */
+export function openWorkerInHydra(id: string, pc?: string | null): void {
+  tellHydra(pc ? { type: 'desk:open-worker', id, pc } : { type: 'desk:open-worker', id })
   openHydra()
 }

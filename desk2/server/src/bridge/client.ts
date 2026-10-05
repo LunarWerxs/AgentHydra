@@ -314,6 +314,8 @@ export interface HydraClientOptions {
 export interface WorkerListQuery {
   /** Keep every active worker and this many recently finished ones; undefined = every worker. */
   limit?: number
+  /** Only this dispatch group's workers (a wave's manager is alone in `mgr-<wave>`). */
+  group?: string
 }
 
 /**
@@ -389,8 +391,12 @@ export function createClient(opts: HydraClientOptions = {}) {
     cliInstances: () => get<AhCliInstance[]>('/api/cli-instances'),
     desktopInstances: () => get<AhDesktopInstance[]>('/api/instances'),
     instanceNumbers: () => get<AhInstanceNumber[]>('/api/instance-numbers'),
-    workers: (q: WorkerListQuery = {}) =>
-      get<AhWorker[]>(`/api/corch/workers${q.limit === undefined ? '' : `?limit=${q.limit}`}`),
+    workers: (q: WorkerListQuery = {}) => {
+      const query = new URLSearchParams()
+      if (q.limit !== undefined) query.set('limit', String(q.limit))
+      if (q.group) query.set('group', q.group)
+      return get<AhWorker[]>(`/api/corch/workers${query.size ? `?${query}` : ''}`)
+    },
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
     /** The other PCs' CliMayte queues (read-only: AgentHydra cancels and sends only to this PC's workers). */
     remoteQueues: () => get<AhRemoteQueues>('/api/corch/remote'),

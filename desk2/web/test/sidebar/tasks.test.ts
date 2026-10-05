@@ -66,6 +66,17 @@ test("a session's running tasks sit under it, a manager's wave under the manager
   expect(listed.length).toBe(new Set(listed).size)
 })
 
+test('a running task deep in a chain is still listed, at the deepest indent, with the finished task above it', () => {
+  const workers = [
+    worker('mgr', 1, { originSessionId: 's-chat' }),
+    worker('task', 2, { originWorkerId: 'mgr' }),
+    worker('sub', 3, { originWorkerId: 'task', status: 'done', active: false }),
+    worker('subsub', 4, { originWorkerId: 'sub' })
+  ]
+  const tasks = nestTasks([{ key: 'chat:1', sessionIds: ['s-chat'] }], workers)
+  expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:mgr', '2:here:task', '3:here:sub', '3:here:subsub'])
+})
+
 test('managers that name each other still give each row an answer, each task once', () => {
   const workers = [
     worker('a', 1, { originWorkerId: 'b' }),

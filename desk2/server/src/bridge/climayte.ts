@@ -98,6 +98,37 @@ export const byRecency = (a: CliMayteWorker, b: CliMayteWorker): number =>
       ? (b.startedAt ?? 0) - (a.startedAt ?? 0)
       : (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)
 
+/**
+ * What this PC's list lacks to place its running workers under the chat that started their chain: the
+ * dispatchers a running worker's chain names by id that `raw` has not, and the waves whose running task has
+ * no manager in it. A manager waits, active, while its wave runs, so it goes missing only once it failed or
+ * was cancelled and AgentHydra's recent-finished window dropped it.
+ */
+export function missingAncestors(raw: readonly AhWorker[]): { ids: string[]; waves: string[] } {
+  const byId = new Map(raw.map((w) => [w.id, w]))
+  const managers = waveManagers(raw)
+  const ids = new Set<string>()
+  const waves = new Set<string>()
+  const seen = new Set<string>()
+  for (const w of raw) {
+    if (!isActiveWorkerStatus(w.status)) continue
+    let cur: AhWorker | undefined = w
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id)
+      let up: AhWorker | undefined
+      if (cur.origin?.kind === 'worker') {
+        up = byId.get(cur.origin.workerId)
+        if (!up) ids.add(cur.origin.workerId)
+      } else if (!cur.origin && cur.wave && cur.kind !== 'manage') {
+        up = managers.get(cur.wave)
+        if (!up) waves.add(cur.wave)
+      }
+      cur = up
+    }
+  }
+  return { ids: [...ids], waves: [...waves] }
+}
+
 export function mapWorkers(raw: AhWorker[]): CliMayteWorker[] {
   const byId = new Map(raw.map((w) => [w.id, w]))
   const managers = waveManagers(raw)
@@ -148,17 +179,25 @@ export function mapRemoteWorker(w: AhRemoteWorker, pc: string, managers: Readonl
  * ones, as this PC's list keeps (each PC shares its last day, which can be hundreds). Sharing off, or no
  * answer, is none. A stale PC (off, asleep or not syncing; AgentHydra counts its workers for nothing) is
  * left out: its last snapshot would show its tasks running for as long as it stays away. A wave's managers
- * are found among each PC's whole list, before the finished ones are cut.
+ * are found among each PC's whole list, before the finished ones are cut, and a finished worker an active one
+ * hangs from (its dispatcher, that one's, and so on) is never cut: the sidebar places the active one through it.
  */
 export function mapRemote(answer: AhRemoteQueues | null | undefined, o: { all?: boolean } = {}): CliMayteWorker[] {
   if (!answer?.enabled || !Array.isArray(answer.pcs)) return []
+  const held = new Set<CliMayteWorker>()
   const list = answer.pcs.flatMap((p) => {
     if (p.stale || !Array.isArray(p.workers)) return []
     const managers = waveManagers(p.workers)
-    return p.workers.map((w) => mapRemoteWorker(w, p.name || 'another PC', managers))
+    const mapped = p.workers.map((w) => mapRemoteWorker(w, p.name || 'another PC', managers))
+    // Ids repeat only across PCs, so each PC's chains are walked within it.
+    const byId = new Map(mapped.map((w) => [w.id, w]))
+    const upOf = (w: CliMayteWorker) => (w.originWorkerId ? byId.get(w.originWorkerId) : undefined)
+    for (const w of mapped) if (w.active) for (let up = upOf(w); up && !held.has(up); up = upOf(up)) held.add(up)
+    return mapped
   })
-  const finished = list.filter((w) => !w.active).sort(byRecency)
-  return [...list.filter((w) => w.active), ...(o.all ? finished : finished.slice(0, RECENT_FINISHED))].sort(byRecency)
+  if (o.all) return list.sort(byRecency)
+  const finished = list.filter((w) => !w.active && !held.has(w)).sort(byRecency)
+  return [...list.filter((w) => w.active || held.has(w)), ...finished.slice(0, RECENT_FINISHED)].sort(byRecency)
 }
 
 /** The active workers a chat dispatched (by its Claude Code session id); never another PC's. */

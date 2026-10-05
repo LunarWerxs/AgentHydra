@@ -120,5 +120,5 @@ export type DeskMessage =
   | { type: 'desk:sidebar'; view: string; action: 'search'; value: string }
   /** Show this instance's row in Instances (its desktop or CLI table) and mark it. */
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' }
-  /** Open this CliMayte task on the CliMayte tab. */
-  | { type: 'desk:open-worker'; id: string }
+  /** Open this CliMayte task on the CliMayte tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
+  | { type: 'desk:open-worker'; id: string; pc?: string }

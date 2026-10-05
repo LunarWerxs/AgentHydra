@@ -233,6 +233,10 @@ export async function startFakeHydra(state: FakeState = freshState()): Promise<F
       return json(state.remote)
     }
     if (p === '/api/corch/workers') {
+      const ids = u.searchParams.get('ids')
+      if (ids !== null) return json(state.workers.filter((w) => ids.split(',').includes(w.id)))
+      const group = u.searchParams.get('group')
+      if (group !== null) return json(state.workers.filter((w) => w.group === group))
       const limit = u.searchParams.get('limit')
       if (limit === null) return json(state.workers)
       const n = Number(limit)
