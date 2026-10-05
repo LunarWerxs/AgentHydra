@@ -72,6 +72,10 @@ const notice = ref<string | null>(null)
 const busy = ref(new Set<string>())
 const resolvingAccounts = ref(new Set<string>())
 const usageSnapshots = shallowRef(new Map<string, UsageSnapshot>())
+/** When the usage cells were last drawn. What they show also follows the clock (a window that has
+ *  reset, "checked 3m ago"), and a poll with the same readings writes nothing, so the poll moves this
+ *  on once a minute and the cells, which read it, are drawn again. */
+const drawnAt = ref(Date.now())
 const lightweightServer = ref(false)
 const lastAccountResolveAt = new Map<string, number>()
 
@@ -199,12 +203,14 @@ function usageVariant(
   snapshot: UsageSnapshot | undefined,
   scope: UsageScope,
 ): 'success' | 'warning' | 'destructive' | 'outline' {
+  void drawnAt.value
   if (scope === 'session') return 'outline'
   const pct = usagePctFor(snapshot, scope)
   return pct == null ? 'outline' : usageBadgeVariant(pct)
 }
 
 function usageTitle(snapshot: UsageSnapshot | undefined, scope: UsageScope): string {
+  void drawnAt.value
   const window = scope === 'session' ? '5-hour session' : 'Weekly usage'
   if (usagePctFor(snapshot, scope) == null || !snapshot) {
     return `${window} has not been checked yet.`
@@ -441,7 +447,9 @@ onMounted(() => {
   void connectLifetime()
   void refresh()
   pollTimer = window.setInterval(() => {
-    if (!document.hidden) void refresh(true)
+    if (document.hidden) return
+    void refresh(true)
+    if (Date.now() - drawnAt.value >= 60_000) drawnAt.value = Date.now()
   }, 10_000)
 })
 

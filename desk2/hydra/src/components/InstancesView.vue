@@ -81,7 +81,7 @@ import { useMoveAllChats } from '@/composables/useMoveAllChats'
 import { piiDisplayName, piiName } from '@/composables/usePrivacy'
 import type { SortableColumn } from '@/composables/useSortable'
 import { useDesktopAccountTokens, useDesktopTokenWindow } from '@/composables/useTokenWindow'
-import { useUiPrefs } from '@/composables/useUiPrefs'
+import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
@@ -665,7 +665,11 @@ function rowModel(inst: CMInstance): InstanceRowModel {
         }
       : { empty: t('instances.resolving') },
     pid: inst.pid,
-    uptime: inst.isRunning ? formatUptime(inst.startTime) : null,
+    // A getter for the same reason as lastRunning's label: the cell that draws it ticks with the clock.
+    get uptime() {
+      void now.value
+      return inst.isRunning ? formatUptime(inst.startTime) : null
+    },
     memory: formatBytes(inst.memoryBytes),
     usage: {
       snapshot: usageFor(inst),
@@ -941,7 +945,7 @@ async function onOpen(inst: CMInstance) {
     toast.success(t('instances.toastOpened'))
     // A successful isolated launch is live proof the install is manageable — re-check so a stale
     // "MSIX-only / not installed" banner clears itself instead of waiting on a manual Refresh.
-    if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
+    if (desktopWarning.value) void refreshDesktopInstall(true)
   }
   // Prefer the server's failure message — it explains the MSIX-only case (same convention
   // as the create dialog surfacing result.message).
@@ -1068,7 +1072,7 @@ async function onCreateSubmit(name: string) {
       createOpen.value = false
       if (result.needsBrowserDance) toast.info(t('instances.browserDanceBody'))
       // Same self-heal as onOpen: a successful create disproves a stale "not manageable" verdict.
-      if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
+      if (desktopWarning.value) void refreshDesktopInstall(true)
     } else {
       createError.value = result?.message ?? t('instances.toastCreateFailed')
     }
@@ -1209,10 +1213,12 @@ const {
   },
 })
 
-// Each row's move targets, worked out once per list or toggle change and only for rows whose menu asks.
+// Each row's move targets, worked out once per list, toggle or privacy change (the targets are sorted by
+// the names as shown) and only for rows whose menu asks.
 const moveTargetsOf = computed(() => {
   void instances.value
   void moveShowClosed.value
+  void privacyMode.value
   const cache = new Map<string, ReturnType<typeof moveTargetsForUncached>>()
   return (from: CMInstance) => {
     let targets = cache.get(from.dir)

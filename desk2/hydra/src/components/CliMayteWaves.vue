@@ -22,6 +22,8 @@ import InfoHint from '@/shell/InfoHint.vue'
 const props = defineProps<{
   waves: CliMayteWave[]
   workers: CliMayteWorkerView[]
+  /** `workers` may leave out older finished tasks: a manager not among them may still be there. */
+  more?: boolean
   now: number
 }>()
 const emit = defineEmits<{ selectWorker: [id: string] }>()
@@ -94,7 +96,7 @@ const derived = computed(() => {
 })
 const counts = (w: CliMayteWave) => derived.value.get(w.id)?.counts ?? []
 const managerIds = computed(() => new Set(props.workers.map((x) => x.id)))
-const hasManager = (w: CliMayteWave) => managerIds.value.has(w.managerId)
+const hasManager = (w: CliMayteWave) => managerIds.value.has(w.managerId) || props.more === true
 const short = (sha: string) => sha.slice(0, 7)
 const escalationsOf = (w: CliMayteWave, key: string) => derived.value.get(w.id)?.escalations.get(key) ?? []
 const strays = (w: CliMayteWave) => derived.value.get(w.id)?.strays ?? []

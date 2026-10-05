@@ -273,7 +273,7 @@ const tiles = computed<Tile[]>(() => {
       icon: Monitor,
       value: String(desktopInstances.value.length),
       label: t('instances.home.desktopTitle'),
-      sub: `${t('instances.home.desktopSignedIn', { n: signedDesktop })} · ${desktopPool}`,
+      sub: `${t('instances.home.desktopSignedIn', { n: signedDesktop })} · ${desktopPool.value}`,
       to: 'instances',
     },
     {
@@ -281,7 +281,7 @@ const tiles = computed<Tile[]>(() => {
       icon: Terminal,
       value: String(cliInstances.value.length),
       label: t('instances.home.cliTitle'),
-      sub: `${t('instances.home.cliSignedIn', { n: signedCli })} · ${cliPool}`,
+      sub: `${t('instances.home.cliSignedIn', { n: signedCli })} · ${cliPool.value}`,
       to: 'cli',
     },
     {

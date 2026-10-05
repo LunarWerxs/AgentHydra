@@ -341,9 +341,18 @@ function onVisible() {
   if (document.visibilityState === 'visible') void load({ silent: true, side: true })
 }
 
+/** This PC's task by id. One older than the finished tasks read so far reads the whole list first. */
+async function findWorker(id: string): Promise<ListRow | undefined> {
+  const w = workers.value.find((x) => x.id === id)
+  if (w || finishedLimit.value === undefined) return w
+  finishedLimit.value = undefined
+  await load({ silent: true })
+  return workers.value.find((x) => x.id === id)
+}
+
 /** A wave's manager link: open that worker's row. */
-function selectManager(id: string) {
-  const m = workers.value.find((x) => x.id === id)
+async function selectManager(id: string) {
+  const m = await findWorker(id)
   if (m) select(m)
 }
 
@@ -681,14 +690,14 @@ useDeskSidebar(
 // "Hide finished" would hide it.
 watch(
   [deskWorkerAsk, loaded],
-  () => {
+  async () => {
     const ask = deskWorkerAsk.value
     if (!ask || !loaded.value) return
     deskWorkerAsk.value = null
     // Another PC's ids may repeat this PC's: its task is looked for among that PC's rows only.
     const w = ask.pc
       ? remoteRows.value.find((x) => x.id === ask.id && x.remote?.name === ask.pc)
-      : workers.value.find((x) => x.id === ask.id)
+      : await findWorker(ask.id)
     if (!w) return
     if (hideFinished.value && !isCliMayteActive(w)) hideFinished.value = false
     select(w)
@@ -793,6 +802,7 @@ onUnmounted(() => {
             <CliMayteWaves
               :waves="waves"
               :workers="workers"
+              :more="hasOlder"
               :now="now"
               @select-worker="selectManager"
             />
@@ -875,6 +885,7 @@ onUnmounted(() => {
         class="mb-2 shrink-0"
         :waves="waves"
         :workers="workers"
+        :more="hasOlder"
         :now="now"
         @select-worker="selectManager"
       />
