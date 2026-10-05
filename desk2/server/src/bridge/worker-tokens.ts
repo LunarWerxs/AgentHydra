@@ -50,8 +50,14 @@ export function addLine(t: Pick<Tally, 'byMessage' | 'total'>, line: string): vo
   t.total += v - prev
 }
 
-export function createWorkerTokens(o: { chunkBytes?: number } = {}) {
+/** How long a transcript that was not found is not looked for again. */
+const MISS_MS = 15_000
+
+export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number } = {}) {
   const chunk = o.chunkBytes ?? CHUNK_BYTES
+  const now = o.now ?? Date.now
+  /** Sessions whose transcript was not found, and when: the scan of every project folder is not repeated at each refresh. */
+  const misses = new Map<string, number>()
   const tallies = new Map<string, Tally>()
   const seen = new Map<string, { updatedAt: number; tokens: number | null }>()
 
@@ -97,8 +103,14 @@ export function createWorkerTokens(o: { chunkBytes?: number } = {}) {
   function sessionTokens(sessionId: string, dirs: string[]): number | null {
     let t = tallies.get(sessionId)
     if (!t) {
+      const missed = misses.get(sessionId)
+      if (missed !== undefined && now() - missed < MISS_MS) return null
       const path = locate(sessionId, dirs)
-      if (!path) return null
+      if (!path) {
+        misses.set(sessionId, now())
+        return null
+      }
+      misses.delete(sessionId)
       t = { path, offset: 0, rest: '', byMessage: new Map(), total: 0 }
       tallies.set(sessionId, t)
     }
@@ -129,9 +141,14 @@ export function createWorkerTokens(o: { chunkBytes?: number } = {}) {
     /** Fills `tokens` on the active workers in `list` (mapped from `raw`), in place. */
     apply(list: CliMayteWorker[], raw: readonly AhWorker[], configDirs: ReadonlyMap<string, string>): void {
       const byId = new Map(raw.map((w) => [w.id, w]))
+      const activeIds = new Set<string>()
+      const activeSessions = new Set<string>()
       for (const w of list) {
         const r = byId.get(w.id)
         if (!w.active || !r || (!r.sessionId && !r.sessions?.length)) continue
+        activeIds.add(w.id)
+        for (const s of r.sessions ?? []) activeSessions.add(s)
+        if (r.sessionId) activeSessions.add(r.sessionId)
         const last = seen.get(w.id)
         if (last && last.updatedAt === r.updatedAt) {
           w.tokens = last.tokens ?? w.tokens
@@ -140,6 +157,10 @@ export function createWorkerTokens(o: { chunkBytes?: number } = {}) {
         w.tokens = live(r, configDirs, w.tokens)
         seen.set(w.id, { updatedAt: r.updatedAt, tokens: w.tokens })
       }
+      // A worker that finished or is no longer listed keeps nothing: its settled figure comes from AgentHydra.
+      for (const id of seen.keys()) if (!activeIds.has(id)) seen.delete(id)
+      for (const id of tallies.keys()) if (!activeSessions.has(id)) tallies.delete(id)
+      for (const id of misses.keys()) if (!activeSessions.has(id)) misses.delete(id)
     },
   }
 }
