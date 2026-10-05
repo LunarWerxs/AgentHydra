@@ -132,6 +132,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
   instead of keeping its card.
+- **Restart to update.** When Desk 2's server code changes after it started, the Menu button gets a blue
+  dot and Menu has Restart to update: it runs `launcher/restart.ps1` for you, the chats keep running and the
+  window reconnects. A button that needs newer server code than the running one says so instead of a bare
+  "no route" (2026-10-05: Send now, Fork and the servers pane each looked broken until a restart).
 - **Small things that stay put.** Closing the tip over a new chat's composer ends the tips for good
   (owner, 2026-10-05: "Those all need to remember if I close them and stay closed"). Over an outside
   session, the line about continuing it says what happens: it continues as a copy on the account CliMayte

@@ -38,6 +38,7 @@ import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId
 import { saveDraft } from '@/components/composer/logic'
 import { saveDraftImages, type DraftImage } from '@/components/composer/draft-images'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
+import { refusalText, serverHello, watchServerUpdate } from '@/lib/server-update'
 import { rememberView, restoreView } from '@/lib/view-memory'
 import { readCache, readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
@@ -218,7 +219,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE_URL + path, init)
   if (!res.ok) {
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
-    throw new Error(typeof error === 'string' && error ? error : `${res.status} ${res.statusText}`)
+    throw new Error(refusalText(res.status, error) ?? `${res.status} ${res.statusText}`)
   }
   return res.json()
 }
@@ -290,6 +291,7 @@ function handleServerEvent(event: ServerEvent) {
       // Whole, whatever its rev: a restarted server may count afresh. A server without a queue sends none.
       queueState.value = event.queue ?? null
       void reloadIfStale()
+      serverHello()
       break
 
     case 'queue.update':
@@ -639,6 +641,7 @@ export function useDesk() {
       }
       connectWebSocket()
       watchBundle()
+      watchServerUpdate()
     },
 
     select(

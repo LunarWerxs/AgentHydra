@@ -25,6 +25,7 @@ import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import NewSessionScreen from './NewSessionScreen.vue'
 import { NavHistory, SidebarPeek, matchShortcut, viewUnder, type View } from './logic'
 import { useShellSource } from './source'
+import { restartServer, updateOffer } from '@/lib/server-update'
 
 // The whole window: sidebar (288, resizable), the chrome bar over its top, and the pane with the
 // title bar, the view, the composer and an optional right pane.
@@ -460,6 +461,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
       :tasks-on="showTasks"
+      :update="demo ? null : updateOffer"
+      @restart="restartServer"
       @hydra="toggleHydra()"
       @cloud="toggleCloud"
       @tasks="toggleTasks"

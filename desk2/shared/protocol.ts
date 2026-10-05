@@ -383,6 +383,13 @@ export interface GitStatus {
   files: GitFileChange[]
 }
 
+/** GET /api/server/update: the server's code changed on disk after it started (Menu > Restart to update). */
+export interface ServerUpdate {
+  stale: boolean
+  /** The launcher started this server, so POST /api/server/restart can restart it (Windows only). */
+  restartable: boolean
+}
+
 // Settings
 
 export interface DeskSettings {

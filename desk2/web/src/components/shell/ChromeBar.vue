@@ -4,6 +4,7 @@ import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
+import type { UpdateOffer } from '@/lib/server-update'
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu, Hide sidebar, Back,
 // Forward (28px, r7). The real app's Chat / Code mode switch is left out: Hydra Desk is Code only.
@@ -11,8 +12,10 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem 
 // sidebar lists every session of both PCs) and CliMayte (each session's running CliMayte tasks listed
 // under it, sidebar/tasks.ts). Each shows when it is on: AgentHydra pressed, Cloud and CliMayte blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
-defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: []; tasks: [] }>()
+// `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
+// Restart to update (or, for a server the launcher did not start, how to restart it).
+defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; update?: UpdateOffer | null }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: []; tasks: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -32,7 +35,10 @@ const BTN = `${BTN_SHAPE} text-text`
       <span class="inline-flex">
     <DropdownMenu>
         <DropdownMenuTrigger as-child>
-          <button type="button" :class="BTN" aria-label="Menu"><component :is="shellGlyphs.menu" class="size-4" /></button>
+          <button type="button" :class="[BTN, 'relative']" :aria-label="update ? 'Menu (update ready)' : 'Menu'">
+            <component :is="shellGlyphs.menu" class="size-4" />
+            <span v-if="update" class="absolute right-1 top-1 size-1.5 rounded-full bg-accent" aria-hidden="true" />
+          </button>
         </DropdownMenuTrigger>
       <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
         <DropdownMenuItem :class="MENU_ITEM" @select="emit('new')">New session<DropdownMenuShortcut :class="MENU_SHORTCUT">Ctrl + N</DropdownMenuShortcut></DropdownMenuItem>
@@ -42,6 +48,14 @@ const BTN = `${BTN_SHAPE} text-text`
         </DropdownMenuItem>
         <DropdownMenuSeparator :class="MENU_SEPARATOR" />
         <DropdownMenuItem :class="MENU_ITEM" @select="emit('settings')">Settings</DropdownMenuItem>
+        <template v-if="update">
+          <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+          <DropdownMenuItem v-if="update.restartable" :class="MENU_ITEM" :disabled="update.restarting" @select="emit('restart')">
+            {{ update.restarting ? 'Restarting...' : 'Restart to update' }}
+          </DropdownMenuItem>
+          <DropdownMenuItem v-else :class="MENU_ITEM" disabled>Server out of date: run launcher/restart.ps1</DropdownMenuItem>
+          <DropdownMenuItem v-if="update.error" :class="[MENU_ITEM, 'whitespace-normal']" disabled>{{ update.error }}</DropdownMenuItem>
+        </template>
       </DropdownMenuContent>
     </DropdownMenu>
       </span>

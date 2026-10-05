@@ -905,6 +905,17 @@ when it comes back into view, then reloads onto it at once when out of sight, el
 touched for 30 s, back on the chat or screen it showed (`web/src/lib/stale-bundle.ts`, `view-memory.ts`;
 drafts are saved as they are typed).
 
+**Restart to update.** The server's code is not reloaded the same way, so the window asks
+`GET /api/server/update` on every hello and every minute (`server/src/plugins/60-update.ts`,
+`web/src/lib/server-update.ts`): `stale` once a `.ts` file under `server/src` or `shared/` was saved after the
+server started or the file count changed, `restartable` when `~/.hydra-desk-2/server.pid` names this server
+(the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
+`POST /api/server/restart` turns into `launcher/restart.ps1`, started hidden outside the server's process tree
+(stop.ps1 ends that tree) with its output in `logs/restart.log`; the chats run on and the window reconnects.
+A server the launcher did not start answers 409 and Menu says to run restart.ps1. A server older than a route
+the window calls answers `no route ...`, which the window shows as "Hydra Desk 2's server is older than this
+window: Menu > Restart to update".
+
 ## Done means
 
 1. `bun run typecheck`, `bun test` and `bun run build` pass at the root.
