@@ -305,7 +305,7 @@ describe('the queue wiring in the composer', () => {
   it('right-clicking Send is a short menu (what Enter does, Resume while held), not the queue popover', () => {
     expect(split).toContain('<ContextMenuTrigger as-child :disabled="!queue">')
     expect(split).toContain('v-for="m in SEND_MODES"')
-    expect(split).toContain('<ContextMenuItem :class="MENU_ITEM" @select="source.queueResume?.(chatId!)">')
+    expect(split).toContain('<ContextMenuItem :class="MENU_ITEM" @select="menuAct(() => source.queueResume?.(chatId!))">')
     expect(split).not.toContain('@contextmenu')
     for (const m of SEND_MODES) expect(m.hint.length).toBeLessThanOrEqual(24)
   })
