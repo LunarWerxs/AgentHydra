@@ -36,7 +36,7 @@ export class ChatStore {
   /** Item files whose tail was checked for a torn last line this process. */
   private checkedTails = new Set<string>()
   /** Per item file: the last line per id as the file stood at this size and mtime, so a poll need not read the file again. */
-  private lineCache = new Map<string, { size: number; mtimeMs: number; lines: Map<string, string> }>()
+  private lineCache = new Map<string, { size: number; mtimeMs: number; offset: number; lines: Map<string, string>; tail: Map<string, string> }>()
   /** The chats.json text last written, so an unchanged list is not written again. */
   private lastSaved: string | null = null
 
@@ -107,7 +107,6 @@ export class ChatStore {
       this.checkedTails.add(file)
       if (!endsWithNewline(file)) prefix = '\n'
     }
-    this.lineCache.delete(file)
     appendFileSync(file, prefix + JSON.stringify(item) + '\n')
   }
 
@@ -123,28 +122,28 @@ export class ChatStore {
     }
     let cached = this.lineCache.get(file)
     if (!cached || cached.size !== st.size || cached.mtimeMs !== st.mtimeMs) {
-      let raw: string
+      // An append only grows the file: read from where the last read stopped. Anything else (shrunk, or rewritten at the same size) reads it whole.
+      const from = cached && st.size > cached.size ? cached.offset : 0
+      let chunk: Buffer
       try {
-        raw = readFileSync(file, 'utf8')
+        chunk = readFrom(file, from, st.size)
       } catch {
         this.lineCache.delete(file)
         return []
       }
-      const lines = new Map<string, string>()
-      for (const line of raw.split('\n')) {
-        if (!line.trim()) continue
-        try {
-          const item = JSON.parse(line) as TranscriptItem
-          if (item && typeof item.id === 'string') lines.set(item.id, line)
-        } catch {
-          // a torn line (crash mid-write): skip it
-        }
-      }
-      cached = { size: st.size, mtimeMs: st.mtimeMs, lines }
+      const lines = from > 0 && cached ? cached.lines : new Map<string, string>()
+      const end = chunk.lastIndexOf(0x0a) + 1
+      addLines(lines, chunk.toString('utf8', 0, end))
+      // A last line with no newline yet may be a write in progress: counted if it parses, read again from its start next time.
+      const tail = new Map<string, string>()
+      addLines(tail, chunk.toString('utf8', end))
+      cached = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, lines, tail }
       this.lineCache.set(file, cached)
     }
     // Parsed afresh on every call: callers keep and change the items they get, so a shared object would leak between them.
-    return [...cached.lines.values()].map((line) => JSON.parse(line) as TranscriptItem)
+    const out = new Map(cached.lines)
+    for (const [id, line] of cached.tail) out.set(id, line)
+    return [...out.values()].map((line) => JSON.parse(line) as TranscriptItem)
   }
 
   /** Drops the chat's transcript file (the caller drops it from the list and saves). */
@@ -156,11 +155,40 @@ export class ChatStore {
   }
 }
 
+/** The file's bytes from `from` to `to`. */
+function readFrom(file: string, from: number, to: number): Buffer {
+  const fd = openSync(file, 'r')
+  try {
+    const buf = Buffer.alloc(Math.max(0, to - from))
+    let got = 0
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, from + got)
+      if (n === 0) break
+      got += n
+    }
+    return got === buf.length ? buf : buf.subarray(0, got)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Each parsable item line in `text`, filed by id (a later line replaces an earlier one, keeping its place); a torn line is skipped. */
+function addLines(lines: Map<string, string>, text: string): void {
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const item = JSON.parse(line) as TranscriptItem
+      if (item && typeof item.id === 'string') lines.set(item.id, line)
+    } catch {
+      // a torn line (crash mid-write): skip it
+    }
+  }
+}
+
 /** True for a missing or empty file, or one whose last byte is a newline. */
 function endsWithNewline(file: string): boolean {
-  if (!existsSync(file)) return true
-  const size = statSync(file).size
-  if (size === 0) return true
+  const size = statSync(file, { throwIfNoEntry: false })?.size
+  if (!size) return true
   const fd = openSync(file, 'r')
   try {
     const buf = Buffer.alloc(1)

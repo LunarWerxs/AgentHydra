@@ -2,7 +2,7 @@
 // these. Email masking, a JSON-lines log that rolls monthly or at a size cap and never throws on write, and the
 // route prefix: every diagnostics route is GET /api/diagnostics/<name>, behind the server's loopback guard.
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 
@@ -40,7 +40,7 @@ export class JsonlLog {
   /** The current file's size and last-write month as this process knows them; null until the first append looks. */
   private known: { size: number; month: string } | null = null
   /** Per file: its rows as parsed when it stood at this size and mtime. */
-  private readonly parsed = new Map<string, { size: number; mtimeMs: number; rows: unknown[] }>()
+  private readonly parsed = new Map<string, { size: number; mtimeMs: number; offset: number; rows: unknown[]; tail: unknown[] }>()
 
   constructor(
     readonly home: string,
@@ -106,27 +106,56 @@ export class JsonlLog {
       }
       let hit = this.parsed.get(f)
       if (!hit || hit.size !== st.size || hit.mtimeMs !== st.mtimeMs) {
-        let text: string
+        // An append only grows the file: read from where the last read stopped. Anything else reads it whole.
+        const from = hit && st.size > hit.size ? hit.offset : 0
+        let chunk: Buffer
         try {
-          text = readFileSync(f, 'utf8')
+          chunk = readFrom(f, from, st.size)
         } catch {
           continue
         }
-        const rows: unknown[] = []
-        for (const raw of text.split('\n')) {
-          if (!raw.trim()) continue
-          try {
-            rows.push(JSON.parse(raw))
-          } catch {
-            // a torn line
-          }
-        }
-        hit = { size: st.size, mtimeMs: st.mtimeMs, rows }
+        const end = chunk.lastIndexOf(0x0a) + 1
+        const rows = from > 0 && hit ? hit.rows : []
+        parseLines(rows, chunk.toString('utf8', 0, end))
+        // A last line with no newline yet may be a write in progress: shown if it parses, read again from its start next time.
+        const tail: unknown[] = []
+        parseLines(tail, chunk.toString('utf8', end))
+        hit = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, rows, tail }
         this.parsed.set(f, hit)
       }
       for (const row of hit.rows) out.push(row)
+      for (const row of hit.tail) out.push(row)
     }
     return out
+  }
+}
+
+/** The file's bytes from `from` to `to`. */
+function readFrom(file: string, from: number, to: number): Buffer {
+  const fd = openSync(file, 'r')
+  try {
+    const buf = Buffer.alloc(Math.max(0, to - from))
+    let got = 0
+    while (got < buf.length) {
+      const n = readSync(fd, buf, got, buf.length - got, from + got)
+      if (n === 0) break
+      got += n
+    }
+    return got === buf.length ? buf : buf.subarray(0, got)
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Pushes every parsable JSON line of `text` onto `rows`; a torn line is skipped. */
+function parseLines(rows: unknown[], text: string): void {
+  for (const raw of text.split('\n')) {
+    if (!raw.trim()) continue
+    try {
+      rows.push(JSON.parse(raw))
+    } catch {
+      // a torn line
+    }
   }
 }
 

@@ -104,6 +104,18 @@ describe('ChatStore items', () => {
     expect(store.loadItems('nothing')).toEqual([])
   })
 
+  test('items appended between loads are read on top of the cached ones', () => {
+    const store = new ChatStore(home())
+    store.appendItem('c4', text('x', 'one'))
+    expect(store.loadItems('c4').map((i) => i.id)).toEqual(['x'])
+    store.appendItem('c4', text('y', 'two'))
+    store.appendItem('c4', text('x', 'one, final'))
+    expect(store.loadItems('c4').map((i) => [i.id, (i as { text: string }).text])).toEqual([
+      ['x', 'one, final'],
+      ['y', 'two'],
+    ])
+  })
+
   test('a torn last line is skipped, and the next append starts on its own line', () => {
     const h = home()
     const store = new ChatStore(h)
