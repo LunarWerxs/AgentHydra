@@ -35,6 +35,9 @@ const props = defineProps<{
   compact?: boolean
   /** How much of the top something lying over the transcript covers (Hydra Desk 2's session header): the first row starts below it. */
   insetTop?: number
+  /** The history is not loaded yet; with `loadError`, the last try at it failed and another is coming. */
+  loading?: boolean
+  loadError?: string | null
 }>()
 
 const desk = useDesk()
@@ -60,6 +63,11 @@ provideTranscript(
 )
 
 const showWorking = computed(() => !!chat.value && ['working', 'starting', 'needs_you'].includes(chat.value.status))
+/** What an empty transcript says: an unloaded one never claims to have no messages. */
+const emptyText = computed(() => {
+  if (!props.loading) return 'No messages yet'
+  return props.loadError ? `Could not load this chat's messages: ${props.loadError.replace(/\.$/, '')}. Trying again…` : 'Loading messages…'
+})
 
 // Windowing: measured heights by item id, estimates until measured.
 const scroller = ref<HTMLElement | null>(null)
@@ -324,7 +332,7 @@ watch(
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
       <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
-        <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">No messages yet</div>
+        <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">{{ emptyText }}</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />

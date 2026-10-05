@@ -540,7 +540,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" />

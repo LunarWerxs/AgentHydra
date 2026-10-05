@@ -63,13 +63,20 @@ g.WebSocket = class {
 }
 // rc-late's items answer only when the test lets them, as a slow GET does.
 const late: { release?: () => void } = {}
+// A path here fails that many more times as a stopped server does: nothing answers.
+const down = new Map<string, number>()
 g.fetch = async (path: string) => {
   if (path.startsWith('/api/chats/')) fetched.push(path)
   if (path === '/api/chats/rc-late/items') await new Promise<void>((r) => (late.release = r))
-  const out = path === '/api/chats/rc-open/items' || path === '/api/chats/rc-late/items' ? OPEN : { ok: true }
+  const fails = down.get(path) ?? 0
+  if (fails > 0) {
+    down.set(path, fails - 1)
+    throw new TypeError('Failed to fetch')
+  }
+  const out = ['/api/chats/rc-open/items', '/api/chats/rc-late/items', '/api/chats/rc-down/items', '/api/chats/rc-shut/items'].includes(path) ? OPEN : { ok: true }
   return new Response(JSON.stringify(out), { status: 200 })
 }
-const { useDesk } = await import('../../src/stores/desk')
+const { useDesk, RELOAD_WAITS_MS } = await import('../../src/stores/desk')
 const desk = useDesk()
 desk.disconnect()
 await desk.init()
@@ -116,6 +123,35 @@ describe('a reconnect keeps the open chat', () => {
     const items = desk.itemsByChat.value.get('rc-late') ?? []
     expect(items.map((i) => i.id)).toEqual(['u1', 'p1', 'p2'])
     expect(items.map((i) => (i.kind === 'permission' ? i.state : null))).toEqual([null, 'allowed', 'pending'])
+  })
+})
+
+describe('a chat whose history does not load', () => {
+  // 2026-10-05: after a server restart chats sat on "No messages yet" with their history on disk.
+  RELOAD_WAITS_MS.splice(0, RELOAD_WAITS_MS.length, 5)
+  const said = "Hydra Desk 2's server is not answering (it may be restarting)"
+
+  test('after a reconnect it is asked for again until it lands, with why it is missing meanwhile', async () => {
+    down.set('/api/chats/rc-down/items', 2)
+    desk.select({ kind: 'chat', id: 'rc-down' })
+    fetched.length = 0
+    push(hello([summary('rc-down')]))
+    await until(() => desk.itemsError.value.has('rc-down'))
+    expect(desk.itemsError.value.get('rc-down')).toBe(said)
+    expect(desk.itemsByChat.value.has('rc-down')).toBe(false)
+    await until(() => desk.itemsByChat.value.has('rc-down'))
+    expect(desk.itemsByChat.value.get('rc-down')?.map((i) => i.id)).toEqual(['u1', 'p1'])
+    expect(desk.itemsError.value.has('rc-down')).toBe(false)
+    expect(fetched).toEqual(Array(3).fill('/api/chats/rc-down/items'))
+  })
+
+  test('opened while the server is down, it loads once the server answers', async () => {
+    push(hello([summary('rc-shut')]))
+    desk.select({ kind: 'chat', id: 'rc-shut' })
+    down.set('/api/chats/rc-shut/items', 1)
+    await expect(desk.loadItems('rc-shut')).rejects.toThrow(said)
+    await until(() => desk.itemsByChat.value.has('rc-shut'))
+    expect(desk.itemsByChat.value.get('rc-shut')?.map((i) => i.id)).toEqual(['u1', 'p1'])
   })
 })
 

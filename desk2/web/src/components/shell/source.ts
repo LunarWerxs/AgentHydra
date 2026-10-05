@@ -25,6 +25,8 @@ import type { View } from './logic'
 export interface ShellSource {
   chats: Readonly<Ref<ChatSummary[]>>
   itemsByChat: Readonly<Ref<Map<string, TranscriptItem[]>>>
+  /** Why a chat's history did not load, by chat id, while it is tried again. Optional: a fixture source loads all it has. */
+  itemsError?: Readonly<Ref<ReadonlyMap<string, string>>>
   workers: Readonly<Ref<CliMayteWorker[]>>
   /** Hydra Desk 2: the other PCs' CliMayte workers (each with `pc`), kept apart from `workers` so they never count as this PC's; only the sidebar's task rows read them. A source without them (the Gallery) has none. */
   remoteWorkers?: Readonly<Ref<CliMayteWorker[]>>

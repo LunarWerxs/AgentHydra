@@ -159,6 +159,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A
   handoff with no move (same account) is one muted "Continued in a fresh session" line; messages you sent
   that the earlier session never got to stay as yours. Chats already saved read the same way.
+- **A chat never claims to be empty when it only failed to load.** A chat whose messages did not load (the
+  server restarting or stopped) says "Loading messages…", or why the load failed, and asks again every few
+  seconds until they come, instead of "No messages yet" until you opened another chat and came back
+  (2026-10-05: "did we delete something?"). A message that cannot reach the server says the server is not
+  answering instead of the browser's "Failed to fetch".
 - **Restart to update.** When Desk 2's server code changes after it started, the Menu button gets a blue
   dot and Menu has Restart to update: it runs `launcher/restart.ps1` for you, the chats keep running and the
   window reconnects. A button that needs newer server code than the running one says so instead of a bare

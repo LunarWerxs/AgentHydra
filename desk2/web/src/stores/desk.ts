@@ -216,7 +216,10 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 
 /** A request; a refusal rejects with the server's own sentence (its { error } body), else the status. */
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(BASE_URL + path, init)
+  // Nothing answered (the browser says only "Failed to fetch"): the server is stopped or restarting.
+  const res = await fetch(BASE_URL + path, init).catch((err: unknown) => {
+    throw new Error("Hydra Desk 2's server is not answering (it may be restarting)", { cause: err })
+  })
   if (!res.ok) {
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
     throw new Error(refusalText(res.status, error) ?? `${res.status} ${res.statusText}`)
@@ -272,6 +275,8 @@ function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
   const items = keepNewer(withWindowNotes(id, snapshot), since)
   const kept = shallowReactive(items)
   itemsByChat.set(id, kept)
+  itemsError.delete(id)
+  reloadTries = 0
   indexes.delete(id)
   touchChat(id)
   return kept
@@ -395,7 +400,30 @@ function reloadOpenChat() {
     .then((items) => {
       landItems(id, items)
     })
-    .catch(() => {}) // floor-ok: left unloaded, the chat loads again when it is next opened
+    .catch((err: unknown) => retryOpenChat(id, err))
+}
+
+/** Why each chat's history did not load, by chat id; gone once it lands. */
+const itemsError = shallowReactive(new Map<string, string>())
+/** Waits between tries at the open chat's history after a failure; the last repeats. */
+export const RELOAD_WAITS_MS = [1000, 2000, 4000, 8000]
+let reloadTimer: ReturnType<typeof setTimeout> | null = null
+let reloadTries = 0
+
+/**
+ * The open chat's history failed to load: it is asked for again while the chat stays open and unloaded.
+ * 2026-10-05: after a server restart chats sat on "No messages yet", their history on disk, until the owner
+ * opened another chat and came back ("did we delete something?").
+ */
+function retryOpenChat(id: string, err: unknown) {
+  itemsError.set(id, err instanceof Error ? err.message : String(err))
+  if (reloadTimer) clearTimeout(reloadTimer)
+  const wait = RELOAD_WAITS_MS[Math.min(reloadTries++, RELOAD_WAITS_MS.length - 1)]
+  reloadTimer = setTimeout(() => {
+    reloadTimer = null
+    const sel = store.selected
+    if (sel.kind === 'chat' && sel.id === id && !itemsByChat.has(id)) reloadOpenChat()
+  }, wait)
 }
 
 /** The snapshot with every item that arrived since it was asked for in place of its own copy, and after it when it has none. */
@@ -624,6 +652,7 @@ export function useDesk() {
     // State
     chats: computed(() => store.chats),
     itemsByChat: computed(() => itemsByChat),
+    itemsError: computed(() => itemsError),
     external: computed(allExternal),
     workers: computed(() => store.workers),
     /** The other PCs' CliMayte workers, for the sidebar's CliMayte rows only (splitWorkers). */
@@ -873,7 +902,11 @@ export function useDesk() {
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {
       const opened = performance.now()
-      const items = landItems(chatId, await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`))
+      const snapshot = await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
+        if (store.selected.kind === 'chat' && store.selected.id === chatId) retryOpenChat(chatId, err)
+        throw err
+      })
+      const items = landItems(chatId, snapshot)
       reportAtPaint('open_to_paint', opened, chatId)
       return items
     },
