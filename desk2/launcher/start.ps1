@@ -1,7 +1,8 @@
 # Opens Hydra Desk 2 as its own app window, starting the server first when it is not already up.
 #
 #   1. GET http://127.0.0.1:7798/api/health. Answers = the server is up, skip to 4.
-#   2. Otherwise start `bun server/src/index.ts` from the desk folder, hidden, stdout and stderr
+#   2. Otherwise start `bun server/src/index.ts` from the desk folder, hidden and through WMI (outside the
+#      caller's process tree and job, so it outlives the shell or worker that ran this), stdout and stderr
 #      appended to ~/.hydra-desk-2/logs/server.log, its pids in ~/.hydra-desk-2/server.pid (stop.ps1 reads it).
 #      A server this launcher started that is still booting is waited on, never started twice.
 #   3. Wait for health up to 20 s; if it never answers, show a message box naming the log and exit 1.
@@ -126,22 +127,44 @@ function Start-Server {
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   Add-Content -Path $ServerLog -Value ("`r`n==== {0} start.ps1: bun server/src/index.ts on port {1} ====" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Port) -Encoding UTF8
 
-  # cmd /c only to send stdout AND stderr to the one log file; Start-Process cannot point both at
-  # the same file. The window is hidden, and bun inherits that hidden console.
+  # cmd /c only to send stdout AND stderr to the one log file. The window is hidden, and bun inherits that
+  # hidden console. WMI (Win32_Process.Create) starts it, so it is born outside this launcher's process tree
+  # and job: 2026-10-05, a server a CliMayte worker restarted from its shell sat in the worker's kill-on-close
+  # job and died the moment the worker finished, leaving the window on "No messages yet" and "Failed to fetch".
+  # A WMI-started process has the user's own environment, not this script's, so port and home go on the
+  # command line. Start-Process (which stays in the caller's job) only when WMI refuses.
   $env:HYDRA_DESK_PORT = "$Port"
-  $cmdLine = "/d /c `"`"$($bun.Source)`" server\src\index.ts >> `"$ServerLog`" 2>&1`""
-  $wrapper = Start-Process -FilePath "$env:ComSpec" -ArgumentList $cmdLine -WorkingDirectory $DeskRoot -WindowStyle Hidden -PassThru
+  $envSet = "set `"HYDRA_DESK_PORT=$Port`""
+  if ($env:HYDRA_DESK_HOME) { $envSet += " && set `"HYDRA_DESK_HOME=$($env:HYDRA_DESK_HOME)`"" }
+  $cmdLine = "/d /c `"$envSet && `"$($bun.Source)`" server\src\index.ts >> `"$ServerLog`" 2>&1`""
+  $wrapper = $null
+  $wrapperPid = 0
+  try {
+    $startup = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ ShowWindow = [UInt16]0 }
+    $made = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+      CommandLine = "`"$env:ComSpec`" $cmdLine"; CurrentDirectory = $DeskRoot; ProcessStartupInformation = $startup
+    }
+    if ($made.ReturnValue -eq 0) {
+      $wrapperPid = [int]$made.ProcessId
+      $wrapper = Get-Process -Id $wrapperPid -ErrorAction SilentlyContinue
+    }
+  } catch { }
+  if (-not $wrapperPid) {
+    Say 'WMI did not start the server: starting it with Start-Process, so it ends with this launcher''s job, if it has one'
+    $wrapper = Start-Process -FilePath "$env:ComSpec" -ArgumentList $cmdLine -WorkingDirectory $DeskRoot -WindowStyle Hidden -PassThru
+    $wrapperPid = $wrapper.Id
+  }
 
   # Record bun itself too, so stop.ps1 can kill the right tree even after the wrapper is gone.
   $server = $null
   for ($i = 0; $i -lt 30 -and -not $server; $i++) {
-    $server = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($wrapper.Id)" -ErrorAction SilentlyContinue |
+    $server = Get-CimInstance Win32_Process -Filter "ParentProcessId=$wrapperPid" -ErrorAction SilentlyContinue |
       Where-Object { $_.Name -like 'bun*' } | Select-Object -First 1
     if (-not $server) { Start-Sleep -Milliseconds 100 }
   }
   $info = [ordered]@{
-    wrapperPid = $wrapper.Id
-    wrapperStarted = $wrapper.StartTime.ToUniversalTime().ToString('o')
+    wrapperPid = $wrapperPid
+    wrapperStarted = if ($wrapper) { $wrapper.StartTime.ToUniversalTime().ToString('o') } else { '' }
     serverPid = 0
     serverStarted = ''
     port = $Port
@@ -183,7 +206,7 @@ if ($DryRun) {
   elseif (Get-LauncherServer) { Say "a server this launcher started is still booting (pid file $PidFile): would wait for it, not start another" }
   else {
     $bun = Find-Bun
-    Say "would start hidden: $(if ($bun) { $bun.Source } else { 'bun (NOT ON PATH: would fail)' }) server\src\index.ts (cwd $DeskRoot, HYDRA_DESK_PORT=$Port)"
+    Say "would start hidden through WMI (outside this shell's job): $(if ($bun) { $bun.Source } else { 'bun (NOT ON PATH: would fail)' }) server\src\index.ts (cwd $DeskRoot, HYDRA_DESK_PORT=$Port)"
     Say "would append stdout+stderr to $ServerLog and write pids to $PidFile"
     Say "would wait up to $HealthTimeoutSec s for health, else show an error box"
   }
