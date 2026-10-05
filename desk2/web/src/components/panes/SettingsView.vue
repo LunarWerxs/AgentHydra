@@ -158,9 +158,28 @@ function onNavKey(e: KeyboardEvent) {
 }
 watch([section, searching], () => contentEl.value?.scrollTo?.({ top: 0 }))
 
+// The bridge status is polled only while its row is on screen (its section, or a search that lists it) and the window is visible.
+const showsBridge = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'bridge')))
 let bridgeTimer: ReturnType<typeof setInterval> | null = null
+function stopBridgePoll() {
+  if (bridgeTimer) clearInterval(bridgeTimer)
+  bridgeTimer = null
+}
+function syncBridgePoll() {
+  stopBridgePoll()
+  if (showsBridge.value && !document.hidden) bridgeTimer = setInterval(loadBridge, 10_000)
+}
+watch(showsBridge, (on) => {
+  syncBridgePoll()
+  if (on) void loadBridge()
+})
+function onVisibility() {
+  syncBridgePoll()
+  if (showsBridge.value && !document.hidden) void loadBridge()
+}
+document.addEventListener('visibilitychange', onVisibility)
 onMounted(async () => {
-  bridgeTimer = setInterval(loadBridge, 10_000)
+  syncBridgePoll()
   const tasks: Promise<unknown>[] = [
     api.models().then((m) => (models.value = m)).catch(() => {}),
     api
@@ -186,7 +205,8 @@ onMounted(async () => {
   await Promise.all(tasks)
 })
 onBeforeUnmount(() => {
-  if (bridgeTimer) clearInterval(bridgeTimer)
+  document.removeEventListener('visibilitychange', onVisibility)
+  stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
   if (idleTimer) clearTimeout(idleTimer)
 })

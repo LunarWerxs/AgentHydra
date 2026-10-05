@@ -20,13 +20,14 @@ const sortedSessions = computed(() => {
     const bTime = b.lastActivityAt ?? 0
     return bTime - aTime
   })
-  return sorted
+  // Each row's relative time is worked out here, once per update of the list, not once per render.
+  return sorted.map((session) => ({ session, time: session.lastActivityAt ? formatTime(session.lastActivityAt) : '' }))
 })
 
 const filteredSessions = computed(() => {
   if (!searchQuery.value) return sortedSessions.value
   const query = searchQuery.value.toLowerCase()
-  return sortedSessions.value.filter((s) =>
+  return sortedSessions.value.filter(({ session: s }) =>
     s.title.toLowerCase().includes(query) ||
     (s.cwd && s.cwd.toLowerCase().includes(query))
   )
@@ -108,7 +109,7 @@ const selectSession = (session: ExternalSession) => {
     <div class="flex-1 overflow-y-auto">
       <div v-if="filteredSessions.length > 0">
         <div
-          v-for="session in filteredSessions"
+          v-for="{ session, time } in filteredSessions"
           :key="session.id"
           class="px-4 py-3 border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--fill-hover)] cursor-pointer"
           @click="selectSession(session)"
@@ -131,7 +132,7 @@ const selectSession = (session: ExternalSession) => {
           <!-- Activity and time -->
           <div class="flex items-center gap-2 text-[12px] text-[var(--text-muted)] mt-1">
             <span v-if="session.activity" class="truncate">{{ session.activity }}</span>
-            <span v-if="session.lastActivityAt" class="flex-shrink-0">{{ formatTime(session.lastActivityAt) }}</span>
+            <span v-if="session.lastActivityAt" class="flex-shrink-0">{{ time }}</span>
           </div>
         </div>
       </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, getCurrentInstance, onMounted, ref, watch } from 'vue'
+import { computed, getCurrentInstance, onMounted, ref, shallowRef, watch } from 'vue'
 import { RefreshCw, CircleCheck, FolderX } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import type { GitStatus } from '@shared/protocol'
@@ -16,15 +16,23 @@ const closable = !!getCurrentInstance()?.vnode.props?.onClose
 const api = usePaneApi()
 const desk = useDesk()
 
-const status = ref<GitStatus | null>(null)
+// Both are replaced whole, never edited in place: shallow refs keep a big diff's rows out of deep proxies.
+const status = shallowRef<GitStatus | null>(null)
 const loading = ref(false)
 const error = ref<string | null>(null)
 const selectedPath = ref<string | null>(props.initialPath ?? null)
-const diff = ref<ParsedDiff | null>(null)
+const diff = shallowRef<ParsedDiff | null>(null)
 const diffLoading = ref(false)
 const diffError = ref<string | null>(null)
 
 const files = computed(() => status.value?.files ?? [])
+// Each file's letter, word, name and folder, worked out once per status read.
+const fileRows = computed(() =>
+  files.value.map((f) => {
+    const { letter, word } = statusLetter(f.status)
+    return { f, letter, word, name: fileName(f.path), dir: fileDir(f.path) }
+  })
+)
 const selectedFile = computed(() => files.value.find((f) => f.path === selectedPath.value) ?? null)
 
 async function refresh() {
@@ -92,13 +100,15 @@ const letterColor: Record<string, string> = {
 
 // Auto-refresh: a chat in this folder whose turn just ended (working/needs_you -> anything else).
 let lastStatuses = new Map<string, string>()
+// The getter returns a string, so the callback only runs when an id, status or folder really changed.
 watch(
-  () => desk.chats.value.map((c) => [c.id, c.status, c.cwd] as const),
-  (now) => {
-    const next = new Map(now.map(([id, s]) => [id, s] as [string, string]))
+  () => desk.chats.value.map((c) => `${c.id}\t${c.status}\t${c.cwd}`).join('\n'),
+  () => {
+    const now = desk.chats.value
+    const next = new Map(now.map((c) => [c.id, c.status] as [string, string]))
     const ended = finishedTurns(lastStatuses, next)
     lastStatuses = next
-    if (ended.some((id) => sameFolder(now.find(([cid]) => cid === id)?.[2], props.cwd))) refresh()
+    if (ended.some((id) => sameFolder(now.find((c) => c.id === id)?.cwd, props.cwd))) refresh()
   },
   { immediate: true }
 )
@@ -180,22 +190,22 @@ onMounted(refresh)
           {{ files.length === 1 ? '1 file changed' : `${files.length} files changed` }}
         </div>
         <button
-          v-for="f in files"
+          v-for="{ f, letter, word, name, dir } in fileRows"
           :key="f.path"
           type="button"
           class="flex h-[26px] w-full items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-left transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
           :class="{ 'bg-[var(--fill-selected)] hover:bg-[var(--fill-selected)]': f.path === selectedPath }"
           :aria-pressed="f.path === selectedPath"
-          :title="`${statusLetter(f.status).word}: ${f.path}`"
+          :title="`${word}: ${f.path}`"
           @click="open(f.path)"
         >
           <span
             class="flex size-6 shrink-0 items-center justify-center text-[12px] font-semibold leading-4"
-            :style="{ color: letterColor[statusLetter(f.status).letter] ?? 'var(--text-muted)' }"
-          >{{ statusLetter(f.status).letter }}</span>
+            :style="{ color: letterColor[letter] ?? 'var(--text-muted)' }"
+          >{{ letter }}</span>
           <span class="min-w-0 flex-1 truncate">
-            <span>{{ fileName(f.path) }}</span>
-            <span v-if="fileDir(f.path)" class="ml-1.5 text-[12px] text-[var(--text-muted)]">{{ fileDir(f.path) }}</span>
+            <span>{{ name }}</span>
+            <span v-if="dir" class="ml-1.5 text-[12px] text-[var(--text-muted)]">{{ dir }}</span>
           </span>
           <span class="tnum flex shrink-0 gap-1 pr-1.5 text-[12px] leading-4">
             <span v-if="f.added" class="text-[var(--git-add)]">+{{ f.added }}</span>

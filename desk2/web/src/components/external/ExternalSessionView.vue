@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
@@ -27,7 +27,8 @@ const props = defineProps<{ sessionId: string }>()
 const src = useShellSource()
 const desk = useDesk()
 const api = usePaneApi()
-const items = ref<TranscriptItem[]>([])
+// Replaced whole on each read, never edited in place: a shallow ref keeps a big transcript out of deep proxies.
+const items = shallowRef<TranscriptItem[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 let pollInterval: ReturnType<typeof setInterval> | null = null
@@ -58,11 +59,22 @@ const continueNote = computed(() => {
   return continueLine(s, account, !!account && account.id === picked)
 })
 
+/** Whether a fresh read says nothing new: same length, same id and status on every item, same last item in full. */
+function sameItems(a: TranscriptItem[], b: TranscriptItem[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].id !== b[i].id || (a[i] as { status?: string }).status !== (b[i] as { status?: string }).status) return false
+  }
+  return a.length === 0 || JSON.stringify(a[a.length - 1]) === JSON.stringify(b[b.length - 1])
+}
+
 async function loadItems(quiet = false) {
   try {
     if (!quiet) loading.value = true
     error.value = null
-    items.value = await api.externalItems(props.sessionId)
+    const next = await api.externalItems(props.sessionId)
+    if (quiet && sameItems(items.value, next)) return
+    items.value = next
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load session items'
   } finally {
@@ -109,14 +121,20 @@ watch(
     const ms = working ? 3000 : running ? 10000 : 0
     if (ms !== pollMs) {
       stopPolling()
-      if (ms) pollInterval = setInterval(() => loadItems(true), ms)
+      // A hidden window rests; it reads once on return (below).
+      if (ms) pollInterval = setInterval(() => !document.hidden && loadItems(true), ms)
       pollMs = ms
     }
     if (!working && before?.[0]) void loadItems(true)
   },
   { immediate: true }
 )
+function onVisible() {
+  if (!document.hidden && pollMs) void loadItems(true)
+}
+document.addEventListener('visibilitychange', onVisible)
 onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisible)
   stopPolling()
   if (outsideTasks.value?.sessionId === props.sessionId) outsideTasks.value = null
 })

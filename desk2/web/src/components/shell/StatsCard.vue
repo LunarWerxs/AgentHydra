@@ -1,8 +1,18 @@
+<script lang="ts">
+import type { HomeStats } from '@shared/protocol'
+import type { StatsRange } from './logic'
+
+// Each range's last answer from the server, kept across mounts of the card for a minute and a half: the
+// screen mounts on every Ctrl+N, close and Back, and the figures barely move in that time.
+const ANSWER_TTL_MS = 90_000
+const recentAnswers = new Map<StatsRange, { at: number; stats: HomeStats }>()
+</script>
+
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue'
 import { ChevronRight } from '@lucide/vue'
-import type { ChatSummary, HomeStats } from '@shared/protocol'
-import { computeStats, type StatsRange } from './logic'
+import type { ChatSummary } from '@shared/protocol'
+import { computeStats } from './logic'
 import { useShellSource } from './source'
 import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, heatTitle, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from './stats'
 
@@ -23,11 +33,18 @@ const answers = reactive<Partial<Record<StatsRange, HomeStats>>>({})
 const failed = reactive<Partial<Record<StatsRange, string>>>({})
 function load(r: StatsRange): void {
   if (!src.homeStats) return
-  const kept = answers[r] ?? src.cachedHomeStats?.(r)
+  const recent = recentAnswers.get(r)
+  if (recent && Date.now() - recent.at < ANSWER_TTL_MS) {
+    answers[r] = recent.stats
+    delete failed[r]
+    return
+  }
+  const kept = answers[r] ?? recent?.stats ?? src.cachedHomeStats?.(r)
   if (kept) answers[r] = kept
   src.homeStats(r).then(
     (stats) => {
       answers[r] = stats
+      recentAnswers.set(r, { at: Date.now(), stats })
       delete failed[r]
     },
     (err: unknown) => {
@@ -49,6 +66,11 @@ const heat = computed(() => home.value?.heat ?? desk.value.heat)
 // Each square names its day and its number on hover (owner, 2026-10-05: "Each of the squares ... need to
 // have a number I can read when I hover over them"): model turns from AgentHydra, chats touched from Desk.
 const heatUnit = computed<[string, string]>(() => (home.value ? ['message', 'messages'] : ['chat', 'chats']))
+// Every square's hover title is worked out once per change of the grid, not once per render.
+const heatCells = computed(() => {
+  const unit = heatUnit.value
+  return heat.value.map((cell) => ({ day: cell.day, level: cell.level, title: heatTitle(cell, ...unit) }))
+})
 
 // The Sources list folds, folded by default, and the choice is kept (owner, 2026-10-05: "The sources need
 // to be collapsible and collapsed by default").
@@ -128,7 +150,7 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
         </div>
       </div>
       <div class="mt-[6px] grid grid-flow-col grid-rows-7 justify-between gap-y-[3px]" role="img" aria-label="Activity over the last 27 weeks">
-        <span v-for="cell in heat" :key="cell.day" :title="heatTitle(cell, ...heatUnit)" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[cell.level] }" />
+        <span v-for="cell in heatCells" :key="cell.day" :title="cell.title" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[cell.level] }" />
       </div>
     </template>
 

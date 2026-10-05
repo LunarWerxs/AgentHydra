@@ -281,11 +281,21 @@ const findOpen = ref(false)
 const query = ref('')
 const index = ref(0)
 const findInput = ref<HTMLInputElement | null>(null)
-const hits = computed(() => (findOpen.value ? findHits(props.shown, query.value) : []))
-watch(query, () => (index.value = 0))
+// The scan follows the typed query about 150 ms after the last keystroke; an emptied box answers at once.
+const searched = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+const hits = computed(() => (findOpen.value ? findHits(props.shown, searched.value) : []))
+watch(query, (q) => {
+  index.value = 0
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = null
+  if (!q.trim()) searched.value = q
+  else searchTimer = setTimeout(() => (searched.value = query.value), 150)
+})
+onBeforeUnmount(() => searchTimer && clearTimeout(searchTimer))
 watch(
-  [findOpen, query, index, hits],
-  () => emit('update:find', findOpen.value ? { query: query.value, active: hits.value[wrapIndex(index.value, hits.value.length)] ?? null } : null),
+  [findOpen, searched, index, hits],
+  () => emit('update:find', findOpen.value ? { query: searched.value, active: hits.value[wrapIndex(index.value, hits.value.length)] ?? null } : null),
   { immediate: true }
 )
 function openFind() {
@@ -582,7 +592,7 @@ const TONE = {
             class="h-6 min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text outline-none placeholder:text-text-muted"
             @keydown="onFindKey"
           />
-          <span class="shrink-0 tnum text-text-muted" role="status">{{ query.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
+          <span class="shrink-0 tnum text-text-muted" role="status">{{ searched.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
           <Tip label="Previous match (Shift + Enter)">
             <button type="button" :class="BTN" aria-label="Previous match" :disabled="!hits.length" @click="step(-1)"><ChevronUp class="size-4" /></button>
           </Tip>

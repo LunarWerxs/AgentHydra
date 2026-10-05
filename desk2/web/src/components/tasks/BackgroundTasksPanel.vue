@@ -4,15 +4,16 @@
 // this chat's background tasks), its phases with progress squares and the agent table, then the
 // finished ones behind 'Finished N'. Stop cancels the unit's active workers through AgentHydra; the
 // trash only hides finished units here.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
+import { useClock } from '@/lib/clock'
 import { cleared, clearFinished } from './api'
-import { elapsedOf, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskUnit } from './logic'
+import { elapsedOf, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -48,10 +49,34 @@ const lists = computed(() =>
   panelLists({ workers: src.workers.value, items: props.items, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value })
 )
 
-const now = ref(Date.now())
-let timer: ReturnType<typeof setInterval> | null = null
-onMounted(() => (timer = setInterval(() => (now.value = Date.now()), 1000)))
-onBeforeUnmount(() => timer && clearInterval(timer))
+// The progress squares of every phase on show, worked out once per list change.
+const squares = computed(() => {
+  const m = new Map<TaskPhase, AgentState[]>()
+  for (const u of lists.value.running) for (const p of u.phases) m.set(p, phaseSquares(p))
+  return m
+})
+
+// The shared 1 s clock runs only while something here counts up (a running unit, or a unit with a start and no end).
+const ticking = computed(() => lists.value.running.length > 0 || lists.value.finished.some((u) => u.startedAt !== null && u.endedAt === null))
+const frozenNow = Date.now()
+const clock = shallowRef<Readonly<Ref<number>> | null>(null)
+const now = computed(() => clock.value?.value ?? frozenNow)
+let clockScope: EffectScope | null = null
+watch(
+  ticking,
+  (on) => {
+    if (on && !clockScope) {
+      clockScope = effectScope()
+      clock.value = clockScope.run(() => useClock(1000)) ?? null
+    } else if (!on && clockScope) {
+      clockScope.stop()
+      clockScope = null
+      clock.value = null
+    }
+  },
+  { immediate: true }
+)
+onBeforeUnmount(() => clockScope?.stop())
 
 // Phases open: per unit, the first with a running agent unless the user toggled it.
 const toggled = ref(new Map<string, string | null>())
@@ -185,7 +210,7 @@ const ICON_BTN =
                 </span>
                 <span class="mt-1.5 flex gap-0.5" aria-hidden="true">
                   <span
-                    v-for="(s, i) in phaseSquares(p)"
+                    v-for="(s, i) in squares.get(p)"
                     :key="i"
                     class="size-1.5 rounded-[1.5px]"
                     :class="[SQUARE[s], s === 'running' ? 'animate-[var(--animate-dot-blink)]' : '']"
