@@ -120,8 +120,7 @@ app.put('/api/routing/settings', async (c) => {
   }
   // Good fields are stored even when others are junk; the 400 names only the junk.
   for (const [key, value] of writes) setSetting(key, value)
-  if (bad.length)
-    return c.json({ error: `invalid value for: ${bad.join(', ')}`, fields: bad }, 400)
+  if (bad.length) return c.json({ error: `invalid value for: ${bad.join(', ')}`, fields: bad }, 400)
   return c.json(readRoutingSettings())
 })
 
@@ -131,7 +130,12 @@ app.post('/api/routing/decide', async (c) => {
   let api: { provider: string; model: string; usd: number } | null = null
   if (b.api !== null && b.api !== undefined) {
     const a = b.api as Record<string, unknown>
-    if (!a || typeof a !== 'object' || typeof a.provider !== 'string' || typeof a.model !== 'string')
+    if (
+      !a ||
+      typeof a !== 'object' ||
+      typeof a.provider !== 'string' ||
+      typeof a.model !== 'string'
+    )
       return c.json({ error: 'api must be null or { provider, model, usd }' }, 400)
     const usd = numeric(a.usd)
     if (usd === null || usd < 0)

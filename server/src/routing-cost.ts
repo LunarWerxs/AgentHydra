@@ -7,7 +7,7 @@ import { listCliInstances } from './core/cli-instances'
 import { db, getSetting } from './db'
 import { PLAN_SIZE, PLANS, type Plan, planOf } from './plans'
 
-export { PLAN_SIZE, PLANS, planOf, type Plan }
+export { PLAN_SIZE, PLANS, type Plan, planOf }
 export const FALLBACK_DOLLARS_PER_PRO_WINDOW = 20.7
 export const FALLBACK_WINDOWS_PER_WEEK: Record<Plan, number> = {
   Pro: 11.7,
