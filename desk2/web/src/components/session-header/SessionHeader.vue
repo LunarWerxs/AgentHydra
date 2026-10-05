@@ -268,7 +268,15 @@ async function migrateTo(t: { ref: string; name: string }) {
   }
 }
 function menuOpened(open: boolean) {
-  if (open && !instances.value.length) void ah.instances().then((list) => (instances.value = list), () => {})
+  if (!open) return
+  // Running state moves while the header stays open; keep the account already resolved for each dir so watch(inst) does not ask again.
+  void ah.instances().then(
+    (list) => {
+      const known = new Map(instances.value.map((x) => [x.dir, x.account]))
+      instances.value = list.map((x) => (x.account?.email || !known.get(x.dir) ? x : { ...x, account: known.get(x.dir) ?? null }))
+    },
+    () => {}
+  )
 }
 
 function setDisplay(key: 'humanOnly' | 'showTools' | 'showThinking' | 'compact') {

@@ -863,8 +863,14 @@ async function submit(ctrl = false) {
       saveDraftImages(sentSlot, [])
     }
   } catch (e) {
-    text.value = keptText
-    images.value = keptImages
+    if (slot.value === sentSlot) {
+      text.value = keptText
+      images.value = keptImages
+    } else {
+      // The user moved to another chat meanwhile: the failed text goes back to its own draft, not over this one.
+      saveDraft(storage, sentSlot, keptText)
+      saveDraftImages(sentSlot, keptImages)
+    }
     showNotice(`Not sent: ${errText(e)}`)
   } finally {
     sending.value = false
@@ -1116,6 +1122,7 @@ onBeforeUnmount(() => {
             :anchor="trayEl"
             @send="submit"
             @stop="stop(true)"
+            @error="(m) => showNotice(`Queue: ${m}`)"
             @close-focus="textarea?.focus()"
           />
         </div>

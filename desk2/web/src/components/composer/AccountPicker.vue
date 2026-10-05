@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import type { AccountInfo, AccountRef } from '@shared/protocol'
 import { accountTitle } from '@/components/accounts/format'
 import type { ComposerApi } from './api'
@@ -29,13 +29,22 @@ onMounted(async () => {
       fetched.value = await props.api.accounts()
     } catch {}
   }
-  if (props.modelValue !== 'auto') return
-  try {
-    autoPick.value = await props.api.pickAccount()
-  } catch {
-    autoPick.value = null
-  }
 })
+
+// The pick is fetched whenever Auto is chosen, also after the profile control switches to it later.
+watch(
+  () => props.modelValue,
+  async (v) => {
+    if (v !== 'auto') return
+    try {
+      const pick = await props.api.pickAccount()
+      if (props.modelValue === 'auto') autoPick.value = pick
+    } catch {
+      autoPick.value = null
+    }
+  },
+  { immediate: true }
+)
 </script>
 
 <template>

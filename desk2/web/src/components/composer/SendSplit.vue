@@ -14,7 +14,7 @@ import { icons } from '@/lib/icons'
 import { Popover, PopoverAnchor } from '@/components/ui/popover'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuSeparator, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { focusFirstItem, MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
-import { useShellSource } from '@/components/shell/source'
+import { useQueueActions } from './queue-actions'
 import { Tip } from '@/components/ui/tooltip'
 import SendGlyph from './SendGlyph.vue'
 import QueuePopover from './QueuePopover.vue'
@@ -35,7 +35,7 @@ const props = defineProps<{
 }>()
 const open = defineModel<boolean>('open', { default: false })
 /** `queue`: a Ctrl-click (Cmd-click), which always queues. */
-const emit = defineEmits<{ send: [queue: boolean]; stop: []; 'close-focus': [] }>()
+const emit = defineEmits<{ send: [queue: boolean]; stop: []; 'close-focus': []; error: [message: string] }>()
 
 const ChevronUp = icons.queueOptions
 const Check = icons.check
@@ -64,7 +64,11 @@ function onFocusOut(e: FocusEvent) {
 }
 
 // The right-click menu: Enter's default, and Resume for this chat's held queue.
-const source = useShellSource()
+const { source, error, act } = useQueueActions(() => false)
+// The same calls as the popover's, so a refusal is kept and handed up to show.
+async function menuAct(fn: () => Promise<unknown> | undefined) {
+  if (!(await act(fn)) && error.value) emit('error', error.value)
+}
 const sendMode = computed(() => source.queue?.value?.sendMode ?? null)
 const held = computed(() => !!(props.chatId && source.queue?.value?.held[props.chatId]))
 function onSend(e: MouseEvent) {
@@ -137,14 +141,14 @@ function onSend(e: MouseEvent) {
           v-for="m in SEND_MODES"
           :key="m.value"
           :class="MENU_ITEM"
-          @select="source.queueSettings?.({ sendMode: m.value })"
+          @select="menuAct(() => source.queueSettings?.({ sendMode: m.value }))"
         >
           <span class="flex-1">{{ m.label }}</span>
           <Check v-if="sendMode === m.value" class="size-3.5 text-[var(--accent)]" :stroke-width="3" />
         </ContextMenuItem>
         <template v-if="held">
           <ContextMenuSeparator :class="MENU_SEPARATOR" />
-          <ContextMenuItem :class="MENU_ITEM" @select="source.queueResume?.(chatId!)">Resume this chat's queue</ContextMenuItem>
+          <ContextMenuItem :class="MENU_ITEM" @select="menuAct(() => source.queueResume?.(chatId!))">Resume this chat's queue</ContextMenuItem>
         </template>
       </ContextMenuContent>
     </ContextMenu>
