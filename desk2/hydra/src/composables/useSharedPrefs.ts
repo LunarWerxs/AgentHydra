@@ -69,6 +69,9 @@ interface SharedPref {
  *  body on it (lib/app-view.ts createViewReady) so it mounts the tab it will end up on. */
 export const sharedPrefsSettled = ref(false)
 
+/** True from the moment the prefs request goes out; the tab-body hold measures from here. */
+export const sharedPrefsRequested = ref(false)
+
 const registry: SharedPref[] = []
 let hydrated = false
 let hydrating: Promise<void> | null = null
@@ -289,6 +292,7 @@ async function readStoredPrefs(): Promise<Record<string, string> | null> {
  */
 export function hydrateSharedPrefs(): Promise<void> {
   if (hydrating) return hydrating
+  sharedPrefsRequested.value = true
   hydrating = (async () => {
     try {
       const prefs = await readStoredPrefs()
@@ -328,6 +332,7 @@ export function resetSharedPrefsForTest(): void {
   hydrated = false
   hydrating = null
   sharedPrefsSettled.value = false
+  sharedPrefsRequested.value = false
   stored = null
   synced.clear()
   pending.clear()

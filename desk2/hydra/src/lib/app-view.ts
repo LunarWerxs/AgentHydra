@@ -153,6 +153,7 @@ export function createViewReady(
   view: Ref<AppView>,
   session: Storage | null,
   settled: Ref<boolean>,
+  requested: Ref<boolean>,
   holdMs: number = VIEW_HOLD_MS,
 ): Ref<boolean> {
   let own: AppView | null = null
@@ -172,11 +173,17 @@ export function createViewReady(
     if (timer !== undefined) clearTimeout(timer)
     stop1()
     stop2()
+    stop3()
   }
   const stop1 = watch(settled, (done) => done && open(), { flush: 'sync' })
   // A click moves the view before any answer; mount what was clicked at once.
   const stop2 = watch(view, open, { flush: 'sync' })
-  timer = setTimeout(open, holdMs)
+  // The cap measures from the moment the prefs request goes out, not from module evaluation.
+  const startTimer = () => {
+    if (timer === undefined) timer = setTimeout(open, holdMs)
+  }
+  const stop3 = watch(requested, (r) => r && startTimer(), { flush: 'sync' })
+  if (requested.value) startTimer()
   return ready
 }
 
