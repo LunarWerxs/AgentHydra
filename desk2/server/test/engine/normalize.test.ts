@@ -191,6 +191,18 @@ describe('hand-built fixtures', () => {
     expect(out[0]).toMatchObject({ type: 'upsert', item: { id: 'toolu_rm', status: 'denied' } })
   })
 
+  test("a task settles when its notice comes, not at its last progress reading's duration", () => {
+    let clock = 1_000
+    const n = createNormalizer({ now: () => clock })
+    const sys = (m: object) => n.handle({ type: 'system', uuid: `u${clock}`, session_id: 's', ...m } as unknown as SDKMessage)
+    sys({ subtype: 'task_started', task_id: 't1', description: 'Review the pages', task_type: 'local_workflow' })
+    clock = 4_000
+    sys({ subtype: 'task_progress', task_id: 't1', usage: { total_tokens: 10, duration_ms: 3_000 } })
+    clock = 61_000
+    const out = sys({ subtype: 'task_notification', task_id: 't1', status: 'completed', summary: 'Reviewed' })
+    expect(out.find((e) => e.type === 'upsert')).toMatchObject({ item: { ts: 1_000, status: 'completed', durationMs: 60_000 } })
+  })
+
   test('cost per turn is the difference of the cumulative totals', () => {
     const n = createNormalizer({ now: () => NOW, baseCostUsd: 2 })
     const res = (total: number) => ({ type: 'result', subtype: 'success', is_error: false, result: 'ok', total_cost_usd: total, num_turns: 1, duration_ms: 1, uuid: `u${total}` }) as unknown as SDKMessage

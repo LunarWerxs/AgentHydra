@@ -1,21 +1,21 @@
 <script setup lang="ts">
 // The muted '1 running task · 2 finished' line the real app shows under the last message
 // (real-running-task-and-attachments.png: 14px #898781, 64px below the status row above it, text at
-// the status rows' x). It counts the Background tasks panel's running units for this chat and opens
-// the panel; nothing renders when nothing runs.
+// the status rows' x). It counts the Background tasks panel's running and finished units for this chat
+// and opens the panel; nothing renders when there are neither.
 import { computed } from 'vue'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
-import { openBackgroundTasks } from './api'
+import { cleared, openBackgroundTasks } from './api'
 import { panelLists, runningLabel } from './logic'
 
 const props = defineProps<{ chat: ChatSummary; items: TranscriptItem[] }>()
 const src = useShellSource()
 
 // Running and finished, as the Background tasks panel lists them for this chat (its CliMayte workers and
-// its own background tasks); a task the chat finished counts as finished.
+// its own background tasks), minus the finished ones cleared there.
 const label = computed(() => {
-  const lists = panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds })
+  const lists = panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
   return runningLabel(lists.running.length, lists.finished.length)
 })
 </script>

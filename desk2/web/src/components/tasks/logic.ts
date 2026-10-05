@@ -1,6 +1,6 @@
 // The Background tasks panel's model (the real app's side panel, with CliMayte as its workflows): the
 // CliMayte workers a chat dispatched, one unit per group (a worker without a group is its own unit),
-// plus the chat's own background tasks still running. Pure, so the grouping and the labels are tested.
+// plus the chat's own background tasks, running and finished. Pure, so the grouping and the labels are tested.
 import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 import { chatWorkers } from '@/components/climayte/dock'
@@ -135,13 +135,15 @@ const TASK_LABEL: Record<NonNullable<TaskItem['taskKind']>, string> = {
 
 function taskUnit(t: TaskItem): TaskUnit {
   const running = t.status === 'running'
+  // A finished task that never said when it settled shows a dash, not a time still counting up.
+  const timed = running || t.durationMs !== undefined
   return {
     id: `task:${t.id}`,
     name: firstLine(t.description) || 'Background task',
     label: TASK_LABEL[t.taskKind ?? 'other'],
     running,
-    startedAt: t.ts,
-    endedAt: running ? null : t.durationMs !== undefined ? t.ts + t.durationMs : null,
+    startedAt: timed ? t.ts : null,
+    endedAt: running || t.durationMs === undefined ? null : t.ts + t.durationMs,
     agents: t.agents ?? 0,
     tokens: t.tokens ?? null,
     description: firstLine(t.summary),

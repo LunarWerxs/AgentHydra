@@ -560,6 +560,8 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         else if (patch.status) next.status = 'running'
         if (typeof patch.description === 'string') next.description = patch.description
         if (typeof patch.error === 'string' && patch.error) next.summary = patch.error
+        // Settled here: when (task_notification keeps it, unless its notice carries a duration).
+        if (t.status === 'running' && next.status !== 'running') next.durationMs = Math.max(0, now() - t.ts)
         tasks.set(t.taskId, next)
         out.push({ type: 'upsert', item: next })
         return
@@ -587,8 +589,12 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         next.taskKind ??= taskKindOf(str(msg.summary))
         if (msg.tool_use_id) next.toolUseId = str(msg.tool_use_id)
         if (msg.output_file) next.outputFile = str(msg.output_file)
-        // The time it settled, which also places it in its turn.
-        if (t && next.durationMs === undefined) next.durationMs = Math.max(0, now() - t.ts)
+        // ts + durationMs is when it settled, which also places it in its turn (transcript/lib/groups.ts): the
+        // notice's own duration, else from the task's start to now (a progress reading's duration is not the
+        // settle); with no start seen, it started that long before the notice.
+        const own = typeof (msg.usage as Loose | undefined)?.duration_ms === 'number'
+        if (t && !own && t.status === 'running') next.durationMs = Math.max(0, now() - t.ts)
+        if (!t && next.durationMs !== undefined) next.ts = Math.max(0, now() - next.durationMs)
         tasks.set(taskId, next)
         out.push({ type: 'upsert', item: next })
         return

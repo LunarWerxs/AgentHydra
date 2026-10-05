@@ -28,8 +28,8 @@ import {
 export type MenuName = 'plus' | 'mode' | 'model' | 'effort'
 
 export interface ParityScene {
-  /** 'frame' = the whole DeskFrame; 'dock' = the composer alone in the transcript column. */
-  layout: 'frame' | 'dock'
+  /** The whole DeskFrame (the composer-alone 'dock' layout went with the composer's agents chip, 2026-10-05). */
+  layout: 'frame'
   chats: () => ChatSummary[]
   items: () => TranscriptItem[]
   view: View
@@ -98,7 +98,6 @@ export const PARITY_SCENES: Record<string, ParityScene> = {
   },
   'transcript-markdown': { ...whole, items: markdownSceneItems, workers: () => [], suggestion: undefined },
   'accounts-popover': { ...whole, accountsOpen: true, accounts: popoverAccounts, defaultAccountId: 'auto', pickId: '128' },
-  'agents-bar-expanded': { ...whole, layout: 'dock' },
   // A chat waiting on AskUserQuestion with three questions: the card shows one at a time.
   'question-steps': {
     ...whole,

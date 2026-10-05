@@ -276,4 +276,8 @@ describe("taskItemFrom", () => {
     const item = taskItemFrom({ taskId: "t1", status: "completed", description: "", summary: "", taskKind: "other" }, prev, 61_000)
     expect(item).toMatchObject({ status: "completed", ts: 1_000, durationMs: 60_000 })
   })
+  test("a notice with a duration and no start seen started that long before it, so it settles at the notice", () => {
+    const item = taskItemFrom({ taskId: "t2", status: "completed", description: "", summary: "", taskKind: "workflow", durationMs: 40_000 }, undefined, 100_000)
+    expect(item).toMatchObject({ ts: 60_000, durationMs: 40_000 })
+  })
 })

@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createServer, type DeskServer } from '../../src/index'
-import { deadUrl, type FakeHydra, startFakeHydra } from './fake-hydra'
+import { deadUrl, type FakeHydra, localDay, startFakeHydra } from './fake-hydra'
 
 const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '10-bridge.ts')
 const DAY = 86_400_000
@@ -88,9 +88,7 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
   expect(body.heat.at(-3).level).toBe(2)
   expect(body.heat.filter((cell: { level: number }) => cell.level > 0)).toHaveLength(2)
   // Each cell names its local day and its number, for the square's hover.
-  const now = new Date()
-  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  expect(body.heat.at(-1)).toMatchObject({ day: today, count: 500 })
+  expect(body.heat.at(-1)).toMatchObject({ day: localDay(0), count: 500 })
 
   const spends = () => f.gets.filter((g) => g.startsWith('/api/analytics/spend')).length
   const before = spends()

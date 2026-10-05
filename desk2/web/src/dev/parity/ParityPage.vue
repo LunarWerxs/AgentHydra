@@ -2,7 +2,6 @@
 import './freeze-clock'
 import { nextTick, onMounted, provide } from 'vue'
 import DeskFrame from '@/components/shell/DeskFrame.vue'
-import Composer from '@/components/composer/Composer.vue'
 import { SHELL_SOURCE } from '@/components/shell/source'
 import { COMPOSER_API, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import { openBackgroundTasks } from '@/components/tasks/api'
@@ -27,7 +26,6 @@ if (scene) {
   provide(PANE_API, scenePaneApi(scene))
 }
 const draft = query.get('draft') ?? undefined
-const chat = scene ? (scene.chats().find((c) => c.id === 'ccd') ?? null) : null
 
 const TRIGGERS: Record<MenuName, () => HTMLElement | null | undefined> = {
   plus: () => document.querySelector<HTMLElement>('button[aria-label="Add"]'),
@@ -122,9 +120,6 @@ onMounted(() => {
 <template>
   <div class="h-screen w-screen overflow-hidden bg-bg-page text-text">
     <p v-if="!scene" class="p-6 text-sm">Unknown parity scene '{{ name }}'. Known: {{ Object.keys(PARITY_SCENES).join(', ') }}</p>
-    <DeskFrame v-else-if="scene.layout === 'frame'" demo :accounts-open="scene.accountsOpen" :history="scene.history" />
-    <div v-else class="flex h-full flex-col justify-end pl-[288px]">
-      <Composer :chat="chat" :demo="{ text: draft }" />
-    </div>
+    <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" />
   </div>
 </template>

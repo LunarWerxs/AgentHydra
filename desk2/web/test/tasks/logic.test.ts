@@ -1,7 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
 import {
-  FINISHED_CAP,
   agentState,
   formatElapsed,
   formatTokens,
@@ -127,11 +126,11 @@ describe('panelLists', () => {
     expect(lists.finished.map((u) => u.id)).toEqual(['worker:gone'])
   })
 
-  test('finished: most recent first, minus the cleared, capped', () => {
-    const many = Array.from({ length: FINISHED_CAP + 5 }, (_, i) => done(`d${i}`, { endedAt: 10_000 + i }))
-    const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set([`d${FINISHED_CAP + 4}`]) })
-    expect(finished).toHaveLength(FINISHED_CAP)
-    expect(finished[0]!.id).toBe(`worker:d${FINISHED_CAP + 3}`)
+  test("finished: most recent first, minus the cleared, capped at the real app's 50", () => {
+    const many = Array.from({ length: 60 }, (_, i) => done(`d${i}`, { endedAt: 10_000 + i }))
+    const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set(['d59']) })
+    expect(finished).toHaveLength(50)
+    expect(finished[0]!.id).toBe('worker:d58')
   })
 
   test("a chat's finished background tasks list and count under finished, a failed one marked", () => {
