@@ -39,7 +39,8 @@ const blocks = computed(() =>
 )
 const when = (ts: number): string => new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 const acct = (r: { accountNumber: number | null; accountId: string }): string => (r.accountNumber !== null ? `#${r.accountNumber}` : r.accountId)
-const known = (id: string): boolean => src.chats.value.some((c) => c.id === id)
+const knownIds = computed(() => new Set(src.chats.value.map((c) => c.id)))
+const known = (id: string): boolean => knownIds.value.has(id)
 </script>
 
 <template>

@@ -116,9 +116,10 @@ const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFracti
 export function formatCompact(n: number): string {
   return Number.isFinite(n) ? compact.format(n) : '—'
 }
+const usd = new Intl.NumberFormat('en', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 export function formatUsd(n: number): string {
   if (n > 0 && n < 0.01) return '<$0.01'
-  return new Intl.NumberFormat('en', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n)
+  return usd.format(n)
 }
 
 /** "1.2M tokens · $3.40", a "+" when a model has no published price (the total is then a floor). Null with nothing counted. */

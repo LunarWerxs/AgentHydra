@@ -1,4 +1,4 @@
-import { ref, computed, reactive, shallowReactive, isReactive, toRaw, watch } from 'vue'
+import { ref, shallowRef, computed, reactive, shallowReactive, isReactive, toRaw, watch } from 'vue'
 import type {
   ChatSummary,
   TranscriptItem,
@@ -172,11 +172,22 @@ function replaceItem(items: TranscriptItem[], at: number, item: TranscriptItem) 
 }
 
 /** The new list with the old row kept for every row that did not change, so only the changed rows draw again. */
+const rowSignatures = new WeakMap<object, string>()
 function reconcile<T extends { id: string }>(old: T[], next: T[]): T[] {
   const before = new Map(old.map((o) => [o.id, o]))
   const out = next.map((n) => {
+    const sig = JSON.stringify(n)
     const o = before.get(n.id)
-    return o && JSON.stringify(toRaw(o)) === JSON.stringify(n) ? o : n
+    let oldSig: string | undefined
+    if (o) {
+      const raw = toRaw(o)
+      oldSig = rowSignatures.get(raw)
+      if (oldSig === undefined) oldSig = JSON.stringify(raw)
+    }
+    // Each row kept remembers its text, so the next reconcile stringifies only the new answer's rows.
+    const kept = o && oldSig === sig ? o : n
+    rowSignatures.set(toRaw(kept), sig)
+    return kept
   })
   return out.length === old.length && out.every((o, i) => o === old[i]) ? old : out
 }
@@ -459,7 +470,7 @@ function findExternal(sessionId: string): ExternalSession | undefined {
 
 // The managed send queue (SPEC "Send queue"): the server holds it and sends from it; the window shows it
 // and edits it, never dispatches. A queue.update or an answer older than the queue shown is dropped.
-const queueState = ref<QueueState | null>(null)
+const queueState = shallowRef<QueueState | null>(null)
 
 function takeQueue(next: QueueState) {
   if (!queueState.value || next.rev >= queueState.value.rev) queueState.value = next

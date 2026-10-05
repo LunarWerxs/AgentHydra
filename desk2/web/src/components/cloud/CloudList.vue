@@ -3,9 +3,8 @@ import { computed, ref } from 'vue'
 import { Cloud } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
-import { useClock } from '@/lib/clock'
 import { Tip } from '@/components/ui/tooltip'
-import { relativeTime } from '@/components/sidebar/search'
+import RowAge from './RowAge.vue'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
 import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
@@ -66,8 +65,6 @@ const foldedRunning = computed(() => {
   }
   return out
 })
-
-const now = useClock(30_000)
 
 const thisPc = computed(() => cloud.thisPc.value)
 /** The other PC's name on a chat the chat sync brought from it; null for this PC's rows. */
@@ -192,7 +189,7 @@ const ROW =
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
-            <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
+            <RowAge :at="r.lastActivityAt" />
           </div>
           </ContextMenuTrigger>
           <ContextMenuContent v-if="props.menuFor" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, props.menuFor!(r))">

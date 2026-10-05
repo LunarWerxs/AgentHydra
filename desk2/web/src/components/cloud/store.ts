@@ -49,7 +49,8 @@ function createCloud() {
   let heldRows = JSON.stringify(sessions.value)
   let keptCache = ''
   const thisPc = ref(fresh?.thisPc ?? 'This PC')
-  const instances = ref<CloudInstance[]>([])
+  // Replaced whole by each answer, never edited in place.
+  const instances = shallowRef<CloudInstance[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
   const loaded = ref(!!fresh)
