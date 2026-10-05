@@ -144,10 +144,11 @@ export async function launchHost(spec: HostSpec, o: LaunchOptions = {}): Promise
     throw new Error(`could not start the chat process: ${(err as Error).message}`)
   }
   const deadline = Date.now() + (o.timeoutMs ?? 30_000)
-  while (Date.now() < deadline) {
+  // Looked at every 50 ms at first, then more slowly: a cold start takes seconds.
+  for (let tries = 0; Date.now() < deadline; tries++) {
     const file = readHostFile(spec.dir, spec.chatId)
     if (file?.token === spec.token) return file
-    await Bun.sleep(50)
+    await Bun.sleep(Math.min(200, 50 + tries * 25))
   }
   // Never leave the chat's environment on disk.
   rmSync(specPath, { force: true })

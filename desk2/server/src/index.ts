@@ -1,6 +1,6 @@
 // Hydra Desk server: Hono routes, the /ws hub, plugins, and the built window in production.
 
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -98,8 +98,11 @@ function serveStatic(app: Hono, dist: string): void {
   app.get('*', async (c) => {
     const path = decodeURIComponent(new URL(c.req.url).pathname)
     const file = resolve(dist, `.${path}`)
-    if ((file === dist || file.startsWith(dist + sep)) && existsSync(file) && statSync(file).isFile()) {
-      return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
+    if (file === dist || file.startsWith(dist + sep)) {
+      const found = Bun.file(file)
+      // One async stat: a folder or a missing file falls through to the window's index.
+      const isFile = await found.stat().then((st) => st.isFile(), () => false)
+      if (isFile) return new Response(found, { headers: { 'cache-control': cacheControl(path) } })
     }
     return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })

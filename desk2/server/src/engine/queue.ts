@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type {
   ChatStatus,
@@ -331,7 +332,12 @@ export class QueueManager {
     }
 
     const byChat = new Map<string, MessageItem[]>()
-    for (const item of this.items) if (item.kind === 'message') byChat.set(item.chatId, [...(byChat.get(item.chatId) ?? []), item])
+    for (const item of this.items) {
+      if (item.kind !== 'message') continue
+      const list = byChat.get(item.chatId)
+      if (list) list.push(item)
+      else byChat.set(item.chatId, [item])
+    }
     for (const [chatId, list] of byChat) {
       const waiting = list.filter((i) => i.state === 'waiting')
       // One in flight per chat; a held chat's items are 'held', not waiting.
@@ -418,7 +424,7 @@ export class QueueManager {
     try {
       // Sent only once queue.json has this uuid: it is how a restart tells whether the message went.
       if (!this.changed()) throw new UnsavedError()
-      const r = await this.manager.send(item.chatId, item.text, this.readBack(item.images), { onlyIfReady: dispatch, messageId: item.sentUuid })
+      const r = await this.manager.send(item.chatId, item.text, await this.readBack(item.images), { onlyIfReady: dispatch, messageId: item.sentUuid })
       this.drop(item)
       return r
     } catch (err) {
@@ -440,7 +446,7 @@ export class QueueManager {
     this.set(item, 'sending', null)
     try {
       if (!this.changed()) throw new UnsavedError()
-      const made = await this.manager.createFromQueue(createRequest(item, this.readBack(item.images)), { waitForRoom, messageId: item.sentUuid })
+      const made = await this.manager.createFromQueue(createRequest(item, await this.readBack(item.images)), { waitForRoom, messageId: item.sentUuid })
       if ('waiting' in made) {
         delete item.sentUuid
         this.set(item, 'waiting', made.waiting === 'no-room' ? REASON.room : REASON.agentHydra)
@@ -589,12 +595,15 @@ export class QueueManager {
   }
 
   /** The bytes again: the SDK input skips a picture without dataBase64. */
-  private readBack(images: ImageRef[] | undefined): ImageRef[] | undefined {
-    return images?.map((img) => {
-      const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
-      if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
-      return { ...img, dataBase64: readFileSync(hit.path).toString('base64') }
-    })
+  private async readBack(images: ImageRef[] | undefined): Promise<ImageRef[] | undefined> {
+    if (!images) return undefined
+    return Promise.all(
+      images.map(async (img) => {
+        const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
+        if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
+        return { ...img, dataBase64: (await readFile(hit.path)).toString('base64') }
+      }),
+    )
   }
 
   // queue.json
@@ -602,10 +611,16 @@ export class QueueManager {
   /** False when queue.json could not be written. */
   private changed(): boolean {
     // A hold with nothing left to hold is spent.
-    for (const id of Object.keys(this.held)) if (!this.messages(id).some((i) => i.state !== 'failed')) delete this.held[id]
+    const heldIds = Object.keys(this.held)
+    if (heldIds.length) {
+      const live = new Set<string>()
+      for (const i of this.items) if (i.kind === 'message' && i.state !== 'failed') live.add(i.chatId)
+      for (const id of heldIds) if (!live.has(id)) delete this.held[id]
+    }
     this.rev++
-    const saved = this.save()
-    this.emit({ type: 'queue.update', queue: this.state() })
+    const state = this.state()
+    const saved = this.save(state)
+    this.emit({ type: 'queue.update', queue: state })
     return saved
   }
 
@@ -613,11 +628,11 @@ export class QueueManager {
    * False when it failed (on Windows an antivirus scan or the indexer can hold queue.json): the queue
    * goes on from memory, and the next change writes the whole of it again.
    */
-  private save(): boolean {
-    const data: QueueFile = { ...this.state(), items: this.items, wasLive: [...this.wasLive] }
+  private save(state: QueueState): boolean {
+    const data: QueueFile = { ...state, items: this.items, wasLive: [...this.wasLive] }
     const tmp = `${this.file}.${process.pid}.tmp`
     try {
-      writeFileSync(tmp, JSON.stringify(data, null, 2))
+      writeFileSync(tmp, JSON.stringify(data))
       renameSync(tmp, this.file)
       return true
     } catch (err) {

@@ -73,6 +73,7 @@ try { if (-not $mutex.WaitOne(10000)) { exit 0 } } catch [System.Threading.Aband
 try {
   $applied = -not $Apply
   $last = ''
+  $lastKey = ''
   $missingSince = Get-Date
   $proc = $null
   while ($true) {
@@ -124,21 +125,28 @@ try {
       $wp = New-Placement
       if ([HydraDesk.Placement]::GetWindowPlacement($h, [ref]$wp) -and $wp.showCmd -ne 2) {  # 2 = minimized: keep the last
         $r = $wp.rcNormalPosition
-        $state = [ordered]@{ left = $r.Left; top = $r.Top; right = $r.Right; bottom = $r.Bottom; maximized = ($wp.showCmd -eq 3) }
         # Where it is on screen while it is not maximized: a snapped window's own rectangle, which its
         # normal bounds above do not follow.
         $onScreen = New-Object HydraDesk.Placement+RECT
-        if ($wp.showCmd -ne 3 -and [HydraDesk.Placement]::GetWindowRect($h, [ref]$onScreen)) {
-          $state.window = [ordered]@{ left = $onScreen.Left; top = $onScreen.Top; right = $onScreen.Right; bottom = $onScreen.Bottom }
-        }
-        $json = $state | ConvertTo-Json -Compress
-        if ($json -ne $last) {
-          $dir = Split-Path -Parent $StateFile
-          if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-          $tmp = "$StateFile.tmp"
-          Set-Content -Path $tmp -Value $json -Encoding UTF8
-          Move-Item -Force -Path $tmp -Destination $StateFile
-          $last = $json
+        $hasWindow = $wp.showCmd -ne 3 -and [HydraDesk.Placement]::GetWindowRect($h, [ref]$onScreen)
+        # The numbers are compared first: the file is built and written only when the rectangle moved.
+        $key = "$($r.Left),$($r.Top),$($r.Right),$($r.Bottom),$($wp.showCmd -eq 3)"
+        if ($hasWindow) { $key += ",$($onScreen.Left),$($onScreen.Top),$($onScreen.Right),$($onScreen.Bottom)" }
+        if ($key -ne $lastKey) {
+          $lastKey = $key
+          $state = [ordered]@{ left = $r.Left; top = $r.Top; right = $r.Right; bottom = $r.Bottom; maximized = ($wp.showCmd -eq 3) }
+          if ($hasWindow) {
+            $state.window = [ordered]@{ left = $onScreen.Left; top = $onScreen.Top; right = $onScreen.Right; bottom = $onScreen.Bottom }
+          }
+          $json = $state | ConvertTo-Json -Compress
+          if ($json -ne $last) {
+            $dir = Split-Path -Parent $StateFile
+            if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+            $tmp = "$StateFile.tmp"
+            Set-Content -Path $tmp -Value $json -Encoding UTF8
+            Move-Item -Force -Path $tmp -Destination $StateFile
+            $last = $json
+          }
         }
       }
     }
