@@ -18,7 +18,9 @@ import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_F
 import {
   BridgeError,
   createClient,
+  type AhChatRow,
   type AhCliInstance,
+  type AhRemoteQueues,
   type AhSearchResult,
   type AhSessionRow,
   type AhWorker,
@@ -58,6 +60,10 @@ const INSTANCES_FRESH_MS = 30_000
 const ROOTS_FRESH_MS = 10_000
 /** How long a search hit's session row (its title, folder, activity time) is reused before it is read again. */
 const SEARCH_ROW_FRESH_MS = 60_000
+/** How long the 24-hour transcript index and desktop chat list are reused. */
+const SESSIONS_FRESH_MS = 10_000
+/** How long the other PCs' queues (remote workers) are reused. */
+const REMOTES_FRESH_MS = 30_000
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
@@ -79,16 +85,21 @@ export function createBridge(opts: BridgeOptions = {}) {
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
   let pinnedIds: () => string[] = () => []
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
+  let lastRawWorkers: { at: number; recent: Promise<AhWorker[]>; all: Promise<AhWorker[]> } | null = null
   /** Told when this side changed the worker list (a start, a follow-up, a cancel): the poller reads it at once. */
   const workerChange = new Set<() => void>()
   function workersChanged(): void {
     lastWorkers = null
+    lastRawWorkers = null
     for (const f of workerChange) f()
   }
   const workerTokens = createWorkerTokens()
   const homeStats = createHomeStats(client, now)
   let configDirs: { at: number; byId: Map<string, string> } | null = null
   let instancesRead: { at: number; read: Promise<AhCliInstance[]> } | null = null
+  let sessionsRead: { at: number; read: Promise<AhSessionRow[]> } | null = null
+  let remotesRead: { at: number; read: Promise<AhRemoteQueues | null> } | null = null
+  let chatsRead: { at: number; read: Promise<AhChatRow[]> } | null = null
 
   /** The CLI instances, read once per INSTANCES_FRESH_MS however many callers ask (a poll tick asks three ways). */
   /** The CLI instances' config folders from the last read, for the synchronous sessionRoots(). */
@@ -163,8 +174,16 @@ export function createBridge(opts: BridgeOptions = {}) {
     return { ...DEFAULT_ACCOUNT }
   }
 
-  async function rawWorkers(all = false): Promise<AhWorker[]> {
-    return client.workers(all ? {} : { limit: RECENT_FINISHED })
+  /** Reads once per WORKERS_FRESH_MS; both recent and all share the same tick. */
+  function rawWorkers(all = false): Promise<AhWorker[]> {
+    if (lastRawWorkers && now() - lastRawWorkers.at < WORKERS_FRESH_MS) {
+      return all ? lastRawWorkers.all : lastRawWorkers.recent
+    }
+    const recent = client.workers({ limit: RECENT_FINISHED })
+    const all_ = client.workers({})
+    const entry = { at: now(), recent, all: all_ }
+    lastRawWorkers = entry
+    return all ? all_ : recent
   }
 
   /** Adds the finished workers a running one hangs from (its dispatcher, a wave's manager, a few links up)
@@ -184,13 +203,18 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
+  /** The other PCs' queues, read at most every REMOTES_FRESH_MS. Shared between remoteWorkers and swarmJobs. */
+  function cachedRemoteQueues(): Promise<AhRemoteQueues | null> {
+    if (remotesRead && now() - remotesRead.at < REMOTES_FRESH_MS) return remotesRead.read
+    const read = client.remoteQueues().catch(() => null)
+    remotesRead = { at: now(), read }
+    return read
+  }
+
   /** The other PCs' workers. An AgentHydra without the route (404), one that fails, or sharing off is none:
-   *  never a failure of this PC's list. */
+   *  never a failure of this PC's list. Read at most every REMOTES_FRESH_MS. */
   function remoteWorkers(all = false): Promise<CliMayteWorker[]> {
-    return client
-      .remoteQueues()
-      .then((answer) => mapRemote(answer, { all }))
-      .catch(() => [])
+    return cachedRemoteQueues().then((answer) => mapRemote(answer ?? undefined, { all })).catch(() => [])
   }
 
   /** Chat id -> session id and title, from AgentHydra's /api/chats, archived chats included (a finished job's chat is
@@ -216,7 +240,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const jobs = (async () => {
       const [answer, remote, chats] = await Promise.all([
         client.hswarmJobs(JOBS_ASKED).catch(() => null),
-        client.remoteQueues().catch(() => null),
+        cachedRemoteQueues().catch(() => null),
         chatsIndex(),
       ])
       return [...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)]
@@ -255,14 +279,36 @@ export function createBridge(opts: BridgeOptions = {}) {
     return activeFor(lastWorkers?.workers ?? [], originSessionId)
   }
 
+  /** The 24-hour transcript index, read at most every SESSIONS_FRESH_MS. */
+  function sessionsIndex(): Promise<AhSessionRow[]> {
+    if (sessionsRead && now() - sessionsRead.at < SESSIONS_FRESH_MS) return sessionsRead.read
+    const read = client.sessions().catch(() => [])
+    sessionsRead = { at: now(), read }
+    read.catch(() => {
+      if (sessionsRead?.read === read) sessionsRead = null
+    })
+    return read
+  }
+
+  /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
+  function chatsForExternal(): Promise<AhChatRow[]> {
+    if (chatsRead && now() - chatsRead.at < SESSIONS_FRESH_MS) return chatsRead.read
+    const read = client.chats().catch(() => [])
+    chatsRead = { at: now(), read }
+    read.catch(() => {
+      if (chatsRead?.read === read) chatsRead = null
+    })
+    return read
+  }
+
   /** AgentHydra's reads behind the outside sessions, or null when every one failed to reach it (it is down). */
   async function externalInputs(): Promise<ExternalInputs | null> {
     const settle = <T>(p: Promise<T>, empty: T) => p.catch((err) => (unreachable(err) ? Promise.reject(err) : empty))
     const parts = await Promise.allSettled([
       settle(client.agentStatus(), []),
       settle(client.liveSessions(), []),
-      settle(client.chats(), []),
-      settle(client.sessions(), []),
+      settle(chatsForExternal(), []),
+      settle(sessionsIndex(), []),
       settle(rawWorkers(), []),
     ])
     if (parts.every((p) => p.status === 'rejected')) return null
