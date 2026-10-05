@@ -67,11 +67,23 @@ export function detachedCommand(platform: NodeJS.Platform, argv: string[]): { ar
   return { argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], detached: false }
 }
 
+function validHostFile(file: HostFile | null, chatId: string): HostFile | null {
+  return file && file.chatId === chatId && typeof file.port === 'number' && typeof file.token === 'string' ? file : null
+}
+
 /** The host file of a chat, when one is there and readable. */
 export function readHostFile(dir: string, chatId: string): HostFile | null {
   try {
-    const file = JSON.parse(readFileSync(hostFilePath(dir, chatId), 'utf8')) as HostFile
-    return file && file.chatId === chatId && typeof file.port === 'number' && typeof file.token === 'string' ? file : null
+    return validHostFile(JSON.parse(readFileSync(hostFilePath(dir, chatId), 'utf8')) as HostFile, chatId)
+  } catch {
+    return null
+  }
+}
+
+/** readHostFile without blocking the loop: for a poll on a server that serves other requests. */
+export async function readHostFileAsync(dir: string, chatId: string): Promise<HostFile | null> {
+  try {
+    return validHostFile(JSON.parse(await Bun.file(hostFilePath(dir, chatId)).text()) as HostFile, chatId)
   } catch {
     return null
   }
@@ -146,7 +158,7 @@ export async function launchHost(spec: HostSpec, o: LaunchOptions = {}): Promise
   const deadline = Date.now() + (o.timeoutMs ?? 30_000)
   // Looked at every 50 ms at first, then more slowly: a cold start takes seconds.
   for (let tries = 0; Date.now() < deadline; tries++) {
-    const file = readHostFile(spec.dir, spec.chatId)
+    const file = await readHostFileAsync(spec.dir, spec.chatId)
     if (file?.token === spec.token) return file
     await Bun.sleep(Math.min(200, 50 + tries * 25))
   }
