@@ -120,8 +120,10 @@ export type DeskMessage =
   | { type: 'desk:sidebar'; view: string; action: 'search'; value: string }
   /** Show this instance's row in Instances (its desktop or CLI table) and mark it. */
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' }
-  /** Open this CliMayte task on the CliMayte tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
+  /** Open this CliMayte task on the CliMayte entry of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
+  /** Open the HSwarm tab (the copy has no way to open one job). */
+  | { type: 'desk:open-hswarm'; job?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
    *  polls rest until it slides back in; the frame stays loaded either way. */
   | { type: 'desk:visible'; visible: boolean }

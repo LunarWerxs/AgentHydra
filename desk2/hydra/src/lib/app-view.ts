@@ -27,14 +27,12 @@
 import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
 export type AppView =
-  | 'climayte'
   | 'instances-home'
   | 'cli'
   | 'desktop'
   | 'analytics'
   | 'hswarm'
 export const APP_VIEWS: readonly AppView[] = [
-  'climayte',
   'instances-home',
   'cli',
   'desktop',
@@ -54,7 +52,9 @@ const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
   // (`instances-home`), so a stored `instances` keeps meaning the desktop page it always meant.
   instances: 'desktop',
   // Hydra Desk 2's copy has no Sessions tab (2026-10-04): Desk's cloud list is it.
-  sessions: 'climayte',
+  sessions: 'hswarm',
+  // CliMayte moved into the HSwarm tab as its first page (2026-10-05).
+  climayte: 'hswarm',
 }
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for

@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   BarChart3,
-  Bot,
   Boxes,
   ChevronDown,
   Layers,
@@ -57,9 +56,11 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { showHSwarmPage } from '@/lib/hswarm-pages'
 import {
   deskInstanceAsk,
   deskWorkerAsk,
+  deskSwarmAsk,
   EMBEDDED,
   findInstanceRow,
   flashRow,
@@ -81,9 +82,8 @@ import { usePushPanel } from '@/shell/usePushPanel'
 // Each tab's view loads the first time its tab opens, so the pane starts with the shell and the one
 // view in front of it, not the whole graph (charts included).
 const AnalyticsView = defineAsyncComponent(() => import('@/components/AnalyticsView.vue'))
-const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
 const CliView = defineAsyncComponent(() => import('@/components/CliView.vue'))
-const HSwarmView = defineAsyncComponent(() => import('@/components/HSwarmView.vue'))
+const HSwarmTab = defineAsyncComponent(() => import('@/components/HSwarmTab.vue'))
 const InstancesHomeView = defineAsyncComponent(() => import('@/components/InstancesHomeView.vue'))
 const InstancesView = defineAsyncComponent(() => import('@/components/InstancesView.vue'))
 
@@ -114,9 +114,9 @@ watch(pendingSessionJump, (j) => {
   if (j) openInDesk(takeSessionJump() ?? j)
 })
 
-// In Desk, CliMayte and HSwarm draw their sidebar in Desk's own (lib/desk-embed.ts useDeskSidebar); any
-// other tab has none, so Desk shows its cloud list beside it.
-const DESK_SIDEBAR_VIEWS: readonly AppView[] = ['climayte', 'hswarm']
+// In Desk, the HSwarm tab (CliMayte and HSwarm's own page, lib/hswarm-pages.ts) draws its sidebar in Desk's
+// own (lib/desk-embed.ts useDeskSidebar); any other tab has none, so Desk shows its cloud list beside it.
+const DESK_SIDEBAR_VIEWS: readonly AppView[] = ['hswarm']
 if (EMBEDDED) {
   watch(
     view,
@@ -126,9 +126,22 @@ if (EMBEDDED) {
     { immediate: true },
   )
 }
-// Desk's sidebar asked for a CliMayte task: on its tab, which opens it (CliMayteView takes the ask).
+// CliMayte has no tab of its own: it is the first page of the HSwarm tab.
+function openClimayte() {
+  showHSwarmPage('climayte')
+  view.value = 'hswarm'
+}
+// Desk's sidebar asked for a CliMayte task: the HSwarm tab on its CliMayte page, which opens it
+// (CliMayteView takes the ask).
 watch(deskWorkerAsk, (id) => {
-  if (id) view.value = 'climayte'
+  if (id) openClimayte()
+})
+// Desk's sidebar asked for an HSwarm job: the HSwarm tab (the copy cannot open one job).
+watch(deskSwarmAsk, (ask) => {
+  if (!ask) return
+  deskSwarmAsk.value = null
+  showHSwarmPage('hswarm')
+  view.value = 'hswarm'
 })
 // Desk's session header asked for an account's row in Instances: its table (desktop or CLI), else the
 // other one, scrolled to and marked.
@@ -161,9 +174,7 @@ useShortcuts([
     keys: 'mod+2',
     labelKey: 'app.shortcutClimayte',
     groupKey: 'app.shortcutGroupApp',
-    run: () => {
-      view.value = 'climayte'
-    },
+    run: openClimayte,
   },
   {
     keys: 'mod+3',
@@ -202,6 +213,7 @@ useShortcuts([
     labelKey: 'app.shortcutHswarm',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
+      showHSwarmPage('hswarm')
       view.value = 'hswarm'
     },
   },
@@ -290,7 +302,6 @@ async function onShutdown() {
 // Top-level tabs. Instances is a group: clicking it opens the landing page, and its two sub-pages
 // sit in a hover dropdown. The group reads as active on any of its three views.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
-  { id: 'climayte', labelKey: 'app.tabClimayte', icon: Bot },
   { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
@@ -303,15 +314,14 @@ const inInstances = computed(() => INSTANCES_VIEWS.includes(view.value))
 // The tab on screen. 'desktop' is the fallback, as the v-else chain it replaces was.
 const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
-  climayte: CliMayteView,
   'instances-home': InstancesHomeView,
   cli: CliView,
-  hswarm: HSwarmView,
+  hswarm: HSwarmTab,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
 const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'desktop'))
 const viewProps = computed(() =>
-  view.value === 'climayte'
+  view.value === 'hswarm'
     ? { class: 'h-full' }
     : view.value === 'instances-home'
       ? { onNavigate: onHomeNavigate }
@@ -376,10 +386,13 @@ function onHomeNavigate(
   to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'hswarm',
 ) {
   if (to === 'sessions') showSessionsInDesk()
+  else if (to === 'climayte') openClimayte()
   else view.value = to === 'instances' ? 'desktop' : to
 }
 
 provide(OPEN_VIEW, (v: AppView) => {
+  // "Open HSwarm" (a stats card's link) means HSwarm's own page, not the CliMayte page beside it.
+  if (v === 'hswarm') showHSwarmPage('hswarm')
   view.value = v
 })
 

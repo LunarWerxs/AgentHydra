@@ -9,7 +9,7 @@
 // hides its own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask
 // for an account's row in Instances (its session header's account chip) or a CliMayte task (its sidebar's
 // task rows).
-import { onActivated, onDeactivated, onScopeDispose, ref, watch } from 'vue'
+import { inject, type InjectionKey, onActivated, onDeactivated, onScopeDispose, provide, reactive, ref, watch } from 'vue'
 import type { AhMessage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
 import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
@@ -58,16 +58,17 @@ export function publishSidebar(model: SidebarModel | null): void {
 const pageHidden = ref(typeof document !== 'undefined' && document.hidden)
 if (EMBEDDED) document.addEventListener('visibilitychange', () => (pageHidden.value = document.hidden))
 
-/** In Desk: describes this tab's sidebar (`build` re-runs when what it reads changes) and takes Desk's
- *  clicks on it. Outside Desk it does nothing and the tab draws its own sidebar. The tab after it sends
- *  its own (or App.vue sends null), so leaving sends nothing: Desk never flashes another list between. */
-export function useDeskSidebar(
-  view: string,
-  build: () => SidebarModel | null,
-  onEvent: (e: SidebarEvent) => void,
-): void {
-  if (!EMBEDDED) return
-  sidebarHandlers.set(view, onEvent)
+/** A tab made of pages (HSwarm: its own page, CliMayte, later more) provides this: each page's view
+ *  describes its part with useDeskSidebar as before, and the tab (useDeskSidebarHost) publishes one
+ *  model made of them. `intercept` sees Desk's clicks first and answers true for one it took. */
+interface SidebarHost {
+  parts: Map<string, () => SidebarModel | null>
+  intercept: (view: string, e: SidebarEvent) => boolean
+}
+const SIDEBAR_HOST: InjectionKey<SidebarHost> = Symbol('desk-sidebar-host')
+
+/** Publishes `build()` while the tab is on screen (and says so again when it comes back). */
+function publishWhileActive(build: () => SidebarModel | null): void {
   // The tab stays built behind the next one (App.vue's KeepAlive): only the tab on screen speaks for
   // the sidebar, and it says so again when it comes back. Out of view the getter reads nothing, so no
   // change of the tab's data rebuilds the model.
@@ -85,14 +86,50 @@ export function useDeskSidebar(
   onDeactivated(() => {
     active.value = false
   })
+}
+
+/** In Desk: describes this tab's sidebar (`build` re-runs when what it reads changes) and takes Desk's
+ *  clicks on it. Outside Desk it does nothing and the tab draws its own sidebar. The tab after it sends
+ *  its own (or App.vue sends null), so leaving sends nothing: Desk never flashes another list between.
+ *  Under a tab that is a sidebar host, it hands its part to the host instead of publishing. */
+export function useDeskSidebar(
+  view: string,
+  build: () => SidebarModel | null,
+  onEvent: (e: SidebarEvent) => void,
+): void {
+  if (!EMBEDDED) return
+  const host = inject(SIDEBAR_HOST, null)
+  const handler = host
+    ? (e: SidebarEvent) => {
+        if (!host.intercept(view, e)) onEvent(e)
+      }
+    : onEvent
+  sidebarHandlers.set(view, handler)
+  if (host) host.parts.set(view, build)
+  else publishWhileActive(build)
   onScopeDispose(() => {
-    if (sidebarHandlers.get(view) === onEvent) sidebarHandlers.delete(view)
+    if (sidebarHandlers.get(view) === handler) sidebarHandlers.delete(view)
+    if (host?.parts.get(view) === build) host.parts.delete(view)
   })
+}
+
+/** In Desk: the tab's one sidebar, composed by `compose` from the parts its pages describe (a page
+ *  that is not mounted yet, or has none, is just absent from `parts`). `intercept` takes the clicks the
+ *  tab itself owns (its page entries) before the page that was drawn gets them. */
+export function useDeskSidebarHost(
+  compose: (parts: ReadonlyMap<string, () => SidebarModel | null>) => SidebarModel | null,
+  intercept: (view: string, e: SidebarEvent) => boolean,
+): void {
+  const host: SidebarHost = { parts: reactive(new Map()) as Map<string, () => SidebarModel | null>, intercept }
+  provide(SIDEBAR_HOST, host)
+  if (EMBEDDED) publishWhileActive(() => compose(host.parts))
 }
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: 'desktop' | 'cli' } | null>(null)
 /** Desk asked for a CliMayte task (CliMayteView opens it once its list is in); `pc` names another PC's. */
+/** Desk asked for the HSwarm tab (App.vue switches to it). */
+export const deskSwarmAsk = ref<{ job?: string } | null>(null)
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
 
 /** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
@@ -168,6 +205,7 @@ if (EMBEDDED) {
     if (!m || typeof m !== 'object' || typeof m.type !== 'string') return
     if (m.type === 'desk:sidebar') sidebarHandlers.get(m.view)?.(m)
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
+    else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
     else if (m.type === 'desk:visible') setDeskHidden(!m.visible)
   })

@@ -58,10 +58,9 @@ export function refreshWarm(kind: WarmKind, opts: { viewed?: boolean } = {}): Pr
 
 /** The kinds a view shows. */
 const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
-  climayte: ['climayte'],
   'instances-home': ['cli', 'desktop', 'climayte', 'hswarm'],
   analytics: ['analytics'],
-  hswarm: ['hswarm'],
+  hswarm: ['hswarm', 'climayte'],
   cli: ['cli', 'desktop'],
   desktop: ['desktop', 'cli'],
 }
