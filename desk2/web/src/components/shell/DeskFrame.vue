@@ -179,10 +179,14 @@ function resizeSidebar(w: number) {
     })
   }
   if (widthSave) clearTimeout(widthSave)
-  widthSave = setTimeout(() => {
-    widthSave = null
-    storage?.setItem(SIDEBAR_KEY, String(pendingWidth))
-  }, 250)
+  widthSave = setTimeout(saveWidth, 250)
+}
+/** Saves the width a drag left; a close or reload before the save fires saves it at once (pagehide). */
+function saveWidth() {
+  if (!widthSave) return
+  clearTimeout(widthSave)
+  widthSave = null
+  storage?.setItem(SIDEBAR_KEY, String(pendingWidth))
 }
 // The group names a row's menu offers, worked out when the chats or outside sessions change, not on every render.
 const rowGroups = computed(() => groupChoices(src.chats.value, src.external.value))
@@ -400,8 +404,11 @@ onMounted(() => {
   document.addEventListener('pointerout', onPeekPointerOut)
   window.addEventListener('focus', markOpenRead)
   document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('pagehide', saveWidth)
 })
 onBeforeUnmount(() => {
+  saveWidth()
+  window.removeEventListener('pagehide', saveWidth)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)

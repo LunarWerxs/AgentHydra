@@ -34,7 +34,7 @@ function sameJson(a: unknown, b: unknown): boolean {
 }
 
 export interface PollerOptions {
-  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'>
+  bridge: Pick<Bridge, 'url' | 'ping' | 'externalSessions' | 'workers' | 'listAccounts'> & Partial<Pick<Bridge, 'onWorkersChanged'>>
   broadcast(event: ServerEvent): void
   wsClientCount(): number
   fastMs?: number
@@ -49,6 +49,7 @@ export function createPoller(o: PollerOptions) {
   const idleMs = o.idleMs ?? IDLE_POLL_MS
   const now = o.now ?? Date.now
   let timer: ReturnType<typeof setInterval> | null = null
+  let unwatch: (() => void) | null = null
   let running = false
   let clients = 0
   let up: boolean | null = null
@@ -155,11 +156,19 @@ export function createPoller(o: PollerOptions) {
         if (idle && now() - polledAt < idleMs - fastMs / 2) return
         void tick()
       }, fastMs)
+      // A worker this side started, sent to or cancelled ends the rest: the list is read now, not up to
+      // an idle interval later (the engine counts each chat's workers from that list).
+      unwatch = o.bridge.onWorkersChanged?.(() => {
+        idle = false
+        void tick()
+      }) ?? null
       void tick()
     },
     stop(): void {
       if (timer) clearInterval(timer)
       timer = null
+      unwatch?.()
+      unwatch = null
     },
   }
 }

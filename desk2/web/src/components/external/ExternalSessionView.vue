@@ -59,11 +59,17 @@ const continueNote = computed(() => {
   return continueLine(s, account, !!account && account.id === picked)
 })
 
-/** Whether a fresh read says nothing new: same length, same id and status on every item, same last item in full. */
+/**
+ * Whether a fresh read says nothing new: same length, same id and status on every item, the same last item
+ * in full, and the same tasks and checklist in full (their notices change them where they stand).
+ */
 function sameItems(a: TranscriptItem[], b: TranscriptItem[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i].id !== b[i].id || (a[i] as { status?: string }).status !== (b[i] as { status?: string }).status) return false
+    const x = a[i]
+    const y = b[i]
+    if (x.id !== y.id || (x as { status?: string }).status !== (y as { status?: string }).status) return false
+    if ((x.kind === 'task' || x.kind === 'todos') && JSON.stringify(x) !== JSON.stringify(y)) return false
   }
   return a.length === 0 || JSON.stringify(a[a.length - 1]) === JSON.stringify(b[b.length - 1])
 }

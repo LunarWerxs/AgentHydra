@@ -191,6 +191,32 @@ describe('poller', () => {
     expect(h.types()).toContain('accounts.update')
   })
 
+  test('a worker sent to or cancelled from here is read again at once, not at the next interval', async () => {
+    const f = await fake()
+    const b = createBridge({ url: f.url, now: () => NOW })
+    // Intervals far past the test: any read after the first comes from the change alone.
+    const poller = createPoller({ bridge: b, broadcast: () => {}, wsClientCount: () => 1, fastMs: 600_000, idleMs: 600_000, now: () => NOW })
+    const lists = () => f.gets.filter((g) => g.split('?')[0] === '/api/corch/workers').length
+    // Waits until the list has been read past `n` times and the poll that read it is over (it reads more after).
+    const readPast = async (n: number) => {
+      for (let i = 0; i < 100 && lists() <= n; i++) await Bun.sleep(20)
+      await Bun.sleep(150)
+      return lists()
+    }
+    poller.start()
+    try {
+      const first = await readPast(0)
+      expect(first).toBeGreaterThan(0)
+      await b.sendToWorker('w-00000001', 'also run the lint')
+      const sent = await readPast(first)
+      expect(sent).toBeGreaterThan(first)
+      await b.cancelWorker('w-00000001')
+      expect(await readPast(sent)).toBeGreaterThan(sent)
+    } finally {
+      poller.stop()
+    }
+  })
+
   test('a window connecting after none were gets everything again', async () => {
     const f = await fake()
     const h = harness(f.url)

@@ -69,6 +69,12 @@ export function createBridge(opts: BridgeOptions = {}) {
   let extraWorkerIds: () => string[] = () => []
   let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
+  /** Told when this side changed the worker list (a start, a follow-up, a cancel): the poller reads it at once. */
+  const workerChange = new Set<() => void>()
+  function workersChanged(): void {
+    lastWorkers = null
+    for (const f of workerChange) f()
+  }
   const workerTokens = createWorkerTokens()
   const homeStats = createHomeStats(client, now)
   let configDirs: { at: number; byId: Map<string, string> } | null = null
@@ -342,7 +348,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const r = await client.cancelWorker(id)
     if (!r.cancelled.includes(id))
       throw new BridgeError('http', `worker ${id} is not active, so there is nothing to cancel`, 409)
-    lastWorkers = null
+    workersChanged()
   }
 
   /** A new chat as a CliMayte worker; AgentHydra's view of it (its id and the session id it minted). */
@@ -350,7 +356,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const r = await client.startWorker(task)
     const w = r.workers[0]
     if (!w) throw new BridgeError('http', 'AgentHydra started no worker for the chat', 502)
-    lastWorkers = null
+    workersChanged()
     return w
   }
 
@@ -422,6 +428,8 @@ export function createBridge(opts: BridgeOptions = {}) {
   async function sendToWorker(id: string, text: string, cwd?: string): Promise<void> {
     const r = await client.sendToWorker(id, text, cwd)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
+    // A follow-up can wake a finished worker.
+    workersChanged()
   }
 
   return {
@@ -442,6 +450,13 @@ export function createBridge(opts: BridgeOptions = {}) {
     activeWorkersFor,
     /** This PC's workers from the last read (by the poller or a route), without asking AgentHydra; never another PC's. */
     lastWorkers: (): CliMayteWorker[] => lastWorkers?.workers ?? [],
+    /** Calls `f` whenever this side changed the worker list; returns the call that stops it. */
+    onWorkersChanged(f: () => void): () => void {
+      workerChange.add(f)
+      return () => {
+        workerChange.delete(f)
+      }
+    },
     cancelWorker,
     sendToWorker,
     startWorker,

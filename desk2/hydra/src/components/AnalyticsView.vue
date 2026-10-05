@@ -220,7 +220,9 @@ async function load(quiet = false) {
     if (mine !== latest) return // the window moved on while we were fetching
     land(activity, a)
     land(concurrency, c.buckets)
-    land(edits, e.edits)
+    // Always replaced: the feed's "3m ago" labels are worked out when it draws, so even an unchanged list
+    // is drawn again on each refresh to keep them true.
+    edits.value = e.edits
     if (tools) land(agentTools, tools.tools)
     land(sinks, k)
   } catch {

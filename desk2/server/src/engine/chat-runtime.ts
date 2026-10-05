@@ -515,6 +515,8 @@ ${swap.real}` }
     const loop = this.loop
     this.loop = null
     await hosted.detach()
+    // Stderr held for the next batched write goes to the log now: the server may be gone before its timer.
+    this.endLog()
     await loop?.catch(() => {})
   }
 

@@ -2,10 +2,9 @@
 import type { HomeStats } from '@shared/protocol'
 import type { StatsRange } from './logic'
 
-// Each range's last answer from the server, kept across mounts of the card for a minute and a half: the
-// screen mounts on every Ctrl+N, close and Back, and the figures barely move in that time.
-const ANSWER_TTL_MS = 90_000
-const recentAnswers = new Map<StatsRange, { at: number; stats: HomeStats }>()
+// Each range's last answer from the server, kept across mounts of the card (the screen mounts on every
+// Ctrl+N, close and Back) so a mount paints it at once while the server is asked again.
+const recentAnswers = new Map<StatsRange, HomeStats>()
 </script>
 
 <script setup lang="ts">
@@ -33,18 +32,12 @@ const answers = reactive<Partial<Record<StatsRange, HomeStats>>>({})
 const failed = reactive<Partial<Record<StatsRange, string>>>({})
 function load(r: StatsRange): void {
   if (!src.homeStats) return
-  const recent = recentAnswers.get(r)
-  if (recent && Date.now() - recent.at < ANSWER_TTL_MS) {
-    answers[r] = recent.stats
-    delete failed[r]
-    return
-  }
-  const kept = answers[r] ?? recent?.stats ?? src.cachedHomeStats?.(r)
+  const kept = answers[r] ?? recentAnswers.get(r) ?? src.cachedHomeStats?.(r)
   if (kept) answers[r] = kept
   src.homeStats(r).then(
     (stats) => {
       answers[r] = stats
-      recentAnswers.set(r, { at: Date.now(), stats })
+      recentAnswers.set(r, stats)
       delete failed[r]
     },
     (err: unknown) => {
