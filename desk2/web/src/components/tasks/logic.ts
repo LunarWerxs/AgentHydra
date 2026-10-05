@@ -49,7 +49,8 @@ export interface TaskUnit {
   failed?: boolean
 }
 
-export const FINISHED_CAP = 25
+/** The real app's panel lists a chat's 50 newest finished tasks (owner's screenshot, 2026-10-05: "Finished 50"). */
+export const FINISHED_CAP = 50
 
 export function agentState(w: CliMayteWorker): AgentState {
   if (w.status === 'running' || w.status === 'checking') return 'running'

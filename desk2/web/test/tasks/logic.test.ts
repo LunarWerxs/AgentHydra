@@ -128,10 +128,10 @@ describe('panelLists', () => {
   })
 
   test('finished: most recent first, minus the cleared, capped', () => {
-    const many = Array.from({ length: 30 }, (_, i) => done(`d${i}`, { endedAt: 10_000 + i }))
-    const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set(['d29']) })
+    const many = Array.from({ length: FINISHED_CAP + 5 }, (_, i) => done(`d${i}`, { endedAt: 10_000 + i }))
+    const { finished } = panelLists({ workers: many, sessionId: 'chat-1', cleared: new Set([`d${FINISHED_CAP + 4}`]) })
     expect(finished).toHaveLength(FINISHED_CAP)
-    expect(finished[0]!.id).toBe('worker:d28')
+    expect(finished[0]!.id).toBe(`worker:d${FINISHED_CAP + 3}`)
   })
 
   test("a chat's finished background tasks list and count under finished, a failed one marked", () => {
@@ -151,7 +151,7 @@ test('labels and formats', () => {
   expect(runningLabel(3)).toBe('3 running tasks')
   expect(runningLabel(1, 2)).toBe('1 running task · 2 finished')
   expect(runningLabel(0, 1)).toBe('1 finished task')
-  expect(runningLabel(0, 25)).toBe('25+ finished tasks')
+  expect(runningLabel(0, 50)).toBe('50+ finished tasks')
   expect(formatElapsed(666_000)).toBe('11m 06s')
   expect(formatElapsed(45_000)).toBe('45s')
   expect(formatElapsed(3_720_000)).toBe('1h 02m')
