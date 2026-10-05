@@ -72,7 +72,10 @@ function setLocal(s: DeskSettings) {
 let savedTimer: ReturnType<typeof setTimeout> | null = null
 async function save(patch: Partial<DeskSettings>) {
   if (!local.value) return
-  const prev = local.value
+  const before = local.value as Record<string, unknown>
+  const keys = Object.keys(patch) as (keyof DeskSettings)[]
+  const prev: Record<string, unknown> = {}
+  for (const k of keys) prev[k] = before[k]
   local.value = { ...local.value, ...patch }
   saveError.value = null
   try {
@@ -81,7 +84,14 @@ async function save(patch: Partial<DeskSettings>) {
     if (savedTimer) clearTimeout(savedTimer)
     savedTimer = setTimeout(() => (showSaved.value = false), 1600)
   } catch (e) {
-    setLocal(prev)
+    // Only this save's keys, and only where they still hold its value: a later save or another window's change stays.
+    if (local.value) {
+      const cur = local.value as Record<string, unknown>
+      const next: Record<string, unknown> = { ...cur }
+      for (const k of keys) if (cur[k] === patch[k]) next[k] = prev[k]
+      local.value = next as unknown as DeskSettings
+      if (keys.includes('idleCloseMinutes')) idleDraft.value = String(local.value.idleCloseMinutes)
+    }
     saveError.value = e instanceof Error ? e.message : String(e)
   }
 }

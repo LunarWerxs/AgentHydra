@@ -295,6 +295,28 @@ watch(
   () => nextTick(paintFind),
   { flush: 'post' },
 )
+// Content that changes inside the rendered range (a tool group opening, markdown re-rendering) moves the
+// text under the marks: while a query is set, one repaint per frame follows the rendered DOM.
+let findMutations: MutationObserver | null = null
+let findFrame = 0
+function watchFindDom(on: boolean) {
+  findMutations?.disconnect()
+  findMutations = null
+  if (findFrame) cancelAnimationFrame(findFrame)
+  findFrame = 0
+  const el = scroller.value
+  if (!on || !el || !highlights) return
+  findMutations = new MutationObserver(() => {
+    if (findFrame) return
+    findFrame = requestAnimationFrame(() => {
+      findFrame = 0
+      paintFind() // the marks are highlights, not elements: painting adds no mutation
+    })
+  })
+  findMutations.observe(el, { childList: true, subtree: true, characterData: true })
+}
+watch(() => !!props.find?.query && !!scroller.value, watchFindDom, { immediate: true, flush: 'post' })
+onBeforeUnmount(() => watchFindDom(false))
 
 // The header over the top folding or unfolding changes the inset: what is on screen stays where it is
 // (the header slides over it or off it) unless the list is at its top, where the first row follows it.
