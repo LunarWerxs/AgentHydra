@@ -2,7 +2,7 @@
 // HSwarm's Savings page: ZSwarm's "running total" report inside the console layout. Everything comes from
 // GET /api/hswarm/api/stats?days=N (hswarm/stats.py). Dense on purpose: one line per row, small tiles,
 // every table column sortable and sized to its content, explanations behind info bubbles.
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { accountDisplay, type HswarmAccountName, useHswarmApi } from '@/lib/hswarm-api'
 import { fetchKitUsage, formatTokens, formatUsd } from '@/lib/kit'
@@ -46,7 +46,8 @@ const { fetchStats, fetchAccountNames } = useHswarmApi()
 const WINDOWS = [7, 14, 30]
 const days = ref(14)
 const mode = ref<'list' | 'plan'>('list')
-const stats = ref<Stats | null>(null)
+// Shallow: the payload is only ever replaced whole.
+const stats = shallowRef<Stats | null>(null)
 const names = ref<Record<string, HswarmAccountName>>({})
 const error = ref<string | null>(null)
 const loading = ref(false)
@@ -65,7 +66,7 @@ async function load() {
 
 // The Claude side of the per-machine table is the usage kit's, per PC: its Claude Code calls (cli and
 // desktop) over all time, the same span as HSwarm's own per-machine totals. Not the Python scanner's.
-const kitClaude = ref<Row[]>([])
+const kitClaude = shallowRef<Row[]>([])
 async function loadKitClaude() {
   try {
     const r = await fetchKitUsage({
@@ -453,20 +454,42 @@ function sortBy(tid: string, col: Col) {
   const dir = cur?.key === col.key ? (-cur.dir as 1 | -1) : col.num ? -1 : 1
   sortState.value = { ...sortState.value, [tid]: { key: col.key, dir } }
 }
-function sorted(tb: Table): Row[] {
-  const st = sortState.value[tb.id]
-  let rows = tb.rows
-  if (st) {
-    rows = [...rows].sort((a, b) => {
-      const x = a[st.key]
-      const y = b[st.key]
-      if (typeof x === 'number' || typeof y === 'number')
-        return ((Number(x) || 0) - (Number(y) || 0)) * st.dir
-      return String(x ?? '').localeCompare(String(y ?? '')) * st.dir
-    })
-  }
-  return tb.folded && !expandedTables.value.has(tb.id) ? rows.slice(0, tb.folded) : rows
+// What identifies a row in its table, so a re-sort moves the rows instead of rewriting each in place.
+const ROW_KEY: Record<string, string[]> = {
+  machines: ['machine'],
+  accounts: ['account'],
+  days: ['day'],
+  recent: ['ts', 'machine', 'label'],
 }
+// Each table's rows as drawn: sorted, folded and keyed, worked out once per change.
+const shownRows = computed(() => {
+  const out = new Map<string, { key: string; row: Row }[]>()
+  for (const tb of tables.value) {
+    const st = sortState.value[tb.id]
+    let rows = tb.rows
+    if (st) {
+      rows = [...rows].sort((a, b) => {
+        const x = a[st.key]
+        const y = b[st.key]
+        if (typeof x === 'number' || typeof y === 'number')
+          return ((Number(x) || 0) - (Number(y) || 0)) * st.dir
+        return String(x ?? '').localeCompare(String(y ?? '')) * st.dir
+      })
+    }
+    if (tb.folded && !expandedTables.value.has(tb.id)) rows = rows.slice(0, tb.folded)
+    const seen = new Map<string, number>()
+    out.set(
+      tb.id,
+      rows.map((row) => {
+        const base = (ROW_KEY[tb.id] ?? []).map((k) => String(row[k] ?? '')).join('|')
+        const n = seen.get(base) ?? 0
+        seen.set(base, n + 1)
+        return { key: n ? `${base}#${n}` : base, row }
+      }),
+    )
+  }
+  return out
+})
 function toggleFold(id: string) {
   const s = new Set(expandedTables.value)
   if (s.has(id)) s.delete(id)
@@ -619,7 +642,7 @@ const ariaSort = (tid: string, key: string) => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="(r, ri) in sorted(tb)" :key="ri" class="border-t hover:bg-muted/50">
+              <tr v-for="{ key, row: r } in shownRows.get(tb.id)" :key="key" class="border-t hover:bg-muted/50">
                 <td
                   v-for="col in tb.cols"
                   :key="col.key"

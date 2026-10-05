@@ -144,6 +144,18 @@ function usageTokens(u?: { in_hit?: number; in_miss?: number; out?: number }): n
   return (u.in_hit ?? 0) + (u.in_miss ?? 0) + (u.out ?? 0)
 }
 
+// The first 50 characters of a result's data, worked out once per payload, not on every render.
+const previews = new WeakMap<object, string>()
+function dataPreview(data: unknown): string {
+  if (typeof data !== 'object' || data === null) return JSON.stringify(data).substring(0, 50)
+  let text = previews.get(data)
+  if (text === undefined) {
+    text = JSON.stringify(data).substring(0, 50)
+    previews.set(data, text)
+  }
+  return text
+}
+
 function getTaskCounts(job: Job): string {
   if (!job.counts || Object.keys(job.counts).length === 0) return '–'
   return Object.entries(job.counts)
@@ -546,7 +558,7 @@ onBeforeUnmount(() => {
                                         <div v-if="usageTokens(result.usage) != null" class="text-muted-foreground">{{ costText(result.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                                       </TableCell>
                                       <TableCell class="text-xs max-w-xs truncate">
-                                        {{ result.answer || result.error || (result.data ? JSON.stringify(result.data).substring(0, 50) : '–') }}
+                                        {{ result.answer || result.error || (result.data ? dataPreview(result.data) : '–') }}
                                       </TableCell>
                                     </TableRow>
                                   </TableBody>

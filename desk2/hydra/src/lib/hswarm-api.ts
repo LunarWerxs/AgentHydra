@@ -1,7 +1,8 @@
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { API_BASE } from '@/lib/api'
 import { pii, piiName } from '@/composables/usePrivacy'
 import { formatUsd as kitUsd, readShared } from '@/lib/kit'
+import { reconcileList, sameData } from '@/lib/reconcile'
 import { loadStats, statsKey } from '@/lib/swarm-stats'
 
 interface HswarmStatus {
@@ -19,11 +20,38 @@ export interface HswarmState {
 }
 
 const status = ref<HswarmStatus>({ running: false })
-const state = ref<HswarmState | null>(null)
+// Shallow: the state is only ever replaced whole, so its providers and models need no deep proxy.
+const state = shallowRef<HswarmState | null>(null)
 const error = ref<string | null>(null)
 const loading = ref(false)
 
-async function apiCall(path: string, options: RequestInit = {}) {
+// A list the tree and its page both ask for when one is selected (Clients, Jobs, Overview): one request,
+// shared while it is in flight and for a moment after, so the page that mounts right behind the tree's
+// load does not ask again. Later calls (Reload, Refresh) fetch afresh.
+const SHARED_GETS = new Set(['clients', 'jobs'])
+const SHARE_MS = 1000
+const shared = new Map<string, Promise<any>>()
+
+function apiCall(path: string, options: RequestInit = {}): Promise<any> {
+  if (!SHARED_GETS.has(path) || (options.method ?? 'GET') !== 'GET') {
+    // A write may change what a shared list says, so the next read asks again.
+    if (options.method && options.method !== 'GET') shared.clear()
+    return request(path, options)
+  }
+  let pending = shared.get(path)
+  if (!pending) {
+    const fresh = request(path, options)
+    pending = fresh
+    shared.set(path, fresh)
+    const drop = () => {
+      if (shared.get(path) === fresh) shared.delete(path)
+    }
+    fresh.then(() => setTimeout(drop, SHARE_MS), drop)
+  }
+  return pending
+}
+
+async function request(path: string, options: RequestInit) {
   // The daemon forwards /api/hswarm/<rest> to hswarm as /<rest>; the console's routes live under /api/.
   const response = await fetch(`${API_BASE}/api/hswarm/api/${path}`, {
     ...options,
@@ -62,8 +90,17 @@ async function fetchState() {
   loading.value = true
   try {
     const data = await apiCall('state')
-    state.value = data
-    error.value = null
+    // An unchanged state writes nothing; a changed one keeps each unchanged list as it was.
+    const prev = state.value
+    if (!prev) state.value = data
+    else if (!sameData(prev, data)) {
+      state.value = {
+        ...data,
+        providers: reconcileList(prev.providers ?? [], data.providers ?? [], (p) => p.name),
+        models: reconcileList(prev.models ?? [], data.models ?? [], (m) => `${m.provider}/${m.name}`),
+      }
+    }
+    if (error.value !== null) error.value = null
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load state'
     state.value = null

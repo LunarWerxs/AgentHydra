@@ -2,7 +2,7 @@
 // The HSwarm tab's models view. Strings: i18n/locales/en/hswarm/models.ts (t('hswarm.v.models.<key>')).
 
 import { AlertCircle, Plus, Star } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
@@ -77,22 +77,42 @@ const readyProviders = computed(() => {
 
 const allModels = computed(() => props.state?.models ?? [])
 
+// The table follows the box once typing pauses, not on every keystroke.
+const SEARCH_DELAY_MS = 150
+const appliedQuery = ref('')
+let searchTimer: ReturnType<typeof setTimeout> | undefined
+watch(searchQuery, (q) => {
+  clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    appliedQuery.value = q
+  }, SEARCH_DELAY_MS)
+})
+onBeforeUnmount(() => clearTimeout(searchTimer))
+
+// Each model's searchable text, lowercased once per state change.
+const searchText = computed(
+  () =>
+    new Map(
+      (allModels.value as Model[]).map((m) => [
+        m,
+        [m.name, m.label || '', m.provider, m.api_id || ''].map((s) => s.toLowerCase()),
+      ]),
+    ),
+)
+
 const filteredModels = computed(() => {
   const models = allModels.value as Model[]
   const rp = readyProviders.value
-  const q = searchQuery.value.trim().toLowerCase()
+  const q = appliedQuery.value.trim().toLowerCase()
 
   if (props.model)
     return models.filter((m) => m.name === props.model && m.provider === props.provider)
 
+  const texts = q ? searchText.value : null
   return models.filter((m) => {
     // Filter by search query
-    if (q) {
-      const matches =
-        m.name.toLowerCase().includes(q) ||
-        (m.label || '').toLowerCase().includes(q) ||
-        m.provider.toLowerCase().includes(q) ||
-        (m.api_id || '').toLowerCase().includes(q)
+    if (texts) {
+      const matches = texts.get(m)?.some((s) => s.includes(q))
       if (!matches) return false
     }
 

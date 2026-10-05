@@ -35,6 +35,7 @@ import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmJobs from './hswarm/HSwarmJobs.vue'
 import HSwarmModels from './hswarm/HSwarmModels.vue'
@@ -78,6 +79,9 @@ interface TreeRow {
   parent: string | null
   hasKids: boolean
   open: boolean
+  // The label split around the search's first match, and the provider logo's URL, built with the row.
+  parts: [string, string, string]
+  avSrc: string | null
 }
 
 const DOT_CLASS: Record<Dot, string> = {
@@ -245,16 +249,38 @@ function filt(list: TreeNode[], q: string): TreeNode[] {
   return out
 }
 
+// Provider logos come from hswarm itself; a provider without one gets its initials.
+const brokenAv = ref(new Set<string>())
+const avatarUrls = computed(() => {
+  const urls = new Map<string, string>()
+  for (const p of state.value?.providers ?? []) {
+    if (p.icon !== 'ok' || brokenAv.value.has(p.name)) continue
+    urls.set(p.name, `${API_BASE}/api/hswarm/ui/favicon/${enc(p.name)}?v=${enc(String(p.icon_v ?? ''))}`)
+  }
+  return urls
+})
+
 const rows = computed<TreeRow[]>(() => {
   const q = query.value.trim().toLowerCase()
   const list = q ? filt(nodes.value, q) : nodes.value
+  const urls = avatarUrls.value
   const out: TreeRow[] = []
   let budget = MODEL_BUDGET
   const walk = (ns: TreeNode[], depth: number, parent: string | null) => {
     for (const n of ns) {
       const hasKids = !!n.kids?.length
       const open = hasKids && (!!n.force || expanded.value.has(n.id))
-      out.push({ id: n.id, sel: n.id, n, depth, parent, hasKids, open })
+      out.push({
+        id: n.id,
+        sel: n.id,
+        n,
+        depth,
+        parent,
+        hasKids,
+        open,
+        parts: hl(n.label, q),
+        avSrc: (n.av && urls.get(n.av)) || null,
+      })
       if (!open) continue
       const kids = n.kids ?? []
       if (kids[0]?.model && kids.length > budget) {
@@ -273,6 +299,8 @@ const rows = computed<TreeRow[]>(() => {
           parent: n.id,
           hasKids: false,
           open: false,
+          parts: ['', '', ''],
+          avSrc: null,
         })
         continue
       }
@@ -285,8 +313,7 @@ const rows = computed<TreeRow[]>(() => {
 })
 
 // A row's label split around the search's first match, which the tree marks.
-function hl(label: string): [string, string, string] {
-  const q = query.value.trim().toLowerCase()
+function hl(label: string, q: string): [string, string, string] {
   const i = q ? label.toLowerCase().indexOf(q) : -1
   return i < 0
     ? [label, '', '']
@@ -474,9 +501,10 @@ function onGlobalKey(e: KeyboardEvent) {
 
 // The tree pane is resizable on a desktop: drag, arrows, double-click or Enter to reset.
 const maxWidth = () => Math.max(TREE_MIN, Math.min(620, window.innerWidth - 360))
-function setWidth(w: number) {
+// A drag writes the width once, when it ends; every other change writes it as it is made.
+function setWidth(w: number, persist = true) {
   treeWidth.value = Math.round(Math.max(TREE_MIN, Math.min(maxWidth(), w)))
-  save('w', treeWidth.value)
+  if (persist) save('w', treeWidth.value)
 }
 let dragX: number | null = null
 let dragW = 0
@@ -488,9 +516,10 @@ function onSplitDown(e: PointerEvent) {
   e.preventDefault()
 }
 function onSplitMove(e: PointerEvent) {
-  if (dragX != null) setWidth(dragW + e.clientX - dragX)
+  if (dragX != null) setWidth(dragW + e.clientX - dragX, false)
 }
 function onSplitUp() {
+  if (dragX != null) save('w', treeWidth.value)
   dragX = null
 }
 function onSplitKey(e: KeyboardEvent) {
@@ -507,13 +536,6 @@ function onSplitKey(e: KeyboardEvent) {
   setWidth(to)
 }
 
-// Provider logos come from hswarm itself; a provider without one gets its initials.
-const brokenAv = ref(new Set<string>())
-function avatarUrl(name: string) {
-  const p = state.value?.providers?.find((x: any) => x.name === name)
-  if (p?.icon !== 'ok' || brokenAv.value.has(name)) return null
-  return `${API_BASE}/api/hswarm/ui/favicon/${enc(name)}?v=${enc(String(p.icon_v ?? ''))}`
-}
 const initials = (name: string) => name.slice(0, 2).toUpperCase()
 function onAvError(n: TreeNode) {
   if (n.av) brokenAv.value.add(n.av)
@@ -554,7 +576,7 @@ const ICON_NAME = new Map<Component, EmbedIcon>([
 ])
 function deskRow(r: TreeRow): SidebarRow {
   const n = r.n
-  const [before, hit] = n.more ? ['', ''] : hl(n.label)
+  const [before, hit] = r.parts
   return {
     key: r.id,
     label: n.label,
@@ -562,7 +584,7 @@ function deskRow(r: TreeRow): SidebarRow {
     hit: hit ? [before.length, before.length + hit.length] : undefined,
     branch: r.hasKids ? (r.open ? 'open' : 'closed') : undefined,
     status: n.dot ? { dot: DOT_TONE[n.dot], pulse: n.dot === 'run', label: n.dotTitle } : undefined,
-    avatar: n.av ? { src: avatarUrl(n.av) ?? undefined, text: initials(n.av) } : undefined,
+    avatar: n.av ? { src: r.avSrc ?? undefined, text: initials(n.av) } : undefined,
     icon: !n.av && n.icon ? ICON_NAME.get(n.icon) : undefined,
     count: n.count ?? undefined,
     meta: n.meta || undefined,
@@ -581,6 +603,14 @@ function deskRow(r: TreeRow): SidebarRow {
   }
 }
 const running = computed(() => !!status.value?.running && !!state.value)
+// Each row Desk gets keeps its identity while it says the same, so a keystroke or a refresh hands over
+// the rows that changed and no more new objects than that.
+let sentRows: SidebarRow[] = []
+const deskRows = computed<SidebarRow[]>(() => {
+  if (!running.value) return []
+  sentRows = reconcileList(sentRows, rows.value.map(deskRow), (r) => r.key)
+  return sentRows
+})
 useDeskSidebar(
   'hswarm',
   () => ({
@@ -609,7 +639,7 @@ useDeskSidebar(
         ]
       : undefined,
     legendNote: status.value?.running ? t('hswarm.nav.port', { port: status.value.port }) : undefined,
-    sections: running.value ? [{ key: 'tree', rows: rows.value.map(deskRow) }] : [],
+    sections: running.value ? [{ key: 'tree', rows: deskRows.value }] : [],
     selected: sel.value,
     empty: !running.value
       ? loading.value
@@ -819,8 +849,8 @@ async function handleRefresh() {
             <span v-if="r.n.dot" class="size-2 shrink-0 rounded-full" :class="DOT_CLASS[r.n.dot]" aria-hidden="true" />
             <template v-if="r.n.av">
               <img
-                v-if="avatarUrl(r.n.av)"
-                :src="avatarUrl(r.n.av) ?? undefined"
+                v-if="r.avSrc"
+                :src="r.avSrc"
                 alt=""
                 aria-hidden="true"
                 decoding="async"
@@ -835,7 +865,7 @@ async function handleRefresh() {
             </template>
             <component :is="r.n.icon" v-else-if="r.n.icon" class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
             <span v-if="r.n.more" class="min-w-0 truncate">{{ r.n.label }}</span>
-            <span v-else class="min-w-0 truncate">{{ hl(r.n.label)[0] }}<mark v-if="hl(r.n.label)[1]" class="find-hit">{{ hl(r.n.label)[1] }}</mark>{{ hl(r.n.label)[2] }}</span>
+            <span v-else class="min-w-0 truncate">{{ r.parts[0] }}<mark v-if="r.parts[1]" class="find-hit">{{ r.parts[1] }}</mark>{{ r.parts[2] }}</span>
             <span v-if="r.n.dotTitle" class="sr-only">, {{ r.n.dotTitle }}</span>
             <span v-if="r.n.star" class="sr-only">, {{ t('hswarm.nav.prioritySr', { n: r.n.star }) }}</span>
             <span v-if="r.n.count != null" class="shrink-0 text-xs text-muted-foreground">({{ r.n.count }})</span>
