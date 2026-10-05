@@ -66,9 +66,12 @@ const variant = computed(() => {
   return pct == null ? 'outline' : usageBadgeVariant(pct)
 })
 const stale = computed(() => isStaleSnap(props.snapshot))
-const checkedAgo = computed(() =>
-  props.snapshot ? usageCheckedAgo(props.snapshot.capturedAt, now.value) : '',
-)
+// Reading the shared `now` makes these recompute on its tick, so "checked X ago" ages beside
+// the reset lines instead of freezing at the snapshot's arrival.
+const checkedAgo = computed(() => {
+  void now.value
+  return props.snapshot ? usageCheckedAgo(props.snapshot.capturedAt) : ''
+})
 // Explains a "—" cell instead of showing it silently (see the usage-check `reason` DTO field).
 const reasonMessage = computed(() => {
   const key = usageReasonMessageKey(props.usageKey ? reasonFor(props.usageKey) : undefined)
@@ -118,7 +121,10 @@ const appSplit = computed(
       .map((row) => `${row.label} ${Math.round(row.pct)}%`)
       .join(' · ') || null,
 )
-const appCheckedAgo = computed(() => (app.value ? usageCheckedAgo(app.value.checkedAt, now.value) : ''))
+const appCheckedAgo = computed(() => {
+  void now.value
+  return app.value ? usageCheckedAgo(app.value.checkedAt) : ''
+})
 
 // Paid extra usage ON: past its limits this account BILLS instead of stopping. The owner never
 // wants that paid, so the popover says so and offers the switch that turns it off at claude.ai
