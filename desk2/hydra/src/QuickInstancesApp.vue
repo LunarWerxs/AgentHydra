@@ -17,6 +17,7 @@ import QuickInstanceFilter from '@/components/QuickInstanceFilter.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
+import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type {
   CliInstance,
@@ -30,7 +31,6 @@ import {
   focusCodexDesktopInstance,
   focusInstance,
   getInstanceAccount,
-  getUsageCache,
   launchCliInstance,
   launchCodexInstance,
   listCliInstances,
@@ -74,7 +74,6 @@ const errorFromAction = ref(false)
 const notice = ref<string | null>(null)
 const busy = ref(new Set<string>())
 const resolvingAccounts = ref(new Set<string>())
-const usageSnapshots = shallowRef(new Map<string, UsageSnapshot>())
 /** When the usage cells were last drawn. What they show also follows the clock (a window that has
  *  reset, "checked 3m ago"), and a poll with the same readings writes nothing, so the poll moves this
  *  on once a minute and the cells, which read it, are drawn again. */
@@ -83,6 +82,7 @@ const lightweightServer = ref(false)
 const lastAccountResolveAt = new Map<string, number>()
 
 const { isDark, toggle: toggleTheme } = useTheme()
+const { snapshots: usageSnapshots, hydrate } = useUsage()
 
 // --- quota columns + the filter -----------------------------------------------------------------
 // Both are the SAME shared singletons the full manager's Instances tab uses, not a private copy:
@@ -292,11 +292,11 @@ async function refreshOnce(silent: boolean): Promise<void> {
   refreshing.value = true
   if (!silent) loading.value = true
   try {
-    const [desktopRows, cliRows, codexRows, usageResult] = await Promise.all([
+    const [desktopRows, cliRows, codexRows] = await Promise.all([
       listInstances(),
       listCliInstances(),
       listCodexInstances(),
-      getUsageCache().catch(() => null),
+      hydrate(),
     ])
     const previousAccounts = new Map(
       claude.value.map((instance) => [instance.dir, instance.account]),
@@ -312,16 +312,6 @@ async function refreshOnce(silent: boolean): Promise<void> {
     }))
     assignIfChanged(claudeCli, cliRows)
     assignIfChanged(codex, codexRows)
-    // A signed-out account's kept reading under its live one (usage-cache.ts lastKnownUsage).
-    if (usageResult) {
-      const merged = new Map([
-        ...Object.entries(usageResult.lastKnown ?? {}),
-        ...Object.entries(usageResult.cache),
-      ])
-      if (JSON.stringify([...merged]) !== JSON.stringify([...usageSnapshots.value])) {
-        usageSnapshots.value = merged
-      }
-    }
     // An action's failure stays until dismissed or the next action: a silent poll must not erase it.
     if (!errorFromAction.value) error.value = null
     void hydrateClaudeAccounts(claude.value, !silent)
