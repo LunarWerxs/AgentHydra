@@ -8,13 +8,13 @@
 // Module-scope singleton with the same shape as the other composables here (shared refs + action
 // wrappers), so mounting it from more than one component cannot start two polls.
 
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import { toast } from 'vue-sonner'
 import type { ResetEvent } from '@/lib/api'
 import * as api from '@/lib/api'
 import { visibleInterval } from '@/lib/visible-poll'
 
-const events = ref<ResetEvent[]>([])
+const events = shallowRef<ResetEvent[]>([])
 const lastError = ref<string | null>(null)
 /** Ids already toasted, so a poll that re-lists the same open event doesn't re-toast it. Persistent
  *  mode's REPEATS are an OS-level concern by design: an in-app toast the user is looking at does

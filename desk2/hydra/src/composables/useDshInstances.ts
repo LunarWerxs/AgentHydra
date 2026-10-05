@@ -3,11 +3,11 @@
 // Module state, like useCodexInstances: the rows in the combined Instances table and anything else
 // that counts or filters DeepSeek homes read the SAME list, so they cannot disagree and one poll
 // serves them all.
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import { type DshInstance, listDshInstances } from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
 
-const instances = ref<DshInstance[]>([])
+const instances = shallowRef<DshInstance[]>([])
 /** True until the first read settles, so a table can show skeletons rather than "none found". */
 const loading = ref(true)
 

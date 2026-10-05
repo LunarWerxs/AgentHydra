@@ -4,7 +4,7 @@
 
 import type { AccountTokens } from '@agenthydra/server/types'
 import { useStorage } from '@vueuse/core'
-import { ref } from 'vue'
+import { shallowRef } from 'vue'
 import { listDesktopInstanceTokens } from '@/lib/api'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 import { registerSharedPref } from './useSharedPrefs'
@@ -19,7 +19,7 @@ export const useDesktopTokenWindow = () => desktopTokenWindow
 
 /** Each desktop instance's current account's tokens, by instance dir. One shared copy, read by the
  *  table and refreshed by lib/warm-data.ts (the desktop kind) and when the tab is shown. */
-const desktopAccountTokens = ref<Record<string, AccountTokens | null>>({})
+const desktopAccountTokens = shallowRef<Record<string, AccountTokens | null>>({})
 export async function refreshDesktopAccountTokens(): Promise<void> {
   try {
     const next = await listDesktopInstanceTokens()

@@ -1,9 +1,9 @@
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import type { CodexInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
 
-const instances = ref<CodexInstance[]>([])
+const instances = shallowRef<CodexInstance[]>([])
 const loading = ref(false)
 /** The list has answered once (or failed to): the Instances tab draws what sits below the Codex rows
  *  only then, so the Codex rows never land between rows already on screen. */

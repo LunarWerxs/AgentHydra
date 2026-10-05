@@ -3,13 +3,13 @@
 // across a component boundary). A "CLI instance" is a `CLAUDE_CONFIG_DIR` the daemon can
 // launch a real `claude` process against, optionally associated with a dispatch account for
 // usage checks and (later) auto-resume. See server/src/core/cli-instances.ts.
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import type { CliInstance } from '@/lib/api'
 import * as api from '@/lib/api'
 import { reconcileList } from '@/lib/reconcile'
 import { useUsage } from './useUsage'
 
-const cliInstances = ref<CliInstance[]>([])
+const cliInstances = shallowRef<CliInstance[]>([])
 const loading = ref(false)
 const busyIds = ref<Set<string>>(new Set())
 const lastError = ref<string | null>(null)
