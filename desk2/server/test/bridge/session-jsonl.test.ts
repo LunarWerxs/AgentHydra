@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
@@ -75,6 +75,39 @@ describe('outside session .jsonl', () => {
     const items = sessionJsonlItems(f)
     expect(items.length).toBe(2)
     expect(readTail(f, lastTwo.length + 5).endsWith(lastTwo)).toBe(true)
+  })
+
+  test('reads on from where it stopped: an appended line, a line finished later, a byte that is not UTF-8', () => {
+    const f = join(temp(), 'grow.jsonl')
+    const rec = (n: number, text: string) =>
+      JSON.stringify({ type: 'user', uuid: `u${n}`, timestamp: new Date(Date.UTC(2026, 9, 3, 10, 0, n)).toISOString(), message: { role: 'user', content: text } })
+    const texts = () => sessionJsonlItems(f).map((i) => (i.kind === 'user' ? i.text : i.kind))
+    // Line 2 holds a byte that is not UTF-8 (0xFF): one byte in the file, three once decoded.
+    const [before, after] = rec(2, 'bad #').split('#')
+    writeFileSync(f, Buffer.concat([Buffer.from(`${rec(1, 'one')}\n${before}`), Buffer.from([0xff]), Buffer.from(`${after}\n`)]))
+    expect(texts()).toEqual(['one', 'bad �'])
+    const four = rec(4, 'four')
+    appendFileSync(f, `${rec(3, 'three')}\n${four.slice(0, 20)}`)
+    expect(texts()).toEqual(['one', 'bad �', 'three'])
+    appendFileSync(f, `${four.slice(20)}\n`)
+    expect(texts()).toEqual(['one', 'bad �', 'three', 'four'])
+  })
+
+  test('a file rewritten in place, to the same size or larger, is read again from the start', () => {
+    const f = join(temp(), 'rewrite.jsonl')
+    const rec = (n: number, text: string) =>
+      JSON.stringify({ type: 'user', uuid: `u${n}`, timestamp: new Date(Date.UTC(2026, 9, 3, 10, 0, n)).toISOString(), message: { role: 'user', content: text } })
+    const texts = () => sessionJsonlItems(f).map((i) => (i.kind === 'user' ? i.text : i.kind))
+    const write = (body: string, at: number) => {
+      writeFileSync(f, body)
+      utimesSync(f, new Date(at), new Date(at))
+    }
+    write(`${rec(1, 'old one')}\n${rec(2, 'old two')}\n`, Date.UTC(2026, 9, 3, 10, 0, 0))
+    expect(texts()).toEqual(['old one', 'old two'])
+    write(`${rec(1, 'new one')}\n${rec(2, 'new two')}\n`, Date.UTC(2026, 9, 3, 10, 0, 10))
+    expect(texts()).toEqual(['new one', 'new two'])
+    write(`${rec(1, 'newer one')}\n${rec(2, 'newer two')}\n${rec(3, 'newer three')}\n`, Date.UTC(2026, 9, 3, 10, 0, 20))
+    expect(texts()).toEqual(['newer one', 'newer two', 'newer three'])
   })
 
   test('keeps the full text of an answer: newlines, lists, headings and fences', () => {
