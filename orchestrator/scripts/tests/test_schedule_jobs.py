@@ -33,7 +33,7 @@ class WrapperTest(unittest.TestCase):
             body = path.read_text(encoding="utf-8")
             self.assertTrue(path.exists(), job)
             # no unexpanded placeholders may reach a scheduled job
-            for token in ("{scripts}", "{odin}", "{repo}"):
+            for token in ("{scripts}", "{hydra}", "{repo}"):
                 self.assertNotIn(token, body, f"{job} kept {token}")
             self.assertIn(str(schedule_jobs.REPO), body, job)
             self.assertIn(job, body, job)
@@ -191,10 +191,10 @@ class WrapperTest(unittest.TestCase):
         self.assertIn("reconcile.py", work)
         self.assertNotIn("--retry", work)  # an unattended retry is what v1/v2 died of
 
-    def test_todo_sweep_runs_odin_and_never_commits(self):
+    def test_todo_sweep_runs_project_hydra_and_never_commits(self):
         schedule_jobs.write_wrapper("todo-sweep", schedule_jobs.JOBS["todo-sweep"])
         work = schedule_jobs.work_path("todo-sweep").read_text(encoding="utf-8")
-        self.assertIn("odin.py", work)
+        self.assertIn(str(schedule_jobs.HYDRA / "ph.py"), work)
         self.assertIn("discover", work)
         self.assertIn("loki --file --apply", work)
         for forbidden in ("git commit", "git push", "git add"):

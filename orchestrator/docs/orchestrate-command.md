@@ -85,4 +85,4 @@ you through a verdict - it is unarchived, it moved in the last couple of hours, 
 place it. That is a signal the CLASSIFIER is wrong, not that the chat is nothing. Open it, work
 out what it is actually doing, and decide. "The gate had no lane for it" is not a reason to skip
 a chat that is plainly part of live work. Repo-level questions ("which PROJECT should I pick up") are not
-this tool's job: that is Odin, in its own clone.
+this tool's job: that is Project Hydra (`ph`), in its own clone.

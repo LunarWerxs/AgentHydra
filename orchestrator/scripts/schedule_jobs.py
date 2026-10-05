@@ -28,7 +28,7 @@ THE JOBS (cadence set 2026-08-31 by owner: "these sweeps need to run every 5 min
               5-minute check needs no admin and covers the same ground within five minutes
   reconcile   every 5 min - did every past archive attempt settle? OBSERVE ONLY, never
               --retry: an unattended retry is the shape both previous orchestrators died of
-  todo-sweep  every 5 min - `odin discover` (new codebases) + `odin loki --file --apply`
+  todo-sweep  every 5 min - `ph discover` (new codebases) + `ph loki --file --apply`
               (consolidate open work into each codebase's docs/todo/). Writes files; never
               stages, commits or pushes anything. This one is MINUTES long over a real
               fleet, so it holds a lockfile: a tick that finds the previous run still going
@@ -95,9 +95,10 @@ REPO = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO / "scripts"
 PREFIX = "Orchestrator-"
 
-# Odin is a separate program in its own clone; the to-do sweep drives it, so its location is a
-# parameter rather than an assumption. Env override for the other machine.
-ODIN = Path(os.environ.get("ODIN_HOME", r"D:\NEWProjects\shared\odin"))
+# Project Hydra (Odin and Launchpad combined, 2026-10-05) is a separate program in its own clone;
+# the to-do sweep drives it, so its location is a parameter rather than an assumption. Env
+# override for the other machine.
+HYDRA = Path(os.environ.get("PROJECTHYDRA_HOME", r"D:\NEWProjects\shared\project-hydra"))
 
 # The interpreters, resolved from THIS process rather than from PATH: a scheduled task runs
 # with a different environment than a terminal, and "python" may not be on it at all.
@@ -208,8 +209,8 @@ JOBS: dict[str, dict] = {
         "what": "find new codebases, then consolidate open work into each codebase's docs/todo/",
         "schedule": EVERY_5_MIN,
         "lines": [
-            '"{python}" "{odin}\\odin.py" discover',
-            '"{python}" "{odin}\\odin.py" loki --file --apply',
+            '"{python}" "{hydra}\\ph.py" discover',
+            '"{python}" "{hydra}\\ph.py" loki --file --apply',
         ],
         "needs_daemon": True,
         # Minutes long over a real fleet: at a 5-minute tick, runs WOULD overlap without this.
@@ -433,7 +434,7 @@ def write_wrapper(job: str, spec: dict) -> Path:
         # Plain replacement, never str.format: these lines carry PowerShell blocks whose
         # braces are syntax, and format() read `try { $r = ...` as a field name and died.
         line.replace("{scripts}", str(SCRIPTS))
-            .replace("{odin}", str(ODIN))
+            .replace("{hydra}", str(HYDRA))
             .replace("{repo}", str(REPO))
             .replace("{pythonw}", str(PYTHONW))
             .replace("{python}", str(PYTHON))

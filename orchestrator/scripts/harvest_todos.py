@@ -6,7 +6,7 @@ or move the pending items to a ToDo md file"). Restoring 769 chats would flood t
 every account's quota; the work inside them is what actually matters, and it is only ever a
 few lines per chat. So: read each below-the-bar archived chat's own closing words, take the
 items it left open, and file them where the fleet already looks for work - each codebase's
-`docs/todo/`, the convention odin's sweep already consolidates.
+`docs/todo/`, the convention Project Hydra's sweep already consolidates.
 
 WHAT COUNTS AS A PENDING ITEM, taken from the chat's own recap and nothing invented:
   - every bullet under "Do I recommend anything else?" that is not a "nothing"
@@ -145,7 +145,7 @@ def _render(key: str, bucket: dict) -> str:
         "",
         "Each entry is the chat's OWN wording, not a summary. The session id is there so the",
         "chat itself can be brought back (`python scripts/audit_archived.py --restore`) if the",
-        "notes are not enough. Delete an item when it is done - odin's sweep reads a deleted",
+        "notes are not enough. Delete an item when it is done - the `ph` sweep reads a deleted",
         "to-do as finished and never re-files it.",
         "",
     ]
@@ -186,7 +186,7 @@ def write(plan: dict) -> list[dict]:
             target.mkdir(parents=True, exist_ok=True)
             path = target / name
             # ⛔ NEVER OVERWRITE AN EXISTING ONE. A ticked-off or deleted to-do means DONE and
-            # must never be re-filed (odin's rule, and the reason its sweep is trusted). This
+            # must never be re-filed (Project Hydra's rule, and the reason its sweep is trusted). This
             # file is generated from chats that are already archived and will never change
             # their minds, so a second run would only resurrect items a person had cleared.
             if path.exists():
