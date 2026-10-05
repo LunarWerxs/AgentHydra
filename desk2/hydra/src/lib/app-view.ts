@@ -137,5 +137,48 @@ export function createTabView(stored: Ref<AppView>, session: Storage | null): Re
   return view
 }
 
+/** How long a fresh window holds its tab body waiting for the daemon's answer before it mounts the
+ *  tab it has. */
+export const VIEW_HOLD_MS = 300
+
+/**
+ * Whether the shell may mount the tab body yet.
+ *
+ * A window with a tab of its own (sessionStorage) is ready at once. A fresh window may still be moved
+ * by the daemon's answer (see `adoptsStored` above), and mounting the localStorage tab first leaves
+ * it built, fetched and kept alive (KeepAlive) after the switch. So it waits for the shared prefs to
+ * settle, a click, or `holdMs`, whichever is first. The header and nav never wait on this.
+ */
+export function createViewReady(
+  view: Ref<AppView>,
+  session: Storage | null,
+  settled: Ref<boolean>,
+  holdMs: number = VIEW_HOLD_MS,
+): Ref<boolean> {
+  let own: AppView | null = null
+  try {
+    own = parseAppView(session?.getItem(APP_VIEW_KEY))
+  } catch {
+    own = null
+  }
+  // Read before createTabView's watcher could write it: callers build this first, or pass a session
+  // whose value was already there. A window that has a tab of its own is ready now.
+  const ready = ref(own !== null || settled.value)
+  if (ready.value) return ready
+
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const open = () => {
+    ready.value = true
+    if (timer !== undefined) clearTimeout(timer)
+    stop1()
+    stop2()
+  }
+  const stop1 = watch(settled, (done) => done && open(), { flush: 'sync' })
+  // A click moves the view before any answer; mount what was clicked at once.
+  const stop2 = watch(view, open, { flush: 'sync' })
+  timer = setTimeout(open, holdMs)
+  return ready
+}
+
 /** Provided by App.vue: lets a nested view switch the tab (e.g. a stats card's "open HSwarm"). */
 export const OPEN_VIEW: InjectionKey<(view: AppView) => void> = Symbol('open-view')

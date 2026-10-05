@@ -23,10 +23,11 @@ import {
   APP_VIEWS,
   type AppView,
   createTabView,
+  createViewReady,
   parseAppView,
   tabStorage,
 } from '@/lib/app-view'
-import { registerSharedPref } from './useSharedPrefs'
+import { registerSharedPref, sharedPrefsSettled } from './useSharedPrefs'
 
 export { APP_VIEWS, type AppView } from '@/lib/app-view'
 
@@ -56,6 +57,9 @@ const storedView = useStorage<AppView>(APP_VIEW_KEY, 'hswarm', undefined, {
 
 /** Where THIS window is, which is what the shell's tabs bind to. */
 const view = createTabView(storedView, tabStorage())
+
+/** False while a fresh window waits (up to 300 ms) for the daemon's answer on which tab to open. */
+const viewReady = createViewReady(view, tabStorage(), sharedPrefsSettled)
 
 // --- Instances: how the desktop table is sorted ------------------------------------------------
 // Which column, and which way. The table used to forget its sort on every reload, which on a
@@ -88,6 +92,7 @@ registerSharedPref('agenthydra.privacyMode', privacyMode)
 export function useUiPrefs() {
   return {
     view,
+    viewReady,
     desktopSortKey,
     desktopSortDirection,
     privacyMode,

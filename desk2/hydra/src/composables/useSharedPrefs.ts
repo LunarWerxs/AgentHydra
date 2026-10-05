@@ -46,7 +46,7 @@
 
 import { useEventListener } from '@vueuse/core'
 import type { Ref } from 'vue'
-import { watch } from 'vue'
+import { ref, watch } from 'vue'
 import * as api from '@/lib/api'
 
 /** A ref this file knows how to move through the store: a switch, a number, or a short enum. */
@@ -64,6 +64,10 @@ interface SharedPref {
    *  hand-edited or downgrade-era value must not reach a `<select>` that has no such option. */
   allowed?: readonly string[]
 }
+
+/** True once the first hydrate has finished, applied or failed. The shell holds a fresh window's tab
+ *  body on it (lib/app-view.ts createViewReady) so it mounts the tab it will end up on. */
+export const sharedPrefsSettled = ref(false)
 
 const registry: SharedPref[] = []
 let hydrated = false
@@ -312,6 +316,7 @@ export function hydrateSharedPrefs(): Promise<void> {
       // than pushing it, so a window that could not reach the store would otherwise never send one.
       hydrated = true
       flushPending()
+      sharedPrefsSettled.value = true
     }
   })()
   return hydrating
@@ -322,6 +327,7 @@ export function resetSharedPrefsForTest(): void {
   registry.length = 0
   hydrated = false
   hydrating = null
+  sharedPrefsSettled.value = false
   stored = null
   synced.clear()
   pending.clear()

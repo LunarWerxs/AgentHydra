@@ -106,7 +106,7 @@ const { startPolling: startNotificationPolling } = useNotifications()
 // Which tab you were on, remembered across reloads — and across the daemon landing on a different
 // port, which is a different browser origin and therefore a different localStorage. Owned by
 // composables/useUiPrefs.ts, which is where every mirrored layout preference lives.
-const { view } = useUiPrefs()
+const { view, viewReady } = useUiPrefs()
 // "Open this chat" asked from another view (the Instances move dialog lists chats; clicking one
 // should land on its transcript). Hydra Desk 2's copy has no Sessions tab (Michael, 2026-10-04: the
 // cloud list is the same thing): Desk opens the chat in its own view (lib/desk-embed.ts).
@@ -661,7 +661,7 @@ onUnmounted(stopAvailabilityPolling)
              back shows it as it was; its data is the shared warm copy (lib/warm-data.ts). -->
         <Transition name="view-fade" mode="out-in">
           <KeepAlive>
-            <component :is="viewComponent" :key="viewKey" v-bind="viewProps" />
+            <component :is="viewComponent" v-if="viewReady" :key="viewKey" v-bind="viewProps" />
           </KeepAlive>
         </Transition>
       </main>
