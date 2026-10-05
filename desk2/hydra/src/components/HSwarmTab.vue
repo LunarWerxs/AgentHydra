@@ -10,10 +10,12 @@ import { useDeskSidebarHost } from '@/lib/desk-embed'
 import { HSWARM_PAGES, hswarmPage, PAGE_KEY_PREFIX, showHSwarmPage } from '@/lib/hswarm-pages'
 
 const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
+const RoutingView = defineAsyncComponent(() => import('@/components/RoutingView.vue'))
 const HSwarmView = defineAsyncComponent(() => import('@/components/HSwarmView.vue'))
 
 const PAGE_COMPONENTS: Record<string, Component> = {
   climayte: CliMayteView,
+  routing: RoutingView,
   hswarm: HSwarmView,
 }
 

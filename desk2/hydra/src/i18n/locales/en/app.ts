@@ -39,4 +39,5 @@ export default {
   tabAnalytics: 'Analytics',
   tabCli: 'CLI',
   tabHswarm: 'HSwarm',
+  tabRouting: 'Routing',
 }

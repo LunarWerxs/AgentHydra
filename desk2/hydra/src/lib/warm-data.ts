@@ -9,7 +9,7 @@
 // A kind never has two requests in flight (an overlapping ask shares the running one) and is never
 // asked twice within MIN_GAP_MS, so a page and its children opening together cost one request.
 
-export type WarmKind = 'cli' | 'desktop' | 'analytics' | 'hswarm' | 'climayte'
+export type WarmKind = 'cli' | 'desktop' | 'analytics' | 'hswarm' | 'climayte' | 'routing'
 
 /** How often a kind is refreshed in the background (never below a minute). */
 export const WARM_MS = 120_000
@@ -60,7 +60,7 @@ export function refreshWarm(kind: WarmKind, opts: { viewed?: boolean } = {}): Pr
 const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
   'instances-home': ['cli', 'desktop', 'climayte', 'hswarm'],
   analytics: ['analytics'],
-  hswarm: ['hswarm', 'climayte'],
+  hswarm: ['hswarm', 'climayte', 'routing'],
   cli: ['cli', 'desktop'],
   desktop: ['desktop', 'cli'],
 }

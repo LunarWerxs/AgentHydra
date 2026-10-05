@@ -1,6 +1,6 @@
 // The HSwarm tab is a list of pages (Hydra Desk 2, owner 2026-10-05: CliMayte moves into HSwarm and shows
 // as an entry of its sidebar). Desk's sidebar lists them at the top, each page's own rows under its entry.
-// A page is data here: a later one (Routing) is one more line in HSWARM_PAGES and its component.
+// A page is data here (Routing was added so): one more line in HSWARM_PAGES and its component.
 import { ref } from 'vue'
 import type { EmbedIcon } from '@desk/shared/hydra-embed'
 
@@ -15,6 +15,7 @@ export interface HSwarmPage {
 /** The entries in the order Desk lists them. HSwarm's own page (its tree, which stays as it was) is last. */
 export const HSWARM_PAGES: readonly HSwarmPage[] = [
   { id: 'climayte', labelKey: 'app.tabClimayte', icon: 'network' },
+  { id: 'routing', labelKey: 'app.tabRouting', icon: 'route' },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: 'layers' },
 ]
 

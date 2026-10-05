@@ -12,6 +12,7 @@ import { useInstances } from '@/composables/useInstances'
 import { refreshDesktopAccountTokens } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { refreshRouting } from '@/lib/routing-cost'
 import { acquirePoll, fetchKitUsage, kitQueryString } from '@/lib/kit'
 import { loadStats, statsKey } from '@/lib/swarm-stats'
 import { registerWarm, startWarm } from '@/lib/warm-data'
@@ -44,6 +45,8 @@ registerWarm('desktop', () =>
 registerWarm('analytics', () => useAnalyticsData().loadAnalytics(true))
 
 registerWarm('hswarm', () => useHswarmApi().refreshHswarm())
+
+registerWarm('routing', () => refreshRouting())
 
 registerWarm('climayte', () => useCliMayteData().refreshCliMayte({ silent: true }))
 
