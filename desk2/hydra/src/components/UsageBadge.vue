@@ -65,7 +65,10 @@ const variant = computed(() => {
   const pct = usagePctFor(props.snapshot, props.scope, now.value)
   return pct == null ? 'outline' : usageBadgeVariant(pct)
 })
-const stale = computed(() => isStaleSnap(props.snapshot))
+const stale = computed(() => {
+  void now.value
+  return isStaleSnap(props.snapshot)
+})
 // Reading the shared `now` makes these recompute on its tick, so "checked X ago" ages beside
 // the reset lines instead of freezing at the snapshot's arrival.
 const checkedAgo = computed(() => {
