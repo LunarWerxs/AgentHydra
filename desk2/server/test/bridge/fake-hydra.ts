@@ -143,7 +143,17 @@ export function statsAnswers(): FakeState['stats'] {
     },
     activity: { hours, tools: [], agentMinutes: 321, health: [], editSurvival: { sessions: 0, average: null, overdue: 0 } },
     totals: { tasks: 12, sessions: 20, cliSessions: 14, costUsd: 400, limitHits: 2, since: null },
-    hswarm: { source: 'hswarm', empty: false, total: { n: 9, tasks: 77, worker_usd: 1.5, saved_usd: 55.5 }, days: [], today: {} },
+    // `total` is lifetime whatever `days` asked; the days listed are the range's.
+    hswarm: {
+      source: 'hswarm',
+      empty: false,
+      total: { n: 90, tasks: 500, worker_usd: 15, saved_usd: 400 },
+      days: [
+        { day: '2026-10-03', tasks: 50, saved_usd: 40 },
+        { day: '2026-10-04', tasks: 27, saved_usd: 15.5 },
+      ],
+      today: {},
+    },
   }
 }
 

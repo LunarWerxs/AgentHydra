@@ -84,7 +84,7 @@ export function homeTiles(s: HomeStats): StatsTile[] {
       ? { label: 'CliMayte tasks', value: count(c.tasks), strong: true, title: `${plural(c.limitHits, 'run', 'runs')} stopped at a usage limit\n${usd(c.costUsd)} at API rates` }
       : { label: 'CliMayte tasks', value: UNKNOWN, strong: true, title: why('climayte', 'CliMayte did not answer') },
     h
-      ? { label: 'HSwarm tasks', value: count(h.tasks), strong: true, title: `Saved ${usd(h.savedUsd)} against Claude's API rates` }
+      ? { label: 'HSwarm tasks', value: count(h.tasks), strong: true, title: h.savedUsd === null ? 'HSwarm priced none of these tasks, so what they saved is not known' : `Saved ${usd(h.savedUsd)} against Claude's API rates` }
       : { label: 'HSwarm tasks', value: UNKNOWN, strong: true, title: why('hswarm', 'HSwarm did not answer') },
     {
       label: 'Cost at API rates',

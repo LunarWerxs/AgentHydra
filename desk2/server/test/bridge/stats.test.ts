@@ -93,6 +93,12 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
   expect((await call(desk, '/api/stats/home?range=7d')).body).toEqual(body)
   expect(spends()).toBe(before)
   expect((await call(desk, '/api/stats/home?range=year')).status).toBe(400)
+
+  // HSwarm's `total` is lifetime whatever `days` asked: the 7 day card above summed the days listed
+  // (77 tasks, $55.50), and only All takes the lifetime total.
+  const all = await call(desk, '/api/stats/home?range=all')
+  expect(f.gets).toContain('/api/hswarm/api/stats?days=90')
+  expect(all.body.hswarm).toEqual({ tasks: 500, savedUsd: 400 })
 })
 
 test('a source that fails is missing, not 0; a failed spend report or AgentHydra down is an error', async () => {
@@ -103,7 +109,7 @@ test('a source that fails is missing, not 0; a failed spend report or AgentHydra
 
   const { status, body } = await call(desk, '/api/stats/home')
   expect(status).toBe(200)
-  expect(f.gets).toContain('/api/hswarm/api/stats?days=3650')
+  expect(f.gets).toContain('/api/hswarm/api/stats?days=90')
   expect(f.gets).toContain('/api/corch/totals')
   expect(body).toMatchObject({ range: 'all', sessions: 60, peakHour: '2 PM', climayte: { tasks: 12 }, hswarm: null })
   expect(body.missing).toEqual([{ part: 'hswarm', reason: expect.stringContaining('HSwarm is not running') }])

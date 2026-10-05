@@ -654,7 +654,8 @@ export interface HomeStats {
   /** Raw model ids, most sessions first. */
   models: { key: string; sessions: number }[]
   climayte: { tasks: number; sessions: number; costUsd: number; limitHits: number } | null
-  hswarm: { tasks: number; savedUsd: number } | null
+  /** For the range; savedUsd null when HSwarm priced none of its tasks. */
+  hswarm: { tasks: number; savedUsd: number | null } | null
   /** How much of the store AgentHydra has read: while `refreshing` the figures still grow. */
   coverage: { sessions: number; total: number; refreshing: boolean }
   missing: HomeStatsMissing[]

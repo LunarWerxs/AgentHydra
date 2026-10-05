@@ -297,7 +297,10 @@ export interface AhCorchTotals {
 
 /** GET /api/hswarm/api/stats (HSwarm's own stats through AgentHydra's proxy, trimmed). */
 export interface AhHswarmStats {
-  total: { tasks: number; saved_usd: number }
+  /** Lifetime, whatever `days` asked; saved_usd is null when no task was priced. */
+  total: { tasks: number; saved_usd: number | null }
+  /** Oldest first, back from today: as many as asked, 90 at most. */
+  days?: Array<{ day: string; tasks?: number; saved_usd?: number | null }>
 }
 
 // --- the client ----------------------------------------------------------------------------------

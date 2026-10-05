@@ -19,8 +19,8 @@ const HEAT_DAYS = 189
 
 const DAY = 86_400_000
 const RANGE_DAYS: Record<Exclude<HomeStatsRange, 'all'>, number> = { '30d': 30, '7d': 7 }
-// HSwarm counts back in days; ten years is its "all".
-const HSWARM_DAYS: Record<HomeStatsRange, number> = { all: 3650, '30d': 30, '7d': 7 }
+// HSwarm lists its days back from today, 90 at most; its `total` is lifetime whatever is asked (hswarmFigures).
+const HSWARM_DAYS: Record<HomeStatsRange, number> = { all: 90, '30d': 30, '7d': 7 }
 
 const SOURCE_LABELS: Record<string, string> = {
   desktop: 'Claude desktop',
@@ -67,6 +67,19 @@ function heatLevels(turnsByDay: Map<string, number>, today: Date): number[] {
   })
   const max = Math.max(1, ...counts)
   return counts.map((n) => (n <= 0 ? 0 : Math.min(4, Math.ceil((n / max) * 4))))
+}
+
+/**
+ * HSwarm's tasks and saving for the range. Its `total` is lifetime whatever `days` asked (the console only
+ * cuts its `days` list), so a 7 or 30 day card added the lifetime count to a week's figures; a range sums
+ * the days listed instead. A saving no task was priced for stays unknown, never $0.
+ */
+function hswarmFigures(range: HomeStatsRange, h: AhHswarmStats): { tasks: number; savedUsd: number | null } {
+  const usd = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+  if (range === 'all') return { tasks: num(h.total.tasks), savedUsd: usd(h.total.saved_usd) }
+  const days = h.days ?? []
+  const saved = days.map((d) => usd(d.saved_usd)).filter((v): v is number => v !== null)
+  return { tasks: days.reduce((sum, d) => sum + num(d.tasks), 0), savedUsd: saved.length ? saved.reduce((a, b) => a + b, 0) : null }
 }
 
 interface Reads {
@@ -119,7 +132,7 @@ function consolidate(range: HomeStatsRange, r: Reads, today: Date): HomeStats {
     climayte: r.climayte
       ? { tasks: num(r.climayte.tasks), sessions: num(r.climayte.sessions), costUsd: num(r.climayte.costUsd), limitHits: num(r.climayte.limitHits) }
       : null,
-    hswarm: r.hswarm ? { tasks: num(r.hswarm.total.tasks), savedUsd: num(r.hswarm.total.saved_usd) } : null,
+    hswarm: r.hswarm ? hswarmFigures(range, r.hswarm) : null,
     coverage: { sessions: num(spend.coverage?.sessions), total: num(spend.coverage?.total), refreshing: !!spend.coverage?.refreshing },
     missing: r.missing,
   }
