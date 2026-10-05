@@ -96,7 +96,7 @@ export interface PingWorker {
   attempts: PingAttempt[]
   check?: string | null
   checkRunner?: unknown
-  verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string }>
+  verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string; at?: number }>
   error: string | null
   origin?: CliMayteOrigin
   /** The question it waits on (climayteAsk): while set, its ended turn is no finish. */
@@ -170,6 +170,17 @@ export function snapshotOf(w: PingWorker, prev: PingSnapshot | null, now: number
           ? prev.waitingSince
           : now,
   }
+}
+
+/** A verdict covers the worker's newest work: the last verdict is stamped and no attempt started
+ *  after it. A follow-up or a sent-back fail makes the worker unjudged again. climayte_status's
+ *  `judged` is this and "not live". */
+export function verdictCoversNewestWork(w: {
+  verdicts?: Array<{ at?: number }>
+  attempts: Array<{ startedAt: number }>
+}): boolean {
+  const at = w.verdicts?.at(-1)?.at
+  return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
 }
 
 const cut = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s)
@@ -300,6 +311,12 @@ export function hhmm(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+/** The first words of every ping. The first sentence is what desk2's note-card detector reads
+ *  (desk2/server/src/engine/system-text.ts NOTE: `[from] Not from the user.`): keep it first. The
+ *  second tells a person reading the chat that no one typed it. */
+export const PING_HEADER =
+  '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this.'
+
 /** The text of one ping. `workers`: the origin's workers now, for the group tally. */
 export function pingMessage(
   events: ReadonlyArray<
@@ -313,7 +330,7 @@ export function pingMessage(
   const hi = Math.max(...seqs)
   const n = events.length
   const lines = [
-    `[AgentHydra · CliMayte] Not from the user. Ping ${lo === hi ? lo : `${lo}-${hi}`}, ${n} update${n === 1 ? '' : 's'} since ${hhmm(Math.min(...events.map((e) => e.at)))}:`,
+    `${PING_HEADER} Ping ${lo === hi ? lo : `${lo}-${hi}`}, ${n} update${n === 1 ? '' : 's'} since ${hhmm(Math.min(...events.map((e) => e.at)))}:`,
     ...events.slice(0, MAX_BULLETS).map((e) => `• ${e.line}`),
   ]
   if (n > MAX_BULLETS) lines.push(`+${n - MAX_BULLETS} more`)
@@ -679,11 +696,67 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     }
   }
 
+  /** Is this queued line still news? Read against the workers as they are now: a result the chat
+   *  judged while the ping waited, a failure that was sent back, a question that was answered. */
+  const stale = (e: QueuedPing, queued: QueuedPing[], group: PingWorker[]): boolean => {
+    const w = e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
+    switch (e.kind) {
+      case 'needs-verdict':
+        return !!w && w.status === 'done' && verdictCoversNewestWork(w)
+      case 'finished': // its own check's verdict is why it was sent: only a later one counts
+        return (
+          !!w &&
+          w.status === 'done' &&
+          verdictCoversNewestWork({
+            attempts: w.attempts,
+            verdicts: (w.verdicts ?? []).filter((v) => v.by !== 'check'),
+          })
+        )
+      case 'failed':
+        return !!w && w.status !== 'failed'
+      case 'asking':
+        return !!w && !w.question
+      case 'stuck':
+        return !!w && w.status !== 'waiting'
+      case 'group-done': {
+        const members = group.filter((x) => x.group === e.group)
+        // A failed or cancelled worker counts as reported once its own line is not waiting here.
+        const waiting = (x: PingWorker) =>
+          queued.some((p) => p.workerId === x.id && p.kind === x.status)
+        return (
+          members.length > 0 &&
+          members.every((x) =>
+            x.status === 'done'
+              ? verdictCoversNewestWork(x)
+              : (x.status === 'failed' || x.status === 'cancelled') && !waiting(x),
+          )
+        )
+      }
+      default:
+        return false
+    }
+  }
+
   const flush = (box: OriginBox) => {
     const k = originKey(box.origin)
     if (inflight.has(k) || !box.pending.length) return
+    const group = workersOf(box.origin)
+    const gone = box.pending.filter((e) => stale(e, box.pending, group))
+    if (gone.length) {
+      // Settled while it waited: never sent, never queued again.
+      const keys = new Set(gone.map((e) => e.key))
+      box.pending = box.pending.filter((p) => !keys.has(p.key))
+      box.deliveredKeys = [...box.deliveredKeys, ...keys].slice(-DELIVERED_KEYS_MAX)
+    }
+    if (!box.pending.length) {
+      box.retry = null
+      box.urgentAt = null
+      save()
+      arm()
+      return
+    }
     const batch = [...box.pending]
-    const text = pingMessage(batch, workersOf(box.origin))
+    const text = pingMessage(batch, group)
     const o = box.origin
     // Deferred one microtask, so the entry is in `inflight` before a synchronous send's
     // `finally` takes it out again.

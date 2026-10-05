@@ -775,7 +775,7 @@ run ended in an error, ...) and ends `details in climayte_status`, because a fai
 can be the worker's own report:
 
 ```
-[AgentHydra · CliMayte] Not from the user. Ping 3-5, 3 updates since 14:02:
+[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 3-5, 3 updates since 14:02:
 • w-1a2b3c4d "Fix events rows": #94 hit its 5-hour limit; resumed on #102 after 12s.
 • w-1a2b3c4d "Fix events rows": done on #102, needs your verdict.
 • w-5e6f7a8b "Docs": done on #84, check passed.

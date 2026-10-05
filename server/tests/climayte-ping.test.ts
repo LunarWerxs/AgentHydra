@@ -15,6 +15,7 @@ import {
   type CliMayteOrigin,
   type CliMaytePingDeps,
   hhmm,
+  PING_HEADER,
   type PingAttempt,
   type PingKind,
   type PingWorker,
@@ -397,7 +398,7 @@ describe('the message', () => {
     )
     expect(text).toEqual(
       [
-        `[AgentHydra · CliMayte] Not from the user. Ping 41-43, 3 updates since ${hhmm(at)}:`,
+        `[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 41-43, 3 updates since ${hhmm(at)}:`,
         '• w-1 "Tear down sales plane": a.',
         '• w-2 b.',
         '• w-3 c.',
@@ -625,7 +626,9 @@ describe('the outbox', () => {
     expect(h.peerCalls()).toBe(0)
     expect(h.workerSends).toHaveLength(1)
     expect(h.workerSends[0][0]).toBe('w-manager')
-    expect(h.workerSends[0][1]).toContain('[AgentHydra · CliMayte] Not from the user. Ping 1-2,')
+    expect(h.workerSends[0][1]).toContain(
+      '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 1-2,',
+    )
     expect(h.workerSends[0][1]).toContain('• Group aws-teardown-planes settled')
     h.ping.stop()
   })
@@ -679,21 +682,25 @@ describe('the real peer pipe', () => {
     try {
       const origin: CliMayteOrigin = { kind: 'chat', sessionId: SID, home, transcript, how: 't' }
       const a = running('w-a', { origin })
+      let now = a
       const real = startCliMaytePing({
         dir,
-        workers: () => [a],
+        workers: () => [now],
         subscribe: () => () => {},
         toast: async () => {},
         climayteSend: () => ({ ok: false, message: 'unused' }),
         journal: () => {},
       })
-      real.observe({ ...a, status: 'failed', error: 'boom' })
+      now = { ...a, status: 'failed', error: 'boom' }
+      real.observe(now)
       await real.flushNow()
       real.stop()
       expect(lines[0]).toEqual({ type: 'auth', token: 'tok' })
       expect(lines[1].type).toBe('user')
       const content = (lines[1].message as { content: string }).content
-      expect(content).toContain('[AgentHydra · CliMayte] Not from the user. Ping 1-2,')
+      expect(content).toContain(
+        '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 1-2,',
+      )
 
       const again = startCliMaytePing({
         dir,
@@ -710,4 +717,72 @@ describe('the real peer pipe', () => {
       server.close()
     }
   }, 20_000)
+})
+
+describe('stale lines are dropped when the outbox flushes', () => {
+  const judge = (w: PingWorker, by = 'orchestrator'): PingWorker => ({
+    ...w,
+    verdicts: [{ verdict: 'pass', by, at: T0 + 1000 }],
+  })
+
+  test('a result judged while its ping waited is left out; the rest still goes', async () => {
+    const ws = ['w-a', 'w-b', 'w-live'].map((id) => running(id))
+    const h = harness({ workers: ws })
+    h.change(doneOf(ws[0]))
+    h.change(doneOf(ws[1]))
+    h.change(judge(doneOf(ws[0])))
+    await h.at(200_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('w-b')
+    expect(h.sent[0].text).not.toContain('w-a')
+    expect(h.sent[0].text).toContain('1 update since')
+    h.ping.stop()
+  })
+
+  test('everything judged: no ping at all, and the keys never resend', async () => {
+    const ws = ['w-a', 'w-b'].map((id) => running(id))
+    const h = harness({ workers: ws })
+    h.change(doneOf(ws[0]))
+    h.change(doneOf(ws[1])) // the group settles: group-done is queued too
+    h.change(judge(doneOf(ws[0])))
+    h.change(judge(doneOf(ws[1])))
+    await h.at(3_600_000)
+    expect(h.sent).toHaveLength(0)
+    expect(h.workerSends).toHaveLength(0)
+    // the same worker states observed again queue nothing new
+    h.change(judge(doneOf(ws[0])))
+    await h.at(7_200_000)
+    expect(h.sent).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('a failed worker keeps its line and the group line goes only when it was reported', async () => {
+    const ws = ['w-a', 'w-b'].map((id) => running(id))
+    const h = harness({ workers: ws })
+    h.change(judge(doneOf(ws[0])))
+    h.change({ ...ws[1], status: 'failed', error: 'boom' })
+    await h.at(3_600_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('failed')
+    h.ping.stop()
+  })
+
+  test('a finished line is kept when only its own check judged it', async () => {
+    const ws = [running('w-a', { check: 'bun test' }), running('w-live')]
+    const h = harness({ workers: ws })
+    h.change({
+      ...ws[0],
+      status: 'done',
+      verdicts: [{ verdict: 'pass', by: 'check', at: T0 + 1000 }],
+    })
+    await h.at(200_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('check passed')
+    h.ping.stop()
+  })
+
+  test('the header says nobody typed it and keeps the prefix the desk2 note card reads', () => {
+    expect(PING_HEADER.startsWith('[AgentHydra · CliMayte] Not from the user.')).toBe(true)
+    expect(PING_HEADER).toContain('nobody typed this')
+  })
 })

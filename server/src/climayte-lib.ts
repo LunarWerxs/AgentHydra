@@ -10,7 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CliMayteOrigin } from './climayte-ping'
+import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
 import {
   type CliMaytePlacement,
   FIT_PCT,
@@ -1872,10 +1872,7 @@ export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
       const reread = w.attempts.reduce((s, a) => s + rereadUnits(a, w.model), 0)
       return { pct: pctOf(all), workPct: pctOf(all - reread), rereadPct: pctOf(reread) }
     })(),
-    judged: (() => {
-      const at = w.verdicts?.at(-1)?.at
-      return !live && at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
-    })(),
+    judged: !live && verdictCoversNewestWork(w),
   }
 }
 
