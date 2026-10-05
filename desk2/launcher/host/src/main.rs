@@ -128,6 +128,30 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 /// First run: carry the old Edge app profile's localStorage over before the WebView exists.
+/// A smoke run cannot delete its own WebView2 folder (the browser processes still hold it as the host
+/// exits), so each smoke run removes the ones earlier runs left, past the 20 s a run can last.
+fn sweep_smoke_dirs(keep: &Path) {
+    let Ok(dir) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for e in dir.flatten() {
+        let old = e
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(120));
+        if old
+            && e.path() != keep
+            && e.file_name()
+                .to_string_lossy()
+                .starts_with("HydraDesk2-smoke-")
+        {
+            let _ = std::fs::remove_dir_all(e.path());
+        }
+    }
+}
+
 fn migrate_local_storage(udf: &Path) {
     if udf.exists() {
         return;
@@ -461,7 +485,9 @@ fn main() {
     if !smoke && !win::single_instance(TITLE) {
         return;
     }
-    if !smoke {
+    if smoke {
+        sweep_smoke_dirs(&udf);
+    } else {
         migrate_local_storage(&udf);
     }
     run(url, udf, state_file, rect, maximized, smoke);
