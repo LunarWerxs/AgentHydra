@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch, SwarmJob } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -7,9 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
-import CloudList from '@/components/cloud/CloudList.vue'
+const CloudList = defineAsyncComponent(() => import('@/components/cloud/CloudList.vue'))
 import { useCloud } from '@/components/cloud/store'
-import HydraSidebar from '@/components/hydra/HydraSidebar.vue'
+const HydraSidebar = defineAsyncComponent(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
@@ -237,9 +237,9 @@ const emptyText = computed(() =>
 // other PCs' tasks only with the cloud on (owner, 2026-10-05: "when cloud is turned off, it shouldn't show
 // these"): the desk store keeps them apart from src.workers so they never count as this PC's
 // (stores/desk.ts splitWorkers); a source without them (the Gallery) has none.
-// HSwarm's jobs, read only while the task toggle is on (lib/swarm-jobs.ts). The cloud list draws no jobs under its
-// rows, so there a running one goes in the unplaced block.
-const swarmJobs = useSwarmJobs(showTasks)
+// HSwarm's jobs, pushed by the server into the desk store (lib/swarm-jobs.ts); the other PCs' only with the cloud on.
+// The cloud list draws no jobs under its rows, so there a running one goes in the unplaced block.
+const swarmJobs = useSwarmJobs(cloud.on)
 const remoteWorkers = computed(() => (cloud.on.value ? (src.remoteWorkers?.value ?? []) : []))
 const nesting = computed<NestedTasks | null>(() => {
   if (!showTasks.value) return null
