@@ -5,6 +5,9 @@ import { reconcileList } from '@/lib/reconcile'
 
 const instances = ref<CodexInstance[]>([])
 const loading = ref(false)
+/** The list has answered once (or failed to): the Instances tab draws what sits below the Codex rows
+ *  only then, so the Codex rows never land between rows already on screen. */
+const listed = ref(false)
 const busyIds = ref(new Set<string>())
 const lastError = ref<string | null>(null)
 
@@ -29,6 +32,7 @@ async function refresh(opts: { silent?: boolean } = {}) {
   const result = await guard(api.listCodexInstances())
   // Unchanged rows keep their old objects, so a poll with nothing new redraws nothing.
   if (result) instances.value = reconcileList(instances.value, result, (i) => i.id)
+  listed.value = true
   if (!opts.silent) loading.value = false
 }
 
@@ -86,6 +90,7 @@ export function useCodexInstances() {
   return {
     instances,
     loading,
+    listed,
     busyIds,
     lastError,
     refresh,

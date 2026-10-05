@@ -316,7 +316,7 @@ const {
  * contributes nothing. (CLI logins have no plan of their own: a linked one shares its desktop row's
  * account, and an unlinked one carries no account record at all.)
  */
-const { instances: codexInstances, refresh: refreshCodex } = useCodexInstances()
+const { instances: codexInstances, refresh: refreshCodex, listed: codexListed } = useCodexInstances()
 const presentPlans = computed(() => [
   ...instances.value.map((i) => i.account?.planLabel),
   ...codexInstances.value.map((i) => i.account?.planLabel),
@@ -438,6 +438,16 @@ const codexEnabled = computed(() => codexDesktopEnabled.value || codexCliEnabled
 const claudeShown = computed(() => showDesktopInstances.value && providerShown('claude'))
 const codexShown = computed(() => codexEnabled.value && providerShown('codex'))
 const dshShown = computed(() => dshEnabled.value && providerShown('deepseek'))
+/** The Codex rows are drawn, or will not be: their list answered and the usage cache is read. The
+ *  DeepSeek rows under them wait for this (at most CODEX_WAIT_MAX_MS), since Codex rows landing
+ *  later pushed the DeepSeek row down by their height (measured 2026-10-04: 119 px at 0.5 s). */
+const CODEX_WAIT_MAX_MS = 3000
+const codexWaitOver = ref(false)
+const codexWaitTimer = setTimeout(() => (codexWaitOver.value = true), CODEX_WAIT_MAX_MS)
+onUnmounted(() => clearTimeout(codexWaitTimer))
+const codexSettled = computed(
+  () => !codexShown.value || codexWaitOver.value || (usageHydrated.value && codexListed.value),
+)
 
 // --- first draw: the Claude rows wait for the quick facts ----------------------------------------
 // See "rows keep their place while the stats load" above. The quick facts are the list, the usage
@@ -594,6 +604,8 @@ const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode
  *   usage: its 3.5rem skeleton (the chip is 2.75rem); plan: a "Max 20x" badge
  *   last active: "Last active" with its hint ("10/12/2025" fits under it)
  *   tokens: "Tokens · Week"; actions: Launch or Focus beside the menu button (Codex rows too)
+ * Measured in the running table (2026-10-04): Last active, Tokens and Actions came out 104, 90 and
+ * 118 px once the Codex rows were in, so theirs are those, rounded up.
  */
 const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   pid: '3.5rem',
@@ -603,9 +615,9 @@ const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   weekly: '9rem',
   usage: '4.25rem',
   plan: '4.75rem',
-  lastActive: '5.5rem',
-  tokens: '5.5rem',
-  actions: '7.25rem',
+  lastActive: '6.5rem',
+  tokens: '5.75rem',
+  actions: '7.5rem',
 }
 
 /** What the shared row draws for one Claude desktop instance. */
@@ -1727,7 +1739,7 @@ onUnmounted(() => {
         </tbody>
         <!-- Hideable in Settings → Providers like Codex (owner, 2026-09-30): someone who never
              uses DeepSeek should not have to scroll past its rows. -->
-        <tbody v-if="dshShown" data-slot="table-body" class="[&_tr:last-child]:border-0">
+        <tbody v-if="dshShown && codexSettled" data-slot="table-body" class="[&_tr:last-child]:border-0">
           <DshInstanceRows ref="dshRows" :columns="columns" />
         </tbody>
       </InstanceTable>

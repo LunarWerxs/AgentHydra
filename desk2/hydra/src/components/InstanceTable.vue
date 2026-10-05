@@ -71,6 +71,16 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
             </component>
             <InfoHint v-if="col.hint" :text="$t(col.hint)" />
           </span>
+          <!-- The width is only a wish to a table laid out by content: while Name's long text asks
+               for more than the row has, the browser shrank these columns to their skeletons and
+               grew them back as the figures landed (measured 2026-10-04: Actions 92 px, then 118).
+               A strut of the width, less the cell's padding, makes it the column's least width. -->
+          <div
+            v-if="widths?.[col.key]"
+            aria-hidden="true"
+            class="h-0"
+            :style="{ width: `calc(${widths[col.key]} - ${density === 'compact' ? '0.75rem' : '1rem'})` }"
+          />
         </TableHead>
       </TableRow>
     </TableHeader>
