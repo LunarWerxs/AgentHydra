@@ -15,13 +15,16 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Back and Forward (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
-  CliMayte it is CliMayte's task list and on HSwarm its tree, drawn in Desk's look (the copy describes
-  them in `shared/hydra-embed.ts` and hides its own; a click goes back to it), and on every other tab
-  the cloud list below. CliMayte's waves move to the top of its task column. The copy has no Sessions
+  HSwarm it lists the tab's pages first (CliMayte, then HSwarm, `hydra/src/lib/hswarm-pages.ts`), and
+  under the page on screen its own rows, CliMayte's task list or HSwarm's tree, drawn in Desk's look (the
+  copy describes them in `shared/hydra-embed.ts` and hides its own; a click goes back to it); on every
+  other tab the cloud list below. CliMayte has no tab of its own (owner, 2026-10-05: "move what is
+  currently on the CliMayte tab into HSwarm ... and have it be on the sidebar as CliMayte"). CliMayte's
+  waves move to the top of its task column. The copy has no Sessions
   tab: the cloud list is the session list, and a session clicked there slides the chat
   back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
   to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
-  same way. Every other AgentHydra tab (CliMayte, Instances, Analytics, HSwarm) is there as usual.
+  same way. Every other AgentHydra tab (Instances, Analytics, HSwarm) is there as usual.
   Escape, the AgentHydra button again, or picking one of Desk's own chats slides the chat back. The pane
   has no strip of its own above the copy (owner, 2026-10-05: "remove the header bar ... and remove the
   logo"): the copy's top bar fills it, without the AgentHydra logo and title or the Queue button. It
@@ -92,7 +95,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
   the desk so the tasks show. Every task AgentHydra's CliMayte list shows running is in the sidebar
   (owner, 2026-10-05: "Is one smaller than six?"): tasks no row in the list started sit at
-  the top, one heading per PC ("On CornuCopia", "On this PC") with its running count. Under it, each chat that started
+  the top, one heading per PC ("On <PC name>", "On this PC") with its running count. Under it, each chat that started
   them has a stand-in row (a chat icon, its title, an ⓘ on hover saying why it is there) with its tasks one step in:
   titled from that PC when its AgentHydra shares the chat's title, else "A chat on <PC> · <short id>"; a Desk chat
   run as a worker on that PC is its own stand-in, with its status and a click that opens it; "No chat" and "Unknown
@@ -100,6 +103,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   it. The other PCs' tasks show only while the cloud is on. A folded group's heading
   carries a blue dot with how many CliMayte tasks run under it and a green dot with how many of its chats
   run (owner, 2026-10-05).
+- **HSwarm jobs in the sidebar.** While the robot button is on, a chat's row also lists the HSwarm jobs it
+  started, after its CliMayte tasks (owner, 2026-10-05: "ZSwarm threads should also be displayed on the
+  HydraDesk 2 sidebar"). Desk 2's server reads them through AgentHydra at most every 10 s
+  (`GET /api/swarm/jobs`, `server/src/bridge/swarm.ts`) and the page polls them while the toggle is on
+  (`web/src/lib/swarm-jobs.ts`); a running job whose chat is not drawn goes in the block at the top.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
