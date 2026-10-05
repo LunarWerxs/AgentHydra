@@ -43,10 +43,13 @@ function run(cmd: string[], windowsHide: boolean): { proc: Proc; done: Promise<{
 }
 
 const builds = new Map<string, Promise<string>>()
+/** The source and manifest do not change while the server runs: hashed the first time a dialog is asked for. */
+let sourceHash: string | undefined
 
 /** The helper for the current source, compiled when missing; a new build removes the older ones. */
 export function helperExe(home: string): Promise<string> {
-  const hash = createHash('sha256').update(readFileSync(SOURCE)).update(readFileSync(MANIFEST)).digest('hex').slice(0, 12)
+  sourceHash ??= createHash('sha256').update(readFileSync(SOURCE)).update(readFileSync(MANIFEST)).digest('hex').slice(0, 12)
+  const hash = sourceHash
   const dir = join(home, 'bin')
   const exe = join(dir, `pick-folder-${hash}.exe`)
   if (existsSync(exe)) return Promise.resolve(exe)

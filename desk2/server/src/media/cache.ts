@@ -58,6 +58,8 @@ export interface MediaCache {
 }
 
 export function createMediaCache(dir: string): MediaCache {
+  /** Pictures already hashed, by path: the ref stands while the file's size and mtime do, so a transcript naming it again costs one stat. */
+  const seen = new Map<string, { size: number; mtimeMs: number; ref: ImageRef }>()
   const put = (bytes: Uint8Array, name?: string): ImageRef | null => {
     if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) return null
     const ext = sniff(bytes)
@@ -90,19 +92,26 @@ export function createMediaCache(dir: string): MediaCache {
     },
     fileRef(path) {
       let size: number
+      let mtimeMs: number
       try {
         const st = statSync(path)
         if (!st.isFile()) return null
         size = st.size
+        mtimeMs = st.mtimeMs
       } catch {
         return null
       }
       const name = basename(path)
       const ext = extname(name).slice(1).toLowerCase()
       if (RENDERABLE.test(name) && size <= MAX_MEDIA_BYTES) {
+        const hit = seen.get(path)
+        if (hit && hit.size === size && hit.mtimeMs === mtimeMs && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
         try {
           const ref = put(new Uint8Array(readFileSync(path)), name)
-          if (ref) return ref
+          if (ref) {
+            seen.set(path, { size, mtimeMs, ref })
+            return { ...ref }
+          }
         } catch {
           // unreadable: a card like any other file
         }

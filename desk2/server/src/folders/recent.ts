@@ -3,7 +3,7 @@
 // back once it is used again: opened or chosen in the menu, or a new chat started in it. Folders that are
 // gone from disk are left out. <home>/folders.json keeps what the chats do not say.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { isRemotePath } from '../engine/reveal'
 
@@ -55,7 +55,7 @@ function load(file: string): Saved {
 function onDisk(path: string): boolean {
   if (isRemotePath(path)) return true
   try {
-    return existsSync(path) && statSync(path).isDirectory()
+    return statSync(path).isDirectory()
   } catch {
     return false
   }

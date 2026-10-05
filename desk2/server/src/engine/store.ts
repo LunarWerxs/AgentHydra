@@ -35,6 +35,10 @@ export class ChatStore {
   private pendingChats: ChatSummary[] | null = null
   /** Item files whose tail was checked for a torn last line this process. */
   private checkedTails = new Set<string>()
+  /** Per item file: the last line per id as the file stood at this size and mtime, so a poll need not read the file again. */
+  private lineCache = new Map<string, { size: number; mtimeMs: number; lines: Map<string, string> }>()
+  /** The chats.json text last written, so an unchanged list is not written again. */
+  private lastSaved: string | null = null
 
   constructor(home: string, opts: ChatStoreOptions = {}) {
     this.home = home
@@ -87,9 +91,12 @@ export class ChatStore {
     const chats = this.pendingChats
     if (!chats) return
     this.pendingChats = null
+    const text = JSON.stringify(chats.map(toStored))
+    if (text === this.lastSaved && existsSync(this.chatsFile)) return
     const tmp = `${this.chatsFile}.${process.pid}.tmp`
-    writeFileSync(tmp, JSON.stringify(chats.map(toStored), null, 2))
+    writeFileSync(tmp, text)
     renameSync(tmp, this.chatsFile)
+    this.lastSaved = text
   }
 
   /** Appends one finished item. A torn last line left by a crash is closed off first. */
@@ -100,34 +107,51 @@ export class ChatStore {
       this.checkedTails.add(file)
       if (!endsWithNewline(file)) prefix = '\n'
     }
+    this.lineCache.delete(file)
     appendFileSync(file, prefix + JSON.stringify(item) + '\n')
   }
 
   /** The chat's items in first-seen order, the last line per id winning; unparsable lines skipped. */
   loadItems(chatId: string): TranscriptItem[] {
-    let raw: string
+    const file = this.itemsFile(chatId)
+    let st: ReturnType<typeof statSync>
     try {
-      raw = readFileSync(this.itemsFile(chatId), 'utf8')
+      st = statSync(file)
     } catch {
+      this.lineCache.delete(file)
       return []
     }
-    const byId = new Map<string, TranscriptItem>()
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue
+    let cached = this.lineCache.get(file)
+    if (!cached || cached.size !== st.size || cached.mtimeMs !== st.mtimeMs) {
+      let raw: string
       try {
-        const item = JSON.parse(line) as TranscriptItem
-        if (item && typeof item.id === 'string') byId.set(item.id, item)
+        raw = readFileSync(file, 'utf8')
       } catch {
-        // a torn line (crash mid-write): skip it
+        this.lineCache.delete(file)
+        return []
       }
+      const lines = new Map<string, string>()
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue
+        try {
+          const item = JSON.parse(line) as TranscriptItem
+          if (item && typeof item.id === 'string') lines.set(item.id, line)
+        } catch {
+          // a torn line (crash mid-write): skip it
+        }
+      }
+      cached = { size: st.size, mtimeMs: st.mtimeMs, lines }
+      this.lineCache.set(file, cached)
     }
-    return [...byId.values()]
+    // Parsed afresh on every call: callers keep and change the items they get, so a shared object would leak between them.
+    return [...cached.lines.values()].map((line) => JSON.parse(line) as TranscriptItem)
   }
 
   /** Drops the chat's transcript file (the caller drops it from the list and saves). */
   deleteChat(chatId: string): void {
     const file = this.itemsFile(chatId)
     this.checkedTails.delete(file)
+    this.lineCache.delete(file)
     rmSync(file, { force: true })
   }
 }

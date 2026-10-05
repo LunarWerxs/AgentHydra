@@ -2,7 +2,7 @@
 // follows the Bash tool's cwd and writes it on every transcript line). Only a move OUT of the chat's
 // folder counts: a cd into a subfolder, or a repo nested inside it, is still the same chat in the same place.
 
-import { existsSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 
 /** A UNC share or a Windows device path (\\server\share, \\?\C:\, //host/x): never a folder a chat moves to. */
@@ -26,5 +26,5 @@ export function movedOutOf(current: string, observed: string | null): string | n
   } catch {
     return null
   }
-  return existsSync(full) ? full : null
+  return full
 }
