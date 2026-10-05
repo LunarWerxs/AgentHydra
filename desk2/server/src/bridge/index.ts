@@ -60,6 +60,8 @@ const ROOTS_FRESH_MS = 10_000
 const SEARCH_ROW_FRESH_MS = 60_000
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
+/** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
+const DELIVER_NOW_PROBE_ID = 'desk-probe-no-such-worker'
 
 const unreachable = (err: unknown): boolean => err instanceof BridgeError && err.unreachable
 
@@ -494,11 +496,35 @@ export function createBridge(opts: BridgeOptions = {}) {
     return items
   }
 
-  async function sendToWorker(id: string, text: string, cwd?: string): Promise<void> {
-    const r = await client.sendToWorker(id, text, cwd)
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false): Promise<boolean> {
+    const r = await client.sendToWorker(id, text, cwd, urgent)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()
+    return r.urgent === true
+  }
+
+  /** An AgentHydra from before deliver-now (v1.10.0 and older) answers its own 404 page. */
+  const noDeliverNow = (err: unknown) => err instanceof BridgeError && err.kind === 'bad_json' && err.status === 404
+  /** Whether the AgentHydra of that version has deliver-now: an update changes the version, and the answer with it. */
+  let deliverNowIn: { version: string; ok: boolean } | null = null
+
+  /** Whether Send now can name a message the worker already holds (deliver-now). Asked once per AgentHydra version,
+   *  with a worker id no worker has: deliver-now answers "No such worker", an AgentHydra without it its 404 page. */
+  async function canDeliverNow(): Promise<boolean> {
+    const version = (await client.health().catch(() => null))?.version
+    // Unreachable: the send that follows says so.
+    if (version === undefined) return true
+    if (deliverNowIn?.version === version) return deliverNowIn.ok
+    try {
+      await client.deliverNow(DELIVER_NOW_PROBE_ID)
+    } catch (err) {
+      if (!noDeliverNow(err)) return true
+      deliverNowIn = { version, ok: false }
+      return false
+    }
+    deliverNowIn = { version, ok: true }
+    return true
   }
 
   /** Send now on a message the worker holds: true when its running turn was stopped for it. */
@@ -507,9 +533,15 @@ export function createBridge(opts: BridgeOptions = {}) {
     try {
       r = await client.deliverNow(id, text)
     } catch (err) {
-      // An AgentHydra from before deliver-now answers its own 404 page.
-      if (err instanceof BridgeError && err.kind === 'bad_json' && err.status === 404)
-        throw new BridgeError('http', 'this AgentHydra cannot send a held message now yet: it needs its update', 404)
+      if (noDeliverNow(err)) {
+        const version = (await client.health().catch(() => null))?.version
+        if (version !== undefined) deliverNowIn = { version, ok: false }
+        throw new BridgeError(
+          'http',
+          `this AgentHydra${version ? ` (version ${version})` : ''} has no Send now for a message it already holds; it goes when the current task ends. Update AgentHydra to send it now`,
+          404,
+        )
+      }
       throw err
     }
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused to send ${id}'s message now`, /no such worker/i.test(r.message) ? 404 : 400)
@@ -545,6 +577,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     },
     cancelWorker,
     sendToWorker,
+    canDeliverNow,
     sendToWorkerNow,
     startWorker,
     workersByIds,

@@ -186,6 +186,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   permissions and CliMayte setting, and opens it; this chat stays as it is, reply and all. An unsent draft
   gets a ⋯ on the box's top-right corner: the same menu moves the text and pictures, unsent, into that
   folder's new-session box (below anything already waiting there) and opens it, leaving this box empty.
+- **A message to a working CliMayte chat goes now.** What you send while its worker is mid-turn stops
+  that turn and the same session continues with your message first, as Send now on a held bubble does
+  (owner, 2026-10-05: "We still can't send messages by hitting send now"). An AgentHydra with deliver-now
+  (`POST /api/corch/workers/:id/deliver-now`) gets a plain send and then deliver-now; one without it
+  (v1.10.0) gets the one urgent send every AgentHydra has (`/send` with `urgent: true`), so the message
+  goes once and never also waits in the queue. Desk asks which it is once per AgentHydra version. A
+  message CliMayte already holds cannot go now on an AgentHydra without deliver-now: its Send now says so
+  and names the version. A message that could not go now says why in the chat, and a chat held by a
+  restart is released once it is seen working again.
 - **A CliMayte move reads as one line.** When CliMayte moves a chat to another account, the chat shows
   "CliMayte moved this chat from #164 to #153." and nothing else for it: the prompt the new session was
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A

@@ -28,6 +28,10 @@ export interface FakeState {
   remote: any
   /** What the home stats reads answer (spend and activity reports, CliMayte's totals, HSwarm's stats); a string answers that error with a 500. */
   stats: { spend: any; activity: any; totals: any; hswarm: any }
+  /** What /api/health says its version is (9.9.9 when unset). */
+  version?: string
+  /** false: an AgentHydra from before deliver-now (v1.10.0), whose route answers its own 404 page. */
+  deliverNow?: boolean
 }
 
 /** Sessions on the other PC: the chat that started its wave, and that wave's manager. */
@@ -205,12 +209,20 @@ export async function startFakeHydra(state: FakeState = freshState()): Promise<F
         const w = state.workers.find((x) => x.id === decodeURIComponent(send[1]))
         if (!w) return json({ ok: false, message: `no such worker ${send[1]}` })
         if (!ACTIVE.has(w.status)) return json({ ok: false, message: `worker ${w.id} is ${w.status}` })
+        if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
         return json({ ok: true, message: 'queued' })
+      }
+      const now = /^\/api\/corch\/workers\/([^/]+)\/deliver-now$/.exec(p)
+      if (now) {
+        if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
+        const w = state.workers.find((x) => x.id === decodeURIComponent(now[1]))
+        if (!w) return json({ ok: false, message: 'No such worker.' })
+        return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
       }
       return json({ error: 'not found' }, 404)
     }
     gets.push(p + u.search)
-    if (p === '/api/health') return json({ ok: true, version: '9.9.9' })
+    if (p === '/api/health') return json({ ok: true, version: state.version ?? '9.9.9' })
     if (p === '/api/agent-status') return json(state.agentStatus)
     if (p === '/api/sessions/live') return json(state.live)
     if (p === '/api/chats') return json(state.chats)

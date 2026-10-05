@@ -459,9 +459,15 @@ export function createClient(opts: HydraClientOptions = {}) {
         ...(task.effort ? { effort: task.effort } : {}),
         copies: true,
       }),
-    /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there. */
-    sendToWorker: (id: string, text: string, cwd?: string) =>
-      post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, cwd ? { text, cwd } : { text }),
+    /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there.
+     *  `urgent`: a running worker is stopped and the same session continues at once with this message first
+     *  (`urgent: true` in the answer when it stopped; every AgentHydra with CliMayte has it). */
+    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean) =>
+      post<{ ok: boolean; message: string; urgent?: boolean }>(`/api/corch/workers/${enc(id)}/send`, {
+        text,
+        ...(cwd ? { cwd } : {}),
+        ...(urgent ? { urgent: true } : {}),
+      }),
     /** Send now on a message the worker holds (`text` names it, else its oldest): its turn stops and the same session continues with it first. */
     deliverNow: (id: string, text?: string) =>
       post<{ ok: boolean; stopped?: boolean; message: string }>(`/api/corch/workers/${enc(id)}/deliver-now`, text ? { text } : {}),

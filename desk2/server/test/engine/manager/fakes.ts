@@ -142,10 +142,12 @@ export function fakeBridge(
     workers: o.workers ?? [],
     /** CliMayte: the workers started (their tasks), the messages sent, the cancels, and what workersByIds answers. */
     started: [] as StartWorker[],
-    sentToWorker: [] as { id: string; text: string; cwd?: string }[],
-    /** Send now on a worker's held message: what was asked, and whether the fake stops a turn for it. */
+    sentToWorker: [] as { id: string; text: string; cwd?: string; urgent?: true }[],
+    /** Send now on a worker's held message: what was asked, and whether the fake stops a turn for it (an urgent message's too). */
     sentNow: [] as { id: string; text?: string }[],
     nowStops: true,
+    /** Whether this AgentHydra has deliver-now (v1.10.0 has not). */
+    deliverNow: true,
     cancelled: [] as string[],
     rows: [] as AhWorker[],
     /** What workerItems answers, by session id. */
@@ -164,9 +166,11 @@ export function fakeBridge(
       state.rows.push(row)
       return row
     },
-    sendToWorker: async (id, text, cwd) => {
-      state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}) })
+    sendToWorker: async (id, text, cwd, urgent) => {
+      state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}) })
+      return urgent === true && state.nowStops
     },
+    canDeliverNow: async () => state.deliverNow,
     sendToWorkerNow: async (id, text) => {
       state.sentNow.push({ id, ...(text ? { text } : {}) })
       return state.nowStops

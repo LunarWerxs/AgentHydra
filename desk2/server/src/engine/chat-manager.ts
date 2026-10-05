@@ -56,7 +56,7 @@ import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -625,12 +625,18 @@ export class ChatManager {
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
     const sentAt = this.now()
+    // Sent as AgentHydra's urgent message, and whether that stopped the running turn for it.
+    let urgent = false
+    let stoppedFor = false
     try {
       if (chat.workerId) {
         // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
         const at = e.workerCwd ?? this.bridge.lastWorkers().find((w) => w.id === chat.workerId)?.cwd ?? null
         const moved = at !== null && at !== chat.cwd
-        await this.bridge.sendToWorker(chat.workerId, text, ...(moved ? [chat.cwd] : []))
+        // An AgentHydra without deliver-now (v1.10.0) takes it as an urgent message: the turn stops and the session
+        // continues with it first, in this one call. Only for a message it does not hold yet: it would go twice.
+        urgent = queued && opts.now === true && !(await this.bridge.canDeliverNow())
+        stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent)
         e.workerCwd = chat.cwd
       } else {
         let started!: () => void
@@ -656,7 +662,12 @@ export class ChatManager {
     // A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
     // on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
     // stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again.
-    if (queued && opts.now && chat.workerId) {
+    if (urgent) {
+      if (stoppedFor) {
+        this.unqueue(e, standIn)
+        queued = false
+      }
+    } else if (queued && opts.now && chat.workerId) {
       try {
         if (await this.deliverHeldNow(e, standIn, text)) queued = false
       } catch (err) {
@@ -708,13 +719,17 @@ export class ChatManager {
    */
   private async deliverHeldNow(e: Entry, standIn: UserItem | undefined, text: string | undefined): Promise<boolean> {
     const stopped = await this.bridge.sendToWorkerNow(e.chat.workerId as string, text)
-    const i = standIn && e.sent ? e.sent.indexOf(standIn) : -1
-    if (stopped && i >= 0) {
-      const { queued: _q, ...sent } = standIn!
-      e.sent![i] = sent
-      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
-    }
+    if (stopped) this.unqueue(e, standIn)
     return stopped
+  }
+
+  /** A held message's stand-in once its turn was stopped for it: no longer queued, it is the turn starting now. */
+  private unqueue(e: Entry, standIn: UserItem | undefined): void {
+    const i = standIn && e.sent ? e.sent.indexOf(standIn) : -1
+    if (i < 0) return
+    const { queued: _q, ...sent } = standIn!
+    e.sent![i] = sent
+    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
   }
 
   async interrupt(id: string): Promise<void> {

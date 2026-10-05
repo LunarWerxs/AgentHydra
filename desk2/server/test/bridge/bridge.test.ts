@@ -117,6 +117,32 @@ describe('bridge', () => {
     expect(await b.cancelWorker('w-00000001').catch((e) => e)).toMatchObject({ status: 409 })
     expect((await b.activeWorkersFor(sid(1))).map((w) => w.id)).toEqual(['w-00000002'])
   })
+
+  test('deliver-now is asked once per AgentHydra version; without it, an urgent send and a plain refusal', async () => {
+    const f = await fake()
+    f.state.version = '1.10.0'
+    f.state.deliverNow = false
+    const b = createBridge({ url: f.url, now: () => NOW })
+    const probes = () => f.posts.filter((p) => p.path.endsWith('/deliver-now')).length
+
+    expect(await b.canDeliverNow()).toBe(false)
+    expect(await b.canDeliverNow()).toBe(false)
+    expect(probes()).toBe(1)
+    // An urgent send to the running worker stops its turn: one POST, `urgent: true`.
+    expect(await b.sendToWorker('w-00000001', 'stop and fix the build', undefined, true)).toBe(true)
+    expect(f.posts.at(-1)).toEqual({ path: '/api/corch/workers/w-00000001/send', body: { text: 'stop and fix the build', urgent: true } })
+    // A message it already holds cannot go now: the reason names the version and is never a 404 page.
+    const held = await b.sendToWorkerNow('w-00000001', 'stop and fix the build').catch((e) => e)
+    expect(held).toMatchObject({ kind: 'http', status: 404 })
+    expect(held.message).toMatch(/version 1\.10\.0.*goes when the current task ends.*Update AgentHydra/)
+
+    // Updated: asked again, and deliver-now is used.
+    f.state.version = '1.11.0'
+    f.state.deliverNow = true
+    expect(await b.canDeliverNow()).toBe(true)
+    expect(probes()).toBe(3)
+    expect(await b.sendToWorkerNow('w-00000001', 'stop and fix the build')).toBe(true)
+  })
 })
 
 describe('poller', () => {

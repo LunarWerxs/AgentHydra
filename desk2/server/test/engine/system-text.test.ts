@@ -345,6 +345,13 @@ describe('notes and picture lines', () => {
     expect(userTurn(user(`see ${preface}\nthere`), null)).toMatchObject({ text: `see ${preface}\nthere` })
   })
 
+  test("a message sent now as an urgent message (an AgentHydra without deliver-now) reads without AgentHydra's preface", () => {
+    const urgent =
+      'AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator. Act on it first; then continue the task only if it still applies, checking the state of anything you were in the middle of.'
+    expect(userTurn(user(`${urgent}\n\nfix the build first`), null)).toMatchObject({ kind: 'user', text: 'fix the build first' })
+    expect(userTurn(user(`see ${urgent}\n\nthere`), null)).toMatchObject({ text: `see ${urgent}\n\nthere` })
+  })
+
   test('a picture line becomes the picture once, a missing file stays as text, plain text is the same item', () => {
     const { media, file } = png()
     const turn = userTurn(user(`look at this\n[Image: source: ${file}]\n[Image: source: ${file}]\n[Image: source: C:/Users/me/gone.png]`), media)

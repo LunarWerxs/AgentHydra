@@ -123,7 +123,7 @@ test('a sent message shows at once, before the worker has it, and its worker cop
 
   // The worker takes its time: the message is on screen while the send is still out.
   let take!: () => void
-  b.bridge.sendToWorker = () => new Promise<void>((r) => (take = r))
+  b.bridge.sendToWorker = () => new Promise<boolean>((r) => (take = () => r(false)))
   const sending = m.send(chat.id, `two
 
 paragraphs`)
@@ -211,12 +211,46 @@ test("a person's plain send to a running worker goes now; the queue's own dispat
 
   // CliMayte could not stop the turn: the message is held all the same, and its bubble keeps Send now.
   b.bridge.sendToWorkerNow = async () => {
-    throw new Error('this AgentHydra cannot send a held message now yet: it needs its update')
+    throw new Error('AgentHydra did not answer in time')
   }
   expect(await m.send(chat.id, 'and then commit', undefined, { now: true })).toEqual({ queued: true })
   expect(bubble('and then commit')).toMatchObject({ queued: true })
   // ...and the chat says why, not only the server log
-  expect(m.listItems(chat.id).filter((i) => i.kind === 'system')).toEqual([expect.objectContaining({ level: 'warn', text: expect.stringMatching(/waits for the current task.*needs its update/s) })])
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'system')).toEqual([expect.objectContaining({ level: 'warn', text: expect.stringMatching(/waits for the current task.*did not answer in time/s) })])
+})
+
+test('an AgentHydra without deliver-now takes a plain send to a running worker as one urgent message, sent once', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  b.state.deliverNow = false
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  const bubble = (text: string) => m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === text)!
+
+  expect(await m.send(chat.id, 'use the other port', undefined, { now: true })).toEqual({ queued: false })
+  // One send, urgent: never a plain send that CliMayte holds plus a second copy.
+  expect(b.state.sentToWorker).toEqual([{ id: 'w1', text: 'use the other port', urgent: true }])
+  expect(b.state.sentNow).toEqual([])
+  expect(bubble('use the other port')).not.toHaveProperty('queued')
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'system')).toEqual([])
+
+  // The queue's own dispatch still waits for the turn, and is no urgent message.
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'then rerun the tests')).toEqual({ queued: true })
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'then rerun the tests' })
+  expect(bubble('then rerun the tests')).toMatchObject({ queued: true })
+
+  // It had just finished on its own: nothing stopped, so the bubble stays as sent until the worker's copy replaces it.
+  b.state.nowStops = false
+  expect(await m.send(chat.id, 'and update the notes', undefined, { now: true })).toEqual({ queued: true })
+  expect(b.state.sentToWorker.at(-1)).toEqual({ id: 'w1', text: 'and update the notes', urgent: true })
+  expect(b.state.sentNow).toEqual([])
 })
 
 test('a new worker chat asks for chat mode and forces no model or effort', async () => {
