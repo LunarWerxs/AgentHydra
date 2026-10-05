@@ -156,7 +156,24 @@ fn resolve_app_root(raw_root: &str, script_dir: &Path) -> PathBuf {
     } else {
         script_dir.join(p)
     };
-    joined.canonicalize().unwrap_or(joined)
+    plain_path(joined.canonicalize().unwrap_or(joined))
+}
+
+/// Drop the `\\?\` verbatim prefix `canonicalize()` puts on every Windows path.
+///
+/// The app root ends up inside command lines handed to `cmd.exe /c` (the compiled exe's own path,
+/// `cd /d "<root>"` for a rebuild or a first-run step), and cmd.exe cannot run a program named by a
+/// verbatim path: it answers "The system cannot find the path specified." and exits 1 at once.
+/// AgentHydra, 2026-10-05: its daemon died, the watchdog revived it four times in 85 s, every
+/// wrapper ended `exit code 1, up 0.0s`, the crash-loop guard paused, and the app stayed down for
+/// 35 minutes until it was opened by hand from Explorer, which uses the plain path. A source
+/// checkout never showed it, because its start command names the interpreter, not the root.
+fn plain_path(p: PathBuf) -> PathBuf {
+    let plain = p.to_str().and_then(|s| match s.strip_prefix(r"\\?\UNC\") {
+        Some(share) => Some(format!(r"\\{share}")),
+        None => s.strip_prefix(r"\\?\").map(str::to_string),
+    });
+    plain.map(PathBuf::from).unwrap_or(p)
 }
 
 /// Resolve the real interpreter rather than letting cmd.exe pick it off PATH: an `npm i -g bun`
@@ -315,11 +332,17 @@ impl Config {
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("Open {}", v.str_at("displayName").unwrap_or("app"))),
             rebuild_command: opt_string(v.str_at("rebuildCommand")),
-            rebuild_log_name: v.str_at("rebuildLogName").unwrap_or("Rebuild.log").to_string(),
+            rebuild_log_name: v
+                .str_at("rebuildLogName")
+                .unwrap_or("Rebuild.log")
+                .to_string(),
             tray_log_name: v.str_at("trayLogName").unwrap_or("Tray.log").to_string(),
             is_dev_tree: resolve_is_dev_tree(v),
             shutdown_token_env_var: opt_string(v.str_at("shutdownTokenEnvVar")),
-            shutdown_header_prefix: v.str_at("shutdownHeaderPrefix").unwrap_or("x-app").to_string(),
+            shutdown_header_prefix: v
+                .str_at("shutdownHeaderPrefix")
+                .unwrap_or("x-app")
+                .to_string(),
             sentinel_file: opt_string(v.str_at("sentinelFile")).map(|s| PathBuf::from(expand(&s))),
             crash_sentinel_dir: opt_string(v.str_at("crashSentinelDir"))
                 .map(|s| PathBuf::from(expand(&s))),
@@ -422,5 +445,36 @@ mod tests {
             "a compiled tree must not bootstrap: {:?}",
             cfg.first_run
         );
+    }
+
+    #[test]
+    fn a_compiled_start_command_names_the_exe_by_a_plain_path() {
+        // The root is canonicalized, and cmd.exe refuses a program named by a \\?\ path, so the
+        // prefix must be gone from the root and from the command built on it.
+        let cfg = config_with("Cargo.toml");
+        assert!(
+            !cfg.app_root.to_string_lossy().starts_with(r"\\?\"),
+            "app root: {}",
+            cfg.app_root.display()
+        );
+        assert!(
+            !cfg.start_command.contains(r"\\?\"),
+            "start command: {}",
+            cfg.start_command
+        );
+        assert!(
+            cfg.start_command.ends_with("Cargo.toml\""),
+            "start command: {}",
+            cfg.start_command
+        );
+    }
+
+    #[test]
+    fn a_verbatim_prefix_is_dropped_and_any_other_path_is_left_alone() {
+        let plain = |s: &str| plain_path(PathBuf::from(s)).to_string_lossy().into_owned();
+        assert_eq!(plain(r"\\?\C:\Apps\My App"), r"C:\Apps\My App");
+        assert_eq!(plain(r"\\?\UNC\server\share\app"), r"\\server\share\app");
+        assert_eq!(plain(r"C:\Apps\My App"), r"C:\Apps\My App");
+        assert_eq!(plain(r"\\server\share\app"), r"\\server\share\app");
     }
 }

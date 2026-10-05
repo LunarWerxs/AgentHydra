@@ -78,7 +78,14 @@ nothing restart it" is answered by the log, not by reading code:
 
 - `spawn pid N (tray start | tray Restart | watchdog revive)`, or `respawn pid N (...) - answering
   death of pid M (exit code C, up 12.3s)` when the tray saw the previous wrapper die.
-- `death of pid N (exit code C, up 12.3s)`, written by the thread holding that child.
+- `death of pid N (exit code C, up 12.3s)`, written by the thread holding that child. A wrapper
+  that ends non-zero inside 10 s adds ` - it said: <its stderr>`, so a launch that failed outright
+  names why (cmd.exe's own "The system cannot find the path specified.", for one).
+- `daemon pid N ended (exit code C: meaning, watched 12s)`, for the daemon itself, whoever started
+  it. Every tick that finds it answering opens the pid its runtime pointer names (only when that
+  pointer's own url answers) and waits on it, so a self-update successor or a daemon opened by hand
+  leaves its exit code too: `3` is a runtime abort, `1` with no `exiting code=` line in
+  `logs/daemon.log` an outside kill, `0xC000013A` a closed console.
 - `watchdog: the daemon is not answering, and it is NOT being revived: <guard>`, once per guard,
   not every tick. The guards are a Restart/Rebuild still running, a daemon another session owns
   (`watchdogRequiresOwnership`), the 20 s grace after a revive, and the crash-loop pause.
@@ -90,7 +97,11 @@ Restart clears the pause, as before. So does a daemon that then answers for a fu
 stopped crash-looping by the guard's own definition. A pause that outlived that once left
 AgentHydra's watchdog standing down for 31 hours, until a killed daemon stayed dead.
 
-## Three Win32 traps this hit, all of them silent
+A daemon this tray starts has its stderr in `logs/daemon-stderr.log` beside the runtime pointer
+(the `infoFile` folder). Each launch first writes `-- <why>: <configured start command> --`, never
+the token; the file rolls to `daemon-stderr.log.1` past 4 MB when the next launch opens it.
+
+## Four Win32 traps this hit, all of them silent
 
 Worth keeping in the file, because each one presented as "it started fine and then nothing
 happened":
@@ -104,7 +115,15 @@ happened":
 3. A child **inherits the parent's stdio**. A tray launched from a terminal handed the daemon that
    terminal's pipe; nothing drained it, the buffer filled, and the daemon blocked on a console write
    *before binding its port*: a live process with no listening socket and no runtime pointer. The
-   daemon now gets `NUL` for all three handles (it already tees its output to `logs/daemon.log`).
+   daemon now gets `NUL` for stdin and stdout (it already tees its output to `logs/daemon.log`) and
+   a file for stderr, `logs/daemon-stderr.log`, which nothing has to drain.
+4. `cmd.exe` **cannot run a program named by a `\\?\` path**. `canonicalize()` puts that verbatim
+   prefix on every Windows path, the compiled start command is `"<root>\App.exe"`, and cmd answers
+   "The system cannot find the path specified." and exits 1 in 0.03 s. Rust's `current_dir` strips
+   the prefix itself, so the spawn succeeds and only the wrapper dies. AgentHydra, 2026-10-05: four
+   watchdog revives ended `exit code 1, up 0.0s`, the crash-loop guard paused, and the app stayed
+   down 35 minutes. The root is now made plain (`plain_path` in `config.rs`); a source checkout
+   never showed it, because its command names the interpreter, not the root.
 
 ## Build and try
 

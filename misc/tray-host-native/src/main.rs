@@ -262,7 +262,11 @@ fn restart_in_mode(hwnd: HWND, safe: bool) {
     }
     daemon::SAFE_MODE.store(safe, Ordering::Relaxed);
     let name = &a.cfg.display_name;
-    let tip = if safe { format!("{name} (Safe Mode)") } else { name.clone() };
+    let tip = if safe {
+        format!("{name} (Safe Mode)")
+    } else {
+        name.clone()
+    };
     UI.with(|ui| {
         let mut slot = ui.borrow_mut();
         let Some(ui) = slot.as_mut() else { return };
@@ -297,7 +301,11 @@ fn start_action(hwnd: HWND) {
     let timeout = Duration::from_secs(a.cfg.action_timeout_secs);
     std::thread::spawn(move || {
         let ok = daemon::post(&url, &path, timeout);
-        let code = if ok { WORK_ACTION_OK } else { WORK_ACTION_FAILED };
+        let code = if ok {
+            WORK_ACTION_OK
+        } else {
+            WORK_ACTION_FAILED
+        };
         unsafe {
             PostMessageW(hwnd_val as HWND, WM_APP_WORKER_DONE, code, 0);
         }
@@ -392,7 +400,11 @@ fn restart_once(budget: Duration) -> bool {
         daemon::wait_port_free(cfg.port, 6);
     }
     std::thread::sleep(Duration::from_millis(300));
-    let why = if a.was_rebuild.load(Ordering::Relaxed) { "tray Rebuild & Restart" } else { "tray Restart" };
+    let why = if a.was_rebuild.load(Ordering::Relaxed) {
+        "tray Rebuild & Restart"
+    } else {
+        "tray Restart"
+    };
     if daemon::spawn(cfg, &a.token, why).is_some() {
         a.started_by_us.store(true, Ordering::Relaxed);
     }
@@ -435,7 +447,10 @@ impl StandDown {
                 "the last revive is still inside its {}s grace",
                 REVIVE_GRACE.as_secs()
             ),
-            StandDown::Paused => format!("auto-restart is paused by the crash-loop guard {}", rearm_hint()),
+            StandDown::Paused => format!(
+                "auto-restart is paused by the crash-loop guard {}",
+                rearm_hint()
+            ),
         }
     }
 }
@@ -519,7 +534,8 @@ impl Watchdog {
         }
         // Crash-loop guard: prune the window, then refuse to keep resurrecting something that will
         // not stay up.
-        self.restart_times.retain(|t| now.duration_since(*t) < CRASH_LOOP_WINDOW);
+        self.restart_times
+            .retain(|t| now.duration_since(*t) < CRASH_LOOP_WINDOW);
         if self.restart_times.len() >= CRASH_LOOP_MAX {
             self.paused = true;
             return Verdict::CrashLoop;
@@ -610,6 +626,8 @@ fn health_tick() {
             // A death followed by a live daemon has been answered already: a self-update relaunch
             // hands over to a daemon that is not our child. A later revive must not claim it.
             daemon::forget_last_death();
+            // Whoever started this daemon, hold its exit code for the day it ends.
+            daemon::witness(&a.cfg);
         }
         Verdict::Hiccup | Verdict::StandDown(_) => {}
         Verdict::CrashLoop | Verdict::Revive => {
@@ -622,9 +640,16 @@ fn health_tick() {
                 a.unclean_exit_seen.store(true, Ordering::Relaxed);
             }
             if verdict == Verdict::CrashLoop {
-                let hint = if offers_safe_mode { "Restart or Restart in Safe Mode" } else { "Restart to try again" };
+                let hint = if offers_safe_mode {
+                    "Restart or Restart in Safe Mode"
+                } else {
+                    "Restart to try again"
+                };
                 balloon(
-                    &format!("{} keeps crashing - auto-restart paused. Use {hint}.", a.cfg.display_name),
+                    &format!(
+                        "{} keeps crashing - auto-restart paused. Use {hint}.",
+                        a.cfg.display_name
+                    ),
                     NIIF_ERROR,
                 );
             } else {
@@ -787,9 +812,10 @@ unsafe extern "system" fn wndproc(h: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                         open_current_ui();
                     }
                 }
-                WORK_ACTION_OK => {
-                    balloon(&a.cfg.action_ok_text.replace("{APP}", &a.cfg.display_name), NIIF_INFO)
-                }
+                WORK_ACTION_OK => balloon(
+                    &a.cfg.action_ok_text.replace("{APP}", &a.cfg.display_name),
+                    NIIF_INFO,
+                ),
                 WORK_ACTION_FAILED => balloon(
                     &a.cfg.action_fail_text.replace("{APP}", &a.cfg.display_name),
                     NIIF_WARNING,
@@ -893,7 +919,10 @@ fn bootstrap_and_spawn_daemon(cfg: &Config, token: &str) -> bool {
     }
     win::message_box(
         &cfg.display_name,
-        &format!("{} could not start its background process.", cfg.display_name),
+        &format!(
+            "{} could not start its background process.",
+            cfg.display_name
+        ),
         MB_ICONERROR,
     );
     false
@@ -1176,7 +1205,10 @@ mod watchdog_tests {
             now += TICK;
             lifted |= w.tick(now, true, false, false) == Verdict::Rearmed;
         }
-        assert!(lifted, "a daemon healthy for the whole crash-loop window must lift the pause");
+        assert!(
+            lifted,
+            "a daemon healthy for the whole crash-loop window must lift the pause"
+        );
         // Then it is killed, and that death is a new one: it gets revived.
         assert_eq!(die(&mut w, &mut now), Verdict::Revive);
     }

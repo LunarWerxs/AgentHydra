@@ -3,7 +3,7 @@
 //! Deliberately no `windows`/`windows-sys` crate: the whole API used here is about two dozen
 //! functions and four structs, and declaring them costs less than adding a crate graph the kit
 //! would then have to vendor, audit and keep building offline.
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_snake_case, non_camel_case_types, clippy::upper_case_acronyms)]
 
 use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
@@ -130,13 +130,40 @@ extern "system" {
     pub fn GetLocalTime(t: *mut SYSTEMTIME);
     pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> HANDLE;
     pub fn GetExitCodeProcess(h: HANDLE, code: *mut u32) -> i32;
+    pub fn WaitForSingleObject(h: HANDLE, ms: u32) -> u32;
     pub fn GetTickCount64() -> u64;
+}
+
+/// Open `pid` so its end can be waited for and its exit code read. None when it cannot be opened
+/// (already gone and reaped, or another user's). The handle travels as a `usize` because a raw
+/// HANDLE is not `Send`, and the wait belongs on its own thread.
+pub fn open_for_exit(pid: u32) -> Option<usize> {
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    let h = unsafe { OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    (!h.is_null()).then_some(h as usize)
+}
+
+/// Block until the process behind a handle from `open_for_exit` ends, close the handle, and
+/// return the exit code Windows recorded for it.
+pub fn wait_for_exit(handle: usize) -> Option<u32> {
+    const INFINITE: u32 = 0xFFFF_FFFF;
+    let h = handle as HANDLE;
+    unsafe {
+        WaitForSingleObject(h, INFINITE);
+        let mut code = 0u32;
+        let ok = GetExitCodeProcess(h, &mut code) != 0;
+        CloseHandle(h);
+        ok.then_some(code)
+    }
 }
 
 /// When this machine booted, in epoch ms: the same moment crash-sentinel.mjs records as a run
 /// file's `bootedAt`, so a live pid on a file from an earlier boot is known to be recycled.
 pub fn boot_time_ms() -> Option<f64> {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
     Some(now.as_millis() as f64 - unsafe { GetTickCount64() } as f64)
 }
 

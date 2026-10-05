@@ -50,8 +50,14 @@ fn run_sentinels(cfg: &Config) -> Vec<PathBuf> {
 pub fn unclean_run_left(cfg: &Config) -> bool {
     let booted = crate::win::boot_time_ms();
     run_sentinels(cfg).iter().any(|path| {
-        let run = std::fs::read_to_string(path).ok().and_then(|s| crate::json::parse(&s));
-        let pid = run.as_ref().and_then(|v| v.num_at("pid")).map(|n| n as u32).unwrap_or(0);
+        let run = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|s| crate::json::parse(&s));
+        let pid = run
+            .as_ref()
+            .and_then(|v| v.num_at("pid"))
+            .map(|n| n as u32)
+            .unwrap_or(0);
         let earlier_boot = match (run.as_ref().and_then(|v| v.num_at("bootedAt")), booted) {
             (Some(then), Some(now)) => (then - now).abs() > BOOT_TOLERANCE_MS,
             _ => false,
@@ -154,7 +160,11 @@ pub fn live_url(cfg: &Config, timeout: Duration) -> Option<String> {
         }
     }
     // A pointer written by an older daemon may carry only the port.
-    if let Some(port) = pointer.as_ref().and_then(|v| v.num_at("port")).map(|p| p as u16) {
+    if let Some(port) = pointer
+        .as_ref()
+        .and_then(|v| v.num_at("port"))
+        .map(|p| p as u16)
+    {
         if port != 0 && health_ok("127.0.0.1", port, &cfg.service_name, timeout) {
             return Some(format!("http://127.0.0.1:{port}"));
         }
@@ -174,21 +184,26 @@ pub fn live_url(cfg: &Config, timeout: Duration) -> Option<String> {
 ///   cmd strips the first and last quote of the whole line, so a quoted interpreter path loses the
 ///   quotes protecting it and cmd runs nothing - while still starting successfully, so the caller
 ///   sees success and waits forever for a daemon that never existed.
-/// * Stdio is NULL, never inherited. A tray started from a terminal otherwise hands the daemon that
+/// * Stdio is never inherited. A tray started from a terminal otherwise hands the daemon that
 ///   terminal's pipes; nothing drains them, the buffer fills, and the daemon blocks on a console
 ///   write BEFORE it binds its port. Observed: a live process with no listening socket and no
-///   runtime pointer. The daemon tees its own output to logs/daemon.log, so nothing is lost.
+///   runtime pointer. stdin and stdout are NULL (the daemon tees its own output to
+///   logs/daemon.log); stderr is a FILE, which never fills and needs no reader (`open_stderr_log`).
 ///
 /// `why` names the caller in the tray log (tray start, tray Restart, watchdog revive), so a spawn
 /// line says who asked for it.
 pub fn spawn(cfg: &Config, token: &str, why: &str) -> Option<u32> {
     let command = cfg.resolved_start_command(token);
+    let (stderr, said) = match open_stderr_log(cfg, why) {
+        Some((file, path, from)) => (Stdio::from(file), Some((path, from))),
+        None => (Stdio::null(), None),
+    };
     let mut cmd = Command::new("cmd.exe");
     cmd.raw_arg(format!("/c \"{command}\""))
         .current_dir(&cfg.app_root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(stderr)
         .creation_flags(CREATE_NO_WINDOW);
     for (k, v) in cfg.resolved_start_env(token) {
         cmd.env(k, v);
@@ -204,18 +219,74 @@ pub fn spawn(cfg: &Config, token: &str, why: &str) -> Option<u32> {
             // evidence that was missing on 2026-09-14/15.
             let log = log_path(cfg);
             match take_last_death() {
-                Some(prev) => {
-                    log_line(&log, &format!("respawn pid {pid}{mode} ({why}) - answering {prev}"))
-                }
+                Some(prev) => log_line(
+                    &log,
+                    &format!("respawn pid {pid}{mode} ({why}) - answering {prev}"),
+                ),
                 None => log_line(&log, &format!("spawn pid {pid}{mode} ({why})")),
             }
             // Before the watcher starts, so even an instant exit clears it again.
             CHILD_PID.store(pid, Ordering::SeqCst);
-            watch_child(child, log);
+            watch_child(child, log, said);
             Some(pid)
         }
         Err(_) => None,
     }
+}
+
+/// The stderr log rolls to `.1` past this size, at a spawn only: a running daemon holds it open.
+const STDERR_LOG_MAX: u64 = 4 * 1024 * 1024;
+/// A wrapper that ends non-zero inside this long never got its daemon going, and what it wrote to
+/// stderr is the reason, so the death line quotes it.
+const FAILED_LAUNCH: Duration = Duration::from_secs(10);
+
+/// WHERE A TRAY-STARTED DAEMON'S STDERR GOES: `<app home>/logs/daemon-stderr.log`, beside the
+/// daemon's own daemon.log (the app home is the folder holding the runtime pointer).
+///
+/// It used to be NULL, and two things were lost with it. cmd.exe's own complaint when it cannot
+/// start the command at all: AgentHydra, 2026-10-05, four revives each `exit code 1, up 0.0s` and
+/// not one word of why (see `config::plain_path`). And a runtime's native crash report, which goes
+/// to stderr and nowhere else: a daemon that ends that way never reaches its own log.
+///
+/// Returns the file, its path and the offset this launch starts writing at. None (and NULL, as
+/// before) when the config names no folder for the pointer or the file cannot be opened: a witness,
+/// never a dependency.
+fn open_stderr_log(cfg: &Config, why: &str) -> Option<(std::fs::File, PathBuf, u64)> {
+    let home = cfg
+        .info_file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())?;
+    let dir = home.join("logs");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("daemon-stderr.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > STDERR_LOG_MAX) {
+        let _ = std::fs::rename(&path, dir.join("daemon-stderr.log.1"));
+    }
+    // The command as CONFIGURED: its {TOKEN} placeholder is still a placeholder here.
+    log_line(&path, &format!("-- {why}: {} --", cfg.start_command));
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .ok()?;
+    let from = file.metadata().map(|m| m.len()).unwrap_or(0);
+    Some((file, path, from))
+}
+
+/// What one launch wrote to the stderr log, as one short line for the tray log.
+fn stderr_since(path: &Path, from: u64) -> String {
+    use std::io::{Seek, SeekFrom};
+    let mut text = Vec::new();
+    if let Ok(mut f) = std::fs::File::open(path) {
+        if f.seek(SeekFrom::Start(from)).is_ok() {
+            let _ = f.take(4096).read_to_end(&mut text);
+        }
+    }
+    let line = String::from_utf8_lossy(&text)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    line.chars().take(300).collect()
 }
 
 /// The last daemon death this process observed, so the NEXT spawn can name what it is answering.
@@ -283,7 +354,10 @@ fn log_line(path: &Path, text: &str) {
 ///   "how the wrapper ended", not "what the daemon's last statement was".
 /// * Windows has no signals; `ExitStatus::code()` is None only in exotic cases, and that is
 ///   reported as `unknown` rather than guessed at.
-fn watch_child(mut child: std::process::Child, log: PathBuf) {
+///
+/// `said` is where this launch's stderr went and the offset it started at (`open_stderr_log`): a
+/// launch that failed outright has its stderr quoted in the death line.
+fn watch_child(mut child: std::process::Child, log: PathBuf, said: Option<(PathBuf, u64)>) {
     let started = Instant::now();
     let pid = child.id();
     std::thread::spawn(move || {
@@ -293,6 +367,7 @@ fn watch_child(mut child: std::process::Child, log: PathBuf) {
         // the slot by now if it already holds a different one.
         let _ = CHILD_PID.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
         let up = started.elapsed();
+        let failed = !matches!(&status, Ok(s) if s.success());
         let how = match status {
             Ok(s) => match s.code() {
                 Some(c) => format!("exit code {c}"),
@@ -300,11 +375,105 @@ fn watch_child(mut child: std::process::Child, log: PathBuf) {
             },
             Err(e) => format!("could not be waited on: {e}"),
         };
-        let text = format!("death of pid {pid} ({how}, up {:.1}s)", up.as_secs_f64());
+        let mut text = format!("death of pid {pid} ({how}, up {:.1}s)", up.as_secs_f64());
+        if failed && up < FAILED_LAUNCH {
+            let reason = said
+                .map(|(path, from)| stderr_since(&path, from))
+                .unwrap_or_default();
+            if !reason.is_empty() {
+                text.push_str(&format!(" - it said: {reason}"));
+            }
+        }
         // Slot first, line second: whoever sees the line can rely on the slot already holding it.
         set_last_death(text.clone());
         log_line(&log, &text);
     });
+}
+
+/// The daemon pid a witness thread is parked on; 0 for none.
+static WITNESSED_PID: AtomicU32 = AtomicU32::new(0);
+
+/// WITNESS THE DAEMON ITSELF, WHOEVER STARTED IT (owner ask, 2026-10-05).
+///
+/// `watch_child` sees only a wrapper this tray spawned. Most of the time the serving daemon is
+/// not that: a self-update hands over to a successor created through WMI, and a daemon opened by
+/// hand was never ours. AgentHydra's daemon ended three times in 36 hours with no last line, no
+/// crash record and no Windows error event, each one such a successor, so the one fact that would
+/// have told a native crash from an outside kill, its exit code, was held by nobody.
+///
+/// Called on every tick that finds the daemon answering. A pid already being watched costs one
+/// pointer read; a new one is opened once and waited on in a parked thread, like `watch_child`.
+pub fn witness(cfg: &Config) {
+    let Some(pointer) = std::fs::read_to_string(&cfg.info_file)
+        .ok()
+        .and_then(|s| crate::json::parse(&s))
+    else {
+        return;
+    };
+    let pid = pointer.num_at("pid").map(|n| n as u32).unwrap_or(0);
+    if pid == 0 || WITNESSED_PID.load(Ordering::SeqCst) == pid {
+        return;
+    }
+    // A pointer can outlive its daemon, and a pid gets reused: only a pid whose OWN url answers as
+    // this service is the daemon's.
+    let answers = pointer
+        .str_at("url")
+        .and_then(split_url)
+        .is_some_and(|(host, port)| health_ok(&host, port, &cfg.service_name, PROBE_POLL));
+    if !answers {
+        return;
+    }
+    // Stored even when the open fails, so a pid that cannot be opened is not retried every tick.
+    WITNESSED_PID.store(pid, Ordering::SeqCst);
+    if let Some(handle) = crate::win::open_for_exit(pid) {
+        watch_pid(pid, handle, log_path(cfg));
+    }
+}
+
+fn watch_pid(pid: u32, handle: usize, log: PathBuf) {
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        let code = crate::win::wait_for_exit(handle);
+        let _ = WITNESSED_PID.compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst);
+        let watched = started.elapsed().as_secs_f64();
+        log_line(
+            &log,
+            &format!(
+                "daemon pid {pid} ended ({}, watched {watched:.0}s)",
+                describe_exit(code)
+            ),
+        );
+    });
+}
+
+/// An exit code as Windows shows it (NTSTATUS values in hex), with what the common ones mean for
+/// a process nobody was holding. The meaning is a reading aid, so it says "or" where a code has
+/// two sources.
+fn describe_exit(code: Option<u32>) -> String {
+    let Some(code) = code else {
+        return "exit code unknown".to_string();
+    };
+    let meaning = match code {
+        0 => "a clean exit",
+        1 => "its own exit(1), or ended from outside: taskkill /F and End task both leave 1",
+        3 => "abort(), how a runtime's crash handler ends the process",
+        0x4001_0004 => "ended by Windows at logoff or shutdown",
+        0xC000_0005 => "access violation",
+        0xC000_00FD => "stack overflow",
+        0xC000_013A => "its console was closed, or Ctrl+C",
+        0xC000_0409 => "fail-fast, a corrupted stack or heap",
+        _ => "",
+    };
+    let shown = if code >= 0x4000_0000 {
+        format!("0x{code:08X}")
+    } else {
+        code.to_string()
+    };
+    if meaning.is_empty() {
+        format!("exit code {shown}")
+    } else {
+        format!("exit code {shown}: {meaning}")
+    }
 }
 
 /// Wait for the daemon to come up and return the URL it ACTUALLY bound.
@@ -537,7 +706,10 @@ mod death_record_tests {
 
     fn temp_log(tag: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        p.push(format!("lunarwerx-tray-test-{tag}-{}.log", std::process::id()));
+        p.push(format!(
+            "lunarwerx-tray-test-{tag}-{}.log",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&p);
         p
     }
@@ -562,7 +734,7 @@ mod death_record_tests {
         let log = temp_log("death");
         let child = exiting_with(3);
         let pid = child.id();
-        watch_child(child, log.clone());
+        watch_child(child, log.clone(), None);
         let body = wait_for_log(&log);
         // The whole point of the item: the pid, HOW it went, and how long it had been up - the
         // three facts that were missing when AgentHydra's daemon died three times in a night.
@@ -580,17 +752,139 @@ mod death_record_tests {
         let log = temp_log("answers");
         let child = exiting_with(1);
         let pid = child.id();
-        watch_child(child, log.clone());
+        watch_child(child, log.clone(), None);
         wait_for_log(&log);
         // take_last_death is what spawn() consults; it must carry the previous death exactly once.
         let first = take_last_death();
         assert!(
-            first.as_deref().unwrap_or("").contains(&format!("pid {pid}")),
+            first
+                .as_deref()
+                .unwrap_or("")
+                .contains(&format!("pid {pid}")),
             "expected the death to be handed to the next spawn, got: {first:?}"
         );
         // Taken, not copied: a second spawn must not claim to answer a death already answered.
         assert!(take_last_death().is_none());
         let _ = std::fs::remove_file(&log);
+    }
+
+    /// A compiled release laid out as the zip is, under a folder whose name has a space:
+    /// `<root>/App.exe` (a real Windows program that exits 0) and `<root>/misc/tray.json` with
+    /// `appRoot: ".."`, so the root is resolved, and canonicalized, exactly as a release's is.
+    fn release_tree(tag: &str, extra: &str) -> (PathBuf, Config) {
+        let root =
+            std::env::temp_dir().join(format!("lunarwerx tray {tag} {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("misc")).expect("temp tree");
+        let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".to_string());
+        std::fs::copy(
+            Path::new(&system).join("System32").join("whoami.exe"),
+            root.join("App.exe"),
+        )
+        .expect("whoami.exe should copy");
+        let pointer = root
+            .join("home")
+            .join("runtime.json")
+            .display()
+            .to_string()
+            .replace('\\', "\\\\");
+        let config = root.join("misc").join("tray.json");
+        std::fs::write(
+            &config,
+            format!(
+                r#"{{ "displayName": "Test", "serviceName": "test", "mutexName": "TestTray",
+                     "appRoot": "..", "compiledExe": "App.exe", "startCommand": "unused",
+                     "infoFile": "{pointer}"{extra} }}"#
+            ),
+        )
+        .expect("config");
+        (root, Config::load(&config).expect("valid config"))
+    }
+
+    fn wait_for_line(path: &Path, needle: &str) -> String {
+        for _ in 0..400 {
+            if let Ok(s) = std::fs::read_to_string(path) {
+                if s.contains(needle) {
+                    return s;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        std::fs::read_to_string(path).unwrap_or_default()
+    }
+
+    #[test]
+    fn a_compiled_release_is_started_by_the_real_spawn() {
+        // AgentHydra, 2026-10-05: every watchdog revive of the compiled exe ended `exit code 1, up
+        // 0.0s`, because the command named it by the canonicalized root's \\?\ path, which cmd.exe
+        // cannot run. Through spawn() itself, so the command line under test is the shipped one.
+        let _slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+        let (root, cfg) = release_tree("start", "");
+        let pid = spawn(&cfg, "token", "test").expect("cmd.exe should spawn");
+        let body = wait_for_line(&log_path(&cfg), &format!("death of pid {pid} "));
+        assert!(
+            body.contains(&format!("death of pid {pid} (exit code 0,")),
+            "got: {body}"
+        );
+        let _ = take_last_death();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_launch_that_fails_outright_says_why_in_its_death_line() {
+        // A program cmd.exe cannot find: before, the tray log held an exit code and nothing else.
+        let _slot = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+        let (root, cfg) = release_tree(
+            "fails",
+            r#", "startCommandCompiled": "\"{COMPILED}.missing\"""#,
+        );
+        let pid = spawn(&cfg, "token", "test").expect("cmd.exe should spawn");
+        // By pid: a respawn line also says "death of pid", naming the death it answers.
+        let body = wait_for_line(&log_path(&cfg), &format!("death of pid {pid} "));
+        // cmd.exe names the program it could not run, in whatever language Windows speaks.
+        let death = body
+            .lines()
+            .find(|l| l.contains(&format!("death of pid {pid} ")))
+            .unwrap_or("");
+        assert!(death.contains("exit code 1,"), "got: {body}");
+        assert!(
+            death.contains(" - it said: ") && death.contains("App.exe.missing"),
+            "got: {body}"
+        );
+        // And the stderr log names the launch it belongs to, by the command as configured.
+        let stderr =
+            std::fs::read_to_string(root.join("home").join("logs").join("daemon-stderr.log"))
+                .unwrap_or_default();
+        assert!(stderr.contains("-- test: "), "got: {stderr}");
+        let _ = take_last_death();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_daemon_this_tray_did_not_start_has_its_exit_code_recorded() {
+        // The witness's own half: a real process, opened by pid alone as a relaunch successor is.
+        let log = temp_log("witness");
+        let child = exiting_with(7);
+        let pid = child.id();
+        let handle = crate::win::open_for_exit(pid).expect("a live child can be opened");
+        watch_pid(pid, handle, log.clone());
+        let body = wait_for_log(&log);
+        assert!(
+            body.contains(&format!("daemon pid {pid} ended (exit code 7,")),
+            "got: {body}"
+        );
+        drop(child);
+        let _ = std::fs::remove_file(&log);
+    }
+
+    #[test]
+    fn an_exit_code_reads_as_windows_shows_it() {
+        assert_eq!(describe_exit(Some(87)), "exit code 87");
+        assert!(
+            describe_exit(Some(0xC000_0005)).starts_with("exit code 0xC0000005: access violation")
+        );
+        assert!(describe_exit(Some(1)).starts_with("exit code 1: "));
+        assert_eq!(describe_exit(None), "exit code unknown");
     }
 
     #[test]
