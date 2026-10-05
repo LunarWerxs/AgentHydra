@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Cloud } from '@lucide/vue'
-import { shellGlyphs, shellIcons } from '@/lib/icons'
+import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
@@ -63,7 +63,7 @@ const BTN = `${BTN_SHAPE} text-text`
     </Tip>
     <Tip :label="hydraOpen ? 'Back to Hydra Desk' : 'AgentHydra'">
       <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
-        <img src="/agenthydra.svg" alt="" class="size-4 rounded-[3px]" :class="hydraOpen ? '' : 'opacity-80 grayscale-[35%]'" />
+        <component :is="agentHydraIcon" class="size-4" />
       </button>
     </Tip>
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">

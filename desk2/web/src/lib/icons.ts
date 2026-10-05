@@ -194,6 +194,18 @@ export const sidebarIcons = {
   footer: Settings // the real settings gear (Jacob, 2026-10-04): eight teeth, a circle inside
 } as const
 
+// The chrome bar's AgentHydra button, in place of the colour logo (Michael, 2026-10-04: "a fun, like,
+// outline-y version like the other ones"): the logo's big head with its open jaw and eye, and a smaller
+// head facing back off its neck, on the grid and stroke of the Cloud and Bot beside it.
+export const agentHydraIcon = glyph([
+  ['path', { d: 'M11 11c0-4 3-7 7-7h3.5l-2.5 2.5' }],
+  ['path', { d: 'M16 9.5h4.5' }],
+  ['path', { d: 'M17.5 6.5h.01' }],
+  ['path', { d: 'M11 11c0 3 4 4.5 4 7.5a2.5 2.5 0 0 1-5 0' }],
+  ['path', { d: 'M11.5 13.5C8 13.5 6.5 12 6.5 10c0-2-1.5-3.5-3.5-3.5H2l1.5 1.5' }],
+  ['path', { d: 'M5 10H2.5' }]
+])
+
 // Settings dialog nav, as the real Settings nav draws them: 16px outline glyphs.
 import { Activity, CircleUserRound, Info } from '@lucide/vue'
 

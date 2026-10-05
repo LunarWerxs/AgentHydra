@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, RefreshCw } from '@lucide/vue'
 import type { AhMessage } from '@shared/hydra-embed'
 import { Tip } from '@/components/ui/tooltip'
+import { agentHydraIcon } from '@/lib/icons'
 import { attachHydraFrame, hydraReady, hydraSidebar } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
@@ -73,7 +74,7 @@ const BTN = 'flex h-[26px] shrink-0 items-center gap-1 rounded-[var(--radius-6)]
 <template>
   <section class="flex h-full min-w-0 flex-col" aria-label="AgentHydra">
     <div class="flex h-[41px] shrink-0 items-center gap-1.5 pr-2 pt-0.5" :style="{ paddingLeft: `${padLeft}px` }">
-      <img src="/agenthydra.svg" alt="" class="size-4 shrink-0 rounded-[3px]" />
+      <component :is="agentHydraIcon" class="size-4 shrink-0 text-text" />
       <span class="min-w-0 truncate text-[13px] font-medium leading-[19.5px] text-text">AgentHydra</span>
       <Tip :label="`Hydra Desk 2's own copy of AgentHydra's window, on the AgentHydra at ${daemon ?? '…'}`">
         <span class="min-w-0 truncate text-[12px] text-text-muted">Desk 2's copy{{ daemon ? ` · ${daemon}` : '' }}</span>
