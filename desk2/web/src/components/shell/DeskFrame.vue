@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
@@ -7,17 +7,18 @@ import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
-import DiffPane from '@/components/panes/DiffPane.vue'
-import ServersPane from '@/components/servers/ServersPane.vue'
+const DiffPane = defineAsyncComponent(() => import('@/components/panes/DiffPane.vue'))
+const ServersPane = defineAsyncComponent(() => import('@/components/servers/ServersPane.vue'))
 import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
-import SettingsView from '@/components/panes/SettingsView.vue'
+const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
+const SettingsView = defineAsyncComponent(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
-import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
+const BackgroundTasksPanel = defineAsyncComponent(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
@@ -59,9 +60,13 @@ watch(
 const settingsOpen = computed(() => src.selected.value.kind === 'settings')
 const closeSettings = () => src.select(under.value)
 // The dialog opens on its current section, not on the Search box (the real one shows no focus ring there).
-const focusSettingsNav = (e: Event) => {
+const focusSettingsNav = async (e: Event) => {
   e.preventDefault()
-  ;(e.target as HTMLElement | null)?.querySelector<HTMLElement>('[data-section][aria-current="page"]')?.focus()
+  const box = e.target as HTMLElement | null
+  // SettingsView loads on first open: wait for it and its first render before looking for the nav.
+  await loadSettingsView()
+  await nextTick()
+  box?.querySelector<HTMLElement>('[data-section][aria-current="page"]')?.focus()
 }
 const chat = computed<ChatSummary | null>(() => {
   const v = view.value
