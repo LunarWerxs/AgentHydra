@@ -344,8 +344,7 @@ const TEXT_BTN =
         <button
           v-if="frameSrc && selected && daemonUrl"
           type="button"
-          :class="TEXT_BTN"
-          class="absolute bottom-2 right-2 shadow-sm"
+          class="absolute bottom-2 right-2 flex h-6 items-center rounded-[var(--radius-6)] bg-[var(--bg-popover)] px-2 text-[12px] text-[var(--text)] opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-[60ms] hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
           :aria-pressed="viaManager"
           @click="viaManager = !viaManager"
         >{{ viaManager ? 'Show directly' : 'Blank? Show through the server manager' }}</button>
