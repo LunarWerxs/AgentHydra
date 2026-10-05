@@ -3,6 +3,7 @@
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
 // `account-extra` (after the account login, on the name's line), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
+import LazyOverlay from '@/components/ui/lazy/LazyOverlay.vue'
 import { EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'
 import CopyResetDate from '@/components/CopyResetDate.vue'
@@ -263,7 +264,25 @@ function onContextMenu(e: MouseEvent): void {
       <TableCell v-else-if="col.key === 'actions'">
         <div class="flex items-center justify-end gap-1">
           <slot name="primary" />
-          <DropdownMenu v-if="row.menu" v-model:open="menuOpen">
+          <!-- A row nobody has opened is its trigger button alone (LazyOverlay); the stand-in carries
+               what reka's trigger sets while closed. -->
+          <LazyOverlay
+            v-if="row.menu"
+            :interest="['hover', 'focus', 'press', 'key']"
+            :stand-in="{
+              'data-slot': 'dropdown-menu-trigger',
+              'data-state': 'closed',
+              type: 'button',
+              'aria-haspopup': 'menu',
+              'aria-expanded': 'false',
+            }"
+          >
+            <template #closed>
+              <Button variant="ghost" size="icon-sm" :aria-label="$t('instances.moreActions')">
+                <EllipsisVertical />
+              </Button>
+            </template>
+          <DropdownMenu v-model:open="menuOpen">
             <!-- No tooltip wrapper: nesting a TooltipTrigger around the DropdownMenuTrigger
                  swallowed the click so the menu never opened. aria-label keeps it accessible. -->
             <DropdownMenuTrigger as-child>
@@ -278,6 +297,7 @@ function onContextMenu(e: MouseEvent): void {
               <slot name="menu" />
             </DropdownMenuContent>
           </DropdownMenu>
+          </LazyOverlay>
         </div>
       </TableCell>
     </template>
