@@ -7,6 +7,7 @@ import { computed, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import LazyOverlay from '@/components/ui/lazy/LazyOverlay.vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
@@ -202,6 +203,32 @@ function onRootOpenChange(v: boolean): void {
 </script>
 
 <template>
+  <!-- A badge nobody has hovered, focused or pressed is its trigger alone (LazyOverlay); the stand-in
+       carries what reka's PopoverTrigger sets while closed. The hover timers live on the Badge itself, so
+       they run in both states. -->
+  <LazyOverlay
+    :stand-in="{
+      'data-slot': 'popover-trigger',
+      'data-state': 'closed',
+      type: 'button',
+      'aria-haspopup': 'dialog',
+      'aria-expanded': 'false',
+    }"
+  >
+    <template #closed>
+      <Badge
+        :variant="variant"
+        class="relative min-w-11 cursor-pointer tabular-nums"
+        :dimmed="stale"
+        :title="noData ? reasonMessage : undefined"
+        :aria-busy="checking || undefined"
+        @mouseenter="onEnter"
+        @mouseleave="onLeave"
+      >
+        <Loader2 v-if="checking" class="absolute animate-spin" />
+        <span :class="checking ? 'opacity-0' : undefined">{{ label }}</span>
+      </Badge>
+    </template>
   <Popover :open="open" @update:open="onRootOpenChange">
     <PopoverTrigger as-child>
       <!-- One box for every state (owner, 2026-10-04: the table "snaps" as its stats load). The
@@ -335,4 +362,5 @@ function onRootOpenChange(v: boolean): void {
       </Button>
     </PopoverContent>
   </Popover>
+  </LazyOverlay>
 </template>
