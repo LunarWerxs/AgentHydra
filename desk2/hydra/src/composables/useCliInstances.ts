@@ -169,6 +169,12 @@ async function checkUsage(id: string): Promise<boolean> {
   }
 }
 
+/** One probe of the usage catch-up: the answer lands in the shared usage cache (the row reads it
+ *  from there) and the list is NOT refetched, the catch-up refreshes it once when it ends. */
+function checkUsageQuiet(id: string): Promise<boolean> {
+  return useUsage().checkCli(id)
+}
+
 export function useCliInstances() {
   return {
     cliInstances,
@@ -186,5 +192,6 @@ export function useCliInstances() {
     linkDesktop,
     remove,
     checkUsage,
+    checkUsageQuiet,
   }
 }

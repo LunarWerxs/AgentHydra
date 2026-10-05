@@ -424,6 +424,8 @@ const {
   loading: cliLoading,
   startPolling: startCliPolling,
   checkUsage: checkCliUsage,
+  checkUsageQuiet: checkCliUsageQuiet,
+  refreshCliInstances,
   create: createCli,
   launch: launchCli,
   login: loginCli,
@@ -905,7 +907,12 @@ watch(
         snapshotFor(`cli:${i.id}`) ?? i.lastUsageCheck,
     )
     if (due.length) {
-      void runUsageCatchup(due, (i) => checkCliUsage(i.id), { signal: catchupSignal })
+      // Each probe lands in the usage cache the rows read; the list is refetched once at the end.
+      void runUsageCatchup(due, (i) => checkCliUsageQuiet(i.id), { signal: catchupSignal }).then(
+        (done) => {
+          if (done && !catchupSignal.aborted) void refreshCliInstances({ silent: true })
+        },
+      )
     }
   },
   { immediate: true },
