@@ -7,8 +7,10 @@ name: CI
 # control, the orchestrator's UI Automation actuators), so the Windows leg is the real gate and stays
 # on every change; it already runs side by side with the Linux leg, and the slow part of it (the
 # Python orchestrator suite) is split into parallel shards below.
-# rust-ci-speed: no step of this workflow builds Rust (misc/tray-host-native is not compiled here),
-# so the cargo-only settings (cache, test timing, no-fail-fast) have nothing to attach to.
+# rust-ci-speed: no step of this workflow builds Rust (misc/tray-host-native is not compiled here,
+# nor misc/climayte-runner-native: its exe is committed, its build.ps1 runs its unit tests before
+# every rebuild, and the Windows leg's runner tests run the committed exe), so the cargo-only
+# settings (cache, test timing, no-fail-fast) have nothing to attach to.
 on:
   push:
     branches: [main]

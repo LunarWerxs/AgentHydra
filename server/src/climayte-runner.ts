@@ -1,16 +1,26 @@
-// server/src/climayte-runner.ts — the process a CliMayte worker's CLI runs under, OUTSIDE the daemon.
+// server/src/climayte-runner.ts — the process a CliMayte worker's CLI runs under, OUTSIDE the daemon:
+// what the daemon hands it and reads back.
 //
 // Owner, 2026-09-30: "I need to be able to restart AgentHydra without breaking CliMayte runners." A
 // Bun.spawn child sits in the daemon's kill-on-close job on Windows, so every daemon restart killed
 // every worker, which then resumed as 'interrupted' and redid its current step. `detached` is no
 // escape (DETACHED_PROCESS flashes a console per child, and the job still holds it).
 //
-// So a worker's CLI runs under a RUNNER: this same program in `--climayte-runner <spec>` mode,
-// launched through the WMI hand-off (detached-spawn.mjs, hidden), which is born outside the
-// daemon's tree. The runner starts the CLI with the attempt's prompt, log and error files as its
-// stdin/stdout/stderr, writes both pids, waits, and writes an exit file. The daemon only ever reads
-// files: the log it already tails, the pid file, and the exit file for the end. A restarted daemon
-// therefore finds its running workers still running and simply goes on reading them.
+// So a worker's CLI runs under a RUNNER, launched through the WMI hand-off (detached-spawn.mjs,
+// hidden), which is born outside the daemon's tree. The runner starts the CLI with the attempt's
+// prompt, log and error files as its stdin/stdout/stderr, writes both pids, waits, and writes an exit
+// file. The daemon only ever reads files: the log it already tails, the pid file, and the exit file
+// for the end. A restarted daemon therefore finds its running workers still running and simply goes
+// on reading them.
+//
+// On Windows the runner is misc/climayte-runner.exe (source beside it in misc/climayte-runner-native/),
+// a small native program rather than this app in runner mode: a Bun runtime per worker measured
+// 123-177 MB, about 3 GB with 20 workers, to wait on one process (owner, 2026-10-04: "instead of
+// spinning up 50 of one thing"). One runner per worker stays on purpose: a runner that dies takes
+// only its own worker with it. It also puts itself in a kill-on-close job
+// before it starts the CLI, so what the session leaves running (a dev server, a watcher) ends with
+// it and the exit file names it, and it answers the worker's wind-down hook over loopback http.
+// Elsewhere the runner is still this app in `--climayte-runner` mode (climayte-runner-posix.ts).
 //
 // The spec carries the CLI's environment (WMI starts the runner with the user's default one, not
 // the daemon's), so the runner deletes it the moment it has read it.
@@ -19,23 +29,27 @@
 // reading; the daemon voids an attempt that has not started by renaming it to `.void` (voidSpec in
 // climayte-core.ts). Exactly one rename wins, so a cancel either stops the attempt before anything
 // starts or knows the runner has it. Measured 2026-10-02: the WMI hand-off takes 0.4-2.2 s to reach
-// this point, and three cancels 87-209 ms after launch each found no pid file, marked the attempt
+// that point, and three cancels 87-209 ms after launch each found no pid file, marked the attempt
 // stopped and left the runner to run the CLI to completion ($0.145-0.150 and ~30k cache-write tokens
 // each, charged to nothing).
-//
-// On Windows the runner first puts itself in a kill-on-close job (climayte-job.ts), so what the
-// session leaves running (a dev server, a watcher) ends with the runner, and the exit file names it.
 
 import { spawn } from 'node:child_process'
-import { existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { join } from 'node:path'
-import { containWorker, type Leftover } from './climayte-job'
-import { pointSignalHook, serveSignal } from './climayte-signal'
+import { ROOT } from './climayte-core'
+import { APP_ROOT, IS_COMPILED } from './config'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
-
-/** config.ts's own test, repeated so the runner process imports nothing of the daemon's: a source
- *  checkout has config.ts beside this file, a compiled exe does not. */
-const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
+import { CLIMAYTE_RUNNER_FILE, embeddedMiscFiles } from './misc-assets'
 
 export interface RunnerSpec {
   argv: string[]
@@ -54,8 +68,8 @@ export interface RunnerSpec {
    *  hook from `file` itself, and rewrites the `settings` file the CLI was given to say so before
    *  it starts the CLI. Absent for a check's log, which has no hooks. */
   signal?: { file: string; settings: string }
-  /** The most processes the worker's tree may have alive at once, the runner included (Windows job
-   *  ceiling, climayte-job.ts). Absent: no ceiling, as for a check's log. */
+  /** The most processes the worker's tree may have alive at once, the runner included (the Windows
+   *  runner's job ceiling). Absent: no ceiling, as for a check's log. */
   maxProcesses?: number
 }
 
@@ -66,6 +80,14 @@ export interface RunnerPids {
   child?: number
 }
 
+/** A process still running in the Windows runner's job when the CLI has exited. */
+export interface Leftover {
+  pid: number
+  /** Its executable's file name, and its command line when it could be read (capped). */
+  name: string
+  command?: string
+}
+
 /** Written by the runner when the CLI has ended (or could not start: `error`). */
 export interface RunnerExit {
   code: number | null
@@ -74,89 +96,79 @@ export interface RunnerExit {
   error?: string
   /** What the CLI left running, ended when the runner's job closed (Windows). */
   left?: Leftover[]
-  /** The most processes the worker's tree had alive at once, the runner and its console hosts
+  /** The most processes the worker's tree had alive at once, the runner and console hosts
    *  included (Windows, read every 2 s): what one worker really costs. The ceiling does not count
    *  console hosts, so this can read above it without anything having been refused. */
   peakProcesses?: number
 }
 
-/** The runner mode itself (main.ts `--climayte-runner <spec>`). Returns the process exit code. */
-export async function runCliMayteRunner(specPath: string): Promise<number> {
-  const taken = `${specPath}.taken`
-  try {
-    renameSync(specPath, taken)
-  } catch (err) {
-    // The daemon voided it first (a cancel or an urgent message before this runner got here): the
-    // attempt is over, so nothing starts and nothing is written.
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0
-    throw err
-  }
-  const spec = JSON.parse(readFileSync(taken, 'utf8')) as RunnerSpec
-  rmSync(taken, { force: true })
-  // Before anything slow: a stop that lost the claim kills this runner by this pid (killOnStart).
-  writeFileSync(spec.pidFile, JSON.stringify({ runner: process.pid } satisfies RunnerPids))
-  const exit = (e: RunnerExit) => writeFileSync(spec.exitFile, JSON.stringify(e))
-  const job = containWorker(spec.maxProcesses)
-  let peak = 0
-  let peaking: ReturnType<typeof setInterval> | null = null
-  function watchPeak(): void {
-    try {
-      const n = job?.active() ?? -1
-      if (n > peak) peak = n
-    } catch {
-      // The count is a diagnostic: a failed read ends the sampling, never the worker's runner.
-      if (peaking) clearInterval(peaking)
-    }
-  }
-  peaking = job ? setInterval(watchPeak, 2_000) : null
-  // The wind-down hook answered from here (no process per tool call). Only once the settings say so;
-  // if they cannot be rewritten the CLI keeps the shell form the daemon wrote, and no port is held.
-  let signal = spec.signal ? serveSignal(spec.signal.file) : null
-  if (signal && spec.signal && !pointSignalHook(spec.signal.settings, signal.port)) {
-    signal.stop()
-    signal = null
-  }
-  let child: ReturnType<typeof Bun.spawn>
-  try {
-    const mode = spec.fresh ? 'w' : 'a'
-    const out = openSync(spec.stdout, mode)
-    child = Bun.spawn(spec.argv, {
-      cwd: spec.cwd,
-      env: spec.env,
-      stdin: Bun.file(spec.stdin),
-      stdout: out,
-      stderr: spec.fresh && spec.stderr === spec.stdout ? out : openSync(spec.stderr, mode),
-      windowsHide: true,
-    })
-  } catch (err) {
-    signal?.stop()
-    if (peaking) clearInterval(peaking)
-    exit({ code: null, signal: null, endedAt: Date.now(), error: String(err) })
-    return 1
-  }
-  writeFileSync(
-    spec.pidFile,
-    JSON.stringify({ runner: process.pid, child: child.pid } satisfies RunnerPids),
+/** The Windows runner as it ships: the checkout's misc/ or a bundle's misc/ beside the exe, else the
+ *  copy a single-file build embeds (RUNTIME_MISC_FILES). Throws, naming the file, when neither is
+ *  there. */
+function nativeRunnerSource(): string {
+  const onDisk = join(APP_ROOT, 'misc', CLIMAYTE_RUNNER_FILE)
+  if (existsSync(onDisk)) return onDisk
+  const embedded = embeddedMiscFiles()?.[CLIMAYTE_RUNNER_FILE]
+  if (embedded) return embedded
+  throw new Error(
+    IS_COMPILED
+      ? `${onDisk} is missing and this build embeds no copy of it: a build defect (scripts/build.ts embeds RUNTIME_MISC_FILES)`
+      : `${onDisk} is missing from this checkout: build it with misc/climayte-runner-native/build.ps1`,
   )
-  watchPeak()
-  await child.exited
-  signal?.stop()
-  if (peaking) clearInterval(peaking)
-  const left = job?.leftovers(process.pid) ?? []
-  exit({
-    code: child.exitCode,
-    signal: child.signalCode ?? null,
-    endedAt: Date.now(),
-    ...(left.length ? { left } : {}),
-    ...(peak > 0 ? { peakProcesses: peak } : {}),
-  })
-  // Returning ends this process, which closes the job: everything in `left` ends with it.
-  return 0
 }
 
-/** How this program starts itself in runner mode: the compiled exe takes the flag directly; a
- *  source run goes through main.ts, the entry that dispatches modes. */
+/** Older copies are removed only this long after the current one was staged: the WMI hand-off takes
+ *  up to a few seconds to start a runner, so a copy just handed to it must still be there. */
+const PRUNE_AFTER_MS = 5 * 60_000
+
+let staged: { key: string; path: string; at: number; pruned: boolean } | null = null
+
+/** The Windows runner to start: a copy of misc/climayte-runner.exe named by its content, in
+ *  CliMayte's own folder. Windows cannot replace a running exe, so runners started from misc/ itself
+ *  would make every update that changes the runner (a `git pull`, a release's misc/ reconcile) fail
+ *  while any worker runs, and a single-file build's embedded copy cannot be started at all. Throws
+ *  when there is no runner to copy: the attempt then fails saying so. */
+export function nativeRunner(): string {
+  const source = nativeRunnerSource()
+  const st = statSync(source)
+  const key = `${source}:${st.size}:${st.mtimeMs}`
+  if (staged?.key !== key || !existsSync(staged.path)) {
+    const bytes = readFileSync(source)
+    const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 12)
+    const path = join(ROOT, 'bin', `climayte-runner-${hash}.exe`)
+    if (!existsSync(path)) {
+      mkdirSync(join(ROOT, 'bin'), { recursive: true })
+      const part = `${path}.${process.pid}.part`
+      writeFileSync(part, bytes)
+      try {
+        renameSync(part, path)
+      } catch (err) {
+        // Another daemon on this folder staged the same bytes first (and may be running them).
+        rmSync(part, { force: true })
+        if (!existsSync(path)) throw err
+      }
+    }
+    staged = { key, path, at: Date.now(), pruned: false }
+  }
+  if (!staged.pruned && Date.now() - staged.at > PRUNE_AFTER_MS) {
+    staged.pruned = true
+    const dir = join(ROOT, 'bin')
+    for (const old of readdirSync(dir)) {
+      if (join(dir, old) === staged.path || !old.startsWith('climayte-runner-')) continue
+      try {
+        rmSync(join(dir, old), { force: true })
+      } catch {
+        // Still running a worker: it goes with a later runner change.
+      }
+    }
+  }
+  return staged.path
+}
+
+/** How a runner is started for `specPath`: the native runner on Windows; elsewhere this program in
+ *  runner mode (the compiled exe takes the flag directly, a source run goes through main.ts). */
 export function runnerArgv(specPath: string): string[] {
+  if (process.platform === 'win32') return [nativeRunner(), specPath]
   return IS_COMPILED
     ? [process.execPath, '--climayte-runner', specPath]
     : [process.execPath, join(import.meta.dir, 'main.ts'), '--climayte-runner', specPath]
@@ -166,16 +178,15 @@ export function runnerArgv(specPath: string): string[] {
  *  arrive in `spec.pidFile`: the runner's once it has claimed the spec, the CLI's once it has started
  *  (readRunnerPids). */
 export function launchRunner(spec: RunnerSpec, specPath: string): void {
+  const argv = runnerArgv(specPath)
   writeFileSync(specPath, JSON.stringify(spec))
-  const { argv, detached } = buildDetachedSpawn(process.platform, runnerArgv(specPath), {
-    hideWindow: true,
-  })
-  const handoff = spawn(argv[0] as string, argv.slice(1), {
-    detached,
+  const handoff = buildDetachedSpawn(process.platform, argv, { hideWindow: true })
+  const child = spawn(handoff.argv[0] as string, handoff.argv.slice(1), {
+    detached: handoff.detached,
     stdio: 'ignore',
     windowsHide: true,
   })
-  handoff.unref()
+  child.unref()
 }
 
 const readJson = <T>(path: string): T | null => {

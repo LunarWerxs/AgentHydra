@@ -179,11 +179,28 @@ Owner, 2026-09-30: restarting AgentHydra must not break CliMayte workers. A `Bun
 the daemon's kill-on-close job on Windows, so a restart used to kill every worker (it then resumed
 as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS flashes a console).
 
-- `launchRunner(spec)` writes `<log>.spec.json` and starts this program in `--climayte-runner <spec>`
-  mode (`main.ts`) through the WMI hand-off (`detached-spawn.mjs`, `hideWindow`): it is born
-  outside the daemon's tree (parent WmiPrvSE.exe). The runner reads and deletes the spec (it holds
-  the CLI's env), starts the CLI with the attempt's files, writes `<log>.pid.json`
-  (`{ runner, child }`), waits, and writes `<log>.exit.json`.
+- `launchRunner(spec)` writes `<log>.spec.json` and starts the runner through the WMI hand-off
+  (`detached-spawn.mjs`, `hideWindow`): it is born outside the daemon's tree (parent WmiPrvSE.exe).
+  The runner reads and deletes the spec (it holds the CLI's env), starts the CLI with the attempt's
+  files, writes `<log>.pid.json` (`{ runner, child }`), waits, and writes `<log>.exit.json`.
+- On Windows the runner is `misc/climayte-runner.exe`, a native program with no dependencies (Rust,
+  source in `misc/climayte-runner-native/`, built and checked for machine paths by its `build.ps1`;
+  the exe is committed, and a single-file build embeds it as one of `RUNTIME_MISC_FILES` in
+  `misc-assets.ts`). It is a console program started hidden,
+  so its console host is born before its job and the CLI shares that console, as under the Bun
+  runner; a CLI given its own console left that console's host in the job for a moment after it
+  exited, listed as a leftover of every attempt. Measured 2026-10-04 on the same stand-in CLI: the
+  Bun runner it replaces (this app in `--climayte-runner` mode, now `climayte-runner-posix.ts` for
+  macOS and Linux) held 175-191 MB private (123-177 MB across live workers), the native one
+  0.9-1.0 MB, with the same exit file and the same process tree (its console host and the CLI).
+  One runner per worker stays on purpose: a runner that dies takes only its own worker. The daemon
+  starts a copy named by its content, `corch/bin/climayte-runner-<sha256:12>.exe`, made from
+  `misc/climayte-runner.exe` when there is one and otherwise from the build's embedded copy:
+  Windows cannot replace a running exe, so runners started from `misc/` itself would make a
+  `git pull` fail whenever the runner changed while a worker ran, and an embedded file cannot be
+  started at all. With neither, the attempt fails and names the file. The runner finds the CLI as
+  Bun.spawn did: a path or a bare name on the CLI's PATH, tried with `.exe`, `.cmd` and `.bat`
+  unless it ends in one, so npm's extensionless `claude` shim starts the `claude.cmd` beside it.
 - The attempt records `runner: { pid, pidFile, exitFile, launchedAt }`; `attempt.pid` is the CLI's.
   `attemptExited()` reads only files: an exit file means ended; a runner gone without one died
   (`finish` reads it as interrupted); no pid file within a minute means it never started. A runner
@@ -192,8 +209,8 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
 - `climayteRunningCount()` counts only pre-runner workers, so `/api/daemon/restart` needs no `force`
   for runner workers. Proven live: two restarts with 6-7 workers running left every attempt count
   unchanged and every worker running.
-- On Windows the runner first puts itself in a kill-on-close job (`server/src/climayte-job.ts`,
-  bun:ffi, `5bc5ba7`), then starts the CLI, so everything the session starts is in it: Bun's and
+- On Windows the runner first puts itself in a kill-on-close job (`src/job.rs` in the runner's
+  crate), then starts the CLI, so everything the session starts is in it: Bun's and
   Node's own child job allows silent breakaway, which is how a finished worker left `bun vite` on
   port 4289 running (field note 43); a breakaway climbs nested jobs only as far as each allows, and
   this one allows none. When the CLI exits the runner lists what is still in the job (pid, exe,
@@ -201,6 +218,9 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   them as `cleaned`. The job also holds a ceiling of 400 live processes per worker
   (`WORKER_MAX_PROCESSES`; a runaway shell function once started about 3,000), and the exit file
   records `peakProcesses`, which `finish` copies onto the attempt. Per attempt: a follow-up turn starts its own server again.
+  The wind-down hook's server (`src/signal.rs`) answers as `serveSignal` does (`{}` inside a
+  sub-agent, the loopback guard's exact-origin refusal), and the command lines in `left` are read
+  with `NtQueryInformationProcess`, not a PowerShell per exit.
 
 ### Tokens, totals and the usage tables
 

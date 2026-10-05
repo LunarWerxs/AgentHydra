@@ -13,7 +13,8 @@
 //   --spend [--json] [--period=]   → token/dollar totals from the stored analytics (./analytics.ts)
 //   --instances | --instance-mode → the lightweight instance launcher (./instance-mode.ts)
 //   --mcp                         → the MCP stdio server (./mcp.ts)
-//   --climayte-runner <spec>         → one CliMayte worker's CLI, run outside the daemon (./climayte-runner.ts)
+//   --climayte-runner <spec>         → one CliMayte worker's CLI, run outside the daemon, on macOS and Linux
+//                                    (./climayte-runner-posix.ts; Windows runs misc/climayte-runner.exe)
 //
 // `__dispatch_runner` and `__fake_claude` were removed with the unreachable headless-dispatch spawn
 // path they existed to serve (dispatch.ts, headless dispatch is now permanently refused - see
@@ -26,7 +27,7 @@ const [mode, ...rest] = process.argv.slice(2)
 
 if (mode === '--climayte-runner') {
   // Before anything else: a runner must not open the daemon's database or bind its port.
-  const { runCliMayteRunner } = await import('./climayte-runner')
+  const { runCliMayteRunner } = await import('./climayte-runner-posix')
   process.exit(await runCliMayteRunner(rest[0] ?? ''))
 } else if (mode === '--version' || mode === '-v') {
   // --json prints a schema-versioned object instead of the bare version, for scripts and CI. Still

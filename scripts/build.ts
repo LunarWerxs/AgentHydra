@@ -125,8 +125,9 @@ function runtimeMiscPaths(): string[] {
     if (!existsSync(path))
       throw new Error(
         `cannot build: ${path} is missing. A build without it ships a daemon that can never ` +
-          'deliver a message to a chat - fix the file (the kit syncs misc\\, see lunarwerx-ui) ' +
-          'or take it out of RUNTIME_MISC_FILES.',
+          'run it (server/src/misc-assets.ts says what each one is for) - fix the file (the kit ' +
+          'syncs misc\\, see lunarwerx-ui; the CliMayte runner is built by ' +
+          'misc/climayte-runner-native/build.ps1) or take it out of RUNTIME_MISC_FILES.',
       )
     return path
   })

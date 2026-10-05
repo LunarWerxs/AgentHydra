@@ -35,6 +35,10 @@ export const DELIVERY_ACTUATOR_FILE = 'Deliver-DesktopChat.ps1'
  *  landed nameless and `chat_rename` answered ok:true over a PowerShell that had never run. */
 export const CHAT_MANAGER_FILE = 'Manage-DesktopChat.ps1'
 
+/** CliMayte's Windows runner: every worker's CLI runs under it (climayte-runner.ts), which starts
+ *  a copy of it by path. */
+export const CLIMAYTE_RUNNER_FILE = 'climayte-runner.exe'
+
 /**
  * Every file under misc\ that the RUNNING daemon opens by path.
  *
@@ -46,7 +50,11 @@ export const CHAT_MANAGER_FILE = 'Manage-DesktopChat.ps1'
  * the `!IS_COMPILED` branch, so a compiled build never wants it. Embedding it would be weight with
  * no reader. If that guard ever goes, this list is where it belongs.
  */
-export const RUNTIME_MISC_FILES = [DELIVERY_ACTUATOR_FILE, CHAT_MANAGER_FILE] as const
+export const RUNTIME_MISC_FILES = [
+  DELIVERY_ACTUATOR_FILE,
+  CHAT_MANAGER_FILE,
+  CLIMAYTE_RUNNER_FILE,
+] as const
 
 /** Set by the generated release entrypoint (scripts/build.ts): filename -> embedded file path,
  *  readable with Bun.file(). Absent in every dev and test run, which is why this is a lookup and

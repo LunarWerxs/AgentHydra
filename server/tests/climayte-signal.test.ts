@@ -1,10 +1,12 @@
 // The wind-down signal and the hooks that carry it into a CliMayte worker (climayte-signal.ts):
 // what the worker's settings say, what the runner answers, and that the runner points the hook at
-// itself before the CLI starts.
+// itself before the CLI starts. The runner tests start the runner this platform uses (runnerArgv):
+// misc/climayte-runner.exe on Windows, this app in runner mode elsewhere.
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { runnerArgv } from '../src/climayte-runner'
 import {
   pointSignalHook,
   RUN_IF_PRESENT,
@@ -214,14 +216,16 @@ describe('the runner points the hook at itself before the CLI starts', () => {
     const dir = tmp()
     const settings = join(dir, 'settings.json')
     const signal = join(dir, 'signal.json')
-    writeFileSync(
-      settings,
-      JSON.stringify({
-        hooks: workerHooks({ signalFile: signal.replace(/\\/g, '/'), claims: null }),
-      }),
-    )
+    const before = {
+      deniedMcpServers: [{ serverUrl: '*://*/api/mcp*' }],
+      hooks: workerHooks({ signalFile: signal.replace(/\\/g, '/'), claims: 'C:/c.py' }),
+      syncClaudeAiSkills: false,
+    }
+    writeFileSync(settings, JSON.stringify(before))
     // The stand-in CLI: reads the settings the way the real one does, calls the PostToolUse hook
-    // twice (a signal appears between the calls), and prints what each answered.
+    // twice (a signal appears between the calls), and prints what each answered. Then, with the
+    // signal up, the call a sub-agent's tool call makes (`agent_id` in its input) and one a web
+    // page on another local port would make (it carries an Origin).
     const cli = join(dir, 'cli.ts')
     writeFileSync(
       cli,
@@ -234,6 +238,10 @@ console.log('FORM=http')
 console.log('FIRST=' + (await call()))
 writeFileSync(signal, payload)
 console.log('SECOND=' + (await call()))
+const sub = await fetch(hook.url, { method: 'POST', body: JSON.stringify({ hook_event_name: 'PostToolUse', agent_id: 'a1b2' }) })
+console.log('SUBAGENT=' + (await sub.text()))
+const page = await fetch(hook.url, { method: 'POST', headers: { origin: 'http://127.0.0.1:5173' }, body: '{}' })
+console.log('PAGE=' + page.status)
 `,
     )
     const spec = join(dir, 'spec.json')
@@ -256,16 +264,38 @@ console.log('SECOND=' + (await call()))
       }),
     )
     writeFileSync(join(dir, 'err.log'), '')
-    const runner = Bun.spawn(
-      [process.execPath, join(import.meta.dir, '../src/main.ts'), '--climayte-runner', spec],
-      { cwd: dir, stdout: 'ignore', stderr: 'pipe' },
-    )
+    const runner = Bun.spawn(runnerArgv(spec), {
+      cwd: dir,
+      stdout: 'ignore',
+      stderr: 'ignore',
+      windowsHide: true,
+    })
     const code = await runner.exited
     expect(code).toBe(0)
     const log = readFileSync(out, 'utf8')
     expect(log).toContain('FORM=http')
     expect(log).toContain('FIRST={}')
     expect(log).toContain(`SECOND=${SIGNAL}`)
+    expect(log).toContain('SUBAGENT={}')
+    expect(log).toContain('PAGE=403')
+    // Only the PostToolUse hook changed: every other key is as the daemon wrote it.
+    const after = JSON.parse(readFileSync(settings, 'utf8'))
+    expect(after.hooks.PostToolUse).toEqual([
+      {
+        matcher: '*',
+        hooks: [
+          {
+            type: 'http',
+            url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+\/signal$/),
+            timeout: SIGNAL_HOOK_TIMEOUT_S,
+          },
+        ],
+      },
+    ])
+    expect({ ...after, hooks: { ...after.hooks, PostToolUse: null } }).toEqual({
+      ...before,
+      hooks: { ...before.hooks, PostToolUse: null },
+    })
     const exit = JSON.parse(readFileSync(join(dir, 'exit.json'), 'utf8'))
     expect(exit.code).toBe(0)
     // On Windows the runner's job also counted the worker's tree: the runner and the CLI at least.
@@ -298,10 +328,12 @@ console.log('SECOND=' + (await call()))
         exitFile: join(dir, 'exit.json'),
       }),
     )
-    const runner = Bun.spawn(
-      [process.execPath, join(import.meta.dir, '../src/main.ts'), '--climayte-runner', spec],
-      { cwd: dir, stdout: 'ignore', stderr: 'ignore' },
-    )
+    const runner = Bun.spawn(runnerArgv(spec), {
+      cwd: dir,
+      stdout: 'ignore',
+      stderr: 'ignore',
+      windowsHide: true,
+    })
     expect(await runner.exited).toBe(0)
     expect(readFileSync(settings, 'utf8')).toBe(written)
   }, 30_000)

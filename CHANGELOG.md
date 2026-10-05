@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Changed
+
+- **A CliMayte worker's runner on Windows is a 1 MB native program instead of a 175-191 MB Bun process** (2026-10-04). Every worker's CLI runs under its own runner, outside the daemon, so restarts leave workers running; that runner was AgentHydra itself in `--climayte-runner` mode, a whole Bun runtime per worker (about 3 GB with 20 workers) to wait on one process. It is now `misc/climayte-runner.exe` (Rust, no dependencies, source in `misc/climayte-runner-native/`, rebuilt and checked for machine paths by its `build.ps1`), and it keeps the same contract: the spec claim, the pid and exit files, the kill-on-close job with its 400-process ceiling, `left` and `peakProcesses`, and the wind-down hook answered over loopback http (sub-agents get `{}`, browser origins are refused). Measured on the same stand-in CLI: 0.9-1.0 MB private against 175-191 MB, the same exit file and the same process tree. One runner per worker stays, so a runner that dies takes only its own worker. The daemon starts a content-named copy from CliMayte's `bin` folder, so a `git pull` or a release's `misc/` reconcile can replace the runner while workers run; leftover command lines are read natively instead of by a PowerShell per exit, and a check command such as `taskkill /IM bun.exe` no longer kills its own runner. macOS and Linux keep the Bun runner (`server/src/climayte-runner-posix.ts`). A single-file build embeds the exe (it joins `RUNTIME_MISC_FILES`, so the build fails without it); the runner's hook server refuses a chunk size past its 64 MB cap rather than overflowing on it.
+
 ## [1.9.1] - 2026-10-04
 
 ### Fixed

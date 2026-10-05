@@ -1,0 +1,24 @@
+[package]
+name = "climayte-runner"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+# NO dependencies on purpose, as in tray-host-native: every Win32 call is declared inline, so the
+# runner adds no supply chain, no vendor directory and no offline-build problem.
+[dependencies]
+
+# Its own workspace root: cargo never walks up into a host repo's manifest, so the profiles below apply.
+[workspace]
+
+# Line tables only in dev and test builds: a panic still names file:line, and links take about half
+# the time of full debug info (rust-ci-speed).
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
