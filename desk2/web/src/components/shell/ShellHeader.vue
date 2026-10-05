@@ -9,7 +9,7 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
-import { PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
 
@@ -34,8 +34,11 @@ const props = withDefaults(
     showThinking?: boolean
     /** The chat menu's Move to group names. */
     groups?: string[]
+    /** The Background tasks panel is open for this session, and how many tasks run in it. */
+    tasksOpen?: boolean
+    tasksRunning?: number
   }>(),
-  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [] }
+  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [], tasksOpen: false, tasksRunning: 0 }
 )
 const emit = defineEmits<{
   action: [item: RowMenuItem]
@@ -43,6 +46,7 @@ const emit = defineEmits<{
   'toggle-pane': [pane: RightPane]
   account: [id: string]
   'update:showThinking': [show: boolean]
+  'toggle-tasks': []
 }>()
 
 const menu = computed(() => (props.chat ? rowMenu(chatRow(props.chat), props.groups) : []))
@@ -111,7 +115,7 @@ const PANE_BTN =
        column at least as wide as the buttons on the right so a long title stops short of them. -->
   <header
     class="grid h-8 min-w-0 grid-cols-[minmax(var(--side),1fr)_minmax(0,auto)_minmax(var(--side),1fr)] items-center pl-1 pr-3 text-[13px] leading-[19.5px]"
-    :style="{ '--side': chat ? '116px' : external ? '26px' : '0px' }"
+    :style="{ '--side': chat ? '144px' : external ? '58px' : '0px' }"
   >
     <span aria-hidden="true" />
     <div class="col-start-2 flex min-w-0 items-center">
@@ -203,6 +207,12 @@ const PANE_BTN =
     </div>
 
     <div v-if="chat" class="col-start-3 flex shrink-0 items-center gap-1 justify-self-end">
+      <Tip label="Background tasks">
+        <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
+          <ListChecks class="size-4" />
+          <span v-if="tasksRunning" class="tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-[3px] text-[10px] font-medium leading-none text-white">{{ tasksRunning }}</span>
+        </button>
+      </Tip>
       <Tip label="Terminal (not in Hydra Desk)">
         <button type="button" :class="PANE_BTN" aria-label="Terminal" aria-disabled="true">
           <component :is="shellGlyphs.terminal" class="size-4" />
@@ -236,10 +246,18 @@ const PANE_BTN =
         </span>
       </Tip>
     </div>
-    <Tip v-else-if="external" :label="headerOpen ? 'Hide session details' : 'Show session details'">
-      <button type="button" :class="PANE_BTN" class="col-start-3 justify-self-end" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
-        <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
-      </button>
-    </Tip>
+    <div v-else-if="external" class="col-start-3 flex shrink-0 items-center gap-1 justify-self-end">
+      <Tip label="Background tasks">
+        <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
+          <ListChecks class="size-4" />
+          <span v-if="tasksRunning" class="tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-[3px] text-[10px] font-medium leading-none text-white">{{ tasksRunning }}</span>
+        </button>
+      </Tip>
+      <Tip :label="headerOpen ? 'Hide session details' : 'Show session details'">
+        <button type="button" :class="PANE_BTN" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
+          <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
+        </button>
+      </Tip>
+    </div>
   </header>
 </template>

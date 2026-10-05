@@ -16,7 +16,8 @@ import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/ap
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
 import BackgroundTasksPanel from '@/components/tasks/BackgroundTasksPanel.vue'
-import { OPEN_TASKS_EVENT, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
+import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
+import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import NewSessionScreen from './NewSessionScreen.vue'
@@ -324,6 +325,18 @@ const tasks = computed<TasksState | null>({
     tasksByView.value = next
   }
 })
+// The title bar's Background tasks button: the panel for the session on view, open or shut (a chat, or an outside session).
+const tasksRunningCount = computed(
+  () => panelLists({ workers: src.workers.value, items: tasksItems.value, sessionId: tasksSessionId.value, workerIds: tasksWorkerIds.value, cleared: cleared.value }).running.length
+)
+function toggleTasksPanel() {
+  if (tasks.value) {
+    tasks.value = null
+    return
+  }
+  pane.value = null
+  tasks.value = { focus: null, expanded: false }
+}
 function onOpenTasks(e: Event) {
   pane.value = null
   tasks.value = { focus: (e as CustomEvent<OpenTasksDetail>).detail?.taskId ?? null, expanded: tasks.value?.expanded ?? false }
@@ -505,6 +518,9 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               @rename="rename"
               @toggle-pane="togglePane"
               @account="pickAccount"
+              :tasks-open="!!tasks"
+              :tasks-running="tasksRunningCount"
+              @toggle-tasks="toggleTasksPanel"
               @update:show-thinking="setShowThinking"
             />
           </div>

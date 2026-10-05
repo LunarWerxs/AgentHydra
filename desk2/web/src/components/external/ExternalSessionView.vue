@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
-import type { TranscriptItem } from '@shared/protocol'
+import type { DesktopMessageRequest, DesktopMessageResult, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
@@ -43,6 +43,38 @@ const inset = ref(0)
 const standIn = computed(() =>
   session.value?.canResume ? externalChat(session.value, src.accounts.value, desk.externalPatch(session.value.id), desk.landingOf(session.value.id)) : null
 )
+// A Claude Desktop chat that is working or waiting on you keeps its composer: a message goes into that chat
+// (AgentHydra queues it there; it runs when the turn ends), text only. A terminal session has no such way in.
+const desktopChat = computed(() => {
+  const s = session.value
+  if (standIn.value || !s || s.source !== 'desktop' || !isWorking.value) return null
+  return externalChat(s, src.accounts.value)
+})
+const INTO_WHY = 'Text only: a message into a working Claude Desktop chat has no pictures or voice.'
+const queued = ref<{ id: number; text: string }[]>([])
+let queuedId = 0
+async function sendInto(text: string): Promise<void> {
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/message`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text } satisfies DesktopMessageRequest)
+  })
+  const body = (await res.json().catch(() => null)) as (Partial<DesktopMessageResult> & { error?: string }) | null
+  if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
+  queued.value = [...queued.value, { id: ++queuedId, text }]
+}
+// A queued message is shown as queued until the transcript shows it (once per matching message).
+watch(items, (list) => {
+  if (!queued.value.length) return
+  const seen = list.filter((i) => i.kind === 'user').map((i) => (i as { text: string }).text.trim())
+  queued.value = queued.value.filter((q) => {
+    const at = seen.indexOf(q.text.trim())
+    if (at < 0) return true
+    seen.splice(at, 1)
+    return false
+  })
+})
+watch(() => props.sessionId, () => (queued.value = []))
 const glyph = computed(() => (session.value ? externalGlyph(session.value) : null))
 const where = computed(() => {
   const s = session.value
@@ -180,10 +212,27 @@ onUnmounted(() => {
     </div>
 
     <template v-if="standIn">
-      <div v-if="continueNote" class="shrink-0 px-8">
+      <div v-if="continueNote" class="shrink-0 px-8 pb-2">
         <p class="mx-auto w-full max-w-[768px] truncate px-2 text-[12px] leading-4 text-[var(--text-muted)]" role="status">{{ continueNote }}</p>
       </div>
       <Composer :key="standIn.id" :chat="standIn" />
+    </template>
+
+    <template v-else-if="desktopChat && session">
+      <div class="shrink-0 px-8 pt-1.5">
+        <p class="mx-auto flex h-6 w-full max-w-[768px] items-center gap-[5px] px-2 pb-1 text-[12px] leading-4 text-[var(--text-muted)]" role="status">
+          <span class="flex size-6 shrink-0 items-center justify-center">
+            <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
+          </span>
+          <span class="min-w-0 flex-1 truncate">
+            {{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}<span v-if="session.activity"> · {{ session.activity }}</span>
+          </span>
+        </p>
+        <ul v-if="queued.length" class="mx-auto flex w-full max-w-[768px] flex-col gap-0.5 px-2 pb-2 pl-8 text-[12px] leading-4 text-[var(--text-muted)]" aria-label="Queued messages">
+          <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
+        </ul>
+      </div>
+      <Composer :key="desktopChat.id" :chat="desktopChat" :into="{ send: sendInto, why: INTO_WHY }" />
     </template>
 
     <div v-else-if="session && usable" class="shrink-0 px-8 pb-3 pt-1.5">

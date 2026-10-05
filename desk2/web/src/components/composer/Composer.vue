@@ -87,6 +87,8 @@ type MenuName = 'plus' | 'dictation' | 'mode' | 'model' | 'effort'
 
 const props = defineProps<{
   chat: ChatSummary | null
+  /** A chat working in Claude Desktop: a send goes into it as text (`send`), pictures and voice are off (`why` says so). */
+  into?: { send: (text: string) => Promise<void>; why: string }
   /** Gallery only: start in a given state without a server. */
   demo?: {
     text?: string
@@ -635,7 +637,8 @@ function onKeydown(e: KeyboardEvent) {
     }
     case 'attach':
       e.preventDefault()
-      fileInput.value?.click()
+      if (props.into) showNotice(props.into.why)
+      else fileInput.value?.click()
       return
   }
 }
@@ -651,6 +654,7 @@ function showNotice(msg: string, info = false) {
 }
 
 function addFiles(files: File[]) {
+  if (props.into) return showNotice(props.into.why)
   for (const file of files) {
     const err = validateImage(file)
     if (err) {
@@ -811,7 +815,11 @@ async function submit(ctrl = false) {
   text.value = ''
   images.value = []
   try {
-    if (props.chat) {
+    if (props.chat && props.into) {
+      await props.into.send(body)
+      lastSent.set(props.chat.id, body)
+      saveDraft(storage, props.chat.id, '')
+    } else if (props.chat) {
       const id = props.chat.id
       const message = { text: body, ...(refs.length ? { images: refs } : {}) }
       if (enqueue) await shell.queueAdd?.({ kind: 'message', chatId: id, ...message })
@@ -1105,7 +1113,7 @@ onBeforeUnmount(() => {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent side="top" align="start" :side-offset="6" :class="MENU" data-composer-menu="plus">
-            <DropdownMenuItem :class="ITEM" @select="fileInput?.click()">
+            <DropdownMenuItem :class="ITEM" :disabled="!!into" :title="into?.why" @select="fileInput?.click()">
               <icons.addFiles :class="MENU_GLYPH" />
               Add files or photos
               <span :class="SHORTCUT">Ctrl+U</span>
@@ -1123,12 +1131,12 @@ onBeforeUnmount(() => {
         </DropdownMenu>
         <input ref="fileInput" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple class="hidden" @change="onFilePicked" />
 
-        <Tip :label="SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
+        <Tip :label="into ? into.why : SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
           <button
             type="button"
             :class="[TOOL_ICON, recording ? 'bg-[var(--danger-bg)] text-[var(--danger-text)]' : '']"
             :aria-label="recording ? 'Recording, release to stop' : 'Press and hold to record'"
-            :disabled="!SpeechRecognition"
+            :disabled="!SpeechRecognition || !!into"
             @pointerdown.prevent="startDictation"
             @pointerup="stopDictation"
             @pointerleave="stopDictation"

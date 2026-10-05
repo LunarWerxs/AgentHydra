@@ -239,6 +239,18 @@ export interface ExternalSession {
   group: string | null
 }
 
+/** POST /api/external/sessions/:id/message: text for a Claude Desktop chat that is working; AgentHydra queues it in the chat. Errors answer { error } with the daemon's reason. */
+export interface DesktopMessageRequest {
+  text: string
+}
+export interface DesktopMessageResult {
+  ok: true
+  /** How it got there ('peer': the chat's own input queue over the native peer channel). */
+  route: string
+  delivered: true
+  detail: string
+}
+
 /** The overlay Hydra Desk keeps on an outside session (PATCH /api/external/sessions/:id/meta answers it). */
 export interface SessionMeta {
   title: string | null // null = the session's own title

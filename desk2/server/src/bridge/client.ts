@@ -364,7 +364,9 @@ export function createClient(opts: HydraClientOptions = {}) {
       throw new BridgeError('bad_json', `AgentHydra answered ${method} ${path} with ${res.status} and no JSON`, res.status)
     }
     if (!res.ok) {
-      const reason = (data as { error?: unknown })?.error
+      // A refused delivery answers `detail` (no `error`): its reason is there.
+      const body = data as { error?: unknown; detail?: unknown }
+      const reason = typeof body?.error === 'string' ? body.error : body?.detail
       throw new BridgeError(
         'http',
         `AgentHydra ${method} ${path} failed (${res.status}): ${typeof reason === 'string' ? reason : 'no reason given'}`,
@@ -424,6 +426,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there. */
     sendToWorker: (id: string, text: string, cwd?: string) =>
       post<{ ok: boolean; message: string }>(`/api/corch/workers/${enc(id)}/send`, cwd ? { text, cwd } : { text }),
+    /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
+    sendToDesktopChat: (sessionId: string, text: string) =>
+      post<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>(`/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }),
     /** AgentHydra's spend report over `period` (all, 30d, 7d): sessions, turns, tokens and dollars per source, model and day. */
     spend: (period: string) => get<AhSpendReport>(`/api/analytics/spend?period=${enc(period)}`, STATS_TIMEOUT_MS),
     activity: (period: string) => get<AhActivityReport>(`/api/analytics/activity?period=${enc(period)}`, STATS_TIMEOUT_MS),

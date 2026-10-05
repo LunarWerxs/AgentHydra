@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import type { CloudList } from '@shared/protocol'
+import type { CloudList, DesktopMessageRequest, DesktopMessageResult } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -51,6 +51,24 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/external/sessions/:id/items', async (c) => {
     try {
       return c.json(await b.externalItems(c.req.param('id')))
+    } catch (err) {
+      return fail(c, b, err)
+    }
+  })
+  // A message for a Claude Desktop chat that is working: AgentHydra queues it in the chat itself.
+  app.post('/api/external/sessions/:id/message', async (c) => {
+    let text: unknown
+    try {
+      text = ((await c.req.json()) as Partial<DesktopMessageRequest> | null)?.text
+    } catch {
+      return c.json({ error: 'the body must be JSON: { "text": "..." }' }, 400)
+    }
+    if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400)
+    try {
+      const id = c.req.param('id')
+      const r = await b.client.sendToDesktopChat(id, text.trim())
+      if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
+      return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
     } catch (err) {
       return fail(c, b, err)
     }

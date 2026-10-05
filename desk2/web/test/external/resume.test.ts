@@ -78,7 +78,7 @@ describe('the stand-in chat of a resumable outside session', () => {
 const calls: { path: string; method: string; body: unknown }[] = []
 let socket: { onmessage: ((e: { data: string }) => void) | null } | null = null
 const g = globalThis as Record<string, unknown>
-g.document ??= { title: 'Hydra Desk', hidden: false }
+g.document ??= { title: 'Hydra Desk', hidden: false, createElement: () => ({}) } // vue's runtime-dom makes a <template> when it loads
 g.window ??= { location: { protocol: 'http:', host: 'localhost:7801' }, addEventListener() {}, dispatchEvent() {}, focus() {} }
 g.location ??= { protocol: 'http:', host: 'localhost:7801' }
 g.Notification ??= { permission: 'denied', requestPermission() {} }
