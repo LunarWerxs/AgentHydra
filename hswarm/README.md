@@ -119,6 +119,17 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 - `AGENTHYDRA_HSWARM_DIR` names the folder holding `hswarm/` when it is not beside the app (a wrong folder is reported in the tab, not replaced).
 - `AGENTHYDRA_PYTHON` names the interpreter (default `python`, `python3` off Windows).
 
+## One tool with CliMayte
+
+Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default
+`http://127.0.0.1:7787`) whether the owner's Claude subscription is the cheaper route. The task is asked about when it
+has an absolute `cwd`, tools `read`, `edit` or `all`, no `writable` globs, receipts, scripted diff or runtime, and is
+not already inside a CliMayte worker (`AGENTHYDRA_CLIMAYTE_WORKER`). On `subscription` it runs as a CliMayte worker
+(kind `code` for edit/all, else `review`), polled every 10 s up to the task's `timeout_s`; the worker's report is the
+answer. No answer within 2 s, any error, or a failed or cancelled worker keeps the API route (a failed worker falls back
+once). The route and the decision's reason are in the result's `selection.route`; the ledger line says provider
+`climayte`. Switch it off with `route_via_climayte = false` in `settings.toml` (default on).
+
 ## Isolation
 
 - All state is isolated under `HSWARM_HOME` (default `~/.hswarm`)

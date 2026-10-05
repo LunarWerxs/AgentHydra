@@ -823,7 +823,8 @@ def brief_selection(selection: dict | None, error: str | None = None) -> dict | 
     and a NoCapableSwarmRoute result keeps it too, since there it IS the answer."""
     if not isinstance(selection, dict) or (error or "").startswith("NoCapableSwarmRoute"):
         return selection
-    out = {k: selection[k] for k in ("below_floor", "unpinned_from", "pinned_error") if selection.get(k)}
+    # `route`: which route the task took and why (climayte_route.py), kept on every row that carries one.
+    out = {k: selection[k] for k in ("below_floor", "unpinned_from", "pinned_error", "route") if selection.get(k)}
     if "below_floor" in out and selection.get("warnings"):
         out["warnings"] = selection["warnings"][:1]  # dispatch puts the below-floor sentence first
     attempts = selection.get("attempts")

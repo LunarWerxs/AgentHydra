@@ -271,6 +271,9 @@ REFERENCE_MIX = {"hit": 0.651, "miss": 0.318, "out": 0.031}
 # NOT named ROUTING: that is already this module's path to routing.jsonl, the agent_routing_gate's log.
 _PRICE_ROUTING_DEFAULT = (os.environ.get("HSWARM_PRICE_ROUTING") or "on").strip().lower() not in ("0", "off", "false", "no")
 PRICE_ROUTING = _PRICE_ROUTING_DEFAULT
+# `route_via_climayte` in settings.toml: ask AgentHydra (POST /api/routing/decide) whether an agentic task should run as a
+# CliMayte worker on the owner's Claude subscription instead of its API route (climayte_route.py). On by default.
+ROUTE_VIA_CLIMAYTE = True
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -430,12 +433,14 @@ def _inherit() -> None:
 
 
 def _apply_settings(doc: dict) -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD
+    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
     if isinstance(doc.get("routing"), bool):
         PRICE_ROUTING = doc["routing"]
+    if isinstance(doc.get("route_via_climayte"), bool):
+        ROUTE_VIA_CLIMAYTE = doc["route_via_climayte"]
     bias = doc.get("load_bias")
     if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
         LOAD_BIAS = float(bias)
@@ -461,7 +466,7 @@ _BUILTIN_DOCS = _builtins()
 
 
 def _reset() -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD
+    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -469,6 +474,7 @@ def _reset() -> None:
     # Reset with everything else: a settings file that says nothing about routing must not leave a
     # `routing = false` from a PREVIOUS read standing (it did until 2026-09-17).
     PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD = _PRICE_ROUTING_DEFAULT, _LOAD_BIAS_DEFAULT, None
+    ROUTE_VIA_CLIMAYTE = True
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

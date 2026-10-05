@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import blobs, breaker, config, escalation, input_limit, ledgerstore, review, scripted, survival, utilization, verify
+from . import blobs, breaker, climayte_route, config, escalation, input_limit, ledgerstore, review, scripted, survival, utilization, verify
 from .agent import LIVE_ROW, LIVE_SPEND, run_api_task
 from .budget import Budget
 from .caller import detect as detect_caller
@@ -390,6 +390,18 @@ def unservable(tasks: list[Task]) -> str | None:
               "whose route is separate. `hswarm doctor` shows routes_now.")
 
 
+def _via_climayte(res: Result) -> bool:
+    return ((res.selection or {}).get("route") or {}).get("via") == "climayte"
+
+
+def _route_fields(res: Result) -> dict:
+    """Ledger columns for a task CliMayte served: its worker, why it went there, and that nothing was billed per token."""
+    route = (res.selection or {}).get("route") or {}
+    if route.get("via") != "climayte":
+        return {}
+    return {"climayte_worker": route.get("worker"), "route_why": route.get("why"), "billed": False}
+
+
 def _provider(model: str) -> str:
     try:
         return config.provider_of(model)
@@ -670,6 +682,16 @@ class JobManager:
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
+        # Before the plan's own route runs: an agentic task may be cheaper on the owner's Claude subscription (climayte_route.py).
+        served, route_note = await climayte_route.consult(job.id, task)
+        if served is not None:
+            return served, None
+        res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
+        if route_note and isinstance(res, Result):
+            res.selection = {**(res.selection or {}), "route": route_note}
+        return res, transcript
+
+    async def _run_legs_api(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         pinned = task.model
         res, transcript = await self._run_route(job, task, warm, is_pilot)
         if not needs_other_route(res):
@@ -1380,7 +1402,7 @@ class JobManager:
                 packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
                 (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
             row = {
-                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": _provider(res.model),
+                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else _provider(res.model),
                 "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
                 "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
                 "failover": ",".join(res.failover) or None,
@@ -1399,6 +1421,7 @@ class JobManager:
                 "liveness": res.liveness or None,
                 "taint": res.taint or None,
                 **({} if res.cached_from else billed_fields(res)),
+                **_route_fields(res),
                 **ledger_fields(job.caller),
             }
             if getattr(res, "edit_snapshot", None):
