@@ -229,6 +229,14 @@
   }
 }
 
+/* Hydra Desk 2: while the pane is out of Desk's view (lib/desk-embed.ts) nothing here moves. Spinners,
+   pulses and pings stop where they are, so the hidden frame draws no frames, and go on when it is back. */
+html.desk-hidden *,
+html.desk-hidden *::before,
+html.desk-hidden *::after {
+  animation-play-state: paused !important;
+}
+
 /* --- rendered transcript markdown (lib/markdown.ts) -------------------------------------------
    Scoped under .md so it can only ever affect a rendered message body, never the app chrome. The
    type scale stays close to the surrounding chat text: a transcript is a conversation being read

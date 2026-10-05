@@ -146,7 +146,7 @@ const ROW =
             <span class="shrink-0 pr-1 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(r.lastActivityAt, now) }}</span>
           </div>
         </Tip>
-        <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" :now="now" @open="(w: CliMayteWorker) => emit('open-task', w)" />
+        <TaskRows v-if="props.tasksOf?.(r.id)" :nodes="props.tasksOf(r.id)!" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" />
         </template>
       </div>
     </section>

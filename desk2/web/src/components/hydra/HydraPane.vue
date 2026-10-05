@@ -4,7 +4,7 @@ import { ArrowLeft, RefreshCw } from '@lucide/vue'
 import type { AhMessage } from '@shared/hydra-embed'
 import { Tip } from '@/components/ui/tooltip'
 import { agentHydraIcon } from '@/lib/icons'
-import { attachHydraFrame, hydraReady, hydraSidebar } from './api'
+import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
@@ -13,7 +13,7 @@ import { attachHydraFrame, hydraReady, hydraSidebar } from './api'
 // copy asks to open (ah:open-session) or its session tiles (ah:show-sessions) come back to Desk. A tab
 // with a sidebar of its own hands it over (ah:sidebar) and Desk's sidebar draws it (shared/hydra-embed.ts).
 // The frame loads the first time the pane opens and then stays, so going back and forth keeps AgentHydra
-// where it was.
+// where it was; out of view it is told so (desk:visible), and its polls rest until it comes back.
 const props = defineProps<{ open: boolean; /** Left padding of the title strip (the chrome bar lies over it when the sidebar is hidden). */ padLeft: number }>()
 const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': [] }>()
 
@@ -36,6 +36,7 @@ async function readStatus(): Promise<void> {
 watch(
   () => props.open,
   (open) => {
+    setHydraVisible(open)
     if (!open) return
     started.value = true
     // Coming back to a pane that found AgentHydra down asks again.

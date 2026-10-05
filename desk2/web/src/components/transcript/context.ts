@@ -1,6 +1,6 @@
 // State a TranscriptView shares with every row it renders (rows unmount when windowed out, so
 // open/closed state lives here, not in the rows).
-import { computed, inject, onScopeDispose, provide, reactive, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue'
+import { computed, inject, provide, reactive, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
 
 export interface TranscriptCtx {
@@ -41,25 +41,4 @@ export function useTranscript(): TranscriptCtx {
     isOpen: (key, fallback = false) => open.get(key) ?? fallback,
     toggle: (key, fallback = false) => open.set(key, !(open.get(key) ?? fallback)),
   }
-}
-
-// One shared 1 s clock for every elapsed counter on screen.
-const now = ref(Date.now())
-let users = 0
-let timer: ReturnType<typeof setInterval> | null = null
-
-export function useClock(): Ref<number> {
-  users++
-  if (!timer) {
-    now.value = Date.now()
-    timer = setInterval(() => (now.value = Date.now()), 1000)
-  }
-  onScopeDispose(() => {
-    users--
-    if (users === 0 && timer) {
-      clearInterval(timer)
-      timer = null
-    }
-  })
-  return now
 }

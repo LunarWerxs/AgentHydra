@@ -91,7 +91,34 @@ export function flashRow(el: HTMLElement): void {
   setTimeout(() => el.classList.remove('desk-flash'), 2200)
 }
 
+// Desk keeps this frame loaded behind its chat once it has been opened. While the pane is out of view
+// (desk:visible false) the page counts as hidden: document.hidden and visibilityState say so on top of
+// the browser's own answer (a minimized window), a visibilitychange goes out when that flips, and the
+// page's CSS animations stop (style.css html.desk-hidden). So every poll that rests on a hidden page
+// (lib/visible-poll.ts and the ones that read document.hidden) rests here too, and catches up on return.
+let deskHidden = false
+
+function watchDeskVisibility(): void {
+  const proto = Document.prototype
+  const hidden = Object.getOwnPropertyDescriptor(proto, 'hidden')!.get!
+  const state = Object.getOwnPropertyDescriptor(proto, 'visibilityState')!.get!
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => deskHidden || hidden.call(document) })
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => (deskHidden ? 'hidden' : state.call(document)),
+  })
+}
+
+function setDeskHidden(next: boolean): void {
+  if (next === deskHidden) return
+  const was = document.hidden
+  deskHidden = next
+  document.documentElement.classList.toggle('desk-hidden', next)
+  if (document.hidden !== was) document.dispatchEvent(new Event('visibilitychange'))
+}
+
 if (EMBEDDED) {
+  watchDeskVisibility()
   window.addEventListener('message', (e: MessageEvent) => {
     if (e.source !== window.parent || e.origin !== window.location.origin) return
     const m = e.data as DeskMessage | null
@@ -99,6 +126,7 @@ if (EMBEDDED) {
     if (m.type === 'desk:sidebar') sidebarHandlers.get(m.view)?.(m)
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
+    else if (m.type === 'desk:visible') setDeskHidden(!m.visible)
   })
   tellDesk({ type: 'ah:ready' })
 }

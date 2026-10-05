@@ -349,15 +349,21 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** Where each session's JSONL was last found: checked first, so a read is a stat, not a scan of every account folder. */
   const foundAt = new Map<string, string>()
 
+  /** Each worker's list as last answered, with the per-file lists it was made of (sessionJsonlItems answers the
+   *  same array for a file that has not changed): while none changed, the same list goes back. The newest few. */
+  const workerReads = new Map<string, { parts: TranscriptItem[][]; items: TranscriptItem[] }>()
+  const WORKER_READS_KEPT = 16
+
   /**
    * A worker's transcript from its own .jsonl files, in session order (`sessions` then `sessionId`). A move
    * to another account copies the session into that account's folder, so the newest copy of each is read
    * (findSessionJsonl): the transcript follows the worker across accounts. Items repeated in a later
-   * session (a resume copies the history) keep their first place.
+   * session (a resume copies the history) keep their first place. While no file changed it answers the very
+   * array it answered last time, so the caller can skip it whole.
    */
   async function workerItems(sessionIds: string[], cwd: string | null, o: { rescan?: boolean } = {}): Promise<TranscriptItem[]> {
     let roots: string[] | null = null
-    const out = new Map<string, TranscriptItem>()
+    const parts: TranscriptItem[][] = []
     for (const sid of new Set(sessionIds)) {
       let file = o.rescan ? null : foundAt.get(sid) ?? null
       if (file && !existsSync(file)) file = null
@@ -367,9 +373,18 @@ export function createBridge(opts: BridgeOptions = {}) {
       }
       if (!file) continue
       foundAt.set(sid, file)
-      for (const item of sessionJsonlItems(file, cwd)) out.set(item.id, item)
+      parts.push(sessionJsonlItems(file, cwd))
     }
-    return [...out.values()]
+    const key = `${sessionIds.join(',')}|${cwd ?? ''}`
+    const last = workerReads.get(key)
+    if (last && last.parts.length === parts.length && last.parts.every((p, i) => p === parts[i])) return last.items
+    const out = new Map<string, TranscriptItem>()
+    for (const part of parts) for (const item of part) out.set(item.id, item)
+    const items = [...out.values()]
+    workerReads.delete(key)
+    workerReads.set(key, { parts, items })
+    if (workerReads.size > WORKER_READS_KEPT) workerReads.delete(workerReads.keys().next().value as string)
+    return items
   }
 
   async function sendToWorker(id: string, text: string, cwd?: string): Promise<void> {

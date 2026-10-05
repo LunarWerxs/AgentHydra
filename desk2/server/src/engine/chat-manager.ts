@@ -141,6 +141,8 @@ interface Entry {
   starting?: Promise<void>
   /** A CliMayte chat: what each item of its Desk file looked like when last written or emitted (the file is the record, the worker's session JSONL the live source). */
   emitted?: Map<string, string>
+  /** The worker's items as the last poll went through them: the bridge answers the same array while nothing changed. */
+  workerSeen?: TranscriptItem[]
   /** The account the worker's JSONL was last read under: a change means the live file may have moved, so it is looked for again. */
   readAccount?: string | null
   /** False once its worker was seen finished: the poll stops reading it until the next send. */
@@ -292,6 +294,7 @@ export class ChatManager {
     const items = this.store.loadItems(e.chat.id).sort((a, b) => a.ts - b.ts)
     if (!e.emitted) {
       e.emitted = new Map()
+      e.workerSeen = undefined
       for (const item of items) e.emitted.set(item.id, JSON.stringify(item))
     }
     return e.sent?.length ? [...items, ...e.sent] : items
@@ -821,15 +824,19 @@ export class ChatManager {
     if (w.sessionId) chat.sessionId = w.sessionId
     e.workerLive = isActiveWorkerStatus(w.status)
 
-    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those.
-    this.deskItems(e)
+    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
+    // Desk file is read once, for what it already holds (emitted), not on every poll.
+    if (!e.emitted) this.deskItems(e)
     const rescan = e.readAccount !== w.accountId
     const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan })
     if (this.chats.get(chat.id) !== e) return
     e.readAccount = w.accountId
     const emitted = e.emitted!
     let newReply = false
-    for (const item of items) {
+    // The same array as last time: nothing in the worker's files changed, so nothing in it is new.
+    const unchanged = items === e.workerSeen
+    e.workerSeen = items
+    for (const item of unchanged ? [] : items) {
       const sig = JSON.stringify(item)
       if (emitted.get(item.id) === sig) continue
       if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true

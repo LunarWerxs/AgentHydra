@@ -74,8 +74,11 @@ try {
   $applied = -not $Apply
   $last = ''
   $missingSince = Get-Date
+  $proc = $null
   while ($true) {
-    $proc = Find-Window
+    # Looked up once, then followed: Find-Window's process query took half a second, every 2 s, for as
+    # long as the window was open. Refresh() re-reads the window handle of the process already found.
+    if (-not $proc -or $proc.HasExited) { $proc = Find-Window } else { $proc.Refresh() }
     $h = if ($proc) { $proc.MainWindowHandle } else { [IntPtr]::Zero }
     if ($h -eq [IntPtr]::Zero) {
       # Gone after it was seen, or never showed up: nothing left to keep.

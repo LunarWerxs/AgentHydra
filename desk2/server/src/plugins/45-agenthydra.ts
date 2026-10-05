@@ -13,6 +13,7 @@ import { existsSync, statSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import type { Hono } from 'hono'
 import { bridge } from '../bridge'
+import { cacheControl } from '../static-cache'
 
 const DIST = resolve(import.meta.dir, '../../../hydra/dist')
 const BASE = '/ah'
@@ -76,8 +77,11 @@ export default function plugin(app: Hono): void {
   app.get(`${BASE}/*`, (c) => {
     const index = join(DIST, 'index.html')
     if (!existsSync(index)) return c.text("Hydra Desk 2's copy of AgentHydra is not built yet: run bun run build in desk2.", 503)
-    const file = resolve(DIST, `.${decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)}`)
-    if (file.startsWith(DIST + sep) && existsSync(file) && statSync(file).isFile()) return new Response(Bun.file(file))
+    const path = decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)
+    const file = resolve(DIST, `.${path}`)
+    if (file.startsWith(DIST + sep) && existsSync(file) && statSync(file).isFile()) {
+      return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
+    }
     return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })
 }
