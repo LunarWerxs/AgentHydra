@@ -141,6 +141,12 @@ class PermissionModeTest(unittest.TestCase):
         self.assertEqual(row["permissionPrompt"]["targets"], [{
             "sessionId": "local_destination", "title": "Destination", "isSelf": False}])
 
+    def test_no_wait_floor_finds_a_transcript_stamped_just_after_the_scan_clock(self):
+        # Windows can stamp a fresh write a little after time.time(); a 0 floor must still see it.
+        ahead = unblock.time.time() + 0.5
+        os.utime(self.transcript, (ahead, ahead))
+        self.assertEqual(self.scan()["sessionId"], "caller")
+
     def test_changed_transcript_or_target_prevents_an_actuator_call(self):
         row = self.scan()
         self.write(assistant(call("replacement")))

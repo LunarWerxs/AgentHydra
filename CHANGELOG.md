@@ -18,6 +18,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Fixed
 
 - **Rows in Hydra Desk 2's desk list no longer pop in and out by themselves** (2026-10-05, owner: "things just keep kind of, like, popping in and popping out for no reason"). Besides the live chats and sessions, the desk list showed any transcript written in the last 30 seconds. HSwarm's jobs write theirs in bursts, so each job appeared with every burst and vanished 30 seconds into every pause. HSwarm's jobs are now left out of the desk list, as the cloud list already left them out (HSwarm has its own tab), and another session only the transcript index knows (a Codex session, a CLI outside `~/.claude`) stays listed, idle, for 10 minutes after its last write instead of 30 seconds.
+- **`unblock_prompts.py --min-wait 0` no longer misses a chat whose transcript was just written** (2026-10-05). A floor of 0 is meant to switch the quiet gate off, but on Windows a fresh write can be stamped a moment after the scan's clock, which made the chat's quiet time negative and skipped it. A negative quiet time now counts as 0. It turned up as a flaky orchestrator test on CI.
 
 ## [1.10.0] - 2026-10-05
 

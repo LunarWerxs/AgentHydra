@@ -181,7 +181,9 @@ def find_stuck(only: set[str] | None = None,
             if not f or not f.exists():
                 continue
             try:
-                quiet = now - f.stat().st_mtime
+                # A write the file clock stamps a hair after `now` is quiet 0, not negative: a
+                # floor of 0 ("ignore the quiet gate") skipped it (CI flake, 2026-10-05).
+                quiet = max(0.0, now - f.stat().st_mtime)
             except OSError:
                 continue
             if quiet < wait_floor:
