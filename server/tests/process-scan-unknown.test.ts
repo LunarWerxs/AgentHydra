@@ -32,6 +32,7 @@ import {
   procTableForTests,
   scanClaudeProcesses,
 } from '../src/core/process'
+import { nativeProcessTableForTests } from '../src/core/win-process-table'
 
 const cleanupDirs: string[] = []
 afterEach(() => {
@@ -56,11 +57,15 @@ async function withBrokenSpawn<T>(fn: () => Promise<T>): Promise<T> {
     throw new Error('injected process-enumeration failure')
   }
   procTableForTests.override = () => null
+  // The in-process Windows table is a scan too; it has to fail with the spawns.
+  const actualNative = nativeProcessTableForTests.disabled
+  nativeProcessTableForTests.disabled = true
   try {
     return await fn()
   } finally {
     ;(Bun as unknown as { spawn: unknown }).spawn = actual
     procTableForTests.override = actualProc
+    nativeProcessTableForTests.disabled = actualNative
     invalidateClaudeProcessCache()
     invalidateCodexProcessCache()
   }

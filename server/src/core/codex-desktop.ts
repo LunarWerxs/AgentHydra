@@ -5,6 +5,7 @@ import { extractUserDataDir, linuxProcTable } from './process'
 import { awaitExitBounded } from './process.ts'
 import { createScanCache } from './scan-cache'
 import type { CMActionResult } from './shared'
+import { nativeProcessesNamed } from './win-process-table'
 
 /** `taskkill` signals and exits; it does not wait for the target to die. A run that has not
  *  returned in ten seconds is wedged, and the caller's next step (a forced kill, a re-scan) is
@@ -168,6 +169,16 @@ async function capture(command: string[], timeoutMs = 10_000): Promise<string | 
  *  two used to share one `return []`, which is what let a delete guard read a broken scan as
  *  "not running" (audit AH-02). */
 async function listWindowsDesktopProcessRecords(): Promise<CodexDesktopProcessRecord[] | null> {
+  // In-process first (win-process-table.ts), on the Codex table's 5-second poll.
+  const native = nativeProcessesNamed(['ChatGPT.exe', 'Codex.exe'])
+  if (native)
+    return native.map((p) => ({
+      pid: p.pid,
+      parentPid: p.ppid,
+      name: p.name,
+      commandLine: p.commandLine ?? '',
+      ...(p.executablePath ? { executablePath: p.executablePath } : {}),
+    }))
   const script = [
     "$ErrorActionPreference = 'Stop';",
     `Get-CimInstance -ClassName Win32_Process -Filter "Name='ChatGPT.exe' OR Name='Codex.exe'" |`,

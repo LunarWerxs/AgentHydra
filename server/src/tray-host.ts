@@ -25,9 +25,11 @@ export {
   trayHostProcessState,
 } from './tray-bootstrap.mjs'
 
+import { nativeProcessesNamed } from './core/win-process-table'
 import {
   type StartTrayHostDeps,
   startTrayHostIfMissing as startShared,
+  TRAY_HOST_EXE,
   type TrayHostDecision,
   trayHostProcessState,
 } from './tray-bootstrap.mjs'
@@ -42,6 +44,14 @@ export async function trayHostRunning(): Promise<boolean> {
   // Scoped to THIS app's config: every kit app runs the same lunarwerx-tray.exe, so an unscoped
   // count answers "running" for whichever sibling happens to be up (measured 2026-09-11, when
   // DevWebUI skipped its own tray because AgentHydra's host was alive).
+  // In-process first (core/win-process-table.ts): this runs every 30 s, and the kit probe is a
+  // PowerShell + WMI read of every process. A host whose command line cannot be read counts as
+  // this app's, for the same stay-alive reason as above.
+  const hosts = nativeProcessesNamed([TRAY_HOST_EXE])
+  if (hosts) {
+    const config = TRAY_HOST_CONFIG.toLowerCase()
+    return hosts.some((h) => h.commandLine === null || h.commandLine.toLowerCase().includes(config))
+  }
   return (await trayHostProcessState({ configFile: TRAY_HOST_CONFIG })) ?? true
 }
 

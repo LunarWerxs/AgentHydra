@@ -157,6 +157,7 @@ import { judgeWaveTask, readWave, waveBatch, waveDone, writeWave } from './clima
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
+import { nativeCommandLines } from './core/win-process-table'
 import { POINTER_DIR } from './instance'
 import { parseResetTime } from './usage'
 
@@ -748,20 +749,29 @@ function runnerQueryArgv(pids: number[]): string[] {
 /** Only a command line that came back and does not name the attempt's spec makes a runner a
  *  stranger. A failed or timed-out query, or a pid with no line or a blank one (it ended meanwhile,
  *  or WMI would not show it), leaves the runner unknown, to be asked again. */
-function judgeRunners(runners: { pid: number; log: string }[], ok: boolean, stdout: string): void {
-  if (!ok) return
-  const lines = new Map<number, string>()
-  for (const line of stdout.split(/\r?\n/)) {
-    const [pid, ...rest] = line.split('\t')
-    const command = rest.join('\t').trim()
-    if (pid && command) lines.set(Number(pid), command)
-  }
+function judgeRunners(
+  runners: { pid: number; log: string }[],
+  lines: Map<number, string> | null,
+): void {
+  if (!lines) return
   for (const { pid, log } of runners) {
     const command = lines.get(pid)
     if (!command) continue
     if (command.includes(runnerSpecPath(log))) confirmedRunners.add(pid)
     else foreignRunners.add(pid)
   }
+}
+
+/** The runner query's "pid<TAB>command" lines, or null when it failed or timed out. */
+function runnerQueryLines(ok: boolean, stdout: string): Map<number, string> | null {
+  if (!ok) return null
+  const lines = new Map<number, string>()
+  for (const line of stdout.split(/\r?\n/)) {
+    const [pid, ...rest] = line.split('\t')
+    const command = rest.join('\t').trim()
+    if (pid && command) lines.set(Number(pid), command)
+  }
+  return lines
 }
 
 /** Ask about every running attempt's unconfirmed runner in ONE PowerShell call under a timeout:
@@ -796,11 +806,14 @@ function checkRunners(): void {
   if (!runners.length) return
   runnerCheckAt = Date.now()
   runnerCheck = (async () => {
+    // In-process first (win-process-table.ts): a few ms, and no PowerShell walking every process.
+    const native = nativeCommandLines(runners.map((p) => p.pid))
+    if (native) return judgeRunners(runners, native)
     const r = await spawnCaptured(runnerQueryArgv(runners.map((p) => p.pid)), {
       timeoutMs: RUNNER_QUERY_TIMEOUT_MS,
       wantStderr: false,
     })
-    judgeRunners(runners, r.code === 0 && !r.timedOut, r.stdout)
+    judgeRunners(runners, runnerQueryLines(r.code === 0 && !r.timedOut, r.stdout))
   })()
     .catch((err) => console.error('[climayte] runner identity query failed:', err))
     .finally(() => {
@@ -928,14 +941,19 @@ function killLateStarts(): void {
 function killRunners(runners: { pid: number; log: string }[]): void {
   const unknown = runners.filter((r) => runnerIdentity(r.pid) === 'unknown')
   if (unknown.length) {
-    // A stop cannot wait for the next tick's check: ask about these now, under the same timeout.
-    const r = Bun.spawnSync(runnerQueryArgv(unknown.map((u) => u.pid)), {
-      stdout: 'pipe',
-      stderr: 'ignore',
-      windowsHide: true,
-      timeout: RUNNER_QUERY_TIMEOUT_MS,
-    })
-    judgeRunners(unknown, r.success, r.stdout?.toString() ?? '')
+    // A stop cannot wait for the next tick's check: ask about these now. In-process when it can
+    // be; the PowerShell fallback holds the daemon for as long as WMI takes, under the same timeout.
+    const native = nativeCommandLines(unknown.map((u) => u.pid))
+    if (native) judgeRunners(unknown, native)
+    else {
+      const r = Bun.spawnSync(runnerQueryArgv(unknown.map((u) => u.pid)), {
+        stdout: 'pipe',
+        stderr: 'ignore',
+        windowsHide: true,
+        timeout: RUNNER_QUERY_TIMEOUT_MS,
+      })
+      judgeRunners(unknown, runnerQueryLines(r.success, r.stdout?.toString() ?? ''))
+    }
   }
   const ours: number[] = []
   for (const { pid, log } of runners) {

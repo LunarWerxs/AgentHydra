@@ -26,6 +26,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { normalizePath } from './paths.ts'
 import { createScanCache } from './scan-cache.ts'
 import { captureInWorker } from './spawn-worker.ts'
+import { nativeProcessesNamed, nativeProcessInfo, nativeProcessTable } from './win-process-table.ts'
 
 /** One row of the OS process table, as `ps -eo pid=,ppid=,command=` would print it. */
 export interface ProcTableRow {
@@ -681,7 +682,16 @@ async function listWindowsProcessesViaWmic(): Promise<WinProcRecord[] | null> {
 /** null = BOTH Windows strategies failed. That is "could not enumerate", which the public
  *  `scanClaudeProcesses` reports as such; it is never folded into an empty list here. */
 async function listWindowsProcesses(): Promise<CMProcessInfo[] | null> {
-  let records = await listWindowsProcessesViaCim()
+  // In-process first (win-process-table.ts): the same four fields without a PowerShell, a conhost
+  // and a WMI read of every process on the machine, on the Instances tab's 4-second poll.
+  let records: WinProcRecord[] | null =
+    nativeProcessesNamed(['Claude.exe'])?.map((p) => ({
+      pid: p.pid,
+      commandLine: p.commandLine,
+      workingSetSize: p.workingSetSize,
+      creationDate: p.creationDate,
+    })) ?? null
+  if (records === null) records = await listWindowsProcessesViaCim()
   if (records === null) {
     records = await listWindowsProcessesViaWmic()
   }
@@ -906,6 +916,8 @@ export function desktopEngineDir(exePath: string | null | undefined): string | n
 /** The pid + executable path of every `claude.exe` on Windows, from one CIM query. Null when the
  *  query failed or its JSON could not be parsed (never folded into "none running"). */
 async function windowsClaudeRows(): Promise<{ pid: number; exe: string | null }[] | null> {
+  const native = nativeProcessesNamed(['claude.exe'])
+  if (native) return native.map((p) => ({ pid: p.pid, exe: p.executablePath }))
   const stdout = await runCaptureStdout([
     'powershell',
     '-NoProfile',
@@ -1091,10 +1103,40 @@ export async function processAncestry(
   }
 }
 
+/** The same walk as {@link windowsAncestry}'s PowerShell loop, over one in-process snapshot. Null
+ *  when the table cannot be read here. */
+function windowsAncestryNative(startPid: number, includeSelf: boolean): AncestorProcess[] | null {
+  const table = nativeProcessTable()
+  if (!table) return null
+  const byPid = new Map(table.map((p) => [p.pid, p]))
+  const out: AncestorProcess[] = []
+  const seen = new Set<number>()
+  let pid = startPid
+  for (let i = 0; i < MAX_ANCESTRY_DEPTH; i++) {
+    if (!pid || seen.has(pid)) break
+    seen.add(pid)
+    const proc = byPid.get(pid)
+    if (!proc) break
+    if (i > 0 || includeSelf) {
+      const info = nativeProcessInfo(pid)
+      out.push({
+        pid,
+        name: proc.name || null,
+        executablePath: info?.executablePath ?? null,
+        commandLine: info?.commandLine ?? null,
+      })
+    }
+    pid = proc.ppid
+  }
+  return out
+}
+
 async function windowsAncestry(
   startPid: number,
   includeSelf = false,
 ): Promise<AncestorProcess[] | null> {
+  const native = windowsAncestryNative(startPid, includeSelf)
+  if (native) return native
   // The loop lives in PowerShell so the whole chain costs ONE spawn (~300ms) instead of one per
   // hop. `$out` is forced to an array with @() — ConvertTo-Json serializes a single-element array
   // as a bare object otherwise, and the parse below would have to guess.

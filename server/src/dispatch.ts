@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { isDispatchReady } from './boot-state'
 import { RUN_LOG_DIR } from './config'
 import { killProcessTree, spawnCaptured } from './core/process'
+import { nativeCommandLines, nativeProcessTable } from './core/win-process-table'
 import { coerceQueueItem, db } from './db'
 import { headlessRunsAllowed, NO_HEADLESS_REASON } from './headless-policy'
 import { deliverIncidentNotification, recordIncident } from './incidents'
@@ -396,6 +397,13 @@ async function isRunnerAlive(id: string): Promise<boolean> {
   }
   try {
     if (process.platform === 'win32') {
+      // In-process first (win-process-table.ts); WQL's LIKE matched any case, so this does too.
+      const table = nativeProcessTable()
+      const commands = table && nativeCommandLines(table.map((p) => p.pid))
+      if (commands) {
+        const lower = needle.toLowerCase()
+        return [...commands.values()].some((c) => c.toLowerCase().includes(lower))
+      }
       const out = await probe([
         'powershell',
         '-NoProfile',

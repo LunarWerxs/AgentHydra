@@ -51,6 +51,7 @@ import { repointClaudeStartShortcut } from './claude-start-shortcut'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
 import { type CapturedRun, scanClaudeProcesses, spawnCaptured } from './core/process'
+import { nativeProcessInfo, nativeProcessTable } from './core/win-process-table'
 import {
   isFinishedBuild,
   newestFinishedBuild,
@@ -759,6 +760,13 @@ async function squirrelUpdate(installed: string): Promise<{ ok: boolean; detail:
 
 async function windowsCliInUse(npmRoot: string): Promise<boolean> {
   const pkgDir = join(npmRoot, 'node_modules', '@anthropic-ai', 'claude-code')
+  const table = nativeProcessTable()
+  if (table) {
+    const prefix = pkgDir.toLowerCase()
+    return table.some((p) =>
+      nativeProcessInfo(p.pid)?.executablePath?.toLowerCase().startsWith(prefix),
+    )
+  }
   const run = await spawnCaptured(
     [
       'powershell.exe',
