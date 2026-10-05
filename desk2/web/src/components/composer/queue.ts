@@ -31,6 +31,12 @@ export function sendOrEnqueue(s: { status: ChatStatus | null; queued: number; se
   return (s.ctrl || s.sendMode === 'queue') && QUEUE_BUSY.includes(s.status) ? 'enqueue' : 'send'
 }
 
+/** What a plain Enter does: the queue popover's choice and the send button's right-click menu. Short on purpose. */
+export const SEND_MODES: { value: QueueSendMode; label: string; hint: string }[] = [
+  { value: 'immediate', label: 'Send immediately', hint: 'Into the running turn' },
+  { value: 'queue', label: 'Send as a queue', hint: 'After the turn ends' }
+]
+
 const HELD_HINT = 'Resume them in the queue (right-click)'
 
 /**

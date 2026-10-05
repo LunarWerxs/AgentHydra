@@ -3,19 +3,18 @@
 // pause, what a plain Enter does, the held chats, and the queued messages and new chats with their
 // actions. Content only; the send button's split (anchored, no trigger) and the dock chip each own the
 // Popover root. Everything goes to the server, which owns the queue; a refusal shows its words here.
-import { computed, nextTick, ref } from 'vue'
-import type { QueueItem, QueueSendMode } from '@shared/protocol'
+import { computed } from 'vue'
 import { icons } from '@/lib/icons'
 import { PopoverContent } from '@/components/ui/popover'
-import { Tip } from '@/components/ui/tooltip'
-import { useShellSource } from '@/components/shell/source'
-import { DESCRIPTION, HEADER, ITEM, MENU, SEPARATOR, TOOL_BUTTON, TOOL_ICON } from './menu'
-import { heldRows, queueRows } from './queue'
+import { DESCRIPTION, HEADER, ITEM, MENU, SEPARATOR, TOOL_BUTTON } from './menu'
+import { heldRows, queueRows, SEND_MODES } from './queue'
+import { useQueueActions } from './queue-actions'
+import QueueItemActions from './QueueItemActions.vue'
 
 const props = defineProps<{
   chatId: string | null
-  /** The anchor group: a press inside it (the chevron, the send button) must not count as outside. */
-  anchor?: HTMLElement | null
+  /** What it is anchored to and opened from (the send group, the tray): a press inside one must not count as outside. */
+  anchors?: (HTMLElement | null | undefined)[]
   /** The id the opener's aria-controls names. */
   panelId?: string
 }>()
@@ -23,76 +22,14 @@ const emit = defineEmits<{ 'close-focus': [] }>()
 
 const Check = icons.check
 
-const source = useShellSource()
+const { source, error, act, editing, draft, setEditor, startEdit, onEditKey } = useQueueActions(listed)
 const queue = computed(() => source.queue?.value ?? null)
 const titles = computed(() => new Map(source.chats.value.map((c) => [c.id, c.title])))
 const rows = computed(() => queueRows(queue.value, props.chatId, titles.value))
 const holds = computed(() => heldRows(queue.value, titles.value))
 
-const MODES: { value: QueueSendMode; label: string; hint: string }[] = [
-  { value: 'immediate', label: 'Send immediately', hint: 'Goes to the running turn right away' },
-  {
-    value: 'queue',
-    label: 'Send as a queue',
-    hint: 'Waits until the chat finishes its turn, and a new chat until an account has room. Ctrl+Enter does this while a turn runs'
-  }
-]
-
-const error = ref<string | null>(null)
-async function act(fn: () => Promise<unknown> | undefined): Promise<boolean> {
-  error.value = null
-  try {
-    await fn()
-    return true
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-    return false
-  }
-}
-
-// Inline edit: Enter saves, Shift+Enter is a new line, Esc cancels the edit (not the popover).
-const editing = ref<string | null>(null)
-const draft = ref('')
-// The rev the draft was taken from: another window's edit meanwhile makes the save a refusal, not an overwrite.
-let editRev = 0
-let editor: HTMLTextAreaElement | null = null
-function setEditor(el: unknown) {
-  editor = el instanceof HTMLTextAreaElement ? el : null
-}
-function startEdit(item: QueueItem) {
-  editing.value = item.id
-  editRev = item.rev
-  draft.value = item.text
-  nextTick(() => {
-    editor?.focus()
-    editor?.setSelectionRange(draft.value.length, draft.value.length)
-  })
-}
-async function saveEdit(item: QueueItem) {
-  const text = draft.value.trim()
-  if (!text && !item.images?.length) return
-  editing.value = null
-  if (text === item.text.trim()) return
-  // A refused save reopens the edit with the text kept, unless the item went out meanwhile.
-  if (!(await act(() => source.queueEdit?.(item.id, { text, ifRev: editRev }))) && listed(item.id)) {
-    startEdit(item)
-    draft.value = text
-  }
-}
 function listed(id: string) {
   return rows.value.some((r) => r.item.id === id)
-}
-function onEditKey(e: KeyboardEvent, item: QueueItem) {
-  if (e.isComposing) return
-  if (e.key === 'Escape') {
-    // Kept from the popover's own Esc either way round: stopped here, and onEscape refuses while editing.
-    e.preventDefault()
-    e.stopPropagation()
-    editing.value = null
-  } else if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    saveEdit(item)
-  }
 }
 function onEscape(e: KeyboardEvent) {
   if (editing.value && listed(editing.value)) e.preventDefault()
@@ -100,7 +37,7 @@ function onEscape(e: KeyboardEvent) {
 
 function onOutside(e: CustomEvent<{ originalEvent: Event }>) {
   const target = e.detail.originalEvent.target
-  if (props.anchor && target instanceof Node && props.anchor.contains(target)) e.preventDefault()
+  if (target instanceof Node && props.anchors?.some((a) => a?.contains(target))) e.preventDefault()
 }
 function onCloseFocus(e: Event) {
   e.preventDefault()
@@ -135,7 +72,7 @@ function onCloseFocus(e: Event) {
       <div role="radiogroup" aria-label="When you press Enter">
         <div :class="HEADER">When you press Enter</div>
         <button
-          v-for="m in MODES"
+          v-for="m in SEND_MODES"
           :key="m.value"
           type="button"
           role="radio"
@@ -197,41 +134,15 @@ function onCloseFocus(e: Event) {
               </span>
             </p>
           </div>
-          <div
+          <QueueItemActions
             v-if="editing !== row.item.id && row.item.state !== 'sending'"
-            class="absolute right-1 top-1 flex items-center gap-0.5 rounded-[var(--radius-6)] bg-[var(--bg-popover)] p-0.5 opacity-0 shadow-(--shadow-menu-ringed) transition-opacity duration-150 group-focus-within/q:opacity-100 group-hover/q:opacity-100"
-          >
-            <Tip label="Edit" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Edit" @click="startEdit(row.item)">
-                <icons.queueEdit class="size-3.5" />
-              </button>
-            </Tip>
-            <Tip label="Move up" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Move up" :disabled="row.first" @click="act(() => source.queueMove?.(row.item.id, -1))">
-                <icons.queueMoveUp class="size-3.5" />
-              </button>
-            </Tip>
-            <Tip label="Move down" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Move down" :disabled="row.last" @click="act(() => source.queueMove?.(row.item.id, 1))">
-                <icons.queueMoveDown class="size-3.5" />
-              </button>
-            </Tip>
-            <Tip v-if="row.item.state === 'failed'" label="Try again" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Retry" @click="act(() => source.queueRetry?.(row.item.id))">
-                <icons.queueRetry class="size-3.5" />
-              </button>
-            </Tip>
-            <Tip v-else label="Send now: right away, into the running turn if the chat is working" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Send now" @click="act(() => source.queueSendNow?.(row.item.id))">
-                <icons.send class="size-3.5" />
-              </button>
-            </Tip>
-            <Tip label="Remove" side="top">
-              <button type="button" :class="TOOL_ICON" aria-label="Remove" @click="act(() => source.queueRemove?.(row.item.id))">
-                <icons.dismiss class="size-3.5" />
-              </button>
-            </Tip>
-          </div>
+            class="absolute right-1 top-1 opacity-0 transition-opacity duration-150 group-focus-within/q:opacity-100 group-hover/q:opacity-100"
+            :item="row.item"
+            :first="row.first"
+            :last="row.last"
+            :act="act"
+            @edit="startEdit(row.item)"
+          />
         </li>
       </ul>
 

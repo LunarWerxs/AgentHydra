@@ -12,6 +12,7 @@ import {
   queueBadge,
   queueRows,
   queuedForChat,
+  SEND_MODES,
   sendOrEnqueue,
   sendWords,
   trayText
@@ -240,15 +241,18 @@ describe('the queue wiring in the composer', () => {
   const read = (file: string) => readFileSync(join(import.meta.dir, '../../src/components/composer', file), 'utf8')
   const split = read('SendSplit.vue')
   const popover = read('QueuePopover.vue')
+  const actions = read('queue-actions.ts')
+  const tray = read('QueueTray.vue')
   const composer = read('Composer.vue')
 
-  it('the popover is anchored to the send group with no trigger, and the Tips sit inside the anchor', () => {
-    expect(split).toContain('<PopoverAnchor as-child>')
+  it('the popover is placed by reference with no trigger: above the tray while it shows, else the send group', () => {
+    expect(split).toContain('<PopoverAnchor as="template" :reference="anchor ?? group ?? undefined" />')
     expect(split).not.toContain('PopoverTrigger')
-    const anchor = split.indexOf('<PopoverAnchor as-child>')
-    expect(anchor).toBeGreaterThan(-1)
-    expect(split.indexOf('<Tip')).toBeGreaterThan(anchor)
-    expect(split.indexOf('<Tip')).toBeLessThan(split.indexOf('</PopoverAnchor>'))
+    // The anchor sits outside the right-click menu, whose PopperRoot it would otherwise join.
+    expect(split.indexOf('<PopoverAnchor')).toBeLessThan(split.indexOf('<ContextMenu>'))
+    expect(split.indexOf('<Tip')).toBeGreaterThan(split.indexOf('<ContextMenuTrigger as-child'))
+    expect(split).toContain(':anchors="[group, anchor]"')
+    expect(composer).toContain(':anchor="trayEl"')
     // The Tips close while the chevron or the popover shows: a blanked label left an open one as an empty pill.
     expect(split).toContain(`<Tip v-if="showStop" label="Stop (Esc)" :disabled="chevron"`)
     expect(split).toContain(`<Tip v-else :label="sendTip" :disabled="chevron"`)
@@ -269,10 +273,12 @@ describe('the queue wiring in the composer', () => {
     expect(composer).toMatch(/\(\) => !!request\.value,\s*\(docked\) => \{\s*if \(docked\) queueOpen\.value = false/)
   })
 
-  it('an edit saves against the rev it was started from', () => {
-    expect(popover).toMatch(/function startEdit[\s\S]*?editRev = item\.rev/)
-    expect(popover).toContain('ifRev: editRev')
-    expect(popover).not.toContain('ifRev: item.rev')
+  it('an edit saves against the rev it was started from, in the popover and the tray alike', () => {
+    expect(actions).toMatch(/function startEdit[\s\S]*?editRev = item\.rev/)
+    expect(actions).toContain('ifRev: editRev')
+    expect(actions).not.toContain('ifRev: item.rev')
+    expect(popover).toContain('useQueueActions(')
+    expect(tray).toContain('useQueueActions(')
   })
 
   it('Up re-checks the box after the remove, and puts the message back if it was typed into', () => {
@@ -294,14 +300,28 @@ describe('the queue wiring in the composer', () => {
   it('the chevron is placed outside the button box, so it takes no width', () => {
     expect(split).toMatch(/v-if="chevron"[\s\S]*?class="absolute bottom-0 right-full /)
     expect(split).toContain('aria-haspopup="dialog"')
-    expect(split).toContain('@contextmenu.capture="onContextMenu"')
+  })
+
+  it('right-clicking Send is a short menu (what Enter does, Resume while held), not the queue popover', () => {
+    expect(split).toContain('<ContextMenuTrigger as-child :disabled="!queue">')
+    expect(split).toContain('v-for="m in SEND_MODES"')
+    expect(split).toContain('<ContextMenuItem :class="MENU_ITEM" @select="source.queueResume?.(chatId!)">')
+    expect(split).not.toContain('@contextmenu')
+    for (const m of SEND_MODES) expect(m.hint.length).toBeLessThanOrEqual(24)
+  })
+
+  it('a tray row carries its actions: a hover toolbar and a right-click menu', () => {
+    expect(tray).toContain('<QueueItemActions')
+    expect(tray).toContain('group-hover/t:opacity-100')
+    expect(tray).toMatch(/<ContextMenuTrigger as-child>\s*<button/)
+    for (const label of ['Send now', 'Try again', 'Edit', 'Move up', 'Move down', 'Remove']) expect(tray).toContain(`/>${label}`)
   })
 
   it('a press in the anchor is not outside, and Esc in an edit cancels the edit, not the popover', () => {
     expect(popover).toContain('@interact-outside="onOutside"')
     expect(popover).toContain('@escape-key-down="onEscape"')
     expect(popover).toContain('@close-auto-focus="onCloseFocus"')
-    const editKey = popover.slice(popover.indexOf('function onEditKey'), popover.indexOf('function onEscape'))
+    const editKey = actions.slice(actions.indexOf('function onEditKey'))
     expect(editKey).toContain('e.stopPropagation()')
     expect(popover).toContain('role="dialog"')
     expect(popover).toContain('aria-label="Message queue"')
@@ -309,7 +329,7 @@ describe('the queue wiring in the composer', () => {
 
   it('demo composers (Gallery, parity) show no queue, and the tray only when this chat has items', () => {
     expect(composer).toContain('const queue = computed(() => (props.demo ? null : (shell.queue?.value ?? null)))')
-    expect(composer).toContain('<QueueTray v-if="!request && queue && trayItems.length"')
+    expect(composer).toMatch(/<QueueTray\s+v-if="!request && queue && trayItems\.length"/)
     expect(composer).toContain('<QueueChip v-if="request && queue && trayItems.length"')
   })
 })

@@ -186,6 +186,9 @@ const trayItems = computed(
     ) ?? []
 )
 const queueOpen = ref(false)
+// The queue popover rises from the tray while it shows, not across it (SendSplit's `anchor`).
+const tray = ref<InstanceType<typeof QueueTray> | null>(null)
+const trayEl = computed(() => (tray.value?.$el as HTMLElement | undefined) ?? null)
 // A docked card hides the box and the send group the popover is anchored to; the dock's chip opens it then.
 watch(
   () => !!request.value,
@@ -957,8 +960,16 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- This chat's queue (ours), stacked above the strip and the box while it has some: three rows, then
-           "+N more"; any of them opens the queue popover, where they are managed -->
-      <QueueTray v-if="!request && queue && trayItems.length" :items="trayItems" :held="queue.held" @open="queueOpen = true" />
+           "+N more". A row's actions are on it (hover toolbar, right-click menu); a click opens the queue
+           popover above the tray -->
+      <QueueTray
+        v-if="!request && queue && trayItems.length"
+        ref="tray"
+        :items="trayItems"
+        :queue="queue"
+        :chat-id="chatId"
+        @open="queueOpen = true"
+      />
 
       <!-- Repository and pull request controls -->
       <template v-if="!chat">
@@ -1102,6 +1113,7 @@ onBeforeUnmount(() => {
             :send-tip="sendText.tip"
             :queue="!!queue"
             :chat-id="chatId"
+            :anchor="trayEl"
             @send="submit"
             @stop="stop(true)"
             @close-focus="textarea?.focus()"
