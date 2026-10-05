@@ -213,6 +213,9 @@ export function pcsIn(rows: Pick<CloudSession, 'fromPc'>[], thisPc: string): str
   return [thisPc, ...others]
 }
 
+/** The Filter menu's Show only local: Computer narrowed to this PC alone, the other PC's sessions out. */
+export const localOnly = (s: Pick<CloudScopes, 'pcs'>, thisPc: string): boolean => s.pcs?.length === 1 && s.pcs[0] === thisPc
+
 export interface CloudGroup {
   key: string
   label: string

@@ -73,6 +73,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   Unhide. Both lists hide the same groups; a search still finds their rows, and opening a chat that sits
   in a hidden group turns Show hidden on. Pinned and Archived cannot be hidden. The browser remembers
   both (`web/src/components/sidebar/hidden.ts`).
+- **Show only local, and a word on hover.** The Filter menu's Show only local (in the cloud list part)
+  keeps just this PC's sessions, the ones synced from the other PC out; the Cloud list heading then reads
+  "this PC". It is Computer with only this PC ticked, so either one undoes it. Every Filter menu item
+  says what it does when the pointer rests on it (owner, 2026-10-05).
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,

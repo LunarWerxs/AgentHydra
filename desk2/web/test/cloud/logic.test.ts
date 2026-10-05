@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, localOnly } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -217,6 +217,19 @@ describe('groupCloud', () => {
       ['Reading', true],
       ['gamma', undefined]
     ])
+  })
+
+  // Owner, 2026-10-05: "we should have one that says show only local".
+  test('Show only local keeps this PC\'s sessions and leaves the other PC\'s out', () => {
+    const answer = [row('here', 'D:/work/alpha', 2), { ...row('synced', 'D:/work/alpha', 3), fromPc: 'OTHER-PC' }]
+    const ids = (s: CloudScopes) => groupCloud(answer, s, 'PC').flatMap((g) => g.rows.map((r) => r.id))
+    expect(localOnly(all, 'PC')).toBe(false)
+    expect(ids(all)).toEqual(['synced', 'here'])
+    const local: CloudScopes = { ...all, pcs: ['PC'] }
+    expect(localOnly(local, 'PC')).toBe(true)
+    expect(ids(local)).toEqual(['here'])
+    // Ticking the other PC too, in Computer, is both PCs again, not local.
+    expect(localOnly({ ...all, pcs: ['PC', 'OTHER-PC'] }, 'PC')).toBe(false)
   })
 
   // Owner, 2026-10-04: an outside Desktop chat the desk list shows was missing from the cloud list, older

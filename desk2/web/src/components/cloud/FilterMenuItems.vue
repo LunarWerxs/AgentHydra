@@ -21,6 +21,7 @@ import {
   DISPATCHED_VALUES,
   INSTANCE_DEFAULT,
   INSTANCE_OTHER,
+  localOnly,
   PERIOD_LABELS,
   PERIOD_VALUES,
   RATE_LIMIT_LABELS,
@@ -40,6 +41,7 @@ import { useCloud } from './store'
 // Sessions ⋯ menu offers for the cloud list, plus Computer (which PC). Changing a cloud filter shows the
 // cloud list, so what it did is on screen. Toggles keep the menu open so several go in one visit. Show
 // hidden groups, between the two, is both lists': the groups a header's right-click hid (sidebar/hidden.ts).
+// Every item says what it does on hover (owner, 2026-10-05).
 const props = defineProps<{ filter: SidebarFilter }>()
 const emit = defineEmits<{ 'update:filter': [filter: SidebarFilter] }>()
 
@@ -51,6 +53,7 @@ const hiddenTip = computed(() =>
     : "Right-click a group's header and choose Hide to hide it"
 )
 const s = computed(() => cloud.scopes.value)
+const local = computed(() => localOnly(s.value, cloud.thisPc.value))
 const claude = computed(() => s.value.source.includes('claude'))
 
 function set(patch: Partial<CloudScopes>) {
@@ -73,8 +76,26 @@ function togglePc(pc: string) {
 }
 
 const sub = [
-  { key: 'source', label: 'Source', icon: MessagesSquare, universe: SOURCE_VALUES, labels: SOURCE_LABELS as Record<string, string>, claudeOnly: false, note: '' },
-  { key: 'dispatched', label: 'Queued work', icon: ListTodo, universe: DISPATCHED_VALUES, labels: DISPATCHED_LABELS as Record<string, string>, claudeOnly: true, note: '' },
+  {
+    key: 'source',
+    label: 'Source',
+    icon: MessagesSquare,
+    universe: SOURCE_VALUES,
+    labels: SOURCE_LABELS as Record<string, string>,
+    claudeOnly: false,
+    note: '',
+    tip: 'Which apps the sessions come from: Claude, Codex and the rest'
+  },
+  {
+    key: 'dispatched',
+    label: 'Queued work',
+    icon: ListTodo,
+    universe: DISPATCHED_VALUES,
+    labels: DISPATCHED_LABELS as Record<string, string>,
+    claudeOnly: true,
+    note: '',
+    tip: 'Sessions AgentHydra started from its queue, or ones run by hand'
+  },
   {
     key: 'rateLimit',
     label: 'Usage limits',
@@ -82,7 +103,8 @@ const sub = [
     universe: RATE_LIMIT_VALUES,
     labels: RATE_LIMIT_LABELS as Record<string, string>,
     claudeOnly: true,
-    note: 'Claude sessions only, and only when the CLI itself reported the wall.'
+    note: 'Claude sessions only, and only when the CLI itself reported the wall.',
+    tip: 'Sessions a usage limit stopped, ones it stopped and that resumed, or ones it never stopped'
   },
   {
     key: 'shape',
@@ -91,14 +113,30 @@ const sub = [
     universe: SHAPE_VALUES,
     labels: SHAPE_LABELS as Record<string, string>,
     claudeOnly: false,
-    note: 'Narrows the sessions already loaded, not the window they came from.'
+    note: 'Narrows the sessions already loaded, not the window they came from.',
+    tip: 'Sessions by size, from Quick to Marathon (messages and minutes), or Automation for queued work'
   },
-  { key: 'archived', label: 'Archived', icon: Archive, universe: ARCHIVED_VALUES, labels: ARCHIVED_LABELS as Record<string, string>, claudeOnly: false, note: '' }
+  {
+    key: 'archived',
+    label: 'Archived',
+    icon: Archive,
+    universe: ARCHIVED_VALUES,
+    labels: ARCHIVED_LABELS as Record<string, string>,
+    claudeOnly: false,
+    note: '',
+    tip: 'Show sessions that are archived, not archived, or both'
+  }
 ] as const
 type SubKey = (typeof sub)[number]['key']
 const ticked = (k: SubKey): readonly string[] => s.value[k]
 function flip(k: SubKey, universe: readonly string[], v: string) {
   set({ [k]: toggle(ticked(k), universe, v) } as Partial<CloudScopes>)
+}
+
+const FILTER_TIPS: Record<SidebarFilter, string> = {
+  active: 'Show the chats that are not archived',
+  archived: 'Show only the archived chats',
+  all: 'Show every chat, the archived ones in a group at the end'
 }
 
 const ITEM = `${MENU_ITEM} pr-2`
@@ -111,6 +149,7 @@ const ITEM = `${MENU_ITEM} pr-2`
     :key="key"
     role="menuitemradio"
     :aria-checked="!cloud.on.value && props.filter === key"
+    :title="FILTER_TIPS[key]"
     :class="MENU_ITEM"
     @select="emit('update:filter', key), (cloud.on.value = false)"
   >
@@ -134,11 +173,22 @@ const ITEM = `${MENU_ITEM} pr-2`
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuLabel class="flex h-[23px] items-center gap-1 px-2 py-0 text-[13px] font-medium text-text-muted">
-    Cloud list<span class="font-normal">· both PCs</span>
+    Cloud list<span class="font-normal">· {{ local ? 'this PC' : 'both PCs' }}</span>
   </DropdownMenuLabel>
-  <DropdownMenuItem :class="ITEM" @select.prevent="(cloud.on.value = true), cloud.refresh()">
+  <DropdownMenuItem :class="ITEM" title="Load the cloud list again from AgentHydra" @select.prevent="(cloud.on.value = true), cloud.refresh()">
     <RefreshCw :class="cloud.loading.value ? 'animate-spin' : ''" />
     <span class="flex-1">Refresh</span>
+  </DropdownMenuItem>
+  <DropdownMenuItem
+    role="menuitemcheckbox"
+    :aria-checked="local"
+    :title="`Only the sessions on this PC (${cloud.thisPc.value}), none synced from the other one`"
+    :class="ITEM"
+    @select.prevent="set({ pcs: local ? null : [cloud.thisPc.value] })"
+  >
+    <component :is="icons.local" />
+    <span class="flex-1">Show only local</span>
+    <component :is="icons.check" v-if="local" class="ml-3" />
   </DropdownMenuItem>
   <DropdownMenuItem
     role="menuitemcheckbox"
@@ -155,6 +205,7 @@ const ITEM = `${MENU_ITEM} pr-2`
   <DropdownMenuItem
     role="menuitemcheckbox"
     :aria-checked="cloud.selectMode.value"
+    title="Tick several sessions in the cloud list to act on them at once"
     :class="ITEM"
     @select="(cloud.on.value = true), cloud.setSelectMode(!cloud.selectMode.value)"
   >
@@ -166,7 +217,7 @@ const ITEM = `${MENU_ITEM} pr-2`
 
   <template v-for="m in sub" :key="m.key">
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger :class="ITEM" :disabled="m.claudeOnly && !claude">
+      <DropdownMenuSubTrigger :class="ITEM" :disabled="m.claudeOnly && !claude" :title="m.tip">
         <component :is="m.icon" />
         <span class="flex-1">{{ m.label }}</span>
         <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(ticked(m.key), m.universe, (v) => m.labels[v] ?? v) }}</span>
@@ -192,7 +243,7 @@ const ITEM = `${MENU_ITEM} pr-2`
 
     <!-- Instance sits after Source, as in AgentHydra: a fact about Claude sessions, so off without Claude. -->
     <DropdownMenuSub v-if="m.key === 'source'">
-      <DropdownMenuSubTrigger :class="ITEM" :disabled="!claude">
+      <DropdownMenuSubTrigger :class="ITEM" :disabled="!claude" title="Which Claude login (account instance) the sessions ran on">
         <Boxes />
         <span class="flex-1">Instance</span>
         <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(instanceTicked, instanceUniverse, instanceLabel) }}</span>
@@ -217,7 +268,7 @@ const ITEM = `${MENU_ITEM} pr-2`
   </template>
 
   <DropdownMenuSub>
-    <DropdownMenuSubTrigger :class="ITEM">
+    <DropdownMenuSubTrigger :class="ITEM" title="Which PC the sessions ran on">
       <Monitor />
       <span class="flex-1">Computer</span>
       <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(pcTicked, cloud.pcs.value, (v) => v) }}</span>
@@ -243,7 +294,7 @@ const ITEM = `${MENU_ITEM} pr-2`
   </DropdownMenuSub>
 
   <DropdownMenuSub>
-    <DropdownMenuSubTrigger :class="ITEM">
+    <DropdownMenuSubTrigger :class="ITEM" title="How far back the cloud list reaches">
       <CalendarRange />
       <span class="flex-1">Time period</span>
       <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ PERIOD_LABELS[s.period] }}</span>
@@ -264,7 +315,7 @@ const ITEM = `${MENU_ITEM} pr-2`
   </DropdownMenuSub>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-  <DropdownMenuItem v-if="scopesNarrowed(s)" :class="ITEM" @select="cloud.reset()">
+  <DropdownMenuItem v-if="scopesNarrowed(s)" :class="ITEM" title="Put every cloud filter back to its default" @select="cloud.reset()">
     <RotateCcw />
     <span class="flex-1">Reset cloud filters</span>
   </DropdownMenuItem>
