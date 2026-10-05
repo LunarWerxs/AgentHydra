@@ -18,7 +18,6 @@ import {
 import {
   type Component,
   computed,
-  defineAsyncComponent,
   KeepAlive,
   onMounted,
   onUnmounted,
@@ -53,6 +52,7 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
 import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { lazyView } from '@/lib/lazy-view'
 import { hswarmJobAsk, showHSwarmPage } from '@/lib/hswarm-pages'
 import {
   deskInstanceAsk,
@@ -80,15 +80,15 @@ import { usePushPanel } from '@/shell/usePushPanel'
 // view in front of it, not the whole graph (charts included).
 // The builder is loaded and mounted on the first request; useBuilder opens it once it is there.
 const { requested: builderEverOpened, builderMounted } = useBuilder()
-const AutomationSettings = defineAsyncComponent(() => import('@/components/AutomationSettings.vue'))
-const QueueBuilder = defineAsyncComponent(() => import('@/components/QueueBuilder.vue'))
-const QueueView = defineAsyncComponent(() => import('@/components/QueueView.vue'))
-const SettingsView = defineAsyncComponent(() => import('@/components/SettingsView.vue'))
-const AnalyticsView = defineAsyncComponent(() => import('@/components/AnalyticsView.vue'))
-const CliView = defineAsyncComponent(() => import('@/components/CliView.vue'))
-const HSwarmTab = defineAsyncComponent(() => import('@/components/HSwarmTab.vue'))
-const InstancesHomeView = defineAsyncComponent(() => import('@/components/InstancesHomeView.vue'))
-const InstancesView = defineAsyncComponent(() => import('@/components/InstancesView.vue'))
+const AutomationSettings = lazyView(() => import('@/components/AutomationSettings.vue'))
+const QueueBuilder = lazyView(() => import('@/components/QueueBuilder.vue'))
+const QueueView = lazyView(() => import('@/components/QueueView.vue'))
+const SettingsView = lazyView(() => import('@/components/SettingsView.vue'))
+const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
+const CliView = lazyView(() => import('@/components/CliView.vue'))
+const HSwarmTab = lazyView(() => import('@/components/HSwarmTab.vue'))
+const InstancesHomeView = lazyView(() => import('@/components/InstancesHomeView.vue'))
+const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
 const DISCORD_URL = 'https://lunarwerx.com/discord/agenthydra'
