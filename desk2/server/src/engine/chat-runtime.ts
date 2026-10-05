@@ -665,8 +665,11 @@ ${swap.real}` }
       // A process that went away takes the mode at its next start. One that refused it (Bypass on a process
       // not launched for it) still runs in the old mode, so the chat says that one, and why.
       if (this.q !== q) return
-      this.chat.permissionMode = was.mode
-      this.beforePlan = was.beforePlan
+      // A later call that changed the mode meanwhile owns it now; only this call's own value is put back.
+      if (this.chat.permissionMode === mode) {
+        this.chat.permissionMode = was.mode
+        this.beforePlan = was.beforePlan
+      }
       this.touch()
       this.publishChat()
       const now = this.now()
@@ -686,7 +689,7 @@ ${swap.real}` }
       await q.setModel(model ?? undefined)
     } catch (err) {
       this.revertRefused('model', err, q, () => {
-        this.chat.model = was
+        if (this.chat.model === model) this.chat.model = was
       })
     }
   }
@@ -702,7 +705,7 @@ ${swap.real}` }
       await q.applyFlagSettings({ effortLevel: effort })
     } catch (err) {
       this.revertRefused('effort', err, q, () => {
-        this.chat.effort = was
+        if (this.chat.effort === effort) this.chat.effort = was
       })
     }
   }

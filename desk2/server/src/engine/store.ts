@@ -9,9 +9,9 @@ import { userTurn } from './system-text'
 import { mediaCache } from '../media/cache'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
+const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
 /** Chats whose raw transcript lines stay in memory; the least recently read goes first. */
 const LINE_CACHE_MAX = 20
-const VOLATILE =['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
 
 export type StoredChat = Omit<ChatSummary, (typeof VOLATILE)[number]>
 
@@ -40,7 +40,7 @@ export class ChatStore {
   /** Item files whose tail was checked for a torn last line this process. */
   private checkedTails = new Set<string>()
   /** Per item file: the last line per id as the file stood at this size and mtime, so a poll need not read the file again. */
-  private lineCache =new Map<string, { size: number; mtimeMs: number; offset: number; lines: Map<string, string>; tail: Map<string, string> }>()
+  private lineCache = new Map<string, { size: number; mtimeMs: number; offset: number; lines: Map<string, string>; tail: Map<string, string> }>()
   /** The chats.json text last written, so an unchanged list is not written again. */
   private lastSaved: string | null = null
 
