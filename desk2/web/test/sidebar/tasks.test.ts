@@ -353,7 +353,7 @@ test("the other PC's job goes under the row that has its session, else under a r
 
 // The rows added for running work, drawn inline in their folder's group (owner, 2026-10-05: "I shouldn't even be
 // able to tell the difference between ones on his computer and mine, besides them having a Cloud icon").
-const addedRow = (id: string, cwd: string | null, at: number): AddedRow => ({ id: `added::task:${id}`, title: id, pc: null, cwd, at, sessionId: null, worker: null, job: null, nodes: [], jobs: [] })
+const addedRow = (id: string, cwd: string | null, at: number): AddedRow => ({ id: `added::task:${id}`, title: id, pc: null, cwd, folder: null, at, sessionId: null, worker: null, job: null, nodes: [], jobs: [] })
 
 function deskRow(id: string, at: number, cwd: string | null): SidebarEntry {
   const session: ExternalSession = { id, title: id, cwd, source: 'cli', instance: null, status: 'idle', activity: null, lastActivityAt: at, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null }
@@ -402,6 +402,39 @@ test("the cloud list draws another PC's chat in the group of its synced folder a
   ])
   expect(out[0]!.rows[1]!.fromPc).toBe('PC-X')
   expect(out[1]!.orderKey).toBe('')
+})
+
+// Owner, 2026-10-06: another PC shares only the last name of a task's folder, never its path; a chat of it this PC
+// does not have goes in the group of that name, not in "No folder".
+test("another PC's chat known only by its folder's last name goes in the one group of that name here, else in a group of that name", () => {
+  const sid = '11111111-2222-3333-4444-555555555555'
+  const { added } = nestTasks(
+    [],
+    [
+      worker('t', 1, { pc: 'PC-X', originSessionId: 's-app', folder: 'App' }),
+      worker('u', 2, { pc: 'PC-X', originSessionId: 's-repo', folder: 'Example-repo' }),
+      worker('v', 3, { pc: 'PC-X', originSessionId: 's-shared', folder: 'shared' }),
+      worker('w', 4, { pc: 'PC-X', originSessionId: 's-none' })
+    ],
+    [swarmJob('j', { pc: 'PC-X', callerSessionId: sid, folder: 'Example-repo', startedAt: 5 })]
+  )
+  const group = (cwd: string, at: number): CloudGroup => ({ key: `cloud:${cwd.toLowerCase()}`, label: cwd.split('/').pop()!, cwd, orderKey: cwd.toLowerCase(), rows: [cloudRow(`s-${at}`, at, cwd)] })
+  // Two folders here are named "shared": which one is a guess, so that chat gets a group of its own.
+  const out = addToCloudGroups([group('D:/Work/app', 70), group('D:/Work/shared', 60), group('E:/Other/shared', 50)], added, {
+    order: { groups: [], rows: [] },
+    hidden: new Set<string>(),
+    showHidden: false,
+    orderKey: (id) => id,
+    onDesk: (id) => !id.startsWith('added:')
+  })
+  expect(out.map((g) => [g.label, g.orderKey, g.rows.map((r) => r.id)])).toEqual([
+    ['app', 'd:/work/app', ['s-70', 'added:PC-X:chat:s-app']],
+    ['shared', 'd:/work/shared', ['s-60']],
+    ['shared', 'e:/other/shared', ['s-50']],
+    ['Example-repo', 'name:example-repo', [`added:PC-X:chat:${sid}`, 'added:PC-X:chat:s-repo']],
+    ['No folder', '', ['added:PC-X:chat:s-none']],
+    ['shared', 'name:shared', ['added:PC-X:chat:s-shared']]
+  ])
 })
 
 // Owner, 2026-10-05: another PC's chats pulse gray while their CliMayte tasks run, still when none does; blue is HSwarm's alone.

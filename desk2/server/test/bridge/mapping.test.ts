@@ -238,9 +238,9 @@ describe('a worker of another PC', () => {
     createdAt: 1, updatedAt: 2, activeS: 1, costUsd: null, lastActivity: null, error: null, verdict: null,
   }
 
-  test('the title of the chat that started it and its earlier sessions pass through; an older PC sends neither', () => {
-    const mapped = mapRemoteWorker({ ...base, originSessionId: 's-chat', originTitle: 'Example chat', sessions: ['s-1', 's-2'] }, 'OTHER-PC', new Map())
-    expect(mapped).toMatchObject({ originTitle: 'Example chat', sessions: ['s-1', 's-2'], pc: 'OTHER-PC' })
-    expect(mapRemoteWorker(base, 'OTHER-PC', new Map())).toMatchObject({ originTitle: null, sessions: [] })
+  test('the title of the chat that started it, its earlier sessions and its folder\'s last name pass through; an older PC sends none', () => {
+    const mapped = mapRemoteWorker({ ...base, originSessionId: 's-chat', originTitle: 'Example chat', sessions: ['s-1', 's-2'], folder: 'Example-repo' }, 'OTHER-PC', new Map())
+    expect(mapped).toMatchObject({ originTitle: 'Example chat', sessions: ['s-1', 's-2'], folder: 'Example-repo', cwd: null, pc: 'OTHER-PC' })
+    expect(mapRemoteWorker(base, 'OTHER-PC', new Map())).toMatchObject({ originTitle: null, sessions: [], folder: null })
   })
 })

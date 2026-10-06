@@ -7,6 +7,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Fixed
+
+- **HSwarm's instructions reach every chat whole again** (2026-10-06): they had grown to 2,233 characters, past the 2,048 Claude Code keeps of a server's instructions, so every chat lost their end, the shared server's "give every task an ABSOLUTE cwd" note included. Shortened to 2,027 with every rule kept.
+- **HSwarm's stats keep each day apart again** (2026-10-06): the per-day query grouped by the new stored `day` column rather than the date it shows, so rows whose `day` the migration had not filled yet fell into one day.
+
+### Changed
+
+- **Another PC's chat lands in its folder's group in Hydra Desk 2, not "No folder"** (2026-10-06, owner: "Do whatever you can do"; the folder's last name was the pick put to him). The shared CliMayte queue now carries the last name of each task's folder, and HSwarm's jobs list the last name of their caller's folder (`caller_ids.folder`), never a path. Desk 2's sidebar files such a chat under the one group here whose folder has that name (case aside, whatever the path before it), else under a group of that name; two groups with the name are a guess, so it gets its own. Only work with no name at all goes in "No folder". A PC shares the name once it runs this version.
+
 ## [1.11.0] - 2026-10-05
 
 ### Added

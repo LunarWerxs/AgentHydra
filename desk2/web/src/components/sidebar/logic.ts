@@ -56,7 +56,7 @@ export type SidebarEntry =
   | { kind: 'external'; id: string; at: number; session: ExternalSession }
 
 export interface ChatGroup {
-  key: string // the cwd, '' for no folder, 'group:<name>' for a moved-to group, or 'pinned' / 'archived'
+  key: string // the cwd, '' for no folder, 'group:<name>' for a moved-to group, 'name:<folder>' for another PC's folder known only by its last name (tasks.ts), or 'pinned' / 'archived'
   label: string
   cwd: string | null // folder for "New session in <folder>"; null for Pinned / Archived / No folder / a moved-to group
   entries: SidebarEntry[]

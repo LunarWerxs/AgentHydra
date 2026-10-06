@@ -17,6 +17,15 @@ import type { CliMayteLiveUsage } from './climayte-lib'
  *  to say it is alive. */
 export const REMOTE_STALE_MS = 20 * 60_000
 
+/** A folder's last name, never its path ("AgentHydra" for D:/x/AgentHydra): all one PC shares of where its
+ *  work runs, so the other PC's Hydra Desk files a chat it does not have under that folder's group (owner,
+ *  2026-10-06, choosing it over a "No folder" group). Null for none. */
+export function folderName(path: string | null | undefined): string | null {
+  const parts = (path ?? '').split(/[\\/]+/).filter(Boolean)
+  const name = parts[parts.length - 1]
+  return name ? name.slice(0, 120) : null
+}
+
 /** One worker as the other PC shows it: never the prompt, results, logs or paths. */
 export interface RemoteWorker {
   id: string
@@ -51,6 +60,9 @@ export interface RemoteWorker {
    *  null when unknown or when a worker dispatched it), for a PC that does not list that chat. Never
    *  the origin's Claude home or transcript path. */
   originTitle?: string | null
+  /** The last name of the folder it runs in (folderName), never the path. Absent from an older
+   *  AgentHydra's snapshot. */
+  folder?: string | null
 }
 
 /** One HSwarm job as the other PC shows it: never the job's dir, cwd, prompts or caller key string. */
@@ -67,6 +79,9 @@ export interface RemoteSwarmJob {
   /** The chat that started the job (HSwarm's caller_ids), null when HSwarm did not say. */
   callerSessionId: string | null
   callerChatId: string | null
+  /** The last name of the caller's folder (folderName), never the path. Absent from an older
+   *  AgentHydra's snapshot, and null when HSwarm's jobs list does not give it. */
+  folder?: string | null
 }
 
 /** This PC's newest live reading of one account, as shared. */

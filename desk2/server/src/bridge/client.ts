@@ -178,7 +178,8 @@ export type AhWorkerDetail = AhWorker & { events: string[] }
 
 /**
  * One worker of another PC's shared queue (climayte-queue-sync.ts reduce()). It deliberately carries no
- * prompt or folder; `account.name` is often the login's email and is never shown. Its session, origin
+ * prompt or path, only its folder's last name (`folder`, from 2026-10-06); `account.name` is often the
+ * login's email and is never shown. Its session, origin
  * (the chat's session, or the worker and that worker's session) and wave are ids on its own PC, absent
  * from an AgentHydra older than 2026-10-04.
  */
@@ -204,6 +205,7 @@ export interface AhRemoteWorker {
   wave?: string | null
   originTitle?: string | null
   sessions?: string[]
+  folder?: string | null
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
@@ -224,6 +226,8 @@ export interface AhRemoteJob {
   finished: string | null
   callerSessionId: string | null
   callerChatId: string | null
+  /** The last name of the caller's folder, never the path; absent from an AgentHydra older than 2026-10-06. */
+  folder?: string | null
 }
 
 export interface AhTailEvent {

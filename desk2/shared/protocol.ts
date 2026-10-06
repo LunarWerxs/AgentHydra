@@ -334,6 +334,7 @@ export interface CliMayteWorker {
   originWorkerId?: string | null // the worker that dispatched it, when a worker did
   originTitle?: string | null // the title of the chat that dispatched it, as its own PC knows it (another PC's only)
   sessions?: string[] // every session the worker has had (a handoff gives it a new sessionId and keeps the old ones here)
+  folder?: string | null // another PC's only: the last name of the folder it runs in, never the path (its `cwd` stays null)
   startedAt: number | null
   endedAt: number | null // when it settled; null while active
   lastActivityAt: number | null
@@ -350,8 +351,8 @@ export interface CliMayteWorker {
   eta?: { minutes: number; at: number; tookS: number | null } | null
   /**
    * The other PC's name when the worker runs there (AgentHydra's shared queue, GET /api/corch/remote);
-   * absent or null = this PC. Such a worker has no folder, and its session and origin are only ids that
-   * PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and
+   * absent or null = this PC. Such a worker has no folder here (only `folder`, its folder's last name), and
+   * its session and origin are only ids that PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and
    * nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
    */
   pc?: string | null
@@ -379,6 +380,8 @@ export interface SwarmJob {
   callerTitle: string | null
   /** The other PC's name when the job ran there; null = this PC. Such jobs show only while the cloud is on. */
   pc: string | null
+  /** Another PC's only: the last name of its caller's folder, never the path; absent or null when not shared. */
+  folder?: string | null
 }
 
 export interface AccountInfo extends AccountRef {

@@ -53,8 +53,12 @@ export interface AddedRow {
   title: string
   /** The PC it runs on; null for this one. */
   pc: string | null
-  /** The folder it runs in; null when nothing here says (another PC shares no folder for its tasks). */
+  /** The folder it runs in; null when nothing here says (another PC shares no path for its tasks). */
   cwd: string | null
+  /** Another PC's folder by its last name only (all that PC shares of it), for a row `cwd` leaves without one: it
+   *  goes in the one group here whose folder has that name, else in a group of its own by that name (owner,
+   *  2026-10-06, over a "No folder" group). */
+  folder: string | null
   /** Its newest activity, its own or its tasks' and jobs'. */
   at: number
   /** The session it stands for, its PC's id: the chat's, or the worker's own; null for a job, or a caller known only by a short prefix. */
@@ -254,12 +258,12 @@ export function nestTasks(
     return same.size === 1 ? [...same][0] : undefined
   }
   /** The row of the chat with session `sid` on `pc`: titled and placed as the window knows that chat, else as `first` (its first task or job) says. */
-  const chatRow = (pc: string | null, sid: string, first: { title: string; cwd: string | null; at: number }): AddedRow => {
+  const chatRow = (pc: string | null, sid: string, first: { title: string; cwd: string | null; folder: string | null; at: number }): AddedRow => {
     const had = addedOf(pc, sid)
     if (had) return had
     const k = known.get(sid)
     return addRow(
-      { id: `${ADDED}${pc ?? ''}:chat:${sid}`, title: k?.title || first.title, pc, cwd: k?.cwd || first.cwd, at: Math.max(k?.at ?? 0, first.at), sessionId: sid.length > 8 ? sid : null, worker: null, job: null },
+      { id: `${ADDED}${pc ?? ''}:chat:${sid}`, title: k?.title || first.title, pc, cwd: k?.cwd || first.cwd, folder: first.folder, at: Math.max(k?.at ?? 0, first.at), sessionId: sid.length > 8 ? sid : null, worker: null, job: null },
       [sid]
     )
   }
@@ -271,14 +275,15 @@ export function nestTasks(
     if (r.originSessionId) {
       // The chat that started it, titled as the window knows it, else as its PC titles it, else after its first
       // task (owner, 2026-10-05), with its tasks one step in as under a drawn row.
-      const row = chatRow(pc, r.originSessionId, { title: titles.get(`${pc ?? ''}|${r.originSessionId}`) || r.title, cwd: cwdOf(r), at: activity(r) })
+      const row = chatRow(pc, r.originSessionId, { title: titles.get(`${pc ?? ''}|${r.originSessionId}`) || r.title, cwd: cwdOf(r), folder: r.folder ?? null, at: activity(r) })
       // A row its first task left without a folder takes the first of its other tasks that has one.
       if (!row.cwd) row.cwd = cwdOf(r)
+      if (!row.folder) row.folder = r.folder ?? null
       row.nodes.push({ worker: r, depth: 1 }, ...walk(sessionsOf(r), new Set([keyOf(r)]), 2, seen))
     } else {
       // A Hydra Desk chat run as a worker, or a task nothing says which chat started (its dispatcher is gone, or
       // its PC's AgentHydra is too old to say): the row is the worker itself, never a "No chat" heading.
-      const row = addRow({ id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(r), at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
+      const row = addRow({ id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(r), folder: r.folder ?? null, at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
       row.nodes.push(...walk(sessionsOf(r), new Set([keyOf(r)]), 1, seen))
     }
   }
@@ -305,9 +310,9 @@ export function nestTasks(
     if (row) return row
     const pc = j.pc ?? null
     const sid = j.callerSessionId ?? j.callerHostSessionId
-    if (sid) return addedOf(pc, sid) ?? (make ? chatRow(pc, sid, { title: j.callerTitle || j.title, cwd: null, at: j.startedAt ?? 0 }) : undefined)
+    if (sid) return addedOf(pc, sid) ?? (make ? chatRow(pc, sid, { title: j.callerTitle || j.title, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0 }) : undefined)
     const id = `${ADDED}${pc ?? ''}:job:${j.id}`
-    return added.get(id) ?? (make ? addRow({ id, title: j.title, pc, cwd: null, at: j.startedAt ?? 0, sessionId: null, worker: null, job: j }, []) : undefined)
+    return added.get(id) ?? (make ? addRow({ id, title: j.title, pc, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0, sessionId: null, worker: null, job: j }, []) : undefined)
   }
   const newestJobs = [...jobs].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
   // The running ones first, so a finished job of the same chat finds the row they made.
@@ -320,6 +325,8 @@ export function nestTasks(
   for (const row of added.values()) {
     for (const n of row.nodes) row.at = Math.max(row.at, activity(n.worker))
     for (const j of row.jobs) row.at = Math.max(row.at, j.endedAt ?? j.startedAt ?? 0)
+    // One that nothing gave a folder takes the first folder name its tasks, then its jobs, have.
+    if (!row.cwd && !row.folder) row.folder = row.nodes.find((n) => n.worker.folder)?.worker.folder ?? row.jobs.find((j) => j.folder)?.folder ?? null
   }
   return { byRow: lists, jobsByRow, added: [...added.values()] }
 }
@@ -393,10 +400,15 @@ export interface AddedPlacing {
   showHidden: boolean
 }
 
+/** The key of a group made for another PC's folder known only by its last name (AddedRow.folder). */
+const NAME_KEY = 'name:'
+
 /**
  * A list's groups with added rows among their own rows (owner, 2026-10-05: "inline identical"): each in the
  * group of its folder, matched by folder key as the cloud list matches a chat synced from the other PC (paths
- * differ between PCs, so another PC's folder often has no group here), and put where the list puts its own
+ * differ between PCs, so another PC's folder often has no group here). A row known only by its folder's last
+ * name (another PC's, AddedRow.folder) goes in the one group whose folder has that name, whatever the path
+ * before it; when none has it, or two do (a guess), it goes in a group of that name. Each is put where the list puts its own
  * rows (`sort`, given them newest first). A folder no group has gets one after the list's groups, newest
  * first, as the cloud list puts the groups only it has; a folder the owner hid keeps them out unless hidden
  * groups are shown, as it does its own rows.
@@ -409,17 +421,41 @@ function placeAdded<G, R>(
     folderOf: (g: G) => string | null
     rowsOf: (g: G) => readonly R[]
     cwdOf: (r: R) => string | null
+    /** The last name of the folder of a row `cwdOf` gives none (AddedRow.folder). */
+    nameOf: (r: R) => string | null
     at: (r: R) => number
     sort: (rows: R[]) => R[]
     withRows: (g: G, rows: R[]) => G
-    make: (folder: string, cwd: string | null, rows: R[], hidden: boolean) => G
+    make: (folder: string, cwd: string | null, label: string, rows: R[], hidden: boolean) => G
   }
 ): G[] {
   const newest = (a: R, b: R) => p.at(b) - p.at(a)
+  // Each folder key here by its last name (keys are lower case, '/' between parts): the list's groups and the
+  // folders this PC's rows bring. A name two folders share maps to null: no guess between them.
+  const byName = new Map<string, string | null>()
+  const noteName = (key: string) => {
+    const name = key.slice(key.lastIndexOf('/') + 1)
+    if (name) byName.set(name, byName.has(name) && byName.get(name) !== key ? null : key)
+  }
+  for (const g of groups) {
+    const folder = p.folderOf(g)
+    if (folder) noteName(folder)
+  }
+  for (const r of rows) {
+    const cwd = p.cwdOf(r)
+    if (cwd) noteName(folderKey(cwd))
+  }
+  /** A name-only group's label: the name as the other PC spelled it first. */
+  const labels = new Map<string, string>()
   const byFolder = new Map<string, R[]>()
   for (const r of rows) {
     const cwd = p.cwdOf(r)
-    const folder = cwd ? folderKey(cwd) : ''
+    const name = cwd ? null : p.nameOf(r)
+    let folder = cwd ? folderKey(cwd) : ''
+    if (name) {
+      folder = byName.get(name.toLowerCase()) ?? `${NAME_KEY}${name.toLowerCase()}`
+      if (!labels.has(folder)) labels.set(folder, name)
+    }
     if (p.hidden.has(folder) && !p.showHidden) continue
     byFolder.set(folder, [...(byFolder.get(folder) ?? []), r])
   }
@@ -432,12 +468,17 @@ function placeAdded<G, R>(
     return p.withRows(g, p.sort([...p.rowsOf(g), ...mine].sort(newest)))
   })
   const fresh = [...byFolder].map(([folder, list]) => ({ folder, list: list.sort(newest) })).sort((a, b) => newest(a.list[0]!, b.list[0]!))
-  for (const { folder, list } of fresh) out.push(p.make(folder, p.cwdOf(list[0]!), p.sort(list), p.hidden.has(folder)))
+  for (const { folder, list } of fresh) {
+    // A path group's first row may be a name-only one that joined it: the path is the first row's that has one.
+    const cwd = list.map(p.cwdOf).find(Boolean) ?? null
+    out.push(p.make(folder, cwd, cwd ? folderLabel(cwd) : (labels.get(folder) ?? NO_FOLDER), p.sort(list), p.hidden.has(folder)))
+  }
   return out
 }
 
 /** The desk list's folder groups (logic.ts groupChats) with this PC's added rows, each drawn as an outside session's row (addedEntry) and ordered as a new row of the list. */
 export function addToDeskGroups(groups: readonly ChatGroup[], rows: readonly AddedRow[], o: AddedPlacing): ChatGroup[] {
+  const names = new Map(rows.map((r) => [r.id, r.folder]))
   return placeAdded<ChatGroup, SidebarEntry>(groups, rows.map(addedEntry), {
     order: o.order,
     hidden: o.hidden,
@@ -445,10 +486,11 @@ export function addToDeskGroups(groups: readonly ChatGroup[], rows: readonly Add
     folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.key === '' ? '' : null),
     rowsOf: (g) => g.entries,
     cwdOf: (e) => (e.kind === 'chat' ? e.chat.cwd : e.session.cwd) || null,
+    nameOf: (e) => names.get(e.id) ?? null,
     at: (e) => e.at,
     sort: (list) => stableOrder(list, (e) => e.id, o.order.rows),
     withRows: (g, entries) => ({ ...g, entries }),
-    make: (_folder, cwd, entries, hidden) => ({ key: cwd ?? '', label: cwd ? folderLabel(cwd) : NO_FOLDER, cwd, entries, ...(hidden ? { hidden } : {}) })
+    make: (folder, cwd, label, entries, hidden) => ({ key: cwd ?? folder, label, cwd, entries, ...(hidden ? { hidden } : {}) })
   })
 }
 
@@ -462,6 +504,7 @@ export function addToCloudGroups(
   rows: readonly AddedRow[],
   o: AddedPlacing & { orderKey: (id: string) => string; onDesk: (id: string) => boolean }
 ): CloudGroup[] {
+  const names = new Map(rows.map((r) => [r.id, r.folder]))
   return placeAdded<CloudGroup, CloudSession>(groups, rows.map(addedCloudRow), {
     order: o.order,
     hidden: o.hidden,
@@ -469,10 +512,11 @@ export function addToCloudGroups(
     folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.orderKey === '' ? '' : null),
     rowsOf: (g) => g.rows,
     cwdOf: (r) => r.cwd,
+    nameOf: (r) => names.get(r.id) ?? null,
     at: (r) => r.lastActivityAt,
     sort: (list) => stableOrder(list, (r) => o.orderKey(r.id), o.order.rows, (r) => !o.onDesk(r.id)),
     withRows: (g, list) => ({ ...g, rows: list }),
-    make: (folder, cwd, list, hidden) => ({ key: `cloud:${folder}`, label: cwd ? folderLabel(cwd) : NO_FOLDER, cwd, orderKey: folder, rows: list, ...(hidden ? { hidden } : {}) })
+    make: (folder, cwd, label, list, hidden) => ({ key: `cloud:${folder}`, label, cwd, orderKey: folder, rows: list, ...(hidden ? { hidden } : {}) })
   })
 }
 

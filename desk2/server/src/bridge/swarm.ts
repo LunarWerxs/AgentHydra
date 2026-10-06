@@ -95,7 +95,7 @@ export function mapSwarmJobs(answer: AhHswarmJobs | null | undefined, chats: Cha
 }
 
 export function mapRemoteJob(j: AhRemoteJob, pc: string, chats: ChatIndex = new Map()): SwarmJob {
-  return jobOf(j, callerFromIds(j.callerSessionId, j.callerChatId, chats), pc)
+  return { ...jobOf(j, callerFromIds(j.callerSessionId, j.callerChatId, chats), pc), folder: j.folder ?? null }
 }
 
 /** The other PCs' jobs (`pc` set), each PC cut as this one's is. Sharing off, a stale PC or an older AgentHydra is none. */

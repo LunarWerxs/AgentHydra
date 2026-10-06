@@ -53,7 +53,7 @@ test("another PC's jobs keep that PC's name, resolve a chat known here and leave
   const answer = {
     enabled: true,
     pcs: [
-      { pc: 'p1', name: 'Other-PC', at: 1, stale: false, workers: [], jobs: [remote('r-1', { callerChatId: CHAT }), remote('r-2', { callerSessionId: '99999999-0000-4000-8000-000000000000', callerChatId: 'local_elsewhere' })] },
+      { pc: 'p1', name: 'Other-PC', at: 1, stale: false, workers: [], jobs: [remote('r-1', { callerChatId: CHAT, folder: 'Example-repo' }), remote('r-2', { callerSessionId: '99999999-0000-4000-8000-000000000000', callerChatId: 'local_elsewhere' })] },
       { pc: 'p2', name: 'Old-PC', at: 1, stale: true, workers: [], jobs: [remote('r-3')] },
       { pc: 'p3', name: 'Plain-PC', at: 1, stale: false, workers: [] }
     ]
@@ -61,8 +61,8 @@ test("another PC's jobs keep that PC's name, resolve a chat known here and leave
   const mapped = mapRemoteJobs(answer, chats)
   expect(mapped.map((j) => j.id).sort()).toEqual(['r-1', 'r-2'])
   expect(mapped.every((j) => j.pc === 'Other-PC')).toBe(true)
-  expect(mapped.find((j) => j.id === 'r-1')).toMatchObject({ callerSessionId: SESSION, callerHostSessionId: CHAT, callerTitle: 'Example chat', tasks: { total: 2, cancelled: 1 } })
-  expect(mapped.find((j) => j.id === 'r-2')).toMatchObject({ callerSessionId: '99999999-0000-4000-8000-000000000000', callerHostSessionId: 'local_elsewhere', callerTitle: null })
+  expect(mapped.find((j) => j.id === 'r-1')).toMatchObject({ callerSessionId: SESSION, callerHostSessionId: CHAT, callerTitle: 'Example chat', tasks: { total: 2, cancelled: 1 }, folder: 'Example-repo' })
+  expect(mapped.find((j) => j.id === 'r-2')).toMatchObject({ callerSessionId: '99999999-0000-4000-8000-000000000000', callerHostSessionId: 'local_elsewhere', callerTitle: null, folder: null })
   expect(mapRemoteJobs({ enabled: false, pcs: answer.pcs }, chats)).toEqual([])
 })
 

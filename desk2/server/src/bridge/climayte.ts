@@ -137,8 +137,8 @@ export function mapWorkers(raw: AhWorker[]): CliMayteWorker[] {
 }
 
 /**
- * One worker of another PC (`pc`: that PC's name). AgentHydra shares no folder for it, so it opens on
- * CliMayte's tab; its account is '#<num>' and never the login's name (often an email). Its session and
+ * One worker of another PC (`pc`: that PC's name). AgentHydra shares no path for it, only its folder's last
+ * name (`folder`, which files its chat in the sidebar), so it opens on CliMayte's tab; its account is '#<num>' and never the login's name (often an email). Its session and
  * origin are its own PC's ids (absent from an older AgentHydra): it sits under the chat that spawned it,
  * which the chat sync brings here with the same session id, or under a worker of its own PC; a wave's
  * task goes under that PC's manager of the wave (`managers`, from waveManagers), as this PC's do.
@@ -163,6 +163,7 @@ export function mapRemoteWorker(w: AhRemoteWorker, pc: string, managers: Readonl
     originSessionId: w.originSessionId ?? manager?.sessionId ?? null,
     originWorkerId: w.originWorkerId ?? manager?.id ?? null,
     sessions: w.sessions ?? [],
+    folder: w.folder ?? null,
     originTitle: manager ? null : (w.originTitle ?? null),
     startedAt: w.createdAt ?? null,
     endedAt: active ? null : (w.updatedAt ?? null),

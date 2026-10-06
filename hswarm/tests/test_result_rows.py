@@ -56,8 +56,9 @@ def test_status_cancel_and_the_job_list_answer_without_the_bookkeeping(tmp_path,
     _serve(monkeypatch)
 
     # mis_scoped is on the record only when it matters ("do not trust it"), so it stays; dir, caller, savings,
-    # created, finished, checkpoint_at, a null budget, zero unknown costs and the task ages do not.
-    brief = {"job_id": job.id, "label": "fixture", "state": "done", "counts": {"ok": 2}, "cost_usd": 0.01, "mis_scoped": ["t2"]}
+    # created, finished, checkpoint_at, a null budget, zero unknown costs and the task ages do not. Tokens lead every
+    # view (8ae38d70), so they stay.
+    brief = {"job_id": job.id, "label": "fixture", "state": "done", "counts": {"ok": 2}, "cost_usd": 0.01, "tokens": 0, "mis_scoped": ["t2"]}
     assert asyncio.run(mcp_server.hswarm_status(job.id)) == brief
     assert asyncio.run(mcp_server.hswarm_cancel(job.id)) == brief  # already finished: nothing to cancel, same answer
     assert asyncio.run(mcp_server.hswarm_jobs(5)) == [brief]

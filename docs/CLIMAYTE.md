@@ -1165,8 +1165,11 @@ toggle on (`POST /api/cli-instances/sync/queue {enabled}`; `shareQueue`, off by 
 `login-sync.json` beside this PC's `pcId`), each login-sync pass also uploads a snapshot of this PC's
 queue under its `pcId` and reads the other PCs'. The snapshot is the queued, running, waiting and
 checking workers plus those finished in the last 24 hours (id, title, group, status, kind, model,
-effort, account, times, active time, cost, last activity, error, verdict: never the prompt, results,
-logs or paths) and this PC's newest live usage reading per account, gzipped and AES-256-GCM encrypted
+effort, account, times, active time, cost, last activity, error, verdict, and the last name of its
+folder, "AgentHydra" for `D:/x/AgentHydra`: never the prompt, results, logs or paths; an HSwarm job
+carries its caller's folder's last name the same way, so the other PC's Hydra Desk files a chat it
+does not have under that folder's group, owner 2026-10-06) and this PC's newest live usage reading per
+account, gzipped and AES-256-GCM encrypted
 under the sync's key with `climayte-queue:<pcId>` as associated data. Over 256 KB the oldest finished
 workers go first. It is uploaded at once when a worker changed, when this PC's live readings moved
 (percentages in 5-point steps, reading times ignored) at most every 10 minutes, and never just to

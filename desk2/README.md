@@ -132,8 +132,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   chat (a synced chat, an outside session or a Desk chat), else as its PC titles it, else after its first
   task; when nothing says which chat started it (a Desk chat run as a worker, a dispatcher that is gone, a
   PC whose AgentHydra is too old), the task is the row (`nestTasks` and `addToDeskGroups` /
-  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares no folders for its
-  tasks, so its chat that is not synced here goes in a "No folder" group after the list's own. Added rows
+  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares only the last name of
+  a task's folder (and of an HSwarm job's caller's), never its path, so its chat that is not synced here
+  goes in the one group here whose folder has that name, else in a group of that name after the list's
+  own (two groups with the name are a guess, so it gets its own; owner, 2026-10-06); only work with no
+  name at all goes in "No folder". Added rows
   stay out while a search is typed, under the Archived filter and in a hidden group, as the list's own
   rows do; with the cloud off only this PC's are added. A folded group's heading carries a gray dot with
   how many CliMayte tasks run under it, a blue dot with how many HSwarm jobs, and a green dot with how
