@@ -1,0 +1,153 @@
+// Shared by LazyOverlay and the kit Tooltip: how the FIRST gesture on a closed, never-mounted overlay
+// arms it, and how that gesture is completed once the real trigger exists.
+//
+// Mouse and pen never swap the stand-in while a press is in progress on it. The stand-in carries the
+// trigger's own listeners (a wrapped button's click handler, a popover's hover timers), so the press
+// finishes there, natively and once; only then is the overlay armed and only what OPENS it replayed:
+// a pointerdown for a menu trigger, a click for a popover trigger, nothing for a tooltip. A hover arms
+// one task later, so a pointerenter that Chromium sends back to back with a pointerdown (a control that
+// came under a resting pointer) is still followed by its press on the stand-in. Touch arms at once,
+// as it always did: its pointerenter precedes the pointerdown and the long-press of
+// ui/tooltip/touch.ts needs the real trigger by then.
+
+export type LazyInterest = "hover" | "focus" | "press" | "key"
+/** What a first press must do on the real trigger: `pointerdown` opens a menu, `click` a popover. */
+export type FirstPress = "pointerdown" | "click" | "none"
+
+const KEYS = new Set(["Enter", " ", "ArrowDown"])
+
+export function replay(event: Event | null, target: HTMLElement, hadFocus: boolean, as?: "click"): void {
+  if (hadFocus) target.focus({ preventScroll: true })
+  if (!event) return
+  if (event instanceof PointerEvent) {
+    const init: PointerEventInit = {
+      bubbles: true,
+      cancelable: true,
+      pointerId: event.pointerId,
+      pointerType: event.pointerType,
+      isPrimary: event.isPrimary,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: event.button,
+      buttons: event.buttons,
+      ctrlKey: event.ctrlKey,
+      shiftKey: event.shiftKey,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+    }
+    if (as === "click") {
+      target.dispatchEvent(new MouseEvent("click", { ...init, detail: 1 }))
+    } else if (event.type === "pointerdown") {
+      target.dispatchEvent(new PointerEvent("pointerdown", init))
+    } else if (event.pointerType !== "touch") {
+      // The new trigger is under a pointer that has not moved, so no pointermove will come by itself.
+      const under = document.elementFromPoint(event.clientX, event.clientY)
+      if (under && target.contains(under)) target.dispatchEvent(new PointerEvent("pointermove", init))
+    }
+  } else if (event instanceof KeyboardEvent) {
+    target.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        bubbles: true,
+        cancelable: true,
+        key: event.key,
+        code: event.code,
+        ctrlKey: event.ctrlKey,
+        shiftKey: event.shiftKey,
+        altKey: event.altKey,
+        metaKey: event.metaKey,
+      }),
+    )
+  }
+}
+
+export interface LazyArming {
+  onPointerenter: (event: PointerEvent) => void
+  onPointerdown: (event: PointerEvent) => void
+  onFocus: (event: FocusEvent) => void
+  onKeydown: (event: KeyboardEvent) => void
+  dispose: () => void
+}
+
+export function createLazyArming(opts: {
+  isArmed: () => boolean
+  /** Mount the real overlay; `event` is what to replay on the new trigger (`as` turns a pointerup into a click). */
+  arm: (event: Event | null, hadFocus: boolean, as?: "click") => void
+  firstPress?: () => FirstPress
+}): LazyArming {
+  let standIn: HTMLElement | null = null
+  let hoverTimer: ReturnType<typeof setTimeout> | undefined
+  let pressing = false
+  let stopPress: (() => void) | null = null
+
+  function fire(event: Event | null, as?: "click"): void {
+    if (opts.isArmed()) return
+    const hadFocus = !!standIn && standIn.contains(document.activeElement)
+    opts.arm(event, hadFocus, as)
+  }
+  function note(event: Event): void {
+    if (event.currentTarget instanceof HTMLElement) standIn = event.currentTarget
+  }
+  function clearHover(): void {
+    if (hoverTimer !== undefined) clearTimeout(hoverTimer)
+    hoverTimer = undefined
+  }
+
+  function onPointerenter(event: PointerEvent): void {
+    if (opts.isArmed() || pressing) return
+    note(event)
+    if (event.pointerType === "touch") return fire(event)
+    clearHover()
+    hoverTimer = setTimeout(() => {
+      hoverTimer = undefined
+      if (!pressing) fire(event)
+    }, 0)
+  }
+
+  function onPointerdown(event: PointerEvent): void {
+    if (opts.isArmed()) return
+    note(event)
+    if (event.pointerType === "touch") return fire(event)
+    clearHover()
+    stopPress?.()
+    pressing = true
+    const mode = opts.firstPress?.() ?? "none"
+    const end = (up: Event): void => {
+      stopPress?.()
+      // After the click that follows this pointerup has run on the stand-in.
+      setTimeout(() => {
+        pressing = false
+        const inside = up.type === "pointerup" && up.target instanceof Node && !!standIn?.contains(up.target)
+        const plain = event.button === 0 && inside
+        if (plain && mode === "pointerdown") fire(event)
+        else if (plain && mode === "click") fire(up, "click")
+        else fire(null)
+      }, 0)
+    }
+    window.addEventListener("pointerup", end, true)
+    window.addEventListener("pointercancel", end, true)
+    stopPress = () => {
+      window.removeEventListener("pointerup", end, true)
+      window.removeEventListener("pointercancel", end, true)
+      stopPress = null
+    }
+  }
+
+  return {
+    onPointerenter,
+    onPointerdown,
+    onFocus(event) {
+      if (opts.isArmed() || pressing) return
+      note(event)
+      fire(event)
+    },
+    onKeydown(event) {
+      if (!KEYS.has(event.key)) return
+      note(event)
+      fire(event)
+    },
+    dispose() {
+      clearHover()
+      stopPress?.()
+    },
+  }
+}

@@ -3,6 +3,7 @@ import type { TooltipRootEmits, TooltipRootProps } from "reka-ui"
 import { TooltipRoot, useForwardProps } from "reka-ui"
 import { computed, onScopeDispose, provide, readonly, ref, watch } from "vue"
 import type { TooltipTouchContext } from "./touch"
+import { TOOLTIP_LAZY_KEY } from "./lazy"
 import { PIN_GRACE_MS, TOOLTIP_TOUCH_KEY } from "./touch"
 
 const props = withDefaults(defineProps<TooltipRootProps>(), {
@@ -22,6 +23,29 @@ const emits = defineEmits<TooltipRootEmits>()
 // controlled and keeps the state itself — reka asks via `update:open`, we decide.
 const consumerControlled = props.open !== undefined
 const localOpen = ref(props.defaultOpen ?? false)
+
+// Lazy: no reka root until the first gesture on the trigger (or the owner opening it by `open`).
+const armed = ref(consumerControlled || props.defaultOpen === true)
+let pending: { event: Event | null; hadFocus: boolean; as?: "click" } | null = null
+watch(
+  () => props.open,
+  (is) => {
+    if (is) armed.value = true
+  },
+)
+provide(TOOLTIP_LAZY_KEY, {
+  armed: readonly(armed),
+  arm(event, hadFocus, as) {
+    if (armed.value) return
+    pending = { event, hadFocus, as }
+    armed.value = true
+  },
+  takePending() {
+    const taken = pending
+    pending = null
+    return taken
+  },
+})
 const open = computed(() => (consumerControlled ? (props.open ?? false) : localOpen.value))
 
 /**
@@ -139,6 +163,7 @@ const forwarded = useForwardProps(props)
 
 <template>
   <TooltipRoot
+    v-if="armed"
     v-slot="slotProps"
     data-slot="tooltip"
     v-bind="forwarded"
@@ -147,4 +172,5 @@ const forwarded = useForwardProps(props)
   >
     <slot v-bind="slotProps" />
   </TooltipRoot>
+  <slot v-else :open="false" />
 </template>

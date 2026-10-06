@@ -2,7 +2,10 @@
 import type { TooltipTriggerProps } from "reka-ui"
 import { reactiveOmit } from "@vueuse/core"
 import { TooltipTrigger } from "reka-ui"
-import { computed, inject, onBeforeUnmount } from "vue"
+import { Primitive } from "reka-ui"
+import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue"
+import { createLazyArming, replay } from "@/lib/lazy-arm"
+import { TOOLTIP_LAZY_KEY } from "./lazy"
 import type { TooltipTouchMode } from "./touch"
 import {
   LONG_PRESS_MS,
@@ -27,6 +30,20 @@ const props = withDefaults(
   >(),
   { touch: "long-press" },
 )
+
+const lazy = inject(TOOLTIP_LAZY_KEY, null)
+const root = ref<{ $el: unknown } | null>(null)
+const arming = createLazyArming({
+  isArmed: () => lazy?.armed.value ?? true,
+  arm: (event, hadFocus, as) => lazy?.arm(event, hadFocus, as),
+})
+onBeforeUnmount(arming.dispose)
+// The real trigger is a new element once the tooltip is armed: finish the gesture that armed it.
+onMounted(() => {
+  const taken = lazy?.takePending()
+  const el = root.value?.$el
+  if (taken && el instanceof HTMLElement) replay(taken.event, el, taken.hadFocus, taken.as)
+})
 
 const touchCtx = inject(TOOLTIP_TOUCH_KEY, null)
 const providerDisabled = inject(TOOLTIP_DISABLED_KEY, null)
@@ -131,7 +148,23 @@ const forwarded = reactiveOmit(props, "touch")
 </script>
 
 <template>
+  <Primitive
+    v-if="lazy && !lazy.armed.value"
+    :as="as ?? 'button'"
+    :as-child="asChild"
+    data-slot="tooltip-trigger"
+    data-state="closed"
+    data-grace-area-trigger=""
+    :class="{ 'select-none [-webkit-touch-callout:none]': suppressNativeHold }"
+    @pointerenter="arming.onPointerenter"
+    @pointerdown="arming.onPointerdown"
+    @focus="arming.onFocus"
+  >
+    <slot />
+  </Primitive>
   <TooltipTrigger
+    v-else
+    ref="root"
     data-slot="tooltip-trigger"
     v-bind="forwarded"
     :class="{ 'select-none [-webkit-touch-callout:none]': suppressNativeHold }"

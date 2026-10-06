@@ -207,6 +207,8 @@ function onRootOpenChange(v: boolean): void {
        carries what reka's PopoverTrigger sets while closed. The hover timers live on the Badge itself, so
        they run in both states. -->
   <LazyOverlay
+    first-press="click"
+    :armed="open"
     :stand-in="{
       'data-slot': 'popover-trigger',
       'data-state': 'closed',

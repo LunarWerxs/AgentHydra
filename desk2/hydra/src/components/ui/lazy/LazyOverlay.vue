@@ -21,12 +21,19 @@
 //   Anything else (several nodes, nothing) mounts the real overlay at once, which is just today's behaviour.
 // - `interest` says what arms it: `hover` (pointer enters), `focus`, `press` (pointerdown), `key`
 //   (Enter, Space or ArrowDown). Default: hover, focus, press. A menu adds `key`; a tooltip is fine as is.
-// - The first interaction is not lost. The real trigger is a NEW element (Vue cannot reparent the
-//   slot), so once it is mounted the arming event is replayed on it: hover becomes a pointermove (reka
-//   opens a tooltip on that, after its normal delay), press and key are re-dispatched as clones, and
-//   focus is handed back with focus() if the stand-in held it.
-// - Touch needs nothing extra: pointerenter always precedes pointerdown, and the overlay is mounted
-//   between them, so the long-press / tap gestures of ui/tooltip/touch.ts see their own pointerdown.
+// - `armed`: the owner opens the overlay without touching the trigger (InstanceRow's right-click sets
+//   its menu's model). While true the real overlay is mounted at once, nothing to replay.
+// - The first gesture is not lost. The real trigger is a NEW element (Vue cannot reparent the slot).
+//   Which gestures arm it and how each first gesture completes (details in lib/lazy-arm.ts):
+//   * hover (mouse, pen): arms one task after pointerenter and replays a pointermove, so reka opens a
+//     tooltip after its normal delay. A press that begins first cancels it.
+//   * press (mouse, pen): the stand-in is NEVER swapped while the button is down, so the control's own
+//     click handler runs once, natively, on the stand-in. After the release it arms and replays only
+//     what opens the overlay, per `firstPress`: a pointerdown (menu), a click (popover), nothing.
+//   * focus (not during a press) and key (Enter, Space, ArrowDown): arm at once, focus is handed back
+//     with focus() and the key is re-dispatched as a clone.
+//   * touch: arms at once on pointerenter, which precedes the pointerdown, so the tap and the
+//     long-press of ui/tooltip/touch.ts see their own pointerdown on the real trigger.
 // - A trigger whose root swallows fallthrough attributes (inheritAttrs: false) would never arm; wrap
 //   it or mount the overlay directly.
 import {
@@ -37,14 +44,16 @@ import {
   getCurrentInstance,
   h,
   nextTick,
+  onBeforeUnmount,
   ref,
   Text,
+  watch,
 } from "vue"
 import type { PropType, VNode } from "vue"
+import { createLazyArming, replay } from "@/lib/lazy-arm"
+import type { FirstPress, LazyInterest } from "@/lib/lazy-arm"
 
-export type LazyOverlayInterest = "hover" | "focus" | "press" | "key"
-
-const KEYS = new Set(["Enter", " ", "ArrowDown"])
+export type LazyOverlayInterest = LazyInterest
 
 function elements(nodes: VNode[] | undefined, out: VNode[] = []): VNode[] {
   for (const node of nodes ?? []) {
@@ -65,48 +74,6 @@ function firstElement(node: Node | null): HTMLElement | null {
   return null
 }
 
-function replay(event: Event | null, target: HTMLElement, hadFocus: boolean): void {
-  if (hadFocus) target.focus({ preventScroll: true })
-  if (!event) return
-  if (event instanceof PointerEvent) {
-    const init: PointerEventInit = {
-      bubbles: true,
-      cancelable: true,
-      pointerId: event.pointerId,
-      pointerType: event.pointerType,
-      isPrimary: event.isPrimary,
-      clientX: event.clientX,
-      clientY: event.clientY,
-      button: event.button,
-      buttons: event.buttons,
-      ctrlKey: event.ctrlKey,
-      shiftKey: event.shiftKey,
-      altKey: event.altKey,
-      metaKey: event.metaKey,
-    }
-    if (event.type === "pointerdown") {
-      target.dispatchEvent(new PointerEvent("pointerdown", init))
-    } else if (event.pointerType !== "touch") {
-      // The new trigger is under a pointer that has not moved, so no pointermove will come by itself.
-      const under = document.elementFromPoint(event.clientX, event.clientY)
-      if (under && target.contains(under)) target.dispatchEvent(new PointerEvent("pointermove", init))
-    }
-  } else if (event instanceof KeyboardEvent) {
-    target.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key: event.key,
-        code: event.code,
-        ctrlKey: event.ctrlKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        metaKey: event.metaKey,
-      }),
-    )
-  }
-}
-
 export default defineComponent({
   name: "LazyOverlay",
   inheritAttrs: false,
@@ -117,40 +84,50 @@ export default defineComponent({
     },
     /** Attributes the real trigger carries while closed, set on the stand-in. */
     standIn: { type: Object as PropType<Record<string, unknown>>, default: () => ({}) },
+    /** What a first mouse press must do on the real trigger: `pointerdown` (a menu), `click` (a popover)
+     *  or `none` (a tooltip, or a wrapped control that runs its own click on the stand-in). */
+    firstPress: { type: String as PropType<FirstPress>, default: "none" },
+    /** The owner opens the overlay from outside the trigger (a right-click, a model, a shortcut): true
+     *  mounts the real overlay at once, with nothing to replay, and it stays mounted. */
+    armed: { type: Boolean, default: false },
   },
   setup(props, { slots }) {
-    const armed = ref(false)
+    const armed = ref(props.armed)
     const instance = getCurrentInstance()
+    watch(
+      () => props.armed,
+      (is) => {
+        if (is) armed.value = true
+      },
+    )
 
-    function arm(event: Event): void {
-      if (armed.value) return
-      const from = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
-      const hadFocus = !!from && from.contains(document.activeElement)
-      armed.value = true
-      void nextTick(() => {
-        const target = firstElement((instance?.vnode.el as Node | null) ?? null)
-        if (target) replay(event, target, hadFocus)
-      })
-    }
+    const arming = createLazyArming({
+      isArmed: () => armed.value,
+      firstPress: () => props.firstPress,
+      arm(event, hadFocus, as) {
+        armed.value = true
+        void nextTick(() => {
+          const target = firstElement((instance?.vnode.el as Node | null) ?? null)
+          if (target) replay(event, target, hadFocus, as)
+        })
+      },
+    })
+    onBeforeUnmount(arming.dispose)
 
     const on = (kind: LazyOverlayInterest) => props.interest.includes(kind)
 
     return () => {
-      if (armed.value) return h(Fragment, null, slots.default?.())
+      if (armed.value || props.armed) return h(Fragment, null, slots.default?.())
       const nodes = elements(slots.closed?.())
       const only = nodes[0]
-      if (nodes.length !== 1 || !only || typeof only.type === "symbol" || typeof only.type === "string" && false) {
+      if (nodes.length !== 1 || !only || typeof only.type === "symbol") {
         return h(Fragment, null, slots.default?.())
       }
       const listeners: Record<string, unknown> = {}
-      if (on("hover")) listeners.onPointerenter = arm
-      if (on("focus")) listeners.onFocus = arm
-      if (on("press")) listeners.onPointerdown = arm
-      if (on("key")) {
-        listeners.onKeydown = (event: KeyboardEvent) => {
-          if (KEYS.has(event.key)) arm(event)
-        }
-      }
+      if (on("hover")) listeners.onPointerenter = arming.onPointerenter
+      if (on("focus")) listeners.onFocus = arming.onFocus
+      if (on("press")) listeners.onPointerdown = arming.onPointerdown
+      if (on("key")) listeners.onKeydown = arming.onKeydown
       return cloneVNode(only, { ...props.standIn, ...listeners })
     }
   },

@@ -3,7 +3,9 @@ import type { TooltipContentEmits, TooltipContentProps } from "reka-ui"
 import type { HTMLAttributes } from "vue"
 import { reactiveOmit } from "@vueuse/core"
 import { TooltipArrow, TooltipContent, TooltipPortal, useForwardPropsEmits } from "reka-ui"
+import { inject } from "vue"
 import { cn } from "@/lib/utils"
+import { TOOLTIP_LAZY_KEY } from "./lazy"
 
 defineOptions({
   inheritAttrs: false,
@@ -15,12 +17,14 @@ const props = withDefaults(defineProps<TooltipContentProps & { class?: HTMLAttri
 
 const emits = defineEmits<TooltipContentEmits>()
 
+const lazy = inject(TOOLTIP_LAZY_KEY, null)
+
 const delegatedProps = reactiveOmit(props, "class", "elevated")
 const forwarded = useForwardPropsEmits(delegatedProps, emits)
 </script>
 
 <template>
-  <TooltipPortal>
+  <TooltipPortal v-if="!lazy || lazy.armed.value">
     <TooltipContent
       data-slot="tooltip-content"
       v-bind="{ ...forwarded, ...$attrs }"

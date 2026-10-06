@@ -269,6 +269,8 @@ function onContextMenu(e: MouseEvent): void {
           <LazyOverlay
             v-if="row.menu"
             :interest="['hover', 'focus', 'press', 'key']"
+            first-press="pointerdown"
+            :armed="menuOpen"
             :stand-in="{
               'data-slot': 'dropdown-menu-trigger',
               'data-state': 'closed',
