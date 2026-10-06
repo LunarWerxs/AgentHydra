@@ -170,7 +170,7 @@ function run(item: RowMenuItem) {
         >
           <ReuseBody />
           <button
-            v-else-if="!renaming"
+            v-if="!renaming"
             type="button"
             data-slot="dropdown-menu-trigger"
             aria-haspopup="menu"
