@@ -162,14 +162,15 @@ function localTarget(raw: string): string | null {
 const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g
 
 /**
- * Markdown images whose target is a local file this transcript named become the cached picture's url;
- * any other local target is left as written (the window shows it as a file chip, never loads it).
+ * Markdown images in assistant text whose target is an absolute local picture (png, jpeg, gif, webp: the
+ * cache checks the file exists, its first bytes and its size) become the cached picture's url, named
+ * earlier in the transcript or not; any other target is left as written (a file chip, never loaded).
  */
-export function rewriteLocalImages(text: string, named: ReadonlySet<string>, media: MediaCache | null): string {
+export function rewriteLocalImages(text: string, _named: ReadonlySet<string>, media: MediaCache | null): string {
   if (!media || !text.includes('![')) return text
   return text.replace(MD_IMAGE, (all, alt: string, target: string, title: string | undefined) => {
     const path = localTarget(target)
-    if (!path || !named.has(pathKey(path)) || !RENDERABLE.test(path)) return all
+    if (!path || !RENDERABLE.test(path)) return all
     const ref = media.fileRef(path)
     return ref?.url ? `![${alt}](${ref.url}${title ?? ''})` : all
   })

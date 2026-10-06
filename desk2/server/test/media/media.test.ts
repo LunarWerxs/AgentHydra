@@ -159,7 +159,7 @@ describe('normalizer pictures', () => {
     expect(last.result!.images![1]).toEqual({ mediaType: 'text/markdown', name: 'report.md', bytes: 8 })
   })
 
-  test('(d) a markdown image at a local path loads only when this transcript named the file', () => {
+  test('(d) a markdown image at a local picture path loads, named by the transcript or not', () => {
     const root = temp('d')
     const media = createMediaCache(join(root, 'media'))
     mkdirSync(join(root, 'shots'))
@@ -177,7 +177,7 @@ describe('normalizer pictures', () => {
     )
     const text = (items.find((i) => i.kind === 'assistant_text') as { text: string }).text
     expect(text).toMatch(/!\[after\]\(\/api\/media\/[0-9a-f]{64}\.png\)/)
-    expect(text).toContain(`![nope](${other})`)
+    expect(text).toMatch(/!\[nope\]\(\/api\/media\/[0-9a-f]{64}\.png\)/)
   })
 
   test('without a cache, pictures are left out, never inlined', () => {

@@ -381,8 +381,9 @@ describe('ChatRuntime: start options', () => {
     expect(opts!.allowDangerouslySkipPermissions).toBeUndefined()
     expect(opts!.disallowedTools).toBeUndefined()
     expect(opts!.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: DESK_APPEND_NO_DELEGATE })
-    expect(DESK_APPEND_NO_DELEGATE).toBe("You are running inside Hydra Desk, Jacob's own desktop for Claude Code.")
-    expect(DESK_APPEND.startsWith(DESK_APPEND_NO_DELEGATE + ' Sub-agents here are CliMayte workers')).toBe(true)
+    expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, Jacob's own desktop for Claude Code. You have a real browser")).toBe(true)
+    expect(DESK_APPEND_NO_DELEGATE).not.toContain('Sub-agents here are CliMayte workers')
+    expect(DESK_APPEND).toContain('Sub-agents here are CliMayte workers')
     expect(opts!.mcpServers).toEqual({ agenthydra: { type: 'http', url: 'http://127.0.0.1:1/mcp' } })
   })
 

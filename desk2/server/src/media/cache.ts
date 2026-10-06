@@ -13,6 +13,8 @@ import type { ImageRef } from '@shared/protocol'
 import { ctx } from '../context'
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
+/** GIFs (screen recordings, demos) may be bigger than other pictures. */
+export const MAX_GIF_BYTES = 30 * 1024 * 1024
 export const MEDIA_ROUTE = '/api/media/'
 
 type Ext = 'png' | 'jpg' | 'gif' | 'webp'
@@ -61,9 +63,9 @@ export function createMediaCache(dir: string): MediaCache {
   /** Pictures already hashed, by path: the ref stands while the file's size and mtime do, so a transcript naming it again costs one stat. */
   const seen = new Map<string, { size: number; mtimeMs: number; ref: ImageRef }>()
   const put = (bytes: Uint8Array, name?: string): ImageRef | null => {
-    if (!bytes.length || bytes.length > MAX_MEDIA_BYTES) return null
+    if (!bytes.length || bytes.length > MAX_GIF_BYTES) return null
     const ext = sniff(bytes)
-    if (!ext) return null
+    if (!ext || bytes.length > (ext === 'gif' ? MAX_GIF_BYTES : MAX_MEDIA_BYTES)) return null
     const hash = createHash('sha256').update(bytes).digest('hex')
     const id = `${hash}.${ext}`
     const file = join(dir, id)
@@ -103,7 +105,7 @@ export function createMediaCache(dir: string): MediaCache {
       }
       const name = basename(path)
       const ext = extname(name).slice(1).toLowerCase()
-      if (RENDERABLE.test(name) && size <= MAX_MEDIA_BYTES) {
+      if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) {
         const hit = seen.get(path)
         if (hit && hit.size === size && hit.mtimeMs === mtimeMs && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
         try {
