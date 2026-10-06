@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { allKey, clampPane, findServer, focusPlan, groupActions, groupServers, isUp, listView, loadPaneWidth, needsSetup, openable, openPlan, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
+import { allKey, findServer, focusPlan, groupActions, groupServers, isUp, listView, needsSetup, openable, openPlan, otherRunning, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
 
 const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
@@ -107,17 +107,6 @@ describe('servers and the address bar', () => {
   })
   it('keeps the last non-empty output lines without colour codes', () => {
     expect(tailLines([{ line: '\x1b[31mboom\x1b[0m' }, { line: '' }, { line: 'again' }], 2)).toEqual(['boom', 'again'])
-  })
-})
-
-describe('the pane width', () => {
-  it('stays between the limits and a default when nothing sensible is saved', () => {
-    expect(clampPane(100)).toBe(PANE_MIN)
-    expect(clampPane(5000)).toBe(PANE_MAX)
-    expect(clampPane(800, 600)).toBe(600)
-    expect(loadPaneWidth({ getItem: () => null })).toBe(PANE_DEFAULT)
-    expect(loadPaneWidth({ getItem: (k) => (k === PANE_KEY ? '640' : null) })).toBe(640)
-    expect(loadPaneWidth({ getItem: () => '10' })).toBe(PANE_DEFAULT)
   })
 })
 

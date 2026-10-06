@@ -5,7 +5,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
 import { processAddress, type DevWebProcess, type LocalServers } from '@shared/devwebui'
 import { browserClose, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
-import { activateTab, clampPane, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { activateTab, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
@@ -24,8 +24,8 @@ import { DOT, ICON_BTN } from './styles'
 // is on screen and the window is. `focus` is that list's request: show this server (its folder is `cwd`). After them the New tab lists "Other localhost servers": what listens on this machine that
 // DevWebUI did not start (GET /dw/localhost), open-only, scanned at most every 8 s.
 /** aiBrowser: the browser this chat's AI last used, which a chat with no tabs yet starts on. */
-const props = defineProps<{ chatId: string; cwd: string; width: number; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null }>()
-const emit = defineEmits<{ close: []; resize: [width: number] }>()
+const props = defineProps<{ chatId: string; cwd: string; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null }>()
+const emit = defineEmits<{ close: [] }>()
 
 const servers = useDevServers()
 const { status, statusMissing, projects, projectsError, busy, actionError } = servers
@@ -294,39 +294,10 @@ watch(
   { immediate: true }
 )
 
-// ---- width: drag the left edge, or arrow keys ----
-function onResizeDown(e: PointerEvent) {
-  const el = e.currentTarget as HTMLElement
-  el.setPointerCapture(e.pointerId)
-  const right = el.parentElement?.getBoundingClientRect().right ?? window.innerWidth
-  const move = (ev: PointerEvent) => emit('resize', clampPane(right - ev.clientX, window.innerWidth * 0.7))
-  const up = () => {
-    el.removeEventListener('pointermove', move)
-    el.removeEventListener('pointerup', up)
-  }
-  el.addEventListener('pointermove', move)
-  el.addEventListener('pointerup', up)
-}
-function onResizeKey(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') emit('resize', clampPane(props.width + 16, window.innerWidth * 0.7))
-  else if (e.key === 'ArrowRight') emit('resize', clampPane(props.width - 16, window.innerWidth * 0.7))
-}
-
 </script>
 
 <template>
   <section class="relative flex h-full w-full min-w-0 flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]" aria-label="Servers">
-    <div
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize the servers pane"
-      tabindex="0"
-      :aria-valuenow="width"
-      class="absolute -left-1.5 top-0 z-[22] h-full w-3 cursor-col-resize touch-none focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-      @pointerdown.prevent="onResizeDown"
-      @keydown="onResizeKey"
-    />
-
     <!-- The tab strip, like a browser's: tabs, a + after the last, and the pane's own buttons at the right end. -->
     <div class="flex h-[41px] shrink-0 items-end gap-1 border-b border-border bg-[var(--bg-sidebar)] pl-2 pr-1.5 pt-[9px]">
       <div role="tablist" aria-label="Tabs" class="flex min-w-0 items-end gap-px">

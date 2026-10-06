@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { AccountInfo, ChatSummary } from '@shared/protocol'
-import { NavHistory, computeStats, matchShortcut, modelName } from '@/components/shell/logic'
+import { CHAT_DEFAULT, CHAT_KEY, CHAT_MIN, NavHistory, SIDE_MIN, computeStats, loadChatWidth, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AUTO_LABEL, accountRows, chooseAccount, headroom, rowTip } from '@/components/accounts/rows'
@@ -238,5 +238,42 @@ describe('the frame and the open view', () => {
   it('an outside session the list lacks is fetched on its own and titled Loading session… meanwhile', () => {
     expect(frame).toContain('await src.ensureExternal(id)')
     expect(frame).toContain("(fetchingSession.value === v.id ? 'Loading session…' : 'Session')")
+  })
+})
+
+describe('the split beside a wide pane', () => {
+  it('keeps the chat at the width it was dragged to whatever the window, and the pane takes the rest', () => {
+    expect(splitChat(700, 1400)).toBe(700)
+    expect(splitChat(700, 2400)).toBe(700)
+    expect(splitChat(700, 1000)).toBe(700)
+  })
+  it('lets the chat go as wide or as narrow as leaves each side usable, with no other limit', () => {
+    expect(splitChat(5000, 2400)).toBe(2400 - SIDE_MIN)
+    expect(splitChat(1800, 2400)).toBe(1800)
+    expect(splitChat(50, 2400)).toBe(CHAT_MIN)
+    expect(splitChat(CHAT_MIN + 1, 2400)).toBe(CHAT_MIN + 1)
+  })
+  it('narrows the chat only when the window leaves the pane less than its minimum, and the chat keeps its own first', () => {
+    expect(splitChat(900, 1000)).toBe(1000 - SIDE_MIN)
+    expect(splitChat(900, 500)).toBe(CHAT_MIN)
+  })
+  it('gives the grid the same rule, so the window resizes the pane before anything is measured', () => {
+    expect(splitColumns(712.4)).toBe(`max(${CHAT_MIN}px, min(712px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`)
+  })
+  it('remembers the width last dragged to, a default when nothing usable is saved', () => {
+    expect(loadChatWidth({ getItem: (k) => (k === CHAT_KEY ? '1800' : null) })).toBe(1800)
+    expect(loadChatWidth({ getItem: () => null })).toBe(CHAT_DEFAULT)
+    expect(loadChatWidth({ getItem: () => '' })).toBe(CHAT_DEFAULT)
+    expect(loadChatWidth({ getItem: () => '40' })).toBe(CHAT_DEFAULT)
+    expect(loadChatWidth({ getItem: () => 'wide' })).toBe(CHAT_DEFAULT)
+    expect(loadChatWidth(null)).toBe(CHAT_DEFAULT)
+  })
+  it('the frame lays the split out with that rule and owns the divider; the servers pane has no width of its own', () => {
+    const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')
+    expect(frame).toContain(':style="split ? { gridTemplateColumns: splitColumns(chatWidth) } : undefined"')
+    expect(frame).toContain('const move = (ev: PointerEvent) => setChatWidth(ev.clientX - left)')
+    const pane = readFileSync(join(import.meta.dir, '../../src/components/servers/ServersPane.vue'), 'utf8')
+    expect(pane).not.toContain('role="separator"')
+    expect(pane).not.toContain('width: number')
   })
 })

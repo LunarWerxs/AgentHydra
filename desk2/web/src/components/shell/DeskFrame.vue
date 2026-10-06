@@ -12,7 +12,6 @@ import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
-import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
 import type { ServerFocus } from '@/components/servers/store'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
 const SettingsView = lazyPanel(loadSettingsView)
@@ -32,7 +31,8 @@ import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type View } from './logic'
+import { CHAT_KEY, CHAT_MIN, NavHistory, SidebarPeek, chatViewOf, loadChatWidth, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
+import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
@@ -415,11 +415,34 @@ const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' &
 function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
-// The servers pane is wider than Changes (a browser needs room); its width is dragged and remembered.
-const serversWidth = ref(loadPaneWidth())
-function resizeServers(w: number) {
-  serversWidth.value = clampPane(w, window.innerWidth * 0.7)
-  storage?.setItem(PANE_KEY, String(serversWidth.value))
+const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
+// A wide pane splits the stage: the chat keeps the width it was dragged to (remembered) and the pane takes the rest, so
+// resizing the window resizes the pane and leaves the chat as it is. The divider on the pane's left edge drags the
+// split, or arrow keys move it; each side keeps only enough room to stay usable.
+const split = computed(() => wide.value && asideOpen.value)
+const splitEl = ref<HTMLElement | null>(null)
+const { width: stageWidth } = useElementSize(splitEl)
+const chatWidth = ref(loadChatWidth())
+const chatAt = computed(() => splitChat(chatWidth.value, stageWidth.value))
+function setChatWidth(want: number) {
+  chatWidth.value = splitChat(want, stageWidth.value)
+  storage?.setItem(CHAT_KEY, String(chatWidth.value))
+}
+function onSplitDown(e: PointerEvent) {
+  const el = e.currentTarget as HTMLElement
+  el.setPointerCapture(e.pointerId)
+  const left = splitEl.value?.getBoundingClientRect().left ?? 0
+  const move = (ev: PointerEvent) => setChatWidth(ev.clientX - left)
+  const up = () => {
+    el.removeEventListener('pointermove', move)
+    el.removeEventListener('pointerup', up)
+  }
+  el.addEventListener('pointermove', move)
+  el.addEventListener('pointerup', up)
+}
+function onSplitKey(e: KeyboardEvent) {
+  if (e.key === 'ArrowLeft') setChatWidth(chatAt.value - 16)
+  else if (e.key === 'ArrowRight') setChatWidth(chatAt.value + 16)
 }
 const onOpenDiff = () => (pane.value = 'diff')
 const onOpenCliMayte = () => (pane.value = 'climayte')
@@ -627,7 +650,13 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
         class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
         :style="{ transform: hydraOpen ? 'translateX(-50%)' : 'translateX(0)' }"
       >
-        <div class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]" :inert="hydraOpen" :aria-hidden="hydraOpen || undefined">
+        <div
+          ref="splitEl"
+          class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]"
+          :style="split ? { gridTemplateColumns: splitColumns(chatWidth) } : undefined"
+          :inert="hydraOpen"
+          :aria-hidden="hydraOpen || undefined"
+        >
           <div
             class="col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
             :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
@@ -677,14 +706,25 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           <!-- Servers and Changes-with-RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
                buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. -->
           <aside
-            v-if="!tasks && pane && (pane === 'climayte' || chat || (pane === 'servers' && serversCwd))"
-            class="col-start-2 flex min-h-0 shrink-0 border-l border-border"
-            :class="wide ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
-            :style="wide ? { width: `${serversWidth}px` } : undefined"
+            v-if="asideOpen"
+            class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-l border-border"
+            :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
+            <div
+              v-if="split"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize the chat and the pane"
+              tabindex="0"
+              :aria-valuenow="chatAt"
+              :aria-valuemin="CHAT_MIN"
+              class="absolute -left-1.5 top-0 z-[22] h-full w-3 cursor-col-resize touch-none focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+              @pointerdown.prevent="onSplitDown"
+              @keydown="onSplitKey"
+            />
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
-            <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
+            <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>

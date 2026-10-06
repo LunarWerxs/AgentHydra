@@ -116,17 +116,6 @@ export function proxyAddress(daemonUrl: string, proc: Pick<DevWebProcess, 'id'>)
   return `${daemonUrl.replace(/\/+$/, '')}/proxy/${proc.id}/`
 }
 
-export const PANE_MIN = 420
-export const PANE_MAX = 900
-export const PANE_DEFAULT = 520
-export const PANE_KEY = 'hydra-desk.servers.width'
-
-export const clampPane = (w: number, room = Number.POSITIVE_INFINITY): number => Math.round(Math.min(Math.max(w, PANE_MIN), Math.min(PANE_MAX, Math.max(PANE_MIN, room))))
-
-export function loadPaneWidth(storage: Pick<Storage, 'getItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): number {
-  const n = Number(storage?.getItem(PANE_KEY))
-  return n >= PANE_MIN && n <= PANE_MAX ? n : PANE_DEFAULT
-}
 
 // ---- saved browsers: the profile list, the live canvas and what the person's input becomes ----
 
