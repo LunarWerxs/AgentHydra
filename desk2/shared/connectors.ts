@@ -67,6 +67,15 @@ export const CONNECTIONS_COMPANIES = `${CONNECTORS}/connections/companies`
 /** POST ConnectionsSwitch: answers the chat's new ConnectionsWorkspace. */
 export const CONNECTIONS_SWITCH = `${CONNECTORS}/connections/switch`
 
+/** POST ConnectionsDefaultSet: the folder's default workspace for NEW chats (Desk's own setting, not Connections'); answers the chat's ConnectionsWorkspace. */
+export const CONNECTIONS_DEFAULT = `${CONNECTORS}/connections/default`
+
+export interface ConnectionsDefaultSet {
+  chat: string
+  /** companyId (or name) to make the default for new chats in the chat's folder; null clears the default. */
+  company: string | null
+}
+
 export interface ConnectionsCompany {
   companyId: string
   projectId?: string
@@ -82,6 +91,8 @@ export interface ConnectionsWorkspace {
   scope: 'chat' | 'folder' | null
   /** Connections' Bypass permissions, read from whoami; null when it does not say. Desk never writes it: only Studio changes it. */
   bypassPermissions?: boolean | null
+  /** companyId of the default for NEW chats in the chat's folder (Desk's own setting); absent when none. */
+  defaultCompanyId?: string
 }
 
 export interface ConnectionsSwitch {

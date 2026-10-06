@@ -3,11 +3,13 @@
 import { ref } from 'vue'
 import {
   CONNECTIONS_COMPANIES,
+  CONNECTIONS_DEFAULT,
   CONNECTIONS_SIGNIN,
   CONNECTIONS_SWITCH,
   CONNECTIONS_WORKSPACE,
   CONNECTORS,
   type ConnectionsCompany,
+  type ConnectionsDefaultSet,
   type ConnectionsSignin,
   type ConnectionsSwitch,
   type ConnectionsWorkspace,
@@ -44,3 +46,5 @@ export const readCompanies = (chat: string): Promise<ConnectionsCompany[]> =>
 export const switchWorkspace = (s: ConnectionsSwitch): Promise<ConnectionsWorkspace> => post(CONNECTIONS_SWITCH, s).then((r) => ask(r))
 
 export const startSignin = (chat: string): Promise<ConnectionsSignin> => post(CONNECTIONS_SIGNIN, { chat }).then((r) => ask(r))
+
+export const setDefaultWorkspace = (s: ConnectionsDefaultSet): Promise<ConnectionsWorkspace> => post(CONNECTIONS_DEFAULT, s).then((r) => ask(r))

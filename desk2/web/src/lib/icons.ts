@@ -11,6 +11,7 @@ import {
   Bookmark,
   Briefcase,
   Check,
+  Star,
   ChevronDown,
   ChevronRight,
   ChevronUp,
@@ -108,6 +109,7 @@ export const icons = {
   queueRetry: RotateCw,
   // Menus
   check: Check,
+  star: Star,
   submenu: ChevronRight,
   addFiles: Paperclip,
   addFolder: FolderPlus,

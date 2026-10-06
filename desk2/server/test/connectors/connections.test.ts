@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { CONNECTIONS_COMPANIES, CONNECTIONS_SIGNIN, CONNECTIONS_SWITCH, CONNECTIONS_WORKSPACE } from '@shared/connectors'
+import { CONNECTIONS_COMPANIES, CONNECTIONS_DEFAULT, CONNECTIONS_SIGNIN, CONNECTIONS_SWITCH, CONNECTIONS_WORKSPACE } from '@shared/connectors'
 import { createServer, type DeskServer } from '../../src/index'
 import defFactory from '../../src/connectors/defs/connections'
 
@@ -99,7 +99,7 @@ interface Rig {
 }
 
 // The chats' folders are real (the child starts in its chat's folder).
-let CHATS: Record<string, { cwd: string; sessionId: string | null }> = {}
+let CHATS: Record<string, { cwd: string; sessionId: string | null; createdAt?: number }> = {}
 
 async function boot(): Promise<Rig> {
   CHATS = {
@@ -112,6 +112,13 @@ async function boot(): Promise<Rig> {
   const shared = temp('desk-cx-shared-')
   CHATS.chatA = { cwd: shared, sessionId: 'sess-A' }
   CHATS.chatB = { cwd: shared, sessionId: 'sess-B' }
+  // a folder with chats made long before (1970) and long after (an hour ahead of) any default set during a test
+  const dflt = temp('desk-cx-default-')
+  const later = Date.now() + 3_600_000
+  CHATS.oldChat = { cwd: dflt, sessionId: 'sess-old', createdAt: 1000 }
+  CHATS.newChat = { cwd: dflt, sessionId: 'sess-new', createdAt: later }
+  CHATS.newChat2 = { cwd: dflt, sessionId: 'sess-new2', createdAt: later }
+  CHATS.pinnedNew = { cwd: dflt, sessionId: 'sess-pinned', createdAt: later }
   const dir = temp('desk-cx-')
   writeFileSync(join(dir, 'loader.mjs'), LOADER)
   const cfg = join(dir, 'claude.json')
@@ -245,4 +252,69 @@ test("'This chat' pins by the chat's own session id: chat A's pin leaves chat B 
   // A reads its pin back; B, same folder, still reads the folder's workspace
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=chatA`)).body).toMatchObject({ company: { companyId: 'c2' }, scope: 'chat' })
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=chatB`)).body).toMatchObject({ company: { companyId: 'c1' }, scope: 'folder' })
+})
+
+const uses = (r: Rig) => r.calls().filter((c) => c.tool === 'connections_use_workspace')
+const defaultsFile = (r: Rig) => JSON.parse(readFileSync(join(process.env.HYDRA_DESK_HOME as string, 'connections-defaults.json'), 'utf8'))
+
+test('the default is stored per folder with the time it was set, and setting it changes no chat or folder', async () => {
+  const r = await boot()
+  const set = await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
+  expect(set.body).toMatchObject({ defaultCompanyId: 'c2' })
+  const file = defaultsFile(r)
+  const [entry] = Object.values(file) as { companyId: string; setAt: number; applied: string[] }[]
+  expect(Object.keys(file).length).toBe(1)
+  expect(entry).toMatchObject({ companyId: 'c2', name: 'Globex Example', applied: [] })
+  expect(entry.setAt).toBeGreaterThan(0)
+  // no pin and no folder binding was written
+  expect(uses(r).length).toBe(0)
+  expect(r.calls().some((c) => c.tool === 'connections_switch_workspace')).toBe(false)
+  // another folder has none
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)).body.defaultCompanyId).toBeUndefined()
+  expect((await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'nope' })).status).toBe(404)
+})
+
+test('a chat started after the default is pinned to it once; a chat started before it is left alone', async () => {
+  const r = await boot()
+  await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
+  const old = await get(r, `${CONNECTIONS_WORKSPACE}?chat=oldChat`)
+  expect(old.body).toMatchObject({ scope: null, defaultCompanyId: 'c2' })
+  expect(uses(r).length).toBe(0)
+  const fresh = await get(r, `${CONNECTIONS_WORKSPACE}?chat=newChat`)
+  expect(fresh.body).toMatchObject({ company: { companyId: 'c2' }, scope: 'chat' })
+  expect(uses(r)).toHaveLength(1)
+  expect(uses(r)[0]).toMatchObject({ params: { company: 'c2' }, env: { session: 'sess-new' } })
+  expect((Object.values(defaultsFile(r))[0] as { applied: string[] }).applied).toEqual(['sess-new'])
+})
+
+test('a chat that already has a pin of its own is not re-pinned', async () => {
+  const r = await boot()
+  r.state({ pins: { 'sess-pinned': { companyId: 'c1', projectId: 'p1', name: 'Acme Example' } } })
+  await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
+  const w = await get(r, `${CONNECTIONS_WORKSPACE}?chat=pinnedNew`)
+  expect(w.body).toMatchObject({ company: { companyId: 'c1' }, scope: 'chat' })
+  expect(uses(r).length).toBe(0)
+})
+
+test('a change made by hand after the default applied is never overridden', async () => {
+  const r = await boot()
+  await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
+  await get(r, `${CONNECTIONS_WORKSPACE}?chat=newChat`)
+  const cleared = await post(r, CONNECTIONS_SWITCH, { chat: 'newChat', company: null, scope: 'chat' })
+  expect(cleared.body.scope).toBeNull()
+  // a fresh read (the switch route reads fresh) did not re-apply it
+  expect(uses(r).map((c) => c.params)).toEqual([{ company: 'c2' }, { clear: true }])
+  await post(r, CONNECTIONS_SWITCH, { chat: 'newChat', company: 'c1', scope: 'chat' })
+  expect(uses(r).at(-1)?.params).toEqual({ company: 'c1' })
+})
+
+test('clearing the default stops it applying, and the star on the default sends company: null', async () => {
+  const r = await boot()
+  await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: 'c2' })
+  const cleared = await post(r, CONNECTIONS_DEFAULT, { chat: 'oldChat', company: null })
+  expect(cleared.body.defaultCompanyId).toBeUndefined()
+  expect(defaultsFile(r)).toEqual({})
+  const w = await get(r, `${CONNECTIONS_WORKSPACE}?chat=newChat2`)
+  expect(w.body).toMatchObject({ scope: null })
+  expect(uses(r).length).toBe(0)
 })

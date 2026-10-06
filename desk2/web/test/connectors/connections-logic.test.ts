@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConnectorView } from '../../../shared/connectors'
-import { canClear, chatScopeAllowed, chipText, effectiveScope, isCurrent, pageShouldOpen, showConnectionsChip } from '../../src/components/connectors/connections-logic'
+import { bypassRow, chatScopeAllowed, chipText, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, starState } from '../../src/components/connectors/connections-logic'
 
 const view = (over: Partial<ConnectorView>): ConnectorView => ({
   id: 'connections', name: 'Connections', blurb: '', homepage: 'https://example.com', installable: false, pane: false,
@@ -34,16 +34,25 @@ describe('what the pill says', () => {
   })
 })
 
-describe('the scope choice', () => {
-  test('This chat needs a Claude session; without one a pick goes to the folder', () => {
+describe('picking and the search', () => {
+  const cs = [{ companyId: 'c1', name: 'Acme Example' }, { companyId: 'c2', name: 'Globex Example' }, { companyId: 'c3', name: 'acme labs' }]
+  test('pinning this chat needs a Claude session', () => {
     expect(chatScopeAllowed(null)).toBe(false)
-    expect(effectiveScope('chat', null)).toBe('folder')
-    expect(effectiveScope('chat', 'sess-1')).toBe('chat')
-    expect(effectiveScope('folder', 'sess-1')).toBe('folder')
+    expect(chatScopeAllowed('sess-1')).toBe(true)
   })
-  test('only a chat pin can be cleared', () => {
-    expect(canClear('chat')).toBe(true)
-    expect(canClear('folder')).toBe(false)
+  test('the filter is case-insensitive by name; blank keeps all; no match is empty', () => {
+    expect(filterCompanies(cs, 'ACME').map((c) => c.companyId)).toEqual(['c1', 'c3'])
+    expect(filterCompanies(cs, '  ')).toEqual(cs)
+    expect(filterCompanies(cs, 'zzz')).toEqual([])
+  })
+})
+
+describe('the star', () => {
+  const ws = { signedIn: true, company: null, scope: null, defaultCompanyId: 'c1' } as const
+  test('filled only on the folder default, with its own titles', () => {
+    expect(starState(ws, { companyId: 'c1', name: 'A' })).toMatchObject({ on: true, title: 'Default for new chats' })
+    expect(starState(ws, { companyId: 'c2', name: 'B' })).toMatchObject({ on: false, title: 'Set as default for new chats in this folder' })
+    expect(starState(null, { companyId: 'c1', name: 'A' }).on).toBe(false)
   })
 })
 
@@ -56,13 +65,12 @@ describe('sign-in', () => {
   })
 })
 
-test('the Bypass permissions row reads On/Off from Connections and is hidden when it does not say', async () => {
-  const { bypassText } = await import('@/components/connectors/connections-logic')
+test('the Bypass permissions row shows a check and On / Off, and is hidden when Connections does not say', () => {
   const ws = (bypassPermissions?: boolean | null, signedIn = true) => ({ signedIn, company: null, scope: null, bypassPermissions }) as const
-  expect(bypassText(ws(true))).toBe('Bypass permissions: On')
-  expect(bypassText(ws(false))).toBe('Bypass permissions: Off')
-  expect(bypassText(ws(null))).toBeNull()
-  expect(bypassText(ws(undefined))).toBeNull()
-  expect(bypassText(ws(true, false))).toBeNull()
-  expect(bypassText(null)).toBeNull()
+  expect(bypassRow(ws(true))).toEqual({ label: 'Bypass permissions', on: true, value: 'On' })
+  expect(bypassRow(ws(false))).toEqual({ label: 'Bypass permissions', on: false, value: 'Off' })
+  expect(bypassRow(ws(null))).toBeNull()
+  expect(bypassRow(ws(undefined))).toBeNull()
+  expect(bypassRow(ws(true, false))).toBeNull()
+  expect(bypassRow(null)).toBeNull()
 })
