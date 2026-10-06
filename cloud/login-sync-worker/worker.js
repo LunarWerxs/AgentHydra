@@ -18,7 +18,7 @@
 //
 // Routes (JSON in and out):
 //   GET    /v1/health            {ok:true}, no token needed
-//   GET    /v1/changes?since=n   {rev, logins, queues, chats, gone:[{table,id}]} changed after cursor n,
+//   GET    /v1/changes?since=n   {rev, logins, queues, chats, free, gone:[{table,id}]} changed after n,
 //                                or {rev, full:true} when n is below the kept tombstones or above rev;
 //                                304 to a matching If-None-Match. The asking PC names itself in
 //                                x-agenthydra-pc; every answer carries x-seen: <pc>=<epoch ms>,...
@@ -39,6 +39,10 @@
 //                                -> {seq}; 409 {error:'taken', next} when that seq exists;
 //                                507 {error, used, room} when it would take chats past their room
 //   GET    /v1/chats/:id/chunks?from=n  {chunks:[{seq, blob, by, createdAt}], next, more}
+//   GET    /v1/free              {free:[{id, version, meta, updatedAt}]}   (Hydra Desk 2's Free web
+//   GET    /v1/free/:id          {id, version, blob, meta, updatedAt}       logins, one row per Free
+//   PUT    /v1/free/:id          {version, blob, meta} -> {version} | 409   instance, written like a
+//   DELETE /v1/free/:id?version=n   -> {ok:true} | 409                     login; blob up to 64 KB)
 
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const MAX_META = 4 * 1024
@@ -50,7 +54,10 @@ const MAX_META = 4 * 1024
 const LOGINS = { table: 'logins', key: 'id', maxBlob: 64 * 1024 }
 const QUEUES = { table: 'queues', key: 'pc', maxBlob: 256 * 1024 }
 const CHATS = { table: 'chats', key: 'id', maxBlob: 256 * 1024 }
-const LIST_NAME = { logins: 'logins', queues: 'queues', chats: 'chats' }
+// Hydra Desk 2's Free web logins (claude.ai, chatgpt.com), one row per Free instance. A table of their
+// own for the reason `queues` has one: an AgentHydra that predates them would land each as a CLI login.
+const FREE = { table: 'free', key: 'id', maxBlob: 64 * 1024 }
+const LIST_NAME = { logins: 'logins', queues: 'queues', chats: 'chats', free: 'free' }
 
 // chat transcript chunks: append-only, one row per (chat, seq), never changed once written
 const MAX_CHUNK = 1048576
@@ -66,7 +73,7 @@ const chatRoom = (env) => {
 }
 
 // Bump when the schema below changes: a database at this PRAGMA user_version is not migrated again.
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 3
 let schemaReady = false
 async function ensureSchema(db) {
   if (schemaReady) return
@@ -81,7 +88,7 @@ async function ensureSchema(db) {
     schemaReady = true
     return
   }
-  for (const t of [LOGINS, QUEUES, CHATS]) {
+  for (const t of [LOGINS, QUEUES, CHATS, FREE]) {
     await db
       .prepare(
         `CREATE TABLE IF NOT EXISTS ${t.table} (${t.key} TEXT PRIMARY KEY, version INTEGER NOT NULL, blob TEXT NOT NULL, meta TEXT NOT NULL, updated_at INTEGER NOT NULL, rev INTEGER NOT NULL DEFAULT 0)`,
@@ -133,6 +140,13 @@ async function ensureSchema(db) {
       .prepare('UPDATE store_rev SET gone_rev = COALESCE((SELECT MAX(rev) FROM tombstones), 0)')
       .run()
   }
+  // The Free table's rev, added after the others: its table is new with it, so it starts at 0.
+  if (
+    !(await db.prepare('PRAGMA table_info(store_rev)').all()).results?.some(
+      (c) => c.name === 'free_rev',
+    )
+  )
+    await db.prepare('ALTER TABLE store_rev ADD COLUMN free_rev INTEGER NOT NULL DEFAULT 0').run()
   await db
     .prepare(
       'CREATE TABLE IF NOT EXISTS chat_chunks (chat TEXT NOT NULL, seq INTEGER NOT NULL, blob TEXT NOT NULL, by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat, seq))',
@@ -240,9 +254,25 @@ const row = (t, r) =>
 // minutes, which costs idle polls rows forever and still shows a change minutes late. A rev moved by
 // hand-run SQL is not seen until the next write; reset the Durable Object with the database.
 const HEAD_SQL =
-  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1'
-const HEAD_FIELDS = ['rev', 'floor', 'logins_rev', 'queues_rev', 'chats_rev', 'gone_rev']
-const NO_HEAD = { rev: 0, floor: 0, logins_rev: 0, queues_rev: 0, chats_rev: 0, gone_rev: 0 }
+  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, free_rev, gone_rev FROM store_rev WHERE id = 1'
+const HEAD_FIELDS = [
+  'rev',
+  'floor',
+  'logins_rev',
+  'queues_rev',
+  'chats_rev',
+  'free_rev',
+  'gone_rev',
+]
+const NO_HEAD = {
+  rev: 0,
+  floor: 0,
+  logins_rev: 0,
+  queues_rev: 0,
+  chats_rev: 0,
+  free_rev: 0,
+  gone_rev: 0,
+}
 const PENDING_MAX_MS = 2 * 60 * 1000
 
 // The characters the chat chunks hold (the chat_usage row), kept in the Durable Object too so a chunk
@@ -581,10 +611,10 @@ async function deleteRow(env, db, t, id, version) {
   })
 }
 
-// DELETE /v1/logins/:id — remove only when `version` is the current one.
-async function deleteLogin(env, db, id, version) {
+// DELETE /v1/logins/:id, DELETE /v1/free/:id — remove only when `version` is the current one.
+async function deleteLogin(env, db, t, id, version) {
   if (!Number.isInteger(version) || version < 1) return json({ error: 'bad version' }, 400)
-  return (await deleteRow(env, db, LOGINS, id, version))
+  return (await deleteRow(env, db, t, id, version))
     ? json({ ok: true })
     : json({ error: 'version conflict' }, 409)
 }
@@ -792,7 +822,7 @@ const idleChanges = (request, rev, seen) =>
         status: 304,
         headers: { etag: etagOf(rev), 'cache-control': 'no-store', 'x-seen': seenHeader(seen) },
       })
-    : changesJson({ rev, logins: [], queues: [], chats: [], gone: [] }, seen)
+    : changesJson({ rev, logins: [], queues: [], chats: [], free: [], gone: [] }, seen)
 
 async function getChanges(request, env, db, sinceParam) {
   const since = Number(sinceParam)
@@ -809,9 +839,10 @@ async function getChanges(request, env, db, sinceParam) {
     [LOGINS, 'logins', head.logins_rev],
     [QUEUES, 'queues', head.queues_rev],
     [CHATS, 'chats', head.chats_rev],
+    [FREE, 'free', head.free_rev],
   ].filter(([, , at]) => at > since)
   const goneNew = head.gone_rev > since
-  const out = { rev, logins: [], queues: [], chats: [], gone: [] }
+  const out = { rev, logins: [], queues: [], chats: [], free: [], gone: [] }
   if (wanted.length || goneNew) {
     await ensureSchema(db)
     const stmts = wanted.map(([t]) =>
@@ -836,7 +867,12 @@ async function getChanges(request, env, db, sinceParam) {
 }
 
 function routeList(env, db, path) {
-  const tables = { '/v1/logins': LOGINS, '/v1/queues': QUEUES, '/v1/chats': CHATS }
+  const tables = {
+    '/v1/logins': LOGINS,
+    '/v1/queues': QUEUES,
+    '/v1/chats': CHATS,
+    '/v1/free': FREE,
+  }
   return tables[path] ? listRows(env, db, tables[path]) : null
 }
 
@@ -856,13 +892,14 @@ function routeChunks(request, db, env, url, match) {
 }
 
 function routeRow(request, env, db, url, match) {
-  const t = match[1] === 'queues' ? QUEUES : match[1] === 'chats' ? CHATS : LOGINS
+  const t = { queues: QUEUES, chats: CHATS, free: FREE }[match[1]] ?? LOGINS
   const id = match[2]
   if (!ID_RE.test(id)) return json({ error: 'bad id' }, 400)
   if (request.method === 'GET') return fetchRow(env, db, t, id)
   if (request.method === 'PUT') return putRow(request, env, db, t, id)
   const version = Number(url.searchParams.get('version'))
-  if (request.method === 'DELETE' && t === LOGINS) return deleteLogin(env, db, id, version)
+  if (request.method === 'DELETE' && (t === LOGINS || t === FREE))
+    return deleteLogin(env, db, t, id, version)
   if (request.method === 'DELETE' && t === CHATS) return deleteChat(env, db, id, version)
   return json({ error: 'method not allowed' }, 405)
 }
@@ -876,12 +913,12 @@ function route(request, db, env, url, path) {
   }
   const c = /^\/v1\/chats\/([^/]+)\/chunks(?:\/([^/]+))?$/.exec(path)
   if (c) return routeChunks(request, db, env, url, c)
-  const m = /^\/v1\/(logins|queues|chats)\/([^/]+)$/.exec(path)
+  const m = /^\/v1\/(logins|queues|chats|free)\/([^/]+)$/.exec(path)
   return m ? routeRow(request, env, db, url, m) : json({ error: 'not found' }, 404)
 }
 
 // The read routes that may answer from the head alone check the schema only when they reach D1.
-const HEAD_FIRST = /^\/v1\/(changes|logins|queues|chats)(\/[^/]+)?$/
+const HEAD_FIRST = /^\/v1\/(changes|logins|queues|chats|free)(\/[^/]+)?$/
 
 export default {
   async fetch(request, env) {
