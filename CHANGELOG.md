@@ -12,6 +12,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **AgentHydra 2.0: the new window (it was Hydra Desk 2) now comes in the download on Windows, Linux and macOS**
 - **Opening AgentHydra always reaches the new window, and starts it when it is down**
 - **Updates install, update and repair the new window, and an install without it fixes itself**
+- **Dev servers run once for every chat: AgentHydra reuses one that runs instead of starting a second**
 - **A Dev servers button lists your projects and their servers in the sidebar**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
@@ -25,8 +26,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the AgentHydra shortcut or the tray icon, on Linux and macOS in your browser. It brings every chat from this PC and your other PC into one sidebar, AgentHydra's accounts,
   CliMayte, HSwarm and Analytics pages beside the chat with one Settings dialog, dev servers and a small browser,
   Free claude.ai and ChatGPT accounts, and pictures and videos in the chat.
-- **A Dev servers button in the title bar.** It lists DevWebUI's projects and their servers in the sidebar, where
-  you can start, stop and open them.
+- **A Dev servers button in the title bar.** It lists your projects and their servers in the sidebar, where you can
+  start, stop and open them.
+- **Chats share dev servers instead of starting their own.** Every chat, and every other Claude session on the PC,
+  gets tools to start a project's dev server through AgentHydra: when that server already runs, whoever started it,
+  they get its address instead of a second copy fighting the first for its port.
+- **Forget a Free thread.** A thread can be removed from AgentHydra's Free list. The chat itself was private, so the
+  site never kept it.
 - **The Free table has a Tokens column, like the CLI and desktop tables.** Neither claude.ai nor ChatGPT reports
   tokens, so AgentHydra estimates them from the text each message sent and got back. The header switches between
   the current 5-hour window, the week and all time.
@@ -36,12 +42,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Opening AgentHydra always leads to the new window.** The tray, the shortcut and every AgentHydra page open
   it. When it is not running, AgentHydra starts it and shows a short "Starting AgentHydra" page that moves on by
   itself, instead of a page that never loads.
-- **Updates carry the new window.** An update installs, updates and repairs the new window and its dev servers
-  helper along with the app, and starts the window again afterwards. An install that is missing the window, such
+- **Updates carry the new window.** An update installs, updates and repairs the new window along with the app, and starts the window again afterwards. An install that is missing the window, such
   as one updated by an older version or the single `.exe` download, puts it back by itself when it starts.
 - **HSwarm's key and model tables look like the Instances tables.** They use the same rows, controls and cards.
 - **The Free table no longer spins its 5-hour and week cells every time you open it.** AgentHydra now keeps the
   Free accounts' readings current in the background, one account at a time, and the table only shows what changed.
+- **Dev servers are part of AgentHydra now, not a separate program.** They run in AgentHydra's own small background
+  process, which you can restart or stop from Settings without touching AgentHydra, and which keeps your servers
+  running when AgentHydra restarts. A server that already runs on its port is used as it is, never killed to make room.
 - **Every change to the new window is tested.** Its own test suite now runs with the rest on every change.
 
 ### Fixed
@@ -57,6 +65,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ### Removed
 
 - **The old AgentHydra window.** Where the new window is installed, AgentHydra no longer shows the old one.
+- **The separate DevWebUI copy.** Its own background program, tray and settings are gone; its projects carry over.
 
 ## [1.13.0] - 2026-10-06
 
@@ -2000,252 +2009,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **Landed chats no longer block resume indefinitely.** A freshly landed chat updates its `lastActivityAt`, so the 180s quiet-window gate was treating it as in-flight. Resume now uses a shorter window for recently imported chats. App-injected meta records (boot hooks, cross-session messages) are skipped when judging idle status. Usage walls are also checked via the daemon's `limit_stop` state. Duplicate resumes are deduped if already staged.
 
-- **The batch mover's resume suite was reading the OWNER'S REAL CHAT LIST**
-  (`orchestrator/scripts/tests/test_migrate_batch_resume.py`). Its isolation stubbed
-  `hydralib.sessions`, but the archive gate moved onto `hydralib.chats()` (the per-store scan) on
-  2026-09-13 - so with a daemon running on the machine, every case in the file gated its fake
-  chats against the real ones. The moment a real title contained "one", "two" or "three" as a
-  fragment the gate refused every batch and thirteen cases failed at once, in a file none of them
-  is about; it also made a 0.05s suite take 141s. Stubbed the way the sibling suite already does.
+- **Test isolation now stubs all daemon paths correctly** so suite tests don't accidentally read the real chat store or leave locks behind. Test cleanup clears route locks and operation records properly.
 
-- **A test file's parked route lock no longer poisons whichever file runs next, and the guardrail
-  now catches it** (`server/src/orchestrator.ts`'s test seam, `server/tests/orchestrator-stale-lock.test.ts`,
-  `orchestrator-preempt.test.ts`, `orchestrator-operations.test.ts`, a third rule in
-  `scripts/checks/test-stub-outlives-its-file.mjs` with its fixtures). GitHub's Linux runner took
-  the three preemption tests RED on 2026-09-14 while Windows stayed green on the same commit, off
-  nothing but which file `readdir` listed first. `bun test` runs every file in ONE process, and
-  the orchestrator's route lock is a module-level Map: `orchestrator-stale-lock.test.ts` pins "a
-  young lock still blocks a second caller" with a spawn stubbed never to settle, so that run can
-  never reach the `finally` that releases its lock, and it left `migrate_batch` held FOREVER. Every
-  later file's `migrate_batch` was then refused `409 busy` by a run that does not exist - so the
-  preempt suite's own holder could not start, there was no operation to preempt, and the red named
-  a file nobody had touched. The test seam now clears the locks as well as the operation records
-  (it had cleared exactly half the module state), the stale-lock suite hands its lock back in an
-  `afterEach`, the preempt suite starts from an empty route whoever ran before it, and the
-  guardrail that already catches an unrestored global or an un-re-mocked module now also reports a
-  never-settling orchestrator run with no reset in an after hook. Proven red-then-green against a
-  probe file that reproduced the Linux order.
+- **Mid-turn deliveries defer instead of failing,** staying staged for retry. Courier now reports the actual state of each delivery (failed, deferred, expired, delivered, etc.) and never falsely claims "nothing staged".
 
-- **A delivery deferred for a live turn is no longer burned as a failure, and `courier --only <id>`
-  says what state a named row is in** (`orchestrator/scripts/courier.py`, `lib/ledgerlib.py`'s new
-  `discount`, `stage_reply.py`, `migrate_batch.py`, four suites). Found live 2026-09-12:
-  `courier --yes --only <id>` correctly refused to type into a chat mid-turn ("peer did not
-  confirm and the turn is in flight - not typing"), but marked the row FAILED on that one attempt,
-  so the same command a minute later answered "nothing staged - the courier has nothing to
-  deliver" - which reads as "already sent" and was the opposite of the truth. The reply had to be
-  re-staged under a new id.
+- **Refused moves stage their resume messages** so they're not lost. The refusal comes back as a structured object naming the operation ID and remedy, not a bare string.
 
-  - A mid-turn refusal now DEFERS: the row stays staged, the result is tagged `deferred`, and the
-    attempt is taken back off the breaker (`ledgerlib.discount`, which never removes a
-    deterministic row) with no incident filed. The breaker counts futility, not restraint.
-  - `--only <id>` on a row that is not staged names it: `failed after 1 attempt: <lastError>`,
-    delivered, cancelled, expired, or "no such delivery id", and exits 2. "nothing staged" is now
-    only said when it is true.
-  - `migrate_batch` read a deferred result as attempted-and-failed, re-staged a SECOND copy of the
-    resume and fired the courier into the same live turn. A deferral is a skip there now, and its
-    automatic retry stages with `dedupe` so a still-staged row is re-used, never doubled.
-  - `stage_reply.py`: a value-taking flag with no value used to swallow the NEXT flag
-    (`--state --limit 200` ate `--limit`, which silently fell back to the default), and
-    `--state All` matched nothing because only the list filter case-folded. Both are usage errors
-    or fixed. New `--dedupe` for the automatic lanes, off by default for a person's reply. The
-    queue's third symptom - `--list --state all --limit 200` answering `rows: []` beside
-    `matched: 120` - could NOT be reproduced against this code, so no fix was invented for it; a
-    CLI-level test now pins that the three counts agree across states and limits.
+- **Chat enumeration now asks the account itself**, not the session list. Half-moved chats exist on two accounts; the per-store scan sees them both. Archive gate includes all archived chats in its census.
 
-- **A refused `move_chats` no longer eats the resume text it was carrying, and says what holds the
-  route instead of throwing a string** (`server/src/mcp.ts`,
-  `server/tests/move-chats-refused-resume.test.ts`). Found live 2026-09-12, minutes after the
-  hand-kill above: the refusal was correct, but the message the caller wanted delivered died with
-  the call, and the landed chat had to be told by hand that four background jobs had been
-  orphaned. The resume is now STAGED against each named chat through `stage_reply` (deduped, so a
-  re-fired call cannot leave two wakes), and the refusal itself comes back as the daemon's own
-  object - `busy`, the `operationId` holding the route, the remedy - rather than as the bare
-  string `AgentHydra 409: {…}` a rejected fetch used to throw. A whole-account sweep names no
-  chat, so it says plainly that the resume was NOT kept rather than implying it was.
+- **Accounts read as "rate limited" when one of multiple OAuth grants was revoked.** Grants are now ordered (app session first, then by expiry) and tried in order. Readers fall through to the next grant when one is refused, and backoff is keyed by label AND token digest. The reported failure is from the preferred grant, not whichever was tried last.
 
-  ⛔ The staging lives in the DAEMON (`runOrchestrator`'s refusal path), not in the MCP tool. The
-  first cut staged from `move_chats` after catching the 409, and an adversarial review caught
-  that `move_chats` detaches by default: the route answers 202 with an operation id and the
-  refusal happens later, inside the operation, where no MCP code sees it. That cut covered the
-  rare blocking call and missed nearly every real one. The same review caught that a preempted
-  holder slow to die fell through to the ordinary "wait for it, or cancel it" refusal about a
-  run the call had just cancelled; that case now says the holder is being torn down and to fire
-  the same call again.
+- **Usage checks no longer fall back to spawning CLI with an instance token,** preventing cross-contamination of account numbers. Config-dir tokens still can spawn, as that CLI owns its login.
 
-- **The two enumerators of "what does this account hold" disagreed, and the one that said ZERO
-  silently did nothing** (`orchestrator/scripts/migrate_batch.py`, `lib/hydralib.py`'s new
-  `chats()`, `test_migrate_batch.py`). Minutes after the killed batch, `--all-unarchived` reported
-  "0 unarchived desktop chat(s)" on an account `list_chats` showed THREE on; naming those three
-  ids by hand then moved them cleanly. `/api/sessions` resolves a session id to ONE owning profile
-  (live beats archived, else newest mtime), which is the right answer to "where is this chat now"
-  and the wrong one to "what is still sitting on this account" - a half-moved chat exists on two
-  accounts at once, and the collapse hides it from the account it is on. Both the batch's movable
-  list and its archive gate now read `/api/chats`, the same per-store scan `list_chats` serves, so
-  this file asks that question once, in one voice.
+- **Compiled daemons can now archive, unarchive and rename chats.** Missing PowerShell scripts were returning success (exit 0) even when they never ran. Scripts now embed in the binary and are resolved through `resolveMiscAsset`, returning non-zero on missing paths.
 
-  ⛔ `hydralib.chats()` is a CENSUS: `archived=include`, paged to the end. Its first cut took the
-  endpoint's UI defaults (`archived=hide`, 200 rows), and the review that caught it named the
-  consequence exactly: the archive gate asks that list "is the chat you named archived?", so a
-  list with every archived chat removed switched the gate OFF - the one protection the owner has
-  been angriest about. It never shipped; the regression test pins both the scope and the paging.
+- **Long moves now timeout per phase with timeouts named on incomplete work.** Post-landing phases (settle, stamp, resume) have per-chat-scaled ceilings on worker threads. Moves auto-detach when they exceed the blocking timeout, keeping work alive even if the client gives up. Archived-chat gate now takes a count that must match the actual archived chats.
 
-- **A signed-in, working account read as "rate limited" for a week, because the only credential
-  ever tried was a revoked one** (`server/src/core/accounts.ts`, `server/src/usage.ts`,
-  `server/src/usage-service.ts`, `server/tests/accounts-grant-preference.test.ts`,
-  `usage-grant-fallthrough.test.ts`, `usage-backoff.test.ts`). Reported by the owner on 2026-09-14
-  about instance #3, which he had just opened and used: yellow account chip, usage frozen since
-  2026-09-07.
+- **CI failures on GitHub legs fixed.** Tray tests now declare their environment state. DeepSeek paths work cross-platform. Search index uses 30-second cooldown instead of permanent latch after transient failures.
 
-  A signed-in desktop profile holds up to three OAuth grants: the app's own session sign-in
-  (`user:sessions:claude_code`, refreshed every time the app runs), a profile-only grant, and a
-  year-long `user:inference user:file_upload user:profile` token that is minted once and never
-  refreshed. Both readers picked by MAX EXPIRY, which is always that year-long token. ⛔ **The
-  latest expiry is not the live one.** On #3 it had been revoked while its expiry still read eleven
-  months out: profile endpoint 401 (so the identity fell back to cache, which is the yellow chip),
-  usage endpoint 429 with an hour of Retry-After (so the row read "rate limited"). The session grant
-  beside it answered 200 on both. Across ten profiles that afternoon, no session grant was dead
-  where the year-long one lived; the reverse was the bug.
+- **Stale `runtime.json` no longer triggers daemon duplication.** Clients now check the default port if the pointer is dead, announce stale pointers explicitly, and refuse to start a second daemon. Daemon rewrites the pointer once per minute if stale. Side-runs announce themselves and write to their own state dir, not the machine-wide pointer.
 
-  Three changes, because each alone leaves the account stuck. Grants are ORDERED (app session
-  first, then by expiry) instead of max-expiry-picked. Both readers FALL THROUGH to the next grant
-  when the server refused that one, and stop early on a failure every grant would share, so a dead
-  connection costs one request rather than one per grant. And the 429 backoff is keyed by label AND
-  token digest: keyed by label alone, the revoked grant's hour-long window silenced the live grant
-  too, which is what made this survive every poll, every refresh and every restart.
-
-  The reported failure is the PREFERRED grant's, not the last one tried: a leftover's 429 must not
-  relabel a profile whose real problem is that its login needs refreshing.
-
-- **A failed usage check could file ANOTHER account's numbers under an instance, and did, for ten
-  of them** (`server/src/usage.ts`, `server/tests/usage-backoff.test.ts`). When the API read failed,
-  a desktop instance's check fell back to spawning `claude -p "/usage"` with the instance's own
-  token injected. The CLI's `/usage` screen is the same GET with the same token, so it cannot
-  succeed where the read failed; what it can do is authenticate as some OTHER login and print that
-  account's numbers, which are then cached and charted as this one's.
-
-  Measured in `usage-history.json`: on 2026-09-11 at 20:00, ten desktop instances each "read" 86%
-  weekly with no reset instant (what 5claude's and test9's own API reads said that hour); at 21:00,
-  seven of them "read" 20% resetting Sep 18 (another_meh's). Those seven were still showing that 20%
-  as their own three days later. An injected token now never falls back to a spawn, whatever the API
-  said. A config-dir token still does, because that CLI owns its login and can refresh it.
-
-- **A compiled daemon could not archive, unarchive or rename a chat, and said `ok: true` every
-  time** (`server/src/ui-archive.ts`, `misc-assets.ts`, `server/tests/ui-archive.test.ts`). This is
-  the misc-assets defect of 2026-09-12 again, on the SECOND actuator, and the entry below about the
-  delivery actuator should be read as one of two, not as the class being closed.
-
-  `ui-archive.ts` built its PowerShell path with `join(import.meta.dir, '..', '..', 'misc',
-  'Manage-DesktopChat.ps1')`. That is right in a checkout and wrong in every compiled build: inside
-  a `bun build --compile` exe `import.meta.dir` is the virtual embedded root, so two `..` hops land
-  on `B:\` and the spawn asked for a path on a drive that does not exist.
-
-  **It failed silently, which is the half worth naming.** `powershell -File <missing>` prints its
-  complaint and EXITS 0, so `uiRenameChat`'s `code === 0` returned `ok: true` over a script that had
-  never run. Measured live: a chat migrated between accounts landed with no title, `chat_rename`
-  answered `ok: true` three times while the sidebar never changed, and the migration's own bypass
-  stamp stayed unverified because the permission picker had no row to aim at. `Manage-DesktopChat
-  .ps1` joins `RUNTIME_MISC_FILES` now, so the build embeds it or fails, and `runPs1` resolves it
-  through `resolveMiscAsset` and returns a NON-ZERO code when there is no path. Three regression
-  tests pin it at the source, because every other unit test here injects `run` and so none of them
-  could ever have caught it. ⚠ A SOURCE daemon was never affected, because it resolves a real
-  `misc\` folder; the defect and its false green belong to COMPILED builds, so a compiled install
-  still on 0.41.0 keeps answering `ok: true` over a script that never runs until it is rebuilt.
-
-- **A one-chat `move_chats` ran fifteen minutes past its documented 15-25s budget, died on a bare
-  transport timeout, and returned no report at all** (`orchestrator/scripts/migrate_batch.py`,
-  `server/src/mcp.ts`, `server/src/orchestrator.ts`). No per-chat result, no `bypassVerdict`, no
-  `resume.delivered`, for work that had in fact done most of its job. Four changes, because the
-  call could die in four places:
-
-  - **Every post-landing phase is bounded.** Settle, stamp and resume each run on a worker thread
-    with a per-chat-scaled ceiling (`_run_bounded`, `SETTLE_PHASE_TIMEOUT_SECS`,
-    `STAMP_PHASE_TIMEOUT_SECS`, `RESUME_PHASE_TIMEOUT_SECS`). A phase over budget is ABANDONED, not
-    killed, because Python cannot safely kill a thread mid subprocess or mid UI-automation wait;
-    the timeout is then NAMED on every chat that never got a verdict rather than left blank.
-  - **`move_chats` auto-detaches** whenever its own declared `timeoutMs` exceeds `AUTO_DETACH_MS`,
-    mirroring `orchestrator_run`'s existing rule. A one-chat batch's 180s floor already exceeds the
-    120s ceiling, so this was silent dead code for the commonest case. `background: false` still
-    forces blocking for a caller who knows their transport can wait.
-  - **A `409 busy` refusal names the operation holding the route** and, with `orchestrator_cancel`
-    above, there is now a supported way out of a stuck batch.
-  - **The archived-chat gate takes a COUNT, not a boolean.** `--archived-count N` must MATCH the
-    archived chats the batch actually holds, and archived chats must be the WHOLE batch. See the
-    Changed entry above: `move_chats`' `archived` boolean is gone, with no shim.
-
-  Also fixed: `test_migrate_batch_resume.py`'s `_BatchTest` was missing the `hydralib.sessions` stub
-  its sibling already carried, so all twelve of its cases were silently reading this machine's real
-  chat store and being refused by the archive gate before touching any of the stubbed machinery
-  under test.
-
-- **Main's CI had been red since 2026-09-11, on every GitHub leg, and is green again.** Three
-  inherited failures, none of them visible on a developer machine:
-
-  - **The tray tests never said which world they were in.** `startTrayHostIfMissing` answers
-    `reason: 'headless'` on a build agent (since ec329bc), which is right, and the four tests of the
-    desktop path inherited that from the runner's `CI=1` and failed on both GitHub legs while
-    passing everywhere else. They state `headless: false` now, and two new cases pin the build-agent
-    answer, explicit and from the environment (`tests/tray-host.test.ts`).
-  - **A DeepSeek session's project name was the whole Windows cwd on Linux** (`dsh-sessions.ts`).
-    The harness records the cwd it ran in, backslashes and all, and node's `basename` splits only on
-    the host's separator; the leaf is taken on either separator now.
-  - **The search index switched itself off for good after one failed open** (`search-index.ts`).
-    A transient cause (GitHub's Windows runner: one 6.6 s open of a fresh file, then a failure) set
-    a permanent latch, and every query for the rest of the process fell back to the scan. It is a
-    30-second cooldown now, proven by a test whose cause clears mid-run.
-
-- **A stale `runtime.json` no longer reads as "the daemon is not running", and can no longer make a
-  second daemon** (`server/src/instance.ts`, `index.ts`, `mcp.ts`, `side-run.ts`,
-  `orchestrator/scripts/lib/hydralib.py`, four suites). On 2026-09-12 a probe daemon left the
-  machine-wide pointer naming a dead port while the real daemon answered on 7787; every MCP tool and
-  every orchestrator script said "couldn't reach the daemon, start it", which is the advice that
-  starts a second one, and a daemon booted then would have found 7787 busy, hopped to 7788 and
-  written a second pointer. f44bfa4 stopped a side-run from taking the pointer; this closes the
-  rest of the class:
-
-  - **The clients say what they see.** When the base came from the pointer and the connection is
-    refused, `mcp.ts` and `hydralib` now say *"runtime.json names port N, nothing is listening
-    there, and it may be stale"*, ask the default port once, and switch to it for the rest of the
-    process if it answers as agenthydra, with a stderr line saying so and "Do NOT start another
-    daemon". An explicit `AGENTHYDRA_URL` / `AGENTHYDRA_PORT` is the caller's word and is never
-    second-guessed.
-  - **The boot guard asks the default port too.** `findLiveInstance` trusts the pointer; when it
-    answers null, `findLiveOnDefaultPort` asks 7787 directly and accepts only our service name, so
-    a stale pointer no longer produces two daemons. The pointer is left alone there: its owner
-    heals it.
-  - **The pointer heals itself.** Once a minute the running daemon rewrites `runtime.json` if it
-    is missing or names a dead daemon, and never touches one naming a live other daemon (a hopped
-    successor, an update relaunch mid-handover). A clean exit already deleted it; a crash, a hard
-    kill or a hand edit used to leave it wrong until the next restart.
-  - **A side-run announces itself to every client.** `/api/health` carries `pid`, `sideRun` and
-    `pointerFile`, and every `/api/*` answer from a daemon with a relocated store carries
-    `x-agenthydra-side-run: <dbPath>`. The MCP server puts `daemonWarning` on every tool result
-    from then on and `hydralib` prints one stderr line, because a client that silently reads and
-    writes a scratch database is worse than an outage: it looks like it worked.
-
-- **The kit-sync hook's own test had never run.** `bun test` does not descend into
-  dot-directories, so `.githooks/tests/check-kit-sync-staged.test.ts` (AH-24, 2026-09-06) passed
-  whenever someone named it by path and was collected by neither `bun run test` nor CI: the suite
-  was two tests smaller than the tree said. All hook suites now live under `tests/githooks/`,
-  anchored by `tests/repo-root.ts` rather than a hop count, and `hook-tests-live-here.test.ts`
-  fails the moment a test file appears under `.githooks/` again.
-
-- **A daemon with a relocated store no longer takes the machine-wide pointer** (`server/src/
-  instance.ts`, `server/src/index.ts`, `server/tests/instance-pointer-side-run.test.ts`).
-  `<CONFIG_DIR>/runtime.json` is how every client on this machine finds the daemon: the MCP tools,
-  the orchestrator scripts, `hydralib`, the tray. A session started a daemon from source on port
-  7799 with a scratch database to click through a UI change; it overwrote that pointer to name
-  itself and exited without restoring it, and from then on every tool reported "couldn't reach the
-  daemon" while the real one answered `/api/health` 200 on 7787 the whole time. Nothing in the error
-  text suggested a stale pointer, so the obvious next move would have been to start a second daemon.
-
-  Where a daemon records itself is now decided by its STORE rather than its port:
-  `isPathInside(CONFIG_DIR, DATA_DIR)`. A process whose data dir sits outside the config dir writes
-  its pointer beside its own state and says so at boot; nothing has to be cleaned up afterwards,
-  which was the whole complaint. ⚠ The port is deliberately NOT the test: a primary install that
-  finds 7787 busy hops to 7788 and is still the machine's daemon, and the auto-update successor
-  takes the same port on purpose. A scratch `AGENTHYDRA_HOME` moves both directories together and
-  was never the problem; `AGENTHYDRA_DATA_DIR` alone, which moves the store and leaves the pointer
-  behind, was.
+- **All hook test suites now live under `tests/githooks/`** instead of `.githooks/tests/`. Test discovery is anchored by `tests/repo-root.ts` not hop count.
 
 
 - **A compiled install could not deliver a message to ANY chat, by any route**
@@ -4674,15 +4458,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **A session's original file location can be copied as text.**
+- **A session's file location can be copied as text.**
 - **Settings can shut down the complete app.**
-- **Codex, ChatGPT and OpenCode support has a concrete scoping document.**
-- **`bun run screenshots` regenerates the README images.**
+- **Codex, ChatGPT and OpenCode support has a scoping document.**
+- **README images now auto-regenerate and match the interface.**
 - **The shared tray launcher can forward dropped files and folders.**
-- **Settings puts the everyday controls up front.**
-- **The version number is now the update status and control.**
+- **Settings puts everyday controls up front.**
+- **Version number shows update status and control.**
 - **Generic Anthropic tiers are treated as Free.**
-- **The README screenshots now match the current interface.**
 
 **Everything in 0.10.0**
 
@@ -4813,21 +4596,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **The session list now has a time window, set to the last 24 hours.**
-- **Finished runs can be cleared out of the queue.**
-- **The scheduler indicators are now the way to reach the scheduler.**
-- **Instances and CLI instances are collapsible.**
-- **Queueing a run for later uses the same picker as the chat composer.**
-- **The instance editor applies as you type.**
-- **The transcript editor setting hides its input until you want it.**
-- **The two create buttons are icons until you hover them.**
-- **Settings no longer has an Accounts section.**
-- **Most sessions were named after a warning notice instead of their contents.**
-- **The list was full of sessions that were never conversations.**
-- **The auto-resume monitor listed work that was long finished.**
-- **Advanced options in the queue builder was quietly broken.**
-- **Settings had one seam with no gap, and one list with no separators.**
-- **A single instance could occupy several rows in the usage cache.**
+- **Session list now filters by time window (last 24h, 7d, 30d, all).**
+- **Finished runs can be cleared from the queue.**
+- **Scheduler indicators are now clickable and accessible.**
+- **Instances and CLI sections are collapsible.**
+- **Queue scheduling uses the same date picker as the composer.**
+- **Session list shows actual conversations, not quota checks and warnings.**
+- **Auto-resume monitor and UI layout fixed.**
+- **Editor settings now hide complexity until needed.**
 
 **Everything in 0.7.0**
 
@@ -4989,18 +4765,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **Stray console windows could flash on an ordinary click.**
-- **A run could be stuck "running" forever after a crash, and cancelling it could kill an unrelated
-  program.**
-- **A 529 overload was treated as your rate limit, so the run died instead of retrying.**
-- **The composer claimed "this session is busy" the moment you hit send, with nothing running.**
-- **The auto-resume monitor was blind to every session it hadn't launched itself.**
-- **A downloaded transcript was named after the session's UUID, not the session.**
-- **CI actually typechecks now, and it covers the tests too.**
-- **Copy the session file to the clipboard.**
-- **A 10-minute stepper in the composer's "queue for later".**
-- **The scheduler status chip in the header is now a link**
-- **Pink means "you can click this now".**
+- **Console windows no longer flash during ordinary operations.**
+- **Runs no longer get stuck after crashes or kill unrelated programs.**
+- **Transient server overloads are now retried instead of failing.**
+- **Composer no longer falsely claims session is busy.**
+- **Auto-resume now finds quota walls in existing transcripts.**
+- **Transcripts download with session titles, not UUIDs.**
+- **Session file can be copied to clipboard as a real file.**
+- **Scheduler UI improved with time steppers and link controls.**
 
 **Everything in 0.5.0**
 
@@ -5150,35 +4922,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **A quota percentage is now quantified into something you can plan with.**
-- **The usage MCP tools now work with the app closed.**
-- **Usage checks now hit the quota endpoint directly instead of spawning `claude`.**
-- **CLI instances can be linked to a desktop instance.**
-- **Background auto-refresh of usage, on by default.**
-- **Usage responses carry an `advice` verdict.**
-- **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.**
-- **A CLI login is now a usable usage-check source in its own right.**
-- **CLI instances.**
-- **Usage-check subsystem.**
-- **AI self-check guidance.**
-- **Auto-resume monitor (opt-in, off by default).**
-- **Quitting could kill your real Claude Desktop chat.**
-- **The MSIX warning banner could be flat wrong.**
-- **A run pinned to a specific account could silently run as the wrong one.**
-- **A queued run's account wasn't shown on its card**
-- **Deleting a desktop instance could orphan its linked CLI login**
-- **A run recovered after a restart could briefly be double-dispatched**
-- **A run that merely TALKED about rate limits was marked rate-limited.**
-- **The auto-resume monitor did nothing at all unless you had added an account.**
-- **Sending a message opened a console window that stayed on screen for the whole run.**
-- **The session view showed conversation the CLI was having with itself.**
-- **"exit -1" now says what it means.**
-- **Finished runs fold away in the queue.**
-- **The composer's busy warning says what will happen to your message.**
-- **Queuing a run resumes a session from a searchable list instead of a pasted UUID.**
-- **The run builder leads with three fields, not thirteen.**
-- **Settings is one scrolling page.**
-- **The queue toolbar's scheduler indicator is an icon with a hover, not a text pill**
+- **Quota percentages quantified into actionable forecasts.**
+- **Usage checks work offline, 25-50x faster, with advice verdicts.**
+- **CLI instances managed, linked to desktop, and fully integrated.**
+- **Background usage auto-refresh keeps numbers current by default.**
+- **Auto-resume monitor catches rate limits from any session source.**
+- **Run builder focuses on essentials; settings and queue redesigned.**
+- **Console windows, message handling, and exit codes fixed.**
+- **Rate limit detection improved to avoid false positives.**
 
 **Everything in 0.3.0**
 
@@ -5367,17 +5118,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **Per-instance icon and color.**
-- **An instance is named after the account it is signed into, not the folder it lives in.**
-- **Accounts resolve themselves; the "Resolve" button is gone.**
-- **The Instances table's quota numbers stay current while you watch them.**
-- **Fewer rules on the Instances screen.**
-- **Renaming an instance is now instant and works while it is running.**
-- **A running instance's row leads with Focus.**
-- **Header and panel cleanup.**
-- **A burn rate of "zero" no longer means "work freely".**
-- **Rebuild.bat could leave a STALE daemon serving old code while reporting success.**
-- **Mutating API routes no longer 500 on an odd request body.**
+- **Instance icons, colors, and names now reflect the account, not the folder.**
+- **Accounts auto-resolve without manual buttons.**
+- **Quota numbers update live while you watch the table.**
+- **Renaming instances is instant and works while running.**
+- **Focus button leads running instance rows.**
+- **Burn rate forecasting fixed to avoid false "safe" signals.**
+- **Daemon rebuilds no longer serve stale code.**
+- **API error handling improved.**
 
 **Everything in 0.2.0**
 
@@ -5477,26 +5225,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **MSIX install warning (Instances tab)**
-- **Portable mode**
-- **MCP stdio server**
-- **Background auto-update loop**
-- **Quitting CC Manager UI no longer closes the Claude Desktop instances it launched.**
-- **The Instances ⋮ "More actions" menu opens again.**
-- **The Instances refresh icon no longer spins on every poll.**
-- **Instance discovery no longer breaks on profile paths that contain a space.**
-- **Composer toasts render as real toasts.**
-- **Open drawers no longer cover the header buttons.**
-- **Push panels no longer crush the centered shell (kit-wide).**
-- **The composer lost its top divider line**
-- **Queue moved from a tab to a slide-in drawer.**
-- **Settings split into tabs.**
-- **One Updates group, and it explains itself.**
-- **Queue resume lives in the queue drawer.**
-- **Multi-select banner is count-only.**
-- **Drawer headers/footers lost their divider lines (kit-wide).**
-- **Header cleanup**
-- **Default port moved 8787 → 7787.**
+- **MSIX detection with link to classic Claude Desktop.**
+- **Portable mode and MCP stdio server.**
+- **Background auto-update loop.**
+- **Instance management and discovery fixed.**
+- **Queue moved to a slide-in drawer.**
+- **Settings reorganized into tabs.**
+- **Drawers and composer UI improved.**
+- **Port, refresh timing, and layout improvements.**
 
 **Everything in 0.1.0**
 
