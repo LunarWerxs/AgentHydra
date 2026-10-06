@@ -452,16 +452,6 @@ export default {
     cliUsable: 'of {total} CLI accounts usable now',
     desktopUsable: 'of {total} desktop accounts usable now',
     usableDetail: '{signedIn} signed in, {spent} at a limit, {signedOut} signed out',
-    pool5hLabel: '5h {pct}% left',
-    pool5hEmpty: '5h n/a',
-    poolWeekLabel: 'Week {pct}% left',
-    poolWeekEmpty: 'Week n/a',
-    pool5hTip: '5-hour limit: {pct}% left across these accounts',
-    pool5hNone: '5-hour limit: no usage reading yet',
-    poolWeekTip: 'Weekly limit: {pct}% left across these accounts',
-    poolWeekNone: 'Weekly limit: no usage reading yet',
-    poolCounted: 'Accounts counted: {n}, weighted by plan size.',
-    poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
     // Nearest their limit: every signed-in account with a reading, the most used first.
     nearest: 'Nearest their limit',
     nearestHint:

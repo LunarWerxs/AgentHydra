@@ -11,7 +11,7 @@ import {
   listCliMayteWorkers,
 } from '@/lib/api'
 import { reconcileList, sameData } from '@/lib/reconcile'
-import { isCliMayteActive } from '@/lib/climayte-status'
+import { climayteRunningCount, isCliMayteActive } from '@/lib/climayte-status'
 
 // Replaced whole by a read that brought a change (reconcileList), never edited in place, so Vue does
 // not wrap every row in a proxy.
@@ -32,6 +32,8 @@ function showOlder(): void {
 }
 /** The other PCs' queue (GET /api/corch/remote); null before it was read or when the route is missing. */
 const remote = shallowRef<{ enabled: boolean; pcs: CliMayteRemotePc[] } | null>(null)
+/** The running count both the page's Running filter and the tree's node show (both PCs when sharing is on). */
+const runningCount = computed(() => climayteRunningCount(workers.value, remote.value))
 /** What CliMayte has offloaded so far. */
 const totals = ref<CliMayteTotals | null>(null)
 /** What passed per kind of task (GET /api/corch/scorecard); shown in the stats card. */
@@ -91,5 +93,5 @@ async function readCliMayte(opts: { silent?: boolean; side?: boolean }): Promise
 }
 
 export function useCliMayteData() {
-  return { workers, finishedLimit, hasOlder, showOlder, remote, totals, scorecard, waves, loading, loaded, unreachable, listedAt, refreshCliMayte }
+  return { workers, finishedLimit, hasOlder, showOlder, remote, runningCount, totals, scorecard, waves, loading, loaded, unreachable, listedAt, refreshCliMayte }
 }

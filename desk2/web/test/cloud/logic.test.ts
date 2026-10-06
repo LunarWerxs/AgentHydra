@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, type RowLead, rowLead } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -43,18 +43,42 @@ describe('parseScopes', () => {
   })
 })
 
-// The cloud means another PC, nothing else; this PC's other apps lead with their own mark.
+// The cloud means another PC, nothing else; this PC's other apps get their own mark, an extra beside the row's dot (never in its place, whether or not the desk list shows the row).
 describe('rowLead', () => {
-  const lead = (source: string, fromPc: string | null, onDesk: boolean, added = false) => rowLead({ source, fromPc }, 'HERE', { onDesk, added })
+  const lead = (source: string, fromPc: string | null, added = false) => rowLead({ source, fromPc }, 'HERE', { added })
   test.each<[string, RowLead, RowLead]>([
-    ["another PC's Claude chat", lead('claude', 'THERE', false), { kind: 'cloud', label: 'From THERE, through the chat sync' }],
-    ["another PC's OpenCode chat", lead('opencode', 'THERE', false), { kind: 'cloud', label: 'OpenCode chat from THERE, through the chat sync' }],
-    ["this PC's OpenCode chat", lead('opencode', null, false), { kind: 'app', app: 'opencode', label: 'OpenCode chat on this PC' }],
-    ["this PC's Claude chat on the desk list", lead('claude', null, true), null],
-    ["a row added for this PC's work", lead('claude', null, false, true), null],
-    ["a row added for the other PC's work", lead('claude', 'THERE', false, true), { kind: 'cloud', label: 'On THERE' }]
+    ["another PC's Claude chat", lead('claude', 'THERE'), { kind: 'cloud', label: 'From THERE, through the chat sync' }],
+    ["another PC's OpenCode chat", lead('opencode', 'THERE'), { kind: 'cloud', label: 'OpenCode chat from THERE, through the chat sync' }],
+    ["this PC's OpenCode chat", lead('opencode', null), { kind: 'app', app: 'opencode', label: 'OpenCode chat on this PC' }],
+    ["this PC's Claude chat", lead('claude', null), null],
+    ["a row added for this PC's work", lead('claude', null, true), null],
+    ["a row added for the other PC's work", lead('claude', 'THERE', true), { kind: 'cloud', label: 'On THERE' }]
   ])('%s', (_name, got, want) => {
     expect(got).toEqual(want)
+  })
+})
+
+// Owner, 2026-10-05: Open Code and ChatGPT are not in the sidebar by default; the Apps ticks decide, desk list included.
+describe("the desk list's Apps scope", () => {
+  const session = (id: string, source: ExternalSession['source']): ExternalSession => ({
+    id, title: id, cwd: 'D:/work/app', source, instance: null, status: 'idle', activity: null, lastActivityAt: 1, model: null,
+    accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null
+  })
+  const external = [session('claude-cli', 'cli'), session('claude-desktop', 'desktop'), session('codex-1', 'codex'), session('unnamed', 'other')]
+  const listed = (apps: string[]) => groupChats([], { external, showApp: (s) => appShown(ahSource(s.source), apps) }).folders.flatMap((f) => f.entries.map((e) => e.id)).sort()
+  test("Claude alone hides this PC's Codex chats, and the one it cannot name", () => {
+    expect(listed(['claude'])).toEqual(['claude-cli', 'claude-desktop'])
+  })
+  test('ticking Codex shows them', () => {
+    expect(listed(['claude', 'codex'])).toEqual(['claude-cli', 'claude-desktop', 'codex-1'])
+  })
+  test('the unnamed one needs every app but HSwarm', () => {
+    expect(listed(['claude', 'codex', 'opencode', 'hermes', 'dsh'])).toContain('unnamed')
+  })
+  test("Desk's own chats are never filtered", () => {
+    const chat = { id: 'c1', sessionId: null, title: 'mine', cwd: 'D:/work/app', group: null, archived: false, pinned: false, updatedAt: 5, createdAt: 5 } as unknown as Parameters<typeof groupChats>[0][number]
+    const out = groupChats([chat], { external, showApp: () => false })
+    expect(out.folders.flatMap((f) => f.entries.map((e) => e.id))).toEqual(['c1'])
   })
 })
 

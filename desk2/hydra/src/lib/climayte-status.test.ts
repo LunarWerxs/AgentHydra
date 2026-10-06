@@ -11,6 +11,7 @@ import type { CliMayteAttemptOutcome, CliMayteVerdict, CliMayteWorkerView } from
 import {
   climayteFailedStory,
   climayteQueuedNote,
+  climayteRunningCount,
   climayteStoryLines,
   climayteVerdictMark,
 } from './climayte-status'
@@ -317,4 +318,14 @@ test('a wave verdict and an unknown recorder both read as real lines', () => {
     expect(story.next.length).toBeGreaterThan(0)
     for (const line of story.next) expect(i18n.global.te(line.key)).toBe(true)
   }
+})
+
+// The tree's CliMayte node and the page's Running filter show one number: this PC's tasks that can still
+// change, plus the other PCs' when sharing is on (live check 2026-10-05: node (1), page "Running (42)").
+test('climayteRunningCount counts the other PCs only while sharing is on', () => {
+  const mine = [{ status: 'running' }, { status: 'queued' }, { status: 'done' }] as CliMayteWorkerView[]
+  const pcs = [{ workers: [{ status: 'running' }, { status: 'waiting' }, { status: 'done' }] }] as never[]
+  expect(climayteRunningCount(mine, { enabled: true, pcs })).toBe(4)
+  expect(climayteRunningCount(mine, { enabled: false, pcs })).toBe(2)
+  expect(climayteRunningCount(mine, null)).toBe(2)
 })

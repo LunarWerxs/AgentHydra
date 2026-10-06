@@ -60,9 +60,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   (and their groups after the desk's groups), each kept where it first appeared. The cloud icon means the
   other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
   different app, sure, but it's not cloud"): a row from the other PC leads with a cloud, its tooltip naming
-  that PC (and the app when it is not Claude), pulsing gray while that chat works, and shows the PC's name
-  in a gray chip (the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and
-  other apps' chats lead with a small muted mark for their app (`rowLead` in `web/src/components/cloud/logic.ts`).
+  that PC (and the app when it is not Claude), pulsing gray while that chat or the work a row was added for
+  runs (blue for a running HSwarm job), and nothing else sets it apart (owner, 2026-10-05: no PC-name chip;
+  the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and other apps' chats
+  lead with a small muted mark for their app in both lists (`rowLead` in `web/src/components/cloud/logic.ts`),
+  and the Apps ticks below decide which apps' chats the desk list shows too (Desk's own chats always).
   Each row shows its AgentHydra instance number (#37), as AgentHydra's rows do. The Filter menu opens with
   Apps, one checkbox per app (Claude, Codex, OpenCode, Hermes, DSH, HSwarm), one click each, and starts at
   Claude alone (owner, 2026-10-05: "I don't necessarily want to see open code or ChatGPT in my sidebar by
@@ -205,8 +207,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   and account, sessions and tokens, what eats tokens, sessions worth a look, tools, busiest hours,
   sessions at once, recurring mistakes, recent edits and the coding tools here. The Instances landing
   ("At a glance", `hydra/src/components/InstancesHomeView.vue`) leads with how many CLI and desktop
-  accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars, and the
-  accounts nearest their limit; then CliMayte's and this PC's session numbers, the 24-hour charts, and
+  accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars (the CLI
+  table's own gauges, in gray), and the accounts nearest their limit, with one warning rule for both:
+  amber from 70% used, red above 90%; then CliMayte's and this PC's session numbers, the 24-hour charts, and
   HSwarm by account. On both, every section has a short title with its explanation behind an info icon,
   long lists show their top 5 behind "+N more", charts are gray, and colour means something: Analytics'
   one blue marks the current period or the top item, the landing's accent marks an account at 70% or

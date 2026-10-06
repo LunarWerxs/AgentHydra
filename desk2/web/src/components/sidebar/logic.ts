@@ -127,6 +127,8 @@ export function groupChats(
     query?: string
     filter?: SidebarFilter
     external?: ExternalSession[]
+    /** Whether the Apps scope lets an outside session's app through (cloud/logic.ts appShown); Desk's own chats are never filtered. */
+    showApp?: (s: ExternalSession) => boolean
     order?: SidebarOrder
     hidden?: ReadonlySet<string>
     showHidden?: boolean
@@ -138,7 +140,7 @@ export function groupChats(
   const entries: SidebarEntry[] = [
     ...chats.map((chat): SidebarEntry => ({ kind: 'chat', id: chat.id, at: chat.updatedAt, chat })),
     ...(opts.external ?? [])
-      .filter((s) => s.source !== 'climayte' && !ours.has(s.id))
+      .filter((s) => s.source !== 'climayte' && !ours.has(s.id) && (opts.showApp?.(s) ?? true))
       .map((session): SidebarEntry => ({ kind: 'external', id: session.id, at: session.lastActivityAt ?? 0, session }))
   ].filter((e) => !query || marksOf(e).title.toLowerCase().includes(query))
   const live = filter === 'archived' ? [] : entries.filter((e) => !marksOf(e).archived)

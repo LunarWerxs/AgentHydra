@@ -13,9 +13,23 @@ import { usageBadgeVariant } from '@/lib/usage'
 import type { PooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
-defineProps<{ session: PooledRemaining; week: PooledRemaining }>()
+const props = defineProps<{
+  session: PooledRemaining
+  week: PooledRemaining
+  /** Grey while plenty is left (the Instances landing's one-focus page, owner 2026-10-05): the week
+   *  bar takes a colour only once the pool runs low. Off, every caller keeps the green week bar. */
+  gray?: boolean
+}>()
 
 const { t } = useI18n()
+
+/** The week bar's tone: the pool's used share (100 - left) through usageBadgeVariant, the one rule
+ *  the accounts rows use too; `gray` turns the all-clear green into neutral. */
+function weekVariant(week: PooledRemaining) {
+  if (week.pct === null) return 'neutral'
+  const tone = usageBadgeVariant(100 - week.pct)
+  return props.gray && tone === 'success' ? 'neutral' : tone
+}
 
 /** The tooltip's second line: who is not in the number. Absent when everyone is. */
 function leftOut(pool: PooledRemaining): string | undefined {
@@ -61,7 +75,7 @@ const counted = (pool: PooledRemaining) => t('cliInstances.poolCounted', { n: po
       <div class="w-24 shrink-0">
         <UsageBar
           :fill-pct="week.pct ?? 0"
-          :variant="week.pct === null ? 'neutral' : usageBadgeVariant(100 - week.pct)"
+          :variant="weekVariant(week)"
           :label="
             week.pct === null
               ? $t('cliInstances.poolWeekEmpty')

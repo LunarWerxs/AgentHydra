@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, type Component } from 'vue'
-import { Bot, Cloud, Code, Cpu, EyeOff, Network, Sparkles, Terminal } from '@lucide/vue'
+import { Cloud, EyeOff } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession, SwarmJob } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
@@ -18,6 +18,7 @@ import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
 import { fromPcLabel, modelName, originLabel, RESULTS_KEY, rowLead, scopesNarrowed, sessionShape, SHAPE_LABELS, type CloudGroup } from './logic'
+import { appMark } from './appMarks'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -44,6 +45,8 @@ const props = defineProps<{
   running?: (id: string) => boolean
   /** The desk row's dot (running, needs you, idle): the row here draws the same one. */
   glyph?: (id: string) => StatusGlyph | undefined
+  /** How an added row's cloud pulses (tasks.ts addedPulse, from the row's own work and tasks); null for a row with nothing running, undefined for any other row. */
+  pulse?: (id: string) => 'gray' | 'blue' | null | undefined
   /** A row's right-click menu: its desk row's, or the cloud-only one (Sidebar.vue cloudMenu). */
   menuFor?: (row: CloudSession) => RowMenuEntry[]
 }>()
@@ -107,16 +110,14 @@ function tooltip(r: CloudSession): string {
     .filter(Boolean)
     .join('\n')
 }
-/** What a row leads with (logic.ts rowLead): another PC's cloud, this PC's other app's mark, or its dot. */
-const cloudMark = (r: CloudSession) => rowLead(r, thisPc.value, { onDesk: cloud.onDesk(r.id), added: isAddedRow(r.id) })
-/** One muted mark per app that is not Claude. */
-const APP_MARKS: Record<string, Component> = { codex: Code, opencode: Terminal, hermes: Sparkles, dsh: Cpu, zswarm: Network }
+/** What a row's lead slot holds (logic.ts rowLead): another PC's cloud, else its dot; this PC's other app's mark sits beside the dot. */
+const cloudMark = (r: CloudSession) => rowLead(r, thisPc.value, { added: isAddedRow(r.id) })
 /** The mark of a row from this PC's other app, null for any other row. */
 function appIcon(r: CloudSession): Component | null {
   const m = cloudMark(r)
-  return m?.kind === 'app' ? (APP_MARKS[m.app] ?? Bot) : null
+  return m?.kind === 'app' ? appMark(m.app) : null
 }
-/** A row the desk list shows keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
+/** A row keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
 function dotClass(r: CloudSession): string {
   if (r.archived) return 'border border-text-muted'
   const g = props.glyph?.(r.id)
@@ -127,6 +128,11 @@ function dotClass(r: CloudSession): string {
  * remote ... gray pulsing"): gray, or blue for a row that is a running HSwarm job; still and muted otherwise.
  */
 function cloudTone(r: CloudSession): string {
+  // A row added for running work has no dot of its own: its work and its tasks say whether it runs.
+  if (isAddedRow(r.id)) {
+    const tone = props.pulse?.(r.id)
+    return tone ? runPulse(tone) : 'text-text-muted'
+  }
   const g = props.glyph?.(r.id)
   return g?.motion === 'blink' ? runPulse(g.tone === 'swarm' ? 'blue' : 'gray') : 'text-text-muted'
 }
@@ -166,12 +172,11 @@ const ROW =
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
               <Cloud v-else-if="cloudMark(r)?.kind === 'cloud'" role="img" :aria-label="cloudMark(r)!.label" class="size-3.5" :class="cloudTone(r)" />
-              <component :is="appIcon(r)!" v-else-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 text-text-muted" />
               <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
+            <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->
+            <component :is="appIcon(r)!" v-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
-            <!-- Muted like the instance number beside it: blue is HSwarm's alone in the sidebar (owner, 2026-10-05). -->
-            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted">{{ r.fromPc }}</span>
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
             <RowAge :at="r.lastActivityAt" />

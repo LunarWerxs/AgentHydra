@@ -331,6 +331,16 @@ export function addedStatus(r: Pick<AddedRow, 'worker' | 'job'>): ExternalSessio
   return r.job?.active ? 'working' : 'idle'
 }
 
+/**
+ * How an added row's other-PC cloud pulses (owner, 2026-10-05: gray for remote work, blue for HSwarm's alone): blue
+ * for a row that is itself a running HSwarm job, gray while any work it stands for or lists runs or waits in the
+ * queue (its worker, its task nodes, a job), null (still, muted) when none does.
+ */
+export function addedPulse(r: Pick<AddedRow, 'worker' | 'job' | 'nodes' | 'jobs'>): 'gray' | 'blue' | null {
+  if (r.job?.active && !r.worker) return 'blue'
+  return r.worker?.active || r.job?.active || r.nodes.some((n) => n.worker.active) || r.jobs.some((j) => j.active) ? 'gray' : null
+}
+
 /** An added row as the desk list draws it: a row of a session run outside Desk (ExternalRow), with none of Hydra Desk's marks. */
 export function addedEntry(r: AddedRow): SidebarEntry {
   const session: ExternalSession = {

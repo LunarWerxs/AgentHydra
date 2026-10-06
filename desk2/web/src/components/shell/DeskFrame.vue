@@ -15,7 +15,7 @@ const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
-import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/api'
+import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
@@ -311,7 +311,7 @@ function toggleTasks() {
   // An AgentHydra tab with a list of its own (HSwarm's tree) has the sidebar while it is open, so the
   // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
   // does nothing in the sidebar").
-  if (hydraOpen.value && hydraSidebar.value) toggleHydra(false)
+  if (hydraOpen.value && hydraShown.value) toggleHydra(false)
 }
 
 // Right pane

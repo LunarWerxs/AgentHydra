@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { Cloud } from '@lucide/vue'
+import { isAddedRow } from './tasks'
 import type { ExternalSession } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
-import { fromPcLabel } from '@/components/cloud/logic'
+import { ahSource, appLead, fromPcLabel } from '@/components/cloud/logic'
+import { appMark } from '@/components/cloud/appMarks'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -46,12 +48,14 @@ const menuOpen = ref(false)
 const { seen, listeners } = useFirstInterest()
 const [DefineBody, ReuseBody] = createReusableTemplate()
 // A Desktop chat AgentHydra's chat sync took from another PC: a cloud beside the status dot, as the cloud list draws it.
-const fromPc = computed(() => (props.session.fromPc ? fromPcLabel(props.session.fromPc) : null))
+const fromPc = computed(() => (props.session.fromPc ? fromPcLabel(props.session.fromPc, ahSource(props.session.source)) : null))
 const tooltip = computed(() =>
   [props.session.title, `${glyph.value.label} · ${source.value}${props.session.instance ? ` ${props.session.instance}` : ''}`, fromPc.value, props.session.activity]
     .filter(Boolean)
     .join('\n')
 )
+// A chat of another app on this PC the Apps scope shows has that app's muted mark beside its dot, as in the cloud list; an added row never does.
+const app = computed(() => (props.session.fromPc || isAddedRow(props.session.id) ? null : appLead(ahSource(props.session.source))))
 const dotClass = computed(() => glyphDotClass(glyph.value))
 
 // Inline rename: the new title is Hydra Desk's own, the session keeps its name where it runs; an
@@ -96,6 +100,8 @@ function run(item: RowMenuItem) {
           </span>
           <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
+          <!-- A chat of another app on this PC: its muted mark beside the dot, never in its place, so working and needs-you still show. -->
+          <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" :title="app.label" class="size-3.5 shrink-0 text-text-muted" />
           <input
             v-if="renaming"
             ref="input"

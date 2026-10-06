@@ -57,7 +57,7 @@ async function setup() {
   const q = fakeQueries()
   const events: ServerEvent[] = []
   const bridge: ManagerBridge = { ...fakeBridge({ roots }).bridge, listAccounts: async () => [account] }
-  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: SID, cwd, title: 'Outside', configDir })
   return { m, q, events, chat, cwd, other, file, configDir, base }

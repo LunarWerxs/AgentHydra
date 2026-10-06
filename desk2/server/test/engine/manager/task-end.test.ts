@@ -36,7 +36,7 @@ function setup(o: { newChats?: 'sdk'; home?: string } = {}) {
   const b = fakeBridge()
   const q = fakeQueries()
   const events: ServerEvent[] = []
-  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, ...(o.newChats ? { newChats: o.newChats } : {}) })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, ...(o.newChats ? { newChats: o.newChats } : {}) })
   managers.push(m)
   return { home, m, b, q, events }
 }

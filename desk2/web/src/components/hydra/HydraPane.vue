@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { AhMessage } from '@shared/hydra-embed'
-import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './api'
+import { attachHydraFrame, hydraReady, setHydraSidebar, setHydraVisible } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
@@ -70,7 +70,7 @@ function onMessage(e: MessageEvent) {
   if (m?.type === 'ah:ready') hydraReady(e.source as Window)
   else if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
-  else if (m?.type === 'ah:sidebar') hydraSidebar.value = m.model && Array.isArray(m.model.sections) ? m.model : null
+  else if (m?.type === 'ah:sidebar') setHydraSidebar(m.model && Array.isArray(m.model.sections) ? m.model : null)
 }
 function onKey(e: KeyboardEvent) {
   if (props.open && e.key === 'Escape' && !e.defaultPrevented) emit('close')

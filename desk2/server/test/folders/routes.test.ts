@@ -41,11 +41,12 @@ function fakeDialog(answers: (string | null | Error)[]) {
 async function boot(pickFolder: (start: string | null) => Promise<string | null>): Promise<DeskServer> {
   const plugins = temp('desk-folders-plugins-')
   writeFileSync(join(plugins, '20-engine.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
+  const home = temp('desk-folders-home-')
   const desk = await createServer({
     port: 0,
-    home: temp('desk-folders-home-'),
+    home,
     pluginsDir: plugins,
-    deps: { newChats: 'sdk', queryImpl: fakeQueries().queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, pickFolder },
+    deps: { newChats: 'sdk', queryImpl: fakeQueries().queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, claudeHome: home, pickFolder },
   })
   servers.push(desk)
   return desk

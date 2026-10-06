@@ -43,7 +43,6 @@ import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
-import { isCliMayteActive } from '@/lib/climayte-status'
 import { deskSwarmAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { reconcileList } from '@/lib/reconcile'
@@ -64,7 +63,7 @@ const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
   useHswarmApi()
 // CliMayte's shared task list (kept warm by lib/warm-data.ts): its node counts the tasks that can still change.
-const { workers: climayteTasks } = useCliMayteData()
+const { runningCount: climayteRunning } = useCliMayteData()
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
@@ -171,7 +170,7 @@ function jobDot(s: string): Dot {
 }
 
 const hasKeys = computed(() => !!state.value?.providers?.some((p: any) => p.keys > 0))
-const climayteActive = computed(() => climayteTasks.value.filter(isCliMayteActive).length)
+const climayteActive = climayteRunning
 
 // The console's tree: a model is part of its provider, so each provider opens onto its models. Routing and
 // CliMayte are there before HSwarm's state is (or while HSwarm is down): their pages are AgentHydra's.

@@ -50,7 +50,7 @@ async function boot(o: { home?: string; bridge?: ReturnType<typeof fakeBridge>; 
     port: 0,
     home,
     pluginsDir: plugins,
-    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: b.bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, climaytePollMs: 20, ...o.deps },
+    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: b.bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, claudeHome: home, climaytePollMs: 20, ...o.deps },
   })
   servers.push(desk)
   return { desk, home, ...q, ...b }

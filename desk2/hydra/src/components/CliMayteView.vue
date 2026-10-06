@@ -99,6 +99,7 @@ type ListRow = CliMayteWorkerView & {
 const {
   workers,
   remote,
+  runningCount,
   totals,
   scorecard,
   waves,
@@ -140,7 +141,7 @@ const now = ref(Date.now())
 /** Running: only the tasks that can still change (isCliMayteActive); All: every one. Kept in this
  *  browser, under the key of the "Hide finished" switch it replaces, so the choice carries over. */
 const runningOnly = useStorage('agenthydra.climayte.hideFinished', false)
-const activeCount = computed(() => rows.value.reduce((n, w) => n + (isCliMayteActive(w) ? 1 : 0), 0))
+const activeCount = runningCount
 /** The list under the filter, newest first. */
 const listed = computed(() =>
   (runningOnly.value ? rows.value.filter(isCliMayteActive) : [...rows.value]).sort(

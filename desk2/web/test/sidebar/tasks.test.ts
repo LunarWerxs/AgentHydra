@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type { CliMayteWorker, CloudSession, ExternalSession, SwarmJob } from '@shared/protocol'
 import type { CloudGroup } from '../../src/components/cloud/logic'
 import type { ChatGroup, SidebarEntry } from '../../src/components/sidebar/logic'
-import { addToCloudGroups, addToDeskGroups, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
+import { addToCloudGroups, addToDeskGroups, addedPulse, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -402,4 +402,15 @@ test("the cloud list draws another PC's chat in the group of its synced folder a
   ])
   expect(out[0]!.rows[1]!.fromPc).toBe('PC-X')
   expect(out[1]!.orderKey).toBe('')
+})
+
+// Owner, 2026-10-05: another PC's chats pulse gray while their CliMayte tasks run, still when none does; blue is HSwarm's alone.
+test('an added row pulses gray while a task it lists runs, blue as a running job itself, and is still with nothing running', () => {
+  const idle = { worker: null, job: null, nodes: [], jobs: [] }
+  const task = (active: boolean): TaskNode => ({ worker: worker('t', 1, { active, pc: 'PC-X' }), depth: 0 })
+  expect(addedPulse({ ...idle, nodes: [task(true)] })).toBe('gray')
+  expect(addedPulse({ ...idle, nodes: [task(false)] })).toBeNull()
+  expect(addedPulse({ ...idle, jobs: [swarmJob('j', { active: true })] })).toBe('gray')
+  expect(addedPulse({ ...idle, job: swarmJob('j', { active: true }) })).toBe('blue')
+  expect(addedPulse(idle)).toBeNull()
 })
