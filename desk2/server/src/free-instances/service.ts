@@ -266,6 +266,9 @@ export class FreeInstances {
   private markThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true): void {
     if (!chatId || !UUID.test(chatId)) return
     const id = `${r.instanceId}/${chatId}`
+    // A forgotten chat used again (a message, a track, a read) is wanted again: the chat-list read keeps it current.
+    const forgotten = this.store.data.forgotten
+    if (used && forgotten?.includes(id)) this.store.data.forgotten = forgotten.filter(f => f !== id)
     let thread = this.store.data.threads.find(t => t.id === id)
     if (!thread) {
       const created = createdAt || Date.now()

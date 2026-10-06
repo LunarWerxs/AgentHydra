@@ -537,11 +537,11 @@ describe('Free jobs and routes', () => {
     expect(existsSync(join(legacy, '.state', 'session.dpapi'))).toBe(true)
     expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual(migrated.data.instances.map(i => i.id))
   })
-  test('forgetting a thread removes it from the list and the saved file, keeps it out of a later read of the private chats, keeps the account\'s tokens, and is refused while its message runs', async () => {
+  test('forgetting a thread removes it from the list and the saved file, keeps it out of a later read of the private chats, keeps the account\'s tokens, is refused while its message runs, and ends once the chat is used again', async () => {
     let release: (value: RunOutput) => void = () => {}
     const reply = { ok: true, chat_id: CHAT, is_temporary: true, response: 'r'.repeat(80) }
     const { service, app, op, instance, home, runtime } = fixture(async (_c, r) => r.command === 'resume' ? new Promise(resolve => { release = resolve })
-      : output(r.command === 'chats' ? { ok: true, chats: [{ chat_id: CHAT, is_temporary: true, name: 'Example chat' }] } : reply))
+      : output(r.command === 'chats' ? { ok: true, chats: [{ chat_id: CHAT, is_temporary: true, name: 'Example chat', server_conversation_id: 'conv-1' }] } : reply))
     const forget = (id: string) => app.request(`/api/free/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })
     const id = `${instance.id}/${CHAT}`
     service.start(op({ command: 'chat', prompt: 'p'.repeat(40) })); await tick()
@@ -563,5 +563,10 @@ describe('Free jobs and routes', () => {
     expect(again.threads()).toEqual([])
     expect(again.status().tokens?.[instance.id]?.total).toEqual(total)
     expect((await forget(id)).status).toBe(404)
+    // Used again (a message on that chat), it is wanted again: the next read of the private chats keeps it current.
+    service.start(op({ command: 'resume', chatId: CHAT, prompt: 'p'.repeat(40) })); await tick()
+    release(output(reply)); await tick()
+    service.start(op({ command: 'chats' })); await tick()
+    expect(service.threads().map(t => [t.id, t.serverId])).toEqual([[id, 'conv-1']])
   })
 })
