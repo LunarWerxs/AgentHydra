@@ -1,7 +1,7 @@
 // RepoYeti's connector entry, read from GET /api/connectors and shared by the title-bar button and the pane. One
 // polling loop for whoever watches it (the button while a chat is open, the pane while it is shown).
 import { computed, ref } from 'vue'
-import { CONNECTORS, connectorAction, type ConnectorAction, type ConnectorsResponse, type ConnectorView } from '@shared/connectors'
+import { CONNECTORS, REPOYETI_REGISTER, connectorAction, type ConnectorAction, type ConnectorsResponse, type ConnectorView, type RepoYetiRegisterResult } from '@shared/connectors'
 import { pollDelay, repoYetiOf } from './logic'
 
 const list = ref<ConnectorView[] | null>(null)
@@ -46,5 +46,15 @@ export function watchRepoYeti(): () => void {
       clearTimeout(timer)
       timer = null
     }
+  }
+}
+
+/** Asks Desk to add the chat's folder to RepoYeti; null when it would not (not a git folder, RepoYeti down): the pane just shows its list. */
+export async function registerRepoYetiFolder(cwd: string): Promise<RepoYetiRegisterResult | null> {
+  try {
+    const res = await fetch(REPOYETI_REGISTER, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ cwd }) })
+    return res.ok ? ((await res.json()) as RepoYetiRegisterResult) : null
+  } catch {
+    return null
   }
 }

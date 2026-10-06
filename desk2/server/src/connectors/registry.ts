@@ -215,6 +215,11 @@ export function connectorsForChat(cwd: string): { mcpServers: Record<string, Mcp
   return out
 }
 
+/** Where connector `id` stands now, or null before the plugin has started. */
+export function connectorStatus(id: ConnectorId): ConnectorView | null {
+  return active?.registry.list().find((v) => v.id === id) ?? null
+}
+
 /** Starts the registry for this server (the plugin calls it): defs from ctx.deps.connectors, else the defs folder. */
 export async function startConnectors(ctx: ServerContext): Promise<ConnectorRegistry> {
   const injected = ctx.deps.connectors as ConnectorDef[] | undefined

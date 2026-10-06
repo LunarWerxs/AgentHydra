@@ -35,3 +35,10 @@ export function repoYetiView(c: ConnectorView | null): RepoYetiView {
 
 /** How long to wait before asking again: quickly while Desk is doing something, slowly otherwise. */
 export const pollDelay = (c: ConnectorView | null): number => (c && (c.state === 'installing' || c.state === 'starting') ? 1000 : 5000)
+
+/** Ask Desk to add `cwd` to RepoYeti only while the frame is up, and once per folder (`done` holds the ones asked). */
+export const shouldRegister = (view: RepoYetiView, cwd: string | null | undefined, done: ReadonlySet<string>): boolean =>
+  view.kind === 'frame' && !!cwd && !done.has(cwd)
+
+/** The frame is reloaded when the folder was newly added, so the new repo shows in RepoYeti's list. */
+export const reloadAfterRegister = (res: { added?: boolean } | null): boolean => res?.added === true

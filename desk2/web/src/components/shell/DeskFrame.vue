@@ -613,7 +613,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             >
               <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
               <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
-              <RepoYetiPane v-else-if="pane === 'repoyeti' && chat" @close="pane = null" />
+              <RepoYetiPane v-else-if="pane === 'repoyeti' && chat" :cwd="chat.cwd" @close="pane = null" />
               <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
             </aside>
           </main>

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ExternalLink, RotateCw, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { ICON_BTN, TEXT_BTN } from '@/components/servers/styles'
-import { repoYetiView } from './logic'
-import { repoYeti, repoYetiAction, watchRepoYeti } from './repoyeti-state'
+import { reloadAfterRegister, repoYetiView, shouldRegister } from './logic'
+import { registerRepoYetiFolder, repoYeti, repoYetiAction, watchRepoYeti } from './repoyeti-state'
 
 // The right pane for RepoYeti (the git app Desk hooks in as a connector): its own page in a frame of its loopback
 // address, under a slim header. RepoYeti sends no frame-blocking header, so its page is shown as it is. Not
 // running: a Start button; not on this machine: Install, with the install's progress line.
+const props = defineProps<{ cwd?: string }>()
 const emit = defineEmits<{ close: [] }>()
 
 const view = computed(() => repoYetiView(repoYeti.value))
@@ -33,6 +34,22 @@ async function act(action: 'start' | 'install') {
 }
 
 const reload = () => frame.value?.contentWindow?.location.reload()
+
+// The chat's folder is added to RepoYeti (by Desk's server) once per folder; a new repo reloads the frame to show it.
+const asked = new Set<string>()
+watch(
+  () => [view.value.kind, props.cwd] as const,
+  async () => {
+    const cwd = props.cwd
+    if (!cwd || !shouldRegister(view.value, cwd, asked)) return
+    asked.add(cwd)
+    if (reloadAfterRegister(await registerRepoYetiFolder(cwd))) {
+      await nextTick()
+      reload()
+    }
+  },
+  { immediate: true }
+)
 const openOutside = () => view.value.kind === 'frame' && window.open(view.value.url, '_blank', 'noopener')
 </script>
 

@@ -100,3 +100,20 @@ export interface ConnectionsSignin {
   opened: boolean
   signedIn: boolean
 }
+
+// The RepoYeti pane: Desk adds the chat's folder to RepoYeti, server-side (RepoYeti's loopback guard refuses a browser).
+
+/** POST RepoYetiRegisterRequest: answers RepoYetiRegisterResult, or { error } with a status. */
+export const REPOYETI_REGISTER = '/api/repoyeti/register'
+
+export interface RepoYetiRegisterRequest {
+  /** The chat's folder (absolute). A folder inside a work tree adds that work tree's root. */
+  cwd: string
+}
+
+export interface RepoYetiRegisterResult {
+  ok: true
+  /** False: RepoYeti already listed it. */
+  added: boolean
+  repoId?: string
+}
