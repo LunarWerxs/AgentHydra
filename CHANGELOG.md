@@ -2032,40 +2032,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **All hook test suites now live under `tests/githooks/`** instead of `.githooks/tests/`. Test discovery is anchored by `tests/repo-root.ts` not hop count.
 
 
-- **A compiled install could not deliver a message to ANY chat, by any route**
-  (`server/src/misc-assets.ts` and its suite, `server/src/routes/session-message.ts`,
-  `scripts/build.ts`). This is the tray defect again, and it was total rather than degraded. The
-  single-file exe embeds every Vite asset and, since 2026-09-11, the tray toolkit, but nothing else
-  from `misc\`. `APP_ROOT` for a compiled build is the directory of the exe, so the composer route
-  looked for `<dist>\misc\Deliver-DesktopChat.ps1`, a file the build had never put there, and
-  answered `delivery actuator missing`. The peer route is refused by that same endpoint before it
-  ever picks a channel, so on a compiled install no chat could be woken by anything, which also
-  silently voided `move_chats --resume`: a migrated chat landed dormant with nothing able to tell it
-  to carry on.
+- **Compiled installs can now deliver messages.** The build embeds all required `misc\` files or fails. `resolveMiscAsset` extracts them on first run beside the app state, so the single-file exe stays portable.
 
-  The shape is deliberately the tray's. `RUNTIME_MISC_FILES` names every `misc\` file the running
-  daemon opens by path, the build embeds exactly that list and FAILS when one is missing, and at
-  runtime `resolveMiscAsset` hands back a real path: from `misc\` when there is one, else written
-  once out of the binary beside the app's own state. Copying `misc\` next to the exe was tried by
-  hand the day this was found. It works, and it re-introduces the sidecar the single-file build
-  exists to remove, so an exe moved anywhere on its own would break again, silently, exactly as
-  here.
-
-- **A rate-limited account can recover, because a 429 we already hold is obeyed instead of re-hit**
-  (`server/src/usage.ts`, `usage-refresh.ts`, `server/tests/usage-backoff.test.ts`).
-  `/api/oauth/usage` limits per account, and when it says 429 it hands back a `Retry-After` measured
-  in TENS OF MINUTES. Nothing honoured it. The fleet has several independent pollers (the 30 minute
-  sweep, the reset watcher, the resume monitor, an open web app), so an account that tripped a limit
-  was re-hit every ~30 seconds, and on a rolling limiter each early knock re-arms the very window
-  being waited out. It could never recover, which is exactly the "not reading usage for the active
-  accounts" seen on 2026-09-11: accounts that had read fine two hours earlier sat at 429 all day
-  while every poller kept knocking.
-
-  The server's own number is now recorded per label and honoured at the single chokepoint
-  (`checkUsage`), so every caller backs off together and no limit is invented here. Inside the
-  window the failure is re-asserted with the REMAINING seconds, so the UI still reads "rate limited,
-  retry in N min" and counts down, and the caller serves its last cached reading rather than a fresh
-  and false 0%.
+- **Rate-limited accounts now respect their Retry-After windows.** The server's 429 Retry-After is recorded per label and honored at a single chokepoint, so all pollers back off together. The UI shows countdown and reuses cached readings rather than showing false 0%.
 
 - **An orchestrator operation id that is missing now says WHY it is missing**
   (`server/src/orchestrator.ts`, `server/tests/orchestrator-operation-miss.test.ts`). A migration
