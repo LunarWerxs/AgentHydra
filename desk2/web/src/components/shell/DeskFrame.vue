@@ -610,20 +610,22 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
                 :demo="props.demo ? { cwd: view.kind === 'new' ? view.cwd : undefined } : undefined"
               />
             </div>
-
-            <aside
-              v-if="!tasks && pane && (pane === 'climayte' || chat)"
-              class="flex shrink-0 border-l border-border"
-              :class="pane === 'servers' || pane === 'repoyeti' ? '' : 'w-[380px]'"
-              :style="pane === 'servers' || pane === 'repoyeti' ? { width: `${serversWidth}px` } : undefined"
-              :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'repoyeti' ? 'RepoYeti' : 'CliMayte'"
-            >
-              <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
-              <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
-              <RepoYetiPane v-else-if="pane === 'repoyeti' && chat" :cwd="chat.cwd" @close="pane = null" />
-              <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
-            </aside>
           </main>
+
+          <!-- Servers and RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
+               buttons end at the pane's left edge; Changes and CliMayte sit under the title bar. -->
+          <aside
+            v-if="!tasks && pane && (pane === 'climayte' || chat)"
+            class="col-start-2 flex min-h-0 shrink-0 border-l border-border"
+            :class="pane === 'servers' || pane === 'repoyeti' ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
+            :style="pane === 'servers' || pane === 'repoyeti' ? { width: `${serversWidth}px` } : undefined"
+            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'repoyeti' ? 'RepoYeti' : 'CliMayte'"
+          >
+            <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
+            <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
+            <RepoYetiPane v-else-if="pane === 'repoyeti' && chat" :cwd="chat.cwd" @close="pane = null" />
+            <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
+          </aside>
 
           <!-- Docked, the panel is a full-height third column: the title bar's buttons end left of it instead of
                sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
