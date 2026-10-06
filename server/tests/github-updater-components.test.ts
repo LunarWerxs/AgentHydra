@@ -20,7 +20,6 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { VERSION } from '../src/config'
-import type { Desk2InstallNotice } from '../src/desk2'
 import {
   type ApplyUpdateDeps,
   applyUpdate,
