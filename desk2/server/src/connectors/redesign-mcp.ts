@@ -1,7 +1,7 @@
 // Desk's own small stdio MCP server for the ReDesign connector (defs/redesign.ts starts it with Desk's bun for
 // every chat while ReDesign runs). Two tools, so a chat can get design options before it builds a UI:
 //
-//   design_options { brief, screenshot?, url?, count?, mock? }  -> one ReDesign run, every option as an image on disk
+//   design_options { brief, screenshot?, url?, count?, mock?, ask_owner? } -> one ReDesign run, every option as an image on disk
 //   design_pick    { run, option }                              -> that option's design spec (DESIGN.md) to build to
 //
 // How it reaches ReDesign: its HTTP API at REDESIGN_URL (loopback), not by spawning `redesign mcp`: that child is
@@ -89,7 +89,7 @@ const TOOLS = [
   {
     name: 'design_options',
     description:
-      'Get several design options for a user interface BEFORE building or restyling it. Gives ReDesign a brief and what exists today (a screenshot file or a URL), waits for it, and returns 3-6 options, each with a ready markdown image line to paste into your reply so the person sees them inline. Takes 1-10 minutes for a real run.',
+      'Get several design options for a user interface BEFORE building or restyling it. Gives ReDesign a brief and what exists today (a screenshot file or a URL), waits for it, and returns 3-6 options, each with a ready markdown image line to paste into your reply so the person sees them inline. Takes 1-10 minutes for a real run. The chat shows the options to the person as a ReDesign card either way. Set ask_owner true when the person asked to see or choose options, or the look is a matter of their taste: the card then lets them pick one, add notes or ask for more, and you end your turn and wait for their reply. Leave it false (the default) to decide yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -97,6 +97,10 @@ const TOOLS = [
         screenshot: { type: 'string', description: 'Absolute path of a screenshot of the current UI (png, jpg, webp).' },
         url: { type: 'string', description: 'A page to capture instead of a screenshot (http/https, e.g. a localhost dev server).' },
         count: { type: 'number', description: 'How many options, 3 to 6 (default 4).' },
+        ask_owner: {
+          type: 'boolean',
+          description: 'true: the person chooses (they asked to see or choose options, or the look is their taste). false (default): you pick the option yourself and say why.'
+        },
         mock: { type: 'boolean', description: 'Placeholder pages and no spend (ReDesign still wants a key in its pool): only to test the flow.' }
       },
       required: ['brief'],
@@ -195,6 +199,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     const brief = typeof args.brief === 'string' ? args.brief.trim() : ''
     if (!brief) return fail('design_options needs a brief: what is being designed and the feel wanted.')
     const mock = args.mock === true
+    const askOwner = args.ask_owner === true
     const count = Math.max(3, Math.min(6, Math.round(Number(args.count) || 4)))
     const models = await pickModels()
     if (!models) return fail(KEY_HINT)
@@ -282,8 +287,11 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     }
     const missing = options.some((x) => !x.image)
     return ok(
-      { run: runId, mock, options },
-      `Show every option inline by pasting its markdown line, say which you would pick and why, let the person choose when they are present, then call design_pick.${missing ? ' (Some options have no picture: ReDesign could not render them, give the page link instead.)' : ''}`
+      { run: runId, mock, ask_owner: askOwner, options },
+      (askOwner
+        ? 'The options are now shown to the person in the chat as a ReDesign card, where they can choose one, add notes, ask for more or reply in words. Do not paste the images and do not call design_pick yet: end your turn and wait. Their reply arrives as their next message (a chosen option number and notes, a request for more options, or free text). Then call design_pick for the option they chose, or call design_options again if they want more.'
+        : 'The options are shown to the person in the chat as a ReDesign card. Say which one you pick and why (you decide; do not wait for them), then call design_pick with it.') +
+        (missing ? ' (Some options have no picture: ReDesign could not render them, give the page link instead.)' : '')
     )
   }
 

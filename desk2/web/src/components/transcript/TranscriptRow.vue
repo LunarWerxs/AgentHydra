@@ -12,6 +12,7 @@ import ToolRow from './parts/ToolRow.vue'
 import SubAgentCard from './parts/SubAgentCard.vue'
 import CliMayteCard from './parts/CliMayteCard.vue'
 import BrowserCard from './parts/BrowserCard.vue'
+import RedesignCard from './parts/RedesignCard.vue'
 import TodoList from './parts/TodoList.vue'
 import TaskCard from './parts/TaskCard.vue'
 import WorkflowCard from './parts/WorkflowCard.vue'
@@ -72,6 +73,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
       <template #row="{ item: kid }"><TranscriptRow :item="kid" nested /></template>
     </SubAgentCard>
     <CliMayteCard v-else-if="family === 'climayte'" :item="item" />
+    <RedesignCard v-else-if="family === 'redesign'" :item="item" />
     <BrowserCard v-else-if="family === 'browser'" :item="item" />
     <ToolRow v-else :item="item" />
   </template>

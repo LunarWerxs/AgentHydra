@@ -11,6 +11,7 @@ import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { buildRows, estimateHeight } from './lib/rows'
 import { newestBrowserCalls } from './lib/tools'
+import { redesignState } from './lib/redesign'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { provideTranscript } from './context'
@@ -57,6 +58,7 @@ provideTranscript(
     cwd: computed(() => chat.value?.cwd ?? null),
     children: computed(() => rows.value.children),
     newestBrowser: computed(() => newestBrowserCalls(props.items)),
+    redesign: computed(() => redesignState(props.items)),
     background: computed(() => ({
       count: chat.value?.climayteActive ?? 0,
       resultId: props.items.findLast((i) => i.kind === 'result' && !i.parentToolUseId)?.id ?? null,

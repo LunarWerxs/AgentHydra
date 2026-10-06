@@ -29,7 +29,7 @@ export type DisplayRow =
 
 /** Sub-agent calls keep their own card and handed-over files their own row; every other tool call, MCP ones included, folds into a status row. */
 function folds(it: TranscriptItem): it is ToolItem {
-  return it.kind === 'tool_use' && toolFamily(it.name) !== 'agent' && !isSendFileTool(it.name) && toolFamily(it.name, it.input) !== 'browser'
+  return it.kind === 'tool_use' && toolFamily(it.name) !== 'agent' && !isSendFileTool(it.name) && toolFamily(it.name, it.input) !== 'browser' && toolFamily(it.name) !== 'redesign'
 }
 
 /** Status rows: a folded tool run, settled tasks, a thinking block, a finished-turn line. They sit tighter than prose. */

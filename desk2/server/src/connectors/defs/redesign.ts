@@ -23,9 +23,11 @@ const PROBE_MS = 1500
 
 const PROMPT =
   'Design first. Before you build or restyle a user interface (a page, screen, component or an app\'s whole look), ' +
-  'get perspective: call design_options with a short brief and a screenshot or URL of what exists, then show EVERY ' +
-  'option inline in your reply by pasting each option\'s markdown line, say which one you would pick and why, and let the ' +
-  'person choose when they are present (when working alone, go with your pick). Then call design_pick with the ' +
+  'get perspective: call design_options with a short brief and a screenshot or URL of what exists. The chat shows ' +
+  'the options to the person as a ReDesign card, so do not paste the images. By default you decide: say which one you ' +
+  'pick and why, then call design_pick. When the person asked to see or choose options, or the look is a matter of ' +
+  'their taste, pass ask_owner true, end your turn and wait: their choice, notes or request for more arrives as their next ' +
+  'message. Then call design_pick with the ' +
   'chosen option and build to the spec it returns. Skip it for a one-line style fix. If design_options says there is no ' +
   'provider key, tell the person to add one in ReDesign (Settings → Connectors → ReDesign → Open); never ask for a key in chat.'
 

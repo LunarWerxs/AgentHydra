@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import factory from '../../src/connectors/defs/redesign'
+import { designImagePath, serveDesignImage } from '../../src/connectors/redesign-images'
 import { createRedesignMcp } from '../../src/connectors/redesign-mcp'
 import type { ConnectorStatus } from '@shared/connectors'
 
@@ -162,5 +163,46 @@ describe('redesign connector', () => {
     expect(text(res)).toContain('Settings → Connectors → ReDesign → Open')
     expect(fake.runs.length).toBe(before)
     fake.keyed = true
+  })
+
+  test('redesign-mcp: ask_owner is in the schema; true tells the AI to wait, false (default) to pick itself', async () => {
+    const mcp = createRedesignMcp({ baseUrl: fake.url, outDir: join(tmp, 'out-ask'), pollMs: 5 })
+    const list = (await mcp.handle(rpc(1, 'tools/list'))) as { result: { tools: { name: string; description: string; inputSchema: { properties: Record<string, { type: string }> } }[] } }
+    const tool = list.result.tools.find((t) => t.name === 'design_options')
+    expect(tool?.inputSchema.properties.ask_owner?.type).toBe('boolean')
+    expect(tool?.description).toContain('ask_owner')
+    const asked = text(await mcp.handle(rpc(2, 'tools/call', { name: 'design_options', arguments: { brief: 'x', mock: true, ask_owner: true } })))
+    expect(asked).toContain('end your turn and wait')
+    expect(asked).toContain('call design_pick for the option they chose')
+    expect(JSON.parse(asked.slice(asked.indexOf('{'))).ask_owner).toBe(true)
+    const own = text(await mcp.handle(rpc(3, 'tools/call', { name: 'design_options', arguments: { brief: 'x', mock: true } })))
+    expect(own).toContain('you decide')
+    expect(own).not.toContain('end your turn and wait')
+    expect(JSON.parse(own.slice(own.indexOf('{'))).ask_owner).toBe(false)
+  })
+
+  test('design image route: serves a picture in the folder, refuses traversal, odd names and outside paths', async () => {
+    const dir = join(tmp, 'design-options')
+    mkdirSync(join(dir, 'run-9'), { recursive: true })
+    writeFileSync(join(dir, 'run-9', 'option-1.png'), PNG)
+    writeFileSync(join(tmp, 'secret.png'), PNG)
+    writeFileSync(join(dir, 'run-9', 'notes.txt'), 'x')
+    const ok = serveDesignImage(dir, 'run-9', 'option-1.png')
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toBe('image/png')
+    expect(Buffer.from(await ok.arrayBuffer()).equals(PNG)).toBe(true)
+    for (const [run, file] of [
+      ['..', 'secret.png'],
+      ['run-9', '../secret.png'],
+      ['run-9', 'option-1.png/../../secret.png'],
+      ['run-9', 'notes.txt'],
+      ['run-9', 'option-2.png'],
+      ['../design-options/run-9', 'option-1.png'],
+      ['run-9\..', 'option-1.png'],
+      ['', 'option-1.png']
+    ] as const) {
+      expect(designImagePath(dir, run, file)).toBeNull()
+      expect(serveDesignImage(dir, run, file).status).toBe(404)
+    }
   })
 })

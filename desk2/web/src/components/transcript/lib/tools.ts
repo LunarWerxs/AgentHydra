@@ -13,6 +13,7 @@ export type ToolFamily =
   | 'agent'
   | 'climayte'
   | 'browser'
+  | 'redesign'
   | 'mcp'
   | 'other'
 
@@ -49,6 +50,7 @@ export function toolFamily(name: string, input?: Record<string, unknown>): ToolF
       return 'agent'
   }
   if (isCliMayteTool(name)) return 'climayte'
+  if (/^mcp__.+__design_options$/.test(name)) return 'redesign'
   if (input && isBrowserCall(name, input)) return 'browser'
   if (name.startsWith('mcp__')) return 'mcp'
   return 'other'

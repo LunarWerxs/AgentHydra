@@ -2,6 +2,7 @@
 // open/closed state lives here, not in the rows).
 import { computed, inject, provide, reactive, ref, type ComputedRef, type InjectionKey, type Ref } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
+import type { RedesignState } from './lib/redesign'
 
 export interface TranscriptCtx {
   chatId: Ref<string>
@@ -12,6 +13,8 @@ export interface TranscriptCtx {
   /** Background tasks the chat dispatched that still run, and the id of its latest result line (the only one they hold back). */
   /** Profile -> id of its newest browser call in this transcript: only that Browser card previews live. */
   newestBrowser?: ComputedRef<Map<string, string>>
+  /** ReDesign picks and the person's replies, for the ReDesign cards. */
+  redesign?: ComputedRef<RedesignState>
   background?: Ref<{ count: number; resultId: string | null }>
   isOpen(key: string, fallback?: boolean): boolean
   toggle(key: string, fallback?: boolean): void
