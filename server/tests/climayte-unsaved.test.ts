@@ -5,7 +5,12 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { editedPaths, uncommittedOf } from '../src/climayte-unsaved'
+import {
+  editedPaths,
+  failsOnlyOnOthersFiles,
+  outputPaths,
+  uncommittedOf,
+} from '../src/climayte-unsaved'
 
 const root = mkdtempSync(join(tmpdir(), 'ah-climayte-unsaved-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -87,5 +92,32 @@ describe('uncommittedOf', () => {
     mkdirSync(plain, { recursive: true })
     writeFileSync(join(plain, 'a.ts'), 'a\n')
     expect(uncommittedOf(plain, new Map([[join(plain, 'a.ts'), Date.now()]]))).toEqual([])
+  })
+})
+
+describe('failsOnlyOnOthersFiles', () => {
+  const mine = ['C:/Work/Repo/src/Foo.vue', 'C:/Work/Repo/desk2/hydra/src/bar.ts']
+  // Another session's uncommitted work in the same checkout, repo-relative as git prints it.
+  const dirty = ['src/Peer.ts', 'src/NotFoo.vue', 'desk2/hydra/src/QuickApp.vue', 'src/Foo.vue']
+  test("a failed check is not the task's only when it fails on another session's uncommitted files", () => {
+    const cases: Array<[string, string, boolean]> = [
+      ['its own file, repo-relative with a position', 'src/foo.vue(3,5): error TS2322', false],
+      ['its own file, nested with a line', 'FAIL desk2/hydra/src/bar.ts:12', false],
+      ['a file named by its basename', 'bar.ts:1:1 lint', false],
+      ['one of its files among others', 'src/peer.ts:1 and src/foo.vue:2', false],
+      ["only a peer's file", 'src/peer.ts(9,1): error', true],
+      ['a backslash path of a peer', '.\\src\\peer.ts:4', true],
+      ["a peer's file printed from a subfolder", 'src/QuickApp.vue(3,1): error TS2322', true],
+      ['a path that only ends like its file', 'src/notfoo.vue:1', true],
+      // The task's own change broke a test nobody else touched: that is the task's fail.
+      ['an unchanged test its change broke', 'FAIL src/foo.test.ts > adds', false],
+      ['no file named', 'Expected 3 received 4, e.g. v1.2 timed out', false],
+    ]
+    for (const [name, output, expected] of cases)
+      expect([name, failsOnlyOnOthersFiles(output, mine, dirty)]).toEqual([name, expected])
+  })
+
+  test('outputPaths reads positions off and ignores version numbers', () => {
+    expect(outputPaths('a/B.TS:3 x\\y.vue(1,2) v1.2 e.g')).toEqual(['a/b.ts', 'x/y.vue'])
   })
 })

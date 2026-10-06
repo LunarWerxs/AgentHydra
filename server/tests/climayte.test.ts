@@ -1967,6 +1967,23 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(climayteGet(id)?.verdicts?.map((v) => v.note)).toEqual([fits])
   }, 40_000)
 
+  test('severity is refused on a pass and outside 0-3, and a fail without one stays accepted', async () => {
+    const id = await start('severity', 'slow-1')
+    climayteCancel({ id })
+    for (const bad of [4, -1, 1.5, 'x'])
+      expect(
+        climayteVerdict(id, { verdict: 'fail', note: 'n', retry: false, severity: bad }).ok,
+      ).toBe(false)
+    expect(climayteVerdict(id, { verdict: 'pass', severity: 1 }).ok).toBe(false)
+    expect(climayteGet(id)?.verdicts ?? []).toEqual([])
+    expect(climayteVerdict(id, { verdict: 'fail', note: 'n', retry: false, severity: 2 }).ok).toBe(
+      true,
+    )
+    // A fail without one stays accepted (the old window's thumbs-down) and carries none.
+    expect(climayteVerdict(id, { verdict: 'fail', note: 'n', retry: false }).ok).toBe(true)
+    expect(climayteGet(id)?.verdicts?.map((v) => v.severity)).toEqual([2, undefined])
+  }, 40_000)
+
   test('a cancel keeps queued messages and delivers them when the worker is continued', async () => {
     const id = await start('cancel keeps', 'slow-2')
     climayteSend(id, 'first')
@@ -2160,10 +2177,42 @@ describe('integration: a task with a check is judged by it', () => {
     const first = climayteList({ id: a })[0]?.verdicts?.[0]
     expect([first?.verdict, first?.by]).toEqual(['fail', 'check'])
     expect(first?.note).toContain('not committed: draft-a.txt')
+    // Right work, a small miss: a slip (1), recorded without changing the send-back.
+    expect(first?.severity).toBe(1)
     expect(climayteList({ id: b })[0]?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([
       ['pass', 'check'],
     ])
     climayteCancel({ id: a })
+  }, 30_000)
+
+  test('a check that cannot run records severity 0 and still fails the task as before', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({
+      tasks: [
+        {
+          prompt: 'prove it with a missing command',
+          cwd,
+          title: 'broken check',
+          kind: 'code',
+          model: 'opus',
+          effort: 'high',
+          ownerWords: 'the setting under test',
+          check: 'exit 127',
+        },
+      ],
+    })
+    groups.push(run.group)
+    const id = run.workers[0]?.id as string
+    const deadline = Date.now() + 25_000
+    while (!(climayteList({ id })[0]?.verdicts?.length ?? 0) && Date.now() < deadline)
+      await climayteWait({ group: run.group }, Math.min(2_000, deadline - Date.now()))
+    const w = climayteList({ id })[0]
+    expect(w?.status).toBe('failed')
+    expect(w?.verdicts?.map((v) => [v.verdict, v.by, v.severity])).toEqual([['fail', 'check', 0]])
   }, 30_000)
 
   test('a check whose runner dies runs again, even past the timeout, and a stop under way is never removed', async () => {

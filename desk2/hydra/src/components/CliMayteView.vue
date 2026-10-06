@@ -7,8 +7,11 @@
 // Running shows only the tasks that can still change (queued, running, waiting or being checked), All
 // every one, and another PC's tasks come with a cloud while the queue is shared. A click opens the task
 // (CliMayteWorkerDetail.vue, whose log is CliMayte's journal) in place of the list; its back button, or
-// a click on the CliMayte row, goes back to the list where it was. The waves and the scorecard (the
-// totals and "What works", OffloadStatsCard.vue) sit above the list, each folded until it is opened.
+// a click on the CliMayte row, goes back to the list where it was. The scorecard (the totals and "What
+// works", OffloadStatsCard.vue) sits above the list, folded until it is opened. The manager waves are the
+// tree's CliMayte > Waves row (`section: 'waves'`, owner 2026-10-06: "Move the waves section into a
+// subsection called waves underneath CLI Mate"): the same page shows them in place of the list, and a
+// wave's manager opens here as any task does, its back button returning to the waves.
 // None of it goes into Desk's sidebar: on the HSwarm tab that is HSwarm's tree.
 //
 // The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts: the page
@@ -21,6 +24,7 @@ import {
   ChevronRight,
   Cloud,
   CloudOff,
+  ListChecks,
   Network,
   PictureInPicture2,
   RefreshCw,
@@ -86,7 +90,7 @@ import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
 /** `home`: HSwarmView bumps it when the CliMayte row is clicked, which goes back to the list. */
-const props = defineProps<{ home?: number }>()
+const props = withDefaults(defineProps<{ home?: number; section?: 'tasks' | 'waves' }>(), { section: 'tasks' })
 /** `open`: a tree path for HSwarmView to show (the scorecard's HSwarm link opens HSwarm's savings). */
 const emit = defineEmits<{ open: [path: string[]] }>()
 
@@ -304,7 +308,12 @@ function verdictMark(w: CliMayteWorkerView) {
   const m = climayteVerdictMark(w)
   if (!m) return null
   const said = t(m.key, m.values)
-  return { kind: m.kind, label: said, hint: m.note ? `${said}: ${m.note}` : said }
+  const sev = m.kind === 'fail' ? w.verdicts?.[w.verdicts.length - 1]?.severity : undefined
+  return {
+    kind: m.kind,
+    label: sev === undefined ? said : t(`climayte.severity${sev}`),
+    hint: m.note ? `${said}: ${m.note}` : said,
+  }
 }
 
 function showOlder() {
@@ -616,7 +625,12 @@ onUnmounted(() => {
     <!-- One line: the title with what CliMayte is behind its info mark (owner, 2026-10-01: a
          description is never a paragraph over the UI), the filter, the float and refresh. -->
     <header class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 pb-2">
-      <h2 class="flex min-w-0 items-center gap-2 text-base font-semibold">
+      <h2 v-if="section === 'waves'" class="flex min-w-0 items-center gap-2 text-base font-semibold">
+        <ListChecks class="size-4.5 shrink-0" aria-hidden="true" />
+        {{ $t('climayte.waves') }}
+        <InfoHint :text="$t('climayte.wavesInfo')" />
+      </h2>
+      <h2 v-else class="flex min-w-0 items-center gap-2 text-base font-semibold">
         <Network class="size-4.5 shrink-0" aria-hidden="true" />
         {{ $t('climayte.title') }}
         <span v-if="rows.length" class="font-normal text-muted-foreground">({{ rows.length }})</span>
@@ -636,7 +650,7 @@ onUnmounted(() => {
       </h2>
       <div class="ms-auto flex items-center gap-1">
         <div
-          v-if="!selectedId && !selectedFree && rows.length"
+          v-if="section === 'tasks' && !selectedId && !selectedFree && rows.length"
           class="me-1 flex items-center gap-1"
           role="group"
           :aria-label="$t('climayte.filterLabel')"
@@ -710,6 +724,17 @@ onUnmounted(() => {
       <Skeleton v-for="i in 5" :key="i" class="h-7" />
     </div>
 
+    <!-- The Waves row: the waves in place of the list. -->
+    <div v-else-if="section === 'waves' && !selectedId" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <CliMayteWaves
+        :waves="waves"
+        :workers="workers"
+        :more="hasOlder"
+        :now="now"
+        @select-worker="selectManager"
+      />
+    </div>
+
     <div
       v-else-if="rows.length === 0"
       class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
@@ -725,7 +750,7 @@ onUnmounted(() => {
       <div class="flex shrink-0 items-center">
         <Button size="sm" variant="ghost" class="-ms-2" @click="back()">
           <ArrowLeft />
-          {{ $t('climayte.backToTasks') }}
+          {{ section === 'waves' ? $t('climayte.backToWaves') : $t('climayte.backToTasks') }}
         </Button>
       </div>
       <!-- Another PC's task is read-only: what its row has, no controls, no call for it here. -->
@@ -784,16 +809,8 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- The list, under the waves and the scorecard (each folded until opened). -->
+    <!-- The list, under the scorecard (folded until opened). -->
     <div v-else ref="listEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-      <CliMayteWaves
-        class="mb-2"
-        :waves="waves"
-        :workers="workers"
-        :more="hasOlder"
-        :now="now"
-        @select-worker="selectManager"
-      />
       <Collapsible v-model:open="scoreOpen" class="mb-2 flex flex-col gap-1.5">
         <CollapsibleTrigger as-child>
           <button

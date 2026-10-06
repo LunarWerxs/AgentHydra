@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
 // left-handed sidebar"). A tree on the left (Overview, Providers > each provider > its models, All models,
-// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte, Help) picks what the right pane
+// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte > Waves, Help) picks what the right pane
 // shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
 // is a drawer, as in the console.
 //
@@ -9,7 +9,9 @@
 // sidebar. Routing should be an option under the HSwarm in the sidebar, and CliMayte should also be an
 // item under that, and then the things would show on the right side"). Routing holds HSwarm's routing and
 // AgentHydra's cost routing between API keys and subscriptions; CliMayte lists its tasks in the pane, as
-// a manager. Both are AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
+// a manager, and its Waves child lists the manager waves (owner, 2026-10-06: "Move the waves section into
+// a subsection called waves underneath CLI Mate, instead of having it be in the same window"). Both are
+// AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
 //
 // In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04: one
 // sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
@@ -21,6 +23,7 @@ import {
   Info,
   Layers,
   LayoutGrid,
+  ListChecks,
   Menu,
   Network,
   PiggyBank,
@@ -66,7 +69,9 @@ const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
   useHswarmApi()
 // CliMayte's shared task list (kept warm by lib/warm-data.ts): its node counts the tasks that can still change.
-const { runningCount: cliRunning } = useCliMayteData()
+const { runningCount: cliRunning, waves } = useCliMayteData()
+// The Waves row counts the waves still being worked (running, or reported and waiting to be verified).
+const liveWaves = computed(() => waves.value.filter((w) => w.status === 'running' || w.status === 'reported').length)
 const { activeCount: freeRunning } = useFreeInstances()
 const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
@@ -189,6 +194,9 @@ const nodes = computed<TreeNode[]>(() => {
     icon: Network,
     count: active || null,
     dotTitle: active ? t('hswarm.nav.climayteActive', { n: active }) : undefined,
+    kids: [
+      { id: 'climayte/waves', label: t('climayte.waves'), icon: ListChecks, count: liveWaves.value || null },
+    ],
   }
   if (!s) return [routing, climayte]
   const provs = [...(s.providers ?? [])].sort(
@@ -408,7 +416,7 @@ function openPath(path: string[]) {
 // otherwise be what the row shows. A Desk task row (hswarmNodeAsk) selects the node without this.
 const climayteHome = ref(0)
 function pick(id: string) {
-  if (id === 'climayte') climayteHome.value++
+  if (id === 'climayte' || id === 'climayte/waves') climayteHome.value++
   select(id)
 }
 
@@ -601,6 +609,7 @@ const ICON_NAME = new Map<Component, EmbedIcon>([
   [Plug, 'plug'],
   [Layers, 'layers'],
   [Network, 'network'],
+  [ListChecks, 'list-checks'],
   [Info, 'info'],
 ])
 function deskRow(r: TreeRow): SidebarRow {
@@ -956,7 +965,12 @@ async function handleRefresh() {
         <!-- CliMayte's tasks are AgentHydra's: shown whether or not HSwarm runs. Kept built while another
              node is open, so its float window (picture-in-picture) stays open across nodes. -->
         <KeepAlive>
-          <CliMayteView v-if="page.component === CliMayteView" :home="climayteHome" @open="openPath" />
+          <CliMayteView
+            v-if="page.component === CliMayteView"
+            :home="climayteHome"
+            :section="sel === 'climayte/waves' ? 'waves' : 'tasks'"
+            @open="openPath"
+          />
         </KeepAlive>
         <template v-if="page.component !== CliMayteView">
           <!-- Error state -->

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-// Waves in the CliMayte view (docs/CLIMAYTE.md, "Manager"): a manager worker dispatches and follows a
-// set of keyed tasks. Each live wave (running or reported), and a finished one from the last 24 h,
-// is one header line (id, status, counts, its group; the group is cut, the counts hide when the box
-// is narrow, the line never wraps). The whole box and each wave start collapsed, live ones too, and
-// both remember what the owner opened. Opened, a wave lists each key with its proof, the
-// escalations with their reasons, and the report (collapsed), scrolling inside a max height.
+// Waves, CliMayte's child in HSwarm's tree (owner, 2026-10-06: "Move the waves section into a subsection
+// called waves underneath CLI Mate"; docs/CLIMAYTE.md, "Manager"): a manager worker dispatches and follows
+// a set of keyed tasks. Each live wave (running or reported), and a finished one from the last 24 h, is
+// one header line (id, status, counts, its group; the group is cut, the counts hide when the page is
+// narrow, the line never wraps). Each wave starts collapsed, live ones too, and remembers what the owner
+// opened. Opened, a wave lists each key with its proof, the escalations with their reasons, and the
+// report (collapsed); the page scrolls.
 // The view loads the waves with its own refresh cycle and passes them in; there is no timer here.
-import { Check, ChevronRight, CircleAlert, Minus, Network, X } from '@lucide/vue'
+import { Check, ChevronRight, CircleAlert, Minus, X } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +18,6 @@ import type {
   CliMayteWaveTaskState,
   CliMayteWorkerView,
 } from '@/lib/api'
-import InfoHint from '@/shell/InfoHint.vue'
 
 const props = defineProps<{
   waves: CliMayteWave[]
@@ -53,8 +53,7 @@ const live = (w: CliMayteWave) => w.status === 'running' || w.status === 'report
 /** Live waves, and a finished one for 24 h after it last changed, newest first. */
 const shown = computed(() => props.waves.filter((w) => live(w) || props.now - w.updatedAt < DAY_MS))
 
-// Everything starts collapsed (a live wave auto-opening was noise); a click is remembered here.
-const wavesOpen = useStorage('agenthydra.climayte.wavesOpen', false)
+// Every wave starts collapsed (a live wave auto-opening was noise); a click is remembered here.
 const open = useStorage<Record<string, boolean>>('agenthydra.climayte.waveOpen', {})
 const reportOpen = ref<Record<string, boolean>>({})
 
@@ -103,27 +102,9 @@ const strays = (w: CliMayteWave) => derived.value.get(w.id)?.strays ?? []
 </script>
 
 <template>
-  <section v-if="shown.length" :aria-label="$t('climayte.waves')">
-    <Collapsible v-model:open="wavesOpen" class="flex flex-col gap-1.5">
-      <div class="flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground">
-        <CollapsibleTrigger as-child>
-          <button
-            type="button"
-            class="group flex items-center gap-1.5 rounded-md hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronRight
-              class="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
-              aria-hidden="true"
-            />
-            <Network class="size-3.5" aria-hidden="true" />
-            {{ $t('climayte.waves') }}
-            <span class="font-normal tabular-nums">({{ shown.length }})</span>
-          </button>
-        </CollapsibleTrigger>
-        <InfoHint :text="$t('climayte.wavesInfo')" />
-      </div>
-      <CollapsibleContent>
-    <div class="scroll-slim max-h-80 divide-y overflow-y-auto rounded-lg border bg-card text-xs">
+  <section :aria-label="$t('climayte.waves')">
+    <p v-if="!shown.length" class="px-1 py-6 text-center text-xs text-muted-foreground">{{ $t('climayte.wavesNone') }}</p>
+    <div v-else class="divide-y rounded-lg border bg-card text-xs">
       <Collapsible
         v-for="w in shown"
         :key="w.id"
@@ -257,7 +238,5 @@ const strays = (w: CliMayteWave) => derived.value.get(w.id)?.strays ?? []
         </CollapsibleContent>
       </Collapsible>
     </div>
-      </CollapsibleContent>
-    </Collapsible>
   </section>
 </template>

@@ -76,6 +76,12 @@ const stopping = ref(false)
 const judging = ref(false)
 const failOpen = ref(false)
 const failNote = ref('')
+/** How bad the fail was (the four choices in the form); none until one is tapped. */
+const failSeverity = ref<0 | 1 | 2 | 3 | null>(null)
+const SEVERITY_CHOICES = [1, 2, 3, 0] as const
+watch(failOpen, (open) => {
+  if (!open) failSeverity.value = null
+})
 const eventsEl = ref<HTMLElement | null>(null)
 /** Follow the log's newest line unless the reader scrolled up to read an older one. */
 const stickToBottom = ref(true)
@@ -253,7 +259,7 @@ async function onSend(urgent = false) {
  *  up the ladder. The toast names the rung it went back on, else says what the server said. */
 async function onVerdict(verdict: 'pass' | 'fail') {
   const w = props.worker
-  if (!w || judging.value) return
+  if (!w || judging.value || (verdict === 'fail' && failSeverity.value === null)) return
   judging.value = true
   try {
     const note = failNote.value.trim()
@@ -261,7 +267,13 @@ async function onVerdict(verdict: 'pass' | 'fail') {
       w.id,
       verdict === 'pass'
         ? { verdict, by: 'owner' }
-        : { verdict, note: note || undefined, retry: true, by: 'owner' },
+        : {
+            verdict,
+            note: note || undefined,
+            retry: true,
+            by: 'owner',
+            severity: failSeverity.value ?? undefined,
+          },
     )
     if (r.ok) {
       failOpen.value = false
@@ -369,7 +381,9 @@ async function onStop() {
                     ? $t('climayte.verdictPassed')
                     : verdictMark.kind === 'retry'
                       ? $t('climayte.verdictRetryShort')
-                      : $t('climayte.verdictFailed')
+                      : latestVerdict?.severity === undefined
+                        ? $t('climayte.verdictFailed')
+                        : $t(`climayte.severity${latestVerdict.severity}`)
                 }}
               </span>
             </Badge>
@@ -428,7 +442,23 @@ async function onStop() {
                       :disabled="judging"
                       @keydown.enter.exact.prevent="onVerdict('fail')"
                     />
-                    <Button type="submit" size="sm" class="self-end" :disabled="judging">
+                    <span class="text-xs font-medium">{{ $t('climayte.verdictHow') }}</span>
+                    <div class="flex flex-wrap gap-1" role="radiogroup" :aria-label="$t('climayte.verdictHow')">
+                      <Button
+                        v-for="s in SEVERITY_CHOICES"
+                        :key="s"
+                        type="button"
+                        size="sm"
+                        role="radio"
+                        :aria-checked="failSeverity === s"
+                        :variant="failSeverity === s ? 'default' : 'outline'"
+                        :title="$t(`climayte.severity${s}Hint`)"
+                        @click="failSeverity = s"
+                      >
+                        {{ $t(`climayte.severity${s}`) }}
+                      </Button>
+                    </div>
+                    <Button type="submit" size="sm" class="self-end" :disabled="judging || failSeverity === null">
                       <RotateCcw /> {{ $t('climayte.verdictSendBack') }}
                     </Button>
                   </form>
@@ -524,7 +554,7 @@ async function onStop() {
                         <ThumbsUp v-if="v.verdict === 'pass'" class="size-3 text-success" aria-hidden="true" />
                         <ThumbsDown v-else class="size-3 text-destructive" aria-hidden="true" />
                         <span :class="v.verdict === 'pass' ? 'text-success' : 'text-destructive'">
-                          {{ v.verdict === 'pass' ? $t('climayte.verdictPassed') : $t('climayte.verdictFailed') }}
+                          {{ v.verdict === 'pass' ? $t('climayte.verdictPassed') : v.severity === undefined ? $t('climayte.verdictFailed') : $t(`climayte.severity${v.severity}`) }}
                         </span>
                         <time
                           class="text-muted-foreground"

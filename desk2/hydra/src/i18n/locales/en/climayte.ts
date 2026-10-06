@@ -107,6 +107,7 @@ export default {
   // The list shows a page of lines at a time (CliMayteView.vue).
   listShowMore: 'Show {n} more ({total} not shown)',
   backToTasks: 'Back to tasks',
+  backToWaves: 'Back to waves',
   // The folded section over the list: the totals and "What works" (OffloadStatsCard.vue).
   scorecard: 'Scorecard',
   offloadedReread:
@@ -157,6 +158,19 @@ export default {
   verdictSaveFailed: 'Could not save the verdict',
   verdictPassed: 'Passed',
   verdictFailed: 'Failed',
+  verdictHow: 'How bad was it?',
+  // A fail's severity: short label, then its one-line meaning.
+  severity0: 'Not its fault',
+  severity0Hint: 'Not the model\'s: the check could not run, or the fault is in files the task did not edit. Not scored.',
+  severity1: 'Small fix',
+  severity1Hint: 'Right work, a small miss fixed in minutes.',
+  severity2: 'Rework',
+  severity2Hint: 'A real part is wrong or missing.',
+  severity3: 'Failed',
+  severity3Hint: 'Wrong, unusable or harmful.',
+  scoreModelHint: '{pass} passed, {slip} small fixes, {rework} reworks, {failed} failed, {excluded} not counted',
+  scoreFailsSplit: '{n} failed: {slip} small fixes, {rework} reworks, {failed} failed',
+  scoreNotCounted: '{n} not counted: not the model\'s fault',
   // The row's verdict mark, by who judged it (lib/climayte-status.ts climayteVerdictMark).
   verdictPassCheck: 'Its check passed',
   verdictPassOrchestrator: 'The orchestrator accepted the result',
@@ -188,7 +202,6 @@ export default {
   scoreNone: 'no verdicts yet',
   scoreEmpty: 'No verdicts yet. Rate a finished task to start.',
   scorePasses: '{n} passed',
-  scoreFails: '{n} failed',
   scorePerTask: 'about {pct}% of a Pro window per task',
   scoreNextPick: 'next pick',
   scoreNextPickHint: 'What CliMayte picks next for this kind of task',
@@ -214,6 +227,7 @@ export default {
   statusCancelledHint: 'Stopped by hand. Send a message to continue it.',
   // --- waves (a manager and the keyed tasks it follows; components/CliMayteWaves.vue) ---
   waves: 'Waves',
+  wavesNone: 'No waves in the last 24 hours.',
   wavesInfo:
     'A wave is one batch of tasks run by a manager worker: it sends the tasks out, checks each one’s proof, and reports back.',
   waveHint: 'Round {rounds}; at most {max} re-dispatches per task.',

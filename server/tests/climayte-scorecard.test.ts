@@ -8,6 +8,7 @@ import {
   OPUS,
   pickConfig,
   SONNET,
+  scoreOf,
   scoreRows,
 } from '../src/climayte-scorecard'
 
@@ -199,5 +200,42 @@ describe('nextRung', () => {
     expect(nextRung({ model: OPUS, effort: 'max' })).toBeNull()
     // The CLI's own default (no model or effort asked for) counts as Opus high.
     expect(nextRung({ model: null, effort: null })).toEqual({ model: OPUS, effort: 'xhigh' })
+  })
+})
+
+describe('fail severity (owner, 2026-10-06: a whoopsie-daisy is not a catastrophic fail)', () => {
+  const sev = (severity: 0 | 1 | 2 | 3 | undefined) =>
+    task('code', v('fail', SONNET, 'medium', 100_000, severity === undefined ? {} : { severity }))
+  const pass = () => task('code', v('pass', SONNET, 'medium'))
+  const row = (...t: ReturnType<typeof task>[]) => scoreRows(t)[0]!
+
+  test('credit is pass 1, slip 2/3, rework 1/3, failed 0; severity 0 is outside n and units', () => {
+    const cases: Array<[string, ReturnType<typeof task>[], number | null, number]> = [
+      ['slip', [pass(), sev(1)], (1 + 2 / 3) / 2, 200_000],
+      ['rework', [pass(), sev(2)], (1 + 1 / 3) / 2, 200_000],
+      ['failed', [pass(), sev(3)], 1 / 2, 200_000],
+      ['no severity counts as 3', [pass(), sev(undefined)], 1 / 2, 200_000],
+      ['severity 0 is not scored', [pass(), sev(0)], 1, 100_000],
+      ['only severity 0: nothing scored', [sev(0)], null, 0],
+    ]
+    for (const [name, tasks, score, units] of cases) {
+      const r = row(...tasks)
+      expect([name, scoreOf(r), r.units]).toEqual([name, score, units])
+    }
+    const r = row(pass(), sev(0), sev(1), sev(2), sev(3), sev(undefined))
+    expect([r.pass, r.fail, r.slip, r.rework, r.failed, r.excluded]).toEqual([1, 4, 1, 1, 2, 1])
+  })
+
+  test('a slip-heavy rung becomes trusted where all-full-fails would not', () => {
+    // 2 passes and 4 slips: 33% as full fails (written off), 78% weighted (trusted, over the 70% bar).
+    const make = (severity: 1 | 3) => [...times(2, pass), ...times(4, () => sev(severity))]
+    expect(pickConfig('code', scoreRows(make(3)), 0).config).not.toEqual({
+      model: SONNET,
+      effort: 'medium',
+    })
+    const slips = scoreRows(make(1))
+    const picked = pickConfig('code', slips, 0)
+    expect(picked.config).toEqual({ model: SONNET, effort: 'medium' })
+    expect(picked.reason).toContain('passed 2 of 6')
   })
 })

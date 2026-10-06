@@ -577,6 +577,37 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   wrote it is a peer's and not counted, and a task whose prompt says not to commit is not held to it
   (2026-10-05: a check passed with 15 files never committed, and the task sat done 2h26m while the
   tasks after it waited on work that was not in git).
+- **Fail severity** (owner, 2026-10-06: "Did it really fail, or did something have to just do a slight
+  bit of work to fix it? Was it ... a catastrophic fail, or was it just kind of like a
+  whoopsie-daisy?"; before it, every non-pass read as a full fail and Opus sat at 73%, Sonnet at 75%).
+  A fail carries `severity`:
+  - **0 not the model's**: the work was not judged or the failure is not this task's. The check could
+    not run (126/127, never started, runner lost) or timed out, or it failed only on files this task
+    did not edit (another session's work in a shared checkout, the environment, a flaky check); an
+    orchestrator may also say the brief was wrong. NOT SCORED: neither a pass nor a fail, and its
+    units stay out of the cost.
+  - **1 slip**: right work, a small miss someone fixes in minutes: files not committed, a file outside
+    the brief's paths, a one-line, typo, lint or format fix, a small missed test or doc update.
+  - **2 rework**: a real part is wrong or missing and needs a substantive follow-up, though the
+    approach stands.
+  - **3 failed**: wrong, unusable or harmful: misunderstood the task, nothing useful, broke unrelated
+    things, claimed a success that was not there.
+
+  Credit per scored verdict: pass 1, slip 2/3, rework 1/3, failed 0 (`SLIP_CREDIT`, `REWORK_CREDIT`,
+  `scoreOf`). The rate that trusts or writes off a rung (`MIN_SAMPLES`, `PASS_BAR`, `BAD_BAR`) is
+  credit over scored verdicts, and `perPass` is units over credit, so a slip-heavy rung that is cheap
+  can be picked where all-full-fails would never trust it. A fail with no severity (recorded before
+  this, by an older daemon, or by the old window's thumbs-down) counts as 3, as before. A pass takes
+  no severity (refused). The orchestrator's `climayte_verdict` must give one on a fail; the route
+  still takes a fail without. The check sets it by code (`judgeCheck`): broken or timed out 0; exit 0
+  with uncommitted files 1; a non-zero exit 0 when its output names files, none is one the task
+  edited (read from the sessions' transcripts like the uncommitted check), and one of them has
+  another session's uncommitted changes (`git status` in the task's folder; `failsOnlyOnOthersFiles`,
+  the note then says so), else 2, so a test the task's own change broke stays its fail; a transcript
+  that cannot be read is unknown, so 2. A wave's fail
+  (`judgeInWave`) is 1 for commits outside the brief's paths, else 2. Retries, send-backs and
+  status are unchanged: only the severity is new. Scorecard rows carry `slip`, `rework`, `failed`,
+  `excluded` and `score`.
 - **The ladder**, cheapest first: Haiku 4.5 (run with no `--effort`), Sonnet 5.5 low, medium, high,
   then Opus 5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high.
 - **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Before a

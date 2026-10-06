@@ -1107,6 +1107,8 @@ export interface CliMayteVerdict {
    *  manager wave's provisional verdict (`wave`). Absent on verdicts recorded before the server
    *  kept it. */
   by?: 'check' | 'orchestrator' | 'owner' | 'wave'
+  /** On a fail: 0 not the model's (not scored), 1 slip, 2 rework, 3 failed. Absent on an old fail: counts as 3. */
+  severity?: 0 | 1 | 2 | 3
 }
 /** What passed per kind of task, per model and thinking level, and what it cost. */
 export interface CliMayteScorecard {
@@ -1117,7 +1119,14 @@ export interface CliMayteScorecard {
     model: string | null
     effort: string | null
     pass: number
+    /** fail = slip + rework + failed; excluded (severity 0) is in neither pass nor fail. */
     fail: number
+    slip: number
+    rework: number
+    failed: number
+    excluded: number
+    /** 0-1: pass 1, slip 2/3, rework 1/3, failed 0, over pass + fail; null with none. */
+    score: number | null
     pctPerTask: number | null
     pick: boolean
   }[]
@@ -1272,7 +1281,13 @@ export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/corch/score
  *  model/thinking ladder, and `next` says which. */
 export const postCliMayteVerdict = (
   id: string,
-  body: { verdict: 'pass' | 'fail'; note?: string; retry?: boolean; by?: 'owner' },
+  body: {
+    verdict: 'pass' | 'fail'
+    note?: string
+    retry?: boolean
+    by?: 'owner'
+    severity?: 0 | 1 | 2 | 3
+  },
 ) =>
   j<{ ok: boolean; message: string; next?: { model: string; effort: string } | null }>(
     `/api/corch/workers/${encodeURIComponent(id)}/verdict`,
