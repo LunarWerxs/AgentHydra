@@ -200,6 +200,18 @@ export class FreeInstances {
     }
   }
   threads(): FreeThread[] { return this.store.data.threads }
+  /** Removes one thread from Desk's list (a private chat: it is not in the site's history either). Its tokens stay in the
+   *  account's ledger, so the totals do not drop. Refused while its message is still running. Its id is remembered: the
+   *  harness still lists the private chats it made, and the next read of them (refresh.ts, hourly) would add it back. */
+  forgetThread(id: string): { ok: true } {
+    const thread = this.store.data.threads.find(t => t.id === id)
+    if (!thread) throw new FreeError('Thread not found.', 404)
+    if (thread.status === 'running') throw new FreeError('This chat has a message running. Wait for it to finish or cancel it first.', 409)
+    this.store.data.threads = this.store.data.threads.filter(t => t !== thread)
+    this.store.data.forgotten = [...(this.store.data.forgotten ?? []).filter(f => f !== id), id].slice(-5000)
+    this.store.save()
+    return { ok: true }
+  }
   status(): FreeStatus {
     this.prune()
     const now = Date.now()
@@ -313,7 +325,7 @@ export class FreeInstances {
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
     if (result.chats) for (const chat of result.chats) {
-      if (chat.is_temporary === true) {
+      if (chat.is_temporary === true && !this.store.data.forgotten?.includes(`${r.instanceId}/${chat.chat_id}`)) {
         const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chat.chat_id)
         this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false)
       }

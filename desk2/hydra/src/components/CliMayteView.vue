@@ -29,6 +29,7 @@ import {
   PictureInPicture2,
   RefreshCw,
   RotateCcw,
+  Trash2,
   TriangleAlert,
   UserRound,
   X,
@@ -87,6 +88,7 @@ import { deskWorkerAsk, PANE_OPEN_EVENT } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import { visibleInterval } from '@/lib/visible-poll'
+import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
 /** `home`: HSwarmView bumps it when the CliMayte row is clicked, which goes back to the list. */
@@ -105,8 +107,16 @@ type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
   free?: FreeThread
 }
-const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, activeCount: freeActiveCount } = useFreeInstances()
+const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, forgetThread, errors: freeErrors, activeCount: freeActiveCount } = useFreeInstances()
 const selectedFree = ref<{ instanceId: string; chatId?: string } | null>(null)
+
+/** Takes a Free chat off Desk's list; the thread leaves the rows at once. An open view of it goes back to the list. */
+async function forgetFree(thread: FreeThread) {
+  if (await forgetThread(thread)) {
+    toast.success(t('freeInstances.toastForgotten', { name: pii(thread.title) }))
+    if (selectedFree.value?.instanceId === thread.instanceId && selectedFree.value.chatId === thread.chatId) await back()
+  } else toast.error(freeErrors[thread.instanceId] || t('freeInstances.forgetFailed'))
+}
 // The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts.
 const {
   workers,
@@ -833,7 +843,7 @@ onUnmounted(() => {
       <!-- One line per task, as the Jobs page lists jobs: the status as an icon (a failed one tells its
            story on hover), the title, the account and model it runs on, how long it has been active. -->
       <ul v-if="shown.length" class="flex flex-col rounded-lg border bg-card py-0.5" :aria-label="$t('climayte.listLabel')">
-        <li v-for="w in shown" :key="rowKey(w)">
+        <li v-for="w in shown" :key="rowKey(w)" class="group/row relative">
           <button
             type="button"
             :data-task="rowKey(w)"
@@ -882,6 +892,19 @@ onUnmounted(() => {
             >{{ rowView(w).tag?.text }}</span>
             <span class="w-14 shrink-0 text-end tabular-nums text-muted-foreground">{{ rowView(w).time }}</span>
           </button>
+          <!-- A Free chat is private: Desk's list is all that remembers it, so one row can be dropped from it. -->
+          <IconTooltip v-if="w.free" :label="$t('freeInstances.forgetThread')" :description="$t('freeInstances.forgetThreadHint')">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              class="absolute end-1.5 top-1/2 -translate-y-1/2 bg-card opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+              :aria-label="$t('freeInstances.forgetThread')"
+              :disabled="w.free.status === 'running'"
+              @click="forgetFree(w.free)"
+            >
+              <Trash2 />
+            </Button>
+          </IconTooltip>
         </li>
       </ul>
       <p v-else class="px-1 py-6 text-center text-xs text-muted-foreground">

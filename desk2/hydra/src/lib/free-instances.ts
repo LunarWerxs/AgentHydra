@@ -34,6 +34,7 @@ export const freeApi = {
   settings: () => request<FreeSettings>('settings'),
   updateSettings: (patch: Partial<FreeSettings>) => request<FreeSettings>('settings', 'PATCH', patch),
   threads: () => request<FreeThread[]>('threads'),
+  forgetThread: (id: string) => request<{ ok: true }>(`threads/${encodeURIComponent(id)}`, 'DELETE'),
   start: (operation: FreeRequest) => request<FreeJob>('jobs', 'POST', operation),
   job: (id: string) => request<FreeJob>(`jobs/${encodeURIComponent(id)}`),
   cancel: (id: string) => request<{ ok: true }>(`jobs/${encodeURIComponent(id)}`, 'DELETE'),

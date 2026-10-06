@@ -537,4 +537,31 @@ describe('Free jobs and routes', () => {
     expect(existsSync(join(legacy, '.state', 'session.dpapi'))).toBe(true)
     expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual(migrated.data.instances.map(i => i.id))
   })
+  test('forgetting a thread removes it from the list and the saved file, keeps it out of a later read of the private chats, keeps the account\'s tokens, and is refused while its message runs', async () => {
+    let release: (value: RunOutput) => void = () => {}
+    const reply = { ok: true, chat_id: CHAT, is_temporary: true, response: 'r'.repeat(80) }
+    const { service, app, op, instance, home, runtime } = fixture(async (_c, r) => r.command === 'resume' ? new Promise(resolve => { release = resolve })
+      : output(r.command === 'chats' ? { ok: true, chats: [{ chat_id: CHAT, is_temporary: true, name: 'Example chat' }] } : reply))
+    const forget = (id: string) => app.request(`/api/free/threads/${encodeURIComponent(id)}`, { method: 'DELETE' })
+    const id = `${instance.id}/${CHAT}`
+    service.start(op({ command: 'chat', prompt: 'p'.repeat(40) })); await tick()
+    service.start(op({ command: 'resume', chatId: CHAT, prompt: 'p'.repeat(40) })); await tick()
+    expect(service.threads().map(t => [t.id, t.status])).toEqual([[id, 'running']])
+    expect((await forget(id)).status).toBe(409)
+    expect(service.threads()).toHaveLength(1)
+    release(output(reply)); await tick()
+    const total = service.status().tokens?.[instance.id]?.total
+    expect(total?.total).toBeGreaterThan(0)
+    expect((await forget(`${instance.id}/${INSTANCE}`)).status).toBe(404)
+    const done = await forget(id)
+    expect(done.status).toBe(200)
+    expect(service.threads()).toEqual([])
+    service.start(op({ command: 'chats' })); await tick()
+    expect(service.threads()).toEqual([])
+    expect(service.status().tokens?.[instance.id]?.total).toEqual(total)
+    const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
+    expect(again.threads()).toEqual([])
+    expect(again.status().tokens?.[instance.id]?.total).toEqual(total)
+    expect((await forget(id)).status).toBe(404)
+  })
 })

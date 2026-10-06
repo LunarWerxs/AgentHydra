@@ -37,4 +37,7 @@ export default {
   user: 'You', assistant: 'Assistant', code: 'Extracted code', sources: 'Sources', empty: 'Send a message to start a private chat.',
   historyHint: 'These local UUIDs keep private chats identifiable while the provider still retains them.',
   accountMissing: 'This Free instance is unavailable. Refresh the instances table.',
+  // Forget: takes a thread off Desk's list; the token count stays.
+  forgetThread: 'Forget', forgetThreadHint: 'Removes it from this list. It was a private chat, so it is not in the site\'s history either.',
+  toastForgotten: 'Forgot {name}', forgetFailed: 'Could not forget this chat. Try again.',
 }

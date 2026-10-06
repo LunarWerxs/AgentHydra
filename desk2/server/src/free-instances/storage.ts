@@ -8,8 +8,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** A name nobody had to type ("Claude", "ChatGPT 2") follows the account; a deliberate one stays. */
 const generic = (name: string): boolean => /^(claude|chatgpt)\s*#?\d*$/i.test(name.trim())
 /** `deleted`: local tombstones the sync still has to tell the store about; `settings`: the keepalive's (keepalive.ts);
- *  `tokens`: each account's token estimate by its id (tokens.ts), counts only. */
-interface Data { instances: FreeInstance[]; threads: FreeThread[]; deleted?: FreeDeleted[]; settings?: FreeSettings; tokens?: Record<string, TokenLedger> }
+ *  `tokens`: each account's token estimate by its id (tokens.ts), counts only; `forgotten`: the ids of threads someone
+ *  forgot, so a later read of the account's private chats does not list them again. */
+interface Data { instances: FreeInstance[]; threads: FreeThread[]; deleted?: FreeDeleted[]; settings?: FreeSettings; tokens?: Record<string, TokenLedger>; forgotten?: string[] }
 
 /** Persistent account/chat metadata only. DPAPI files are copied without decrypting them. */
 export class FreeStorage {
@@ -28,6 +29,7 @@ export class FreeStorage {
       // A damaged estimate is dropped, never trusted: the account counts again from its next message.
       const tokens = value.tokens && typeof value.tokens === 'object' ? Object.entries(value.tokens) : []
       this.data.tokens = Object.fromEntries(tokens.flatMap(([id, l]) => { const ledger = UUID.test(id) && validLedger(l); return ledger ? [[id, ledger]] : [] }))
+      this.data.forgotten = Array.isArray(value.forgotten) ? value.forgotten.filter(f => typeof f === 'string') : []
       this.data.deleted = Array.isArray(value.deleted) ? value.deleted.filter(d => d && typeof d.id === 'string' && UUID.test(d.id) && FREE_PROVIDERS.includes(d.provider) && Number.isInteger(d.num) && typeof d.name === 'string') : []
       // Older records lack lastSignedInAt: a signed-in account was last signed in when it was last checked.
       for (const i of this.data.instances) if (typeof i.lastSignedInAt !== 'number') i.lastSignedInAt = i.loggedIn ? i.checkedAt ?? null : null
@@ -57,6 +59,7 @@ export class FreeStorage {
     const instance = this.data.instances.find(i => i.id === id)
     this.data.instances = this.data.instances.filter(i => i.id !== id)
     this.data.threads = this.data.threads.filter(t => t.instanceId !== id)
+    if (this.data.forgotten) this.data.forgotten = this.data.forgotten.filter(f => !f.startsWith(`${id}/`))
     if (this.data.tokens) delete this.data.tokens[id]
     if (tombstone && instance) this.data.deleted = [...(this.data.deleted ?? []).filter(d => d.id !== id), { id, num: instance.num, provider: instance.provider, name: instance.name }]
     rmSync(join(this.home, 'free', 'instances', id), { recursive: true, force: true })

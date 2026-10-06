@@ -129,6 +129,22 @@ async function remove(instance: FreeInstance): Promise<boolean> {
   }
 }
 
+/** Takes one thread off Desk's list (the site keeps nothing of a private chat). Returns whether it worked; the reason
+ *  lands in errors[thread.instanceId]. A thread the server no longer has leaves the list too. */
+async function forgetThread(thread: FreeThread): Promise<boolean> {
+  errors[thread.instanceId] = ''
+  try {
+    await freeApi.forgetThread(thread.id)
+  } catch (error) {
+    if (!(error instanceof FreeApiError && error.status === 404)) {
+      errors[thread.instanceId] = error instanceof Error ? error.message : 'Could not forget this chat. Try again.'
+      return false
+    }
+  }
+  threads.value = threads.value.filter(t => t.id !== thread.id)
+  return true
+}
+
 /**
  * Reads the list again; `silent` (the warm loop, opening the tab) shows no spinner. Desk keeps every reading current
  * itself, one account a minute (server/src/free-instances/refresh.ts), so opening the tab starts nothing and the rows
@@ -154,6 +170,6 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
 }
 
 export function useFreeInstances() {
-  return { instances, threads, tokens, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree,
+  return { instances, threads, tokens, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, forgetThread, recover, refreshFree,
     activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
 }
