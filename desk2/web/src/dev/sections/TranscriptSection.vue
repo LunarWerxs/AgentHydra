@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, onMounted, ref } from 'vue'
+import type { TranscriptItem } from '@shared/protocol'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import { transcriptFixtures, chatFixtures } from '../fixtures'
 import { makeStressItems, transcriptChat, transcriptStates } from '@/components/transcript/fixtures'
@@ -12,6 +13,19 @@ const live = transcriptStates.slice(split)
 // Tool runs fold into one status row with id `tools:<first id>`; the ids after it open rows inside it.
 const open = ['th1', 'tools:r1', 'r1', 'b-ok', 'b-err', 'cm1', 'mcp1', 'tw1', 'plan-done']
 const markdownItems = markdownGalleryItems()
+// An AgentHydra ping as its note card: one closed line, the whole text under Show more.
+const pingItems: TranscriptItem[] = [
+  { id: 'gu', ts: Date.now() - 120_000, kind: 'user', text: 'Send the docs and the events fix to CliMayte.' },
+  { id: 'ga', ts: Date.now() - 110_000, kind: 'assistant_text', text: 'Both are dispatched.' },
+  {
+    id: 'gn',
+    ts: Date.now(),
+    kind: 'note',
+    from: 'AgentHydra · CliMayte',
+    text: 'Ping 3-4, 2 updates since 09:00:\n• w-1a2b3c4d "Docs": done on #84, check passed.\n• w-5e6f7a8b "Fix events rows": done on #102, needs your verdict.\nGroup g-1f2e3d: 2 done, 0 failed, 1 running, 0 waiting.\nNext: climayte_status {group:"g-1f2e3d", report:true}, then climayte_verdict.',
+  },
+  { id: 'gr', ts: Date.now(), kind: 'assistant_text', text: 'Two results are in and one task still runs.' },
+]
 
 // The windowing check: 3,000 items, mount time, rows in the DOM, cost of each scroll step.
 const STRESS_N = 3000
@@ -65,6 +79,12 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
+    <div>
+      <h3 class="mb-2 text-[13px] text-text-muted">A program's note (an AgentHydra ping), closed</h3>
+      <div class="h-[260px] overflow-hidden rounded-lg border border-border" data-gallery-note>
+        <TranscriptView chat-id="gallery-note" :items="pingItems" :chat="null" />
+      </div>
+    </div>
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">Every row, finished turn (some rows opened)</h3>
       <div class="h-[1900px] overflow-hidden rounded-lg border border-border">

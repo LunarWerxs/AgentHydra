@@ -516,7 +516,7 @@ describe('POST /api/sessions/:sessionId/ping (AgentHydra\'s CliMayte note to the
       stored('c-current', { sessionId: 'sess-now', cwd, title: 'New session' }),
       stored('c-past', { sessionId: 'sess-new', pastSessions: ['sess-old'], cwd }),
     ])
-    const note = '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this.'
+    const note = '[AgentHydra · CliMayte] Not from the user. Ping 1, 1 update since 09:00:'
     const now = await call(t.desk, 'POST', '/api/sessions/sess-now/ping', { text: note })
     expect(now.status).toBe(200)
     expect(now.body).toMatchObject({ ok: true, chatId: 'c-current' })

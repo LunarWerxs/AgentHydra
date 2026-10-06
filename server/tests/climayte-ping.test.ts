@@ -457,7 +457,7 @@ describe('the message', () => {
     )
     expect(text).toEqual(
       [
-        `[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 41-43, 3 updates since ${hhmm(at)}:`,
+        `[AgentHydra · CliMayte] Not from the user. Ping 41-43, 3 updates since ${hhmm(at)}:`,
         '• w-1 "Tear down sales plane": a.',
         '• w-2 b.',
         '• w-3 c.',
@@ -741,9 +741,7 @@ describe('the outbox', () => {
     expect(h.peerCalls()).toBe(0)
     expect(h.workerSends).toHaveLength(1)
     expect(h.workerSends[0][0]).toBe('w-manager')
-    expect(h.workerSends[0][1]).toContain(
-      '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 1-2,',
-    )
+    expect(h.workerSends[0][1]).toContain('[AgentHydra · CliMayte] Not from the user. Ping 1-2,')
     expect(h.workerSends[0][1]).toContain('• Group aws-teardown-planes settled')
     h.ping.stop()
   })
@@ -813,9 +811,7 @@ describe('the real peer pipe', () => {
       expect(lines[0]).toEqual({ type: 'auth', token: 'tok' })
       expect(lines[1].type).toBe('user')
       const content = (lines[1].message as { content: string }).content
-      expect(content).toContain(
-        '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this. Ping 1-2,',
-      )
+      expect(content).toContain('[AgentHydra · CliMayte] Not from the user. Ping 1-2,')
 
       const again = startCliMaytePing({
         dir,
@@ -896,8 +892,7 @@ describe('stale lines are dropped when the outbox flushes', () => {
     h.ping.stop()
   })
 
-  test('the header says nobody typed it and keeps the prefix the desk2 note card reads', () => {
-    expect(PING_HEADER.startsWith('[AgentHydra · CliMayte] Not from the user.')).toBe(true)
-    expect(PING_HEADER).toContain('nobody typed this')
+  test('the header is the prefix the desk2 note card reads and nothing more', () => {
+    expect(PING_HEADER).toBe('[AgentHydra · CliMayte] Not from the user.')
   })
 })

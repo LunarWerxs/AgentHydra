@@ -321,11 +321,10 @@ export function hhmm(ms: number): string {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-/** The first words of every ping. The first sentence is what desk2's note-card detector reads
- *  (desk2/server/src/engine/system-text.ts NOTE: `[from] Not from the user.`): keep it first. The
- *  second tells a person reading the chat that no one typed it. */
-export const PING_HEADER =
-  '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this.'
+/** The first words of every ping, and nothing more (owner, 2026-10-06: no "automatic status note,
+ *  nobody typed this"). They are what desk2's note-card detector reads
+ *  (desk2/server/src/engine/system-text.ts NOTE: `[from] Not from the user.`): keep them first. */
+export const PING_HEADER = '[AgentHydra · CliMayte] Not from the user.'
 
 /** The text of one ping. `workers`: the origin's workers now, for the group tally. */
 export function pingMessage(
