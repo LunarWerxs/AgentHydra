@@ -1,7 +1,7 @@
-// The Routing page's data (Hydra Desk 2): AgentHydra's cost model (GET /api/routing/cost-model) and its
-// settings (PUT /api/routing/settings). One shared store; the warm-data kind 'routing' refreshes it and
-// the page only reads it. An edit is kept in `draft` at once and saved after a short pause, one request
-// for a burst of changes; a refresh that lands meanwhile never overwrites what was just typed.
+// The Routing page's data: AgentHydra's cost model (GET /api/routing/cost-model) and its settings
+// (PUT /api/routing/settings). One shared store; the page refreshes it when it opens. An edit is kept in
+// `draft` at once and saved after a short pause, one request for a burst of changes; a refresh that lands
+// meanwhile never overwrites what was just typed.
 import { computed, ref, shallowRef } from 'vue'
 import { j } from '@/lib/api'
 
@@ -12,7 +12,12 @@ export interface RoutingDiscounts {
   other: number
 }
 export type DiscountKey = keyof RoutingDiscounts
-export const DISCOUNT_KEYS: readonly DiscountKey[] = ['anthropic', 'deepseek', 'openrouter', 'other']
+export const DISCOUNT_KEYS: readonly DiscountKey[] = [
+  'anthropic',
+  'deepseek',
+  'openrouter',
+  'other',
+]
 
 export interface RoutingSettings {
   enabled: boolean
@@ -55,7 +60,9 @@ export interface RoutingCostModel {
   settings: RoutingSettings
 }
 
-type Change = Partial<Omit<RoutingSettings, 'discounts'>> & { discounts?: Partial<RoutingDiscounts> }
+type Change = Partial<Omit<RoutingSettings, 'discounts'>> & {
+  discounts?: Partial<RoutingDiscounts>
+}
 
 const SAVE_MS = 600
 

@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // The HSwarm tab's routing view. Strings: i18n/locales/en/hswarm/routing.ts (t('hswarm.v.routing.<key>')).
+// Below HSwarm's own routing it carries AgentHydra's cost routing between API keys and subscriptions
+// (HSwarmCostRouting.vue), so the tree's one Routing item holds both.
 import { AlertCircle, Route } from '@lucide/vue'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -21,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { formatUsd } from '@/lib/kit'
+import HSwarmCostRouting from './HSwarmCostRouting.vue'
 
 const props = defineProps<{ state: HswarmState }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -54,10 +57,14 @@ const enabledModels = props.state.models?.filter((m: any) => m.enabled) || []
 
 async function handleDailyCapChange() {
   try {
-    const value = dailyCap.value === '' ? undefined : parseFloat(dailyCap.value)
+    const raw = String(dailyCap.value ?? '').trim()
+    const value = raw === '' ? null : parseFloat(raw)
+    if (value !== null && !Number.isFinite(value)) return
+    if (value === (props.state.options?.daily_cap_usd ?? null)) return
+    // An empty box removes the cap: HSwarm reads "" as none, and a missing field as "leave it".
     await apiCall('options', {
       method: 'POST',
-      body: JSON.stringify({ daily_cap_usd: value }),
+      body: JSON.stringify({ daily_cap_usd: value ?? '' }),
     })
     emit('changed')
     toast.success(t('hswarm.v.routing.dailyCapUpdated'))
@@ -94,6 +101,14 @@ async function handleRoutingToggle(checked: boolean) {
   }
 }
 
+// The slider's value while it is being dragged; it is saved once, when the drag settles, and held until
+// the saved value comes back in the state (a failed save puts the thumb back where it was).
+const biasDraft = ref<number | null>(null)
+watch(
+  () => props.state.options?.load_bias,
+  () => (biasDraft.value = null),
+)
+
 async function handleLoadBiasChange(value: string) {
   try {
     const bias = parseFloat(value)
@@ -104,6 +119,7 @@ async function handleLoadBiasChange(value: string) {
     emit('changed')
     toast.success(t('hswarm.v.routing.loadBiasSaved'))
   } catch (err) {
+    biasDraft.value = null
     toast.error(err instanceof Error ? err.message : 'Failed to update load bias')
   }
 }
@@ -350,8 +366,8 @@ async function handlePreview() {
                 </p>
               </div>
               <Switch
-                :checked="state.options?.routing || false"
-                @update:checked="handleRoutingToggle"
+                :model-value="!!state.options?.routing"
+                @update:model-value="handleRoutingToggle"
               />
             </div>
 
@@ -360,7 +376,7 @@ async function handlePreview() {
               <div class="flex items-center justify-between">
                 <Label>{{ t('hswarm.v.routing.loadBias') }}</Label>
                 <span class="font-mono text-sm">
-                  {{ (state.options?.load_bias ?? 0).toFixed(1) }}
+                  {{ (biasDraft ?? state.options?.load_bias ?? 0).toFixed(1) }}
                 </span>
               </div>
               <input
@@ -368,8 +384,9 @@ async function handlePreview() {
                 min="0"
                 max="5"
                 step="0.1"
-                :value="state.options?.load_bias ?? 0"
-                @input="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value)"
+                :value="biasDraft ?? state.options?.load_bias ?? 0"
+                @input="(e) => (biasDraft = parseFloat((e.target as HTMLInputElement).value))"
+                @change="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value)"
                 class="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
               />
               <p class="text-xs text-muted-foreground">
@@ -399,5 +416,7 @@ async function handlePreview() {
         </CollapsibleContent>
       </Collapsible>
     </Card>
+
+    <HSwarmCostRouting class="mt-1 border-t pt-3" />
   </div>
 </template>

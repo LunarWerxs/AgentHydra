@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// Shared HSwarm stats card. Mounted by the Instances landing, the CliMayte tab and Analytics; the
+// Shared HSwarm stats card. Mounted by the Instances landing, the CliMayte page and Analytics; the
 // parent wires `open` to the HSwarm tab (tabs here are a ref, not a URL). Numbers come from
 // lib/swarm-stats.ts, which polls once per `days` however many cards are mounted.
 import { CloudOff } from '@lucide/vue'

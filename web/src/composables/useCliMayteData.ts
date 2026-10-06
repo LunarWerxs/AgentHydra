@@ -1,8 +1,14 @@
-// CliMayte's data, one shared copy: the tab only reads it. lib/warm-data.ts keeps it fresh in the
-// background (about every 2 minutes) and the tab asks again when it opens. Module scope, so the list
-// is already there when the tab is first opened.
+// CliMayte's data, one shared copy: CliMayteView.vue reads it while it is on screen and HSwarmView.vue
+// reads it now and then for the tree's running count. Module scope, so the list is already there when
+// the page is first opened.
 import { computed, ref, shallowRef } from 'vue'
-import type { CliMayteRemotePc, CliMayteScorecard, CliMayteTotals, CliMayteWave, CliMayteWorkerView } from '@/lib/api'
+import type {
+  CliMayteRemotePc,
+  CliMayteScorecard,
+  CliMayteTotals,
+  CliMayteWave,
+  CliMayteWorkerView,
+} from '@/lib/api'
 import {
   getCliMayteRemote,
   getCliMayteScorecard,
@@ -10,8 +16,8 @@ import {
   listCliMayteWaves,
   listCliMayteWorkers,
 } from '@/lib/api'
-import { reconcileList, sameData } from '@/lib/reconcile'
 import { climayteRunningCount, isCliMayteActive } from '@/lib/climayte-status'
+import { reconcileList, sameData } from '@/lib/reconcile'
 
 // Replaced whole by a read that brought a change (reconcileList), never edited in place, so Vue does
 // not wrap every row in a proxy.
@@ -29,6 +35,11 @@ const hasOlder = computed(
 /** Asks for every finished task from now on; the caller reads again. */
 function showOlder(): void {
   finishedLimit.value = undefined
+}
+/** Back to the newest finished tasks once the page is left: the page reads every few seconds, and the
+ *  whole history on every read is what the limit is there to spare. */
+function resetFinished(): void {
+  finishedLimit.value = FINISHED_PAGE
 }
 /** The other PCs' queue (GET /api/corch/remote); null before it was read or when the route is missing. */
 const remote = shallowRef<{ enabled: boolean; pcs: CliMayteRemotePc[] } | null>(null)
@@ -100,5 +111,21 @@ async function readCliMayte(opts: { silent?: boolean; side?: boolean }): Promise
 }
 
 export function useCliMayteData() {
-  return { workers, finishedLimit, hasOlder, showOlder, remote, runningCount, totals, scorecard, waves, loading, loaded, unreachable, listedAt, refreshCliMayte }
+  return {
+    workers,
+    finishedLimit,
+    hasOlder,
+    showOlder,
+    resetFinished,
+    remote,
+    runningCount,
+    totals,
+    scorecard,
+    waves,
+    loading,
+    loaded,
+    unreachable,
+    listedAt,
+    refreshCliMayte,
+  }
 }

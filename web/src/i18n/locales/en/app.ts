@@ -31,7 +31,6 @@ export default {
   shortcutClimayte: 'Go to CliMayte',
   navLabel: 'Main',
   instancesMenu: 'Instances pages',
-  tabClimayte: 'CliMayte',
   tabDesktop: 'Desktop',
   shortcutHswarm: 'Go to HSwarm',
   tabAnalytics: 'Analytics',

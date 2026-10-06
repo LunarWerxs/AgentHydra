@@ -148,6 +148,20 @@ export const isCliMayteActive = (w: Pick<CliMayteWorkerView, 'status'>): boolean
   w.status === 'waiting' ||
   w.status === 'checking'
 
+/** The tasks that can still change, on this PC and (when sharing is on) on the others: the one number
+ *  the CliMayte page's Running filter and the tree's CliMayte node both show. */
+export function climayteRunningCount(
+  workers: ReadonlyArray<Pick<CliMayteWorkerView, 'status'>>,
+  remote: {
+    enabled: boolean
+    pcs: ReadonlyArray<{ workers: ReadonlyArray<Pick<CliMayteWorkerView, 'status'>> }>
+  } | null,
+): number {
+  let n = workers.filter(isCliMayteActive).length
+  if (remote?.enabled) for (const pc of remote.pcs) n += pc.workers.filter(isCliMayteActive).length
+  return n
+}
+
 /** `#68 Darragh (CLI)`, or the bare name when the account has no instance number. Privacy mode
  *  masks it: a numbered instance's name may be the account's address, and a bare name IS the
  *  account's. */

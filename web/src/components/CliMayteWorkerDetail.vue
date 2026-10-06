@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The selected CliMayte task (CliMayteView.vue's right-hand pane): what it is, where it ran, what it did,
+// The selected CliMayte task (CliMayteView.vue's detail, in place of its list): what it is, where it ran, what it did,
 // and a box to message or continue it.
 //
 // Three parts at their natural height: a header (title, Stop, then one row of stat chips: status,
@@ -303,7 +303,9 @@ async function onStop() {
       <header class="flex flex-col gap-3 border-b px-4 py-3">
         <div class="flex items-start justify-between gap-3">
           <div class="flex min-w-0 flex-col items-start gap-1.5">
-            <h3 class="line-clamp-2 wrap-break-word text-sm font-semibold" :title="worker.title">
+            <!-- Whole, never clamped (owner, 2026-10-04: "is showing a cut off version of the title?
+                 Prompt? Whatever? Should show full one"). -->
+            <h3 class="wrap-break-word text-sm font-semibold">
               {{ worker.title }}
             </h3>
             <!-- Its id, to name it in chat (owner, 2026-10-02: "should have an ID ... so I can refer to

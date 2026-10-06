@@ -14,7 +14,8 @@ export default {
   splitApi: 'API keys',
   splitSubscription: 'Subscriptions',
   splitAria: 'Share of close calls sent to API keys',
-  splitNote: 'Used when the two costs are within {ratio}x of each other; otherwise the cheaper one wins.',
+  splitNote:
+    'Used when the two costs are within {ratio}x of each other; otherwise the cheaper one wins.',
   closeRatio: 'Close band',
   closeRatioNote: 'Two costs within this factor count as close.',
   discountsTitle: 'Bulk-rate discount',
