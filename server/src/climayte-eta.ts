@@ -56,6 +56,10 @@ export interface EtaReview {
 export const ETA_LINE_MAX = 300
 export const ETA_TEXT_MAX = 2000
 
+/** The durable ledger of estimates, settled times and reviews, in the corch folder next to
+ *  workers.json (climayte-eta-ledger.ts reads and appends it). */
+export const ETA_LEDGER_FILE = 'eta.jsonl'
+
 /** An estimate past a day is not one. */
 const MAX_ETA_MIN = 24 * 60
 

@@ -19,6 +19,7 @@ import { join } from 'node:path'
 import { ROOT } from './climayte-core'
 import {
   type CliMayteEta,
+  ETA_LEDGER_FILE,
   type EtaBucket,
   type EtaReview,
   type EtaSample,
@@ -28,7 +29,7 @@ import {
   mergeSamples,
 } from './climayte-eta'
 
-export const ETA_LEDGER_PATH = join(ROOT, 'eta.jsonl')
+export const ETA_LEDGER_PATH = join(ROOT, ETA_LEDGER_FILE)
 /** A read looks at this much of the file's end. */
 export const LEDGER_TAIL_BYTES = 1_000_000
 /** The scorecard lists this many settled samples and reads this many reviews. */
