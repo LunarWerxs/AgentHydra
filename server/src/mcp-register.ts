@@ -38,7 +38,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { getSetting, setSetting } from './db'
 import { IS_PRIMARY_INSTALL } from './instance'
 
@@ -82,8 +82,29 @@ export function claudeCodeConfigPath(env: NodeJS.ProcessEnv = process.env): stri
 export function registrationBarred(
   primary: boolean = IS_PRIMARY_INSTALL,
   env: NodeJS.ProcessEnv = process.env,
+  /** The caller named the exact file (a test's configPath), so no ambient config is in play. */
+  explicitPath = false,
 ): boolean {
-  return !primary && !env.AGENTHYDRA_MCP_CONFIG?.trim()
+  if (env.AGENTHYDRA_MCP_CONFIG?.trim()) return false
+  return !primary || (!explicitPath && homeRelocated(env))
+}
+
+/**
+ * Is AGENTHYDRA_HOME pointed somewhere other than the default home? Such a daemon is a throwaway
+ * (a smoke run, a probe), and being "primary" inside its own scratch home says nothing about the
+ * config it would write: 2026-10-06 scripts/smoke-release.ts, run from a CliMayte worker whose env
+ * carries CLAUDE_CONFIG_DIR, wrote its random port into that account's real .claude.json, dead once
+ * the daemon exited (4 of 42 accounts). Without its own AGENTHYDRA_MCP_CONFIG it must not register.
+ */
+function homeRelocated(env: NodeJS.ProcessEnv): boolean {
+  const home = (env.AGENTHYDRA_HOME ?? env.CCMANAGERUI_HOME)?.trim()
+  if (!home) return false
+  const norm = (p: string) =>
+    resolve(p)
+      .replace(/[\\/]+$/, '')
+      .toLowerCase()
+  const h = norm(home)
+  return h !== norm(join(homedir(), '.agenthydra')) && h !== norm(join(homedir(), '.ccmanagerui'))
 }
 
 export interface McpHttpEntry {
@@ -384,7 +405,7 @@ export function syncMcpRegistration(
   const desired = desiredEntry(opts.daemonUrl)
   const base: SyncBase = { enabled, configPath, desired }
   // Before the file is even read: a barred daemon touches nothing, whatever the file holds.
-  if (registrationBarred(opts.primary, opts.env))
+  if (registrationBarred(opts.primary, opts.env, !!opts.configPath))
     return { ...base, registered: false, entry: null, action: 'side-run', error: null }
   const writeConfig = deps.writeConfig ?? writeConfigAtomic
   let raced: McpRegisterStatus | null = null
@@ -489,7 +510,7 @@ export function mcpRegistrationStatus(opts: {
   const enabled = mcpRegisterEnabled()
   const configPath = opts.configPath ?? claudeCodeConfigPath()
   const desired = desiredEntry(opts.daemonUrl)
-  if (registrationBarred())
+  if (registrationBarred(undefined, undefined, !!opts.configPath))
     return {
       enabled,
       configPath,

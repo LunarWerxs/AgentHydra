@@ -105,6 +105,7 @@ export function evalServerConfig(fixtureUrl: string, home: string) {
       AGENTHYDRA_URL: fixtureUrl,
       AGENTHYDRA_HOME: home,
       AGENTHYDRA_DB: join(home, 'eval.db'),
+      AGENTHYDRA_MCP_CONFIG: join(home, 'claude.json'),
     },
   }
 }

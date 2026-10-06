@@ -55,6 +55,7 @@ if "--fresh" not in args and not os.path.exists(db):
 token = secrets.token_hex(16)
 env = dict(os.environ, AGENTHYDRA_PORT_FIXED="1", PORT=str(PORT), AGENTHYDRA_NO_OPEN="1",
            AGENTHYDRA_NO_PING="1", AGENTHYDRA_HOME=home, CLAUDE_CONFIG_DIR=cfg,
+           AGENTHYDRA_MCP_CONFIG=os.path.join(cfg, ".claude.json"),
            AGENTHYDRA_SHUTDOWN_TOKEN=token)
 cmd = [BUN] + (["--cpu-prof", "--cpu-prof-md", f"--cpu-prof-dir={profdir}"] if "--prof" in args else [])
 cmd.append("server/src/index.ts")

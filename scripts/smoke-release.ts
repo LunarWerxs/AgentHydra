@@ -29,6 +29,8 @@ const child = Bun.spawn([binary], {
   env: {
     ...process.env,
     AGENTHYDRA_HOME: join(scratch, 'state'),
+    // Its own MCP config: an inherited CLAUDE_CONFIG_DIR must never receive this daemon's random port.
+    AGENTHYDRA_MCP_CONFIG: join(scratch, 'claude.json'),
     AGENTHYDRA_NO_OPEN: '1',
     PORT: String(port),
   },

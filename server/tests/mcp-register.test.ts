@@ -6,7 +6,15 @@
 // ~/.claude.json - the file this module is otherwise designed to edit in place.
 
 import { afterAll, expect, test } from 'bun:test'
-import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -272,4 +280,37 @@ test('a side-run with its own AGENTHYDRA_MCP_CONFIG still registers into that fi
   expect(read(configPath)).toEqual({
     mcpServers: { [MCP_SERVER_KEY]: { type: 'http', url: 'http://127.0.0.1:7801/api/mcp' } },
   })
+})
+
+// 2026-10-06: scripts/smoke-release.ts started a throwaway daemon with a scratch AGENTHYDRA_HOME
+// from inside a CliMayte worker, whose env carries CLAUDE_CONFIG_DIR=<an account's dir>. The scratch
+// store sits inside that config dir's reach, so the daemon counted as primary and wrote its random
+// port into the account's real .claude.json; the entry outlived the daemon. A relocated home with
+// no AGENTHYDRA_MCP_CONFIG of its own must never reach an inherited config.
+test('a relocated AGENTHYDRA_HOME never writes into an inherited CLAUDE_CONFIG_DIR', () => {
+  const account = scratch()
+  const configPath = join(account, '.claude.json')
+  const res = syncMcpRegistration({
+    daemonUrl: 'http://127.0.0.1:59714',
+    enabled: true,
+    primary: true,
+    env: { AGENTHYDRA_HOME: join(scratch(), 'state'), CLAUDE_CONFIG_DIR: account },
+  })
+  expect(res.action).toBe('side-run')
+  expect(existsSync(configPath)).toBe(false)
+})
+
+test('a relocated AGENTHYDRA_HOME with its own AGENTHYDRA_MCP_CONFIG still registers there', () => {
+  const configPath = join(scratch(), 'own.json')
+  const res = syncMcpRegistration({
+    daemonUrl: 'http://127.0.0.1:59714',
+    enabled: true,
+    primary: true,
+    env: {
+      AGENTHYDRA_HOME: join(scratch(), 'state'),
+      CLAUDE_CONFIG_DIR: scratch(),
+      AGENTHYDRA_MCP_CONFIG: configPath,
+    },
+  })
+  expect(res.action).toBe('added')
 })
