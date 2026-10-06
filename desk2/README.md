@@ -332,6 +332,36 @@ sidebar on the left stays put, and only the pane on the right changes.
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
+## Planned next
+
+**Dev servers in the sidebar** (owner, 2026-10-06). To start once AgentHydra 2.0 (Desk 2 taking over from the
+old AgentHydra window, which is being retired) has finished consolidating. Today DevWebUI is reached only through
+a chat's Browser button, and only for that chat's folder; nothing shows every dev server at once. The plan:
+
+- **A fourth title-bar button, Dev servers,** beside Cloud and CliMayte, working like Cloud. On, the sidebar
+  lists DevWebUI's projects with their servers under each: a status dot (`statusDot` in
+  `web/src/components/servers/logic.ts`), running ones first, Start / Stop / Restart on hover, Start all /
+  Stop all on a project's header. Off, the desk list comes back. Blue while on, like the others.
+- **Opening a server uses the servers pane that exists.** A click opens the right pane on that server's project,
+  its browser and logs, whatever chat is open. `ServersPane` takes a folder today (`cwd`, the chat's), so the
+  sidebar hands it `projectDir(project)`. No new screen in the main area.
+- **Desk draws it, from the client it already has.** Desk 2 reaches DevWebUI through `/dw/api`
+  (`server/src/plugins/50-devwebui.ts`, types in `shared/devwebui.ts`), and `web/src/components/servers/api.ts`
+  and `logic.ts` are its one client. The sidebar and the pane read the same project list through one polling loop,
+  only while one of them is on screen and the window is visible, so they never disagree. No iframe and no embed
+  messages, unlike the AgentHydra button. Turning the view on starts the server manager when it is not running,
+  as the pane does.
+- **Maybe later, from the CliMayte button's pattern:** a small dot on a chat whose folder has a server running,
+  with the view off.
+- **First version:** the project and server list, the dots, Start / Stop / Restart, and opening a server in the
+  pane with its logs. DevWebUI's own settings and environment editing stay in DevWebUI.
+- **Jacob's DevWebUI work goes into Desk 2,** not the old AgentHydra window (`../web`). The seam is the `/dw/api`
+  contract in `shared/devwebui.ts`: if DevWebUI's daemon moves into AgentHydra's, only where the plugin finds it
+  changes (`DEVWEBUI_URL`, or `runtime.json` in `DEVWEBUI_HOME`), not the sidebar. Agree that with him before
+  building.
+- **Checks:** unit tests for the list's order and grouping beside `logic.ts`'s, gesture cases for the new button
+  and a server row in `e2e/gestures.e2e.ts`, then `bun run build` and `bun run e2e:gestures`.
+
 ---
 
 <img src="launcher/hydra-desk.png" width="96" alt="Hydra Desk icon">
@@ -373,6 +403,14 @@ which the server on 7798 serves; the launcher's window needs that build. `bun te
 `bun run typecheck` are the checks.
 
 `bun e2e/stream-frames.e2e.ts` streams a long reply (an em dash, a 240-line TypeScript block) into the transcript in headless chrome-headless-shell and writes `tmp/stream-frames.json`: frames over the 8.33 ms budget, style recalcs, layouts and DOM mutations per chunk (needs `bun add -d puppeteer`).
+
+`bun run e2e:gestures` (after `bun run build`) starts the built window as a hidden server on 7819 with a
+throwaway home and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
+long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
+sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 39
+cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
+`GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
+any change to a tooltip, menu, popover, sidebar row or lazy overlay.
 
 To regenerate the icon: `python launcher\make-icon.py` (needs Pillow), then re-run
 `install-shortcuts.ps1` so Windows picks it up.

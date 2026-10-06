@@ -30,6 +30,10 @@ between server/ and web/.
   `~/.devwebui`), starts `bun server/src/index.ts` there hidden when the pane asks, and forwards `/dw/api/*` with the
   daemon's `.cookie` credential. Contract: `shared/devwebui.ts`. Tests set `DEVWEBUI_HOME` to a temp folder. Change
   `../devwebui` only when the pane truly needs it, upstream-shaped, and name it in the commit message.
+- A Dev servers view in the sidebar is planned (README, "Planned next", owner 2026-10-06): build it on
+  `web/src/components/servers/api.ts` and `logic.ts`, the one DevWebUI client, never a second one.
+- After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
+  `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
