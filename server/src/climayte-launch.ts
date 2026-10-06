@@ -501,9 +501,11 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md'))] }
 }
 
-/** The one line a chat is told on top of the CLI's own prompt: it runs headless. */
+/** What a chat is told on top of the CLI's own prompt: it runs headless, and its process (every
+ *  background command with it) ends with the turn. */
 export const CHAT_NOTE =
-  'This session runs headless through AgentHydra: no one sees a terminal, so nothing that waits for an interactive prompt or a permission dialog can be answered.'
+  'This session runs headless through AgentHydra: no one sees a terminal, so nothing that waits for an interactive prompt or a permission dialog can be answered.' +
+  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
