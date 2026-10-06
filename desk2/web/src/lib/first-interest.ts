@@ -46,6 +46,9 @@ export interface FirstInterestOptions {
   interest?: Interest[]
   /** Re-send the arming pointer/key event to the new root once the overlay is mounted. */
   replay?: boolean
+  /** Called once a press has armed it, after focus is back on the new element (a tooltip closes there:
+   *  the focus it just got would open it, and a press closes one). */
+  afterPress?: () => void
 }
 
 const KEYS = new Set(['Enter', ' ', 'ArrowDown', 'ContextMenu', 'F10'])
@@ -255,7 +258,8 @@ function settle(
   before: HTMLElement | null,
   after: () => HTMLElement | null,
   replay: boolean,
-  menu: MouseEvent | null
+  menu: MouseEvent | null,
+  afterPress?: () => void
 ): void {
   const active = document.activeElement
   const focusPath = before && active && before.contains(active) ? pathTo(before, active) : null
@@ -267,6 +271,7 @@ function settle(
     const lost = !document.activeElement || document.activeElement === document.body
     const focusTo = focusPath && lost ? resolve(root, focusPath) : null
     if (focusTo instanceof HTMLElement || focusTo instanceof SVGElement) focusTo.focus({ preventScroll: true })
+    if (event.type === 'pointerdown') afterPress?.()
     if (menu) replayMenu(menu, root)
     else if (replay || event.type === 'pointerdown') replayOn(event, root, targetPath)
   })
@@ -284,7 +289,7 @@ export function useFirstInterest(options: FirstInterestOptions = {}): {
     if (seen.value) return
     const before = root()
     seen.value = true
-    settle(event, before, root, options.replay === true, menu)
+    settle(event, before, root, options.replay === true, menu, options.afterPress)
   }
 
   return { seen, listeners: listenersFor(() => seen.value, arm, options.interest ?? ['hover', 'focus', 'press', 'key']) }
