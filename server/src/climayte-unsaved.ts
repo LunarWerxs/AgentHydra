@@ -4,7 +4,7 @@
 // and the task sat 'done' for 2h26m while the two tasks after it waited on work that was never in git.
 
 import { spawnSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { tailText, transcriptCandidates, transcriptFile } from './climayte-core'
 import type { CliMayteAccount, CliMayteWorker } from './climayte-lib'
@@ -57,6 +57,19 @@ export function editedPaths(jsonl: string, cwd: string): Map<string, number> {
 /** A repo-relative path as compared: Windows paths differ only in case when they are the same file. */
 const keyOf = (rel: string): string => (process.platform === 'win32' ? rel.toLowerCase() : rel)
 
+/** A path as the filesystem names it, the form `git rev-parse --show-toplevel` prints: Windows' 8.3
+ *  short names resolve (a GitHub runner's TEMP is C:\Users\RUNNER~1\..., while git says runneradmin,
+ *  so every edit read as outside the repository and nothing was ever uncommitted: CI, 2026-10-06), as
+ *  do macOS' /var -> /private/var and any junction or symlink. A path that is gone is kept as given;
+ *  a file the session wrote that no longer exists is never counted anyway. */
+function canonical(p: string): string {
+  try {
+    return realpathSync.native(p)
+  } catch {
+    return p
+  }
+}
+
 function git(cwd: string, args: string[]): string | null {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
   return r.status === 0 ? (r.stdout ?? '') : null
@@ -67,12 +80,13 @@ function git(cwd: string, args: string[]): string | null {
  *  Ignored files never show. [] outside a repository. */
 export function uncommittedOf(cwd: string, edits: Map<string, number>): string[] {
   if (!edits.size) return []
-  const top = git(cwd, ['rev-parse', '--show-toplevel'])?.trim()
-  if (!top) return []
+  const shown = git(cwd, ['rev-parse', '--show-toplevel'])?.trim()
+  if (!shown) return []
+  const top = canonical(shown)
   const lastWrite = new Map<string, number>()
   const rels: string[] = []
   for (const [abs, at] of edits) {
-    const rel = relative(top, abs).replaceAll('\\', '/')
+    const rel = relative(top, canonical(abs)).replaceAll('\\', '/')
     if (!rel || rel.startsWith('../') || rel === '..' || isAbsolute(rel)) continue
     lastWrite.set(keyOf(rel), at)
     rels.push(rel)
