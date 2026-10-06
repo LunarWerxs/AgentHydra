@@ -11,6 +11,13 @@
 # --ref v0.16.0` was what actually shipped it. See docs/RELEASING.md.
 #
 # Design notes (verified 2026-07-16 against a real compiled exe on Windows):
+# - AgentHydra 2.0 ships Desk 2 as the primary window (owner, 2026-10-06). Every bundle carries
+#   desk2/ (git-tracked files only, production node_modules installed with --linker hoisted),
+#   desk2/runtime/bun (the running bun, process.execPath for host target, or downloaded for
+#   cross-target builds), desk2/launcher/ (Windows only), and devwebui/ (same structure). The
+#   daemon stays the engine on port 7787, and Desk 2 runs on 7798. The standalone Windows .exe is
+#   still published for quick launch (direct double-click, no unzip needed); the zip has desk2/
+#   and misc/, and when desk2/ is present the tray's Open runs its launcher instead of the daemon's old window.
 # - `bun build --compile` cross-compiles every POSIX target (minified) from one Linux runner. The
 #   windows-x64 leg runs on windows-latest UNMINIFIED: --minify alone panics Bun 1.3.14 when the
 #   compile host is Windows (isolated locally; the exact same --minify is fine cross-compiling from
@@ -19,12 +26,14 @@
 #   NOT prove is that the binary RUNS — the smoke job boots each bundle on real hardware for its OS
 #   and asserts /api/health, because the failure modes here (virtual import.meta.dir paths, the
 #   implicit-serve entrypoint trap) all pass the build and only explode at runtime.
-# - The SPA is embedded into the executable by scripts/build.ts. Windows publishes both a direct
-#   exe and a smaller updater zip; Unix targets publish updater tarballs. Each archive has one
-#   versioned wrapper directory holding the executable, plus (Windows only) the misc/ tray toolkit
-#   the system-tray shortcut needs. That wrapper preserves the update path from older CC Manager UI
-#   releases (the pre-rename name), whose updater expects it. There are no web/, node_modules/ or
-#   source-map sidecars.
+# - The daemon's old SPA is embedded into the executable by scripts/build.ts. Windows publishes
+#   both a direct exe and a smaller updater zip; Unix targets publish updater tarballs. Each
+#   archive has one versioned wrapper directory holding the executable, plus (Windows only) the
+#   misc/ tray toolkit the system-tray shortcut needs. That wrapper preserves the update path from
+#   older CC Manager UI releases (the pre-rename name), whose updater expects it. Desk 2's files
+#   are staged outside the exe, never embedded, since the server needs them on disk to spawn
+#   processes and install deps. There are no web/ (embedded in daemon), node_modules/, or
+#   source-map sidecars at the top level; desk2/ and devwebui/ carry only production deps.
 name: Release
 
 on:
@@ -89,81 +98,38 @@ jobs:
       - name: Build web SPA
         run: bun run --cwd web build
 
-      - name: Compile + package
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Build desk2
         run: |
-          VERSION=$(bun -e 'console.log(require("./package.json").version)')
-          target="${{ matrix.target }}"
-          name="AgentHydra-${VERSION}-${target}"
-          stage="tmp/release-stage"
-          rm -rf "$stage"
-          mkdir -p "$stage/$name" out
-          # THE ORCHESTRATOR (2026-09-03). The Python toolbox ships beside the executable so a
-          # compiled daemon finds it at APP_ROOT/orchestrator (server/src/orchestrator.ts resolves
-          # it there; GET /api/orchestrator says `present:false` otherwise). The python half only:
-          # orch.py + scripts/ + docs. Never state/ (runtime, gitignored anyway), never the tests,
-          # never the remote front-end (orchestrator/server + web need bun, which a compiled
-          # bundle does not have). Python itself is the user's; the daemon reports its absence.
-          mkdir -p "${stage}/${name}/orchestrator"
-          cp orchestrator/orch.py orchestrator/orch_cli.py orchestrator/README.md \
-             "${stage}/${name}/orchestrator/"
-          cp -r orchestrator/scripts orchestrator/docs "${stage}/${name}/orchestrator/"
-          rm -rf "${stage}/${name}/orchestrator/scripts/tests"
-          find "${stage}/${name}/orchestrator" -name __pycache__ -type d -prune -exec rm -rf {} +
-          if [ "$target" = "windows-x64" ]; then
-            # NO --minify: on a WINDOWS compile host --minify alone panics Bun 1.3.14 outright
-            # ("Crashed while printing main.ts" — isolated locally 2026-07-16 to --minify specifically;
-            # --windows-icon/--windows-title are innocent, they only appeared guilty when paired with
-            # --minify, and the same --minify works fine on the Linux legs). The native Windows
-            # resource flags DO work on a Windows host (they're only unavailable when cross-compiling
-            # from Linux), so the icon + title are applied at compile time — no rcedit post-step.
-            # Unminified costs a few MB.
-            bun run scripts/build.ts --skip-web --target "$target" \
-              --outfile "${stage}/${name}/AgentHydra.exe"
-            "${stage}/${name}/AgentHydra.exe" --version   # canary: the compiled exe runs
-            cp "${stage}/${name}/AgentHydra.exe" "out/${name}.exe"
-            # THE TRAY TOOLKIT. Staged after the standalone .exe is copied out, so that download
-            # stays a single file and only the zip carries these.
-            #
-            # 0.11.2 dropped this step while trimming sidecars, and because the daemon contains no
-            # tray code whatsoever (the icon is drawn by misc/lunarwerx-tray.exe, a separate
-            # process), every bundle from 0.12.0 on could only run console-style. It presented as
-            # "the tray icon is gone and no setting brings it back", which is unfixable from the
-            # user's side and gives no clue that files are simply absent.
-            #
-            # AgentHydra-Tray.json resolves appRoot as ".." and compiledExe as "AgentHydra.exe",
-            # so misc/ sitting beside the executable is exactly the layout it expects.
-            mkdir -p "${stage}/${name}/misc"
-            cp misc/lunarwerx-tray.exe misc/AgentHydra-Tray.json misc/AgentHydra.ico \
-               misc/Create-Shortcut.ps1 misc/New-TrayShortcut.ps1 \
-               misc/Instance-Launch.vbs "${stage}/${name}/misc/"
-            # The `-Legacy` rollback (wscript + the WinForms PowerShell host) ships too: it is the
-            # documented one-switch fallback if the native host ever misbehaves on a user's machine,
-            # and a fallback that isn't in the bundle is not a fallback.
-            cp misc/Tray-Host.ps1 misc/AgentHydra-Tray.ps1 misc/Tray-Launch.vbs \
-               "${stage}/${name}/misc/"
-            # AGENTHYDRA 2.0 IS DESK 2 (owner, 2026-10-06: "when Agent Hydra became the new Hydra Desk
-            # UI, it was Agent Hydra 2.0"). The tray's Open runs desk2\launcher\start.vbs where it
-            # exists (misc/AgentHydra-Tray.json `requires`), so a zip without it would still open the
-            # old window. A tag run refuses to publish one; a branch run (validating the pipeline)
-            # only warns. docs/AGENTHYDRA-2-CUTOVER.md has what staging Desk 2 takes.
-            if [ ! -f "${stage}/${name}/desk2/launcher/start.vbs" ]; then
-              if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-                echo "::error::the Windows zip has no desk2/: AgentHydra 2.0 ships Desk 2 as its window"
+          cd desk2
+          bun install --frozen-lockfile
+          bun run build
+
+      - name: Build devwebui
+        run: |
+          if [ -d ../devwebui ]; then
+            cd ../devwebui
+            bun install --frozen-lockfile
+            bun run build 2>/dev/null || true
+          fi
+
+      - name: Package release
+        shell: bash
+        run: |
+          mkdir -p out
+          bun scripts/package-release.ts --target ${{ matrix.target }} --out out
+
+          # Assert desk2/launcher/start.vbs is in Windows bundle before archiving
+          if [ "${{ matrix.target }}" = "windows-x64" ]; then
+            name="AgentHydra-$(bun -e 'console.log(require("./package.json").version)')-${{ matrix.target }}"
+            if [ ! -f "out/${name}/desk2/launcher/start.vbs" ]; then
+              if [ "${{ github.ref_type }}" = "tag" ]; then
+                echo "::error::the Windows bundle has no desk2/launcher/start.vbs: AgentHydra 2.0 ships Desk 2 as its window"
                 exit 1
               fi
-              echo "::warning::the Windows zip has no desk2/ (fine for a branch run, refused for a tag)"
+              echo "::warning::the Windows bundle has no desk2/launcher/start.vbs (fine for a branch run, refused for a tag)"
             fi
-            # windows-latest has 7z on PATH; git-bash there has no `zip`
-            (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
-          else
-            bun run scripts/build.ts --skip-web --target "$target" \
-              --outfile "${stage}/${name}/agenthydra"
-            tar -C "$stage" -czf "out/${name}.tar.gz" "$name"
           fi
-          rm -rf "$stage"
+
           ls -la out
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -178,12 +144,12 @@ jobs:
           # (or nobody, on a workflow_dispatch validation run). No reason to keep them 90 days.
           retention-days: 3
 
-  # Boot each bundle and assert --version + /api/health + served SPA. This catches the
-  # compiled-only runtime bugs a green compile can't (virtual import.meta.dir paths, the
-  # implicit-serve trap). Native runners for x64 Linux / Windows / arm64 macOS; linux-arm64 is
-  # booted under QEMU on the x64 runner (no free native ARM-Linux runner). darwin-x64 (Intel mac)
-  # is the ONE target that stays build-only-verified: GitHub retired its Intel macOS runners, so
-  # there is no honest way to boot it in CI — a documented, deliberate gap, not a silent one.
+  # Boot each bundle and assert daemon + desk2 working. This catches compiled-only runtime bugs
+  # (virtual import.meta.dir paths, the implicit-serve trap) and desk2 server startup.
+  # Native runners for x64 Linux / Windows / arm64 macOS; linux-arm64 runs under QEMU on the x64
+  # runner (no free native ARM-Linux runner). darwin-x64 (Intel mac) is the ONE target that stays
+  # build-only-verified: GitHub retired its Intel macOS runners, so there is no honest way to boot
+  # it in CI — a documented, deliberate gap, not a silent one.
   smoke:
     timeout-minutes: 60
     name: smoke (${{ matrix.target }})
@@ -212,6 +178,11 @@ jobs:
           name: release-${{ matrix.target }}
           path: out
 
+      - name: Setup Bun (smoke job)
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.0
+
       # linux-arm64 runs inside an arm64 container via binfmt/QEMU emulation on the x64 runner.
       - name: Set up QEMU (arm64 emulation)
         if: matrix.qemu
@@ -237,28 +208,19 @@ jobs:
           bundle_dir=$(find smoke -mindepth 1 -maxdepth 1 -type d | head -1)
           test -n "$bundle_dir"
           echo "BUNDLE_DIR=out/$bundle_dir" >> "$GITHUB_ENV"
-          # Windows: the tray toolkit must be in the bundle. It went missing for 8 releases
-          # (0.12.0 through 0.19.0) with nothing failing, because a bundle without it still boots,
-          # serves and passes every other check here. Only its absence is the bug, so absence is
-          # what has to be asserted.
-          case "${{ matrix.target }}" in
-            windows-*)
-              for f in lunarwerx-tray.exe AgentHydra-Tray.json AgentHydra.ico \
-                       Create-Shortcut.ps1 New-TrayShortcut.ps1 Tray-Host.ps1 \
-                       AgentHydra-Tray.ps1 Tray-Launch.vbs Instance-Launch.vbs; do
-                test -f "$bundle_dir/misc/$f" || { echo "bundle is missing misc/$f"; exit 1; }
-              done
-              echo "tray toolkit present"
-              ;;
-          esac
 
-      # THE ORCHESTRATOR PAYLOAD (AH-27). An archive missing orchestrator/orch.py boots and
-      # serves fine — nothing in the boot+assert steps below ever imports it — so absence here
-      # would ship silently, exactly like the tray toolkit gap above. Runs for every smoke
-      # target (native and QEMU alike): this is a filesystem check on the unpacked archive, not
-      # a runtime boot, so it needs no emulation. Checked against orchestrator/orch.py's own
-      # assembly step (release.yml's "Compile + package" step): orch.py + scripts/ + docs/ are
-      # shipped; scripts/tests/, scripts/**/__pycache__ and state/ are deliberately never shipped.
+      - name: Assert tray toolkit (Windows)
+        if: matrix.target == 'windows-x64'
+        shell: bash
+        run: |
+          cd "$BUNDLE_DIR"
+          for f in lunarwerx-tray.exe AgentHydra-Tray.json AgentHydra.ico \
+                   Create-Shortcut.ps1 New-TrayShortcut.ps1 Tray-Host.ps1 \
+                   AgentHydra-Tray.ps1 Tray-Launch.vbs Instance-Launch.vbs; do
+            test -f "misc/$f" || { echo "bundle is missing misc/$f"; exit 1; }
+          done
+          echo "tray toolkit present"
+
       - name: Assert orchestrator payload
         shell: bash
         run: |
@@ -277,38 +239,12 @@ jobs:
           fi
           echo "orchestrator payload present, no runtime/test cruft"
 
-      # The actual boot+assert, factored so native and QEMU paths run identical checks.
       - name: Boot + assert (native)
         if: '!matrix.qemu'
         shell: bash
-        env:
-          BIN: ${{ matrix.bin }}
         run: |
-          cd "$BUNDLE_DIR"
-          chmod +x "$BIN" 2>/dev/null || true
-          "./$BIN" --version
-          export AGENTHYDRA_HOME="$RUNNER_TEMP/ccm-smoke-home"
-          export AGENTHYDRA_NO_OPEN=1
-          PORT=7797 "./$BIN" > daemon.out 2>&1 &
-          ok=""
-          for _ in $(seq 1 40); do
-            if curl -sf http://127.0.0.1:7797/api/health > health.json 2>/dev/null; then ok=1; break; fi
-            sleep 0.5
-          done
-          if [ -z "$ok" ]; then echo "daemon never served /api/health"; cat daemon.out; exit 1; fi
-          cat health.json; echo
-          grep -q '"service":"agenthydra"' health.json
-          grep -q '"distribution":"compiled"' health.json
-          curl -sf http://127.0.0.1:7797/api/orchestrator > orchestrator.json
-          cat orchestrator.json; echo
-          grep -q '"present":true' orchestrator.json
-          grep -q 'OBSERVE' orchestrator.json
-          curl -sf http://127.0.0.1:7797/ > index.html
-          grep -qi '<!doctype html' index.html
-          asset=$(grep -Eo "/assets/[^\"']+\.(js|css)" index.html | head -1)
-          test -n "$asset"
-          curl -sf "http://127.0.0.1:7797${asset}" > frontend-asset
-          test -s frontend-asset
+          # smoke-release.ts tests daemon + desk2 in complete isolation with temp homes
+          bun scripts/smoke-release.ts --bundle-dir "$BUNDLE_DIR" --port 7797 --desk-port 7799
 
       - name: Boot + assert (arm64 under QEMU)
         if: matrix.qemu

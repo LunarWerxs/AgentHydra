@@ -112,10 +112,13 @@ function Close-OldWindow {
   }
 }
 
-# The bun that cmd.exe can run: bun.exe, else a .cmd/.bat shim. An npm-installed bun puts bun.ps1 first
-# on PATH, and `Get-Command bun` returned it; cmd /c cannot run a .ps1, so the server never started
-# (2026-10-04: AppData\Roaming\npm\bun.ps1 ahead of bun.cmd on the second PC).
+# The bun that cmd.exe can run: prefer $DeskRoot\runtime\bun.exe (bundled in release), then PATH.
+# An npm-installed bun puts bun.ps1 first on PATH, and `Get-Command bun` returned it; cmd /c cannot
+# run a .ps1, so the server never started (2026-10-04: AppData\Roaming\npm\bun.ps1 ahead of bun.cmd
+# on the second PC).
 function Find-Bun {
+  $bundled = Join-Path $DeskRoot 'runtime\bun.exe'
+  if (Test-Path $bundled) { return @{ Source = $bundled; Extension = '.exe' } }
   $exe = Get-Command bun.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($exe) { return $exe }
   return Get-Command bun -CommandType Application -ErrorAction SilentlyContinue |
@@ -124,7 +127,14 @@ function Find-Bun {
 
 function Start-Server {
   $bun = Find-Bun
-  if (-not $bun) { Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again." }
+  if (-not $bun) {
+    $bundled = Join-Path $DeskRoot 'runtime\bun.exe'
+    if (Test-Path $bundled) {
+      Fail "AgentHydra could not start: bundled bun at $bundled is not accessible."
+    } else {
+      Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again."
+    }
+  }
   $entry = Join-Path $DeskRoot 'server\src\index.ts'
   if (-not (Test-Path $entry)) { Fail "AgentHydra could not start: $entry is missing." }
 
