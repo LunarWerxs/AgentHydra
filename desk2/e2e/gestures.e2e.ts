@@ -130,7 +130,8 @@ try {
     const settled = Date.now() + (c.page === 'pane' ? 6000 : 0)
     await park()
     // Page.navigate answers before the old document goes: mark it, and wait for a document without the mark.
-    await ev('window.__previous = 1')
+    // A reload comes back to the screen it left (lib/view-memory.ts): every case starts from a fresh window instead.
+    await ev('window.__previous = 1; try { sessionStorage.clear() } catch {}')
     await send('Page.navigate', { url: `http://127.0.0.1:${PORT}${c.page === 'pane' ? '/ah/?embed=desk' : '/'}` })
     await send('Page.bringToFront')
     const fresh = `!window.__previous && document.readyState === 'complete'`

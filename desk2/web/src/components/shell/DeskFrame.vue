@@ -26,6 +26,7 @@ import ChromeBar from './ChromeBar.vue'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import NewSessionScreen from './NewSessionScreen.vue'
 import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type View } from './logic'
+import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -43,15 +44,22 @@ const props = defineProps<{
 }>()
 
 const src = useShellSource()
+// A reload (a right-click Refresh, a new build) comes back to the same screen: the store keeps Desk's view,
+// and the rest is kept here (lib/view-memory.ts): the view under Settings, the AgentHydra pane, the Settings
+// page. The demo window starts from its props.
+const kept: ScreenMemory = props.demo ? {} : restoreScreen()
 // Settings is a dialog over the window: under it stays the last other view, and closing it (Esc, the X)
 // selects that view again.
-const under = ref<View>(src.selected.value.kind === 'settings' ? (props.history?.at(-1) ?? { kind: 'new' }) : src.selected.value)
+const under = ref<View>(src.selected.value.kind === 'settings' ? (props.history?.at(-1) ?? kept.under ?? { kind: 'new' }) : src.selected.value)
 watch(
   () => src.selected.value,
   (v) => {
     if (v.kind !== 'settings') under.value = v
   }
 )
+watch(under, (v) => !props.demo && rememberScreen({ under: v }), { immediate: true })
+// SettingsView checks the page is still one of its own.
+if (!props.demo && src.selected.value.kind === 'settings' && kept.section) requestedSection.value = kept.section as SettingsSection
 const view = computed<View>(() => chatViewOf(viewUnder(src.selected.value, under.value), src.chats.value))
 // Opening a new session (the plus button, a folder's +, Ctrl+N, the menu) puts the caret in its box and
 // keeps it there while a closing menu hands focus back to its trigger (lib/hold-focus.ts).
@@ -272,6 +280,16 @@ function toggleHydra(open = !hydraOpen.value) {
     cloudForHydra = false
     cloud.on.value = false
   }
+  keepHydra()
+}
+function keepHydra() {
+  if (!props.demo) rememberScreen({ hydra: hydraOpen.value ? { cloud: cloudForHydra } : undefined })
+}
+// A reload with AgentHydra open opens it again, on the tab it showed (the pane keeps its own tab).
+if (kept.hydra) {
+  toggleHydra(true)
+  cloudForHydra = kept.hydra.cloud
+  keepHydra()
 }
 const onOpenHydra = () => toggleHydra(true)
 // Picking anything slides the chat back; an outside session came from the cloud list, which stays.
@@ -311,6 +329,7 @@ function showSessions() {
 function toggleCloud() {
   cloud.on.value = !cloud.on.value
   cloudForHydra = false
+  keepHydra()
   if (cloud.on.value) toggleSidebar(true)
 }
 function toggleTasks() {

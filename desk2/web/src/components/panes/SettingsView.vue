@@ -12,6 +12,7 @@ import { usePaneApi } from './api'
 import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
 import { SETTINGS_SECTIONS, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
+import { rememberScreen } from '@/lib/view-memory'
 import { ahUpdateDot, seeAhUpdateDot } from '@/components/hydra/api'
 import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
@@ -30,6 +31,8 @@ const ah = useAgentHydraSettings(api)
 const inst = useInstanceSettings(api, ah)
 
 const section = ref<SettingsSection>('general')
+// A reload with Settings open comes back to this page (DeskFrame asks for it, lib/view-memory.ts).
+watch(section, (id) => rememberScreen({ section: id }))
 const query = ref('')
 const searching = computed(() => query.value.trim() !== '')
 const holds = (c: SettingsCondition) =>
@@ -172,12 +175,13 @@ function pick(id: SettingsSection) {
 // seeing Updates clears the dot. A section another part of Desk asked for comes first.
 if (ahUpdateDot.value) pick('updates')
 watch(section, (id) => id === 'updates' && seeAhUpdateDot(), { immediate: true })
-// Another part of Desk asked for a section (settings-request.ts).
+// Another part of Desk asked for a section (settings-request.ts); a page kept from before a reload may be one
+// Settings no longer has.
 watch(
   requestedSection,
   (id) => {
     if (!id) return
-    pick(id)
+    if (SETTINGS_SECTIONS.some((s) => s.id === id)) pick(id)
     requestedSection.value = null
   },
   { immediate: true }
