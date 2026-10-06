@@ -146,13 +146,14 @@ def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile
 def plan(profile="general", *, tools="none", backend="api", usable=None, reasoning_effort=None,
          thinking=None, min_scores=None, exclude_models=(), min_context=0, vision=False, purpose="production", zdr=False):
     from . import config, zdr as zdr_mod
+    from .spec import BACKENDS
 
     if profile not in PROFILES:
         raise ValueError(f"unknown capability profile {profile!r}; choose {sorted(PROFILES)}")
     if purpose not in PURPOSES:
         raise ValueError(f"unknown purpose {purpose!r}; choose {sorted(PURPOSES)}")
-    if backend not in ("api", "cc"):
-        raise ValueError(f"unknown backend {backend!r}")
+    if backend not in BACKENDS:
+        raise ValueError(f"unknown backend {backend!r}; choose {list(BACKENDS)} (api: sandboxed tool loop, cc: headless Claude Code)")
     if profile == "routine" and not config.is_tool_free(tools):
         raise ValueError("routine is tool-free only; tool work requires a stronger capability profile")
     data = evidence()

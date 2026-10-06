@@ -30,7 +30,7 @@ from .caller import detect as detect_caller
 from .jobs import JobManager
 from .ledger import append_row, ask_row, usage_report
 from .results import brief_summary, job_payload, results_from_disk
-from .spec import EFFORTS, Task
+from .spec import EFFORTS, Backend, Task
 
 # The instructions every client shows its model: the same text `hswarm install --instructions` writes into
 # CLAUDE.md / AGENTS.md (data/agent-instructions.md), so "delegate the cheap, wide work here" is said once.
@@ -147,7 +147,7 @@ _told_behind: set[str] = set()  # the chats (MCP session ids) hswarm_run has alr
 @_served
 @_returns_errors
 async def hswarm_run(
-    tasks: list[Any], backend: str = "api", model: str = "auto", cwd: str | None = None, tools: str = "read", system: str | None = None,
+    tasks: list[Any], backend: Backend = "api", model: str = "auto", cwd: str | None = None, tools: str = "read", system: str | None = None,
     max_turns: int | None = None, timeout_s: int = 600, schema: dict | None = None, concurrency: int | None = None, thinking: bool | None = None,
     reasoning_effort: str | None = None, max_cost_usd: float | None = None, budget_usd: float | None = None, label: str = "",
     wait: bool = True, wait_s: int = 240, max_answer_chars: int = 4000, role: str | None = None, lean: bool | None = None, profile: str | None = None,
@@ -340,7 +340,7 @@ _loops: dict[str, tuple[Any, asyncio.Task]] = {}
 async def hswarm_loop(
     probe: str | None = None, cwd: str | None = None, loop_id: str | None = None, cancel: bool = False, log: str | None = None,
     max_rounds: int = 5, max_workers: int = 4, stall_rounds: int = 2, budget_usd: float | None = None, probe_timeout_s: float = 600.0,
-    tools: str = "edit", model: str = "auto", backend: str = "api", max_turns: int = 24, fix_prompt: str | None = None, port_prompt: str | None = None,
+    tools: str = "edit", model: str = "auto", backend: Backend = "api", max_turns: int = 24, fix_prompt: str | None = None, port_prompt: str | None = None,
     wait: bool = True, wait_s: int = 240,
 ) -> dict:
     """A FRONTIER LOOP: hswarm finds the next target itself, so you orchestrate without reading source.
@@ -438,7 +438,7 @@ async def hswarm_ask(prompt: str, system: str | None = None, model: str = "auto"
 
 @_served
 @_returns_errors
-async def hswarm_select(profile: str = "general", tools: str = "none", backend: str = "api", min_scores: dict | None = None, reasoning_effort: str | None = None, vision: bool = False, purpose: str = "production", verbose: bool = False) -> dict:
+async def hswarm_select(profile: str = "general", tools: str = "none", backend: Backend = "api", min_scores: dict | None = None, reasoning_effort: str | None = None, vision: bool = False, purpose: str = "production", verbose: bool = False) -> dict:
     """Preview the plan a task would run NOW, from published task scores, exact effort, cost and live key pools. No
     model call. Profiles: routine, general, code, decision, research, critical. CritPt is excluded from eligibility.
     `candidates` is EVERY leg dispatch walks, in the order it would try them (a resting pool only when no pool is
@@ -652,9 +652,10 @@ async def hswarm_usage(hours: float = 24.0) -> dict:
 
 @_served
 @_returns_errors
-async def hswarm_doctor() -> dict:
-    """Health: key present (never the value), models reachable, balance, claude/rg/bash binaries, home dir, rate window."""
-    return await health.doctor(manager())
+async def hswarm_doctor(verbose: bool = False) -> dict:
+    """Health: key present (never the value), models reachable, balance, claude/rg/bash binaries, home dir, rate window.
+    Key pools are counts per provider; verbose=true adds the per-key rows (hswarm_keys lists the ones needing attention)."""
+    return await health.doctor(manager(), verbose)
 
 
 @_served

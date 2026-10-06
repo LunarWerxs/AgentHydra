@@ -78,10 +78,12 @@ def _providers(only: str | None = None) -> list[str]:
 BOUNDED_ROWS_PER_PROVIDER = 40
 
 
-def report(only: str | None = None, *, verbose: bool = True) -> dict:
+def report(only: str | None = None, *, verbose: bool = True, counts_only: bool = False) -> dict:
     """Offline: what the shared state file says about every pool. No network call, so it is safe to run
     while two hundred workers are in flight. `verbose=False` keeps every count and only the rows that
-    are not plainly ok (capped per provider, with `rows_omitted` saying how many were left out)."""
+    are not plainly ok (capped per provider, with `rows_omitted` saying how many were left out).
+    `counts_only=True` keeps the counts and no rows at all: the doctor's default, where even the bounded
+    rows were 74,801 of its 82,669 characters (2026-10-06, mostly disabled keys)."""
     out: dict = {"providers": {}}
     for name in _providers(only):
         keys = config.load_api_keys(name)
@@ -100,7 +102,9 @@ def report(only: str | None = None, *, verbose: bool = True) -> dict:
             "disabled": sum(1 for r in rows if r["disabled"]),
             "free_only": sum(1 for r in rows if r["free_only"]),
         }
-        if verbose:
+        if counts_only:
+            pass  # the counts above are the whole entry
+        elif verbose:
             entry["rows"] = rows
         else:
             attention = [r for r in rows if r["state"] != "ok" or r["disabled"] or r.get("broke")]
@@ -108,7 +112,9 @@ def report(only: str | None = None, *, verbose: bool = True) -> dict:
             entry["rows_omitted"] = len(rows) - len(entry["rows"])
         out["providers"][name] = entry
     out["note"] = _note(out)
-    if not verbose:
+    if counts_only:
+        out["note"] += " Counts only: hswarm_keys lists the keys needing attention (verbose=true there prints every row)."
+    elif not verbose:
         out["note"] += " Bounded report: only keys needing attention are listed; verbose=true (or `hswarm keys`) prints every row."
     return out
 

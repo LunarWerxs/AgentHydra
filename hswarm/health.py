@@ -14,8 +14,9 @@ from .ledger import ledger_summary
 from .procs import find_bash
 
 
-async def doctor(m: JobManager) -> dict:
-    """Key present (never the value), models reachable, balance, claude/rg/bash binaries, home dir, rate window."""
+async def doctor(m: JobManager, verbose: bool = False) -> dict:
+    """Key present (never the value), models reachable, balance, claude/rg/bash binaries, home dir, rate window.
+    verbose=True adds the per-key rows (the pools' keys needing attention, and every DeepSeek key's balance)."""
     from . import procgate
 
     out: dict = {"home": str(config.HOME), "key": config.key_status(), "rate_now": "peak" if config.is_peak() else "off-peak", "procs": procgate.status(),
@@ -49,8 +50,9 @@ async def doctor(m: JobManager) -> dict:
     # `hswarm keys probe` (or hswarm_keys action="probe") is the one that spends a GET and heals a topped-up key.
     # BOUNDED, like hswarm_keys' default list: the verbose report is one row per key, and with 1,700+ keys
     # that made the doctor a 989k-character answer (measured 2026-09-20) that no MCP client will show.
-    # `hswarm_keys verbose=true` is the spelling for every row.
-    out["key_pools"] = keys.report(verbose=False)
+    # `hswarm_keys verbose=true` is the spelling for every row. Even bounded, the rows were 74,801 of the doctor's
+    # 82,669 characters on one line (2026-10-06, mostly keys in the disabled slot), so by default it is counts only.
+    out["key_pools"] = keys.report(verbose=False, counts_only=not verbose)
     # The egress receipts' hash chain (egress.py): a tampered or truncated ledger shows up here, not only on request.
     from . import egress
 
@@ -81,13 +83,15 @@ async def doctor(m: JobManager) -> dict:
         try:
             out["models"] = await m.client.models()
             out["balance"] = await m.client.balance()
-            out["keys"] = await m.client.balances()  # one row per key in the pool: fingerprint + balance, never the key
-            out["key_pool"] = m.client.pool.status()
-            off = [r["fingerprint"] for r in out["keys"] if r.get("usable") is False]
-            out["keys_out_of_balance"] = off
-            out["keys_note"] = (f"{len(off)} of {len(out['keys'])} keys are out of credit and DISABLED - never retried with a real "
-                                f"request until a probe sees a top-up or `hswarm keys enable` says so: {', '.join(off)}"
-                                if off else f"every one of the {len(out['keys'])} keys has balance")
+            rows = await m.client.balances()  # one row per key in the pool: fingerprint + balance, never the key
+            if verbose:
+                out["keys"] = rows
+                out["key_pool"] = m.client.pool.status()
+            off = [r["fingerprint"] for r in rows if r.get("usable") is False]
+            out["keys_out_of_balance"] = off  # both consoles colour the key check by whether this is empty
+            out["keys_note"] = (f"{len(off)} of {len(rows)} keys are out of credit and DISABLED - never retried with a real "
+                                "request until a probe sees a top-up or `hswarm keys enable` says so"
+                                if off else f"every one of the {len(rows)} keys has balance")
         except Exception as e:  # noqa: BLE001 - the report must come back even when the API is down
             out["api_error"] = f"{type(e).__name__}: {e}"
     return out

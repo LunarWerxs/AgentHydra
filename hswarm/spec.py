@@ -9,7 +9,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, get_args
 
 from . import capability as capmod, config, redaction, review, shared, shellpolicy, verify
 from . import zdr as zdr_mod
@@ -18,7 +18,11 @@ from .runtimes import parse_runtime, posix_abs
 from .scripted import SCRIPT_SCHEMA, SCRIPTED_CLAUSE
 from .toolspecs import PRESETS, WEB_TOOLS, tool_names
 
-BACKENDS = ("api", "cc")
+# api: the sandboxed tool loop; cc: headless Claude Code. A Literal so the MCP tools taking a backend publish the
+# values as an enum in their schema; an unknown one is refused naming both (2026-10-06: 'free' answered only
+# "unknown backend").
+Backend = Literal["api", "cc"]
+BACKENDS: tuple[str, ...] = get_args(Backend)
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # The cc tiers that run Claude Code with every permission bypassed. Reaching one takes two opt-ins (the
 # preset AND confirm_write), so a caller who meant "read" can never widen a worker by a typo or a default.

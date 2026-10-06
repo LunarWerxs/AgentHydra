@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from hswarm import dispatch, install, mcp_server, selection, shared
+from hswarm import config, dispatch, install, keys, mcp_server, selection, shared, spec
 
 
 class Submitted(Exception):
@@ -115,3 +115,41 @@ def test_select_answers_with_names_and_flags_and_the_whole_plan_only_when_asked(
 
     full = asyncio.run(mcp_server.hswarm_select(profile="code", verbose=True))
     assert all("rates" in c for c in full["candidates"]) and len(full["rejected"]) == 48 and full["unavailable"][0]["why"]
+
+
+def test_backend_is_published_as_an_enum_and_an_unknown_one_is_refused_naming_the_valid_ones():
+    # 'free' answered only "unknown backend" (2026-10-06), and no schema said which values exist.
+    served = {t.name: t for t in asyncio.run(mcp_server.mcp.list_tools())}
+    for name in ("hswarm_run", "hswarm_select", "hswarm_loop"):
+        assert served[name].input_schema["properties"]["backend"]["enum"] == list(spec.BACKENDS)
+    with pytest.raises(Exception) as refused:
+        asyncio.run(mcp_server.mcp.call_tool("hswarm_select", {"backend": "free"}))
+    assert all(f"'{b}'" in str(refused.value) for b in spec.BACKENDS)
+
+
+def test_the_doctor_counts_each_key_pool_and_lists_its_rows_only_when_asked(monkeypatch, tmp_path):
+    # 82,669 characters on one line (2026-10-06), 74,801 of them per-key rows for keys in the disabled slot: more than
+    # a chat client shows. The counts answer "is a pool short"; verbose=true (or hswarm_keys) names the keys.
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    monkeypatch.setattr(config, "SECRETS_DIR", secrets)
+    (secrets / config.PROVIDERS["groq"]["key_files"][0]).write_text("SECRETKEYgroq0\nSECRETKEYgroq1", encoding="utf-8")
+    keys.set_enabled(config.fingerprint("SECRETKEYgroq1"), False, only="groq")
+
+    class Reachable:
+        async def models(self):
+            return ["a-model"]
+
+    class Mgr:
+        def client_for(self, model):
+            return Reachable()
+
+    monkeypatch.setattr(mcp_server, "manager", lambda: Mgr())
+
+    def doctor(**args):
+        return json.loads(asyncio.run(mcp_server.mcp.call_tool("hswarm_doctor", args)).content[0].text)
+
+    groq = doctor()["key_pools"]["providers"]["groq"]
+    assert (groq["keys"], groq["disabled"]) == (2, 1) and "rows" not in groq
+    rows = doctor(verbose=True)["key_pools"]["providers"]["groq"]["rows"]
+    assert [r["fingerprint"] for r in rows] == [config.fingerprint("SECRETKEYgroq1")]
