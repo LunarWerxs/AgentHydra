@@ -29,9 +29,9 @@
 //     tooltip after its normal delay. A press that begins first cancels it.
 //   * press (mouse, pen): the stand-in is NEVER swapped while the button is down, so the control's own
 //     click handler runs once, natively, on the stand-in. After the release it arms and replays only
-//     what opens the overlay, per `firstPress`: a pointerdown (menu), a click (popover), nothing.
+//     what opens the overlay, per `firstPress`: a click (menu or popover), or nothing.
 //   * focus (not during a press) and key (Enter, Space, ArrowDown): arm at once, focus is handed back
-//     with focus() and the key is re-dispatched as a clone.
+//     with focus() (only when the swap lost it) and the key is re-dispatched as a clone.
 //   * touch: arms at once on pointerenter, which precedes the pointerdown, so the tap and the
 //     long-press of ui/tooltip/touch.ts see their own pointerdown on the real trigger.
 // - A trigger whose root swallows fallthrough attributes (inheritAttrs: false) would never arm; wrap
@@ -84,8 +84,8 @@ export default defineComponent({
     },
     /** Attributes the real trigger carries while closed, set on the stand-in. */
     standIn: { type: Object as PropType<Record<string, unknown>>, default: () => ({}) },
-    /** What a first mouse press must do on the real trigger: `pointerdown` (a menu), `click` (a popover)
-     *  or `none` (a tooltip, or a wrapped control that runs its own click on the stand-in). */
+    /** What a first mouse press must do on the real trigger: `click` (a menu or a popover: reka 2.10 opens
+     *  both on click) or `none` (a tooltip, or a wrapped control that runs its own click on the stand-in). */
     firstPress: { type: String as PropType<FirstPress>, default: "none" },
     /** The owner opens the overlay from outside the trigger (a right-click, a model, a shortcut): true
      *  mounts the real overlay at once, with nothing to replay, and it stays mounted. */

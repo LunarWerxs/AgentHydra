@@ -4,20 +4,34 @@
 // Mouse and pen never swap the stand-in while a press is in progress on it. The stand-in carries the
 // trigger's own listeners (a wrapped button's click handler, a popover's hover timers), so the press
 // finishes there, natively and once; only then is the overlay armed and only what OPENS it replayed:
-// a pointerdown for a menu trigger, a click for a popover trigger, nothing for a tooltip. A hover arms
+// a click for a menu or popover trigger (reka 2.10 opens both on click), nothing for a tooltip. A hover arms
 // one task later, so a pointerenter that Chromium sends back to back with a pointerdown (a control that
 // came under a resting pointer) is still followed by its press on the stand-in. Touch arms at once,
 // as it always did: its pointerenter precedes the pointerdown and the long-press of
 // ui/tooltip/touch.ts needs the real trigger by then.
 
 export type LazyInterest = "hover" | "focus" | "press" | "key"
-/** What a first press must do on the real trigger: `pointerdown` opens a menu, `click` a popover. */
-export type FirstPress = "pointerdown" | "click" | "none"
+/** What a first press must do on the real trigger: `click` opens a menu or a popover (reka 2.10 opens both on
+ *  click, not pointerdown), `none` a tooltip or a control whose own click already ran on the stand-in. */
+export type FirstPress = "click" | "none"
 
 const KEYS = new Set(["Enter", " ", "ArrowDown"])
 
+/**
+ * Arming swaps the stand-in for the real trigger, and Vue cannot reparent a slot, so everything inside
+ * the stand-in is mounted again. A menu or popover in there that is open (the press that just ran on the
+ * stand-in opened it: a gear popover inside a lazy tooltip) would close. So nothing arms while one is
+ * open; the first hover or focus after it closes arms it.
+ */
+export function holdsOpen(standIn: Element | null): boolean {
+  return !!standIn?.querySelector('[aria-expanded="true"]')
+}
+
 export function replay(event: Event | null, target: HTMLElement, hadFocus: boolean, as?: "click"): void {
-  if (hadFocus) target.focus({ preventScroll: true })
+  // Only focus the swap lost: a press that already opened something (a popover beside a lazy tooltip) has
+  // moved focus into it, and taking it back would close it as a focus outside.
+  const lost = !document.activeElement || document.activeElement === document.body
+  if (hadFocus && lost) target.focus({ preventScroll: true })
   if (!event) return
   if (event instanceof PointerEvent) {
     const init: PointerEventInit = {
@@ -80,7 +94,7 @@ export function createLazyArming(opts: {
   let stopPress: (() => void) | null = null
 
   function fire(event: Event | null, as?: "click"): void {
-    if (opts.isArmed()) return
+    if (opts.isArmed() || holdsOpen(standIn)) return
     const hadFocus = !!standIn && standIn.contains(document.activeElement)
     opts.arm(event, hadFocus, as)
   }
@@ -118,8 +132,7 @@ export function createLazyArming(opts: {
         pressing = false
         const inside = up.type === "pointerup" && up.target instanceof Node && !!standIn?.contains(up.target)
         const plain = event.button === 0 && inside
-        if (plain && mode === "pointerdown") fire(event)
-        else if (plain && mode === "click") fire(up, "click")
+        if (plain && mode === "click") fire(up, "click")
         else fire(null)
       }, 0)
     }

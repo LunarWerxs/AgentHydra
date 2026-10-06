@@ -19,14 +19,15 @@ import { Comment, Fragment, Text, cloneVNode, defineComponent } from 'vue'
  *    before it, such as a click right after a wheel scroll, sends enter and down back to back), so the
  *    swap never happens while a press is in progress: a press runs on the stand-in (which carries the
  *    control's own listeners, so its click completes there), the swap follows the release, and only
- *    what opens an overlay is replayed: a pointer-down on a menu trigger, a context menu the stand-in
- *    could not open. A click that already ran is never replayed.
+ *    what opens an overlay is replayed: a click on a menu trigger that the stand-in's own click could not
+ *    open (reka 2.10 opens a dropdown on click), a context menu the stand-in could not open.
  *  - On the trigger itself, via `<InterestSlot :listeners="listeners">`: it renders the default slot's
  *    one element with the listeners added. `Tip` does this and passes `{ replay: true }`.
  *
  * Mounting the overlay swaps the trigger for a NEW element (Vue cannot reparent a slot), so right
  * after arming the composable puts back what the swap would lose: focus goes back to the same
- * descendant of the component's root element (found by its child-index path), and with
+ * descendant of the component's root element (found by its child-index path) when the swap left it on
+ * the page body, and with
  * `replay: true` the arming event is replayed on the new root: a pointer-enter becomes a pointermove
  * (reka opens a tooltip on that, after its normal delay), a key is re-dispatched.
  *
@@ -70,14 +71,15 @@ function pathTo(root: HTMLElement, el: Element): number[] | null {
   return cur === root ? path : null
 }
 
-function resolve(root: HTMLElement, path: number[]): HTMLElement | null {
+// An Element, not only an HTMLElement: a press often lands on an icon's SVG shape inside the button.
+function resolve(root: HTMLElement, path: number[]): Element | null {
   let cur: Element = root
   for (const i of path) {
     const next = cur.children[i]
     if (!next) return null
     cur = next
   }
-  return cur instanceof HTMLElement ? cur : null
+  return cur
 }
 
 function replayOn(event: Event, target: HTMLElement, targetPath: number[] | null): void {
@@ -98,12 +100,13 @@ function replayOn(event: Event, target: HTMLElement, targetPath: number[] | null
       metaKey: event.metaKey,
     }
     if (event.type === 'pointerdown') {
-      // The press already ran its click on the stand-in. Only a menu trigger still needs it (it opens on
-      // pointerdown), and not one that is already open (its menu root lived outside the swap).
+      // The press already ran its click on the stand-in. Only a menu trigger still needs one (reka 2.10
+      // opens a dropdown on click, not pointerdown), and not one that is already open (its menu root lived
+      // outside the swap).
       const hit = targetPath ? resolve(target, targetPath) : null
       const trigger = hit?.closest<HTMLElement>('[aria-haspopup]')
       if (trigger && target.contains(trigger) && trigger.getAttribute('aria-expanded') !== 'true') {
-        trigger.dispatchEvent(new PointerEvent('pointerdown', init))
+        trigger.dispatchEvent(new MouseEvent('click', { ...init, detail: 1 }))
       }
     } else if (event.pointerType !== 'touch') {
       // The new trigger sits under a pointer that has not moved, so no pointermove comes by itself.
@@ -146,6 +149,15 @@ function replayMenu(menu: MouseEvent, root: HTMLElement): void {
 }
 
 type Listeners = Record<string, (event: any) => void>
+
+/**
+ * Arming swaps the stand-in for a new element and mounts everything inside it again, so a menu or
+ * popover in there that is open (the press that just ran on the stand-in opened it) would close. Nothing
+ * arms while one is open; the first hover or focus after it closes arms it.
+ */
+function holdsOpen(standIn: Element | null): boolean {
+  return !!standIn?.querySelector('[aria-expanded="true"]')
+}
 type Fire = (event: Event, from: HTMLElement | null, menu: MouseEvent | null) => void
 
 /**
@@ -163,7 +175,8 @@ function listenersFor(armed: () => boolean, fire: Fire, interest: Interest[]): L
 
   function now(event: Event): void {
     if (armed() || pressing) return
-    fire(event, event.currentTarget instanceof HTMLElement ? event.currentTarget : null, null)
+    const from = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+    if (!holdsOpen(from)) fire(event, from, null)
   }
 
   function press(event: Event): void {
@@ -179,18 +192,34 @@ function listenersFor(armed: () => boolean, fire: Fire, interest: Interest[]): L
       menu = e as MouseEvent
       e.preventDefault()
     }
+    const touch = event instanceof PointerEvent && event.pointerType === 'touch'
+    let fallback = 0
+    let done = false
     const stop = (): void => {
-      window.removeEventListener('pointerup', stop, true)
+      if (done) return
+      done = true
+      clearTimeout(fallback)
+      window.removeEventListener('pointerup', release, true)
+      window.removeEventListener('click', stop, true)
       window.removeEventListener('pointercancel', stop, true)
       window.removeEventListener('blur', stop)
       // One task later, after the click (and a context menu that comes with the release) went out.
       setTimeout(() => {
         window.removeEventListener('contextmenu', onMenu)
         pressing = false
-        if (!armed()) fire(event, from, menu)
+        if (!armed() && !holdsOpen(from)) fire(event, from, menu)
       }, 0)
     }
-    window.addEventListener('pointerup', stop, true)
+    // A tap's click comes well after its pointerup (the browser sends the compatibility mouse events late)
+    // and would toggle shut a menu the swap had just opened, so a touch waits for that click. A long press
+    // that brings no click is let go half a second after the release.
+    const release = (): void => {
+      if (!touch) return stop()
+      clearTimeout(fallback)
+      fallback = window.setTimeout(stop, 500)
+    }
+    window.addEventListener('pointerup', release, true)
+    if (touch) window.addEventListener('click', stop, true)
     window.addEventListener('pointercancel', stop, true)
     window.addEventListener('blur', stop)
     window.addEventListener('contextmenu', onMenu)
@@ -203,7 +232,7 @@ function listenersFor(armed: () => boolean, fire: Fire, interest: Interest[]): L
       const from = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
       clearTimeout(hover)
       hover = window.setTimeout(() => {
-        if (!armed() && !pressing) fire(event, from, null)
+        if (!armed() && !pressing && !holdsOpen(from)) fire(event, from, null)
       }, 0)
     }
   }
@@ -234,7 +263,10 @@ function settle(
   void nextTick(() => {
     const root = after()
     if (!root) return
-    if (focusPath) resolve(root, focusPath)?.focus({ preventScroll: true })
+    // Only focus the swap lost: if the press opened something that took focus, leave it there.
+    const lost = !document.activeElement || document.activeElement === document.body
+    const focusTo = focusPath && lost ? resolve(root, focusPath) : null
+    if (focusTo instanceof HTMLElement || focusTo instanceof SVGElement) focusTo.focus({ preventScroll: true })
     if (menu) replayMenu(menu, root)
     else if (replay || event.type === 'pointerdown') replayOn(event, root, targetPath)
   })
