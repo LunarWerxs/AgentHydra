@@ -266,7 +266,11 @@ function settle(
   const active = document.activeElement
   const focusPath = before && active && before.contains(active) ? pathTo(before, active) : null
   const targetPath = before && event.target instanceof Element ? pathTo(before, event.target) : null
-  void nextTick(() => {
+  // Focus goes back in the microtask that follows the flush which swapped the element, ahead of the
+  // MutationObserver callback that the removal queued during that flush: a modal dialog's focus scope
+  // answers a removed focused element by moving focus to the dialog itself, after which nothing here
+  // could tell the swap's loss from a press that moved focus on.
+  queueMicrotask(() => {
     const root = after()
     if (!root) return
     // Only focus the swap lost: if the press opened something that took focus, leave it there.
@@ -274,6 +278,10 @@ function settle(
     const focusTo = focusPath && lost ? resolve(root, focusPath) : null
     if (focusTo instanceof HTMLElement || focusTo instanceof SVGElement) focusTo.focus({ preventScroll: true })
     if (event.type === 'pointerdown') afterPress?.()
+  })
+  void nextTick(() => {
+    const root = after()
+    if (!root) return
     if (menu) replayMenu(menu, root)
     else if (replay || event.type === 'pointerdown') replayOn(event, root, targetPath)
   })
