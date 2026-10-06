@@ -45,7 +45,7 @@ def build_server(client: Client | None = None):
     client = client or Client()
     server = MCPServer(
         "ClaudFree",
-        version="0.7.0",
+        version="0.8.0",
         log_level="WARNING",
         instructions="Use claude_list_chats to discover locally tracked UUID/name handles. "
         "Use explicit references to read/resume; multiple chats have independent context. "

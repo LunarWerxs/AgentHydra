@@ -35,11 +35,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "command",
-        # Preserve the original visible launcher when no command was supplied.
-        nargs="?",
-        default="new",
         choices=[
-            "new",
             "login",
             "auth",
             "usage",
@@ -51,11 +47,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "schema",
             "mcp",
             "mcp-config",
-            "requests",
             "forget",
             "doctor",
-            "close",
-            "stop",
             "prepare",
             "prepared",
         ],
@@ -68,37 +61,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Account service; Claude remains the default",
     )
     parser.add_argument(
-        "--transport",
-        choices=["http", "browser"],
-        default="http",
-        help="ChatGPT defaults to HTTP; browser explicitly enables its heavier worker",
-    )
-    parser.add_argument(
-        "--browser", choices=["camoufox", "chromium", "chrome", "msedge"], default="camoufox"
-    )
-    parser.add_argument("--desktop-exe", help="Explicit path to Claude Desktop's executable")
-    parser.add_argument(
-        "--no-desktop", action="store_true", help="Only open the Claude browser session"
-    )
-    parser.add_argument(
         "--regular",
         action="store_true",
         help="Use an ordinary chat instead of Claude Incognito chat",
     )
     parser.add_argument(
         "--prompt",
-        help="Message for HTTP chat, or an optional first message for the browser launcher",
+        help="Message for HTTP chat",
     )
     parser.add_argument("--chat-id", help="Continue or read this chat UUID")
     parser.add_argument("--name", help="Local name for a new chat, or local rename with track")
     parser.add_argument(
         "--count", type=int, default=None, help="ChatGPT preparations to collect (1-8; default 3)"
-    )
-    parser.add_argument(
-        "--preparation-method",
-        choices=["javascript", "browser"],
-        default=None,
-        help="ChatGPT prepare defaults to JavaScript; browser explicitly opens visible preparation",
     )
     parser.add_argument(
         "--no-auto-prepare",
@@ -152,36 +126,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--timeout",
         type=int,
         default=900,
-        help="Seconds to allow for manual login / Incognito activation",
+        help="Seconds to allow for manual login",
     )
     args = parser.parse_args(argv)
     if args.command in {"prepare", "prepared"} and args.provider != "chatgpt":
         parser.error("prepare/prepared require --provider chatgpt")
     if args.count is not None and (args.command != "prepare" or not 1 <= args.count <= 8):
         parser.error("--count is only for prepare and must be between 1 and 8")
-    if args.preparation_method is not None and (
-        args.command != "prepare" or args.provider != "chatgpt"
-    ):
-        parser.error("--preparation-method is only for prepare --provider chatgpt")
     if args.no_auto_prepare and (
         args.provider != "chatgpt"
         or args.command not in {"chat", "resume", "mcp"}
-        or args.transport != "http"
     ):
-        parser.error("--no-auto-prepare is only for ChatGPT HTTP chat/resume/mcp")
+        parser.error("--no-auto-prepare is only for ChatGPT chat/resume/mcp")
     # Validate the command/option combinations before opening any state or sockets.
     if args.timeout < 1:
         parser.error("--timeout must be positive")
-    if args.command not in {"new", "chat", "resume"} and (args.prompt or args.regular):
-        parser.error("--prompt and --regular are only valid with new/chat/resume")
-    if args.command not in {"chat", "resume", "read", "track", "close"} and (
+    if args.command not in {"chat", "resume"} and (args.prompt or args.regular):
+        parser.error("--prompt and --regular are only valid with chat/resume")
+    if args.command not in {"chat", "resume", "read", "track"} and (
         args.identifier or args.chat_id
     ):
         parser.error("A chat reference is only valid with chat/resume/read/track")
     if args.identifier and args.chat_id:
         # Selecting one chat in two ways is ambiguous, even when the values match.
         parser.error("Choose a positional chat reference or --chat-id")
-    if args.command in {"resume", "track", "close"} and not (args.identifier or args.chat_id):
+    if args.command in {"resume", "track"} and not (args.identifier or args.chat_id):
         # A missing resume handle must never silently become a new conversation.
         parser.error("Specify a local name or chat UUID (use 'last' explicitly for resume)")
     if args.name and (
@@ -216,8 +185,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "chats",
         "schema",
         "mcp-config",
-        "close",
-        "stop",
         "prepare",
         "prepared",
     }:
@@ -228,12 +195,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--export is only valid with chat/resume/read")
     if args.request_timeout < 1:
         parser.error("--request-timeout must be positive")
-    if args.command in {"close", "stop"} and args.provider != "chatgpt":
-        parser.error("close and stop require --provider chatgpt")
-    if args.transport == "browser" and (
-        args.provider != "chatgpt" or args.command not in {"chat", "resume", "read", "track", "mcp"}
-    ):
-        parser.error("--transport browser is only for ChatGPT chat/resume/read/track/mcp")
     return args
 
 
@@ -266,37 +227,31 @@ def main(argv: list[str] | None = None) -> int:
             from .service import forget_session
 
             forget_session(state)
-            print("Saved web session removed. Desktop and other browser logins are separate.")
-        elif args.command == "requests":
-            from .browser import show_requests
+            print("Saved web session removed.")
+        elif args.command == "login":
+            from . import signin
 
-            show_requests()
+            asyncio.run(signin.login_claude(args.timeout))
+            print(f"Claude web login saved with Windows encryption: {state.SESSION_FILE}")
         elif args.command == "doctor":
             # Diagnostics inspect local installations without decrypting the login.
-            from .browser import find_desktop, camoufox_options
-
             print(f"Python: {sys.version.split()[0]}")
-            print(f"Claude Desktop: {find_desktop(args.desktop_exe) or 'not found'}")
-            print(
-                f"Encrypted web session: {'present' if state.SESSION_FILE.exists() else 'not saved yet'}"
-            )
-            print(
-                f"Observed request report: {'present' if state.REQUEST_FILE.exists() else 'not captured yet'}"
-            )
-            try:
-                print(f"Camoufox: {camoufox_options()['executable_path']}")
-            except UserError as error:
-                print(str(error))
             try:
                 from importlib.metadata import version, PackageNotFoundError
 
-                print(f"Playwright: {version('playwright')}")
+                print(f"zendriver: {version('zendriver')}")
             except PackageNotFoundError:
-                print("Playwright: run python -m pip install -e '.[browser]'")
-        else:
-            from .browser import run_browser
+                print("zendriver: run python -m pip install zendriver==0.17.0")
+            else:
+                from zendriver.core.config import find_executable
 
-            asyncio.run(run_browser(args))
+                try:
+                    print(f"Browser: {find_executable()}")
+                except Exception:
+                    print("Browser: not found")
+            print(
+                f"Encrypted web session: {'present' if state.SESSION_FILE.exists() else 'not saved yet'}"
+            )
         return 0
     except KeyboardInterrupt:
         # The exit code remains distinguishable from both usage and network errors.

@@ -58,18 +58,18 @@ describe('Free instance boundary', () => {
     expect(nodeDependenciesReady(runtime)).toBe(true)
   })
 
-  test('sends multiline Unicode only on stdin, uses HTTP and never opens Desktop', () => {
+  // The harness has no browser transport any more (2026-10-06): HTTP is its only way to chat, so no flag picks it.
+  test('sends multiline Unicode only on stdin, as an Incognito chat', () => {
     const { config } = fixture()
     const args = commandArgs(config, operation({ command: 'chat', prompt: 'π\n$(not-a-command)', name: 'local name' }))
     expect(args).toContain('--stdin')
     expect(args).not.toContain('--prompt')
     expect(args.join(' ')).not.toContain('not-a-command')
-    expect(args).toContain('http')
     expect(args).not.toContain('--regular')
     expect(args[args.indexOf('--name') + 1]).toMatch(/^desk-[a-f0-9]{24}$/)
     // desk_entry prints sign-in's JSON itself; the harness refuses --json and --brief with login, which once failed
     // every sign-in from Desk before a browser opened.
-    expect(commandArgs(config, operation({ command: 'login' })).slice(1)).toEqual(['login', '--provider', 'claude', '--no-desktop', '--timeout', '900'])
+    expect(commandArgs(config, operation({ command: 'login' })).slice(1)).toEqual(['login', '--provider', 'claude', '--timeout', '900'])
     // The harness's parser refuses --json with forget, which would turn every log out into a failure.
     expect(commandArgs(config, { ...operation(), command: 'forget', provider: 'chatgpt' }).slice(1)).toEqual(['forget', '--provider', 'chatgpt', '--request-timeout', '120'])
   })

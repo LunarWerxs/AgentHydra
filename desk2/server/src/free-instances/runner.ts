@@ -14,9 +14,9 @@ export function commandArgs(config: FreeConfig, request: FreeRunRequest): string
   // The harness refuses --json with forget, and forget prints a sentence: its exit code is the result.
   if (request.command === 'forget') return [...args, '--provider', request.provider, '--request-timeout', '120']
   // Sign-in: desk_entry prints the JSON itself, and the harness refuses --json and --brief with login.
-  if (request.command === 'login') return [...args, '--provider', request.provider, '--no-desktop', '--timeout', '900']
+  if (request.command === 'login') return [...args, '--provider', request.provider, '--timeout', '900']
   if (request.chatId) args.push(request.chatId)
-  args.push('--provider', request.provider, '--transport', 'http', '--json', '--brief', '--request-timeout', '120')
+  args.push('--provider', request.provider, '--json', '--brief', '--request-timeout', '120')
   if (request.command === 'chat' || request.command === 'resume') args.push('--stdin')
   // Registry aliases are restricted; Desk keeps the friendly display name separately.
   if (request.name) args.push('--name', `desk-${createHash('sha256').update(request.name).digest('hex').slice(0, 24)}`)

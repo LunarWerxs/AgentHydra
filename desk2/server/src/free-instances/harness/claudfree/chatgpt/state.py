@@ -49,7 +49,7 @@ class ChatGPTState:
             decoded = json.loads(dpapi(data[len(MAGIC) :], decrypt=True))
             result = filter_state(decoded)
             # Upgrade old browser snapshots once. The caller's normal session lock
-            # serializes this with login, requests, and the optional browser worker.
+            # serializes this with login and requests.
             if decoded.get("origins"):
                 self.save(result)
             return result

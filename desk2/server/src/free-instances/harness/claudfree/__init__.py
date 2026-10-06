@@ -4,7 +4,7 @@ from .api import Client
 from .errors import ClaudeError
 
 __all__ = ["Client", "ChatGPTClient", "ClaudeError"]
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 
 def __getattr__(name):

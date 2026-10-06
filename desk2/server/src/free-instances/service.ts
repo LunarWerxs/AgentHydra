@@ -73,8 +73,7 @@ export class FreeInstances {
   }
   /**
    * Removes the stored sign-in only (chats and metadata stay); the account can sign in again later. The harness's own
-   * forget does it: it deletes the session under the lock a cookie refresh takes, and for ChatGPT it first stops the
-   * live worker, whose browser would otherwise stay signed in.
+   * forget does it: it deletes the saved login (and for ChatGPT its preparations) under the lock a cookie refresh takes.
    */
   async logout(id: string): Promise<FreeInstance> {
     const instance = this.instance(id)
@@ -82,7 +81,7 @@ export class FreeInstances {
     if (this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running')) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
     this.forgetting.add(id)
     try {
-      try { await this.runtime.ensure(instance.provider, false) }
+      try { await this.runtime.ensure(instance.provider) }
       catch { throw new FreeError('Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.', 503) }
       const done = await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000)).catch(() => null)
       if (done?.code !== 0) throw new FreeError('The saved login could not be removed. Try again.', 503)
@@ -166,7 +165,7 @@ export class FreeInstances {
   }
   private async execute(job: FreeJob, r: FreeRequest, controller: AbortController): Promise<void> {
     try {
-      try { await this.runtime.ensure(r.provider, r.command === 'login') }
+      try { await this.runtime.ensure(r.provider) }
       catch { job.result = failure('setup_failed', 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
       controller.signal.throwIfAborted()
       job.phase = 'working'

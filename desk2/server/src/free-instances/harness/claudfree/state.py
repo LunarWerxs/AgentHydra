@@ -17,8 +17,6 @@ DEFAULT_STATE = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ClaudFree" 
 STATE_DIR = Path(os.environ.get("CLAUDFREE_STATE_DIR", DEFAULT_STATE)).expanduser().resolve()
 SESSION_FILE = STATE_DIR / "session.dpapi"
 HTTP_CONFIG_FILE = STATE_DIR / "http-config.json"
-BROWSER_RUNTIME_FILE = STATE_DIR / "browser-runtime.json"
-REQUEST_FILE = STATE_DIR / "requests.json"
 MAGIC = b"CLAUDFREE-DPAPI-1\x00"
 
 

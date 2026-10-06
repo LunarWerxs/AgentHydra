@@ -17,9 +17,9 @@ def build_server(client=None):
     client = client or ChatGPTClient()
     server = MCPServer(
         "ClaudFree ChatGPT",
-        version="0.7.0",
+        version="0.8.0",
         log_level="WARNING",
-        instructions=f"Call chatgpt_schema for capability limits. Configured transport: {client.transport}; automatic preparation: {client.auto_prepare}. Call create/resume directly; fresh single-use verification is collected automatically when needed with a short JavaScript runtime. HTTP commands never start a browser. chatgpt_prepare is optional prewarming; method='browser' explicitly opens the older visible preparer. No automatic resend after an uncertain result; read chat_id first. Login is a separate manual CLI command.",
+        instructions=f"Call chatgpt_schema for capability limits. Automatic preparation: {client.auto_prepare}. Call create/resume directly; fresh single-use verification is collected automatically when needed with a short JavaScript runtime. HTTP commands never start a browser. chatgpt_prepare is optional prewarming. No automatic resend after an uncertain result; read chat_id first. Login is a separate manual CLI command.",
     )
     read = ToolAnnotations(
         read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True
@@ -29,9 +29,6 @@ def build_server(client=None):
     )
     local = ToolAnnotations(
         read_only_hint=False, destructive_hint=False, idempotent_hint=True, open_world_hint=False
-    )
-    close = ToolAnnotations(
-        read_only_hint=False, destructive_hint=True, idempotent_hint=True, open_world_hint=False
     )
 
     def call(operation, *args, **kwargs):
@@ -61,7 +58,6 @@ def build_server(client=None):
         return call(
             lambda: {
                 **client.schema(),
-                "configured_transport": client.transport,
                 "configured_auto_prepare": client.auto_prepare,
             }
         )
@@ -77,9 +73,9 @@ def build_server(client=None):
         return call(client.preparation_status)
 
     @server.tool(annotations=send)
-    def chatgpt_prepare(count: int = 3, method: str = "javascript") -> CallToolResult:
-        """Prepare 1-8 HTTP sends with JavaScript, then close the runtime. No browser or message. method='browser' explicitly opens one."""
-        return call(client.prepare, count, method=method)
+    def chatgpt_prepare(count: int = 3) -> CallToolResult:
+        """Prepare 1-8 HTTP sends with JavaScript, then close the runtime. No browser or message."""
+        return call(client.prepare, count)
 
     @server.tool(annotations=read)
     def chatgpt_list_chats(check: bool = False) -> CallToolResult:
@@ -110,11 +106,6 @@ def build_server(client=None):
     def chatgpt_track_chat(reference: str, name: str) -> CallToolResult:
         """Validate a private chat by name/UUID and save its local alias. Requires the saved login."""
         return call(client.track, reference, name)
-
-    @server.tool(annotations=close)
-    def chatgpt_close_chat(reference: str) -> CallToolResult:
-        """Close an optional browser tab. The saved login remains usable for HTTP reads."""
-        return call(client.close, reference)
 
     @server.resource("claudfree://chatgpt/schema")
     def schema_resource() -> str:

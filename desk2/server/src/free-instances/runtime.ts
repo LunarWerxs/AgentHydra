@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FreeConfig, FreeProvider } from '@shared/free-instances'
@@ -7,8 +7,11 @@ import type { FreeConfig, FreeProvider } from '@shared/free-instances'
 export interface FreeRuntime {
   ready(): boolean
   config(instanceId: string): FreeConfig
-  ensure(provider: FreeProvider, login: boolean): Promise<void>
+  ensure(provider: FreeProvider): Promise<void>
 }
+
+/** zendriver drives the installed Chrome or Edge, so no browser download is needed. */
+const PYTHON_PACKAGES = ['requests==2.34.2', 'zendriver==0.17.0']
 
 /** Node's restricted reader cannot follow Bun links into a global package store. */
 export function nodeDependenciesReady(directory: string): boolean {
@@ -53,34 +56,37 @@ export class ManagedFreeRuntime implements FreeRuntime {
     this.root = join(home, 'free', 'runtime')
     this.python = join(this.root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
   }
-  ready(): boolean { return existsSync(join(this.root, 'python-ready')) && existsSync(this.python) }
+  // The marker records the package list: an install made with another one (Camoufox, Playwright) is rebuilt.
+  ready(): boolean {
+    try { return readFileSync(join(this.root, 'python-ready'), 'utf8') === PYTHON_PACKAGES.join(' ') && existsSync(this.python) }
+    catch { return false }
+  }
   config(instanceId: string): FreeConfig {
     return { harnessDir: this.harnessDir, python: this.python, stateDir: join(this.home, 'free', 'instances', instanceId), cacheDir: join(this.root, 'cache') }
   }
-  async ensure(provider: FreeProvider, login: boolean): Promise<void> {
+  async ensure(provider: FreeProvider): Promise<void> {
     // Concurrent accounts share one dependency installation, never their cookies or locks.
     while (this.preparing) await this.preparing
-    const key = `${provider}/${login}`
-    if (this.prepared.has(key)) return
-    const task = this.prepare(provider, login)
+    if (this.prepared.has(provider)) return
+    const task = this.prepare(provider)
     this.preparing = task
-    try { await task; this.prepared.add(key) } finally { if (this.preparing === task) this.preparing = null }
+    try { await task; this.prepared.add(provider) } finally { if (this.preparing === task) this.preparing = null }
   }
-  private async prepare(provider: FreeProvider, login: boolean): Promise<void> {
+  private async prepare(provider: FreeProvider): Promise<void> {
     mkdirSync(this.root, { recursive: true })
     const c = this.config('setup')
     // The setup run's own state goes to Desk's data home too: without it the harness fell back to a
     // folder beside its code, inside the repo.
     const env = { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_CACHE_DIR: c.cacheDir, CLAUDFREE_STATE_DIR: join(this.root, 'state') }
     if (!this.ready()) {
-      if (!existsSync(this.python)) {
-        if (process.platform === 'win32') {
-          try { await setup('py', ['-3', '-m', 'venv', join(this.root, '.venv')], this.root) }
-          catch { await setup('python', ['-m', 'venv', join(this.root, '.venv')], this.root) }
-        } else await setup('python3', ['-m', 'venv', join(this.root, '.venv')], this.root)
-      }
-      await setup(this.python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'requests==2.34.2', 'camoufox==0.5.6', 'playwright==1.62.0'], this.root, env)
-      writeFileSync(join(this.root, 'python-ready'), '1')
+      // A stale venv keeps the old packages (and their ~5 GB browser) otherwise.
+      rmSync(join(this.root, '.venv'), { recursive: true, force: true })
+      if (process.platform === 'win32') {
+        try { await setup('py', ['-3', '-m', 'venv', join(this.root, '.venv')], this.root) }
+        catch { await setup('python', ['-m', 'venv', join(this.root, '.venv')], this.root) }
+      } else await setup('python3', ['-m', 'venv', join(this.root, '.venv')], this.root)
+      await setup(this.python, ['-m', 'pip', 'install', '--disable-pip-version-check', ...PYTHON_PACKAGES], this.root, env)
+      writeFileSync(join(this.root, 'python-ready'), PYTHON_PACKAGES.join(' '))
     }
     if (provider === 'chatgpt') {
       const dependencyDir = join(c.cacheDir, 'chatgpt-runtime')
@@ -92,10 +98,6 @@ export class ManagedFreeRuntime implements FreeRuntime {
       }
       try { await setup(this.python, ['-c', 'from claudfree.chatgpt.runtime import installation; installation()'], this.harnessDir, env) }
       catch { await setup(this.python, ['-c', 'from claudfree.chatgpt.runtime import download_assets, installation; download_assets(); installation()'], this.harnessDir, env) }
-    }
-    if (login) {
-      try { await setup(this.python, ['-c', 'from pathlib import Path; from camoufox.pkgman import launch_path; assert Path(launch_path()).is_file()'], this.root, env) }
-      catch { await setup(this.python, ['-m', 'camoufox', 'fetch'], this.root, env) }
     }
   }
 }

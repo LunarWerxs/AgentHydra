@@ -20,15 +20,13 @@ def run():
     try:
         with redirect_stdout(io.StringIO()):
             if args.provider == "chatgpt":
-                from claudfree.chatgpt.login import login
                 from claudfree.chatgpt.state import ChatGPTState
-                from claudfree import ChatGPTClient
-                asyncio.run(login(ChatGPTState(), timeout=args.timeout))
+                from claudfree import ChatGPTClient, signin
+                asyncio.run(signin.login_chatgpt(ChatGPTState(), timeout=args.timeout))
                 result = ChatGPTClient().auth()
             else:
-                from claudfree.browser import run_browser
-                from claudfree import Client
-                asyncio.run(run_browser(args))
+                from claudfree import Client, signin
+                asyncio.run(signin.login_claude(args.timeout))
                 result = Client().auth()
         print(json.dumps(result, ensure_ascii=False))
         return 0

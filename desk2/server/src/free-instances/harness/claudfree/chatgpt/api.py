@@ -1,4 +1,4 @@
-"""HTTP by default; the existing browser sender requires an explicit opt-in."""
+"""ChatGPT Temporary Chats over HTTP; only manual login opens a browser."""
 
 from pathlib import Path
 from uuid import uuid4
@@ -13,28 +13,24 @@ from .state import ChatGPTState
 
 
 class ChatGPTClient(Client):
-    """Use private chats by local name or UUID without starting a browser by default.
+    """Use private chats by local name or UUID without starting a browser.
 
     state_dir selects the shared root; ChatGPT state always lives in its chatgpt/
     subfolder. Login is manual. HTTP reads send a Temporary Chat routing marker.
     HTTP sending prepares fresh single-use verification automatically when needed.
     auto_prepare=False requires an explicit prepare() before sending.
-    prepare() uses a short JavaScript process; method='browser' is explicit opt-in.
-    transport='browser' explicitly enables the heavier existing sender.
+    prepare() uses a short JavaScript process.
     No transcript is stored unless export_dir is supplied. Calls are serialized.
     """
 
-    def __init__(self, state_dir=None, *, timeout=120, transport="http", auto_prepare=True):
+    def __init__(self, state_dir=None, *, timeout=120, auto_prepare=True):
         if isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
             raise ClaudeError("timeout must be a positive integer.", code="invalid_arguments")
         self._state = ChatGPTState(Path(state_dir) / "chatgpt" if state_dir else None)
         self.timeout = timeout
         self.organization_id = None
-        if transport not in {"http", "browser"}:
-            raise ClaudeError("transport must be http or browser.", code="invalid_arguments")
         if not isinstance(auto_prepare, bool):
             raise ClaudeError("auto_prepare must be a boolean.", code="invalid_arguments")
-        self.transport = transport
         self.auto_prepare = auto_prepare
 
     def _run(self, args, *, on_text=None):
@@ -42,7 +38,7 @@ class ChatGPTClient(Client):
             return self._execute(args, on_text=on_text)
 
     def preparation_status(self):
-        """Read local readiness without network, authentication or browser activity."""
+        """Read local readiness without network or authentication."""
         from .preparation import Preparations
 
         with chat_lock(self._state.directory / "locks", "session", wait=self.timeout + 90):
@@ -52,12 +48,11 @@ class ChatGPTClient(Client):
                 "provider": "chatgpt",
                 "command": "prepared",
                 "transport": "local",
-                "browser_launched": False,
                 **Preparations(self._state.directory).status(),
             }
 
-    def prepare(self, count=3, *, method="javascript"):
-        """Collect verification without a browser, then close the JavaScript runtime.
+    def prepare(self, count=3):
+        """Collect verification with JavaScript, then close the JavaScript runtime.
 
         No account message is sent. Each HTTP message subsequently consumes one
         preparation, with a conservative five-minute local expiry.
@@ -72,56 +67,23 @@ class ChatGPTClient(Client):
             raise ClaudeError(
                 f"count must be between 1 and {MAX_PREPARATIONS}.", code="invalid_arguments"
             )
-        if not isinstance(method, str) or method not in {"javascript", "browser"}:
-            raise ClaudeError("method must be javascript or browser.", code="invalid_arguments")
-        if method == "javascript":
-            from . import runtime
+        from . import runtime
 
-            runtime.installation()  # Missing setup fails before account traffic or pool changes.
+        runtime.installation()  # Missing setup fails before account traffic or pool changes.
         with chat_lock(self._state.directory / "locks", "session", wait=self.timeout + 90):
             pool = Preparations(self._state.directory)
-            if method == "javascript":
-                # The same authenticated session owns collection and account binding.
-                # Keep the old pool intact if refreshing fails.
-                with connection(self._state, self.timeout) as http:
-                    entries, measurements = runtime.collect(http, count)
-                    pool.replace(http.account_key, entries)
-            else:
-                import asyncio
-                from . import worker
-                from .preparer import collect
-
-                worker.request(
-                    self._state, {"command": "stop", "timeout": self.timeout}, start=False
-                )
-                pool.clear()
-                with connection(self._state, self.timeout) as http:
-                    original_account = http.account_key
-                    if not original_account:
-                        raise ClaudeError(
-                            "The signed-in account could not be identified.",
-                            code="invalid_response",
-                        )
-                entries = asyncio.run(collect(self._state, count))
-                measurements = []
-                with connection(self._state, self.timeout) as http:
-                    if http.account_key != original_account:
-                        raise ClaudeError(
-                            "The account changed during preparation. Run prepare again.",
-                            code="preparation_account_mismatch",
-                        )
-                    pool.replace(http.account_key, entries)
+            # The same authenticated session owns collection and account binding.
+            # Keep the old pool intact if refreshing fails.
+            with connection(self._state, self.timeout) as http:
+                entries, measurements = runtime.collect(http, count)
+                pool.replace(http.account_key, entries)
             return {
                 "ok": True,
                 "schema_version": 1,
                 "provider": "chatgpt",
                 "command": "prepare",
-                "transport": "javascript_preparation"
-                if method == "javascript"
-                else "visible_browser_preparation",
-                "preparation_method": method,
-                "browser_launched": method == "browser",
-                "browser_closed": method == "browser",
+                "transport": "javascript_preparation",
+                "preparation_method": "javascript",
                 "runtime_closed": True,
                 "runtime_measurements": measurements,
                 "messages_sent": 0,
@@ -144,25 +106,10 @@ class ChatGPTClient(Client):
         transport = "http"
         if command == "auth":
             with connection(self._state, args.request_timeout):
-                value = {"authenticated": True, "browser_launched": False}
+                value = {"authenticated": True}
         elif command == "usage":
             with connection(self._state, args.request_timeout) as http:
                 value = http.usage()
-        elif self.transport == "browser" and command in {"chat", "resume", "read", "track"}:
-            from . import worker
-
-            payload = {
-                "command": command,
-                "reference": args.identifier or args.chat_id,
-                "name": args.name,
-                "prompt": args.prompt,
-                "timeout": args.request_timeout,
-            }
-            if command == "chat" and not payload["reference"]:
-                # This stable recovery ID exists before a message can be sent.
-                payload["chat_id"] = str(uuid4())
-            value = worker.request(self._state, payload)
-            transport = "headless_browser"
         else:
             value = self._http_execute(args)
             if command == "chats" and not args.check_chats:
@@ -173,7 +120,6 @@ class ChatGPTClient(Client):
             "provider": "chatgpt",
             "command": command,
             "transport": transport,
-            "browser_launched": transport == "headless_browser",
             **value,
         }
         if args.export_dir:
@@ -322,53 +268,6 @@ class ChatGPTClient(Client):
             "raw_tool_results_available": False,
         }
 
-    def close(self, reference: str) -> dict:
-        from . import worker
-
-        if not isinstance(reference, str) or not reference.strip():
-            raise ClaudeError("Supply an explicit chat name or UUID.", code="invalid_arguments")
-        with chat_lock(self._state.directory / "locks", "session", wait=self.timeout + 90):
-            registry = ChatGPTRegistry(self._state.directory)
-            try:
-                entry, _ = registry.resolve(reference)
-            finally:
-                registry.close()
-            value = worker.request(
-                self._state,
-                {"command": "close", "reference": reference, "timeout": self.timeout},
-                start=False,
-            )
-            if value.get("stopped"):
-                value = {
-                    "chat_id": entry["chat_id"],
-                    "closed": True,
-                    "tab_was_open": False,
-                    "resumable": None,
-                }
-            return {
-                "ok": True,
-                "provider": "chatgpt",
-                "schema_version": 1,
-                "command": "close",
-                "credentials_retained": True,
-                **value,
-            }
-
-    def stop(self) -> dict:
-        from . import worker
-
-        with chat_lock(self._state.directory / "locks", "session", wait=self.timeout + 90):
-            return {
-                "ok": True,
-                "provider": "chatgpt",
-                "schema_version": 1,
-                "command": "stop",
-                "credentials_retained": True,
-                **worker.request(
-                    self._state, {"command": "stop", "timeout": self.timeout}, start=False
-                ),
-            }
-
     @staticmethod
     def schema() -> dict:
         return {
@@ -384,10 +283,9 @@ class ChatGPTClient(Client):
                 "certificate_verification": True,
                 "follow_redirects": False,
             },
-            "optional_transport": "browser (explicit --transport browser / transport='browser')",
             "default_privacy": {"temporary": True, "personalization": False},
             "browser_required_for": ["login"],
-            "preparation_methods": {"default": "javascript", "optional": "browser"},
+            "preparation_methods": {"default": "javascript"},
             "preparation_runtime": "Node.js 24+ with Happy DOM 20.14.5 and pinned public web assets; see docs/CHATGPT.txt",
             "commands": {
                 name: "Use --provider chatgpt"
@@ -402,8 +300,6 @@ class ChatGPTClient(Client):
                     "chats",
                     "track",
                     "usage",
-                    "close",
-                    "stop",
                     "forget",
                     "schema",
                     "mcp",
@@ -424,7 +320,6 @@ class ChatGPTClient(Client):
                     "create_chat",
                     "resume_chat",
                     "track_chat",
-                    "close_chat",
                 ]
             ],
             "capabilities": {
@@ -437,21 +332,19 @@ class ChatGPTClient(Client):
                 "automatic_preparation": True,
                 "explicit_prepare_required": False,
                 "http_send_status": "create and resume verified with browser-free JavaScript preparation after manual login; one credential per message",
-                "resume_live_tabs": True,
-                "resume_after_worker_stop": True,
-                "read_after_worker_stop": "requires saved login, UUID and server availability; routing marker supplied automatically",
+                "read_requires": "requires saved login, UUID and server availability; routing marker supplied automatically",
                 "remaining_usage": False,
                 "raw_tool_results": False,
                 "token_streaming": False,
             },
             "rules": [
                 "chat_id is a local UUID; server_conversation_id is the service UUID. Accessible unknown server UUIDs can be read/tracked with the saved login.",
-                "HTTP is the default and never starts a browser or falls back to one. Explicit browser mode uses a persistent headless worker.",
+                "HTTP never starts a browser or falls back to one; only manual login opens a browser.",
                 "Temporary privacy is verified before reading/resuming. Creation requests unpersonalized mode; HTTP reads do not independently verify personalization.",
                 "Names and UUIDs are stored without transcripts. HTTP supplies the Temporary Chat routing cookie automatically, enabling reads after the browser closes while the service permits access.",
                 "Offline listings do not verify availability; readable/resumable=null means unknown. --check performs HTTP reads.",
                 "chat/resume automatically collect one JavaScript preparation when the pool is empty or expired, using the same authenticated connection. Read-only commands never prepare. auto_prepare=False / --no-auto-prepare retains explicit preparation.",
-                "prepare optionally collects up to eight single-use preparations without sending messages. JavaScript is the default; method='browser' explicitly requests the older visible preparation. prepared reports local readiness, not a required next step.",
+                "prepare optionally collects up to eight single-use preparations without sending messages. prepared reports local readiness, not a required next step.",
                 "HTTP sending consumes one DPAPI-encrypted preparation before POST, including on failure. Preparations are account-bound with a five-minute local cutoff; service acceptance is not guaranteed. JavaScript collection failures create no pending chat and send no message.",
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
                 "No message is retried automatically. On timeout, read the returned chat_id before sending again.",

@@ -185,7 +185,7 @@ class Client:
                 "follow_redirects": False,
             },
             "interfaces": ["cli", "python", "mcp_stdio"],
-            "browser_required_for": ["login", "new"],
+            "browser_required_for": ["login"],
             "commands": {
                 "auth": "auth --json: verify saved login",
                 "usage": "usage --json: read usage endpoint; empty counters fall back to a timestamped last-chat observation",

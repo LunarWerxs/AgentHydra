@@ -1,4 +1,4 @@
-"""ChatGPT handles shared by the HTTP client and optional browser worker."""
+"""ChatGPT handles used by the HTTP client."""
 
 from ..errors import ClaudeError
 from ..http import valid_uuid
