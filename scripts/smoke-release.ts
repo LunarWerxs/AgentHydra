@@ -48,6 +48,20 @@ function findBundle(dir: string): string {
   return join(d, found[0].name)
 }
 
+for (const [label, p] of [
+  ['--port', port],
+  ['--desk-port', deskPort],
+] as const) {
+  try {
+    Bun.listen({ hostname: '127.0.0.1', port: p, socket: { data() {} } }).stop(true)
+  } catch {
+    console.error(
+      `FAIL ${label} ${p} is already in use by another process; pick a free port (the smoke never kills one it did not start)`,
+    )
+    process.exit(1)
+  }
+}
+
 const bundle = findBundle(bundleArg)
 const scratch = mkdtempSync(join(tmpdir(), 'agenthydra-smoke-'))
 const daemonLog = join(scratch, 'daemon.log')
