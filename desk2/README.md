@@ -305,6 +305,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   the daemon's `POST /api/sessions/:id/message`) and runs when its turn ends; until the transcript shows
   it, it is listed as queued. Text only: files, pictures and voice are off there. An idle chat still
   continues as a copy, as above.
+- **Copy up to here into a new chat.** Under a finished reply in an outside Claude Code session, a button
+  has AgentHydra copy the session up to that reply into a new session beside it, "<title> (branch)", which
+  opens; the original is not touched (`POST /api/external/sessions/:id/branch`, on to the daemon's
+  `POST /api/sessions/:id/branch`). AgentHydra's old Sessions tab had it; Desk 2 has it now that it shows
+  those sessions (2026-10-06).
 - **Its own window, opening where you left it.** Desk 2 opens in its own native window,
   `launcher/HydraDesk2.exe` (WebView2, built from `launcher/host`), instead of an Edge app window
   (owner, 2026-10-05: "It loads and then it auto-adjusts itself on the screen ... I want it to load in
