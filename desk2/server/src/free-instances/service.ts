@@ -90,6 +90,8 @@ export class FreeInstances {
     instance.loggedIn = false
     instance.checkedAt = Date.now()
     instance.usage = null
+    // Logged out on purpose, not lost: the row offers "Sign in", and "Sign in again" stays for an expired login.
+    instance.lastSignedInAt = null
     this.store.save()
     this.onLoginChange?.()
     return instance

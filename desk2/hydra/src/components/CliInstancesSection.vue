@@ -240,6 +240,13 @@ function previousEmailOf(inst: CliInstance): string | null {
       : null
 }
 
+/** The address "Log in again" puts back: only for a login that ended by itself (its credential file is still
+ *  there and the daemon noted it dead, loginNote). A log out you chose deletes the file, so that row offers a
+ *  plain "Log in" with an empty box (owner, 2026-10-06: "Sign in again is for accounts that got logged out"). */
+function reloginEmailOf(inst: CliInstance): string | null {
+  return !inst.loggedIn && inst.loginNote ? previousEmailOf(inst) : null
+}
+
 /** What the shared row draws for one CLI login (components/InstanceRow.vue). */
 function rowModel(inst: CliInstance): InstanceRowModel {
   const plan = planFor(inst)
@@ -492,7 +499,7 @@ async function onLogin(inst: CliInstance) {
     id: inst.id,
     num: inst.num,
     name: inst.name,
-    email: previousEmailOf(inst),
+    email: reloginEmailOf(inst),
   })
   await nextTick()
   quickAdd.value?.focusEmail()
@@ -865,7 +872,7 @@ onUnmounted(() => {
                   <Play /> {{ $t('cliInstances.launch') }}
                 </DropdownMenuItem>
                 <DropdownMenuItem v-if="!inst.loggedIn" :disabled="isBusy(inst)" @click="onLogin(inst)">
-                  <LogIn /> {{ previousEmailOf(inst) ? $t('cliInstances.loginAgain') : $t('cliInstances.login') }}
+                  <LogIn /> {{ reloginEmailOf(inst) ? $t('cliInstances.loginAgain') : $t('cliInstances.login') }}
                 </DropdownMenuItem>
                 <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
                   <Monitor /> {{ $t('cliInstances.linkDesktop') }}

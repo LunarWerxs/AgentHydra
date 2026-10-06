@@ -67,7 +67,9 @@ describe('Free instance boundary', () => {
     expect(args).toContain('http')
     expect(args).not.toContain('--regular')
     expect(args[args.indexOf('--name') + 1]).toMatch(/^desk-[a-f0-9]{24}$/)
-    expect(commandArgs(config, operation({ command: 'login' }))).toContain('--no-desktop')
+    // desk_entry prints sign-in's JSON itself; the harness refuses --json and --brief with login, which once failed
+    // every sign-in from Desk before a browser opened.
+    expect(commandArgs(config, operation({ command: 'login' })).slice(1)).toEqual(['login', '--provider', 'claude', '--no-desktop', '--timeout', '900'])
     // The harness's parser refuses --json with forget, which would turn every log out into a failure.
     expect(commandArgs(config, { ...operation(), command: 'forget', provider: 'chatgpt' }).slice(1)).toEqual(['forget', '--provider', 'chatgpt', '--request-timeout', '120'])
   })
@@ -285,7 +287,7 @@ describe('Free jobs and routes', () => {
     expect(done.status).toBe(200)
     expect((await done.json()).loggedIn).toBe(false)
     expect(instance.usage).toBeNull()
-    expect(instance.lastSignedInAt).not.toBeNull()
+    expect(instance.lastSignedInAt).toBeNull()
     expect(forgets.map(f => [f.instanceId, f.provider])).toEqual([[instance.id, 'claude'], [instance.id, 'claude']])
     expect((await app.request(`/api/free/instances/${CHAT}/logout`, { method: 'POST' })).status).toBe(404)
   })

@@ -66,7 +66,8 @@ export interface FreeInstance {
   name: string
   loggedIn: boolean
   checkedAt: number | null
-  /** When this account was last seen signed in; null if it never was. Survives a log out. */
+  /** When this account was last seen signed in; null if it never was or you logged it out. Set while signed out,
+   *  the login ended by itself, and the row offers "Sign in again" (owner, 2026-10-06). */
   lastSignedInAt: number | null
   lastActiveAt: number | null
   usage: FreeUsage | null

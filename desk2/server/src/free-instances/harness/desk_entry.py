@@ -10,7 +10,11 @@ from claudfree.errors import ClaudeError
 
 
 def run():
-    args = parse_args()
+    try:
+        args = parse_args()
+    except ClaudeError as error:
+        print(json.dumps({"ok": False, "error": error.as_dict()}))
+        return 1
     if args.command != "login":
         return main()
     try:
