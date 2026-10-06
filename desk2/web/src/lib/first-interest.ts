@@ -156,10 +156,12 @@ type Listeners = Record<string, (event: any) => void>
 /**
  * Arming swaps the stand-in for a new element and mounts everything inside it again, so a menu or
  * popover in there that is open (the press that just ran on the stand-in opened it) would close. Nothing
- * arms while one is open; the first hover or focus after it closes arms it.
+ * arms while one is open; the first hover or focus after it closes arms it. A popover or dropdown trigger
+ * says so with aria-expanded; a context menu trigger only with data-state="open" (a row's menu inside a
+ * Tip's stand-in, opened by the same right-click that arms the Tip), so a trigger in that state counts too.
  */
 function holdsOpen(standIn: Element | null): boolean {
-  return !!standIn?.querySelector('[aria-expanded="true"]')
+  return !!standIn?.querySelector('[aria-expanded="true"], [data-slot$="-trigger"][data-state="open"]')
 }
 type Fire = (event: Event, from: HTMLElement | null, menu: MouseEvent | null) => void
 
