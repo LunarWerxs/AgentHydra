@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
 import type { ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
-import { type HelloProvider, type Plugin, type ServerContext, setContext } from './context'
+import { type HelloProvider, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
 import { createSettingsStore, SettingsError } from './settings'
 import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
@@ -116,6 +116,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const settings = createSettingsStore(home)
   const stopHooks: (() => void | Promise<void>)[] = []
   const connectHooks: ((send: (event: ServerEvent) => void) => void)[] = []
+  const wsRoutes = new Map<string, WsRoute>()
+  const routeOf = (ws: WsClient) => (ws.data as { route: WsRoute; data: unknown } | undefined) ?? null
   let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, chats: [], settings: settings.get() })
 
   const ctx: ServerContext = {
@@ -128,6 +130,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     },
     wsClientCount: hub.clientCount,
     onConnect: (fn) => void connectHooks.push(fn),
+    wsRoute: (path, route) => void wsRoutes.set(path, route as WsRoute),
     onStop: (fn) => void stopHooks.push(fn),
     deps: opts.deps ?? {},
   }
@@ -166,10 +169,19 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const dist = resolve(opts.webDist ?? WEB_DIST)
   if (existsSync(join(dist, 'index.html'))) serveStatic(app, dist)
 
-  const server = Bun.serve({
+  const server = Bun.serve<unknown>({
     port: opts.port,
     hostname: opts.hostname ?? '127.0.0.1',
-    fetch(req, srv) {
+    async fetch(req, srv) {
+      const route = wsRoutes.get(new URL(req.url).pathname)
+      if (route) {
+        const why = foreignRequest(req.headers)
+        if (why) return Response.json({ error: why }, { status: 403 })
+        const accepted = await route.accept(req)
+        if (accepted instanceof Response) return accepted
+        if (srv.upgrade(req, { data: { route, data: accepted.data } })) return undefined
+        return new Response('expected a websocket upgrade', { status: 426 })
+      }
       if (new URL(req.url).pathname === '/ws') {
         // The upgrade does not go through Hono, so it gets the same guard here.
         const why = foreignRequest(req.headers)
@@ -181,6 +193,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     },
     websocket: {
       async open(ws: WsClient) {
+        const own = routeOf(ws)
+        if (own) return own.route.open(ws, own.data)
         hub.addClient(ws)
         try {
           hub.send(ws, await hello())
@@ -195,10 +209,14 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
           }
         }
       },
-      message() {
-        // The client only pings (ClientEvent); nothing to answer.
+      message(ws: WsClient, message) {
+        // The hub's client only pings (ClientEvent); nothing to answer.
+        const own = routeOf(ws)
+        if (own) own.route.message(ws, own.data, message)
       },
       close(ws: WsClient) {
+        const own = routeOf(ws)
+        if (own) return own.route.close(ws, own.data)
         hub.removeClient(ws)
       },
     },
