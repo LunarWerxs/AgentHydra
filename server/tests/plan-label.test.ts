@@ -75,6 +75,7 @@ describe('resolvePlanLabel', () => {
       expect(resolvePlanLabel('pro', prettyTier('default_claude_pro'))).toBe('Pro')
       expect(resolvePlanLabel('free', prettyTier('default_claude_free'))).toBe('Free')
       expect(resolvePlanLabel(null, prettyTier('default_claude_team_x'))).toBe('Team')
+      expect(resolvePlanLabel('team', prettyTier('default_raven'))).toBe('Team')
       expect(resolvePlanLabel(null, prettyTier('default_claude_enterprise_x'))).toBe('Enterprise')
     })
 

@@ -29,6 +29,7 @@ import {
 } from './core/accounts'
 import { cliInstanceForDesktop, getCliInstance, listCliInstances } from './core/cli-instances'
 import { codexUsageSnapshot, localCodexAccount, resolveCodexAccount } from './core/codex-account'
+import { listAllInstances } from './core/instance-ref'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { listClaudeProcesses } from './core/process'
@@ -474,6 +475,10 @@ export interface UsageSurveyRow {
   /** Desktop dir or CLI instance id — the handle to re-check this one. */
   id: string
   label: string
+  /** The plan and rate-limit tier the instance directory (list_instance_numbers) shows for this
+   *  number, so a caller can filter the survey by plan without a second call. */
+  plan: string | null
+  tier: string | null
   result: UsageCheckResult
 }
 
@@ -498,8 +503,14 @@ export async function desktopIsCheckable(dir: string): Promise<boolean> {
  * the old code refused to do it.)
  */
 export async function surveyUsage(): Promise<UsageSurveyRow[]> {
-  const desktops = await listInstances()
+  // The directory is a cache read (no network), and its plan is the one list_instance_numbers
+  // shows: one source, so the two can never disagree about an account's plan.
+  const [desktops, directory] = await Promise.all([listInstances(), listAllInstances()])
   const clis = listCliInstances()
+  const planOf = (num: number) => {
+    const row = directory.find((r) => r.num === num)
+    return { plan: row?.plan ?? null, tier: row?.tier ?? null }
+  }
 
   const desktopRows = desktops.map(async (inst): Promise<UsageSurveyRow | null> => {
     if (!(await desktopIsCheckable(inst.dir))) return null
@@ -508,6 +519,7 @@ export async function surveyUsage(): Promise<UsageSurveyRow[]> {
       num: inst.num,
       id: inst.dir,
       label: inst.label ?? inst.name,
+      ...planOf(inst.num),
       result: await checkUsageForDesktop(inst.dir),
     }
   })
@@ -515,7 +527,9 @@ export async function surveyUsage(): Promise<UsageSurveyRow[]> {
   const cliRows = clis.map(async (inst): Promise<UsageSurveyRow | null> => {
     if (!inst.loggedIn && !inst.associatedAccountId && !inst.associatedDesktopDir) return null
     const result = await checkUsageForCliInstance(inst.id)
-    return result ? { kind: 'cli', num: inst.num, id: inst.id, label: inst.name, result } : null
+    return result
+      ? { kind: 'cli', num: inst.num, id: inst.id, label: inst.name, ...planOf(inst.num), result }
+      : null
   })
 
   const rows = await Promise.all([...desktopRows, ...cliRows])

@@ -32,6 +32,9 @@ const KNOWN_TIERS: Record<string, string> = {
   default_claude_max: 'Max',
   default_claude_pro: 'Pro',
   default_claude_free: 'Free',
+  // A Team seat's tier (a `team` CLI login, and a claude_team desktop org, both carry it). Unmapped,
+  // it passed through raw and a Team account's plan read "default_raven" (2026-10-06).
+  default_raven: 'Team',
 }
 
 /** Maps a raw rate-limit tier string (e.g. "default_claude_max_20x") to a friendly display

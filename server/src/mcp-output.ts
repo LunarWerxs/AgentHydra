@@ -46,9 +46,41 @@ export function resultBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value, null, 2) ?? '', 'utf8')
 }
 
-/** Kept to one line on purpose: it is repeated on every read tool in tools/list. */
+/** Kept to one line on purpose: it is repeated on every read tool in tools/list. It names no shape:
+ *  most list tools answer a bare array and others an object, and the old example's `sessions[]`
+ *  was copied into tools that have no `sessions` (2026-10-06, list_instance_numbers: no match). */
 export const JMESPATH_ARG_DESCRIPTION =
-  'Optional JMESPath applied to the result server-side, e.g. "sessions[].{id:id,title:title}".'
+  'Optional JMESPath applied to the result server-side. Shape unknown? Try "type(@)" or "keys(@)" first; a no-match answer names the top-level keys.'
+
+/** A tool's own top-level shape and a projection that works on it, named in its `jmespath`
+ *  description instead of the generic line, for the tools agents project most. */
+const RESULT_SHAPES: Readonly<Record<string, string>> = Object.freeze({
+  list_instance_numbers: `a bare array of instances, e.g. "[?plan=='Pro'].{num:num,email:email}"`,
+  list_instances:
+    'a bare array of desktop instances, e.g. "[].{num:num,dir:dir,isRunning:isRunning}"',
+  list_cli_instances: 'a bare array of CLI instances, e.g. "[].{num:num,id:id,plan:planLabel}"',
+  list_codex_instances:
+    'a bare array of Codex instances, e.g. "[].{num:num,id:id,loggedIn:loggedIn}"',
+  list_sessions: 'a bare array of sessions, e.g. "[].{id:session_id,title:title}"',
+  list_rate_limited_sessions: 'a bare array of sessions, e.g. "[].{id:session_id,title:title}"',
+  list_projects: 'a bare array of projects, e.g. "[].{cwd:cwd,sessions:sessions}"',
+  list_queue: 'a bare array of queue items, e.g. "[?status==\'queued\'].{id:id,title:title}"',
+  list_incidents: 'a bare array of incidents, e.g. "[?state==\'open\'].{id:id,error:error}"',
+  climayte_status: 'a bare array of tasks, e.g. "[].{id:id,status:status,account:account}"',
+  list_chats: 'an object whose `rows` is the array of chats, e.g. "rows[].{id:chatId,title:title}"',
+  list_usage:
+    'an object whose `rows` is the array of accounts, e.g. "rows[?plan==\'Pro\'].{num:num,weekly:advice.bindingPct}"',
+  orchestrator_menu:
+    'an object whose `actions` is an OBJECT keyed by script name (not an array), e.g. "keys(actions)" or "actions.migrate_chat"',
+})
+
+/** The `jmespath` argument's description for one tool: its own shape when known, else the generic line. */
+export function jmespathArgDescription(tool: string): string {
+  const shape = RESULT_SHAPES[tool]
+  return shape
+    ? `Optional JMESPath applied to the result server-side. The result is ${shape}.`
+    : JMESPATH_ARG_DESCRIPTION
+}
 
 /** The grammar, shown once: when an expression does not parse. */
 const JMESPATH_HELP =
@@ -325,13 +357,13 @@ export function isProjectable(tool: McpEngineTool): boolean {
   return !/MUTATES:/.test(tool.description)
 }
 
-function withJmespathArg(schema: unknown): unknown {
+function withJmespathArg(tool: string, schema: unknown): unknown {
   if (!isRecord(schema) || !isRecord(schema.properties)) return schema
   return {
     ...schema,
     properties: {
       ...schema.properties,
-      jmespath: { type: 'string', description: JMESPATH_ARG_DESCRIPTION },
+      jmespath: { type: 'string', description: jmespathArgDescription(tool) },
     },
   }
 }
@@ -345,7 +377,7 @@ export function withOutputShaping(tools: McpEngineTool[]): McpEngineTool[] {
     const projectable = isProjectable(t)
     return {
       ...t,
-      inputSchema: projectable ? withJmespathArg(t.inputSchema) : t.inputSchema,
+      inputSchema: projectable ? withJmespathArg(t.name, t.inputSchema) : t.inputSchema,
       run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
         if (!projectable) return guardResult(t.name, await t.run(args, signal))
         const { jmespath, ...rest } = args

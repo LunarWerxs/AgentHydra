@@ -116,7 +116,10 @@ export async function listAllInstances(): Promise<ResolvedInstance[]> {
       ref: instanceRef('cli', inst.id),
       name: inst.name,
       email: linked?.account?.email ?? null,
-      plan: linked?.account?.planLabel ?? null,
+      // Its own login's plan first (cliPlanLabel, from its .credentials.json): most CLI instances
+      // are linked to no desktop, and reading the plan only through the link left 35 of 56 surveyed
+      // accounts with plan null (2026-10-06).
+      plan: inst.planLabel ?? linked?.account?.planLabel ?? null,
       tier: linked?.account?.rateLimitTier ?? null,
       configDir: inst.configDir,
       loggedIn: inst.loggedIn,
