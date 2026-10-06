@@ -232,7 +232,9 @@ describe('the queue snapshot', () => {
       workers.delete('w-swarm-ok')
       resetQueueSync()
     }
-  })
+    // It waits SWARM_WAIT_MS on purpose (the HSwarm that never answers); 2026-10-06's full gate under
+    // load ran it past bun's 5 s default. The bound that matters is the assertion above.
+  }, 15_000)
 
   test('a snapshot with jobs opens with them, and one from an older PC without jobs still opens', () => {
     const pc = randomUUID()
