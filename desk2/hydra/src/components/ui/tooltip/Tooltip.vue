@@ -26,7 +26,7 @@ const localOpen = ref(props.defaultOpen ?? false)
 
 // Lazy: no reka root until the first gesture on the trigger (or the owner opening it by `open`).
 const armed = ref(consumerControlled || props.defaultOpen === true)
-let pending: { event: Event | null; hadFocus: boolean; as?: "click" } | null = null
+let pending: { event: Event | null; hadFocus: boolean; as?: "click"; pressed?: boolean } | null = null
 watch(
   () => props.open,
   (is) => {
@@ -35,10 +35,13 @@ watch(
 )
 provide(TOOLTIP_LAZY_KEY, {
   armed: readonly(armed),
-  arm(event, hadFocus, as) {
+  arm(event, hadFocus, as, pressed) {
     if (armed.value) return
-    pending = { event, hadFocus, as }
+    pending = { event, hadFocus, as, pressed }
     armed.value = true
+  },
+  dismiss() {
+    setOpen(false)
   },
   takePending() {
     const taken = pending

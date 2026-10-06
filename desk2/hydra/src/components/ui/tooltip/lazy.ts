@@ -9,9 +9,11 @@ import type { InjectionKey, Ref } from "vue"
 export interface TooltipLazyContext {
   armed: Readonly<Ref<boolean>>
   /** Mount the reka root; the arming event is replayed on the real trigger when it mounts. */
-  arm: (event: Event | null, hadFocus: boolean, as?: "click") => void
+  arm: (event: Event | null, hadFocus: boolean, as?: "click", pressed?: boolean) => void
   /** The real trigger, once mounted, takes the event to replay (once). */
-  takePending: () => { event: Event | null; hadFocus: boolean; as?: "click" } | null
+  takePending: () => { event: Event | null; hadFocus: boolean; as?: "click"; pressed?: boolean } | null
+  /** Close it again: the arming press gave the new trigger focus back, which opens a tooltip at once. */
+  dismiss: () => void
 }
 
 export const TOOLTIP_LAZY_KEY: InjectionKey<TooltipLazyContext> = Symbol("lunarwerx-tooltip-lazy")

@@ -98,7 +98,7 @@ export interface LazyArming {
 export function createLazyArming(opts: {
   isArmed: () => boolean
   /** Mount the real overlay; `event` is what to replay on the new trigger (`as` turns a pointerup into a click). */
-  arm: (event: Event | null, hadFocus: boolean, as?: "click") => void
+  arm: (event: Event | null, hadFocus: boolean, as?: "click", pressed?: boolean) => void
   firstPress?: () => FirstPress
 }): LazyArming {
   let standIn: HTMLElement | null = null
@@ -108,10 +108,10 @@ export function createLazyArming(opts: {
   /** Set by dispose: a press that ends after the overlay unmounted arms nothing. */
   let disposed = false
 
-  function fire(event: Event | null, as?: "click"): void {
+  function fire(event: Event | null, as?: "click", pressed = false): void {
     if (disposed || opts.isArmed() || holdsOpen(standIn)) return
     const hadFocus = !!standIn && standIn.contains(document.activeElement)
-    opts.arm(event, hadFocus, as)
+    opts.arm(event, hadFocus, as, pressed)
   }
   function note(event: Event): void {
     if (event.currentTarget instanceof HTMLElement) standIn = event.currentTarget
@@ -174,8 +174,8 @@ export function createLazyArming(opts: {
         pressing = false
         const inside = up.type === "pointerup" && up.target instanceof Node && !!standIn?.contains(up.target)
         const plain = event.button === 0 && inside
-        if (plain && mode === "click") fire(up, "click")
-        else fire(null)
+        if (plain && mode === "click") fire(up, "click", true)
+        else fire(null, undefined, true)
       }, 0)
     }
     window.addEventListener("pointerup", end, true)

@@ -35,14 +35,18 @@ const lazy = inject(TOOLTIP_LAZY_KEY, null)
 const root = ref<{ $el: unknown } | null>(null)
 const arming = createLazyArming({
   isArmed: () => lazy?.armed.value ?? true,
-  arm: (event, hadFocus, as) => lazy?.arm(event, hadFocus, as),
+  arm: (event, hadFocus, as, pressed) => lazy?.arm(event, hadFocus, as, pressed),
 })
 onBeforeUnmount(arming.dispose)
 // The real trigger is a new element once the tooltip is armed: finish the gesture that armed it.
 onMounted(() => {
   const taken = lazy?.takePending()
   const el = root.value?.$el
-  if (taken && el instanceof HTMLElement) replay(taken.event, el, taken.hadFocus, taken.as)
+  if (taken && el instanceof HTMLElement) {
+    replay(taken.event, el, taken.hadFocus, taken.as)
+    // The focus handed back after a press opens the tooltip at once; a press closes one.
+    if (taken.pressed) lazy?.dismiss()
+  }
 })
 
 const touchCtx = inject(TOOLTIP_TOUCH_KEY, null)
