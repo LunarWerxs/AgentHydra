@@ -28,7 +28,9 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits)
     >
       <slot />
 
-      <TooltipArrow class="size-2.5 rotate-45 rounded-xs bg-text fill-text z-50 translate-y-[calc(-50%-2px)]" />
+      <!-- The arrow's tip touches the trigger, and the opening slide moves it 8px further in: without
+           pointer-events-none a press on a short trigger lands on the arrow and is lost. -->
+      <TooltipArrow class="pointer-events-none size-2.5 rotate-45 rounded-xs bg-text fill-text z-50 translate-y-[calc(-50%-2px)]" />
     </TooltipContent>
   </TooltipPortal>
 </template>
