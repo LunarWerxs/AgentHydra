@@ -198,7 +198,8 @@ test('one service per home: the lock is taken, refused while a live process hold
   writeFileSync(serviceLockPath(h), String(gone.pid))
   expect(await takeServiceLock(h, 0)).toEqual({ ok: true })
   expect(readFileSync(serviceLockPath(h), 'utf8')).toBe(String(process.pid))
-})
+  // It starts a bun process, which a loaded CI runner can take past bun's 5 s default to start and end.
+}, 15_000)
 
 test('a live service is told apart from a file a dead one left behind', async () => {
   const b = await boot(fakeDevServers())
