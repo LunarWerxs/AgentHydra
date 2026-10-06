@@ -17,7 +17,8 @@ import { join } from 'node:path'
 /** HSwarm list -> the ReDesign pools it feeds, and how many keys each pool is topped up to. */
 export const KEY_PLAN: readonly { list: string; pools: readonly string[]; want: number }[] = [
   { list: 'gemini', pools: ['GEMINI_FLASH_API_KEYS', 'GEMINI_PRO_API_KEYS'], want: 5 },
-  { list: 'anthropic', pools: ['ANTHROPIC_API_KEYS'], want: 3 }
+  { list: 'anthropic', pools: ['ANTHROPIC_API_KEYS'], want: 3 },
+  { list: 'mistral', pools: ['MISTRAL_API_KEYS'], want: 5 }
 ]
 
 export interface PoolResult {

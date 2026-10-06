@@ -181,6 +181,24 @@ describe('redesign connector', () => {
     expect(JSON.parse(own.slice(own.indexOf('{'))).ask_owner).toBe(false)
   })
 
+  test('redesign-mcp: url capture with custom capture function and automatic cleanup', async () => {
+    const outDir = join(tmp, 'out-url-capture')
+    const mockCapture = async (_url: string, png: string) => {
+      writeFileSync(png, PNG)
+    }
+    const mcp = createRedesignMcp({
+      baseUrl: fake.url,
+      outDir,
+      pollMs: 5,
+      captureUrl: mockCapture
+    })
+    const res = await mcp.handle(rpc(1, 'tools/call', { name: 'design_options', arguments: { brief: 'test', url: 'http://localhost:3000', count: 3 } }))
+    expect((res as { result: { isError?: boolean } }).result.isError).toBeUndefined()
+    const out = JSON.parse((res as { result: { content: { text: string }[] } }).result.content[0].text.split('\n\n').slice(1).join('\n\n')) as { options: { image: string }[] }
+    expect(out.options.length).toBe(3)
+    for (const opt of out.options) expect(existsSync(opt.image)).toBe(true)
+  })
+
   test('design image route: serves a picture in the folder, refuses traversal, odd names and outside paths', async () => {
     const dir = join(tmp, 'design-options')
     mkdirSync(join(dir, 'run-9'), { recursive: true })

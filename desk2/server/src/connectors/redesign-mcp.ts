@@ -25,7 +25,7 @@ import { basename, extname, join } from 'node:path'
 
 const MAX_WAIT_MS = 10 * 60_000
 const KEY_HINT =
-  'ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page. Do not ask for the key in chat. (A mock run also needs some key present in ReDesign, but spends nothing.)'
+  'ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page. Do not ask for the key in chat. (A mock run also needs some key present in ReDesign, but spends nothing.) If all keys are cooling down (too many requests in a short time), tell them to wait a few minutes or add more keys from another provider in HSwarm.'
 
 /** A 1x1 PNG: the input when the chat gave neither a screenshot nor a url. */
 const PLACEHOLDER_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -152,7 +152,17 @@ async function captureWithBrowser(url: string, png: string): Promise<void> {
       })
     })
   } finally {
-    rmSync(profile, { recursive: true, force: true })
+    let lastErr: Error | null = null
+    for (let i = 0; i < 10; i++) {
+      try {
+        rmSync(profile, { recursive: true, force: true })
+        return
+      } catch (err) {
+        lastErr = err as Error
+        if (i < 9) await new Promise((r) => setTimeout(r, 100))
+      }
+    }
+    if (lastErr) console.error(`Warning: could not clean up ${profile}: ${lastErr.message}`)
   }
   if (!existsSync(png)) throw new Error('the browser did not produce a screenshot of the url')
 }
@@ -221,7 +231,17 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       } catch (err) {
         return fail(`Could not capture ${args.url}: ${err instanceof Error ? err.message : String(err)}. Pass a screenshot file instead.`)
       } finally {
-        rmSync(dir, { recursive: true, force: true })
+        let lastErr: Error | null = null
+        for (let i = 0; i < 10; i++) {
+          try {
+            rmSync(dir, { recursive: true, force: true })
+            break
+          } catch (err) {
+            lastErr = err as Error
+            if (i < 9) await new Promise((r) => setTimeout(r, 100))
+          }
+        }
+        if (lastErr) console.error(`Warning: could not clean up ${dir}: ${lastErr.message}`)
       }
     } else {
       inputId = await uploadInput('brief-only.png', 'image/png', PLACEHOLDER_PNG)

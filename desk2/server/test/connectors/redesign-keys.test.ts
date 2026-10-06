@@ -10,13 +10,14 @@ afterEach(() => {
   while (dirs.length) rmSync(dirs.pop()!, { recursive: true, force: true })
 })
 
-/** A fake HSwarm home: gemini keys 1-8 (3 disabled, 4 resting, 5 struck), anthropic key 1. */
+/** A fake HSwarm home: gemini keys 1-8 (3 disabled, 4 resting, 5 struck), anthropic key 1, mistral keys 1-5. */
 function hswarmHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'hswarm-fake-'))
   dirs.push(home)
   mkdirSync(join(home, 'secrets'))
   writeFileSync(join(home, 'secrets', 'gemini_api_keys'), ['# note', ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => `test-gem-${n}`)].join('\n'))
   writeFileSync(join(home, 'secrets', 'anthropic_api_keys'), 'test-ant-1\n')
+  writeFileSync(join(home, 'secrets', 'mistral_api_keys'), [1, 2, 3, 4, 5].map((n) => `test-mist-${n}`).join('\n'))
   const db = new Database(join(home, 'keys.sqlite'))
   db.run('CREATE TABLE keys (fp TEXT PRIMARY KEY, entry TEXT NOT NULL, rev INTEGER NOT NULL, ts REAL NOT NULL)')
   const put = (key: string, entry: object) => db.run('INSERT INTO keys VALUES (?, ?, 1, 0)', [fingerprint(key), JSON.stringify(entry)])
@@ -34,6 +35,7 @@ function fakeRedesign(initial: Record<string, string[]> = {}) {
     GEMINI_FLASH_API_KEYS: [],
     GEMINI_PRO_API_KEYS: [],
     ANTHROPIC_API_KEYS: [],
+    MISTRAL_API_KEYS: [],
     ...initial
   }
   const fetchImpl = (async (url: string, init?: RequestInit) => {
@@ -96,5 +98,15 @@ describe('copyHswarmKeys', () => {
     })
     expect(out.ok).toBe(false)
     expect(out.error).toContain('not answering')
+  })
+
+  test('adds Mistral keys alongside Gemini and Anthropic to reduce provider reliance', async () => {
+    const home = hswarmHome()
+    const r = fakeRedesign()
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    expect(out.ok).toBe(true)
+    expect(out.okInHswarm.mistral).toBe(5)
+    expect(r.pools.MISTRAL_API_KEYS).toHaveLength(5)
+    expect(out.pools.map((p) => p.pool)).toContain('MISTRAL_API_KEYS')
   })
 })
