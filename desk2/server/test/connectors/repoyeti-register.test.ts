@@ -28,7 +28,8 @@ beforeAll(() => {
   Bun.spawnSync(['git', 'init', '-q', repo])
   mkdirSync(join(repo, 'sub'))
   plain = mkdtempSync(join(tmpdir(), 'ry-reg-plain-'))
-})
+  // 20s: a real `git init`; a cold Windows CI runner has run spawns ~9.5x slower than a desk.
+}, 20_000)
 
 afterAll(() => {
   rmSync(repo, { recursive: true, force: true })
