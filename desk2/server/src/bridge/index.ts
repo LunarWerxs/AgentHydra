@@ -203,8 +203,15 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The other PCs' queues, read at most every REMOTES_FRESH_MS. Shared between remoteWorkers and swarmJobs. */
   function cachedRemoteQueues(): Promise<AhRemoteQueues | null> {
     if (remotesRead && now() - remotesRead.at < REMOTES_FRESH_MS) return remotesRead.read
-    const read = client.remoteQueues().catch(() => null)
+    // An AgentHydra without the route (404) is kept as none; any other failure is not kept: the next caller reads again.
+    const read = client.remoteQueues().catch((err) => {
+      if (err instanceof BridgeError && err.status === 404) return null
+      throw err
+    })
     remotesRead = { at: now(), read }
+    read.catch(() => {
+      if (remotesRead?.read === read) remotesRead = null
+    })
     return read
   }
 
@@ -250,7 +257,8 @@ export function createBridge(opts: BridgeOptions = {}) {
   async function workers(o: { all?: boolean } = {}): Promise<CliMayteWorker[]> {
     const remote = remoteWorkers(o.all)
     try {
-      const raw = await rawWorkers(o.all)
+      // A copy: the read is shared by every caller of the tick, none may change it.
+      const raw = [...(await rawWorkers(o.all))]
       // Workers matched to a chat that AgentHydra's recent-finished window dropped stay listed under it.
       const have = new Set(raw.map((w) => w.id))
       const missing = extraWorkerIds().filter((id) => !have.has(id))
@@ -279,7 +287,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The 24-hour transcript index, read at most every SESSIONS_FRESH_MS. */
   function sessionsIndex(): Promise<AhSessionRow[]> {
     if (sessionsRead && now() - sessionsRead.at < SESSIONS_FRESH_MS) return sessionsRead.read
-    const read = client.sessions().catch(() => [])
+    const read = client.sessions()
     sessionsRead = { at: now(), read }
     read.catch(() => {
       if (sessionsRead?.read === read) sessionsRead = null
@@ -290,7 +298,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
   function chatsForExternal(): Promise<AhChatRow[]> {
     if (chatsRead && now() - chatsRead.at < SESSIONS_FRESH_MS) return chatsRead.read
-    const read = client.chats().catch(() => [])
+    const read = client.chats()
     chatsRead = { at: now(), read }
     read.catch(() => {
       if (chatsRead?.read === read) chatsRead = null

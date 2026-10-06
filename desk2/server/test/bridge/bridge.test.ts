@@ -68,6 +68,32 @@ describe('bridge', () => {
     expect(await b.activeWorkersFor(sid(1))).toEqual([])
   })
 
+  test('overlapping workers() calls each list a missing extra worker once and leave the shared read alone', async () => {
+    const f = await fake()
+    const done = f.state.workers.find((w) => w.status === 'done')
+    // More finished workers than AgentHydra's recent window: the last one is only found by id.
+    const many = Array.from({ length: 25 }, (_, i) => ({ ...done, id: `w-many-${String(i).padStart(2, '0')}`, group: 'g-many', sessionId: null }))
+    f.state.workers = [...f.state.workers, ...many]
+    const extra = many[24].id
+    const b = createBridge({ url: f.url, now: () => NOW })
+    b.setExtraWorkerIds(() => [extra])
+    const [a, c] = await Promise.all([b.workers(), b.workers()])
+    for (const list of [a, c]) expect(list.filter((w) => w.id === extra).length).toBe(1)
+    const gets = f.gets.filter((g) => g.startsWith('/api/corch/workers') && g.includes('limit='))
+    expect(gets.length).toBe(1)
+  })
+
+  test('a failed sessions read is not cached: the next read after AgentHydra returns is the good one', async () => {
+    const f = await fake()
+    let t = NOW
+    const b = createBridge({ url: f.url, now: () => t })
+    await f.stop()
+    expect(await b.externalSessions()).toEqual([])
+    await f.start()
+    t += 4000 // past the worker list's own 3 s tick; the sessions and chats reads (10 s) are still fresh
+    expect((await b.externalSessions()).length).toBe(7)
+  })
+
   test('external sessions leave out the ids the engine registers', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })
