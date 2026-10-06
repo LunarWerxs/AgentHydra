@@ -497,6 +497,58 @@ Measured 2026-10-04, the first request of a one-line prompt on one account in th
 tokenizer): ordinary 27,864 tokens, chat 28,844 (+980; 124 tools against 33, 66 skills against 23;
 MCP tools are deferred, so they cost a name each).
 
+### Sealed tasks (`sealed: {...}`, 2026-10-05)
+
+Some workers need one system prompt and one MCP server and nothing else. SUE (the playtest tool in
+the Connections repo) runs each simulated visitor as a CliMayte worker, and one visit measured on
+2026-10-05 made 98 requests whose context was already 38,700 tokens before the visitor's first move
+(the CLI's tool set, the owner's MCP servers, the account's CLAUDE.md, `WORKER_BRIEF`), median 72k,
+6.84M cache-read tokens for the visit and 5.5 minutes from worker start to first move. SUE can seal
+its own `claude` spawn, but that would use a CLI login outside CliMayte, which is the one allowed
+door to those accounts; so the sealing is a task option here.
+
+A task with `sealed` (the task field on `climayteRun`, `POST /api/corch/workers` and the
+`climayte_run` MCP tool) is a sealed worker:
+
+```json
+{
+  "prompt": "Visit the page and try to sign up.",
+  "sealed": {
+    "systemPromptFile": "C:/Users/me/sue/visitor-7.md",
+    "mcpConfig": "C:/Users/me/sue/visitor-7.mcp.json",
+    "allowedTools": ["mcp__sue-hands__*"]
+  }
+}
+```
+
+`sealed.prompt` stands in for the task's `prompt` when that is empty; the task's `cwd` is not read.
+`sealedOf` refuses the dispatch, with the task's number, when either path is not an absolute
+existing file, when `mcpConfig` is not JSON with an `mcpServers` object, or when `allowedTools` is
+not a non-empty array of non-empty strings; a sealed task cannot also be `chat: true`. The option is
+on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resends and revives.
+
+| | Ordinary worker | Sealed worker |
+| --- | --- | --- |
+| System prompt | the CLI's own, plus `WORKER_BRIEF` (`--append-system-prompt`) | `--system-prompt-file <systemPromptFile>`, in place of the CLI's own; no `WORKER_BRIEF`, no `CHAT_NOTE`, no ETA note |
+| Settings sources | the account folder's (the lean CLAUDE.md, skills, user settings) | `--setting-sources ""`: no CLAUDE.md, no hook, no skill, no user setting; `syncOwnerClaude` is not run for the launch |
+| Built-in tools | all | `--tools ""`: none |
+| MCP servers | the owner's and `climayte-worker`, written to `<hooks>/<id>.mcp.json` | `--strict-mcp-config --mcp-config <mcpConfig>`: only that file's; no `climayte-worker`, so no `climayte_ask` |
+| Permissions | `--dangerously-skip-permissions` | `--permission-mode default` and `--allowedTools` exactly as given |
+| Folder | the task's `cwd` | a fresh empty temp folder (`climayte-sealed-*`), made at dispatch and again at launch if it was cleaned away |
+| Usage stops | the wind-down ask at the stop line, then the ceiling | the ceiling only: it has no Write tool for a handoff note, so it is never asked for one (`climayte_handoff` refuses it); stopped at the ceiling, its session moves to another account and resumes from its transcript |
+| Report | its final text, after the worker contract's steps | its final text; it has no Connections MCP, and nothing in the daemon asks it for the contract's `prompt_get` or rating (those come from the account's CLAUDE.md, which it never loads) |
+
+Everything else is as for any worker: the account is picked by quota and placement, RAM gating,
+the scorecard's model pick unless one is named, usage accounting, pings, checks, verdicts and
+status. Its `--settings` file is still written and read (a `--settings` flag is not a settings
+source), without the edit-claims hook. Two sealed tasks never count as a repeat of each other,
+since each has its own folder (`repeatOf` compares folders).
+
+`cliArgv` builds both launches; the sealed branch is in `briefArgs`, and `writeWorkerMcp` answers
+the task's own config. `server/tests/climayte-sealed.test.ts` pins the exact argv and the refusals.
+Not yet measured: the request size of a live sealed worker (the daemon had not been restarted onto
+this code when it was written).
+
 ### Scorecard (`server/src/climayte-scorecard.ts`, `5710553`)
 
 Owner, 2026-09-30: "the AI can try a model, and if it works, it gives it a thumbs up ... if it

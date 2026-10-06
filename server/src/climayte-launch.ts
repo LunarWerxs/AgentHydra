@@ -399,7 +399,9 @@ export function forgetOwnNeedsAuth(configDir: string): void {
  *  another name is left out too. The file, or null when there is nothing to give (no owner dir, as
  *  under tests).
  *  For `manage` kind workers, also includes the manager endpoint for wave control. */
-function writeWorkerMcp(w: CliMayteWorker): string | null {
+export function writeWorkerMcp(w: CliMayteWorker): string | null {
+  // A sealed worker has the one config its task named and nothing of the owner's or this daemon's.
+  if (w.sealed) return w.sealed.mcpConfig
   const file = workerFiles(w.id)[1]
   // A chat has the owner's servers with none left out: his own `claude` has AgentHydra's too.
   const deny = w.chat ? { names: [], paths: [] } : { names: WORKER_DENIED_MCP, paths: [MCP_PATH] }
@@ -452,7 +454,8 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   // task's id and says when another chat or worker edited it in the last half hour. Workers carry
   // none of the owner's hooks, so without this a worker's edits were invisible to it, and a worker
   // editing a chat's files was the collision it was built for (2026-10-01).
-  const claims = ownerClaudeDir ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
+  const claims =
+    ownerClaudeDir && !w.sealed ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
   writeFileSync(
     hookFile,
     JSON.stringify({
@@ -535,9 +538,24 @@ function ownerHome(): string | null {
   return ownerClaudeDir && basename(ownerClaudeDir) === '.claude' ? dirname(ownerClaudeDir) : null
 }
 
-/** What tells the CLI who it is: an ordinary worker's WORKER_BRIEF, or a chat's prompt file and the
- *  owner's skills. */
+/** What tells the CLI who it is: an ordinary worker's WORKER_BRIEF, a chat's prompt file and the
+ *  owner's skills, or a sealed worker's own system prompt in place of the CLI's, with no settings
+ *  source (no CLAUDE.md, hook or user setting; `--settings` is still read), no built-in tool, and
+ *  no MCP server but its config's (docs/CLIMAYTE.md, "Sealed tasks"). */
 function briefArgs(w: CliMayteWorker): string[] {
+  if (w.sealed)
+    return [
+      '--strict-mcp-config',
+      '--setting-sources',
+      '',
+      '--tools',
+      '',
+      // Variadic, like --mcp-config: the option after it ends its list.
+      '--allowedTools',
+      ...w.sealed.allowedTools,
+      '--system-prompt-file',
+      w.sealed.systemPromptFile,
+    ]
   if (!w.chat) {
     // How the newest estimates compared with the real time (climayte-eta.ts): nothing until there
     // are enough samples, then the ratio to multiply a first guess by.
@@ -562,7 +580,8 @@ export function cliArgv(
     '--output-format',
     'stream-json',
     '--verbose',
-    '--dangerously-skip-permissions',
+    // A sealed worker is allowed its named tools and no other (briefArgs).
+    ...(w.sealed ? ['--permission-mode', 'default'] : ['--dangerously-skip-permissions']),
     ...(resume ? ['--resume', sessionId] : ['--session-id', sessionId]),
     ...(w.model ? ['--model', w.model] : []),
     ...(w.effort ? ['--effort', w.effort] : []),
@@ -744,7 +763,9 @@ export function launch(
   }
   if (w.pendingCwd) applyPendingCwd(w, acct, sessionId, fresh)
   // The owner's global CLAUDE.md and skills, so a worker keeps the owner's rules (field note 5).
-  if (ownerClaudeDir) syncOwnerClaude(ownerClaudeDir, acct.configDir)
+  if (ownerClaudeDir && !w.sealed) syncOwnerClaude(ownerClaudeDir, acct.configDir)
+  // A sealed worker's folder is a temp one made at dispatch; a cleanup since then is made good.
+  if (w.sealed) mkdirSync(w.cwd, { recursive: true })
   const resume = !fresh && hasTranscript(acct.configDir, sessionId)
   const plan: LaunchPlan = {
     n,

@@ -172,6 +172,14 @@ export interface CliMayteSizing {
   roomOn: string | null
 }
 
+/** A sealed task's launch (docs/CLIMAYTE.md, "Sealed tasks"): the CLI gets this system prompt in
+ *  place of its own, this MCP config and no other server, no built-in tool, and no settings source. */
+export interface CliMayteSealed {
+  systemPromptFile: string
+  mcpConfig: string
+  allowedTools: string[]
+}
+
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
@@ -226,6 +234,9 @@ export interface CliMayteWorker {
    *  launched like his own `claude` in the folder, with no worker brief, his full instructions and
    *  skills, and Opus xhigh unless the task names its own. Absent: an ordinary delegated worker. */
   chat?: boolean
+  /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
+   *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
+  sealed?: CliMayteSealed
   /** Each judgement of its result, oldest first (climayteVerdict). */
   verdicts?: CliMayteVerdict[]
   /** A shell command that proves the task is done (exit 0). CliMayte runs it in `cwd` after the worker
