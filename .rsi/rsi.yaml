@@ -34,3 +34,20 @@ metrics:
     measure: 'bun -e "const m = await import(''./server/src/mcp.ts''); console.log(JSON.stringify({chars: m.SERVER_INSTRUCTIONS.length}))"'
     pick: 'json:$.chars'
     light: true
+  # Every native HSwarm task re-sends its system prompt and tool schemas on every turn: the prefix of a
+  # read task with a schema, the common shape (today's date line left out, its length moves by month).
+  - id: hswarm.read_task.prefix_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: "python scripts/rsi/hswarm-prefix.py"
+    pick: 'json:$.chars'
+    light: true
+  # Every CliMayte worker carries this brief on every turn of its session.
+  - id: climayte.worker_brief_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: 'bun -e "const m = await import(''./server/src/climayte-lib.ts''); console.log(JSON.stringify({chars: m.WORKER_BRIEF.length}))"'
+    pick: 'json:$.chars'
+    light: true
