@@ -302,6 +302,66 @@ function liveSocket(url: string) {
   return { ws, got, until, opened }
 }
 
+const preview = (desk: DeskServer, cwd: string, profile: string, headers: Record<string, string> = {}) =>
+  fetch(`${desk.url}/api/browser/preview?${q({ cwd, profile })}`, { headers })
+
+describe('preview', () => {
+  test('a closed or unknown profile is 404, another workspace’s is 403, a foreign page is 403, and none of them starts a Chrome', async () => {
+    makeStore()
+    const desk = await boot()
+    expect((await preview(desk, 'c:/Users/me/Proj', 'alpha')).status).toBe(404)
+    expect((await preview(desk, 'c:/Users/me/Proj', 'nope')).status).toBe(404)
+    expect((await preview(desk, 'c:/Users/me/Proj', 'legacy')).status).toBe(404)
+    expect((await preview(desk, 'c:/Users/me/Proj', 'gamma')).status).toBe(403)
+    expect((await preview(desk, 'c:/Users/me/Proj', 'alpha', { origin: 'http://evil.example.com' })).status).toBe(403)
+    expect((await fetch(`${desk.url}/api/browser/preview?${q({ cwd: 'c:/Users/me/Proj' })}`)).status).toBe(400)
+  })
+})
+
+describe.skipIf(!chrome)('preview of a real headless Chrome', () => {
+  let pid = 0
+  afterEach(() => {
+    if (pid) killTree(pid)
+    pid = 0
+  })
+
+  test('answers a small uncached JPEG of the page', async () => {
+    const { root } = makeStore()
+    const dir = join(root, 'ws', WS_PROJ, 'alpha')
+    const site = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('<title>Invented page</title><h1>Hello</h1>', { headers: { 'content-type': 'text/html' } }) })
+    fakes.push(site)
+    const proc = Bun.spawn(
+      [chrome as string, '--headless=new', `--user-data-dir=${dir}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-gpu', `http://127.0.0.1:${site.port}/`],
+      { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore', windowsHide: true },
+    )
+    pid = proc.pid
+    const until = Date.now() + 20_000
+    while (!existsSync(join(dir, 'DevToolsActivePort')) && Date.now() < until) await Bun.sleep(100)
+    const desk = await boot()
+    let res = await preview(desk, 'c:/Users/me/Proj', 'alpha')
+    for (let i = 0; i < 50 && res.status !== 200; i++) {
+      await Bun.sleep(150)
+      res = await preview(desk, 'c:/Users/me/Proj', 'alpha')
+    }
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('image/jpeg')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xff, 0xd8, 0xff])
+    expect(bytes.length).toBeGreaterThan(500)
+    // Sized by the JPEG's own header: SOF0/SOF2 hold height then width.
+    let w = 0
+    for (let i = 2; i < bytes.length - 9; i++) {
+      if (bytes[i] === 0xff && (bytes[i + 1] === 0xc0 || bytes[i + 1] === 0xc2)) {
+        w = (bytes[i + 7] << 8) | bytes[i + 8]
+        break
+      }
+    }
+    expect(w).toBeGreaterThan(0)
+    expect(w).toBeLessThanOrEqual(640)
+  })
+})
+
 describe.skipIf(!chrome)('live view of a real headless Chrome', () => {
   let pid = 0
   afterEach(() => {

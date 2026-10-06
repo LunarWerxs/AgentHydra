@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
-import { browserOpenRequest, isBrowserCall, parseBrowserCall, toolFamily } from '../../src/components/transcript/lib/tools'
+import { browserOpenRequest, isBrowserCall, newestBrowserCalls, parseBrowserCall, toolFamily } from '../../src/components/transcript/lib/tools'
 
 const call = (tool_name: string, params: Record<string, unknown> = {}, local = true) => ({ local, tool_name, params })
 const item = (id: string, name: string, input: Record<string, unknown>): ToolItem => ({
@@ -52,6 +52,24 @@ describe('parseBrowserCall', () => {
     const r = parseBrowserCall(A, call('browser_click'), 'Clicked. Now on https://example.com/next?x=1 (200) or https://other.example.com')
     expect(r).toEqual({ verb: 'Clicked', url: 'https://example.com/next?x=1', profile: 'default browser' })
     expect(parseBrowserCall(A, call('browser_click'), 'no address here').url).toBe('')
+  })
+
+  test('the profile is params.profile, then profile_id, then profileId, else the default browser', () => {
+    expect(parseBrowserCall(A, call('browser_click', { profile: 'one', profile_id: 'two', profileId: 'three' })).profile).toBe('one')
+    expect(parseBrowserCall(A, call('browser_click', { profile_id: 'company-example', profileId: 'three' })).profile).toBe('company-example')
+    expect(parseBrowserCall(A, call('browser_click', { profileId: 'three' })).profile).toBe('three')
+    expect(parseBrowserCall(A, call('browser_click', {})).profile).toBe('default browser')
+  })
+
+  test('only the newest call of each named profile may preview live', () => {
+    const items = [
+      item('1', A, call('browser_navigate', { profile: 'shop' })),
+      item('2', A, call('browser_click', { profile_id: 'shop' })),
+      item('3', A, call('browser_click', { profile: 'blog' })),
+      item('4', A, call('browser_click')),
+      item('5', A, call('memory_search')),
+    ]
+    expect([...newestBrowserCalls(items)]).toEqual([['shop', '2'], ['blog', '3']])
   })
 
   test('a click asks for the saved profile and the address; the default browser has no profile', () => {

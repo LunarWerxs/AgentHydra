@@ -1,5 +1,6 @@
 // What a tool row's one-line header says. Pure: no Vue, no DOM.
 import type { BrowserOpenRequest } from '@shared/browser'
+import type { TranscriptItem } from '@shared/protocol'
 
 export type ToolFamily =
   | 'bash'
@@ -91,7 +92,7 @@ export const DEFAULT_BROWSER = 'default browser'
 /**
  * What a Browser card shows. `name` is the browser tool ("browser_navigate") or the whole MCP call name (then the
  * tool is input.tool_name). The url is params.url, else the first http(s) address in the result; the profile is
- * params.profile, else the default browser.
+ * params.profile (or its aliases profile_id / profileId), else the default browser.
  */
 export function parseBrowserCall(
   name: string,
@@ -102,7 +103,7 @@ export function parseBrowserCall(
   const verb = BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser')
   const params = input.params && typeof input.params === 'object' ? (input.params as Record<string, unknown>) : {}
   const fromResult = resultText ? (/https?:\/\/[^\s"'<>)\]}\\]+/.exec(resultText)?.[0] ?? '') : ''
-  return { verb, url: str(params.url) || fromResult, profile: str(params.profile) || DEFAULT_BROWSER }
+  return { verb, url: str(params.url) || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
 }
 
 /** What a click on a Browser card asks the pane to show: no profile for the person's own (default) browser. */
@@ -302,4 +303,15 @@ export function formatElapsed(ms: number): string {
   if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
   const h = Math.floor(m / 60)
   return `${h}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+/** The id of the newest browser call of each profile (the default browser has none): its card is the one that may show live. */
+export function newestBrowserCalls(items: readonly TranscriptItem[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const it of items) {
+    if (it.kind !== 'tool_use' || !isBrowserCall(it.name, it.input)) continue
+    const { profile } = parseBrowserCall(it.name, it.input)
+    if (profile !== DEFAULT_BROWSER) out.set(profile, it.id)
+  }
+  return out
 }

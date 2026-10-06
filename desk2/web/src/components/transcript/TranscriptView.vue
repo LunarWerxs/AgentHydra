@@ -10,6 +10,7 @@ const ArrowDown = icons.scrollToBottom
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { buildRows, estimateHeight } from './lib/rows'
+import { newestBrowserCalls } from './lib/tools'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { provideTranscript } from './context'
@@ -55,6 +56,7 @@ provideTranscript(
     readOnly: computed(() => !!props.readOnly),
     cwd: computed(() => chat.value?.cwd ?? null),
     children: computed(() => rows.value.children),
+    newestBrowser: computed(() => newestBrowserCalls(props.items)),
     background: computed(() => ({
       count: chat.value?.climayteActive ?? 0,
       resultId: props.items.findLast((i) => i.kind === 'result' && !i.parentToolUseId)?.id ?? null,

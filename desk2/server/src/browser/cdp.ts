@@ -126,6 +126,56 @@ export async function firstTab(port: number): Promise<BrowserTab | null> {
   return null
 }
 
+/** One small JPEG of a page, as base64: opens a CDP socket, captures once and closes it (no session outlives the call). */
+export async function capturePreview(port: number, tabId: string, width = 640): Promise<Buffer> {
+  // The URL is built from the id, as LiveSession does.
+  const ws = new WebSocket(`ws://${HOST}:${port}/devtools/page/${encodeURIComponent(tabId)}`)
+  const done = (): void => {
+    try {
+      ws.close()
+    } catch {
+      // floor-ok: already closed
+    }
+  }
+  try {
+    await new Promise<void>((res, rej) => {
+      ws.onopen = () => res()
+      ws.onerror = () => rej(new Error('the page did not accept a connection'))
+      setTimeout(() => rej(new Error('the page did not answer in time')), 4000)
+    })
+    let next = 1
+    const pending = new Map<number, (m: { result?: Record<string, unknown>; error?: { message?: string } }) => void>()
+    ws.onmessage = (ev) => {
+      try {
+        const m = JSON.parse(String(ev.data)) as { id?: number; result?: Record<string, unknown>; error?: { message?: string } }
+        if (m.id !== undefined) pending.get(m.id)?.(m)
+      } catch {
+        // floor-ok: not a reply
+      }
+    }
+    const call = (method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> =>
+      new Promise((resolve, reject) => {
+        const id = next++
+        const timer = setTimeout(() => reject(new Error(`${method} timed out`)), 6000)
+        pending.set(id, (m) => {
+          clearTimeout(timer)
+          pending.delete(id)
+          if (m.error) reject(new Error(m.error.message ?? method))
+          else resolve(m.result ?? {})
+        })
+        ws.send(JSON.stringify({ id, method, params }))
+      })
+    const metrics = (await call('Page.getLayoutMetrics')) as { cssVisualViewport?: { clientWidth?: number; clientHeight?: number } }
+    const w = Math.max(1, Math.round(metrics.cssVisualViewport?.clientWidth ?? width))
+    const h = Math.max(1, Math.round(metrics.cssVisualViewport?.clientHeight ?? width))
+    const shot = await call('Page.captureScreenshot', { format: 'jpeg', quality: 60, clip: { x: 0, y: 0, width: w, height: h, scale: Math.min(1, width / w) } })
+    if (typeof shot.data !== 'string') throw new Error('no image')
+    return Buffer.from(shot.data, 'base64')
+  } finally {
+    done()
+  }
+}
+
 const KEY_CODES: Record<string, number> = {
   Backspace: 8,
   Tab: 9,

@@ -10,6 +10,8 @@ export interface TranscriptCtx {
   cwd: Ref<string | null>
   children: ComputedRef<Map<string, TranscriptItem[]>>
   /** Background tasks the chat dispatched that still run, and the id of its latest result line (the only one they hold back). */
+  /** Profile -> id of its newest browser call in this transcript: only that Browser card previews live. */
+  newestBrowser?: ComputedRef<Map<string, string>>
   background?: Ref<{ count: number; resultId: string | null }>
   isOpen(key: string, fallback?: boolean): boolean
   toggle(key: string, fallback?: boolean): void

@@ -152,6 +152,13 @@ export async function listProfiles(cwd: string): Promise<Listing> {
   return { result, refs }
 }
 
+/** True when `name` is a saved browser of some workspace other than the one `cwd` belongs to (and of none this chat's own). */
+export function ofAnotherWorkspace(listing: Listing, name: string): boolean {
+  if (listing.refs.some((r) => r.profile.name === name)) return false
+  const ws = join(storeRoot(), 'ws')
+  return realDirs(ws).some((slug) => slug !== listing.result.workspace && realDirs(join(ws, slug)).includes(name))
+}
+
 async function matchWorkspace(cwd: string, workspaces: Json): Promise<string | null> {
   const entries = Object.entries(workspaces).flatMap(([slug, v]) =>
     isObject(v) && typeof v.workspace === 'string' ? [{ slug, path: normalizePath(v.workspace) }] : [],

@@ -6,10 +6,10 @@
 // guard. A request names a profile, never a port: the port comes from that profile folder's DevToolsActivePort.
 
 import type { Hono } from 'hono'
-import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened } from '@shared/browser'
-import { firstTab, LaunchError, launchChrome, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
+import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened } from '@shared/browser'
+import { capturePreview, firstTab, LaunchError, launchChrome, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
-import { listProfiles, type ProfileRef } from '../browser/store'
+import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
 import type { ServerContext } from '../context'
 
 /** The profile `name` as this chat's workspace may use it: its own, or an unowned one that is open. */
@@ -82,6 +82,27 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 409)
     try {
       return c.json(await pageTabs(ref.port))
+    } catch {
+      return c.json({ error: `'${profile}' did not answer` }, 502)
+    }
+  })
+
+  // A small JPEG of what the profile's page shows now (the transcript Browser card's live preview). Never starts a Chrome.
+  app.get(BROWSER_PREVIEW, async (c) => {
+    const why = notOwnPage(c.req.raw.headers)
+    if (why) return c.json({ error: why }, 403)
+    const cwd = c.req.query('cwd')
+    const profile = c.req.query('profile')
+    if (!cwd || !profile) return c.json({ error: 'cwd and profile required' }, 400)
+    const listing = await listProfiles(cwd)
+    const ref = listing.refs.find((r) => r.profile.name === profile)
+    if (!ref) return c.json({ error: `no browser '${profile}' for this chat's workspace` }, ofAnotherWorkspace(listing, profile) ? 403 : 404)
+    if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 404)
+    try {
+      const tab = await LiveSession.pick(ref.port, null)
+      if (!tab) return c.json({ error: `'${profile}' has no page open` }, 404)
+      const jpeg = await capturePreview(ref.port, tab.id)
+      return new Response(new Uint8Array(jpeg), { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } })
     } catch {
       return c.json({ error: `'${profile}' did not answer` }, 502)
     }

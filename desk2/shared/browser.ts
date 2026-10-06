@@ -19,6 +19,11 @@ export const BROWSER_PROFILES = `${BROWSER_BASE}/profiles`
 export const BROWSER_OPEN = `${BROWSER_BASE}/open`
 /** GET ?cwd=&profile= -> BrowserTab[]: the pages of the profile's running Chrome. */
 export const BROWSER_TABS = `${BROWSER_BASE}/tabs`
+/**
+ * GET ?cwd=&profile= -> a small JPEG (about 640px wide) of the profile's current page, Cache-Control: no-store.
+ * 404 when the profile is not open, 403 for another workspace's profile; it never starts a Chrome.
+ */
+export const BROWSER_PREVIEW = `${BROWSER_BASE}/preview`
 /** WebSocket ?cwd=&profile=&tab=<id, optional>: BrowserLiveOut from the server, BrowserLiveIn from the page. */
 export const BROWSER_LIVE = `${BROWSER_BASE}/live`
 
