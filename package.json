@@ -15,7 +15,6 @@
     "dev:server": "bun run --cwd server dev",
     "dev:web": "bun run --cwd web dev",
     "build": "bun run --cwd web build",
-    "build:desk2": "bun install --cwd desk2 && bun run --cwd desk2 build",
     "compile": "bun build --compile --outfile=tmp/agenthydra server/src/main.ts",
     "dist": "bun run scripts/build.ts",
     "start": "bun run --cwd server start",

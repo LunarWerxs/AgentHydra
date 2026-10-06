@@ -24,7 +24,13 @@ const gitUpdater = createUpdater({
   appLabel: 'AgentHydra',
   updateRepoEnvVar: 'AGENTHYDRA_UPDATE_REPO',
   installCmd: ['bun', 'install'],
-  buildCmd: ['bun', 'run', 'build:desk2'],
+  // Desk 2 (desk2/) is AgentHydra 2.0's window: its own `bun install` then `bun run build`, in desk2/.
+  // The kit engine takes one command, so a short bun script runs the two and fails on the first error.
+  buildCmd: [
+    'bun',
+    '-e',
+    "for (const a of [['install'], ['run', 'build']]) { const r = Bun.spawnSync(['bun', ...a], { cwd: 'desk2', stdout: 'inherit', stderr: 'inherit' }); if (r.exitCode !== 0) process.exit(r.exitCode ?? 1) }",
+  ],
 })
 
 /** `fresh` bypasses the compiled path's 5-minute result cache, for a check a PERSON asked for.

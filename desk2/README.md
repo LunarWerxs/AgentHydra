@@ -20,8 +20,7 @@ is no longer called HydraDesk. It is now called AgentHydra"). Its window, its **
 and its messages say AgentHydra; the folder and the internal names keep Desk 2's: `desk2/`, port 7798,
 data in `~/.hydra-desk-2/`, the window host `launcher/HydraDesk2.exe` (WebView2 data in
 `%LOCALAPPDATA%\HydraDesk2\webview`). The daemon on 7787 no longer shows the old window where this folder
-is beside it: a page asked of it goes on to this window (`server/src/desk2.ts`): a 302 when this window's server answers, else the daemon starts it and shows a
-"Starting AgentHydra..." page that goes on by itself.
+is beside it: a page asked of it goes on to this window (`server/src/index.ts`, `DESK2_URL`).
 
 It began as Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things on
 without touching Jacob's app. Everything below is Hydra Desk's own description, with the ports and
