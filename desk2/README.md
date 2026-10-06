@@ -157,10 +157,14 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **A list or a count per kind.** The Filter menu's Sub-items choose, per kind, whether a row shows its
   CliMayte tasks and HSwarm jobs as lines (List) or as a small badge with the kind's icon and how many run
   (Count: blue for running HSwarm jobs, light gray for running CliMayte tasks, muted when only finished
-  ones are left, its icon pulsing while any run) at the row's right edge; defaults: CliMayte List,
-  HSwarm Count (owner, 2026-10-05: "just an icon, like a number ... not insanely cluttering up my
-  sidebar"). A badge's tooltip names up to eight of them; a click shows that row's lines inline until the
-  next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
+  ones are left, its icon pulsing while any run) at the row's right edge; both default to Count (owner,
+  2026-10-05: "just an icon, like a number ... not insanely cluttering up my sidebar"; 2026-10-06, of
+  CliMayte's: "the same option ... that I can click to see if I want"). A CliMayte badge also has a dot per
+  account its tasks run on (up to three, dimmed for one with nothing running) in that account's colour, and
+  each task line shows its account (`#68`) in the same colour (`sidebar/account-tone.ts`: AgentHydra's
+  instance palette without the blue that is HSwarm's, or the red, green and gray a line's mark uses). A
+  badge's tooltip names up to eight of them, a task after its account; a click shows that row's lines inline
+  until the next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
