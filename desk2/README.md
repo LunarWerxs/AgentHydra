@@ -435,7 +435,11 @@ The full design is in [SPEC.md](SPEC.md). The contract between the server and th
 <details>
 <summary><b>Read more: starting it, the launcher and the window</b></summary>
 
-**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk 2" shortcut on the
+**In a release download** (from 2.0) this folder ships beside the daemon with its own bun in `runtime/`.
+On Windows the tray's Open runs the launcher below; on Linux and macOS the daemon starts the server on
+that bun and opens your browser. Either way the daemon starts it when it is down.
+
+**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts an "AgentHydra" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
 waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
 the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it

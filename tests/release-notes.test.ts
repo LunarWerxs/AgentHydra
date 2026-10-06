@@ -2,7 +2,7 @@
 // a TL;DR, then every line folded under "Read more" (owner, 2026-10-06: "do it like Sage does"), and the
 // refusals that keep a 1.x release or a wall of text off GitHub.
 import { describe, expect, test } from 'bun:test'
-import { formatReleaseBody, refusal } from '../scripts/release-notes.mjs'
+import { formatReleaseBody, refusal, unreleasedRefusal } from '../scripts/release-notes.mjs'
 
 const changelog = (section: string) =>
   `# Changelog\n\n## [Unreleased]\n\n${section}\n\n## [1.13.0] - 2026-10-06\n\n### Added\n\n- **Old.** Old.\n`
@@ -49,13 +49,23 @@ describe('release notes', () => {
     expect(body.indexOf('## Downloads')).toBeGreaterThan(body.indexOf('</details>'))
   })
 
-  test('refused: a 1.x version, a long section with no TL;DR, a version with no section', () => {
+  test('refused: a 1.x version, a long section with no TL;DR (also [Unreleased]), a version with no section', () => {
     expect(refusal(changelog(LONG.replace('2.0.0', '1.14.0')), '1.14.0')).toContain('below 2.0.0')
     const noTldr = LONG.replace(/\*\*TL;DR\*\*[\s\S]*?\*\*Everything in 2\.0\.0\*\*\n/, '')
     expect(refusal(changelog(noTldr), '2.0.0')).toContain('3 changes and no TL;DR')
     expect(() => formatReleaseBody(changelog(noTldr), '2.0.0')).toThrow('no TL;DR')
     expect(refusal(changelog(LONG), '2.0.1')).toContain('no section for 2.0.1')
     expect(refusal(changelog(LONG), '2.0.0')).toBeNull()
+    // --check-unreleased holds [Unreleased] to the same rule; an empty or short one passes.
+    const asUnreleased = (s: string) => changelog(s.replace(/^## \[2\.0\.0\][^\n]*\n/, ''))
+    expect(unreleasedRefusal(asUnreleased(noTldr))).toContain(
+      'Unreleased section has 3 changes and no TL;DR',
+    )
+    expect(unreleasedRefusal(asUnreleased(LONG))).toBeNull()
+    expect(unreleasedRefusal(changelog(''))).toBeNull()
+    expect(
+      unreleasedRefusal(asUnreleased('### Fixed\n\n- **Two little things.** Both fixed.')),
+    ).toBeNull()
   })
 
   test('a section of one or two changes needs no TL;DR and is shown whole', () => {

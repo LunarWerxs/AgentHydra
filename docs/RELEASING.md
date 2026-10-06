@@ -27,8 +27,38 @@
   ```
 
   `node scripts/release-notes.mjs 2.0.0` prints the page; `--check` only says whether it may ship.
+  `--check-unreleased` holds `[Unreleased]` to the same rule before it has a version (exit 1, the
+  reason on stderr; an empty or short section passes).
   Write each bullet for someone who uses AgentHydra: what changed for them, in a few sentences. The
   owner's quotes, measurements, endpoints and file names belong in the commit message and the docs.
+
+## What a 2.0 bundle holds, and building one on a PC
+
+Every bundle (`AgentHydra-<version>-<target>`, a `.zip` on Windows, a `.tar.gz` elsewhere) holds:
+
+- the compiled daemon (`AgentHydra.exe` / `agenthydra`) and `orchestrator/`; on Windows also `misc/`
+  (the tray) and the lone `.exe` beside the archive;
+- `desk2/`, AgentHydra 2.0's window: its own bun in `desk2/runtime/` (the version the workflow
+  compiles with), its server source, `shared/`, production `node_modules` (installed hoisted, for
+  the target's OS and CPU), the built `web/dist` and `hydra/dist`, and on Windows `launcher/` with
+  `HydraDesk2.exe`. Windows opens it in its native window; Linux and macOS run its server on the
+  shipped bun and open the default browser;
+- `devwebui/` beside it, the same way (Desk 2's servers pane starts it on Desk 2's bun).
+
+No tests, e2e, `tmp/` or dev dependencies ship. `scripts/package-release.ts` stages and archives a
+bundle and `scripts/smoke-release.ts` boots one; `release.yml` runs the same two scripts. On a PC
+(Windows shown), build Desk 2 first, since the packager never builds it or writes into the checkout:
+
+```sh
+cd desk2 && bun install --frozen-lockfile && bun run build && cd ..
+cd devwebui && bun install --frozen-lockfile && cd ..
+bun scripts/package-release.ts --target windows-x64 --out <dir>
+bun scripts/smoke-release.ts --bundle-dir <dir> --port <free> --desk-port <free>
+```
+
+Pick two ports nothing on the PC uses (not 7787 or 7798, where the live daemon and Desk 2 run);
+the smoke refuses a busy one. It starts the bundle's daemon and Desk 2's server on temp homes,
+headless (never the launcher, window host or tray), checks them, and stops exactly what it started.
 
 ## Pushing `main` is the release
 
@@ -85,7 +115,7 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
    commands below are a convenience copy and the workflow wins if the two ever disagree. Check
    the workflow rather than trusting this line when a step has been added recently.
    `bun install --frozen-lockfile`, `bun run typecheck`, `bun run check`, `bun run build`,
-   `bun test`, `bun run dist`, and `bun run scripts/smoke-release.ts dist/AgentHydra.exe`.
+   `bun test`, then a bundle built and smoked as in "What a 2.0 bundle holds" above.
    Don't rely on pushing to find out one of these fails.
 
    Maintainers: also `bun run check:local`, which CI cannot run at all (see REFERENCE.md).
@@ -177,6 +207,11 @@ discarded only once everything has landed. A swap refuses to start while a toolb
 through the daemon (`orchestratorBusy()`), and a bare-executable install acquires the toolbox on its
 first update. `server/tests/github-updater-components.test.ts` pins `install.ps1`'s component list to
 `RELEASE_COMPONENTS` by parsing the PowerShell, so the two lists cannot drift apart unnoticed.
+
+**From 2.0.0 the self-updater also owns `desk2/` and `devwebui/`.** It stops Desk 2 before replacing
+`desk2/` and starts it again after. `install.ps1` still swaps its three components; a compiled
+daemon that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs
+it from its own version's release archive at boot, without a click.
 
 ## When a push doesn't trigger anything
 

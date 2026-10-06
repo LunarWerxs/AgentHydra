@@ -16,5 +16,8 @@ export function splitTldr(section: string): { tldr: string[]; rest: string }
 /** Why this version may not be released, or null when it may. */
 export function refusal(changelog: string, version: string): string | null
 
+/** Why the [Unreleased] section may not stay as it is (long, with no TL;DR), or null when it may. */
+export function unreleasedRefusal(changelog: string): string | null
+
 /** The release page body; throws with the refusal when the version may not be released. */
 export function formatReleaseBody(changelog: string, version: string): string

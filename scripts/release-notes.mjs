@@ -33,6 +33,7 @@
 //
 // usage: node scripts/release-notes.mjs <version> [CHANGELOG.md]           prints the body
 //        node scripts/release-notes.mjs --check <version> [CHANGELOG.md]   exit 1 with the reason when refused
+//        node scripts/release-notes.mjs --check-unreleased [CHANGELOG.md]  exit 1 when [Unreleased] is long with no TL;DR
 
 import { readFileSync } from 'node:fs'
 
@@ -100,11 +101,24 @@ export function refusal(changelog, version) {
   }
   const section = changelogSection(changelog, version)
   if (section === null || !section.trim()) return `CHANGELOG.md has no section for ${version}.`
+  return missingTldr(section, version, version)
+}
+
+/** Why the [Unreleased] section may not stay as it is (long, with no TL;DR), or null. It is the next
+ *  release's section in waiting, so it is held to the same rule; an empty or short one passes. */
+export function unreleasedRefusal(changelog) {
+  const section = changelogSection(changelog, 'Unreleased')
+  if (section === null || !section.trim()) return null
+  return missingTldr(section, 'Unreleased', 'X.Y.Z')
+}
+
+/** The refusal for a section of more than two changes with no TL;DR, or null. */
+function missingTldr(section, name, version) {
   const { tldr, rest } = splitTldr(section)
   const changes = rest.split(/\r?\n/).filter((l) => BULLET.test(l)).length
   if (changes > 2 && !tldr.length) {
     return (
-      `CHANGELOG.md's ${version} section has ${changes} changes and no TL;DR. Open it with a **TL;DR** ` +
+      `CHANGELOG.md's ${name} section has ${changes} changes and no TL;DR. Open it with a **TL;DR** ` +
       `line, one short headline bullet per change that matters, then **Everything in ${version}** ` +
       'before the full list.'
     )
@@ -201,10 +215,20 @@ export function formatReleaseBody(changelog, version) {
 const invokedDirectly = process.argv[1] && /release-notes\.mjs$/.test(process.argv[1].replace(/\\/g, '/'))
 if (invokedDirectly) {
   const args = process.argv.slice(2)
+  if (args[0] === '--check-unreleased') {
+    const why = unreleasedRefusal(readFileSync(args[1] ?? 'CHANGELOG.md', 'utf8'))
+    if (why) {
+      console.error(`unreleased refused: ${why}`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
   const check = args[0] === '--check'
   const [version, file = 'CHANGELOG.md'] = check ? args.slice(1) : args
   if (!version) {
-    console.error('usage: node scripts/release-notes.mjs [--check] <version> [CHANGELOG.md]')
+    console.error(
+      'usage: node scripts/release-notes.mjs [--check] <version> [CHANGELOG.md] | --check-unreleased [CHANGELOG.md]',
+    )
     process.exit(2)
   }
   const changelog = readFileSync(file, 'utf8')

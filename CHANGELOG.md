@@ -7,21 +7,56 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+**TL;DR**
+
+- **AgentHydra 2.0: the new window (it was Hydra Desk 2) now comes in the download on Windows, Linux and macOS**
+- **Opening AgentHydra always reaches the new window, and starts it when it is down**
+- **Updates install, update and repair the new window, and an install without it fixes itself**
+- **A Dev servers button lists your projects and their servers in the sidebar**
+- **Free accounts get a Tokens column and keep their readings current in the background**
+- **HSwarm's tables look like the Instances tables, and popups close when you look away**
+
+**Everything in 2.0.0**
+
 ### Added
 
+- **AgentHydra 2.0: a new window, in the download on every platform.** The window that was Hydra Desk 2 is now
+  AgentHydra's, and the download carries everything it needs to run: on Windows it opens in its own window from
+  the AgentHydra shortcut or the tray icon, on Linux and macOS in your browser. It brings every chat from this PC and your other PC into one sidebar, AgentHydra's accounts,
+  CliMayte, HSwarm and Analytics pages beside the chat with one Settings dialog, dev servers and a small browser,
+  Free claude.ai and ChatGPT accounts, and pictures and videos in the chat.
+- **A Dev servers button in the title bar.** It lists DevWebUI's projects and their servers in the sidebar, where
+  you can start, stop and open them.
 - **The Free table has a Tokens column, like the CLI and desktop tables.** Neither claude.ai nor ChatGPT reports
   tokens, so AgentHydra estimates them from the text each message sent and got back. The header switches between
   the current 5-hour window, the week and all time.
 
-### Fixed
+### Changed
 
+- **Opening AgentHydra always leads to the new window.** The tray, the shortcut and every AgentHydra page open
+  it. When it is not running, AgentHydra starts it and shows a short "Starting AgentHydra" page that moves on by
+  itself, instead of a page that never loads.
+- **Updates carry the new window.** An update installs, updates and repairs the new window and its dev servers
+  helper along with the app, and starts the window again afterwards. An install that is missing the window, such
+  as one updated by an older version or the single `.exe` download, puts it back by itself when it starts.
+- **HSwarm's key and model tables look like the Instances tables.** They use the same rows, controls and cards.
 - **The Free table no longer spins its 5-hour and week cells every time you open it.** AgentHydra now keeps the
   Free accounts' readings current in the background, one account at a time, and the table only shows what changed.
+- **Every change to the new window is tested.** Its own test suite now runs with the rest on every change.
+
+### Fixed
+
 - **A Free account no longer shows as signed out after a check that merely failed.** Only the site saying the login
   is gone signs it out; being offline for a moment does not.
 - **Tooltips and usage popups no longer pile up while the window is not focused.** Hovering AgentHydra while another
   app had focus left every popup the pointer passed on screen.
 - **The keepalive dot on the 5-hour counter is quieter.** It is half as bright and sits a little further in.
+- **Dev servers start on every PC.** They failed to start where another copy of Bun was found first; they now run
+  on the window's own.
+
+### Removed
+
+- **The old AgentHydra window.** Where the new window is installed, AgentHydra no longer shows the old one.
 
 ## [1.13.0] - 2026-10-06
 
