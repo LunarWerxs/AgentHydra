@@ -77,6 +77,9 @@ export interface FreeInstance {
   usage: FreeUsage | null
   /** The last keepalive nudge (keepalive.ts): when it ran and whether it worked; null or absent if none ran yet. */
   nudge?: { at: number; ok: boolean } | null
+  /** When Desk last asked the provider for this account's usage (a usage read or a login check), worked or not;
+   *  the rolling refresh (refresh.ts) goes by it. Absent on older records. */
+  usageReadAt?: number | null
 }
 /** What a deleted account leaves behind until the login sync has told the store (sync.ts). */
 export type FreeDeleted = Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>
@@ -95,6 +98,9 @@ export interface FreeThread {
   createdAt: number
   updatedAt: number
   error: string | null
+  /** About how many characters the conversation holds so far (what a continuation sends the model again), for the
+   *  token estimate (tokens.ts). A count, never the text; absent for a chat Desk only saw in a list. */
+  contextChars?: number
 }
 export interface FreeJob {
   id: string
@@ -107,9 +113,19 @@ export interface FreeJob {
   finishedAt?: number
   chatId?: string
   result?: FreeResult
+  /** Started by Desk itself (the rolling refresh, a keepalive nudge, a login another PC shared), not by a person
+   *  or a chat: the window shows no spinner for it, and an operation someone asks for waits for it, never refused. */
+  auto?: boolean
 }
+/** Estimated tokens: neither provider reports any, so Desk counts the text each message sent (the thread it
+ *  continues included) and got back, at about 4 characters a token (tokens.ts). */
+export interface FreeTokenParts { input: number; output: number; total: number }
+/** One account's estimate for its current 5-hour window, its current week and all time on this PC. */
+export interface FreeTokens { fiveHour: FreeTokenParts; week: FreeTokenParts; total: FreeTokenParts }
 export interface FreeStatus {
   ready: boolean
+  /** Each account's estimate by its id (tokens.ts); an account that never chatted here has none. */
+  tokens?: Record<string, FreeTokens>
   instances: FreeInstance[]
   jobs: FreeJob[]
 }

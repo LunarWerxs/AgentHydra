@@ -1,28 +1,43 @@
-import { computed, reactive, ref } from 'vue'
-import type { FreeCommand, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread } from '@desk/shared/free-instances'
+import { computed, reactive, ref, shallowRef } from 'vue'
+import type { FreeCommand, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, rememberedJob } from '@/lib/free-instances'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
 const instances = ref<FreeInstance[]>([])
 const threads = ref<FreeThread[]>([])
+/** Each account's token estimate by its id (server/src/free-instances/tokens.ts). */
+const tokens = shallowRef<Record<string, FreeTokens>>({})
 const jobs = reactive<Record<string, FreeJob | undefined>>({})
 const errors = reactive<Record<string, string>>({})
 const loaded = ref(false)
 const loading = ref(false)
 const loadError = ref('')
 const followers = new Map<string, Promise<FreeResult | null>>()
-const checked = new Set<string>()
 let refreshing: Promise<void> | null = null
-
-const CHECK_AFTER_MS = 15 * 60_000
 
 const busy = (id: string) => jobs[id]?.state === 'running'
 
+/** The new list, keeping each unchanged item's own object: a row redraws only when its account changed. */
+function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
+  const before = new Map(old.map(x => [x.id, x]))
+  let same = old.length === next.length
+  const merged = next.map((x, n) => {
+    const o = before.get(x.id)
+    const keep = !!o && JSON.stringify(o) === JSON.stringify(x)
+    if (!keep || old[n] !== o) same = false
+    return keep ? o! : x
+  })
+  return same ? old : merged
+}
+
 async function snapshot(): Promise<void> {
   const [status, list] = await Promise.all([freeApi.status(), freeApi.threads()])
-  instances.value = status.instances
-  threads.value = list
-  for (const job of status.jobs) if (job.state === 'running') jobs[job.instanceId] = job
+  instances.value = keepUnchanged(instances.value, status.instances)
+  threads.value = keepUnchanged(threads.value, list)
+  const estimate = status.tokens ?? {}
+  if (JSON.stringify(estimate) !== JSON.stringify(tokens.value)) tokens.value = estimate
+  // Desk's own reads (the rolling refresh, a keepalive nudge) show no spinner: only what someone started does.
+  for (const job of status.jobs) if (job.state === 'running' && !job.auto) jobs[job.instanceId] = job
   loaded.value = true
 }
 
@@ -114,9 +129,15 @@ async function remove(instance: FreeInstance): Promise<boolean> {
   }
 }
 
-function refreshFree(): Promise<void> {
+/**
+ * Reads the list again; `silent` (the warm loop, opening the tab) shows no spinner. Desk keeps every reading current
+ * itself, one account a minute (server/src/free-instances/refresh.ts), so opening the tab starts nothing and the rows
+ * show only what changed (owner, 2026-10-06: "the five-hour and week things keep spinning every time I view the
+ * page. They're supposed to refresh on a rolling refresh and only display changes like on the others").
+ */
+function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
   if (refreshing) return refreshing
-  loading.value = true
+  if (!opts.silent) loading.value = true
   loadError.value = ''
   refreshing = (async () => {
     try {
@@ -125,13 +146,6 @@ function refreshFree(): Promise<void> {
         const running = jobs[instance.id]
         if (running?.state === 'running') void follow(running)
         else if (rememberedJob(instance.id)) void recover(instance.id)
-        else if (!checked.has(instance.id) && (!instance.checkedAt || (instance.loggedIn && Date.now() - instance.checkedAt > CHECK_AFTER_MS))) {
-          checked.add(instance.id)
-          // Owner, 2026-10-06: "the Claude ones are showing 'Not checked yet.' They should probably
-          // check on load." Each account is checked once per page session, when it never was or its
-          // reading is stale; this is read-only and never opens a browser.
-          void run(instance, 'auth')
-        }
       }
     } catch (error) { loadError.value = error instanceof Error ? error.message : 'Free instances could not be loaded.' }
     finally { loading.value = false; refreshing = null }
@@ -140,6 +154,6 @@ function refreshFree(): Promise<void> {
 }
 
 export function useFreeInstances() {
-  return { instances, threads, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree,
+  return { instances, threads, tokens, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree,
     activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
 }

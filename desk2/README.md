@@ -8,6 +8,7 @@ right, and AgentHydra's accounts, CliMayte and HSwarm pages inside it.
 - **Every chat in one sidebar:** this PC's and your other PC's, with CliMayte and HSwarm work as badges
 - **AgentHydra inside the window:** accounts and quota, CliMayte, HSwarm, analytics, one Settings dialog
 - **Servers and a small browser beside the chat**, through DevWebUI
+- **A Dev servers button in the title bar:** the sidebar lists DevWebUI's projects and servers, start, stop and open them
 - **Git through RepoYeti:** commit, push, pull, branch and Create PR, and one Changes tab
 - **Connectors** for RepoYeti, ReDesign, DevWebUI and Connections, without copying them in
 - **Free claude.ai and ChatGPT accounts** that can take work
@@ -63,6 +64,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   offered no limit reset shows no reset icon.
 
 - **Servers and a small browser beside the chat, like Claude Code Desktop's.** The title bar's Browser button opens a right pane (wider than Changes, drag its left edge to resize, the width is remembered) with a Servers | Browser switch in its header, always there. Servers lists this chat's localhost servers, centred in the pane: a status dot, name, port, Start / Stop / Restart, Open for one that runs, the last output of one that crashed, Start all / Stop all, and below them the servers other folders have running ("Also running", Open / Stop). Browser is the page: an address bar, back, forward, reload and open in the system browser, and before anything is opened "No page open" with a button for each server that answers. Open shows a server there, and Start opens it as soon as it answers; the header then has the server's name and Stop, and a stopped server shows "X is stopped" with Start over the page. "Open an address, or a port" at the bottom opens any address. The chat's folder needs no Add step: `POST /dw/folder {cwd}` (`server/src/devwebui/folder.ts`) uses the project DevWebUI already has for that folder, or sets one up from Claude Code's `.claude/launch.json` (its preview servers: `runtimeExecutable`/`runtimeArgs` or `program`, `port`, `cwd`, `env`) or else package.json's dev scripts, every server left stopped, and adds the `.devwebui` file it writes to the repo's `.git/info/exclude` so it never shows in git status; a folder with neither says so, with Look again. The servers come from DevWebUI (`../devwebui`), found through `DEVWEBUI_URL` or its `runtime.json` pointer and started hidden by `server/src/plugins/50-devwebui.ts` when the pane is opened and none answers (log in `~/.hydra-desk-2/logs/devwebui.log`; it keeps running when Desk 2 exits). `/dw/api/*` goes on to the daemon only for Desk 2's own page, with DevWebUI's local credential added server-side; `GET /dw/status` says running, starting, stopped or failed. A Desk 2 server started before this existed shows "Restart Hydra Desk 2 to turn on servers". The New tab also lists "Other localhost servers": what listens on this machine that DevWebUI did not start (a server run from a terminal), with its port, page title and process name; a click opens it in the tab, and there is no Stop or Restart. DevWebUI's own servers are left out, and "All ports (N hidden)" widens the list past dev runtimes. It is Desk 2's own `GET /dw/localhost` (`server/src/plugins/51-localhost.ts`, `server/src/localhost/`), not part of `/dw/api`.
+- **Dev servers in the sidebar, beside Cloud and CliMayte** (owner, 2026-10-06). A fourth title-bar button turns the left sidebar into DevWebUI's projects with their servers under each: a status dot, name and port, running ones first, Start / Stop / Restart on hover and Start all / Stop all on a project. A click on a server opens the right-hand servers pane on its project and shows it in the browser, whatever chat is open. The list and the pane read one DevWebUI client and one polling loop (`web/src/components/servers/store.ts`), so they never disagree.
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Hide sidebar (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
@@ -407,33 +409,10 @@ parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 <details>
 <summary><b>Read more: what is planned next</b></summary>
 
-**Dev servers in the sidebar** (owner, 2026-10-06). To start once AgentHydra 2.0 (Desk 2 taking over from the
-old AgentHydra window, which is being retired) has finished consolidating. Today DevWebUI is reached only through
-a chat's Browser button, and only for that chat's folder; nothing shows every dev server at once. The plan:
+**Maybe later**, from the CliMayte button's pattern: a small dot on a chat whose folder has a server running, with
+the Dev servers view off.
 
-- **A fourth title-bar button, Dev servers,** beside Cloud and CliMayte, working like Cloud. On, the sidebar
-  lists DevWebUI's projects with their servers under each: a status dot (`statusDot` in
-  `web/src/components/servers/logic.ts`), running ones first, Start / Stop / Restart on hover, Start all /
-  Stop all on a project's header. Off, the desk list comes back. Blue while on, like the others.
-- **Opening a server uses the servers pane that exists.** A click opens the right pane on that server's project,
-  its browser and logs, whatever chat is open. `ServersPane` takes a folder today (`cwd`, the chat's), so the
-  sidebar hands it `projectDir(project)`. No new screen in the main area.
-- **Desk draws it, from the client it already has.** Desk 2 reaches DevWebUI through `/dw/api`
-  (`server/src/plugins/50-devwebui.ts`, types in `shared/devwebui.ts`), and `web/src/components/servers/api.ts`
-  and `logic.ts` are its one client. The sidebar and the pane read the same project list through one polling loop,
-  only while one of them is on screen and the window is visible, so they never disagree. No iframe and no embed
-  messages, unlike the AgentHydra button. Turning the view on starts the server manager when it is not running,
-  as the pane does.
-- **Maybe later, from the CliMayte button's pattern:** a small dot on a chat whose folder has a server running,
-  with the view off.
-- **First version:** the project and server list, the dots, Start / Stop / Restart, and opening a server in the
-  pane with its logs. DevWebUI's own settings and environment editing stay in DevWebUI.
-- **Jacob's DevWebUI work goes into Desk 2,** not the old AgentHydra window (`../web`). The seam is the `/dw/api`
-  contract in `shared/devwebui.ts`: if DevWebUI's daemon moves into AgentHydra's, only where the plugin finds it
-  changes (`DEVWEBUI_URL`, or `runtime.json` in `DEVWEBUI_HOME`), not the sidebar. Agree that with him before
-  building.
-- **Checks:** unit tests for the list's order and grouping beside `logic.ts`'s, gesture cases for the new button
-  and a server row in `e2e/gestures.e2e.ts`, then `bun run build` and `bun run e2e:gestures`.
+</details>
 
 ---
 
@@ -574,10 +553,30 @@ again). A pass runs 15 s after start, every 2 minutes, and right after a sign-in
 log out; `GET /api/free/sync` says when it last ran and its last error. A PC takes part once it runs
 Desk 2 with this feature and its AgentHydra is joined to the same Login sync.
 
-The table provides login checks, usage, renaming, New private chat and Delete (the account, its chat
-handles and its saved login, here and on the other PCs; its chats stay at the provider). Opening it
-checks, once per page session, each account never checked or whose reading is over 15 minutes old.
+The table provides login checks, usage, Tokens, renaming, New private chat and Delete (the account, its chat
+handles and its saved login, here and on the other PCs; its chats stay at the provider).
 Claude reports no usage for a free account until it sends a message, so such a row says "No reading yet".
+
+**Desk keeps the readings current itself** (owner, 2026-10-06: the 5-hour and week cells "keep spinning every
+time I view the page"; `server/src/free-instances/refresh.ts`). One read a minute, from 90 s after Desk starts,
+of the most overdue account: a login never checked first, then a login checked over an hour ago (`auth`, which
+also reads the private chat list and the usage) or a signed-in Claude account's usage over 15 minutes old
+(`usage`, by `usageReadAt`); each account at most once in 15 minutes. These reads, the keepalive's nudges and
+the check of a login another PC shared are Desk's own (`FreeJob.auto`): the table shows no spinner for them, and
+an operation someone starts on that account waits for one instead of being refused (409 only while another
+person's or chat's operation runs; a log out or delete waits too). Opening the tab and the 2-minute warm loop
+only read the list, and a row redraws only when its account changed. A check that fails for any reason but the
+site asking for a login (`login_required`) leaves the account signed in.
+
+**Tokens** (owner, 2026-10-06: "a column on the free table called tokens ... just like the others";
+`server/src/free-instances/tokens.ts`). Neither site reports tokens, so Desk estimates them at about 4 characters
+a token: a message's input is what it sent plus the thread it continues (what earlier messages here sent and got
+back, or what a read of the chat showed), its output the reply. Only counts are kept, in `free/accounts.json`
+(`tokens`: a week of per-message entries and the all-time sums). `GET /api/free/status` returns each account's
+`tokens` for its current 5-hour window and week (cut at the account's own resets when its reading has them, as
+the CLI table's are, else rolling) and all time. The header's 5h / Week / Total choice is its own shared
+preference (`agenthydra.freeTokens.window`). Messages sent before this count began, or from another PC, are not
+in it.
 
 **Keep windows running** (owner, 2026-10-06; `server/src/free-instances/keepalive.ts`) mirrors
 AgentHydra's CLI keepalive for Free Claude logins: every 10 minutes, a signed-in account whose 5-hour

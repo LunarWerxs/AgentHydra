@@ -6,6 +6,8 @@ import { Hono } from 'hono'
 import type { ServerContext } from '../src/context'
 import type { FreeInstance, FreeRequest, FreeUsage } from '../../shared/free-instances'
 import { nudgeDue } from '../src/free-instances/keepalive'
+import { type FreeRead, nextRead } from '../src/free-instances/refresh'
+import { addTokens, tokenWindows } from '../src/free-instances/tokens'
 import { commandArgs, type FreeRunner, type FreeRunRequest, type RunOutput } from '../src/free-instances/runner'
 import { parseResult } from '../src/free-instances/results'
 import { FreeInstances, validateRequest } from '../src/free-instances/service'
@@ -390,6 +392,133 @@ describe('Free jobs and routes', () => {
     expect(instance.nudge?.ok).toBe(true)
     expect(gpt.nudge).toBeUndefined()
     expect(service.threads()).toEqual([])
+  })
+  test("Desk's own read never turns a person away: their operation waits for it; a second one, or another of Desk's, is refused", async () => {
+    const calls: string[] = []
+    let release: (value: RunOutput) => void = () => {}
+    const { service, op, instance } = fixture(async (_c, r) => {
+      calls.push(r.command)
+      if (calls.length === 1) return new Promise(resolve => { release = resolve })
+      return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Example reply' })
+    })
+    const auto = service.start(op({ command: 'usage' }), true)
+    expect(service.status().jobs.find(j => j.id === auto.id)?.auto).toBe(true)
+    expect(() => service.start(op({ command: 'usage' }), true)).toThrow('already has an operation')
+    const chat = service.start(op({ command: 'chat', prompt: 'Example prompt' }))
+    expect(() => service.start(op({ command: 'chats' }))).toThrow('already has an operation')
+    await tick()
+    expect(calls).toEqual(['usage'])
+    release(output({ ok: true, available: true, windows: [] })); await tick(); await tick()
+    expect(calls).toEqual(['usage', 'chat'])
+    expect(service.get(chat.id).result?.ok).toBe(true)
+    expect(instance.usageReadAt).toBeNumber()
+  })
+  test("a log out waits for Desk's own read instead of being refused", async () => {
+    let release: (value: RunOutput) => void = () => {}
+    const { service, app, op, instance } = fixture(async (_c, r) => r.command === 'usage' ? new Promise(resolve => { release = resolve }) : { code: 0, stdout: 'Saved web session removed.' })
+    instance.loggedIn = true
+    service.start(op({ command: 'usage' }), true); await tick()
+    const out = app.request(`/api/free/instances/${instance.id}/logout`, { method: 'POST' })
+    await tick()
+    release(output({ ok: true, available: true, windows: [] }))
+    expect((await out).status).toBe(200)
+    expect(instance.loggedIn).toBe(false)
+  })
+  test('a check that fails on its own leaves the login as it was; only a login the site asks for signs it out', async () => {
+    let reply = output({ ok: false, error: { code: 'network_error', message: 'Offline' } }, 1)
+    const { service, op, instance } = fixture(async () => reply)
+    instance.loggedIn = true
+    service.start(op(), true); await tick()
+    expect(instance.loggedIn).toBe(true)
+    reply = output({ ok: false, error: { code: 'login_required', message: 'No saved login.' } }, 1)
+    service.start(op(), true); await tick()
+    expect(instance.loggedIn).toBe(false)
+  })
+  test('a login another PC shares, landing while a background check runs, is checked again after it', async () => {
+    const answers: ((value: RunOutput) => void)[] = []
+    const { service, op, instance } = fixture(async (_c, r) => r.command === 'auth' ? new Promise(resolve => answers.push(resolve)) : output({ ok: true, chats: [] }))
+    service.start(op(), true); await tick()
+    service.syncHost().landed(instance.id)
+    answers.shift()!(output({ ok: false, error: { code: 'login_required', message: 'No saved login.' } }, 1)); await tick(); await tick()
+    expect(answers).toHaveLength(1)
+    answers.shift()!(output({ ok: true, authenticated: true })); await tick(); await tick()
+    expect(instance.loggedIn).toBe(true)
+  })
+  test('the rolling refresh starts its read as Desk\'s own, and tries an account at most once in 15 minutes', async () => {
+    const { service, runtime } = fixture()
+    // Setup failing records nothing on the account, so it stays never-checked and due on every tick.
+    runtime.ensure = async () => { throw new Error('setup') }
+    service.refreshNext(); await tick()
+    service.refreshNext(); await tick()
+    const jobs = service.status().jobs
+    expect(jobs.map(j => [j.command, j.auto])).toEqual([['auth', true]])
+    expect(service.get(jobs[0]!.id).result?.error?.code).toBe('setup_failed')
+  })
+  test('the Tokens column counts what each message sent, the thread it continues included, and its reply; counts only', async () => {
+    const { service, op, instance, home, runtime } = fixture(async (_c, r) => output(r.command === 'read'
+      ? { ok: true, chat_id: CHAT, is_temporary: true, messages: [{ id: 'm1', role: 'user', text: 'x'.repeat(400), code_blocks: [], citations: [] }] }
+      : { ok: true, chat_id: CHAT, is_temporary: true, response: 'r'.repeat(80) }))
+    const total = () => service.status().tokens?.[instance.id]?.total
+    expect(total()).toBeUndefined()
+    service.start(op({ command: 'chat', prompt: 'p'.repeat(40) })); await tick()
+    expect(total()).toEqual({ input: 10, output: 20, total: 30 })
+    // The continuation sends the 120 characters the thread holds, plus its own 40.
+    service.start(op({ command: 'resume', chatId: CHAT, prompt: 'p'.repeat(40) })); await tick()
+    expect(total()).toEqual({ input: 50, output: 40, total: 90 })
+    // A read gives the thread's real length (400), so the next continuation counts that.
+    service.start(op({ command: 'read', chatId: CHAT })); await tick()
+    service.start(op({ command: 'resume', chatId: CHAT, prompt: 'p'.repeat(40) })); await tick()
+    expect(total()).toEqual({ input: 160, output: 60, total: 220 })
+    const now = service.status().tokens![instance.id]!
+    expect([now.fiveHour, now.week]).toEqual([now.total, now.total])
+    expect(readFileSync(join(home, 'free', 'accounts.json'), 'utf8')).not.toMatch(/ppp|rrr|xxx/)
+    const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
+    expect(again.status().tokens?.[instance.id]?.total.total).toBe(220)
+    await again.remove(instance.id)
+    expect(again.status().tokens).toEqual({})
+  })
+  test('token windows cut where the account\'s own windows do: at a reset ahead or just passed, else rolling', () => {
+    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const hour = 3_600_000
+    // Distinct powers of two, so a sum names exactly which messages a window holds.
+    const ledger = { entries: [[1, 1], [4, 2], [6, 4], [72, 8]].map(([ago, n]) => ({ at: NOW - ago! * hour, input: n!, output: 0 })), total: { input: 99, output: 1 } }
+    const usage = (fiveHour: number | null, week: number | null): FreeUsage => ({ available: true, is_snapshot: false, observed_at: null, note: '', windows: [
+      { id: 'five_hour', used_percent: 1, remaining_percent: 99, resets_at: fiveHour == null ? null : new Date(NOW + fiveHour * hour).toISOString(), reset_passed: false },
+      { id: 'seven_day', used_percent: 1, remaining_percent: 99, resets_at: week == null ? null : new Date(NOW + week * hour).toISOString(), reset_passed: false },
+    ] })
+    const cases: [string, FreeUsage | null, number, number][] = [
+      ['no reading: the last 5 hours and 7 days', null, 1 + 2, 1 + 2 + 4 + 8],
+      ['resets ahead: from the reset minus the span', usage(2, 24), 1, 1 + 2 + 4 + 8],
+      ['a 5-hour reset 2 hours ago: from the reset', usage(-2, 24 * 5), 1, 1 + 2 + 4],
+      ['a reset over a span ago: rolling again', usage(-10, -24 * 8), 1 + 2, 1 + 2 + 4 + 8],
+    ]
+    for (const [label, u, fiveHour, week] of cases) {
+      const w = tokenWindows(ledger, u, NOW)
+      expect([label, w.fiveHour.input, w.week.input, w.total]).toEqual([label, fiveHour, week, { input: 99, output: 1, total: 100 }])
+    }
+    // A message leaves the ledger once no window can reach it; the all-time sum keeps it.
+    const later = addTokens(ledger, { at: NOW + 5 * 24 * hour, input: 16, output: 0 })
+    expect([later.entries.map(e => e.input), later.total.input]).toEqual([[1, 2, 4, 16], 115])
+  })
+  test('the rolling refresh reads the most overdue account: a never-checked login first, then old logins and old Claude usage', () => {
+    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const min = 60_000
+    const base: FreeInstance = { id: 'a', num: 1, provider: 'claude', name: 'A', autoName: false, loggedIn: true, checkedAt: NOW - 10 * min, lastSignedInAt: NOW - 10 * min, lastActiveAt: null, usage: null, usageReadAt: NOW - 10 * min }
+    const one = (change: Partial<FreeInstance>, busy = false) => nextRead([{ ...base, ...change }], () => busy, NOW)
+    const cases: [string, ReturnType<typeof one>, FreeRead | null][] = [
+      ['fresh', one({}), null],
+      ['usage read 20 minutes ago', one({ usageReadAt: NOW - 20 * min }), { id: 'a', command: 'usage' }],
+      ['older record: usage goes by the last check', one({ usageReadAt: undefined, checkedAt: NOW - 20 * min }), { id: 'a', command: 'usage' }],
+      ['login checked 70 minutes ago', one({ checkedAt: NOW - 70 * min, usageReadAt: NOW - min }), { id: 'a', command: 'auth' }],
+      ['never checked', one({ checkedAt: null, loggedIn: false }), { id: 'a', command: 'auth' }],
+      ['signed out after a check', one({ loggedIn: false, checkedAt: NOW - 600 * min, usageReadAt: null }), null],
+      ['ChatGPT usage is not read between checks', one({ provider: 'chatgpt', usageReadAt: NOW - 50 * min }), null],
+      ['busy', one({ usageReadAt: NOW - 50 * min }, true), null],
+    ]
+    for (const [label, got, want] of cases) expect([label, got]).toEqual([label, want])
+    const many = [{ ...base, id: 'b', usageReadAt: NOW - 20 * min }, { ...base, id: 'c', usageReadAt: NOW - 40 * min }, { ...base, id: 'd', checkedAt: null }]
+    expect(nextRead(many, () => false, NOW)?.id).toBe('d')
+    expect(nextRead(many.slice(0, 2), () => false, NOW)?.id).toBe('c')
   })
   test('legacy migration copies encrypted state into isolated homes once, without removing its source', () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-migrate-')); dirs.push(home)

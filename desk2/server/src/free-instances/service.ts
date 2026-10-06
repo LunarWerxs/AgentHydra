@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeInstance, type FreeJob, type FreeRequest, type FreeSettings, type FreeStatus, type FreeThread } from '@shared/free-instances'
+import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
+import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
 import { failure, parseResult } from './results'
 import { runFree, type FreeRunner } from './runner'
 import { ManagedFreeRuntime, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
 import type { FreeSyncHost } from './sync'
+import { addTokens, estimateTokens, tokenWindows } from './tokens'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export class FreeError extends Error {
@@ -48,6 +50,13 @@ export class FreeInstances {
   private cleanup = setInterval(() => this.prune(), 60_000).unref()
   /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
   private keeper: ReturnType<typeof setTimeout> = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
+  /** The rolling refresh (refresh.ts): a first read a minute and a half after start, then one each REFRESH_TICK_MS. */
+  private refresher: ReturnType<typeof setTimeout> = setTimeout(() => { this.refreshNext(); this.refresher = setInterval(() => this.refreshNext(), REFRESH_TICK_MS).unref() }, 90_000).unref()
+  /** When the rolling refresh last started a read on each account: one per USAGE_EVERY_MS at most, so a read that
+   *  fails before it records anything (setup, a crash) is not tried again every tick. */
+  private refreshed = new Map<string, number>()
+  /** Each operation's end: a person's operation waits for it while Desk's own read (FreeJob.auto) holds the account. */
+  private runs = new Map<string, Promise<void>>()
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
@@ -81,8 +90,10 @@ export class FreeInstances {
    * forget does it: it deletes the saved login (and for ChatGPT its preparations) under the lock a cookie refresh takes.
    */
   async logout(id: string): Promise<FreeInstance> {
-    const instance = this.instance(id)
+    this.instance(id)
     if (this.stopping) throw new FreeError('Desk is stopping. Log out after reconnecting.', 503)
+    await this.autoSettled(id)
+    const instance = this.instance(id)
     if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
     this.forgetting.add(id)
     try {
@@ -105,8 +116,10 @@ export class FreeInstances {
    * the sync leaves a tombstone for the store, and the other PCs remove it too (they pass `tombstone: false`).
    */
   async remove(id: string, opts: { tombstone?: boolean } = {}): Promise<{ ok: true }> {
-    const instance = this.instance(id)
+    this.instance(id)
     if (this.stopping) throw new FreeError('Desk is stopping. Delete the account after reconnecting.', 503)
+    await this.autoSettled(id)
+    const instance = this.instance(id)
     if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
     this.forgetting.add(id)
     try {
@@ -124,6 +137,16 @@ export class FreeInstances {
   private busy(id: string): boolean {
     return this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running')
   }
+  /** Waits until no read of Desk's own (FreeJob.auto) runs on the account: a person's log out or delete waits for one
+   *  rather than being refused. */
+  private async autoSettled(id: string): Promise<void> {
+    for (;;) {
+      const job = [...this.jobs.values()].find(j => j.instanceId === id && j.state === 'running' && j.auto)
+      const run = job && this.runs.get(job.id)
+      if (!run) return
+      await run
+    }
+  }
   settings(): FreeSettings { return this.store.data.settings ?? { ...FREE_SETTINGS_DEFAULTS } }
   updateSettings(value: unknown): FreeSettings {
     const r = record(value)
@@ -140,8 +163,17 @@ export class FreeInstances {
     const settings = this.settings()
     for (const instance of [...this.store.data.instances]) {
       if (!nudgeDue(instance, settings, Date.now()) || this.busy(instance.id)) continue
-      try { this.start({ requestId: randomUUID(), instanceId: instance.id, provider: 'claude', command: 'nudge' }) } catch { /* Desk is stopping or its jobs are full; the next pass tries again */ }
+      try { this.start({ requestId: randomUUID(), instanceId: instance.id, provider: 'claude', command: 'nudge' }, true) } catch { /* Desk is stopping or its jobs are full; the next pass tries again */ }
     }
+  }
+  /** One read of the rolling refresh (refresh.ts): the most overdue account's login check or usage, as Desk's own job. */
+  refreshNext(): void {
+    if (this.stopping) return
+    const now = Date.now()
+    const read = nextRead(this.store.data.instances, id => this.busy(id) || now - (this.refreshed.get(id) ?? 0) < USAGE_EVERY_MS, now)
+    if (!read) return
+    this.refreshed.set(read.id, now)
+    try { this.start({ requestId: randomUUID(), instanceId: read.id, provider: this.instance(read.id).provider, command: read.command }, true) } catch { /* its jobs are full; a later tick reads it */ }
   }
   /** What the Free login sync (sync.ts) reads and does here. */
   syncHost(): FreeSyncHost {
@@ -158,8 +190,11 @@ export class FreeInstances {
         instance.loggedIn = true
         instance.checkedAt = instance.lastSignedInAt = Date.now()
         this.store.save()
-        // Check it here at once: the row then says whether the login works on this PC, with its quota.
-        try { this.start({ requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'auth' }) } catch { /* an operation already runs on it; the next check confirms the login */ }
+        // Check it here at once: the row then says whether the login works on this PC, with its quota. A read of Desk's
+        // own already running began with the old login and may report it gone: this check waits and comes after it.
+        void this.autoSettled(id).then(() => {
+          try { this.start({ requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'auth' }, true) } catch { /* someone's operation runs on it; the next check confirms the login */ }
+        })
       },
       forget: async id => { await this.logout(id) }
     }
@@ -167,7 +202,13 @@ export class FreeInstances {
   threads(): FreeThread[] { return this.store.data.threads }
   status(): FreeStatus {
     this.prune()
-    return { ready: this.runtime.ready(), instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    const now = Date.now()
+    const tokens: Record<string, FreeTokens> = {}
+    for (const i of this.store.data.instances) {
+      const ledger = this.store.data.tokens?.[i.id]
+      if (ledger) tokens[i.id] = tokenWindows(ledger, i.usage, now)
+    }
+    return { ready: this.runtime.ready(), tokens, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   get(id: string): FreeJob {
     this.prune()
@@ -176,7 +217,9 @@ export class FreeInstances {
     return job
   }
   cancel(id: string): void { this.get(id); this.controllers.get(id)?.abort() }
-  start(value: unknown): FreeJob {
+  /** `auto`: Desk's own job (FreeJob.auto). It never waits: it is refused while the account runs anything; an operation a
+   *  person or a chat asks for while it runs waits for it instead of being refused. */
+  start(value: unknown, auto = false): FreeJob {
     const r = validateRequest(value)
     const fingerprint = createHash('sha256').update(JSON.stringify([r.instanceId, r.provider, r.command, r.chatId, r.prompt, r.name, r.webSearch])).digest('hex')
     const previous = this.jobs.get(r.requestId)
@@ -187,20 +230,24 @@ export class FreeInstances {
     if (this.stopping) throw new FreeError('Desk is stopping. Read the chat after reconnecting.', 503)
     const instance = this.instance(r.instanceId)
     if (instance.provider !== r.provider) throw new FreeError('The provider does not match this instance.')
-    if (this.forgetting.has(r.instanceId) || [...this.jobs.values()].some(j => j.instanceId === r.instanceId && j.state === 'running')) throw new FreeError('This account already has an operation running.', 409)
+    const running = [...this.jobs.values()].filter(j => j.instanceId === r.instanceId && j.state === 'running')
+    if (this.forgetting.has(r.instanceId) || (running.length && (auto || running.some(j => !j.auto)))) throw new FreeError('This account already has an operation running.', 409)
     this.prune()
     while (this.jobs.size >= 16) {
       const oldest = [...this.jobs.values()].find(j => j.state === 'done')
       if (!oldest) throw new FreeError('Desk already has 16 operations running.', 409)
       this.jobs.delete(oldest.id); this.fingerprints.delete(oldest.id)
     }
-    const job: FreeJob = { id: r.requestId, instanceId: r.instanceId, provider: r.provider, command: r.command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: r.chatId }
+    const job: FreeJob = { id: r.requestId, instanceId: r.instanceId, provider: r.provider, command: r.command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: r.chatId, ...(auto ? { auto: true } : {}) }
     this.jobs.set(job.id, job)
     this.fingerprints.set(job.id, fingerprint)
     const controller = new AbortController()
     this.controllers.set(job.id, controller)
     this.markThread(r, 'running')
-    void this.execute(job, r, controller)
+    const before = running.length ? Promise.all(running.map(j => this.runs.get(j.id))).then(() => undefined) : undefined
+    const run = this.execute(job, r, controller, before).then(() => undefined, () => undefined)
+    this.runs.set(job.id, run)
+    void run.then(() => this.runs.delete(job.id))
     return job
   }
   /** `used` false for a chat-list refresh: it records the chat but is not a use, so "last used" stays. */
@@ -216,8 +263,11 @@ export class FreeInstances {
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     this.store.save()
   }
-  private async execute(job: FreeJob, r: FreeRequest, controller: AbortController): Promise<void> {
+  private async execute(job: FreeJob, r: FreeRequest, controller: AbortController, before?: Promise<void>): Promise<void> {
     try {
+      // Desk's own read on this account ends first: one operation per account at a time. A cancel ends the wait.
+      if (before) await Promise.race([before, new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }))])
+      controller.signal.throwIfAborted()
       try { await this.runtime.ensure(r.provider) }
       catch { job.result = failure('setup_failed', 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
       controller.signal.throwIfAborted()
@@ -226,16 +276,20 @@ export class FreeInstances {
       job.result = parseResult(r.command, await this.runner(config, r, controller.signal))
       const instance = this.instance(r.instanceId)
       if (r.command === 'auth' || r.command === 'login') {
-        instance.loggedIn = job.result.ok && job.result.authenticated === true
+        // Only an answer moves the login: the site took it, or said it needs one (login_required). A check that failed
+        // on its own (offline after sleep, a crashed harness) leaves it as it was: Desk checks in the background now
+        // (refresh.ts), and a working login read as signed out would never be checked again.
+        const signedIn = job.result.ok && job.result.authenticated === true
+        if (job.result.ok || r.command === 'login' || job.result.error?.code === 'login_required') instance.loggedIn = signedIn
         instance.checkedAt = Date.now()
-        if (instance.loggedIn) {
+        if (signedIn) {
           instance.lastSignedInAt = instance.checkedAt
           const label = job.result.account_label
           if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
           this.onLoginChange?.()
         }
         // Read-only followups bring imported chats and available quota into the shared view.
-        if (instance.loggedIn) for (const command of ['chats', 'usage'] as const) {
+        if (signedIn) for (const command of ['chats', 'usage'] as const) {
           try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, controller.signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
         }
       }
@@ -256,6 +310,7 @@ export class FreeInstances {
   private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): void {
     const instance = this.instance(r.instanceId)
     if (result.usage) instance.usage = result.usage
+    if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
     if (result.chats) for (const chat of result.chats) {
       if (chat.is_temporary === true) {
@@ -270,7 +325,22 @@ export class FreeInstances {
       if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
       this.markThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
     }
+    if (result.ok) this.countTokens(r, result)
     this.store.save()
   }
-  stop(): void { this.stopping = true; clearInterval(this.cleanup); clearTimeout(this.keeper); clearInterval(this.keeper); for (const controller of this.controllers.values()) controller.abort() }
+  /** A message adds to the account's token estimate (tokens.ts): what it sent, the thread it continues included, and
+   *  the reply. A chat that was read gives its thread's length, so a later continuation counts what it holds. */
+  private countTokens(r: FreeRequest, result: FreeResult): void {
+    const chatId = result.chat_id ?? r.chatId
+    const thread = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
+    if (r.command === 'read' && thread && result.messages) thread.contextChars = result.messages.reduce((n, m) => n + (m.text?.length ?? 0), 0)
+    if (r.command !== 'chat' && r.command !== 'resume') return
+    const context = r.command === 'resume' ? thread?.contextChars ?? 0 : 0
+    const sent = r.prompt?.length ?? 0
+    const reply = result.response?.length ?? 0
+    const ledgers = (this.store.data.tokens ??= {})
+    ledgers[r.instanceId] = addTokens(ledgers[r.instanceId], { at: Date.now(), input: estimateTokens(context + sent), output: estimateTokens(reply) })
+    if (thread) thread.contextChars = context + sent + reply
+  }
+  stop(): void { this.stopping = true; clearInterval(this.cleanup); clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher); for (const controller of this.controllers.values()) controller.abort() }
 }

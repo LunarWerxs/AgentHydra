@@ -22,6 +22,7 @@ import {
   type FreeInstance,
   type FreeProvider,
 } from '@desk/shared/free-instances'
+import type { TokenParts } from '@agenthydra/server/types'
 import { useStorage } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -40,7 +41,10 @@ import { TableBody } from '@/components/ui/table'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { pii } from '@/composables/usePrivacy'
+import { useFreeTokenWindow } from '@/composables/useTokenWindow'
 import { useUsageMode } from '@/composables/useUsageMode'
+import type { UsageSnapshot } from '@/lib/api'
+import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
 import { openSettingsInDesk } from '@/lib/desk-embed'
 import { freeApi, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
@@ -49,7 +53,7 @@ import { type InstanceRowModel, instanceColumns } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
-const { instances, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree } =
+const { instances, tokens, jobs, errors, loaded, loadError, busy, run, logout, remove, recover, refreshFree } =
   useFreeInstances()
 /** Whether the table is unfolded, kept in this browser, as on the CLI tab. */
 const accountsOpen = useStorage('agenthydra.free.accountsOpen', true)
@@ -64,11 +68,27 @@ const chatMode = (p: FreeProvider) =>
 const runningOf = (i: FreeInstance, ...commands: FreeCommand[]) =>
   busy(i.id) && commands.includes(jobs[i.id]!.command)
 
-// One snapshot per reading, so the usage cells see a new object only when the reading changed.
-const snapshots = computed(
-  () => new Map(instances.value.map((i) => [i.id, freeUsageSnapshot(i.usage)])),
-)
-const usageFor = (i: FreeInstance) => snapshots.value.get(i.id) ?? null
+// One snapshot per reading, so a usage cell sees a new object only when its account's reading changed: a
+// refresh that brings the same reading back redraws nothing.
+const snapshotMemo = new Map<string, { key: string; snapshot: UsageSnapshot | null }>()
+function usageFor(i: FreeInstance): UsageSnapshot | null {
+  const key = JSON.stringify(i.usage)
+  const memo = snapshotMemo.get(i.id)
+  if (memo?.key === key) return memo.snapshot
+  const snapshot = freeUsageSnapshot(i.usage)
+  snapshotMemo.set(i.id, { key, snapshot })
+  return snapshot
+}
+
+// The Tokens column (owner, 2026-10-06: "a column on the free table called tokens to show the amount of tokens run
+// through the account, just like the others"), for the span its header has chosen. Neither site counts tokens, so
+// these are Desk's estimate; an account that sent nothing from here has 0.
+const tokenWindow = useFreeTokenWindow()
+function tokensOf(i: FreeInstance): TokenParts {
+  const all = tokens.value[i.id]
+  const p = !all ? null : tokenWindow.value === '5h' ? all.fiveHour : tokenWindow.value === 'week' ? all.week : all.total
+  return { input: p?.input ?? 0, output: p?.output ?? 0, cacheRead: 0, cacheWrite: 0, total: p?.total ?? 0 }
+}
 
 // A Free login is never open or closed and has no plan the filter offers, so only its sign-in and
 // usage can set it aside (as on the CLI tab).
@@ -81,6 +101,7 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
     { key: 'status', accessor: (i: FreeInstance) => i.loggedIn },
     { key: 'name', accessor: (i: FreeInstance) => i.name },
     { key: 'lastActive', accessor: (i: FreeInstance) => i.lastActiveAt ?? undefined },
+    { key: 'tokens', accessor: (i: FreeInstance) => tokensOf(i).total },
     ...quotaSortColumns(usageFor, (i: FreeInstance) => i.provider, now),
   ],
 })
@@ -108,6 +129,7 @@ const emptyState = computed(() =>
 function rowModel(i: FreeInstance): InstanceRowModel {
   const shown = shortDisplayName(pii(i.name), 36)
   const working = busy(i.id)
+  const used = tokensOf(i)
   return {
     id: i.id,
     num: i.num,
@@ -179,6 +201,11 @@ function rowModel(i: FreeInstance): InstanceRowModel {
           title: new Date(i.lastActiveAt).toLocaleString(),
         }
       : null,
+    tokens: used,
+    tokensNote: {
+      breakdown: t('freeInstances.tokensBreakdown', { output: formatTokens(used.output), input: formatTokens(used.input) }),
+      source: t('freeInstances.tokensSource'),
+    },
     menu: { name: i.name, actions: menuActionsFor(i), class: 'max-w-56' },
   }
 }
@@ -222,10 +249,17 @@ function menuActionsFor(i: FreeInstance): MenuIconAction[] {
   ]
 }
 
-/** Refresh re-reads the list, then checks every saved login (read-only: no window opens). */
+/** Refresh re-reads the list, then checks every saved login (read-only: no window opens). Only this
+ *  spins the header: the background reads and opening the tab show no spinner. */
+const refreshing = ref(false)
 async function refreshAccounts() {
-  await refreshFree()
-  await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => run(i, 'auth')))
+  refreshing.value = true
+  try {
+    await refreshFree()
+    await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => run(i, 'auth')))
+  } finally {
+    refreshing.value = false
+  }
 }
 
 // --- add: the header's + menu names the provider; the server names the account after its login ---
@@ -351,7 +385,7 @@ async function onRenameSubmit(name: string) {
         :count="headingCount"
         :refresh-label="$t('freeInstances.refresh')"
         :refresh-hint="$t('freeInstances.refreshHint')"
-        :refreshing="loading"
+        :refreshing="refreshing"
         :create-label="$t('freeInstances.add')"
         :create-options="createOptions"
         @refresh="refreshAccounts"

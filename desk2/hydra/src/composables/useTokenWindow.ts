@@ -13,9 +13,12 @@ const cliTokenWindow = useStorage<TokenWindow>('agenthydra.cliTokens.window', 't
 registerSharedPref('agenthydra.cliTokens.window', cliTokenWindow, TOKEN_WINDOWS)
 const desktopTokenWindow = useStorage<TokenWindow>('agenthydra.desktopTokens.window', 'total')
 registerSharedPref('agenthydra.desktopTokens.window', desktopTokenWindow, TOKEN_WINDOWS)
+const freeTokenWindow = useStorage<TokenWindow>('agenthydra.freeTokens.window', 'total')
+registerSharedPref('agenthydra.freeTokens.window', freeTokenWindow, TOKEN_WINDOWS)
 
 export const useCliTokenWindow = () => cliTokenWindow
 export const useDesktopTokenWindow = () => desktopTokenWindow
+export const useFreeTokenWindow = () => freeTokenWindow
 
 /** Each desktop instance's current account's tokens, by instance dir. One shared copy, read by the
  *  table and refreshed by lib/warm-data.ts (the desktop kind) and when the tab is shown. */

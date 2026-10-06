@@ -52,7 +52,7 @@ registerWarm('routing', () => refreshRouting())
 registerWarm('climayte', () => useCliMayteData().refreshCliMayte({ silent: true }))
 
 // Free logins and their private chats' metadata (Desk's own /api/free, not the daemon).
-registerWarm('free', () => useFreeInstances().refreshFree())
+registerWarm('free', () => useFreeInstances().refreshFree({ silent: true }))
 
 // The HSwarm savings feed and CliMayte's all-time tokens are shared 2-minute polls (lib/kit.ts
 // acquirePoll, one per key, none while the document is hidden). Holding one for the life of the window

@@ -8,11 +8,11 @@
 import { Check } from '@lucide/vue'
 import { onUnmounted, ref } from 'vue'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
-import { useCliTokenWindow, useDesktopTokenWindow } from '@/composables/useTokenWindow'
+import { useCliTokenWindow, useDesktopTokenWindow, useFreeTokenWindow } from '@/composables/useTokenWindow'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 
-const props = defineProps<{ kind: 'cli' | 'desktop' }>()
-const model = props.kind === 'cli' ? useCliTokenWindow() : useDesktopTokenWindow()
+const props = defineProps<{ kind: 'cli' | 'desktop' | 'free' }>()
+const model = { cli: useCliTokenWindow, desktop: useDesktopTokenWindow, free: useFreeTokenWindow }[props.kind]()
 const labelKey = { '5h': 'tokensWindow5h', week: 'tokensWindowWeek', total: 'tokensWindowTotal' }
 const hintKey = {
   '5h': 'tokensWindow5hHint',
