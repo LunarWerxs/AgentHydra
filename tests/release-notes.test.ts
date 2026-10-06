@@ -83,6 +83,14 @@ describe('release notes', () => {
     expect(body).not.toContain('<details>')
   })
 
+  test('a past release (below 2.0.0) is refused for publishing but renders as a history page', () => {
+    const past = '## [0.9.0] - 2026-01-01\n\n### Fixed\n\n- **Two little things.** Both fixed.'
+    expect(() => formatReleaseBody(changelog(past), '0.9.0')).toThrow('below 2.0.0')
+    expect(formatReleaseBody(changelog(past), '0.9.0', { history: true })).toContain(
+      '- **Two little things.** Both fixed.',
+    )
+  })
+
   test('formatLineBody synthesizes TL;DR from headlines when versions have no explicit TL;DR', () => {
     const patches = `## [0.35.4] - 2026-08-26
 

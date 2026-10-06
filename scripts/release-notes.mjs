@@ -279,9 +279,12 @@ export function formatReleaseBody(changelog, version, options = {}) {
   const why = history ? null : refusal(changelog, version)
   if (why) throw new Error(why)
   const section = changelogSection(changelog, version)
-  const { tldr, rest } = splitTldr(section)
+  const split = splitTldr(section)
+  const { rest } = split
   const lines = rest.split(/\r?\n/)
   const details = renderSectionDetails(lines)
+  // A past release's section may have no written TL;DR; its headlines stand in so every history page opens short.
+  const tldr = split.tldr.length || !history ? split.tldr : synthesizeTldr(section)
 
   const out = [
     '<div align="center">',

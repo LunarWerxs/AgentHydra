@@ -60,7 +60,10 @@ function classifyVersions(versions) {
 
 /** Main consolidation logic. */
 async function consolidate(options = {}) {
-  const { apply = false, out = null, repo = REPO, history = false } = options
+  // These are past releases, so formatReleaseBody's refusal of versions below 2.0.0 (meant for
+  // publishing new ones) must never stop a page being rewritten; --history is accepted and ignored.
+  const { apply = false, out = null, repo = REPO } = options
+  const history = true
 
   const releases = await fetchReleases(repo)
   const changelog = readFileSync('CHANGELOG.md', 'utf8')
