@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+### Added
+
+- **A CliMayte worker whose time estimate missed is asked why, and the answers are kept and sorted** (2026-10-06, owner: "actively tracking all estimations and the time it actually took to finish. And then asking the AI at the end, hey, why did you think it would take two hours and it only took 30 minutes?"). Every `ETA:` line a worker writes, word for word, and the working time it really took now go to a ledger, `corch/eta.jsonl`, that outlives the worker. When a worker is about to end its turn and its working time is outside 1.5x of its estimate either way, the daemon answers the worker's Stop hook and asks it once, in the same turn, for an `ETA-REVIEW:` line (why it missed, and what it would estimate next time) and a `CAUSE:` from a fixed list (human-pace, scope-smaller, scope-larger, slow-commands, waiting, rework, padding, unclear-ask, other). Those two lines never become the worker's report. `climayte_scorecard` shows the newest estimates and the causes counted, and once there are three reviews the calibration line every worker's brief ends with also names the most common cause.
+
 ## [1.12.0] - 2026-10-06
 
 ### Added
