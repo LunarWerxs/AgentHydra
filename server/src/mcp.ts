@@ -2232,9 +2232,9 @@ list_usage {} surveys every account (\`deepseek\` = HSwarm's balance). Mechanica
 goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
-work on his CLI accounts, moving it when one runs out. Use it for Claude-quality pieces, above all
-while accounts sit idle (check_my_usage says how many). AgentHydra picks the account (skips one a
-person or another session is using, weighs quota); see climayte_status.
+work on his CLI accounts, moving it when one runs out; use it while accounts sit idle
+(check_my_usage says how many). AgentHydra picks the account, never one a person or another
+session is using; see climayte_status.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
 tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,

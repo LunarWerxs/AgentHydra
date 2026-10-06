@@ -47,8 +47,10 @@ describe('SERVER_INSTRUCTIONS', () => {
 
   test('stays small enough to be worth its rent in every request', () => {
     // It rides in context for the whole session. A cap is the only thing that stops a guidance
-    // block growing a line at a time until it is skimmed instead of read.
-    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(2200)
+    // block growing a line at a time until it is skimmed instead of read. Claude Code keeps 2,048
+    // characters of a server's instructions: at 2,063 the probe-chat deletion rule at the end was
+    // cut from every chat (2026-10-06).
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThanOrEqual(2048)
     expect(SERVER_INSTRUCTIONS.split('\n').length).toBeLessThan(32)
   })
 })
