@@ -25,7 +25,7 @@ import { basename, extname, join } from 'node:path'
 
 const MAX_WAIT_MS = 10 * 60_000
 const KEY_HINT =
-  'ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page. Do not ask for the key in chat. (A mock run also needs some key present in ReDesign, but spends nothing.) If all keys are cooling down (too many requests in a short time), tell them to wait a few minutes or add more keys from another provider in HSwarm.'
+  'ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page. Do not ask for the key in chat. (A mock run also needs some key present in ReDesign, but spends nothing.)'
 
 /** A 1x1 PNG: the input when the chat gave neither a screenshot nor a url. */
 const PLACEHOLDER_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
@@ -73,6 +73,26 @@ interface ModelInfo {
   vision?: boolean
   enabled?: boolean
   starred?: boolean
+}
+
+interface KeyEntry {
+  cooldownUntil?: number | null
+  lastError?: string | null
+  lastUsedAt?: number | null
+  lastSuccessAt?: number | null
+}
+
+interface KeyPool {
+  pool: string
+  available: number
+  entries?: KeyEntry[]
+}
+
+/** A pool whose every key's last word was an error (no success since its last use). Unknown (no entries): not failing. */
+export function poolFailing(p: KeyPool | undefined): boolean {
+  const entries = p?.entries ?? []
+  const good = (e: KeyEntry) => !e.lastError || (e.lastSuccessAt != null && e.lastSuccessAt >= (e.lastUsedAt ?? 0))
+  return entries.length > 0 && !entries.some(good)
 }
 
 interface ToolResult {
@@ -131,6 +151,18 @@ function findBrowser(): string | null {
   return null
 }
 
+/** Deletes a temp folder, retrying while Windows still holds a file in it (EBUSY/EPERM); never throws, a leftover folder in tmp is harmless. */
+export async function removeQuietly(dir: string, rm: (dir: string) => void = (d) => rmSync(d, { recursive: true, force: true }), tries = 10, delayMs = 200): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    try {
+      rm(dir)
+      return
+    } catch {
+      await new Promise((r) => setTimeout(r, delayMs))
+    }
+  }
+}
+
 async function captureWithBrowser(url: string, png: string): Promise<void> {
   const exe = findBrowser()
   if (!exe) throw new Error('no Edge or Chrome found to capture the url: pass a screenshot file instead')
@@ -152,17 +184,7 @@ async function captureWithBrowser(url: string, png: string): Promise<void> {
       })
     })
   } finally {
-    let lastErr: Error | null = null
-    for (let i = 0; i < 10; i++) {
-      try {
-        rmSync(profile, { recursive: true, force: true })
-        return
-      } catch (err) {
-        lastErr = err as Error
-        if (i < 9) await new Promise((r) => setTimeout(r, 100))
-      }
-    }
-    if (lastErr) console.error(`Warning: could not clean up ${profile}: ${lastErr.message}`)
+    await removeQuietly(profile)
   }
   if (!existsSync(png)) throw new Error('the browser did not produce a screenshot of the url')
 }
@@ -193,13 +215,44 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     return id
   }
 
-  /** The models a run should use: enabled vision models with a key in their pool (a mock run needs one too). Null: none. */
+  /**
+   * The models a run should use: enabled vision models with a key in their pool (a mock run needs one too), starred
+   * first. Models whose pool is failing (poolFailing) are used only when no other pool is left.
+   */
   async function pickModels(): Promise<ModelInfo[] | null> {
-    const boot = await api<{ models?: ModelInfo[]; keys?: { pools?: { pool: string; available: number }[] } }>('/api/bootstrap')
-    const live = new Set((boot.keys?.pools ?? []).filter((p) => p.available > 0).map((p) => p.pool))
-    const usable = (boot.models ?? []).filter((m) => m.enabled !== false && m.vision !== false && (m.keyEnv && live.has(m.keyEnv)))
+    const boot = await api<{ models?: ModelInfo[]; keys?: { pools?: KeyPool[] } }>('/api/bootstrap')
+    const pools = new Map((boot.keys?.pools ?? []).map((p) => [p.pool, p]))
+    const usable = (boot.models ?? []).filter((m) => m.enabled !== false && m.vision !== false && m.keyEnv && (pools.get(m.keyEnv)?.available ?? 0) > 0)
     if (!usable.length) return null
-    return usable.sort((a, b) => Number(b.starred === true) - Number(a.starred === true))
+    const starred = (a: ModelInfo, b: ModelInfo) => Number(b.starred === true) - Number(a.starred === true)
+    const healthy = usable.filter((m) => !poolFailing(pools.get(m.keyEnv as string)))
+    return (healthy.length ? healthy : usable).sort(starred)
+  }
+
+  /** Why a run made nothing, and what to do; for a cooled pool, when its first key comes back and the provider's last error. */
+  async function noOptionsMessage(runId: string, manifest: Manifest): Promise<string> {
+    const errors = (manifest.jobs ?? []).map((j) => (j as Job & { error?: string }).error).filter(Boolean) as string[]
+    const why = errors[0] ?? manifest.error ?? manifest.status
+    const cooled = [...new Set(errors.map((e) => /cooling down \(([A-Z_]+)\)/.exec(e)?.[1]).filter(Boolean) as string[])]
+    if (!cooled.length) return `Run ${runId} made no options: ${String(why).slice(0, 300)}. If a key is the problem, tell the person to check it in ReDesign (Settings → Connectors → ReDesign → Open).`
+    let pools: KeyPool[] = []
+    try {
+      pools = (await api<{ pools?: KeyPool[] }>('/api/keys')).pools ?? []
+    } catch {
+      // the message below still says what to do
+    }
+    const lines = cooled.map((name) => {
+      const p = pools.find((x) => x.pool === name)
+      const until = Math.min(...(p?.entries ?? []).map((e) => e.cooldownUntil ?? 0).filter((t) => t > Date.now()))
+      const last = (p?.entries ?? []).map((e) => e.lastError).find(Boolean)
+      const when = Number.isFinite(until) ? `its first key is free again at ${new Date(until).toLocaleTimeString()} (in ${Math.ceil((until - Date.now()) / 1000)} s)` : 'its cooldown has already ended'
+      return `${name}: ${when}${last ? `; the provider's last answer was "${String(last).slice(0, 160)}"` : ''}`
+    })
+    return [
+      `Run ${runId} made no options: every key of ${cooled.join(', ')} was cooling down after the provider refused or dropped its requests.`,
+      ...lines.map((l) => `- ${l}`),
+      `What to do: call design_options again after that time; or ask the person to press "Use HSwarm's keys" on the ReDesign card (or add keys of another provider in ReDesign: Settings → Connectors → ReDesign → Open) so the next run has fresh keys. A key refused with 429 for quota needs a different key, not a wait. Never ask for a key in chat.`
+    ].join('\n')
   }
 
   /** The finished options of a run, in the order ReDesign wrote them. */
@@ -231,17 +284,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       } catch (err) {
         return fail(`Could not capture ${args.url}: ${err instanceof Error ? err.message : String(err)}. Pass a screenshot file instead.`)
       } finally {
-        let lastErr: Error | null = null
-        for (let i = 0; i < 10; i++) {
-          try {
-            rmSync(dir, { recursive: true, force: true })
-            break
-          } catch (err) {
-            lastErr = err as Error
-            if (i < 9) await new Promise((r) => setTimeout(r, 100))
-          }
-        }
-        if (lastErr) console.error(`Warning: could not clean up ${dir}: ${lastErr.message}`)
+        await removeQuietly(dir)
       }
     } else {
       inputId = await uploadInput('brief-only.png', 'image/png', PLACEHOLDER_PNG)
@@ -273,10 +316,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       await sleep(o.pollMs ?? 1500)
     }
     const jobs = okJobs(manifest).slice(0, count)
-    if (!jobs.length) {
-      const why = (manifest.jobs ?? []).map((j) => (j as Job & { error?: string }).error).find(Boolean) ?? manifest.error ?? manifest.status
-      return fail(`Run ${runId} made no options: ${String(why).slice(0, 300)}. If a key is the problem, tell the person to check it in ReDesign (Settings → Connectors → ReDesign → Open).`)
-    }
+    if (!jobs.length) return fail(await noOptionsMessage(runId, manifest))
 
     // Each option to a picture on disk.
     const dir = join(o.outDir, runId)

@@ -39,7 +39,15 @@ function fakeRedesign(initial: Record<string, string[]> = {}) {
     ...initial
   }
   const fetchImpl = (async (url: string, init?: RequestInit) => {
-    if (url.endsWith('/api/keys')) return Response.json({ pools: Object.entries(pools).map(([pool, k]) => ({ pool, total: k.length })) })
+    if (url.endsWith('/api/keys')) {
+      return Response.json({
+        pools: Object.entries(pools).map(([pool, k]) => ({
+          pool,
+          total: k.length,
+          entries: k.map((key) => (key.startsWith('dead-') ? { lastError: 'HTTP 429', lastUsedAt: 2, lastSuccessAt: null } : { lastError: null, lastUsedAt: null, lastSuccessAt: null }))
+        }))
+      })
+    }
     const { pool, key } = JSON.parse(String(init?.body))
     if (pools[pool].includes(key)) return Response.json({ error: 'exists' }, { status: 409 })
     pools[pool].push(key)
@@ -48,11 +56,32 @@ function fakeRedesign(initial: Record<string, string[]> = {}) {
   return { pools, fetchImpl }
 }
 
+const alive = async () => true
+
 describe('copyHswarmKeys', () => {
+  test('copies only keys that pass the live check, and keys whose last answer was an error do not fill a pool', async () => {
+    const home = hswarmHome()
+    const r = fakeRedesign({ GEMINI_FLASH_API_KEYS: ['dead-1', 'dead-2', 'dead-3', 'dead-4', 'dead-5'] })
+    const checked: string[] = []
+    const checkKey = async (_list: string, key: string) => {
+      checked.push(key)
+      return key !== 'test-gem-2' && key !== 'test-gem-6'
+    }
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey })
+    const flash = out.pools.find((p) => p.pool === 'GEMINI_FLASH_API_KEYS')
+    expect(flash?.before).toBe(0)
+    expect(flash?.added).toBe(3)
+    expect(r.pools.GEMINI_FLASH_API_KEYS).not.toContain('test-gem-2')
+    expect(r.pools.GEMINI_PRO_API_KEYS).toEqual(r.pools.GEMINI_FLASH_API_KEYS.filter((k) => !k.startsWith('dead-')))
+    // one check per key feeds both Gemini pools
+    expect(checked.filter((k) => k === 'test-gem-1')).toHaveLength(1)
+    expect(JSON.stringify(out)).not.toContain('test-gem')
+  })
+
   test('adds up to five ok Gemini keys per pool and one Anthropic key, skipping parked ones', async () => {
     const home = hswarmHome()
     const r = fakeRedesign()
-    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
     expect(out.ok).toBe(true)
     expect(out.okInHswarm.gemini).toBe(5)
     expect(r.pools.GEMINI_FLASH_API_KEYS).toHaveLength(5)
@@ -64,8 +93,8 @@ describe('copyHswarmKeys', () => {
   test('running again adds nothing', async () => {
     const home = hswarmHome()
     const r = fakeRedesign()
-    await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
-    const again = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
+    const again = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
     expect(again.pools.every((p) => p.added === 0)).toBe(true)
     expect(r.pools.GEMINI_FLASH_API_KEYS).toHaveLength(5)
   })
@@ -73,7 +102,7 @@ describe('copyHswarmKeys', () => {
   test('tops up a pool that has one of the keys already, without a duplicate', async () => {
     const home = hswarmHome()
     const r = fakeRedesign({ GEMINI_FLASH_API_KEYS: ['test-gem-1'] })
-    await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
     expect(r.pools.GEMINI_FLASH_API_KEYS).toHaveLength(5)
     expect(new Set(r.pools.GEMINI_FLASH_API_KEYS).size).toBe(5)
   })
@@ -81,7 +110,7 @@ describe('copyHswarmKeys', () => {
   test('the result carries counts and fingerprints, never a key value', async () => {
     const home = hswarmHome()
     const r = fakeRedesign()
-    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
     const text = JSON.stringify(out)
     expect(text).not.toContain('test-gem')
     expect(text).not.toContain('test-ant')
@@ -103,7 +132,7 @@ describe('copyHswarmKeys', () => {
   test('adds Mistral keys alongside Gemini and Anthropic to reduce provider reliance', async () => {
     const home = hswarmHome()
     const r = fakeRedesign()
-    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl })
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey: alive })
     expect(out.ok).toBe(true)
     expect(out.okInHswarm.mistral).toBe(5)
     expect(r.pools.MISTRAL_API_KEYS).toHaveLength(5)

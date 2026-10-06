@@ -6,7 +6,9 @@
 //   <home>/keys.sqlite holds each key's state by fingerprint (disabled, broke, strikes, rest_until). A key is "ok"
 //   when none of those is set and it is not resting.
 // ReDesign: POST /api/keys/save { pool, key } adds one key to a pool (409 when it is already there); GET /api/keys
-//   lists the pools with counts. Gemini Flash is what its image/HTML models use first, then Gemini Pro and Anthropic.
+//   lists the pools with each key's last result. Only keys that work count toward a pool's target, and a key is copied
+//   only after one tiny live request answers 200 (liveCheck): many HSwarm keys that are "ok" there are refused for quota
+//   (429 "per minute for a region") on their very first request, and a pool of those makes every ReDesign run fail.
 
 import { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
@@ -23,7 +25,7 @@ export const KEY_PLAN: readonly { list: string; pools: readonly string[]; want: 
 
 export interface PoolResult {
   pool: string
-  /** Keys already in the pool before this run. */
+  /** Working keys already in the pool before this run (keys whose last answer was an error are not counted). */
   before: number
   /** Keys this run added. */
   added: number
@@ -36,6 +38,8 @@ export interface CopyResult {
   pools: PoolResult[]
   /** HSwarm keys that were ok and not resting, per list (counts only). */
   okInHswarm: Record<string, number>
+  /** Live checks spent per list. */
+  checked?: Record<string, number>
   error?: string
 }
 
@@ -44,6 +48,42 @@ export interface CopyOptions {
   /** HSwarm's home; default HSWARM_HOME or ~/.hswarm. */
   hswarmHome?: string
   fetchImpl?: typeof fetch
+  /** Whether one key of an HSwarm list answers a tiny request; default liveCheck. */
+  checkKey?: (list: string, key: string) => Promise<boolean>
+}
+
+/** Live checks spent per HSwarm list at most, so a list of dead keys cannot run on for minutes. */
+export const CHECK_LIMIT = 60
+
+/** One tiny request per provider (a few tokens at most); true only on a 200. */
+export async function liveCheck(list: string, key: string, doFetch: typeof fetch = fetch): Promise<boolean> {
+  const json = { 'content-type': 'application/json' }
+  const req: Record<string, [string, RequestInit]> = {
+    gemini: ['https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent', { method: 'POST', headers: { ...json, 'x-goog-api-key': key }, body: JSON.stringify({ contents: [{ parts: [{ text: 'hi' }] }], generationConfig: { maxOutputTokens: 1 } }) }],
+    mistral: ['https://api.mistral.ai/v1/chat/completions', { method: 'POST', headers: { ...json, authorization: `Bearer ${key}` }, body: JSON.stringify({ model: 'mistral-small-latest', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) }],
+    anthropic: ['https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...json, 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) }]
+  }
+  const r = req[list]
+  if (!r) return true
+  try {
+    const res = await doFetch(r[0], { ...r[1], signal: AbortSignal.timeout(15_000) })
+    await res.body?.cancel()
+    return res.status === 200
+  } catch {
+    return false
+  }
+}
+
+interface PoolEntry {
+  lastError?: string | null
+  lastUsedAt?: number | null
+  lastSuccessAt?: number | null
+}
+
+/** Keys of a pool that work: no error yet, or a success since their last use. A pool listed without entries: all of them. */
+function workingKeys(p: { total: number; entries?: PoolEntry[] }): number {
+  if (!p.entries) return Number(p.total) || 0
+  return p.entries.filter((e) => !e.lastError || (e.lastSuccessAt != null && e.lastSuccessAt >= (e.lastUsedAt ?? 0))).length
 }
 
 export const fingerprint = (key: string): string => createHash('sha256').update(key).digest('hex').slice(0, 8)
@@ -94,8 +134,8 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
   try {
     const res = await doFetch(`${base}/api/keys`)
     if (!res.ok) return fail(`ReDesign answered ${res.status} for its key pools`)
-    const body = (await res.json()) as { pools?: { pool: string; total: number }[] }
-    poolTotals = new Map((body.pools ?? []).map((p) => [p.pool, Number(p.total) || 0]))
+    const body = (await res.json()) as { pools?: { pool: string; total: number; entries?: PoolEntry[] }[] }
+    poolTotals = new Map((body.pools ?? []).map((p) => [p.pool, workingKeys(p)]))
   } catch {
     return fail('ReDesign is not answering')
   }
@@ -107,32 +147,39 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
     return fail("HSwarm's key state could not be read")
   }
 
+  const check = opts.checkKey ?? ((list: string, key: string) => liveCheck(list, key, doFetch))
   for (const plan of KEY_PLAN) {
     const ok = readList(join(home, 'secrets', `${plan.list}_api_keys`)).filter((k) => !skip.has(fingerprint(k)))
     result.okInHswarm[plan.list] = ok.length
-    for (const pool of plan.pools) {
-      if (!poolTotals.has(pool)) continue
-      const before = poolTotals.get(pool) ?? 0
-      const row: PoolResult = { pool, before, added: 0, fingerprints: [] }
-      result.pools.push(row)
-      for (const key of ok) {
-        if (before + row.added >= plan.want) break
+    const rows: PoolResult[] = plan.pools.filter((pool) => poolTotals.has(pool)).map((pool) => ({ pool, before: poolTotals.get(pool) ?? 0, added: 0, fingerprints: [] }))
+    result.pools.push(...rows)
+    let checks = 0
+    for (const key of ok) {
+      const open = rows.filter((row) => row.before + row.added < plan.want)
+      if (!open.length || checks >= CHECK_LIMIT) break
+      checks++
+      if (!(await check(plan.list, key))) continue
+      for (const row of open) {
         let res: Response
         try {
           res = await doFetch(`${base}/api/keys/save`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ pool, key })
+            body: JSON.stringify({ pool: row.pool, key })
           })
         } catch {
           return fail('ReDesign stopped answering while keys were added')
         }
         if (res.status === 409) continue // already in the pool
-        if (!res.ok) break // this pool refuses keys; do not hammer it
+        if (!res.ok) {
+          row.before = plan.want // this pool refuses keys; do not hammer it
+          continue
+        }
         row.added++
         row.fingerprints.push(fingerprint(key))
       }
     }
+    result.checked = { ...result.checked, [plan.list]: checks }
   }
   return result
 }

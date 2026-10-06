@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import factory from '../../src/connectors/defs/redesign'
 import { designImagePath, serveDesignImage } from '../../src/connectors/redesign-images'
-import { createRedesignMcp } from '../../src/connectors/redesign-mcp'
+import { createRedesignMcp, poolFailing, removeQuietly } from '../../src/connectors/redesign-mcp'
 import type { ConnectorStatus } from '@shared/connectors'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')
@@ -181,22 +181,79 @@ describe('redesign connector', () => {
     expect(JSON.parse(own.slice(own.indexOf('{'))).ask_owner).toBe(false)
   })
 
-  test('redesign-mcp: url capture with custom capture function and automatic cleanup', async () => {
-    const outDir = join(tmp, 'out-url-capture')
-    const mockCapture = async (_url: string, png: string) => {
-      writeFileSync(png, PNG)
+  test('removeQuietly: retries a folder Windows still holds (EBUSY) and never throws', async () => {
+    let calls = 0
+    const busyTwice = () => {
+      calls++
+      if (calls < 3) throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
     }
-    const mcp = createRedesignMcp({
-      baseUrl: fake.url,
-      outDir,
-      pollMs: 5,
-      captureUrl: mockCapture
+    await removeQuietly('x', busyTwice, 10, 1)
+    expect(calls).toBe(3)
+    const alwaysBusy = () => {
+      throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' })
+    }
+    await expect(removeQuietly('x', alwaysBusy, 3, 1)).resolves.toBeUndefined()
+  })
+
+  test('poolFailing: a pool whose every key last answered with an error; fresh or recently good keys are not', () => {
+    const bad = { lastError: 'network error', lastUsedAt: 20, lastSuccessAt: 10 }
+    expect(poolFailing({ pool: 'P', available: 2, entries: [bad, { ...bad, lastSuccessAt: null }] })).toBe(true)
+    expect(poolFailing({ pool: 'P', available: 2, entries: [bad, { lastError: null, lastUsedAt: null, lastSuccessAt: null }] })).toBe(false)
+    expect(poolFailing({ pool: 'P', available: 1, entries: [{ lastError: 'old', lastUsedAt: 20, lastSuccessAt: 25 }] })).toBe(false)
+    expect(poolFailing({ pool: 'P', available: 1 })).toBe(false)
+  })
+
+  test('redesign-mcp: models of a failing pool are skipped; a run lost to cooldown says when the key is back and what to do', async () => {
+    const until = Date.now() + 90_000
+    const failing = { lastError: 'network error: The socket connection was closed unexpectedly', lastUsedAt: 2, lastSuccessAt: 1, cooldownUntil: until }
+    const runs: Record<string, unknown>[] = []
+    let cooled = false
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(req) {
+        const u = new URL(req.url)
+        const pools = [
+          { pool: 'A_KEYS', available: 1, entries: [failing] },
+          { pool: 'B_KEYS', available: 1, entries: [{ lastError: null, lastUsedAt: null, lastSuccessAt: null }] }
+        ]
+        if (u.pathname === '/api/bootstrap') {
+          return Response.json({
+            models: [
+              { id: 'm-a', label: 'A', keyEnv: 'A_KEYS', vision: true, starred: true },
+              { id: 'm-b', label: 'B', keyEnv: 'B_KEYS', vision: true }
+            ],
+            keys: { pools }
+          })
+        }
+        if (u.pathname === '/api/keys') return Response.json({ pools })
+        if (u.pathname === '/api/inputs/upload') return Response.json({ addedIds: ['in-1'] })
+        if (u.pathname === '/api/run') {
+          runs.push((await req.json()) as Record<string, unknown>)
+          return Response.json({ runId: 'run-c' })
+        }
+        if (u.pathname === '/api/runs/run-c') {
+          const error = cooled ? 'all keys cooling down (A_KEYS)' : 'all keys cooling down (B_KEYS)'
+          return Response.json({ status: 'done', jobs: [{ id: 'j1', status: 'skipped', modelId: 'm-b', error }] })
+        }
+        return Response.json({}, { status: 404 })
+      }
     })
-    const res = await mcp.handle(rpc(1, 'tools/call', { name: 'design_options', arguments: { brief: 'test', url: 'http://localhost:3000', count: 3 } }))
-    expect((res as { result: { isError?: boolean } }).result.isError).toBeUndefined()
-    const out = JSON.parse((res as { result: { content: { text: string }[] } }).result.content[0].text.split('\n\n').slice(1).join('\n\n')) as { options: { image: string }[] }
-    expect(out.options.length).toBe(3)
-    for (const opt of out.options) expect(existsSync(opt.image)).toBe(true)
+    try {
+      const mcp = createRedesignMcp({ baseUrl: `http://127.0.0.1:${server.port}`, outDir: join(tmp, 'out-cool'), pollMs: 5 })
+      await mcp.handle(rpc(1, 'tools/call', { name: 'design_options', arguments: { brief: 'x', count: 3 } }))
+      expect(runs[0]).toMatchObject({ models: ['m-b'], modelQuantities: { 'm-b': 3 } })
+      cooled = true
+      const res = (await mcp.handle(rpc(2, 'tools/call', { name: 'design_options', arguments: { brief: 'x', count: 3 } }))) as { result: { isError: boolean } }
+      expect(res.result.isError).toBe(true)
+      const msg = text(res)
+      expect(msg).toContain('every key of A_KEYS was cooling down')
+      expect(msg).toMatch(/free again at .+ \(in (89|90) s\)/)
+      expect(msg).toContain('socket connection was closed')
+      expect(msg).toContain("Use HSwarm's keys")
+    } finally {
+      server.stop(true)
+    }
   })
 
   test('design image route: serves a picture in the folder, refuses traversal, odd names and outside paths', async () => {
