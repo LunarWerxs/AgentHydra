@@ -1,22 +1,24 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { ArrowLeft, ArrowRight, ExternalLink, Globe, Play, RefreshCw, RotateCw, Square, X } from '@lucide/vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { AppWindow, Globe, Plus, RefreshCw, Search, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import type { BrowserOpenRequest } from '@shared/browser'
+import type { BrowserOpenRequest, BrowserProfiles } from '@shared/browser'
 import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
-import { devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
-import { clampPane, type FolderSetup, isUp, needsSetup, openable, otherRunning, paneView, parseAddress, proxyAddress, statusDot, statusWord, tailLines } from './logic'
+import { browserProfiles, devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
+import { activateTab, clampPane, closeTab, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { browserRequest, claimBrowserRequest } from './browser-request'
+import NewTab from './NewTab.vue'
+import PageTab from './PageTab.vue'
 import SavedBrowsers from './SavedBrowsers.vue'
-import { DOT, ICON_BTN, INPUT, TEXT_BTN, tab } from './styles'
+import { DOT, ICON_BTN } from './styles'
 
-// The right-hand servers pane (title bar's Browser button), like Claude Code Desktop's: a Servers | Browser switch
-// in its header, always there. Servers is the list of this chat's localhost servers from DevWebUI (Start / Stop /
-// Restart, Open for one that runs), centred in the pane; Browser is the page, with its address bar even before
-// anything is opened. Opening a server shows the browser, and starting one opens it as soon as it answers. A folder
-// that is not a project yet is set up by itself (POST /dw/folder): from Claude Code's .claude/launch.json or
-// package.json's dev scripts, every server stopped. Opening the pane starts the server manager when it is not
-// running; status is polled while the pane is open and the window is on screen.
+// The right-hand pane (title bar's Browser button): a browser's tab strip over the active tab. A New tab lists this
+// chat's localhost servers from DevWebUI (Start / Stop / Restart, click one to open it in the tab) and the workspace's
+// saved browsers, narrowed by its address bar; a page tab shows a server or an address in a frame; a saved tab is a
+// saved browser, live. Tabs are remembered per chat folder. A folder that is not a project yet is set up by itself
+// (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server stopped.
+// Opening the pane starts the server manager when it is not running; status is polled while the pane is open and the
+// window is on screen.
 const props = defineProps<{ cwd: string; width: number }>()
 const emit = defineEmits<{ close: []; resize: [width: number] }>()
 
@@ -63,6 +65,7 @@ async function refresh() {
   try {
     projects.value = await listProjects()
     projectsError.value = null
+    void loadProfiles()
   } catch (err) {
     projectsError.value = err instanceof Error ? err.message : String(err)
   }
@@ -153,10 +156,8 @@ async function run(key: string, fn: () => Promise<unknown>) {
 }
 async function toggle(p: DevWebProcess) {
   const up = isUp(p.status)
-  if (!up) pendingOpen.value = p.id
-  else if (pendingOpen.value === p.id) pendingOpen.value = null
+  if (up) dropPending(p.id)
   await run(p.id, () => processAction(p.id, up ? 'stop' : 'start'))
-  if (actionError.value && pendingOpen.value === p.id) pendingOpen.value = null
 }
 const restart = (p: DevWebProcess) => run(p.id, () => processAction(p.id, 'restart'))
 const all = (action: 'start' | 'stop') => project.value && run('all', () => projectAction(project.value!.id, action))
@@ -169,104 +170,130 @@ async function tryAgain() {
   if (status.value === pending) status.value = null
 }
 
-// ---- the browser: one click away on the header's switch, and shown when a server (or an address) is opened ----
-const mode = ref<'list' | 'browser'>('list')
-/** Browser mode's source: a localhost dev server in a frame, or the workspace's saved browsers (live, driven by the AI and the person). */
-const source = ref<'dev' | 'saved'>('dev')
-/** The transcript card's request the pane is acting on; SavedBrowsers selects its profile. */
-const request = ref<BrowserOpenRequest | null>(null)
-// A request that fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
+// ---- saved browsers, for the New tab page ----
+const profiles = shallowRef<BrowserProfiles | null>(null)
+const profilesError = ref<string | null>(null)
+const profileList = computed(() => (profiles.value ? profileRows(profiles.value) : null))
+let profilesAt = 0
+async function loadProfiles(force = false) {
+  if (!force && Date.now() - profilesAt < 6000) return
+  profilesAt = Date.now()
+  const cwd = props.cwd
+  try {
+    const r = await browserProfiles(cwd)
+    if (cwd !== props.cwd) return
+    profiles.value = r
+    profilesError.value = r.error ?? null
+  } catch (err) {
+    if (cwd === props.cwd) profilesError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+
+// ---- the tabs, remembered per chat folder ----
+const state = ref<TabsState>(loadTabs(props.cwd))
+const activeTab = computed(() => state.value.tabs.find((t) => t.id === state.value.active) ?? state.value.tabs[0]!)
+watch(state, (s) => saveTabs(props.cwd, s), { deep: true })
+/** Server id -> the New tab that clicked it while it was stopped: that tab opens it once it answers. */
+const pending = ref(new Map<string, string>())
+/** Tabs just pointed at a server that was starting: their frame looks again once. */
+const justStarted = ref(new Set<string>())
+
+function dropPending(procId: string) {
+  if (!pending.value.has(procId)) return
+  const next = new Map(pending.value)
+  next.delete(procId)
+  pending.value = next
+}
+const newTab = () => (state.value = openTab(state.value))
+const pick = (id: string) => (state.value = activateTab(state.value, id))
+function close(id: string) {
+  const next = new Map(pending.value)
+  for (const [proc, tab] of next) if (tab === id) next.delete(proc)
+  pending.value = next
+  state.value = closeTab(state.value, id)
+}
+const aim = (id: string, spec: TabSpec) => (state.value = retargetTab(state.value, id, spec))
+function openAddress(id: string, url: string) {
+  aim(id, { kind: 'page', target: url, proc: null })
+}
+function openSaved(id: string, name: string) {
+  aim(id, { kind: 'saved', target: name, proc: null })
+}
+function openRunning(id: string, p: DevWebProcess, fresh = false) {
+  const url = processAddress(p)
+  if (!url) return
+  if (fresh) justStarted.value = new Set(justStarted.value).add(id)
+  aim(id, { kind: 'page', target: url, proc: p.id })
+}
+/** A server clicked on a New tab: it opens in that tab, starting it first when it is stopped. */
+async function openServer(id: string, p: DevWebProcess) {
+  if (p.status === 'running' && processAddress(p)) return openRunning(id, p)
+  if (p.status === 'crashed' || p.status === 'stopped') {
+    pending.value = new Map(pending.value).set(p.id, id)
+    await run(p.id, () => processAction(p.id, 'start'))
+    if (actionError.value) dropPending(p.id)
+  } else pending.value = new Map(pending.value).set(p.id, id)
+}
+watch(
+  () => [...pending.value.keys()].map((id) => `${id}:${findProc(id)?.status}|${processAddress(findProc(id) ?? ({} as DevWebProcess)) ?? ''}`).join(),
+  () => {
+    for (const [procId, tabId] of pending.value) {
+      const p = findProc(procId)
+      if (!p) continue
+      // Not 'stopped': that is what the list still says the moment Start is clicked.
+      if (p.status !== 'running' && p.status !== 'crashed') continue
+      const next = new Map(pending.value)
+      next.delete(procId)
+      pending.value = next
+      if (p.status === 'running' && state.value.tabs.find((t) => t.id === tabId)?.kind === 'new') openRunning(tabId, p, true)
+    }
+  }
+)
+/** A page tab went somewhere else (a link, the address bar, back): the tab remembers where, and drops a server it no longer shows. */
+function navigated(id: string, url: string) {
+  const t = state.value.tabs.find((x) => x.id === id)
+  if (!t || t.target === url) return
+  const p = findProc(t.proc)
+  aim(id, { kind: 'page', target: url, proc: p && processAddress(p) === url ? p.id : null })
+}
+
+const procOf = (t: PaneTab): DevWebProcess | null => (t.kind === 'page' ? findProc(t.proc) : null)
+const titleOf = (t: PaneTab): string => (t.kind === 'new' ? 'New tab' : t.kind === 'saved' ? (t.target ?? 'Saved browser') : pageTitle(t.target, procOf(t)))
+
+// The transcript card's request: the tab for that browser comes forward, else it opens in a new one. A request that
+// fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
+function applyRequest(r: BrowserOpenRequest) {
+  if (r.profile) {
+    const have = state.value.tabs.find((t) => t.kind === 'saved' && t.target === r.profile)
+    if (have) return pick(have.id)
+    state.value = openTab(state.value, { kind: 'saved', target: r.profile, proc: null, ...(r.url ? { url: r.url } : {}) })
+  } else if (r.url) state.value = openTab(state.value, { kind: 'page', target: r.url, proc: null })
+}
 watch(
   browserRequest,
   () => {
     const r = claimBrowserRequest()
-    if (!r) return
-    request.value = r
-    source.value = 'saved'
-    mode.value = 'browser'
+    if (r) applyRequest(r)
   },
   { immediate: true }
 )
-const addressInput = ref<HTMLInputElement | null>(null)
-/** With no page open yet, the switch lands in the address bar. */
-function showBrowser() {
-  mode.value = 'browser'
-  if (!current.value) void nextTick(() => addressInput.value?.focus())
+
+const savedEl = ref<{ refresh: () => Promise<void> } | null>(null)
+async function refreshAll() {
+  void loadProfiles(true)
+  await refresh()
+  if (activeTab.value.kind === 'saved') await savedEl.value?.refresh()
 }
-const ready = computed(() => openable(projects.value, project.value))
-const openId = ref<string | null>(null)
-/** The server just started from the list: it opens once it answers. */
-const pendingOpen = ref<string | null>(null)
-const selected = computed(() => findProc(openId.value))
-const history = ref<string[]>([])
-const at = ref(-1)
-const address = ref('')
-const goTo = ref('')
-const reloads = ref(0)
-const viaManager = ref(false)
-const current = computed(() => history.value[at.value] ?? null)
-const frameSrc = computed(() => {
-  const cur = current.value
-  if (!cur) return null
-  if (viaManager.value && selected.value && daemonUrl.value) return proxyAddress(daemonUrl.value, selected.value)
-  return cur
-})
-function go(url: string) {
-  history.value = [...history.value.slice(0, at.value + 1), url]
-  at.value = history.value.length - 1
-  address.value = url
-  viaManager.value = false
-}
-function submitAddress() {
-  const url = parseAddress(address.value)
-  if (url) go(url)
-}
-function openAddress() {
-  const url = parseAddress(goTo.value)
-  if (!url) return
-  openId.value = null
-  go(url)
-  goTo.value = ''
-  mode.value = 'browser'
-}
-const back = () => at.value > 0 && ((at.value -= 1), (address.value = current.value ?? ''), (viaManager.value = false))
-const forward = () => at.value < history.value.length - 1 && ((at.value += 1), (address.value = current.value ?? ''), (viaManager.value = false))
-function open(p: DevWebProcess, justStarted = false) {
-  const url = processAddress(p)
-  if (!url) return
-  openId.value = p.id
-  mode.value = 'browser'
-  if (url !== current.value) go(url)
-  // A dev server reports running a moment before it listens: look once more so the frame is not left on a refused page.
-  if (justStarted) setTimeout(() => current.value === url && reloads.value++, 2500)
-}
-watch(
-  () => {
-    const p = findProc(pendingOpen.value)
-    return p ? `${p.status}|${processAddress(p) ?? ''}` : null
-  },
-  () => {
-    const p = findProc(pendingOpen.value)
-    if (!p) return
-    // Not 'stopped': that is what the list still says the moment Start is clicked.
-    if (p.status === 'running') {
-      pendingOpen.value = null
-      open(p, true)
-    } else if (p.status === 'crashed') pendingOpen.value = null
-  }
-)
 
 watch(
   () => props.cwd,
   () => {
-    mode.value = 'list'
-    openId.value = null
-    pendingOpen.value = null
-    history.value = []
-    at.value = -1
-    address.value = ''
-    viaManager.value = false
+    state.value = loadTabs(props.cwd)
+    pending.value = new Map()
+    profiles.value = null
+    profilesError.value = null
     actionError.value = null
+    void loadProfiles(true)
     void refresh()
   }
 )
@@ -304,178 +331,88 @@ function onResizeKey(e: KeyboardEvent) {
       @keydown="onResizeKey"
     />
 
-    <div class="flex h-8 shrink-0 items-center gap-1 px-2">
-      <div role="tablist" aria-label="Servers or browser" class="flex shrink-0 items-center gap-0.5">
-        <button type="button" role="tab" :aria-selected="mode === 'list'" :class="tab(mode === 'list')" @click="mode = 'list'">Servers</button>
-        <button type="button" role="tab" :aria-selected="mode === 'browser'" :class="tab(mode === 'browser')" @click="showBrowser"><Globe class="size-3.5" />Browser</button>
+    <!-- The tab strip, like a browser's: tabs, a + after the last, and the pane's own buttons at the right end. -->
+    <div class="flex h-[41px] shrink-0 items-end gap-1 border-b border-border bg-[var(--bg-sidebar)] pl-2 pr-1.5 pt-[9px]">
+      <div role="tablist" aria-label="Tabs" class="flex min-w-0 items-end gap-px">
+        <div
+          v-for="t in state.tabs"
+          :key="t.id"
+          role="tab"
+          tabindex="0"
+          :aria-selected="t.id === activeTab.id"
+          :title="titleOf(t)"
+          class="group relative flex h-8 w-[170px] min-w-[44px] max-w-[190px] flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-[8px] pl-2.5 pr-1 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+          :class="t.id === activeTab.id ? 'z-10 -mb-px h-[33px] bg-[var(--bg-page)] text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'"
+          @click="pick(t.id)"
+          @keydown.enter.prevent="pick(t.id)"
+          @mousedown.middle.prevent
+          @auxclick.middle.prevent="close(t.id)"
+        >
+          <span v-if="procOf(t)" class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(procOf(t)!.status)]" aria-hidden="true" />
+          <Globe v-else-if="t.kind === 'page'" class="size-3.5 shrink-0" aria-hidden="true" />
+          <AppWindow v-else-if="t.kind === 'saved'" class="size-3.5 shrink-0" aria-hidden="true" />
+          <Search v-else class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="min-w-0 flex-1 truncate text-[12px]">{{ titleOf(t) }}</span>
+          <button
+            type="button"
+            class="size-5 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] hover:bg-[var(--fill-selected)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none group-hover:flex"
+            :class="t.id === activeTab.id ? 'flex' : 'hidden'"
+            :aria-label="`Close ${titleOf(t)}`"
+            @click.stop="close(t.id)"
+          ><X class="size-3" /></button>
+        </div>
       </div>
-      <template v-if="mode === 'list'">
-        <span v-if="project" class="ml-1 truncate text-[12px] text-[var(--text-muted)]">{{ project.name }}</span>
-        <span class="flex-1" />
-        <template v-if="project && project.processes.length > 1">
-          <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="all('start')"><Play class="size-3" />Start all</button>
-          <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="all('stop')"><Square class="size-3" />Stop all</button>
-        </template>
-        <Tip label="Refresh">
-          <button type="button" :class="ICON_BTN" aria-label="Refresh servers" @click="refresh"><RefreshCw class="size-4" /></button>
-        </Tip>
-      </template>
-      <template v-else>
-        <template v-if="selected">
-          <span class="ml-1 size-2 shrink-0 rounded-full" :class="DOT[statusDot(selected.status)]" aria-hidden="true" />
-          <span class="truncate font-medium">{{ selected.name }}</span>
-          <span v-if="selected.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ selected.port }}</span>
-        </template>
-        <span class="flex-1" />
-        <Tip v-if="selected && isUp(selected.status)" label="Stop">
-          <button type="button" :class="ICON_BTN" :disabled="busy.has(selected.id)" :aria-label="`Stop ${selected.name}`" @click="toggle(selected)"><Square class="size-3.5" /></button>
-        </Tip>
-      </template>
-      <Tip label="Close">
-        <button type="button" :class="ICON_BTN" aria-label="Close servers" @click="emit('close')"><X class="size-4" /></button>
+      <Tip label="New tab">
+        <button type="button" :class="ICON_BTN" class="mb-1" aria-label="New tab" @click="newTab"><Plus class="size-4" /></button>
       </Tip>
-    </div>
-
-    <template v-if="mode === 'list'">
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <!-- Centred in the pane, both ways; a list taller than the pane starts at the top and scrolls. -->
-        <div class="mx-auto flex min-h-full w-full max-w-[480px] flex-col justify-center py-2">
-          <div role="status" aria-live="polite" class="px-3 text-center">
-            <template v-if="view.kind === 'loading'"><span class="text-[var(--text-muted)]">Loading…</span></template>
-            <template v-else-if="view.kind === 'starting'"><span class="text-[var(--text-muted)]">Starting the server manager</span></template>
-            <template v-else-if="view.kind === 'looking'"><span class="text-[var(--text-muted)]">Looking for servers in this folder</span></template>
-          </div>
-
-          <div v-if="view.kind === 'restart-desk'" class="mx-3 rounded-[var(--radius-10)] bg-[var(--warning-bg)] px-3 py-2 text-center text-[var(--warning-text)]">
-            Restart Hydra Desk 2 to turn on servers.
-          </div>
-
-          <div v-else-if="view.kind === 'failed'" class="mx-3 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-center text-[var(--danger-text)]" role="alert">
-            <div>The server manager did not start.</div>
-            <div class="break-words font-mono text-[12px]">{{ view.reason }}</div>
-            <button type="button" :class="TEXT_BTN" class="self-center" @click="tryAgain">Try again</button>
-          </div>
-
-          <div v-else-if="view.kind === 'stopped'" class="mx-3 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2 text-center">
-            <div>The server manager stopped.</div>
-            <button type="button" :class="TEXT_BTN" class="self-center" @click="tryAgain">Start it</button>
-          </div>
-
-          <div v-else-if="view.kind === 'unreachable'" class="mx-3 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-center text-[var(--danger-text)]" role="alert">
-            The server manager is running but did not answer: {{ view.reason }}
-          </div>
-
-          <div v-else-if="view.kind === 'looking'" class="break-all px-3 pt-1 text-center text-[var(--text-muted)]">{{ cwd }}</div>
-
-          <div v-else-if="view.kind === 'nothing'" class="flex flex-col gap-2 px-3 text-center">
-            <div class="font-medium">No servers in this folder</div>
-            <div class="break-all text-[var(--text-muted)]">{{ cwd }}</div>
-            <div class="rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2" role="status">{{ view.reason }}</div>
-            <div class="text-[12px] text-[var(--text-muted)]">Servers come from Claude Code's .claude/launch.json, or the dev scripts in package.json.</div>
-            <button type="button" :class="TEXT_BTN" class="self-center" @click="lookAgain">Look again</button>
-          </div>
-
-          <div v-else-if="project" class="px-2 pb-1">
-            <div v-if="project.processes.length === 0" class="px-1 py-2 text-center text-[var(--text-muted)]">This project has no servers.</div>
-            <ul v-else class="flex flex-col gap-0.5" aria-label="This folder's servers">
-              <li v-for="p in project.processes" :key="p.id" class="flex flex-col rounded-[var(--radius-6)] px-1 py-0.5 hover:bg-[var(--fill-hover)]">
-                <div class="flex min-h-[28px] items-center gap-1.5">
-                  <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(p.status)]" aria-hidden="true" />
-                  <span class="truncate font-medium">{{ p.name }}</span>
-                  <span v-if="p.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ p.port }}</span>
-                  <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ pendingOpen === p.id && (p.status === 'starting' || p.status === 'waiting') ? 'starting, opens when it answers' : statusWord(p) }}</span>
-                  <span class="flex-1" />
-                  <button v-if="p.status === 'running' && processAddress(p)" type="button" :class="TEXT_BTN" :aria-label="`Open ${p.name}`" @click="open(p)">Open</button>
-                  <Tip :label="isUp(p.status) ? 'Stop' : 'Start'">
-                    <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start'} ${p.name}`" @click="toggle(p)">
-                      <Square v-if="isUp(p.status)" class="size-3.5" />
-                      <Play v-else class="size-3.5" />
-                    </button>
-                  </Tip>
-                  <Tip label="Restart">
-                    <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`Restart ${p.name}`" @click="restart(p)"><RotateCw class="size-3.5" /></button>
-                  </Tip>
-                </div>
-                <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 py-1 font-mono text-[11px] leading-4 text-[var(--text-2)]" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
-              </li>
-            </ul>
-          </div>
-
-          <div v-if="elsewhere.length" class="px-2 pb-1 pt-2">
-            <div class="px-1 pb-0.5 text-[12px] font-medium text-[var(--text-muted)]">Also running</div>
-            <ul class="flex flex-col gap-0.5" aria-label="Servers running for other folders">
-              <li v-for="r in elsewhere" :key="r.proc.id" class="flex min-h-[28px] items-center gap-1.5 rounded-[var(--radius-6)] px-1 hover:bg-[var(--fill-hover)]">
-                <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(r.proc.status)]" aria-hidden="true" />
-                <span class="truncate font-medium">{{ r.proc.name }}</span>
-                <span class="truncate text-[12px] text-[var(--text-muted)]">{{ r.project.name }}</span>
-                <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ r.proc.port }}</span>
-                <span class="flex-1" />
-                <button type="button" :class="TEXT_BTN" :aria-label="`Open ${r.proc.name}`" @click="open(r.proc)">Open</button>
-                <Tip label="Stop">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="toggle(r.proc)"><Square class="size-3.5" /></button>
-                </Tip>
-              </li>
-            </ul>
-          </div>
-
-          <div v-if="actionError" class="mx-2 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ actionError }}</div>
-        </div>
-      </div>
-
-      <form class="flex h-9 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="openAddress">
-        <input v-model="goTo" type="text" spellcheck="false" aria-label="Open an address" placeholder="Open an address, or a port" :class="INPUT" />
-      </form>
-    </template>
-
-    <!-- Kept mounted while the list shows, so going back to the list does not reload the page. -->
-    <div v-show="mode === 'browser'" class="flex min-h-0 flex-1 flex-col">
-      <div role="tablist" aria-label="Browser source" class="flex h-8 shrink-0 items-center gap-0.5 border-t border-border px-2">
-        <button type="button" role="tab" :aria-selected="source === 'dev'" :class="tab(source === 'dev')" @click="source = 'dev'">Dev server</button>
-        <button type="button" role="tab" :aria-selected="source === 'saved'" :class="tab(source === 'saved')" @click="source = 'saved'">Saved browsers</button>
-      </div>
-      <SavedBrowsers v-if="source === 'saved' && mode === 'browser'" :cwd="cwd" :request="request" />
-      <div v-show="source === 'dev'" class="flex min-h-0 flex-1 flex-col">
-      <form class="flex h-8 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="submitAddress">
-        <Tip label="Back"><button type="button" :class="ICON_BTN" aria-label="Back" :disabled="at <= 0" @click="back"><ArrowLeft class="size-4" /></button></Tip>
-        <Tip label="Forward"><button type="button" :class="ICON_BTN" aria-label="Forward" :disabled="at >= history.length - 1" @click="forward"><ArrowRight class="size-4" /></button></Tip>
-        <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" :disabled="!current" @click="reloads++"><RotateCw class="size-4" /></button></Tip>
-        <input ref="addressInput" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address, or a port" :class="INPUT" />
-        <Tip label="Open in the system browser">
-          <a v-if="current" :href="current" target="_blank" rel="noopener noreferrer" :class="ICON_BTN" aria-label="Open in the system browser"><ExternalLink class="size-4" /></a>
-          <span v-else :class="ICON_BTN" class="opacity-40" aria-hidden="true"><ExternalLink class="size-4" /></span>
+      <span class="flex-1" />
+      <div class="mb-1 flex shrink-0 items-center gap-0.5">
+        <Tip label="Refresh">
+          <button type="button" :class="ICON_BTN" aria-label="Refresh servers" @click="refreshAll"><RefreshCw class="size-4" /></button>
         </Tip>
-      </form>
-      <div class="relative min-h-0 flex-1 border-t border-border bg-white bg-clip-padding">
-        <iframe
-          v-if="frameSrc"
-          :key="`${frameSrc}#${reloads}`"
-          :src="frameSrc"
-          :title="selected ? `${selected.name} preview` : 'Preview'"
-          class="size-full border-0"
-          referrerpolicy="no-referrer"
-        />
-        <div v-if="!current" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
-          <div class="font-medium">No page open</div>
-          <div class="text-[var(--text-muted)]">{{ ready.length ? 'Open a running server, or type an address or a port above.' : 'Type an address or a port above, or start a server under Servers.' }}</div>
-          <div v-if="ready.length" class="flex flex-wrap justify-center gap-1">
-            <button v-for="p in ready" :key="p.id" type="button" :class="TEXT_BTN" :aria-label="`Open ${p.name}`" @click="open(p)">
-              <span class="size-2 shrink-0 rounded-full" :class="DOT.run" aria-hidden="true" />{{ p.name }}<span v-if="p.port" class="tnum text-[var(--text-muted)]">:{{ p.port }}</span>
-            </button>
-          </div>
-        </div>
-        <div v-else-if="selected && !isUp(selected.status)" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
-          <div class="text-[var(--text-muted)]">{{ selected.name }} is {{ statusWord(selected) }}.</div>
-          <button type="button" :class="TEXT_BTN" :disabled="busy.has(selected.id)" @click="toggle(selected)"><Play class="size-3" />Start</button>
-        </div>
-        <button
-          v-else-if="frameSrc && selected && daemonUrl"
-          type="button"
-          class="absolute bottom-2 right-2 flex h-6 items-center rounded-[var(--radius-6)] bg-[var(--bg-popover)] px-2 text-[12px] text-[var(--text)] opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-[60ms] hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-          :aria-pressed="viaManager"
-          @click="viaManager = !viaManager"
-        >{{ viaManager ? 'Show directly' : 'Blank? Show through the server manager' }}</button>
-      </div>
+        <Tip label="Close">
+          <button type="button" :class="ICON_BTN" aria-label="Close servers" @click="emit('close')"><X class="size-4" /></button>
+        </Tip>
       </div>
     </div>
+
+    <!-- Every New tab and page tab stays mounted while another shows, so going back does not reload a page or lose a filter. -->
+    <template v-for="t in state.tabs" :key="t.id">
+      <NewTab
+        v-if="t.kind === 'new'"
+        v-show="t.id === activeTab.id"
+        :active="t.id === activeTab.id"
+        :cwd="cwd"
+        :view="view"
+        :project="project"
+        :elsewhere="elsewhere"
+        :busy="busy"
+        :pending="[...pending.keys()]"
+        :log-of="logOf"
+        :profiles="profileList"
+        :profiles-error="profilesError"
+        :action-error="actionError"
+        @server="openServer(t.id, $event)"
+        @toggle="toggle"
+        @restart="restart"
+        @all="all"
+        @saved="openSaved(t.id, $event)"
+        @address="openAddress(t.id, $event)"
+        @look-again="lookAgain"
+        @try-again="tryAgain"
+      />
+      <PageTab
+        v-else-if="t.kind === 'page' && t.target"
+        v-show="t.id === activeTab.id"
+        :url="t.target"
+        :proc="procOf(t)"
+        :daemon-url="daemonUrl"
+        :busy="!!procOf(t) && busy.has(procOf(t)!.id)"
+        :just-started="justStarted.has(t.id)"
+        @navigated="navigated(t.id, $event)"
+        @toggle="toggle"
+      />
+    </template>
+    <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}`" :cwd="cwd" :profile="activeTab.target" :url="activeTab.url" />
   </section>
 </template>

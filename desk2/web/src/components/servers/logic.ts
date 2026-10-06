@@ -241,3 +241,139 @@ export function resolveRequest(req: BrowserOpenRequest, list: BrowserProfiles | 
   const found = req.profile ? list?.profiles.find((p) => p.name === req.profile) : undefined
   return found ? { kind: 'profile', profile: found.name } : { kind: 'missing', profile: req.profile ?? null, url: req.url ?? null }
 }
+
+// ---- the pane's tabs, like a browser's: a New tab shows the servers, a page shows one, a saved tab a saved browser ----
+
+export type TabKind = 'new' | 'page' | 'saved'
+
+export interface PaneTab {
+  id: string
+  kind: TabKind
+  /** page: the address; saved: the profile name; new: null. */
+  target: string | null
+  /** page: the DevWebUI server it shows, when it was opened from one. */
+  proc: string | null
+  /** saved: the address a transcript card asked to see, used when the browser is opened from here. */
+  url?: string
+}
+
+export interface TabsState {
+  tabs: PaneTab[]
+  active: string
+}
+
+export type TabSpec = Omit<PaneTab, 'id'>
+
+let tabCounter = 0
+export const nextTabId = (): string => `tab${++tabCounter}`
+
+export const NEW_TAB: TabSpec = { kind: 'new', target: null, proc: null }
+
+export function freshTabs(id = nextTabId()): TabsState {
+  return { tabs: [{ id, ...NEW_TAB }], active: id }
+}
+
+/** A new tab at the end, shown. */
+export function openTab(s: TabsState, spec: TabSpec = NEW_TAB, id = nextTabId()): TabsState {
+  return { tabs: [...s.tabs, { id, ...spec }], active: id }
+}
+
+export const activateTab = (s: TabsState, id: string): TabsState => (s.tabs.some((t) => t.id === id) ? { ...s, active: id } : s)
+
+/** What a tab shows is replaced (a server clicked on the New tab, an address typed): the tab keeps its place and id. */
+export function retargetTab(s: TabsState, id: string, spec: TabSpec): TabsState {
+  return { ...s, tabs: s.tabs.map((t) => (t.id === id ? { id, ...spec } : t)) }
+}
+
+/** Closing the shown tab shows its right neighbour, else its left; closing the last one leaves one New tab. */
+export function closeTab(s: TabsState, id: string, spare = nextTabId()): TabsState {
+  const i = s.tabs.findIndex((t) => t.id === id)
+  if (i < 0) return s
+  const tabs = s.tabs.filter((t) => t.id !== id)
+  if (!tabs.length) return freshTabs(spare)
+  return { tabs, active: s.active === id ? (tabs[Math.min(i, tabs.length - 1)] as PaneTab).id : s.active }
+}
+
+export const tabsKey = (cwd: string): string => `hydra-desk.servers.tabs:${cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()}`
+
+export function serializeTabs(s: TabsState): string {
+  return JSON.stringify({ tabs: s.tabs.map((t) => ({ kind: t.kind, target: t.target, proc: t.proc, ...(t.url ? { url: t.url } : {}) })), active: Math.max(0, s.tabs.findIndex((t) => t.id === s.active)) })
+}
+
+/** Reads what serializeTabs wrote; anything unreadable, or a tab without its target, is dropped, and nothing left is one New tab. */
+export function restoreTabs(raw: string | null | undefined): TabsState {
+  try {
+    const data = JSON.parse(raw ?? '') as { tabs?: unknown; active?: unknown }
+    const list = Array.isArray(data.tabs) ? data.tabs : []
+    const tabs: PaneTab[] = []
+    let active = ''
+    list.forEach((item, i) => {
+      const t = (item ?? {}) as Partial<TabSpec>
+      const kind = t.kind
+      if (kind !== 'new' && kind !== 'page' && kind !== 'saved') return
+      if (kind !== 'new' && (typeof t.target !== 'string' || t.target === '')) return
+      const tab: PaneTab = { id: nextTabId(), kind, target: kind === 'new' ? null : (t.target as string), proc: kind === 'page' && typeof t.proc === 'string' ? t.proc : null }
+      if (kind === 'saved' && typeof t.url === 'string' && t.url) tab.url = t.url
+      tabs.push(tab)
+      if (i === data.active) active = tab.id
+    })
+    if (!tabs.length) return freshTabs()
+    return { tabs, active: active || (tabs[0] as PaneTab).id }
+  } catch {
+    return freshTabs()
+  }
+}
+
+export const loadTabs = (cwd: string, storage: Pick<Storage, 'getItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): TabsState => (storage ? restoreTabs(storage.getItem(tabsKey(cwd))) : freshTabs())
+
+export function saveTabs(cwd: string, s: TabsState, storage: Pick<Storage, 'setItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): void {
+  try {
+    storage?.setItem(tabsKey(cwd), serializeTabs(s))
+  } catch {
+    // a full or blocked store: the tabs are just not remembered
+  }
+}
+
+/** Every word of the filter appears in the text, ignoring case. */
+export function matchesFilter(text: string, filter: string): boolean {
+  const words = filter.toLowerCase().split(/\s+/).filter(Boolean)
+  const hay = text.toLowerCase()
+  return words.every((w) => hay.includes(w))
+}
+
+export const filterServers = <T extends Pick<DevWebProcess, 'name' | 'port' | 'status'>>(procs: T[], filter: string): T[] =>
+  procs.filter((p) => matchesFilter(`${p.name} ${p.port ? `:${p.port} ${p.port}` : ''} ${p.status}`, filter))
+
+export const filterProfiles = (rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
+
+/** True when the text is meant as an address, not as a search: a port, a scheme, localhost, a host with a dot, or host:port. */
+export function looksLikeAddress(text: string): boolean {
+  const t = text.trim()
+  if (t === '' || /\s/.test(t)) return false
+  if (/^\d{2,5}$/.test(t) || /^[a-z][a-z0-9+.-]*:\/\//i.test(t)) return true
+  return /^localhost(?=[:/]|$)/i.test(t) || /^[^/:]+\.[^/:.]+(?=[:/]|$)/.test(t) || /^[^/:]+:\d{2,5}(?=\/|$)/.test(t)
+}
+
+export type EnterTarget = { kind: 'address'; url: string } | { kind: 'server'; id: string } | { kind: 'saved'; name: string }
+
+/** What Enter does in the New tab's address bar: an address or a port opens, otherwise the first match (servers first). */
+export function enterTarget(text: string, servers: Pick<DevWebProcess, 'id'>[], saved: Pick<ProfileRow, 'name'>[]): EnterTarget | null {
+  if (looksLikeAddress(text)) {
+    const url = parseAddress(text)
+    if (url) return { kind: 'address', url }
+  }
+  if (servers[0]) return { kind: 'server', id: servers[0].id }
+  if (saved[0]) return { kind: 'saved', name: saved[0].name }
+  return null
+}
+
+/** A page tab's title: the server's name, else the address's host. */
+export function pageTitle(url: string | null, proc: Pick<DevWebProcess, 'name'> | null): string {
+  if (proc) return proc.name
+  if (!url) return 'New tab'
+  try {
+    return new URL(url).host || url
+  } catch {
+    return url
+  }
+}
