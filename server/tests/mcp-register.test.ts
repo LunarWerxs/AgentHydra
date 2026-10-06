@@ -314,3 +314,19 @@ test('a relocated AGENTHYDRA_HOME with its own AGENTHYDRA_MCP_CONFIG still regis
   })
   expect(res.action).toBe('added')
 })
+
+// A real install may live outside ~/.agenthydra (docs/REFERENCE.md, install.ps1 honour a relocated
+// AGENTHYDRA_HOME). With no inherited CLAUDE_CONFIG_DIR its target is the user's own ~/.claude.json,
+// which is exactly where it must keep registering.
+test('a relocated AGENTHYDRA_HOME with no CLAUDE_CONFIG_DIR still registers into ~/.claude.json', () => {
+  const home = scratch()
+  const env = { AGENTHYDRA_HOME: join(home, 'agenthydra') }
+  const wrote: string[] = []
+  // The write is stubbed: the target here is the machine's real ~/.claude.json, never to be touched.
+  const res = syncMcpRegistration(
+    { daemonUrl: 'http://127.0.0.1:7799', enabled: true, primary: true, env },
+    { writeConfig: (path) => void wrote.push(path) },
+  )
+  expect(res.action).not.toBe('side-run')
+  expect(wrote).toEqual([claudeCodeConfigPath(env)])
+})

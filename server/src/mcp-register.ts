@@ -86,15 +86,16 @@ export function registrationBarred(
   explicitPath = false,
 ): boolean {
   if (env.AGENTHYDRA_MCP_CONFIG?.trim()) return false
-  return !primary || (!explicitPath && homeRelocated(env))
+  return !primary || (!explicitPath && homeRelocated(env) && !!env.CLAUDE_CONFIG_DIR?.trim())
 }
 
 /**
- * Is AGENTHYDRA_HOME pointed somewhere other than the default home? Such a daemon is a throwaway
- * (a smoke run, a probe), and being "primary" inside its own scratch home says nothing about the
- * config it would write: 2026-10-06 scripts/smoke-release.ts, run from a CliMayte worker whose env
- * carries CLAUDE_CONFIG_DIR, wrote its random port into that account's real .claude.json, dead once
- * the daemon exited (4 of 42 accounts). Without its own AGENTHYDRA_MCP_CONFIG it must not register.
+ * Is AGENTHYDRA_HOME pointed somewhere other than the default home? On its own that is NOT a
+ * reason to bar: a real install may live elsewhere (docs/REFERENCE.md, install.ps1) and its config
+ * is the user's own ~/.claude.json. It matters only together with an INHERITED CLAUDE_CONFIG_DIR
+ * (registrationBarred checks both): 2026-10-06 scripts/smoke-release.ts, run from a CliMayte worker
+ * whose env carries that variable, wrote its random port into the account's real .claude.json, dead
+ * once the daemon exited (4 of 42 accounts). Without its own AGENTHYDRA_MCP_CONFIG it must not register.
  */
 function homeRelocated(env: NodeJS.ProcessEnv): boolean {
   const home = (env.AGENTHYDRA_HOME ?? env.CCMANAGERUI_HOME)?.trim()
