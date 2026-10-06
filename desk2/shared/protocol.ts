@@ -128,7 +128,8 @@ export type TranscriptItem =
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean })
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
   | (ItemBase & { kind: 'note'; from: string; text: string })
-  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean })
+  /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest). */
+  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string })
   | (ItemBase & { kind: 'thinking'; text: string; streaming?: boolean })
   | (ItemBase & {
       kind: 'tool_use'
@@ -254,6 +255,19 @@ export interface DesktopMessageResult {
   route: string
   delivered: true
   detail: string
+}
+
+/**
+ * POST /api/external/sessions/:id/branch: "Copy up to here into a new chat". AgentHydra writes a new Claude Code
+ * session beside this one holding it up to the reply `uuid` (its session-branch), titled "<title> (branch)";
+ * the original is not touched. Answers the new session's id; errors answer { error } with the daemon's reason.
+ */
+export interface ExternalBranchRequest {
+  uuid: string
+  title?: string
+}
+export interface ExternalBranchResult {
+  id: string
 }
 
 /** The overlay Hydra Desk keeps on an outside session (PATCH /api/external/sessions/:id/meta answers it). */

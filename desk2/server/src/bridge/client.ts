@@ -236,6 +236,8 @@ export interface AhTailEvent {
   text: string
   tool_name: string | null
   timestamp: string | null
+  /** A Claude reply's transcript line, which a new session can branch from (AgentHydra's session-branch). */
+  uuid?: string
 }
 
 /** GET /api/sessions/:id/tail (TailResult). `error` is set when the transcript was not found. */
@@ -482,6 +484,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
     sendToDesktopChat: (sessionId: string, text: string) =>
       post<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>(`/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }),
+    /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
+    branchSession: (sessionId: string, uuid: string, title: string) =>
+      post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),
     /** AgentHydra's spend report over `period` (all, 30d, 7d): sessions, turns, tokens and dollars per source, model and day. */
     spend: (period: string) => get<AhSpendReport>(`/api/analytics/spend?period=${enc(period)}`, STATS_TIMEOUT_MS),
     activity: (period: string) => get<AhActivityReport>(`/api/analytics/activity?period=${enc(period)}`, STATS_TIMEOUT_MS),

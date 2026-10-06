@@ -269,7 +269,7 @@ export function tailToItems(tail: AhTail): TranscriptItem[] {
     closeOpen()
     if (e.kind === 'thinking') items.push({ id, ts, kind: 'thinking', text: e.text })
     else if (e.role === 'user') userParts(items, tasks, id, ts, e.text)
-    else items.push({ id, ts, kind: 'assistant_text', text: e.text })
+    else items.push({ id, ts, kind: 'assistant_text', text: e.text, ...(e.uuid ? { branchFrom: e.uuid } : {}) })
   }
   return items
 }

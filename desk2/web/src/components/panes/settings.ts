@@ -261,7 +261,7 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'AgentHydra',
     label: 'Auto-update',
     description:
-      'Installs a newer AgentHydra on its own and restarts it, waiting while work a restart would stop is running. A checkout with local changes is never touched.'
+      'On by default. Installs a newer AgentHydra on its own and restarts it, waiting while work a restart would stop is running. A checkout with local changes is never touched.'
   },
   { id: 'version', section: 'about', group: 'Hydra Desk', label: 'Version', description: 'The Hydra Desk server this window talks to.' },
   { id: 'home', section: 'about', group: 'Hydra Desk', label: 'Data folder', description: 'Chats, transcripts and these settings.' },

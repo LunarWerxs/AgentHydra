@@ -7,6 +7,8 @@
 // new chat cut just before that message, the message waiting unsent in its box.
 // "..." (a message of yours) has Change project: a new chat in the folder chosen sends the same text and
 // pictures and opens; this chat is left as it is, the message and its reply still in it.
+// "Copy up to here into a new chat" (a reply in an outside Claude Code session): AgentHydra writes a new session
+// holding it up to this reply, which opens; the original is not touched (AgentHydra's old Sessions tab had it).
 import { computed, ref } from 'vue'
 import { RotateCcw } from '@lucide/vue'
 import type { ImageRef } from '@shared/protocol'
@@ -27,6 +29,8 @@ const props = defineProps<{
   resend?: { text: string; images?: ImageRef[]; id?: string } | null
   /** The message's transcript id: a message of yours with one has Fork. */
   itemId?: string
+  /** An outside Claude Code session's reply line: it has "Copy up to here into a new chat". */
+  branchFrom?: string
 }>()
 const copied = ref(false)
 const time = computed(() => new Date(props.ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))
@@ -57,6 +61,17 @@ const forkLabel = computed(() =>
     : forkState.value === 'failed'
       ? `Fork failed${forkError.value ? `: ${forkError.value}` : ''}`
       : 'Fork: a new chat from just before this message'
+)
+
+const canBranch = computed(() => !!props.branchFrom && !!ctx.chatId.value)
+const branchState = ref<'idle' | 'branching' | 'failed'>('idle')
+const branchError = ref('')
+const branchLabel = computed(() =>
+  branchState.value === 'branching'
+    ? 'Copying…'
+    : branchState.value === 'failed'
+      ? `Copy failed${branchError.value ? `: ${branchError.value}` : ''}`
+      : 'Copy up to here into a new chat'
 )
 
 const moreOpen = ref(false)
@@ -160,6 +175,19 @@ async function fork() {
     setTimeout(() => (forkState.value = 'idle'), 4000)
   }
 }
+
+async function branch() {
+  if (!props.branchFrom || branchState.value === 'branching') return
+  branchState.value = 'branching'
+  try {
+    await desk.branchExternal(ctx.chatId.value, props.branchFrom)
+    branchState.value = 'idle'
+  } catch (err) {
+    branchError.value = err instanceof Error ? err.message : String(err)
+    branchState.value = 'failed'
+    setTimeout(() => (branchState.value = 'idle'), 4000)
+  }
+}
 </script>
 
 <template>
@@ -194,6 +222,17 @@ async function fork() {
       @click="fork"
     >
       <component :is="icons.fork" class="size-4" :class="forkState === 'failed' && 'text-danger-text'" />
+    </button>
+    <button
+      v-if="canBranch"
+      type="button"
+      class="tx-action"
+      :aria-label="branchLabel"
+      :title="branchLabel"
+      :disabled="branchState === 'branching'"
+      @click="branch"
+    >
+      <component :is="icons.fork" class="size-4" :class="branchState === 'failed' && 'text-danger-text'" />
     </button>
     <ChangeProjectMenu v-if="canResend" v-model:open="moreOpen" :current="ctx.cwd.value" header="Send it in a new chat in" @choose="moveTo">
       <button type="button" class="tx-action" :aria-label="moreLabel" :title="moreLabel" :disabled="moveState === 'moving'">

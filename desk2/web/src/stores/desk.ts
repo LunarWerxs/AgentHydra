@@ -31,7 +31,9 @@ import type {
   QueueSettingsPatch,
   QueueState,
   SendNowRequest,
-  SendNowResult
+  SendNowResult,
+  ExternalBranchRequest,
+  ExternalBranchResult
 } from '@shared/protocol'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
@@ -888,6 +890,18 @@ export function useDesk() {
       const s = findExternal(sessionId)
       if (s) Object.assign(s, { pinned: meta.pinned, archived: meta.archived, unread: meta.unread, group: meta.group }, meta.title ? { title: meta.title } : {})
       return meta
+    },
+
+    /** "Copy up to here into a new chat" on an outside Claude Code session's reply: AgentHydra writes the copy beside it, which opens. */
+    async branchExternal(sessionId: string, uuid: string): Promise<string> {
+      const title = findExternal(sessionId)?.title
+      const made = await fetchJson<ExternalBranchResult>(`/external/sessions/${encodeURIComponent(sessionId)}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uuid, ...(title ? { title } : {}) } satisfies ExternalBranchRequest)
+      })
+      store.selected = { kind: 'external', id: made.id }
+      return made.id
     },
 
     /** Lists an outside session the list lacks (older than its 24 hours) by fetching it; rejects on AgentHydra's 404. */

@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import type { CloudList, DesktopMessageRequest, DesktopMessageResult } from '@shared/protocol'
+import type { CloudList, DesktopMessageRequest, DesktopMessageResult, ExternalBranchRequest, ExternalBranchResult } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -69,6 +69,23 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const r = await b.client.sendToDesktopChat(id, text.trim())
       if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
       return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
+    } catch (err) {
+      return fail(c, b, err)
+    }
+  })
+  // "Copy up to here into a new chat" on a Claude Code session's reply: AgentHydra writes the copy beside it.
+  app.post('/api/external/sessions/:id/branch', async (c) => {
+    let req: Partial<ExternalBranchRequest> | null
+    try {
+      req = (await c.req.json()) as Partial<ExternalBranchRequest> | null
+    } catch {
+      return c.json({ error: 'the body must be JSON: { "uuid": "..." }' }, 400)
+    }
+    if (typeof req?.uuid !== 'string' || !req.uuid) return c.json({ error: 'uuid is required' }, 400)
+    const title = typeof req.title === 'string' ? req.title : ''
+    try {
+      const made = await b.client.branchSession(c.req.param('id'), req.uuid, title)
+      return c.json({ id: made.session_id } satisfies ExternalBranchResult)
     } catch (err) {
       return fail(c, b, err)
     }

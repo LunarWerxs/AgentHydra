@@ -280,7 +280,7 @@ onMounted(() => {
             </div>
 
             <div v-if="!hasReadyKey" class="flex gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
-              <AlertCircle class="size-4 flex-shrink-0 mt-0.5" />
+              <AlertCircle class="size-4 shrink-0 mt-0.5" />
               <span>{{ t('hswarm.v.tools.noReadyKey') }}</span>
             </div>
           </CardContent>
@@ -333,7 +333,7 @@ onMounted(() => {
         <div v-if="doctorResult && !doctorLoading" class="space-y-2">
           <div v-if="doctorResult.error" class="rounded-md border border-red-200 bg-red-50 p-4">
             <div class="flex gap-2">
-              <AlertCircle class="size-5 text-red-600 flex-shrink-0" />
+              <AlertCircle class="size-5 text-red-600 shrink-0" />
               <div>
                 <div class="font-semibold text-red-600">{{ t('hswarm.v.tools.doctorFailed') }}</div>
                 <div class="text-sm text-red-600">{{ doctorResult.error }}</div>
@@ -343,7 +343,7 @@ onMounted(() => {
 
           <div v-else class="space-y-2">
             <div v-for="([ok, title, value], idx) in doctorChecks" :key="idx" class="flex gap-3 rounded-md border p-3">
-              <div class="flex-shrink-0 mt-0.5">
+              <div class="shrink-0 mt-0.5">
                 <Check v-if="ok" class="size-5 text-green-600" />
                 <AlertCircle v-else class="size-5 text-amber-600" />
               </div>

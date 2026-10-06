@@ -74,6 +74,25 @@ test('the REST rows answer from AgentHydra', async () => {
   expect(f.posts.map((p) => p.path).filter((p) => p !== '/api/corch/place-chat')).toEqual(['/api/corch/workers/w-00000001/send', '/api/corch/cancel', '/api/corch/cancel'])
 })
 
+test('POST /api/external/sessions/:id/branch has AgentHydra copy the session up to one reply and answers the copy', async () => {
+  const f = await startFakeHydra()
+  fakes.push(f)
+  const desk = await boot(f.url)
+  const id = '00000000-0000-4000-8000-000000000001'
+  const path = `/api/external/sessions/${id}/branch`
+
+  expect(await call(desk, path, post({ uuid: 'reply-1', title: 'Fix the tests' }))).toEqual({ status: 200, body: { id: `branch-of-${id}` } })
+  expect(f.posts.at(-1)).toEqual({ path: `/api/sessions/${id}/branch`, body: { uuid: 'reply-1', title: 'Fix the tests' } })
+  // AgentHydra's refusal keeps its status and reason
+  const refused = await call(desk, path, post({ uuid: 'not-in-this-chat' }))
+  expect(refused.status).toBe(404)
+  expect(refused.body.error).toContain('that reply is not in this chat')
+  const before = f.posts.length
+  expect((await call(desk, path, post({}))).status).toBe(400)
+  expect((await call(desk, path, post())).status).toBe(400)
+  expect(f.posts.length).toBe(before)
+})
+
 test("the other PCs' CliMayte workers join the list under their PC's name, and never count as this PC's", async () => {
   const f = await startFakeHydra()
   fakes.push(f)

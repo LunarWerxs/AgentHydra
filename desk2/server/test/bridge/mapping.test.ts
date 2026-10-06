@@ -221,6 +221,9 @@ describe('transcripts', () => {
     // AgentHydra cut this input: kept raw rather than dropped
     expect(Object.keys(tools[4].input)).toEqual(['raw'])
     expect(new Set(items.map((i) => i.id)).size).toBe(items.length)
+    // a reply that names its transcript line can be copied up to (the action under it); one that does not cannot
+    const replies = items.filter((i) => i.kind === 'assistant_text') as Extract<(typeof items)[number], { kind: 'assistant_text' }>[]
+    expect(replies.map((r) => r.branchFrom)).toEqual([undefined, '00000000-0000-4000-8000-00000000c0de'])
   })
 
   test('a worker detail becomes its task, event lines and running last tool', () => {

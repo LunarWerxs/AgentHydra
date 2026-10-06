@@ -212,6 +212,12 @@ export async function startFakeHydra(state: FakeState = freshState()): Promise<F
         if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
         return json({ ok: true, message: 'queued' })
       }
+      const branch = /^\/api\/sessions\/([^/]+)\/branch$/.exec(p)
+      if (branch) {
+        // AgentHydra's session-branch: a reply line that is not in the chat is a 404
+        if (body?.uuid === 'not-in-this-chat') return json({ error: 'that reply is not in this chat' }, 404)
+        return json({ session_id: `branch-of-${decodeURIComponent(branch[1])}`, source: 'claude' })
+      }
       const now = /^\/api\/corch\/workers\/([^/]+)\/deliver-now$/.exec(p)
       if (now) {
         if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
