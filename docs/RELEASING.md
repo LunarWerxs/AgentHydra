@@ -42,8 +42,8 @@ Every bundle (`AgentHydra-<version>-<target>`, a `.zip` on Windows, a `.tar.gz` 
   compiles with), its server source, `shared/`, production `node_modules` (installed hoisted, for
   the target's OS and CPU), the built `web/dist` and `hydra/dist`, and on Windows `launcher/` with
   `HydraDesk2.exe`. Windows opens it in its native window; Linux and macOS run its server on the
-  shipped bun and open the default browser;
-- `devwebui/` beside it, the same way (Desk 2's servers pane starts it on Desk 2's bun).
+  shipped bun and open the default browser. Desk 2's dev-servers service (for managing dev servers)
+  runs as a hidden service started by Desk 2 itself.
 
 No tests, e2e, `tmp/` or dev dependencies ship. `scripts/package-release.ts` stages and archives a
 bundle and `scripts/smoke-release.ts` boots one; `release.yml` runs the same two scripts. On a PC
@@ -51,7 +51,6 @@ bundle and `scripts/smoke-release.ts` boots one; `release.yml` runs the same two
 
 ```sh
 cd desk2 && bun install --frozen-lockfile && bun run build && cd ..
-cd devwebui && bun install --frozen-lockfile && cd ..
 bun scripts/package-release.ts --target windows-x64 --out <dir>
 bun scripts/smoke-release.ts --bundle-dir <dir> --port <free> --desk-port <free>
 ```
@@ -59,6 +58,39 @@ bun scripts/smoke-release.ts --bundle-dir <dir> --port <free> --desk-port <free>
 Pick two ports nothing on the PC uses (not 7787 or 7798, where the live daemon and Desk 2 run);
 the smoke refuses a busy one. It starts the bundle's daemon and Desk 2's server on temp homes,
 headless (never the launcher, window host or tray), checks them, and stops exactly what it started.
+
+## Consolidating old releases
+
+Periodically rewrite all previous release pages from CHANGELOG.md and fold patch releases into
+their minor's release. This removes old patch releases and combines their changes with the minor
+release, making the release list shorter and keeping patches visible without their own page.
+
+`scripts/consolidate-releases.mjs` reads releases and CHANGELOG.md, groups them by minor version
+(x.y), keeps x.y.0 (or the lowest version in a line if x.y.0 does not exist), and folds every
+other release in the line into the one it keeps. The release marked latest is never folded.
+
+A kept release with folded patches gets one body in `formatLineBody`'s layout (icon, ## TL;DR,
+<details> Read more, ## Downloads, Discord) covering the whole line: the TL;DR is the kept
+version's bullets then each folded version's, duplicates removed; Read more holds each version's
+section, oldest first, each under its own `#### x.y.z` heading. Every other kept release gets
+`formatReleaseBody`'s page.
+
+Run the dry run first and read it:
+```sh
+node scripts/consolidate-releases.mjs
+```
+
+It prints a summary, writes every new body to `/tmp/consolidate-<timestamp>/bodies/<tag>.md` and
+the plan to `/tmp/consolidate-<timestamp>/plan.json` ({ edit: [tags], fold: { <kept tag>: [patch tags] },
+delete: [tags], missingSections: [versions] }). Review the bodies and plan, then apply only on the
+owner's word:
+
+```sh
+node scripts/consolidate-releases.mjs --apply
+```
+
+The git tags stay; only the release pages change. Versions with no CHANGELOG section are listed in
+the plan but not changed.
 
 ## Pushing `main` is the release
 
@@ -208,10 +240,11 @@ through the daemon (`orchestratorBusy()`), and a bare-executable install acquire
 first update. `server/tests/github-updater-components.test.ts` pins `install.ps1`'s component list to
 `RELEASE_COMPONENTS` by parsing the PowerShell, so the two lists cannot drift apart unnoticed.
 
-**From 2.0.0 the self-updater also owns `desk2/` and `devwebui/`.** It stops Desk 2 before replacing
-`desk2/` and starts it again after. `install.ps1` still swaps its three components; a compiled
-daemon that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs
-it from its own version's release archive at boot, without a click.
+**From 2.0.0 the self-updater also owns `desk2/`.** It stops Desk 2 before replacing `desk2/` and
+starts it again after. Desk 2 includes its own dev-servers service that manages development servers
+without requiring a separate daemon. `install.ps1` still swaps its three components; a compiled daemon
+that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs it from
+its own version's release archive at boot, without a click.
 
 ## When a push doesn't trigger anything
 

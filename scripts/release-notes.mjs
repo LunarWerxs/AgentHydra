@@ -126,9 +126,82 @@ function missingTldr(section, name, version) {
   return null
 }
 
+/** Format a line body (folded patches under a kept release) with tldr, details, and downloads.
+ *  The tldr is a dedup of bullets from the kept version and each folded version. Details holds
+ *  each version's section under its own `#### x.y.z` heading, oldest first. downloads is the
+ *  kept release's asset names. */
+export function formatLineBody(changelog, keptVersion, patchVersions, options = {}) {
+  const { history = false } = options
+  // Collect TL;DR and details for each version
+  const sections = [keptVersion, ...patchVersions].map((v) => {
+    const section = changelogSection(changelog, v)
+    if (!section) return { version: v, tldr: [], details: '' }
+    const { tldr, rest } = splitTldr(section)
+    return { version: v, tldr, details: rest.trim() }
+  })
+
+  // Deduplicate TL;DR across all versions
+  const seenTldr = new Set()
+  const tldr = []
+  for (const sec of sections) {
+    for (const line of sec.tldr) {
+      const t = line.trim()
+      if (!seenTldr.has(t)) {
+        seenTldr.add(t)
+        tldr.push(line)
+      }
+    }
+  }
+
+  // Build details with version headings
+  const details = []
+  for (const sec of sections) {
+    if (sec.details) {
+      details.push(`#### ${sec.version}`, '', sec.details)
+    }
+  }
+
+  // Format the body
+  const out = [
+    '<div align="center">',
+    `<img src="https://raw.githubusercontent.com/${REPO}/v${keptVersion}/misc/AgentHydra-icon.png" width="96" alt="AgentHydra logo">`,
+    '</div>',
+    '',
+  ]
+
+  if (tldr.length) {
+    out.push('## TL;DR', '', ...tldr, '', '<details>')
+    out.push(
+      `<summary><b>Read more: everything from ${patchVersions.length ? `${patchVersions[patchVersions.length - 1]} to ` : ''}${keptVersion}</b></summary>`,
+      '',
+      details.join('\n\n'),
+      '',
+      '</details>',
+    )
+  } else {
+    out.push("## What's changed", '', details.join('\n\n'))
+  }
+
+  out.push(
+    '',
+    '## Downloads',
+    '',
+    `- **Windows:** \`AgentHydra-${keptVersion}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
+    '- **Linux and macOS:** the `.tar.gz` for your system.',
+    '- `SHA256SUMS.txt` lets you check that a download is the one published here.',
+    '',
+    '---',
+    '',
+    `💬 Questions, ideas, or a hello: the [LunarWerx Discord](${DISCORD}).`,
+  )
+
+  return out.join('\n')
+}
+
 /** The release page: the icon, the TL;DR, every line of the section under "Read more", the downloads. */
-export function formatReleaseBody(changelog, version) {
-  const why = refusal(changelog, version)
+export function formatReleaseBody(changelog, version, options = {}) {
+  const { history = false } = options
+  const why = history ? null : refusal(changelog, version)
   if (why) throw new Error(why)
   const section = changelogSection(changelog, version)
   const { tldr, rest } = splitTldr(section)
