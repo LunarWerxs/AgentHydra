@@ -27,6 +27,53 @@ const pingItems: TranscriptItem[] = [
   { id: 'gr', ts: Date.now(), kind: 'assistant_text', text: 'Two results are in and one task still runs.' },
 ]
 
+// Browser cards: one saved browser's calls around a command row are one card ("4 calls"), its picture an invented page
+// drawn here; a second chat's card has no picture (no full-screen button). The chats have a folder, so the gallery can
+// fire BROWSER_CLOSED_EVENT for BROWSER_CWD to show Closed.
+const BROWSER_CWD = 'C:/Users/me/example'
+const BROWSER_PROFILE = 'company-1f2e3d4c-0000-4000-8000-000000000001'
+function inventedPage(): string {
+  const c = document.createElement('canvas')
+  c.width = 640
+  c.height = 400
+  const g = c.getContext('2d')!
+  g.fillStyle = '#f6f7f9'
+  g.fillRect(0, 0, 640, 400)
+  g.fillStyle = '#1f6feb'
+  g.fillRect(0, 0, 640, 52)
+  g.fillStyle = '#fff'
+  g.font = 'bold 20px sans-serif'
+  g.fillText('Example Shop · Orders', 20, 33)
+  g.fillStyle = '#222'
+  g.font = '15px sans-serif'
+  ;['#1042  Blue mug       paid', '#1041  Desk lamp      shipped', '#1040  Notebook set   paid'].forEach((t, i) => {
+    g.fillStyle = '#fff'
+    g.fillRect(20, 76 + i * 64, 600, 50)
+    g.fillStyle = '#222'
+    g.fillText(t, 36, 106 + i * 64)
+  })
+  return c.toDataURL('image/png').split(',')[1]
+}
+const call = (id: string, tool: string, params: Record<string, unknown>, result: string, extra: Partial<TranscriptItem> = {}): TranscriptItem =>
+  ({ id, ts: Date.now(), kind: 'tool_use', name: 'mcp__connections__connections_execute', input: { local: true, tool_name: tool, params }, status: 'done', startedAt: Date.now(), result: { text: result, isError: false }, ...extra }) as TranscriptItem
+const browserItems: TranscriptItem[] = [
+  { id: 'bu', ts: Date.now(), kind: 'user', text: 'Check the shop admin for unpaid orders.' },
+  call('bn1', 'browser_navigate', { url: 'https://example.com/admin', profile: BROWSER_PROFILE }, 'Opened https://example.com/admin'),
+  call('bn2', 'browser_click', { selector: 'a[href="/admin/orders"]', profile: BROWSER_PROFILE }, 'Clicked Orders'),
+  { id: 'bb', ts: Date.now(), kind: 'tool_use', name: 'Bash', input: { command: 'ls exports' }, status: 'done', startedAt: Date.now(), result: { text: 'orders.csv', isError: false } } as TranscriptItem,
+  call('bn3', 'browser_get_text', { profile: BROWSER_PROFILE }, '#1042 Blue mug paid\n#1041 Desk lamp shipped\n#1040 Notebook set paid'),
+  call('bn4', 'browser_take_screenshot', { url: 'https://example.com/admin/orders', profile: BROWSER_PROFILE }, '[image]', {
+    result: { text: '[image]', isError: false, images: [{ mediaType: 'image/png', name: 'orders.png', dataBase64: inventedPage() }] },
+  } as Partial<TranscriptItem>),
+  { id: 'bt', ts: Date.now(), kind: 'assistant_text', text: 'Every order on the first page is paid or shipped.' },
+]
+const browserNoShot: TranscriptItem[] = [
+  { id: 'cu', ts: Date.now(), kind: 'user', text: 'Open the status page.' },
+  call('cn1', 'browser_navigate', { url: 'https://status.example.com/', profile: BROWSER_PROFILE }, 'Opened https://status.example.com/'),
+]
+const browserChat = { ...transcriptChat, id: 'gallery-browser', cwd: BROWSER_CWD, status: 'idle' } as typeof transcriptChat
+const browserChat2 = { ...browserChat, id: 'gallery-browser-2' }
+
 // The windowing check: 3,000 items, mount time, rows in the DOM, cost of each scroll step.
 const STRESS_N = 3000
 const stressItems = ref<ReturnType<typeof makeStressItems>>([])
@@ -83,6 +130,20 @@ onMounted(async () => {
       <h3 class="mb-2 text-[13px] text-text-muted">A program's note (an AgentHydra ping), closed</h3>
       <div class="h-[260px] overflow-hidden rounded-lg border border-border" data-gallery-note>
         <TranscriptView chat-id="gallery-note" :items="pingItems" :chat="null" />
+      </div>
+    </div>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <h3 class="mb-2 text-[13px] text-text-muted">A saved browser's calls in one turn: one Browser card</h3>
+        <div class="h-[460px] overflow-hidden rounded-lg border border-border" data-gallery-browser>
+          <TranscriptView chat-id="gallery-browser" :items="browserItems" :chat="browserChat" />
+        </div>
+      </div>
+      <div>
+        <h3 class="mb-2 text-[13px] text-text-muted">A Browser card with no picture</h3>
+        <div class="h-[460px] overflow-hidden rounded-lg border border-border" data-gallery-browser-noshot>
+          <TranscriptView chat-id="gallery-browser-2" :items="browserNoShot" :chat="browserChat2" />
+        </div>
       </div>
     </div>
     <div>

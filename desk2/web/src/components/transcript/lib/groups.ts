@@ -1,7 +1,7 @@
 // What the transcript lays out, after nesting: runs of tool calls fold into one status row
 // ("Ran 3 commands, read screen-half.png"), as the real Claude Code desktop does. Pure: no Vue, no DOM.
 import { CONTINUED_LINE, type TranscriptItem } from '@shared/protocol'
-import { formatElapsed, isSendFileTool, parseMcpName, shortPath, toolFamily } from './tools'
+import { formatElapsed, isSendFileTool, parseBrowserCall, parseMcpName, shortPath, toolFamily } from './tools'
 import { toolDiff } from './diff'
 
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
@@ -30,6 +30,19 @@ export type DisplayRow =
 /** Sub-agent calls keep their own card and handed-over files their own row; every other tool call, MCP ones included, folds into a status row. */
 function folds(it: TranscriptItem): it is ToolItem {
   return it.kind === 'tool_use' && toolFamily(it.name) !== 'agent' && !isSendFileTool(it.name) && toolFamily(it.name, it.input) !== 'browser' && toolFamily(it.name) !== 'redesign'
+}
+
+/** The browser row of this profile in the current turn (after the last user message or note), if any. */
+function openBrowserRun(out: DisplayRow[], profile: string): Extract<DisplayRow, { kind: 'browser' }> | null {
+  for (let i = out.length - 1; i >= 0; i--) {
+    const r = out[i]
+    if (r.kind === 'item' && (r.item.kind === 'user' || r.item.kind === 'note')) return null
+    if (r.kind === 'browser') {
+      const f = r.items[0]
+      if (parseBrowserCall(f.name, f.input).profile === profile) return r
+    }
+  }
+  return null
 }
 
 /** Status rows: a folded tool run, settled tasks, a thinking block, a finished-turn line. They sit tighter than prose. */
@@ -87,8 +100,13 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     // 2026-10-05: only the move line). The move line's id is `moved:<ts>` (server chat-manager systemLine).
     if (it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')) return
     if (it.kind === 'tool_use' && toolFamily(it.name, it.input) === 'browser') {
-      if (last?.kind === 'browser') last.items.push(it)
-      else out.push({ id: `browser:${it.id}`, kind: 'browser', items: [it] })
+      // One card per browser per turn: a run of the same profile's calls joins across other rows, and the card moves down to its newest call.
+      const run = openBrowserRun(out, parseBrowserCall(it.name, it.input).profile)
+      if (run) {
+        out.splice(out.indexOf(run), 1)
+        run.items.push(it)
+        out.push(run)
+      } else out.push({ id: `browser:${it.id}`, kind: 'browser', items: [it] })
     } else if (folds(it)) {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })

@@ -1,5 +1,5 @@
 // The calls the servers pane makes: Desk 2's /dw/status, /dw/start and /dw/folder, and DevWebUI's own API behind /dw/api.
-import { BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
+import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
 import { DW_API, DW_BASE, DW_FOLDER, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
 
 /** Thrown when /dw/status is not there: a Desk 2 server started before the route existed. */
@@ -52,5 +52,7 @@ export const setUpFolder = (cwd: string): Promise<DevWebFolder> => call(DW_FOLDE
 
 // ---- saved browsers (shared/browser.ts) ----
 export const browserProfiles = (cwd: string): Promise<BrowserProfiles> => call(`${BROWSER_PROFILES}?${new URLSearchParams({ cwd })}`)
+
+export const browserClose = (cwd: string, profile: string): Promise<{ closed: boolean }> => call(BROWSER_CLOSE, post({ cwd, profile }))
 
 export const browserOpen = (cwd: string, profile: string, opts: { url?: string; login?: boolean } = {}): Promise<BrowserOpened> => call(BROWSER_OPEN, post({ cwd, profile, ...opts }))

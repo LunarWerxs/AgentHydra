@@ -440,6 +440,63 @@ describe.skipIf(!chrome)('live view of a real headless Chrome', () => {
   })
 })
 
+const close = (desk: DeskServer, body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${desk.url}/api/browser/close`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+
+describe('close', () => {
+  test('a closed own profile answers closed:false; another workspace’s or an unknown one is 404; a foreign page is 403', async () => {
+    makeStore()
+    const desk = await boot()
+    const cwd = 'c:/Users/me/Proj'
+    const res = await close(desk, { cwd, profile: 'beta' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ closed: false })
+    expect((await close(desk, { cwd, profile: 'gamma' })).status).toBe(404)
+    expect((await close(desk, { cwd, profile: 'nope' })).status).toBe(404)
+    expect((await close(desk, { cwd, profile: 'legacy' })).status).toBe(404)
+    expect((await close(desk, { cwd })).status).toBe(400)
+    expect((await close(desk, { cwd, profile: 'beta' }, { origin: 'https://evil.example.com' })).status).toBe(403)
+  })
+})
+
+describe.skipIf(!chrome)('close of a real headless Chrome', () => {
+  let pid = 0
+  afterEach(() => {
+    if (pid) killTree(pid)
+    pid = 0
+  })
+
+  test('closing the profile ends its Chrome, and the profile then reads not open', async () => {
+    const { root } = makeStore()
+    const dir = join(root, 'ws', WS_PROJ, 'alpha')
+    const proc = Bun.spawn(
+      [chrome as string, '--headless=new', `--user-data-dir=${dir}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-gpu', 'about:blank'],
+      { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore', windowsHide: true },
+    )
+    pid = proc.pid
+    const until = Date.now() + 20_000
+    while (!existsSync(join(dir, 'DevToolsActivePort')) && Date.now() < until) await Bun.sleep(100)
+    expect(existsSync(join(dir, 'DevToolsActivePort'))).toBe(true)
+
+    const desk = await boot()
+    const cwd = 'c:/Users/me/Proj'
+    let open = false
+    for (let i = 0; i < 50 && !open; i++) {
+      open = (await profiles(desk, cwd)).profiles.find((p) => p.name === 'alpha')?.open === true
+      if (!open) await Bun.sleep(100)
+    }
+    expect(open).toBe(true)
+
+    const res = await close(desk, { cwd, profile: 'alpha' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ closed: true })
+    expect((await profiles(desk, cwd)).profiles.find((p) => p.name === 'alpha')?.open).toBe(false)
+    // The Chrome itself exited: its process is gone, not only its port.
+    expect(await Promise.race([proc.exited.then(() => true), Bun.sleep(10_000).then(() => false)])).toBe(true)
+    pid = 0
+  })
+})
+
 function killTree(pid: number): void {
   if (process.platform === 'win32') Bun.spawnSync(['taskkill', '/PID', String(pid), '/T', '/F'], { stdout: 'ignore', stderr: 'ignore' })
   else process.kill(pid, 'SIGKILL')

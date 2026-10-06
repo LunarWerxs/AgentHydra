@@ -2,9 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { AppWindow, Globe, Plus, RefreshCw, Search, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import type { BrowserOpenRequest, BrowserProfiles } from '@shared/browser'
+import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
 import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
-import { browserProfiles, devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
+import { browserClose, browserProfiles, devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
 import { activateTab, clampPane, closeTab, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
@@ -210,7 +210,18 @@ function close(id: string) {
   const next = new Map(pending.value)
   for (const [proc, tab] of next) if (tab === id) next.delete(proc)
   pending.value = next
+  const gone = state.value.tabs.find((t) => t.id === id)
   state.value = closeTab(state.value, id)
+  if (gone?.kind === 'saved' && gone.target) void closeSaved(gone.target)
+}
+/** Closing a saved browser's tab closes its Chrome (not only the tab), so the transcript's Browser cards read it as closed. */
+async function closeSaved(profile: string) {
+  const cwd = props.cwd
+  try {
+    if ((await browserClose(cwd, profile)).closed) window.dispatchEvent(new CustomEvent(BROWSER_CLOSED_EVENT, { detail: { cwd, profile } }))
+  } catch {
+    // floor-ok: the browser stays as it was; the cards keep reading its real state
+  }
 }
 const aim = (id: string, spec: TabSpec) => (state.value = retargetTab(state.value, id, spec))
 function openAddress(id: string, url: string) {

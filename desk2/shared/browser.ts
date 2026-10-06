@@ -17,6 +17,16 @@ export const BROWSER_PROFILES = `${BROWSER_BASE}/profiles`
  * walls behave): the person signs in in that window and the pane has no live view of it until it closes.
  */
 export const BROWSER_OPEN = `${BROWSER_BASE}/open`
+/**
+ * POST { cwd, profile } -> { closed }: closes the profile's Chrome (what closing its pane tab means). closed is false when
+ * none ran, or one that has no debugging port (a sign-in window) that is the person's to close. 404/403 as BROWSER_OPEN.
+ */
+export const BROWSER_CLOSE = `${BROWSER_BASE}/close`
+/**
+ * The window event the pane fires, detail { profile }, when it closed that profile's browser: its Browser card shows
+ * Closed at once instead of waiting for its next look.
+ */
+export const BROWSER_CLOSED_EVENT = 'hydra-desk:browser-closed'
 /** GET ?cwd=&profile= -> BrowserTab[]: the pages of the profile's running Chrome. */
 export const BROWSER_TABS = `${BROWSER_BASE}/tabs`
 /**

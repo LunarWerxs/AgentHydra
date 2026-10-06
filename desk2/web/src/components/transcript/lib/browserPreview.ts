@@ -1,21 +1,60 @@
 // The live preview of a Browser card: a low-fps stream of the profile's page (server/src/browser/preview.ts), or, when
 // that fails, one small JPEG fetched every few seconds; either way by the newest on-screen card of that profile only. The open/closed answer is one shared, briefly cached read of the saved browsers.
-import { BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, type BrowserPreviewOut, type BrowserProfiles } from '@shared/browser'
+import { BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, type BrowserPreviewOut, type BrowserProfile, type BrowserProfiles } from '@shared/browser'
 
 export const PREVIEW_EVERY_MS = 3000
 
-const known = new Map<string, { at: number; open: Promise<Set<string> | null> }>()
+const known = new Map<string, { at: number; list: Promise<BrowserProfile[] | null> }>()
 
-/** The names of the chat folder's browsers that run now (own ones only), or null when the read failed (unknown, not closed); shared by every card for a few seconds. */
-export function openProfiles(cwd: string, now = Date.now()): Promise<Set<string> | null> {
+/** The chat folder's saved browsers, or null when the read failed; shared by every card for a few seconds. */
+export function savedProfiles(cwd: string, now = Date.now()): Promise<BrowserProfile[] | null> {
   const hit = known.get(cwd)
-  if (hit && now - hit.at < PREVIEW_EVERY_MS - 500) return hit.open
-  const open = fetch(`${BROWSER_PROFILES}?${new URLSearchParams({ cwd })}`, { signal: AbortSignal.timeout(5000) })
+  if (hit && now - hit.at < PREVIEW_EVERY_MS - 500) return hit.list
+  const list = fetch(`${BROWSER_PROFILES}?${new URLSearchParams({ cwd })}`, { signal: AbortSignal.timeout(5000) })
     .then((r) => (r.ok ? (r.json() as Promise<BrowserProfiles>) : Promise.reject(new Error(String(r.status)))))
-    .then((p) => new Set(p.profiles.filter((x) => x.open && x.own).map((x) => x.name)))
+    .then((p) => p.profiles)
     .catch(() => null)
-  known.set(cwd, { at: now, open })
-  return open
+  known.set(cwd, { at: now, list })
+  return list
+}
+
+/** The names of the chat folder's browsers that run now (own ones only), or null when the read failed (unknown, not closed). */
+export async function openProfiles(cwd: string, now = Date.now()): Promise<Set<string> | null> {
+  const list = await savedProfiles(cwd, now)
+  return list && new Set(list.filter((x) => x.open && x.own).map((x) => x.name))
+}
+
+/** Forgets the cached read of a folder's browsers (the pane just closed one), so the next look sees the truth. */
+export function forgetProfiles(cwd: string): void {
+  known.delete(cwd)
+}
+
+/**
+ * Whether a picture is one flat colour: a blank page (about:blank, which Chrome paints #121212 when Windows is in dark
+ * mode: the "black" live card of 2026-10-06) or one not painted yet. Sampled on a small canvas; false where none exists.
+ */
+export async function isBlankPicture(src: string): Promise<boolean> {
+  if (typeof document === 'undefined') return false
+  try {
+    const img = new Image()
+    img.src = src
+    await img.decode()
+    const c = document.createElement('canvas')
+    c.width = c.height = 16
+    const g = c.getContext('2d', { willReadFrequently: true })
+    if (!g) return false
+    g.drawImage(img, 0, 0, 16, 16)
+    return isBlankPixels(g.getImageData(0, 0, 16, 16).data)
+  } catch {
+    return false
+  }
+}
+
+/** RGBA samples of one flat colour: no channel more than 6 from the first pixel's (a page with anything on it differs somewhere). */
+export function isBlankPixels(rgba: ArrayLike<number>): boolean {
+  if (rgba.length < 4) return false
+  for (let i = 4; i + 2 < rgba.length; i += 4) for (let c = 0; c < 3; c++) if (Math.abs(rgba[i + c] - rgba[c]) > 6) return false
+  return true
 }
 
 /** The next frame of the profile as an object URL, loaded and decoded so showing it never flashes blank; null when the browser is not open. */

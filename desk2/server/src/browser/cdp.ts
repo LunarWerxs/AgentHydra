@@ -116,6 +116,34 @@ async function doLaunch(dir: string, url: string | undefined, login: boolean): P
   throw new LaunchError('Chrome did not announce its debugging port within 15 seconds')
 }
 
+/** Closes the Chrome of this profile folder (CDP Browser.close on its browser endpoint, which the folder's own port file names); false when none answers. */
+export async function closeBrowser(dir: string): Promise<boolean> {
+  const live = await liveBrowser(dir)
+  const file = readPortFile(dir)
+  if (!live || !file?.wsPath) return false
+  const ws = new WebSocket(`ws://${HOST}:${live.port}${file.wsPath}`)
+  try {
+    await new Promise<void>((res, rej) => {
+      ws.onopen = () => res()
+      ws.onerror = () => rej(new Error('the browser did not accept a connection'))
+      setTimeout(() => rej(new Error('the browser did not answer in time')), 4000)
+    })
+    ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }))
+    // Chrome answers, then exits; wait until its port stops answering (at most 5 s).
+    for (let i = 0; i < 25; i++) {
+      await sleep(200)
+      if (!(await liveBrowser(dir))) return true
+    }
+    return false
+  } finally {
+    try {
+      ws.close()
+    } catch {
+      // floor-ok: already closed
+    }
+  }
+}
+
 /** The first page of a Chrome that was just started (its page target can lag the port by a moment). */
 export async function firstTab(port: number): Promise<BrowserTab | null> {
   for (let i = 0; i < 20; i++) {

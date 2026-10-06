@@ -6,8 +6,8 @@
 // guard. A request names a profile, never a port: the port comes from that profile folder's DevToolsActivePort.
 
 import type { Hono } from 'hono'
-import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
-import { capturePreview, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
+import { BROWSER_CLOSE, BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
+import { capturePreview, closeBrowser, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
 import { previewHub } from '../browser/preview'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
@@ -69,6 +69,23 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, err instanceof LaunchError ? 503 : 500)
+    }
+  })
+
+  // Closing a saved browser's pane tab closes its Chrome: the Browser cards then read the profile as not open and stop.
+  app.post(BROWSER_CLOSE, async (c) => {
+    const why = notOwnPage(c.req.raw.headers)
+    if (why) return c.json({ error: why }, 403)
+    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown } | null
+    if (typeof body?.cwd !== 'string' || body.cwd === '' || typeof body.profile !== 'string' || body.profile === '')
+      return c.json({ error: 'cwd and profile required' }, 400)
+    const ref = await usable(body.cwd, body.profile)
+    if (!ref) return c.json({ error: `no browser '${body.profile}' for this chat's workspace` }, 404)
+    if (!ref.profile.own) return c.json({ error: `'${body.profile}' belongs to no workspace` }, 404)
+    try {
+      return c.json({ closed: ref.port !== null && (await closeBrowser(ref.dir)) })
+    } catch (err) {
+      return c.json({ error: err instanceof Error ? err.message : String(err) }, 502)
     }
   })
 

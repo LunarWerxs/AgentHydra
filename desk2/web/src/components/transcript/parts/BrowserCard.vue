@@ -2,14 +2,18 @@
 // The AI used its browser: one compact preview card that opens that browser live in the side pane (DeskFrame listens
 // for OPEN_BROWSER_EVENT). A run of browser calls is one card showing the latest (`run`). The picture is, in order,
 // the browser live (a stream, else a 3 s poll; newest card of an open profile, on screen, window visible), the run's latest screenshot, a quiet
-// placeholder; the caption along the bottom is faint until the pointer is over it.
+// placeholder; the caption along the bottom is faint until the pointer is over it. A browser that is closed (its pane tab
+// was closed, or a look finds it not open) shows a quiet Closed and is not fed any more; the full-screen button and the
+// copy-the-calls button are the card's own, over the picture and the status.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Globe, Maximize2 } from '@lucide/vue'
+import { Check, Copy, Globe, Maximize2 } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
-import { OPEN_BROWSER_EVENT } from '@shared/browser'
+import { BROWSER_CLOSED_EVENT, OPEN_BROWSER_EVENT } from '@shared/browser'
 import { browserOpenRequest, DEFAULT_BROWSER, parseBrowserCall } from '../lib/tools'
 import { imageSrc, openLightbox } from '../lib/media'
-import { nextFrame, openPreviewStream, openProfiles, PreviewFeed, previewWanted } from '../lib/browserPreview'
+import { browserCallsText } from '../lib/browserCopy'
+import { forgetProfiles, isBlankPicture, nextFrame, openPreviewStream, openProfiles, PreviewFeed, previewWanted, savedProfiles } from '../lib/browserPreview'
+import { shortId, shortName } from '../../servers/names'
 import { useTranscript } from '../context'
 import StatusIcon from './StatusIcon.vue'
 
@@ -60,10 +64,50 @@ const visible = ref(typeof document === 'undefined' || document.visibilityState 
 const live = ref<string | null>(null)
 const named = computed(() => info.value.profile !== DEFAULT_BROWSER)
 const newest = computed(() => named.value && ctx.newestBrowser?.value.get(info.value.profile) === props.item.id)
-const watching = computed(() => previewWanted({ named: named.value, newest: newest.value, onScreen: onScreen.value, visible: visible.value, hasCwd: !!ctx.cwd.value }))
+// The browser was found closed (not open any more): the card says so and stops feeding itself. A newer call resets it.
+const closed = ref(false)
+watch(
+  () => props.item.id,
+  () => (closed.value = false)
+)
+const watching = computed(() => !closed.value && previewWanted({ named: named.value, newest: newest.value, onScreen: onScreen.value, visible: visible.value, hasCwd: !!ctx.cwd.value }))
+
+// The profile chip is the short label the Saved browsers list shows; the registry name is its hover.
+const label = ref<string | null>(null)
+const chip = computed(() => label.value ?? shortId(info.value.profile))
+async function loadLabel() {
+  const cwd = ctx.cwd.value
+  if (!cwd || !named.value) return
+  const name = info.value.profile
+  const row = (await savedProfiles(cwd))?.find((p) => p.name === name)
+  if (row && name === info.value.profile) label.value = shortName(row)
+}
+watch(
+  () => info.value.profile,
+  () => {
+    label.value = null
+    void loadLabel()
+  }
+)
 
 // A picture is a stream frame (a data: address) or a polled still (an object URL that is revoked when replaced).
+// A blank page (one flat colour: the browser is on about:blank, its page is gone) is not shown live: the card goes back
+// to the run's screenshot or its placeholder, never an older frame of a page that is no longer there.
+let shown = 0
 function show(src: string | null) {
+  const token = ++shown
+  if (!src) return put(null)
+  void isBlankPicture(src).then((blank) => {
+    if (token !== shown) {
+      if (src.startsWith('blob:')) URL.revokeObjectURL(src)
+      return
+    }
+    if (!blank) return put(src)
+    if (src.startsWith('blob:')) URL.revokeObjectURL(src)
+    put(null)
+  })
+}
+function put(src: string | null) {
   const old = live.value
   live.value = src
   if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
@@ -76,13 +120,14 @@ async function tick() {
   try {
     const open = await openProfiles(cwd)
     // Only a read that succeeded and does not list the profile means closed; a failed read or frame keeps the last good one.
-    const closed = open !== null && !open.has(info.value.profile)
-    const frame = closed ? null : await nextFrame(cwd, info.value.profile).catch(() => null)
+    const gone = open !== null && !open.has(info.value.profile)
+    const frame = gone ? null : await nextFrame(cwd, info.value.profile).catch(() => null)
     if (!watching.value) {
       if (frame) URL.revokeObjectURL(frame)
       return
     }
-    if (!frame && !closed) return
+    if (gone) closed.value = true
+    if (!frame && !gone) return
     show(frame)
   } finally {
     busy = false
@@ -97,7 +142,16 @@ watch(watching, (on) => feed.setWanted(on), { immediate: true })
 
 let observer: IntersectionObserver | null = null
 const onVisibility = () => (visible.value = document.visibilityState === 'visible')
+// The pane closed this browser: Closed at once, without waiting for the next look.
+const onClosed = (e: Event) => {
+  const d = (e as CustomEvent<{ cwd?: string; profile?: string }>).detail
+  if (d?.profile !== info.value.profile || d.cwd !== ctx.cwd.value) return
+  forgetProfiles(d.cwd)
+  if (newest.value) closed.value = true
+}
 onMounted(() => {
+  void loadLabel()
+  window.addEventListener(BROWSER_CLOSED_EVENT, onClosed)
   document.addEventListener('visibilitychange', onVisibility)
   if (root.value && typeof IntersectionObserver !== 'undefined') {
     observer = new IntersectionObserver((e) => (onScreen.value = e[e.length - 1]?.isIntersecting ?? false))
@@ -106,12 +160,28 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   feed.setWanted(false)
+  window.removeEventListener(BROWSER_CLOSED_EVENT, onClosed)
   observer?.disconnect()
   document.removeEventListener('visibilitychange', onVisibility)
   show(null)
 })
 
 const picture = computed(() => live.value ?? shot.value)
+
+// Copy the calls: plain text, brief feedback.
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+async function copyCalls() {
+  try {
+    await navigator.clipboard.writeText(browserCallsText(calls.value))
+  } catch {
+    return
+  }
+  copied.value = true
+  if (copiedTimer) clearTimeout(copiedTimer)
+  copiedTimer = setTimeout(() => (copied.value = false), 1500)
+}
+onBeforeUnmount(() => copiedTimer && clearTimeout(copiedTimer))
 function open() {
   window.dispatchEvent(new CustomEvent(OPEN_BROWSER_EVENT, { detail: browserOpenRequest(info.value) }))
 }
@@ -123,14 +193,15 @@ function open() {
       <button
         type="button"
         class="group/open relative block aspect-[16/10] w-full overflow-hidden rounded-[inherit] text-left outline-none focus-visible:ring-2 focus-visible:ring-brand"
-        :title="`Watch this browser live${info.url ? ': ' + info.url : ''}`"
+        :title="closed ? 'This browser is closed: open it again' : `Watch this browser live${info.url ? ': ' + info.url : ''}`"
         @click="open"
       >
-        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" draggable="false" />
+        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="closed ? 'opacity-60 grayscale' : ''" draggable="false" />
         <span v-else class="flex size-full flex-col items-center justify-center gap-1 bg-fill-hover text-text-muted">
           <Globe class="size-5" aria-hidden="true" />
           <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
         </span>
+        <span v-if="closed" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Closed</span>
         <span
           class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-[120ms] hover:opacity-100 group-focus-visible/open:opacity-100"
           :title="`${info.verb}${info.url ? ' ' + info.url : ''}`"
@@ -138,21 +209,41 @@ function open() {
           <span v-if="live" class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" title="Live" />
           <Globe class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 truncate">{{ shownUrl || info.verb }}</span>
-          <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]">{{ info.profile }}</span>
-          <span class="ml-auto flex shrink-0 items-center gap-1.5 pl-1 tabular-nums">
+          <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]" :title="info.profile">{{ chip }}</span>
+          <!-- Room for the count and status drawn over this end: the address truncates before the chip meets them. -->
+          <span class="invisible flex shrink-0 items-center gap-1.5 tabular-nums" aria-hidden="true">
+            <span class="w-5" />
             <template v-if="count > 1">{{ count }} calls</template>
-            <StatusIcon :status="item.status" />
+            <span class="size-3.5" />
           </span>
         </span>
       </button>
+      <!-- Over the caption's right end, not inside its button: the count and status, with Copy the calls on hover. -->
+      <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-[12px] text-white">
+        <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-[120ms] focus-within:opacity-100 hover:opacity-100">
+          <button
+            type="button"
+            class="grid h-5 place-items-center rounded-6 bg-black/55 px-1 text-white opacity-0 outline-none transition-opacity duration-[120ms] hover:bg-black/75 focus-visible:opacity-100 group-hover/calls:opacity-100"
+            :class="copied ? '!opacity-100' : ''"
+            :aria-label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
+            :title="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
+            @click="copyCalls"
+          >
+            <span v-if="copied" class="flex items-center gap-1 text-[11px]"><Check class="size-3" aria-hidden="true" />Copied</span>
+            <Copy v-else class="size-3" aria-hidden="true" />
+          </button>
+          <template v-if="count > 1">{{ count }} calls</template>
+          <StatusIcon :status="item.status" />
+        </span>
+      </span>
     </div>
     <button
-      v-if="shot"
+      v-if="picture"
       type="button"
       class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-6 bg-black/55 text-white opacity-0 outline-none transition-opacity duration-[120ms] hover:bg-black/75 focus-visible:opacity-100 group-hover/card:opacity-100"
-      aria-label="Open the screenshot"
-      title="Open the screenshot"
-      @click="openLightbox(shot!, 'Browser screenshot')"
+      aria-label="Open full screen"
+      title="Open full screen"
+      @click="openLightbox(picture!, 'Browser')"
     >
       <Maximize2 class="size-3.5" aria-hidden="true" />
     </button>
