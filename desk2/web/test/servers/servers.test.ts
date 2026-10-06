@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
-import { type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { clampPane, isUp, loadPaneWidth, needsSetup, openable, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, statusDot, tailLines } from '../../src/components/servers/logic'
+import { type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
+import { allKey, clampPane, findServer, focusPlan, groupActions, groupServers, isUp, listView, loadPaneWidth, needsSetup, openable, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
 
 const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
@@ -107,5 +107,79 @@ describe('the pane width', () => {
     expect(loadPaneWidth({ getItem: () => null })).toBe(PANE_DEFAULT)
     expect(loadPaneWidth({ getItem: (k) => (k === PANE_KEY ? '640' : null) })).toBe(640)
     expect(loadPaneWidth({ getItem: () => '10' })).toBe(PANE_DEFAULT)
+  })
+})
+
+// The sidebar's Dev servers list and its click, on the same logic as the pane.
+describe('the Dev servers list', () => {
+  const proc = (id: string, status: DevWebProcess['status'], port?: number, name = id): DevWebProcess => ({ id, name, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+  const withProcs = (id: string, processes: DevWebProcess[], name = id): DevWebProject => ({ ...project(id, `C:/Users/me/Code/${id}/.devwebui`), name, processes })
+  const running = { state: 'running' as const, url: 'http://127.0.0.1:4000' }
+  const base = { status: null, statusMissing: false, projects: null, projectsError: null }
+
+  it('shows each daemon state the pane does, and a list only once the projects are read', () => {
+    expect(listView({ ...base, statusMissing: true })).toEqual({ kind: 'restart-desk' })
+    expect(listView(base)).toEqual({ kind: 'loading' })
+    expect(listView({ ...base, status: { state: 'starting', url: null } })).toEqual({ kind: 'starting' })
+    expect(listView({ ...base, status: { state: 'failed', url: null } })).toEqual({ kind: 'failed', reason: 'it did not start' })
+    expect(listView({ ...base, status: { state: 'stopped', url: null } })).toEqual({ kind: 'stopped' })
+    expect(listView({ ...base, status: running })).toEqual({ kind: 'loading' })
+    expect(listView({ ...base, status: running, projectsError: 'boom' })).toEqual({ kind: 'unreachable', reason: 'boom' })
+    expect(listView({ ...base, status: running, projects: [] })).toEqual({ kind: 'empty' })
+    expect(listView({ ...base, status: running, projects: [withProcs('a', [])] }).kind).toBe('list')
+  })
+
+  it('puts running servers first, then coming up, going down, crashed and stopped, by name inside each', () => {
+    const procs = [proc('s1', 'stopped', 1, 'zeta'), proc('c1', 'crashed', 2, 'beta'), proc('r2', 'running', 3, 'web'), proc('w1', 'waiting', 4, 'db'), proc('r1', 'running', 5, 'api'), proc('x1', 'stopping', 6, 'queue'), proc('t1', 'starting', 7, 'cache')]
+    expect(sortServers(procs).map((p) => p.name)).toEqual(['api', 'web', 'cache', 'db', 'queue', 'beta', 'zeta'])
+  })
+
+  it('groups by project: ones with a server running first, then by name, each with its running count', () => {
+    const groups = groupServers([withProcs('p1', [proc('a', 'stopped')], 'Zulu'), withProcs('p2', [proc('b', 'running'), proc('c', 'stopped')], 'Mike'), withProcs('p3', [], 'Alpha'), withProcs('p4', [proc('d', 'crashed')], 'Bravo'), withProcs('p5', [proc('e', 'running')], 'Charlie')])
+    expect(groups.map((g) => g.project.name)).toEqual(['Charlie', 'Mike', 'Alpha', 'Bravo', 'Zulu'])
+    expect(groups.map((g) => g.running)).toEqual([1, 1, 0, 0, 0])
+    expect(groups[1]?.servers.map((p) => p.id)).toEqual(['b', 'c'])
+  })
+
+  it('offers each row the buttons its status allows', () => {
+    expect(serverActions('running')).toEqual(['stop', 'restart'])
+    expect(serverActions('starting')).toEqual(['stop', 'restart'])
+    expect(serverActions('waiting')).toEqual(['stop', 'restart'])
+    expect(serverActions('stopped')).toEqual(['start'])
+    expect(serverActions('crashed')).toEqual(['start', 'restart'])
+    expect(serverActions('stopping')).toEqual([])
+  })
+
+  it("offers a header Start all / Stop all only for several servers, each while a server would act on it", () => {
+    expect(groupActions([])).toEqual({ start: false, stop: false })
+    expect(groupActions([proc('a', 'stopped')])).toEqual({ start: false, stop: false })
+    expect(groupActions([proc('a', 'running'), proc('b', 'running')])).toEqual({ start: false, stop: true })
+    expect(groupActions([proc('a', 'stopped'), proc('b', 'crashed')])).toEqual({ start: true, stop: false })
+    expect(groupActions([proc('a', 'running'), proc('b', 'stopped')])).toEqual({ start: true, stop: true })
+    expect(groupActions([proc('a', 'stopping'), proc('b', 'stopping')])).toEqual({ start: false, stop: false })
+  })
+
+  it('writes a port as :port, and nothing without one; a project keeps its own busy key', () => {
+    expect(serverPort({ port: 5173 })).toBe(':5173')
+    expect(serverPort({})).toBe('')
+    expect(allKey({ id: 'p1' })).toBe('all:p1')
+  })
+
+  it('finds a server and its project in the shared list', () => {
+    const list = [withProcs('p1', [proc('a', 'running')]), withProcs('p2', [proc('b', 'stopped')])]
+    expect(findServer(list, 'b')?.project.id).toBe('p2')
+    expect(findServer(list, 'nope')).toBeNull()
+    expect(findServer(null, 'a')).toBeNull()
+  })
+
+  it('shows a clicked server: its tab when one is open, else the page of one that answers, else a started one', () => {
+    const tabs: PaneTab[] = [{ id: 't1', kind: 'new', target: null, proc: null }, { id: 't2', kind: 'page', target: 'http://localhost:3000', proc: 'web' }]
+    expect(focusPlan(proc('web', 'running', 3000), tabs)).toEqual({ kind: 'pick', tab: 't2' })
+    // An open tab wins even when the server stopped since: the tab says so over its page.
+    expect(focusPlan(proc('web', 'stopped', 3000), tabs)).toEqual({ kind: 'pick', tab: 't2' })
+    expect(focusPlan(proc('api', 'running', 8080), tabs)).toEqual({ kind: 'open', url: 'http://localhost:8080' })
+    expect(focusPlan(proc('api', 'stopped', 8080), tabs)).toEqual({ kind: 'start' })
+    expect(focusPlan(proc('api', 'starting', 8080), tabs)).toEqual({ kind: 'start' })
+    expect(focusPlan(proc('worker', 'running'), tabs)).toEqual({ kind: 'start' })
   })
 })

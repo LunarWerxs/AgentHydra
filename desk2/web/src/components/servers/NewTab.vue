@@ -3,7 +3,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess, DevWebProject, LocalServers } from '@shared/devwebui'
-import { enterTarget, filterLocal, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
+import { allKey, enterTarget, filterLocal, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
 import { chipHosts, splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
@@ -122,8 +122,8 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
             <span class="text-[12px] font-medium text-[var(--text-muted)]">Servers</span>
             <span class="flex-1" />
             <template v-if="project.processes.length > 1">
-              <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="emit('all', 'start')"><Play class="size-3" />Start all</button>
-              <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="emit('all', 'stop')"><Square class="size-3" />Stop all</button>
+              <button type="button" :class="TEXT_BTN" :disabled="busy.has(allKey(project))" @click="emit('all', 'start')"><Play class="size-3" />Start all</button>
+              <button type="button" :class="TEXT_BTN" :disabled="busy.has(allKey(project))" @click="emit('all', 'stop')"><Square class="size-3" />Stop all</button>
             </template>
           </div>
           <div v-if="project.processes.length === 0" class="px-1 py-2 text-center text-[var(--text-muted)]">This project has no servers.</div>

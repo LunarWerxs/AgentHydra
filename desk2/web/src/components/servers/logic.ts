@@ -390,3 +390,91 @@ export function pageTitle(url: string | null, proc: Pick<DevWebProcess, 'name'> 
     return url
   }
 }
+
+// ---- the sidebar's Dev servers view: every DevWebUI project with its servers under it ----
+
+/** What the sidebar draws for the daemon's status and the project list (the pane's states, without a folder). */
+export type ListView =
+  | { kind: 'loading' }
+  | { kind: 'restart-desk' }
+  | { kind: 'starting' }
+  | { kind: 'failed'; reason: string }
+  | { kind: 'stopped' }
+  | { kind: 'unreachable'; reason: string }
+  /** The daemon runs and has no project yet. */
+  | { kind: 'empty' }
+  | { kind: 'list'; groups: ServerGroup[] }
+
+/** One project and its servers, running ones first. */
+export interface ServerGroup {
+  project: DevWebProject
+  servers: DevWebProcess[]
+  /** How many of them answer (status running). */
+  running: number
+}
+
+export type ListInput = Pick<PaneInput, 'status' | 'statusMissing' | 'projects' | 'projectsError'>
+
+export function listView(i: ListInput): ListView {
+  if (i.statusMissing) return { kind: 'restart-desk' }
+  if (!i.status) return { kind: 'loading' }
+  if (i.status.state === 'starting') return { kind: 'starting' }
+  if (i.status.state === 'failed') return { kind: 'failed', reason: i.status.reason ?? 'it did not start' }
+  if (i.status.state === 'stopped') return { kind: 'stopped' }
+  if (i.projectsError) return { kind: 'unreachable', reason: i.projectsError }
+  if (!i.projects) return { kind: 'loading' }
+  if (!i.projects.length) return { kind: 'empty' }
+  return { kind: 'list', groups: groupServers(i.projects) }
+}
+
+const RANK: Record<DevWebProcessStatus, number> = { running: 0, starting: 1, waiting: 1, stopping: 2, crashed: 3, stopped: 4 }
+
+/** Running servers first, then the ones coming up, going down, crashed and stopped; by name inside each. */
+export const sortServers = (procs: readonly DevWebProcess[]): DevWebProcess[] => [...procs].sort((a, b) => RANK[a.status] - RANK[b.status] || a.name.localeCompare(b.name))
+
+/** A project per group, the ones with a server running first, then by name; a project's servers sorted by `sortServers`. */
+export function groupServers(projects: readonly DevWebProject[]): ServerGroup[] {
+  return projects
+    .map((project) => ({ project, servers: sortServers(project.processes), running: project.processes.filter((p) => p.status === 'running').length }))
+    .sort((a, b) => Number(b.running > 0) - Number(a.running > 0) || a.project.name.localeCompare(b.project.name))
+}
+
+/** The key the shared state's `busy` holds while a project's Start all / Stop all runs. */
+export const allKey = (project: Pick<DevWebProject, 'id'>): string => `all:${project.id}`
+
+export type ServerAction = 'start' | 'stop' | 'restart'
+
+/** The buttons a server's row offers on hover: a server that is up is stopped or restarted, one that is not is started (a crashed one restarted too); none while it stops. */
+export function serverActions(status: DevWebProcessStatus): ServerAction[] {
+  if (status === 'stopping') return []
+  if (isUp(status)) return ['stop', 'restart']
+  return status === 'crashed' ? ['start', 'restart'] : ['start']
+}
+
+/** A project header's Start all / Stop all, as the pane offers them: only for a project with more than one server, each only while some server it would act on is there. */
+export function groupActions(servers: readonly Pick<DevWebProcess, 'status'>[]): { start: boolean; stop: boolean } {
+  if (servers.length < 2) return { start: false, stop: false }
+  return { start: servers.some((s) => s.status === 'stopped' || s.status === 'crashed'), stop: servers.some((s) => isUp(s.status)) }
+}
+
+/** The name and port a row shows: `web` and `:5173`; no port, no second part. */
+export const serverPort = (p: Pick<DevWebProcess, 'port'>): string => (p.port ? `:${p.port}` : '')
+
+/** The server and its project for an id, from the list the sidebar and the pane share. */
+export function findServer(projects: readonly DevWebProject[] | null, id: string): { project: DevWebProject; proc: DevWebProcess } | null {
+  for (const project of projects ?? []) {
+    const proc = project.processes.find((p) => p.id === id)
+    if (proc) return { project, proc }
+  }
+  return null
+}
+
+/** What the pane does when the sidebar asks it to show a server: bring its tab forward, open the page of one that answers, else start it in a new tab (which opens it once it answers). */
+export type FocusPlan = { kind: 'pick'; tab: string } | { kind: 'open'; url: string } | { kind: 'start' }
+
+export function focusPlan(proc: DevWebProcess, tabs: readonly PaneTab[]): FocusPlan {
+  const have = tabs.find((t) => t.kind === 'page' && t.proc === proc.id)
+  if (have) return { kind: 'pick', tab: have.id }
+  const url = proc.status === 'running' ? processAddress(proc) : null
+  return url ? { kind: 'open', url } : { kind: 'start' }
+}

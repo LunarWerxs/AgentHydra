@@ -33,8 +33,10 @@ between server/ and web/.
   `~/.devwebui`), starts `bun server/src/index.ts` there hidden when the pane asks, and forwards `/dw/api/*` with the
   daemon's `.cookie` credential. Contract: `shared/devwebui.ts`. Tests set `DEVWEBUI_HOME` to a temp folder. Change
   `../devwebui` only when the pane truly needs it, upstream-shaped, and name it in the commit message.
-- A Dev servers view in the sidebar is planned (README, "Planned next", owner 2026-10-06): build it on
-  `web/src/components/servers/api.ts` and `logic.ts`, the one DevWebUI client, never a second one.
+- The title bar's Dev servers button lists DevWebUI's projects and servers in the sidebar (README, "What Desk 2 adds",
+  owner 2026-10-06): `web/src/components/servers/DevServersList.vue`. It and `ServersPane` read the one DevWebUI client
+  state, `servers/store.ts` (on `api.ts` and `logic.ts`; one polling loop, only while one is on screen), never a second
+  client; a click on a server hands the pane the project's folder and the server (`store.show`, DeskFrame's `serversCwd`).
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from

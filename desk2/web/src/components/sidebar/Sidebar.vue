@@ -8,6 +8,8 @@ import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
+const DevServersList = lazyPanel(() => import('@/components/servers/DevServersList.vue'))
+import { useDevServers } from '@/components/servers/store'
 import { useCloud } from '@/components/cloud/store'
 import { ahSource, appShown, deskOnPcs } from '@/components/cloud/logic'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
@@ -148,6 +150,8 @@ function closeSearch() {
 // PCs, components/cloud). The search box then searches it: AgentHydra matches titles over everything in
 // the list's scope, or over everything at all unless "Only this view" is ticked.
 const cloud = useCloud()
+// The title bar's Dev servers button: DevWebUI's projects and servers take the list's place (components/servers).
+const devServers = useDevServers()
 const searchText = computed({
   get: () => (cloud.on.value ? cloud.search.value : query.value),
   set: (v: string) => {
@@ -680,7 +684,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
       <div class="min-h-0 flex-1 overflow-y-auto pr-[2px] pt-1 [scrollbar-width:none]">
-        <div v-if="searchOpen && !hydraModel" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
+        <div v-if="searchOpen && !hydraModel && !devServers.on.value" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
           <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="icons.search" class="size-4" /></span>
           <input
             ref="searchInput"
@@ -697,6 +701,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </div>
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" :stale="hydraShown?.stale" />
+
+        <DevServersList v-else-if="devServers.on.value" />
 
         <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">

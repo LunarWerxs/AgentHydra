@@ -12,6 +12,7 @@ const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue')
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
 import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
+import type { ServerFocus } from '@/components/servers/store'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
 const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -19,6 +20,7 @@ import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
+import { useDevServers } from '@/components/servers/store'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
@@ -336,6 +338,20 @@ function toggleCloud() {
   keepHydra()
   if (cloud.on.value) toggleSidebar(true)
 }
+// The Dev servers button: the sidebar lists DevWebUI's projects and servers (components/servers). One list at a time: it
+// and the cloud list turn each other off, and AgentHydra's own pane, which borrows the cloud list, does too. An
+// AgentHydra tab with a list of its own has the sidebar while it is open, so it slides back to the desk, as for tasks.
+const devServers = useDevServers()
+watch(() => devServers.on.value, (on) => on && (cloud.on.value = false), { immediate: true })
+watch(() => cloud.on.value, (on) => on && devServers.setOn(false))
+function toggleDev() {
+  devServers.setOn(!devServers.on.value)
+  if (!devServers.on.value) return
+  cloudForHydra = false
+  keepHydra()
+  toggleSidebar(true)
+  if (hydraOpen.value && hydraShown.value) toggleHydra(false)
+}
 function toggleTasks() {
   showTasks.value = !showTasks.value
   if (!showTasks.value) return
@@ -350,6 +366,29 @@ const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
 
 // Right pane
 const pane = ref<RightPane | null>(null)
+// The servers pane is for the chat's folder, unless the Dev servers list asked for a server of another project: that
+// project's folder, until another chat is picked or the pane is closed. `serversFocus` is the request itself (the pane
+// shows that server once).
+const serversCwd = ref<string | null>(null)
+const serversFocus = ref<ServerFocus | null>(null)
+const serversDir = computed(() => serversCwd.value ?? chat.value?.cwd ?? null)
+watch(
+  () => devServers.focus.value,
+  (f) => {
+    if (!f) return
+    serversCwd.value = f.cwd
+    serversFocus.value = f
+    tasks.value = null
+    pane.value = 'servers'
+  }
+)
+watch(
+  () => chat.value?.id,
+  () => (serversCwd.value = null)
+)
+watch(pane, (p) => {
+  if (p !== 'servers') serversCwd.value = null
+})
 // Changes with RepoYeti selected is as wide as the servers pane (it is a whole page in a frame).
 const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
 function togglePane(p: RightPane) {
@@ -369,7 +408,9 @@ const onOpenRepoYeti = () => {
 }
 // A Browser card in the transcript: the servers pane shows that browser (it reads the same event itself).
 const onOpenBrowser = () => {
-  if (chat.value) pane.value = 'servers'
+  if (!chat.value) return
+  serversCwd.value = null
+  pane.value = 'servers'
 }
 // Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
 // Open or closed (and expanded) is remembered per chat: switching chats shows each one's own state.
@@ -503,9 +544,9 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Clean sidebar, the sixth,
-// ends at 200).
-const CHROME_COLLAPSED = 208
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Clean sidebar, the seventh,
+// ends at 232).
+const CHROME_COLLAPSED = 240
 const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 
@@ -518,12 +559,14 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
       :tasks-on="showTasks"
+      :dev-on="devServers.on.value"
       :clean-on="cleanSidebar"
       :update="demo ? null : updateOffer"
       @restart="restartServer"
       @hydra="toggleHydra()"
       @cloud="toggleCloud"
       @tasks="toggleTasks"
+      @dev="toggleDev"
       @clean="toggleClean"
       @new="src.select({ kind: 'new' })"
       @search="openSearch"
@@ -617,14 +660,14 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           <!-- Servers and Changes-with-RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
                buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. -->
           <aside
-            v-if="!tasks && pane && (pane === 'climayte' || chat)"
+            v-if="!tasks && pane && (pane === 'climayte' || chat || (pane === 'servers' && serversCwd))"
             class="col-start-2 flex min-h-0 shrink-0 border-l border-border"
             :class="wide ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
             :style="wide ? { width: `${serversWidth}px` } : undefined"
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
-            <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
+            <ServersPane v-else-if="pane === 'servers' && serversDir" :cwd="serversDir" :focus="serversFocus" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>

@@ -9,7 +9,8 @@
 // Starts the built Desk 2 (web/dist, hydra/dist: run `bun run build` first) as a hidden process on E2E_PORT (default 7819) with a
 // throwaway HYDRA_DESK_HOME; /ah/api goes on to the live AgentHydra daemon, read only: no case here acts on an account (the Open
 // and Focus row icons are only hovered or focused), it only opens menus and popovers, hides the sidebar, selects a row, flips a
-// view toggle or copies an address to the clipboard. Prints PASS/FAIL per case; exits 1 on any FAIL. Prints aria-labels only,
+// view toggle or copies an address to the clipboard. DevWebUI's /dw status and projects are answered here with an invented
+// project (a stopped server and a running one), and a POST under /dw with {}, so the Dev servers cases touch no real server. Prints PASS/FAIL per case; exits 1 on any FAIL. Prints aria-labels only,
 // never a control's text (a row's text is a chat title, a name cell's an account). GESTURE_ONLY=pane|desk and GESTURE_WHAT=<text>
 // pick cases; GESTURE_TRACE=1 prints each case's pointer, mouse, focus and click events (target tag, data-slot, data-state).
 
@@ -40,6 +41,8 @@ interface Case {
   wait?: number
   /** Hold the page as a window without focus does: its animations paused (the class lib/pause-motion.ts sets). */
   paused?: boolean
+  /** JS expression run once the desk is up and before the target is looked for: it turns on the view the target is in. */
+  setup?: string
 }
 
 const VISIBLE = `(els) => els.find((el) => { const r = el.getBoundingClientRect(); if (r.width < 6 || r.height < 6 || r.top < 0 || r.bottom > innerHeight) return false;
@@ -70,6 +73,19 @@ const NAME = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] bu
 // Only the copy's own toast: the page can show another toast on load.
 const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t) => t.textContent.includes('Copied')).length`
 
+// The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): a click on the row shows it in the servers pane.
+const DEV = 'button[aria-label="Dev servers"]'
+const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="Open api"]')])`
+const SERVERS_PANE = `!!document.querySelector('aside[aria-label="Servers"]')`
+// What DevWebUI answers to the window here (shared/devwebui.ts): one invented project with a running and a stopped server.
+const DW_FIXTURE: Record<string, unknown> = {
+  '/dw/status': { state: 'running', url: 'http://127.0.0.1:9' },
+  '/dw/api/projects': [{ id: 'p1', name: 'example-app', path: 'C:/Users/me/code/example-app/.devwebui', processes: [
+    { id: 'p1-web', name: 'web', command: 'npm run dev', cwd: '', port: 5173, status: 'running', exitCode: null, projectId: 'p1' },
+    { id: 'p1-api', name: 'api', command: 'npm run api', cwd: '', port: 8787, status: 'stopped', exitCode: null, projectId: 'p1' },
+  ] }],
+}
+
 const CASES: Case[] = []
 const each = (kinds: Kind[], c: Omit<Case, 'kind'>) => { for (const kind of kinds) CASES.push({ ...c, kind }) }
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'row ... menu opens', pick: ROW_MENU, ok: MENU_OPEN })
@@ -87,6 +103,8 @@ each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outsid
 each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pick: ROW, ok: MENU_OPEN })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'sidebar row ... menu opens', pick: ROW_MORE, ok: MENU_OPEN })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: CliMayte tasks flips once, no tooltip', pick: toggle(TASKS), ok: `${flipped(TASKS)} && !(${TIP_OPEN})`, diag: `[${flipped(TASKS)}, ${TIP_OPEN}]` })
+each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: Dev servers flips once, no tooltip', pick: toggle(DEV), ok: `${flipped(DEV)} && !(${TIP_OPEN})`, diag: `[${flipped(DEV)}, ${TIP_OPEN}]` })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its server in the servers pane', pick: DEV_ROW, ok: SERVERS_PANE, setup: `document.querySelector('${DEV}').click()` })
 
 const TRACE = `(() => { window.__log = []; const d = (e) => { const t = e.target; window.__log.push([Math.round(performance.now()), e.type, e.isTrusted, t && t.tagName,
   t && t.getAttribute && (t.getAttribute('aria-label') || t.getAttribute('data-slot')), t && t.getAttribute && t.getAttribute('data-state'), t && t.isConnected, e.pointerType || '']) };
@@ -121,7 +139,15 @@ try {
   await new Promise((r) => (ws.onopen = r))
   let id = 0
   const pending = new Map<number, (v: any) => void>()
-  ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); if (m.id && pending.has(m.id)) { pending.get(m.id)!(m.result ?? m); pending.delete(m.id) } }
+  ws.onmessage = (e) => { const m = JSON.parse(String(e.data));
+    if (m.method === 'Fetch.requestPaused') {
+      const { requestId, request } = m.params
+      const body = request.method === 'GET' ? DW_FIXTURE[new URL(request.url).pathname] : {}
+      if (body === undefined) void send('Fetch.continueRequest', { requestId })
+      else void send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'application/json' }], body: btoa(JSON.stringify(body)) })
+      return
+    }
+    if (m.id && pending.has(m.id)) { pending.get(m.id)!(m.result ?? m); pending.delete(m.id) } }
   const send = (method: string, params: object = {}) => new Promise<any>((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })) })
   const ev = async (expression: string) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.value
   /** Poll `expression` until it is truthy (true) or `ms` runs out (false). */
@@ -131,6 +157,7 @@ try {
   }
   const park = () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 940 })
   await send('Page.enable')
+  await send('Fetch.enable', { patterns: [{ urlPattern: `http://127.0.0.1:${PORT}/dw/*` }] })
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
 
   /** Load the page fresh and wait until the case's target is on screen and has stopped changing: rows are replaced as data
@@ -142,7 +169,7 @@ try {
     await park()
     // Page.navigate answers before the old document goes: mark it, and wait for a document without the mark.
     // A reload comes back to the screen it left (lib/view-memory.ts): every case starts from a fresh window instead.
-    await ev('window.__previous = 1; try { sessionStorage.clear() } catch {}')
+    await ev(`window.__previous = 1; try { sessionStorage.clear(); localStorage.removeItem('hydra-desk.devservers.on') } catch {}`)
     await send('Page.navigate', { url: `http://127.0.0.1:${PORT}${c.page === 'pane' ? '/ah/?embed=desk' : '/'}` })
     await send('Page.bringToFront')
     const fresh = `!window.__previous && document.readyState === 'complete'`
@@ -161,6 +188,7 @@ try {
         return load(c)
       }
     }
+    if (c.setup) await ev(c.setup)
     const seen = `(() => { const el = ${c.pick}; if (!el) return ''; el.__seen ??= Math.random(); return el.__seen + JSON.stringify(el.getBoundingClientRect()) })()`
     let last = ''
     let since = Date.now()

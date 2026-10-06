@@ -3,9 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { AppWindow, Globe, Plus, RefreshCw, Search, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
-import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus, type LocalServers } from '@shared/devwebui'
-import { browserClose, browserProfiles, devwebStart, devwebStatus, listProjects, localhostServers, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
-import { activateTab, clampPane, closeTab, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { processAddress, type DevWebProcess, type LocalServers } from '@shared/devwebui'
+import { browserClose, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
+import { activateTab, clampPane, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
 import PageTab from './PageTab.vue'
@@ -17,19 +18,16 @@ import { DOT, ICON_BTN } from './styles'
 // saved browsers, narrowed by its address bar; a page tab shows a server or an address in a frame; a saved tab is a
 // saved browser, live. Tabs are remembered per chat folder. A folder that is not a project yet is set up by itself
 // (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server stopped.
-// Opening the pane starts the server manager when it is not running; status is polled while the pane is open and the
-// window is on screen. After them the New tab lists "Other localhost servers": what listens on this machine that
+// Opening the pane starts the server manager when it is not running; the status and the project list come from the
+// window's one DevWebUI client (store.ts), which the sidebar's Dev servers list reads too and which polls while either
+// is on screen and the window is. `focus` is that list's request: show this server (its folder is `cwd`). After them the New tab lists "Other localhost servers": what listens on this machine that
 // DevWebUI did not start (GET /dw/localhost), open-only, scanned at most every 8 s.
-const props = defineProps<{ cwd: string; width: number }>()
+const props = defineProps<{ cwd: string; width: number; focus?: ServerFocus | null }>()
 const emit = defineEmits<{ close: []; resize: [width: number] }>()
 
-const status = ref<DevWebStatus | null>(null)
-const statusMissing = ref(false)
-const projects = shallowRef<DevWebProject[] | null>(null)
-const projectsError = ref<string | null>(null)
+const servers = useDevServers()
+const { status, statusMissing, projects, projectsError, busy, actionError } = servers
 const setup = ref<FolderSetup | null>(null)
-const busy = ref(new Set<string>())
-const actionError = ref<string | null>(null)
 const logs = ref(new Map<string, string[]>())
 
 const input = computed(() => ({ status: status.value, statusMissing: statusMissing.value, projects: projects.value, projectsError: projectsError.value, cwd: props.cwd, setup: setup.value }))
@@ -39,70 +37,17 @@ const elsewhere = computed(() => otherRunning(projects.value, project.value))
 const daemonUrl = computed(() => status.value?.url ?? null)
 const findProc = (id: string | null): DevWebProcess | null => (id ? ((projects.value ?? []).flatMap((p) => p.processes).find((p) => p.id === id) ?? null) : null)
 
-// ---- polling ----
-let timer: ReturnType<typeof setTimeout> | null = null
-let alive = true
-let started = false
-
-async function refresh() {
-  void loadLocal()
-  let s: DevWebStatus
-  try {
-    s = await devwebStatus()
-    statusMissing.value = false
-  } catch (err) {
-    if (err instanceof RouteMissing) statusMissing.value = true
-    return
-  }
-  if (s.state === 'stopped' && !started) {
-    // Show 'starting' while the automatic start runs, so the stopped card only appears once a start has failed.
-    started = true
-    status.value = { state: 'starting', url: null }
-    status.value = await devwebStart().catch((err) => ({ state: 'failed', url: null, reason: err instanceof Error ? err.message : String(err) }) as DevWebStatus)
-  } else status.value = s
-  if (status.value.state !== 'running') {
-    projects.value = null
-    return
-  }
-  try {
-    projects.value = await listProjects()
-    projectsError.value = null
-    void loadProfiles()
-  } catch (err) {
-    projectsError.value = err instanceof Error ? err.message : String(err)
-  }
-}
-
-// One polling loop at a time: stopTimer and onVisibility move `loop` on, so a refresh that was already running
-// when the window was hidden does not schedule a second loop behind the new one.
-let loop = 0
-function schedule(gen = loop) {
-  if (!alive || document.hidden || gen !== loop) return
-  timer = setTimeout(async () => {
-    await refresh()
-    schedule(gen)
-  }, status.value?.state === 'starting' ? 1000 : 2000)
-}
-function stopTimer() {
-  loop++
-  if (timer) clearTimeout(timer)
-  timer = null
-}
-function onVisibility() {
-  stopTimer()
-  if (document.hidden) return
-  const gen = loop
-  void refresh().then(() => schedule(gen))
-}
+// ---- polling: the store's loop runs while this pane is mounted; what only the pane keeps is loaded on each answer ----
+const refresh = () => servers.refresh()
+let release: (() => void) | null = null
 onMounted(() => {
-  document.addEventListener('visibilitychange', onVisibility)
-  const gen = loop
-  void refresh().then(() => schedule(gen))
+  release = servers.use()
+  void loadLocal()
 })
-onBeforeUnmount(() => {
-  alive = false
-  stopTimer()
-  document.removeEventListener('visibilitychange', onVisibility)
+onBeforeUnmount(() => release?.())
+watch(servers.answered, () => {
+  void loadLocal()
+  if (status.value?.state === 'running' && projects.value) void loadProfiles()
 })
 
 // ---- the chat's folder, set up without an Add step ----
@@ -142,35 +87,14 @@ watch(
 const logOf = (p: DevWebProcess): string[] => (p.status === 'crashed' ? (logs.value.get(`${p.id}:${p.exitCode}`) ?? []) : [])
 
 // ---- actions ----
-async function run(key: string, fn: () => Promise<unknown>) {
-  actionError.value = null
-  busy.value = new Set(busy.value).add(key)
-  try {
-    await fn()
-    await refresh()
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : String(err)
-  } finally {
-    const next = new Set(busy.value)
-    next.delete(key)
-    busy.value = next
-  }
-}
 async function toggle(p: DevWebProcess) {
   const up = isUp(p.status)
   if (up) dropPending(p.id)
-  await run(p.id, () => processAction(p.id, up ? 'stop' : 'start'))
+  await servers.act(p, up ? 'stop' : 'start')
 }
-const restart = (p: DevWebProcess) => run(p.id, () => processAction(p.id, 'restart'))
-const all = (action: 'start' | 'stop') => project.value && run('all', () => projectAction(project.value!.id, action))
-async function tryAgain() {
-  started = false
-  const pending: DevWebStatus = { state: 'starting', url: null }
-  status.value = pending
-  await refresh()
-  // A status error that refresh returned on leaves the pane as on first open (loading, polling goes on), not starting for good.
-  if (status.value === pending) status.value = null
-}
+const restart = (p: DevWebProcess) => servers.act(p, 'restart')
+const all = (action: 'start' | 'stop') => project.value && servers.actAll(project.value, action)
+const tryAgain = () => servers.tryAgain()
 
 // ---- saved browsers, for the New tab page ----
 const profiles = shallowRef<BrowserProfiles | null>(null)
@@ -266,7 +190,7 @@ async function openServer(id: string, p: DevWebProcess) {
   if (p.status === 'running' && processAddress(p)) return openRunning(id, p)
   if (p.status === 'crashed' || p.status === 'stopped') {
     pending.value = new Map(pending.value).set(p.id, id)
-    await run(p.id, () => processAction(p.id, 'start'))
+    await servers.act(p, 'start')
     if (actionError.value) dropPending(p.id)
   } else pending.value = new Map(pending.value).set(p.id, id)
 }
@@ -333,6 +257,28 @@ watch(
     void loadProfiles(true)
     void refresh()
   }
+)
+
+// The sidebar's Dev servers list asked for a server: its tab comes forward, or it opens in a new one (started first when
+// it is stopped). After the folder watch above, so a tab opened for a folder this request just switched to is not
+// replaced by that folder's saved tabs. Each request is acted on once, when the project list holds its server.
+let handledFocus = 0
+watch(
+  () => [props.focus, projects.value] as const,
+  ([f, list]) => {
+    if (!f || f.seq <= handledFocus || !list) return
+    handledFocus = f.seq
+    const hit = findServer(list, f.procId)
+    if (!hit) return
+    const plan = focusPlan(hit.proc, state.value.tabs)
+    if (plan.kind === 'pick') state.value = activateTab(state.value, plan.tab)
+    else if (plan.kind === 'open') state.value = openTab(state.value, { kind: 'page', target: plan.url, proc: hit.proc.id })
+    else {
+      state.value = openTab(state.value)
+      void openServer(state.value.active, hit.proc)
+    }
+  },
+  { immediate: true }
 )
 
 // ---- width: drag the left edge, or arrow keys ----

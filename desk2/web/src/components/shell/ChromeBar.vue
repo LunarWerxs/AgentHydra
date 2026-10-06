@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Cloud } from '@lucide/vue'
+import { Cloud, Server } from '@lucide/vue'
 import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -9,15 +9,16 @@ import type { UpdateOffer } from '@/lib/server-update'
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu and Hide sidebar (28px, r7).
 // The real app's Chat / Code mode switch is left out: Hydra Desk is Code only. Its Back and Forward arrows
 // are gone too (owner, 2026-10-06); Alt + Left / Right still go back and forward (DeskFrame).
-// AgentHydra 2.0 adds four: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the sidebar lists
+// AgentHydra 2.0 adds five: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the sidebar lists
 // every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
-// sidebar/tasks.ts) and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
-// Each shows when it is on: AgentHydra pressed, the other three blue.
+// sidebar/tasks.ts), Dev servers (the sidebar lists DevWebUI's projects and their servers, servers/DevServersList.vue)
+// and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
+// Each shows when it is on: AgentHydra pressed, the other four blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
-defineProps<{ sidebarOpen: boolean; width: number; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; cloud: []; tasks: []; clean: []; restart: [] }>()
+defineProps<{ sidebarOpen: boolean; width: number; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; cloud: []; tasks: []; dev: []; clean: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -81,6 +82,11 @@ const BTN = `${BTN_SHAPE} text-text`
     <Tip :label="tasksOn ? 'Hide the CliMayte tasks under each session' : 'CliMayte: the running tasks under each session'">
       <button type="button" :class="[BTN_SHAPE, tasksOn ? 'text-accent-text' : 'text-text']" aria-label="CliMayte tasks in the sidebar" :aria-pressed="!!tasksOn" @click="emit('tasks')">
         <component :is="shellIcons.climayte" class="size-4" />
+      </button>
+    </Tip>
+    <Tip :label="devOn ? 'Back to the desk list' : 'Dev servers: the projects and servers DevWebUI runs'">
+      <button type="button" :class="[BTN_SHAPE, devOn ? 'text-accent-text' : 'text-text']" aria-label="Dev servers" :aria-pressed="!!devOn" @click="emit('dev')">
+        <Server class="size-4" />
       </button>
     </Tip>
     <Tip :label="cleanOn ? 'Show account numbers and times in the sidebar' : 'Clean sidebar: titles only, no account numbers or times'">
