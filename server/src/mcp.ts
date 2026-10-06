@@ -31,6 +31,7 @@
 
 import { RECENT_FINISHED } from './climayte-lib'
 import { VERSION } from './config'
+import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
 import {
   AUTO_DETACH_MS,
   api,
@@ -1816,6 +1817,7 @@ export const TOOLS: McpEngineTool[] = [
   // --- fan-out: one task list -> N visible chats on N accounts (mcp-fan-out.ts)
   ...FAN_OUT_TOOLS,
   ...FREE_TOOLS,
+  ...DEV_SERVERS_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:
@@ -2231,11 +2233,11 @@ export const SERVER_INSTRUCTIONS = `AgentHydra manages every Claude/Codex accoun
 
 CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} (~300ms, no quota). Then:
 - advice.shouldOffload true -> WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE NOW, and
-  hand what is left to climayte_run. An agent cut off mid-task loses all it had not saved.
+  hand what is left to climayte_run.
 - advice.safeToFanOut false -> shrink or postpone. Gate on CURRENT + PROJECTED cost: a fan-out
-  cannot be recalled; solo work stops at any tool call.
+  cannot be recalled.
 - usage_budget {} gives exhaustsBeforeReset: branch on that, not a bare percentage. Weekly is
-  the binding cap; on Pro the 5-hour window binds first; switching model shares the week.
+  the binding cap; on Pro the 5-hour window binds first.
 - severity 'unknown' or a failed read is NOT plenty left. Never fan out on one.
 
 NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance; say so when identity.warning is set.
@@ -2245,9 +2247,7 @@ list_usage {} surveys every account (\`deepseek\` = HSwarm's balance). Mechanica
 goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
-work on his CLI accounts, moving it when one runs out; use it while accounts sit idle
-(check_my_usage says how many). AgentHydra picks the account, never one a person or another
-session is using; see climayte_status.
+work on his CLI accounts while they sit idle; it never takes one a person or session is using.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
 tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,
@@ -2255,8 +2255,10 @@ from, to}, or fan_out {tasks:[{cwd, prompt}]} (VISIBLE desktop chats on OTHER ac
 one a person is in); fan_out_status {} reads verdicts, fan_out_send {group, text} steers.
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
 ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS: fan_out_delete {group}, or
-orchestrator_run delete_chat <chat>.
-Free web accounts: free_chat {tasks}`
+orchestrator_run delete_chat <chat>. Free web accounts: free_chat {tasks}
+
+DEV SERVERS: never start one from the shell (vite, npm/bun run dev):
+dev_servers {action:"start", cwd} reuses the running copy, whoever started it, or starts it.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

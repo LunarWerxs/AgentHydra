@@ -66,7 +66,6 @@ const bundle = findBundle(bundleArg)
 const scratch = mkdtempSync(join(tmpdir(), 'agenthydra-smoke-'))
 const daemonLog = join(scratch, 'daemon.log')
 const deskLog = join(scratch, 'desk2.log')
-const devwebuiLog = join(scratch, 'devwebui.log')
 const pids: number[] = []
 let failed = 0
 
@@ -142,13 +141,7 @@ try {
   const exe = join(bundle, isWin ? 'AgentHydra.exe' : 'agenthydra')
   const bun = join(bundle, 'desk2', 'runtime', isWin ? 'bun.exe' : 'bun')
 
-  const required = [
-    exe,
-    bun,
-    join(bundle, 'desk2/server/src/index.ts'),
-    join(bundle, 'devwebui/server/src/index.ts'),
-    join(bundle, 'devwebui/web/dist/index.html'),
-  ]
+  const required = [exe, bun, join(bundle, 'desk2/server/src/index.ts')]
   if (isWin) {
     required.push(
       join(bundle, 'desk2/launcher/start.vbs'),
@@ -240,26 +233,6 @@ try {
     { ...env, HYDRA_DESK_PORT: String(deskPort), HYDRA_URL: daemonUrl },
     deskLog,
   )
-  // devwebui from the bundle, on the bundle's bun; a port that is free now, bound exactly.
-  const dwPort = (() => {
-    const l = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } })
-    const p = l.port
-    l.stop(true)
-    return p
-  })()
-  start(
-    bun,
-    ['server/src/index.ts'],
-    join(bundle, 'devwebui'),
-    {
-      ...env,
-      DEVWEBUI_HOME: join(scratch, 'devwebui-home'),
-      DEVWEBUI_NO_OPEN: '1',
-      DEVWEBUI_PORT: String(dwPort),
-      DEVWEBUI_PORT_FIXED: '1',
-    },
-    devwebuiLog,
-  )
 
   const daemonUp = await waitHealth(`${daemonUrl}/api/health`, 40_000)
   if (check(daemonUp, 'daemon /api/health answers')) {
@@ -290,20 +263,6 @@ try {
     check(ahBody.service === 'agenthydra', 'Desk 2 /ah/api/health reaches the daemon')
   }
 
-  const dwUrl = `http://127.0.0.1:${dwPort}`
-  if (
-    check(
-      await waitHealth(`${dwUrl}/api/health`, 40_000),
-      `devwebui /api/health answers (port ${dwPort})`,
-    )
-  ) {
-    const dwRoot = await get(`${dwUrl}/`)
-    check(
-      dwRoot.ok && /<!doctype html/i.test(await dwRoot.text()),
-      'devwebui / serves its built web',
-    )
-  }
-
   if (daemonUp) {
     const r = await get(`${daemonUrl}/`, { redirect: 'manual' })
     const loc = r.headers.get('location') ?? ''
@@ -322,7 +281,7 @@ try {
   await Bun.sleep(1000)
   if (failed) {
     console.log(
-      `\n--- daemon log tail ---\n${tail(daemonLog)}\n--- desk2 log tail ---\n${tail(deskLog)}\n--- devwebui log tail ---\n${tail(devwebuiLog)}`,
+      `\n--- daemon log tail ---\n${tail(daemonLog)}\n--- desk2 log tail ---\n${tail(deskLog)}`,
     )
   }
   for (let i = 0; i < 10; i++) {

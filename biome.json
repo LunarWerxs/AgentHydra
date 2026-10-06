@@ -14,7 +14,6 @@
       "!hswarm/ui",
       "!desk",
       "!desk2",
-      "!devwebui",
       "!**/tray-host-native/target",
       "!**/*.gen.ts",
       "!**/*.css",

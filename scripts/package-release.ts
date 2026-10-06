@@ -5,7 +5,7 @@
  *   bun scripts/package-release.ts --target <windows-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64> --out <dir>
  *
  * Writes <out>/AgentHydra-<version>-<target>/ and its archive beside it (Windows also gets the lone
- * exe). The daemon is compiled by scripts/build.ts; Desk 2 and devwebui ship as source plus production
+ * exe). The daemon is compiled by scripts/build.ts; Desk 2 ships as source plus production
  * node_modules on a bundled bun (desk2/runtime). Needs desk2/web/dist and desk2/hydra/dist already
  * built; it never builds them and never writes into the checkout.
  */
@@ -304,24 +304,6 @@ if (isWindows) {
   for (const f of LAUNCHER_FILES) copyFileSync(join(ROOT, 'desk2/launcher', f), join(launcher, f))
 }
 
-// devwebui sits beside desk2/ (Desk 2's servers pane starts it from ../devwebui).
-const devwebui = join(stage, 'devwebui')
-// Its server serves web/dist, so the Vue sources never ship: the dist is built here from the checkout's
-// devwebui install (CI's "Build devwebui" step, or `bun install` in devwebui/ on a PC).
-stageTracked('devwebui', stage, [
-  /\.test\.tsx?$/,
-  /^devwebui\/(tests?|e2e|tmp|docs|scripts)\//,
-  /^devwebui\/web\//,
-])
-run(
-  process.execPath,
-  ['run', 'vite', 'build', '--outDir', join(devwebui, 'web/dist'), '--emptyOutDir'],
-  join(ROOT, 'devwebui/web'),
-)
-if (!existsSync(join(devwebui, 'web/dist/index.html')))
-  fail('devwebui web build wrote no index.html')
-installServerOnly(devwebui, target, hostTarget)
-
 if (isWindows) {
   mkdirSync(join(stage, 'misc'))
   for (const f of MISC_FILES) copyFileSync(join(ROOT, 'misc', f), join(stage, 'misc', f))
@@ -362,8 +344,6 @@ const sizes = {
   'desk2 runtime': dirSize(runtime),
   'desk2 node_modules': dirSize(join(desk2, 'node_modules')),
   dists: dirSize(join(desk2, 'web/dist')) + dirSize(join(desk2, 'hydra/dist')),
-  'devwebui node_modules': dirSize(join(devwebui, 'node_modules')),
-  devwebui: dirSize(devwebui),
 }
 console.log(`\nBundle size (${name}):`)
 for (const [k, v] of Object.entries(sizes)) console.log(`  ${k.padEnd(20)} ${mb(v)}`)
