@@ -362,7 +362,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_instance_numbers',
     description:
-      "THE INSTANCE DIRECTORY: every instance (Claude Desktop, Claude CLI, Codex) in one flat list, each with its permanent NUMBER, kind, signed-in account email, plan, login state, and the dir/id the per-kind tools take. Numbers are unique across all three kinds, assigned once and NEVER reused, so '#7' means the same account tomorrow. Call this first whenever a human says 'instance 7' or you need to pick an account to route work to.",
+      "THE INSTANCE DIRECTORY: every instance (Claude Desktop, Claude CLI, Codex) in one flat list, each with its permanent NUMBER, kind, signed-in account email, plan, login state, and the dir/id the per-kind tools take. Numbers are unique across all three kinds, assigned once and NEVER reused, so '#7' means the same account tomorrow. Call this first whenever a human says 'instance 7' or you need to pick an account to route work to. The Free accounts (claude.ai and chatgpt.com free web logins) are not instances and are numbered apart: free_status lists them.",
     inputSchema: S(),
     run: () => api('/api/instance-numbers'),
   },
@@ -514,7 +514,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'list_usage',
     description:
-      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek account balance HSwarm spends from (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on HSwarm (`hswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota.",
+      "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek account balance HSwarm spends from (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on HSwarm (`hswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota. The Free web accounts are not in it: free_status.",
     inputSchema: S(),
     run: async () => {
       const survey = (await apiOrLocal('/api/usage/survey', async () => {

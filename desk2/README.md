@@ -581,4 +581,9 @@ interrupted send means refresh the tracked chats and read the relevant UUID befo
 again. The harness's chat handles survive restarts; provider retention still limits their lifetime.
 Desk does not write Free transcripts to its normal SDK chat store.
 
+A chat reaches the Free accounts through AgentHydra's MCP (owner, 2026-10-06): `free_chat` sends tasks
+as new threads on the idle accounts with the most room, or continues a thread by its `chat_id`;
+`free_status`, `free_results`, `free_threads` and `free_read` read the rest. They call the routes above
+(`server/src/mcp-free.ts` in the engine; docs/REFERENCE.md has the details).
+
 This folder is part of AgentHydra's public repo: everything committed here is published.

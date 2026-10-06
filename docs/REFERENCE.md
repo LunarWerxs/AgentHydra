@@ -108,6 +108,16 @@ chat you name (the act `fan_out_send` structurally cannot perform, since a chat 
 reads as `working`; see [Clearing a stuck prompt](UNBLOCKING-STUCK-PROMPTS.md)).
 Mutating tools say `MUTATES:` in their description; there is deliberately no shutdown tool.
 
+The **Free accounts** (the claude.ai and chatgpt.com free web logins in AgentHydra 2.0's Instances →
+Free, which Desk 2's server keeps) have **`free_status`**, **`free_chat`**, **`free_results`**,
+**`free_threads`** and **`free_read`** (`server/src/mcp-free.ts`). `free_chat {tasks:[{prompt, chat_id?,
+name?, account?, provider?, web_search?}]}` starts each task as a private thread (Claude incognito,
+ChatGPT temporary chat) on the idle signed-in account with the most 5-hour room, skipping accounts at
+90% of their week unless one is named, or continues a thread by `chat_id` on its own account. Each
+account runs one operation at a time, so tasks wait for an idle account. The call answers within 45 s
+with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
+hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
+
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
 rest; a Pi session shows its active branch, and each branch left behind with /tree lists as a
