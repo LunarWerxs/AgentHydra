@@ -32,7 +32,7 @@ import {
   Server,
   X,
 } from '@lucide/vue'
-import { type Component, computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { type Component, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -43,6 +43,7 @@ import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
+import { lazyView } from '@/lib/lazy-view'
 import { deskSwarmAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { reconcileList } from '@/lib/reconcile'
@@ -56,8 +57,9 @@ import HSwarmRouting from './hswarm/HSwarmRouting.vue'
 import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
 
-// CliMayte's page loads the first time its node is opened (its task detail is most of it).
-const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
+// CliMayte's page loads the first time its node is opened (its task detail is most of it); a pane left
+// open across a Desk update that asks for the old chunk takes lazyView's stale-pane path.
+const CliMayteView = lazyView(() => import('@/components/CliMayteView.vue'))
 
 const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
