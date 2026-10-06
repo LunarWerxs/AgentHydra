@@ -82,14 +82,17 @@ if ($Sha256 -and -not $FromZip) { throw "-Sha256 only applies together with -Fro
 $Repo = 'LunarWerxs/AgentHydra'
 
 # --- release-owned components ---------------------------------------------------------------
-# The complete windows-x64 payload, per .github/workflows/release.yml's "Compile + package" step
-# (~line 90-137): AgentHydra.exe at the root, plus misc/ and orchestrator/ beside it. This is the
-# other consumer is server/src/github-updater.ts's RELEASE_COMPONENTS, which since AH-08 swaps
-# orchestrator/ and reconciles misc/ alongside the exe. The two lists must name the same
-# components, and they cannot drift unnoticed: server/tests/github-updater-components.test.ts
-# parses THIS block and asserts it matches RELEASE_COMPONENTS.
+# The complete windows-x64 payload, per scripts/package-release.ts: AgentHydra.exe (the launcher)
+# at the root, plus app/ (the daemon as plain JS and its pinned Bun version), desk2/, misc/ and
+# orchestrator/ beside it. No Bun ships: the launcher downloads the pinned one into runtime/ on first
+# run, and runtime/ is never part of an install. The other consumer is server/src/github-updater.ts's
+# RELEASE_COMPONENTS, which swaps orchestrator/ and reconciles misc/ and desk2/ alongside the exe.
+# The two lists must name the same components, and they cannot drift unnoticed:
+# server/tests/github-updater-components.test.ts parses THIS block and asserts it matches.
 $ReleaseComponents = @(
   [pscustomobject]@{ Name = 'exe';          RelPath = 'AgentHydra.exe' }
+  [pscustomobject]@{ Name = 'app';          RelPath = 'app' }
+  [pscustomobject]@{ Name = 'desk2';        RelPath = 'desk2' }
   [pscustomobject]@{ Name = 'misc';         RelPath = 'misc' }
   [pscustomobject]@{ Name = 'orchestrator'; RelPath = 'orchestrator' }
 )
@@ -228,9 +231,9 @@ try {
     # copy, before anything real is replaced. A binary that cannot print its own version, or
     # prints the wrong one, is not one to swap in for a working install.
     #
-    # Start-Process with redirected output, never `& $stagedExe --version`. AgentHydra.exe is a
-    # GUI-subsystem binary (scripts/build.ts's setWindowsGuiSubsystem, so a tray launch opens no
-    # console), and Windows PowerShell 5.1 neither waits for a GUI program nor captures its
+    # Start-Process with redirected output, never `& $stagedExe --version`. AgentHydra.exe is the
+    # launcher, a GUI-subsystem binary (so a tray launch opens no console; --version only prints the
+    # version baked into it and downloads nothing), and Windows PowerShell 5.1 neither waits for a GUI program nor captures its
     # output: `&` returned $null and never set $LASTEXITCODE, so on the PowerShell most Windows
     # users have, this canary died on a StrictMode error before checking anything. pwsh 7 does
     # capture it, which is why the pwsh-only test suite never saw it (2026-09-28). Redirecting to
@@ -374,7 +377,8 @@ try {
   Write-Host "AgentHydra $reportedVersion is installed." -ForegroundColor Green
   Write-Host "  $exe"
   if (-not $NoShortcut) {
-    Write-Host "  Launch it from the Start Menu entry 'AgentHydra' (or $InstallDir\AgentHydra.lnk) to get the tray icon."
+    Write-Note "The first start downloads the pinned Bun into runtime\ beside the exe (a few seconds)."
+  Write-Host "  Launch it from the Start Menu entry 'AgentHydra' (or $InstallDir\AgentHydra.lnk) to get the tray icon."
   }
 } finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue

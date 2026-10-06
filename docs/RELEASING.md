@@ -36,14 +36,27 @@
 
 Every bundle (`AgentHydra-<version>-<target>`, a `.zip` on Windows, a `.tar.gz` elsewhere) holds:
 
-- the compiled daemon (`AgentHydra.exe` / `agenthydra`) and `orchestrator/`; on Windows also `misc/`
-  (the tray) and the lone `.exe` beside the archive;
-- `desk2/`, AgentHydra 2.0's window: its own bun in `desk2/runtime/` (the version the workflow
-  compiles with), its server source, `shared/`, production `node_modules` (installed hoisted, for
-  the target's OS and CPU), the built `web/dist` and `hydra/dist`, and on Windows `launcher/` with
-  `HydraDesk2.exe`. Windows opens it in its native window; Linux and macOS run its server on the
-  shipped bun and open the default browser. Desk 2's dev-servers service (for managing dev servers)
-  runs as a hidden service started by Desk 2 itself.
+- the launcher (`AgentHydra.exe` on Windows, the sh script `agenthydra` elsewhere), `app/` (the
+  daemon as plain JS in `app/server.js`, its web assets, `release.json`, and `bun-version`, the Bun
+  this release runs on) and `orchestrator/`; on Windows also `misc/` (the tray) and the lone
+  `.exe` beside the archive, which is the same launcher;
+- `desk2/`, AgentHydra 2.0's window: its server source, `shared/`, production `node_modules`
+  (installed hoisted, for the target's OS and CPU, with Claude Code's platform binary removed: Desk 2
+  resolves or downloads it itself), the built `web/dist` and `hydra/dist`, and on Windows `launcher/`
+  with `HydraDesk2.exe`. Windows opens it in its native window; Linux and macOS run its server on
+  the launcher's Bun and open the default browser. Desk 2's dev-servers service (for managing dev
+  servers) runs as a hidden service started by Desk 2 itself.
+
+**No Bun and no Claude Code binary ship.** The launcher downloads the Bun that `app/bun-version`
+names (from oven-sh/bun's release, its SHA-256 checked) into `runtime/` the first time it runs, and
+again whenever an update brings a new pin. `runtime/` is created by the launcher, is never in an
+archive and is never replaced by the updater. Run on its own, the lone `.exe` finds no `app/` and
+installs everything from its own version's archive first. `release.yml` resolves the newest Bun
+release once and passes it to the packager as `--bun-version`, and builds and smokes on that same
+Bun; a PC build pins the running `Bun.version`. The packager fails the Windows archive when it is
+over 30 MB (about 15 to 20 MB expected, against 198 MB before). The smoke seeds `runtime/` with its
+own Bun and points both download bases (`AGENTHYDRA_RELEASE_BASE`, `AGENTHYDRA_BUN_BASE`) at a
+refusing address, so a bundle that tries to download anything fails it.
 
 No tests, e2e, `tmp/` or dev dependencies ship. `scripts/package-release.ts` stages and archives a
 bundle and `scripts/smoke-release.ts` boots one; `release.yml` runs the same two scripts. On a PC
@@ -215,11 +228,11 @@ Two shapes to keep intact if the workflow is ever restructured:
 
 **The install itself is transactional (AH-40).** After the checksum passes, `install.ps1` extracts
 into a staging directory beside `-InstallDir` (same volume, so the real swap is a rename) and
-validates the complete staged payload: exe present, `misc/` and `orchestrator/` present, and the
+validates the complete staged payload: the launcher, `app/`, `desk2/`, `misc/` and `orchestrator/` present, and the
 `--version` canary run **on the staged copy** before anything real is touched, then refuses to
 proceed under a detected running instance (`AgentHydra`/`lunarwerx-tray` process, or a live pid in
-`<config dir>\runtime.json`) unless `-Force` is passed. The three release-owned components
-(`AgentHydra.exe`, `misc/`, `orchestrator/`) are then swapped one at a time: each is renamed aside (`<name>.old-<stamp>`),
+`<config dir>\runtime.json`) unless `-Force` is passed. The five release-owned components
+(`AgentHydra.exe`, `app/`, `desk2/`, `misc/`, `orchestrator/`) are then swapped one at a time: each is renamed aside (`<name>.old-<stamp>`),
 the staged copy is moved into place, and orchestrator's user-owned `state/` directory is carried
 across the swap rather than dropped. Any failure during the swap rolls every component processed
 so far back to its `.old-` copy, so a disk-full, interrupted, or locked-file mid-copy can no longer
@@ -242,7 +255,7 @@ first update. `server/tests/github-updater-components.test.ts` pins `install.ps1
 
 **From 2.0.0 the self-updater also owns `desk2/`.** It stops Desk 2 before replacing `desk2/` and
 starts it again after. Desk 2 includes its own dev-servers service that manages development servers
-without requiring a separate daemon. `install.ps1` still swaps its three components; a compiled daemon
+without requiring a separate daemon. `install.ps1` installs the new layout and leaves Bun to the launcher's first run; a release daemon
 that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs it from
 its own version's release archive at boot, without a click.
 

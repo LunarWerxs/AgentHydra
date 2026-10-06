@@ -1,5 +1,5 @@
 // tests/install-transactional.test.ts — AH-40: install.ps1 must swap release-owned components
-// (AgentHydra.exe, misc/, orchestrator/) atomically, never leave a half-upgraded install behind,
+// (AgentHydra.exe, app/, desk2/, misc/, orchestrator/) atomically, never leave a half-upgraded install behind,
 // and never drop orchestrator/state/ (user data — see orchestrator/scripts/lib/ledgerlib.py's
 // _state_dir()) that lives inside an otherwise release-owned folder.
 //
@@ -124,6 +124,12 @@ function buildReleaseDir(baseDir: string, version: string, opts: ReleaseDirOpts 
   const dir = join(baseDir, `AgentHydra-${version}-windows-x64`)
   mkdirSync(dir, { recursive: true })
   compileFakeExe(join(dir, 'AgentHydra.exe'), opts.exeVersion ?? version)
+
+  // The 2.0 layout also holds the daemon bundle and Desk 2; install.ps1 refuses a payload without them.
+  mkdirSync(join(dir, 'app'), { recursive: true })
+  writeFileSync(join(dir, 'app', 'server.js'), '// placeholder daemon bundle\n')
+  mkdirSync(join(dir, 'desk2'), { recursive: true })
+  writeFileSync(join(dir, 'desk2', 'package.json'), '{}')
 
   const miscDir = join(dir, 'misc')
   mkdirSync(miscDir, { recursive: true })

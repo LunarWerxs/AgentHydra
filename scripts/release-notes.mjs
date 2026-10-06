@@ -261,9 +261,7 @@ export function formatLineBody(changelog, keptVersion, patchVersions, options = 
     '',
     '## Downloads',
     '',
-    `- **Windows:** \`AgentHydra-${keptVersion}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
-    '- **Linux and macOS:** the `.tar.gz` for your system.',
-    '- `SHA256SUMS.txt` lets you check that a download is the one published here.',
+    ...downloadLines(keptVersion),
     '',
     '---',
     '',
@@ -271,6 +269,23 @@ export function formatLineBody(changelog, keptVersion, patchVersions, options = 
   )
 
   return out.join('\n')
+}
+
+/** The Downloads bullets. From 2.0.0 the .exe is a small launcher; older pages keep the text they shipped with. */
+function downloadLines(version) {
+  const checksums = '- `SHA256SUMS.txt` lets you check that a download is the one published here.'
+  if (compareVersions(version, '2.0.0') < 0) {
+    return [
+      `- **Windows:** \`AgentHydra-${version}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
+      '- **Linux and macOS:** the `.tar.gz` for your system.',
+      checksums,
+    ]
+  }
+  return [
+    `- **Windows:** \`AgentHydra-${version}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is a small launcher: it downloads the rest (Bun and the app) the first time you run it.`,
+    '- **Linux and macOS:** the `.tar.gz` for your system. Its `agenthydra` launcher downloads Bun the first time you run it.',
+    checksums,
+  ]
 }
 
 /** The release page: the icon, the TL;DR, every line of the section under "Read more", the downloads. */
@@ -302,9 +317,7 @@ export function formatReleaseBody(changelog, version, options = {}) {
     '',
     '## Downloads',
     '',
-    `- **Windows:** \`AgentHydra-${version}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
-    '- **Linux and macOS:** the `.tar.gz` for your system.',
-    '- `SHA256SUMS.txt` lets you check that a download is the one published here.',
+    ...downloadLines(version),
     '',
     '---',
     '',

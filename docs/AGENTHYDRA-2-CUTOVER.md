@@ -23,8 +23,9 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   writes **AgentHydra** and recycles the old "Hydra Desk 2" ones), the launcher's message boxes and Desk's Settings say
   AgentHydra. The internal names below are unchanged.
 - **Desk 2 ships in the release (Order step 1, 2026-10-06).** Every bundle (Windows, Linux, macOS) carries `desk2/`
-  with its own bun (`desk2/runtime/`), its server source and production `node_modules`, its built `web/dist` and
-  `hydra/dist`, and on Windows `launcher/` with `HydraDesk2.exe`. Desk 2's dev-servers service (for managing dev
+  on the launcher's Bun (downloaded into `runtime/` on first run, never shipped; no `desk2/runtime/`), its server
+  source and production `node_modules` (without Claude Code's binary, which Desk 2 fetches itself), its built
+  `web/dist` and `hydra/dist`, and on Windows `launcher/` with `HydraDesk2.exe`. Desk 2's dev-servers service (for managing dev
   servers) runs as a hidden service started by Desk 2 itself, with no separate shipping.
   `scripts/package-release.ts` stages it and `scripts/smoke-release.ts` boots it, the same in `release.yml` and on a
   PC (see [RELEASING.md](RELEASING.md)); a tag build whose Windows zip has no `desk2/` does not publish. CI runs
@@ -93,7 +94,7 @@ the queue, Free instances, notifications and the shortcut sheet.
 
 ## Order
 
-1. **Ship Desk 2 in the release.** Done 2026-10-06 (above): every bundle carries `desk2/` on a shipped bun,
+1. **Ship Desk 2 in the release.** Done 2026-10-06 (above): every bundle carries `desk2/` and runs it on the Bun the launcher downloads,
    the updater installs and repairs it, and a 2.0 tag does not publish without it.
 2. **Point the daemon's openers at Desk 2.** Done 2026-10-06 (above) for every page, the boot and double-click
    openers and a checkout's self-update. Still open: the quick-instances window and its shortcut (table above).

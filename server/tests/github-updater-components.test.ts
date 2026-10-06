@@ -28,18 +28,17 @@ import {
   cleanupStaleUpdateArtifacts,
   componentVersions,
   currentTarget,
-  type Desk2RepairDeps,
   type DeskSeam,
   installedComponentVersion,
   missingComponents,
   RELEASE_COMPONENTS,
   RELEASE_VERSION_FILE,
   reconcileComponent,
-  repairDesk2AtBoot,
   rollbackComponents,
   swapComponent,
 } from '../src/github-updater'
 
+const APP = RELEASE_COMPONENTS.find((c) => c.name === 'app')!
 const ORCH = RELEASE_COMPONENTS.find((c) => c.name === 'orchestrator')!
 const MISC = RELEASE_COMPONENTS.find((c) => c.name === 'misc')!
 const DESK2 = RELEASE_COMPONENTS.find((c) => c.name === 'desk2')!
@@ -62,7 +61,11 @@ function fixture(): { root: string; bundle: string; install: string } {
   const root = scratchRoot()
   const bundle = join(root, 'bundle', 'AgentHydra-9.9.9-windows-x64')
   const install = join(root, 'install')
-  // The release ships the toolbox and the tray toolkit.
+  // The release ships the daemon, toolbox, tray toolkit and window.
+  put(bundle, 'app/server.js', 'new daemon')
+  put(bundle, 'app/release.json', '{"version":"9.9.9"}')
+  put(bundle, 'app/bun-version', '1.0.0')
+  put(bundle, 'app/web/index.html', 'new ui')
   put(bundle, 'orchestrator/orch.py', 'new driver')
   put(bundle, 'orchestrator/scripts/lib/hydralib.py', 'new lib')
   put(bundle, 'orchestrator/new-payload.txt', 'new')
@@ -70,8 +73,11 @@ function fixture(): { root: string; bundle: string; install: string } {
   put(bundle, 'misc/new-component.txt', 'new')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
-  // The install has an OLD toolbox with live state, and a retired sidecar in misc/.
+  // The install has old versions with live state and retired sidecars.
   put(install, 'AgentHydra.exe', 'old exe')
+  put(install, 'app/server.js', 'old daemon')
+  put(install, 'app/obsolete.js', 'old file')
+  put(install, 'app/web/old.html', 'old ui')
   put(install, 'orchestrator/orch.py', 'old driver')
   put(install, 'orchestrator/old-payload.txt', 'old')
   put(install, 'orchestrator/state/holds.json', '{"held":["abc"]}')
@@ -97,6 +103,28 @@ test('a swap brings orchestrator/ to the release content, keeps state, removes r
     // The previous copy sits aside for rollback until the caller discards it.
     expect(existsSync(aside!.aside)).toBe(true)
     expect(readFileSync(join(aside!.aside, 'old-payload.txt'), 'utf8')).toBe('old')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('a swap brings app/ to the release content and removes obsolete assets', () => {
+  const { root, bundle, install } = fixture()
+  try {
+    const output: string[] = []
+    const aside = swapComponent(bundle, install, APP, 'stamp1', '9.9.9', output)
+    expect(aside).not.toBeNull()
+    const a = join(install, 'app')
+    expect(readFileSync(join(a, 'server.js'), 'utf8')).toBe('new daemon')
+    expect(readFileSync(join(a, 'release.json'), 'utf8')).toBe('{"version":"9.9.9"}')
+    expect(readFileSync(join(a, 'bun-version'), 'utf8')).toBe('1.0.0')
+    expect(readFileSync(join(a, 'web/index.html'), 'utf8')).toBe('new ui')
+    expect(existsSync(join(a, 'obsolete.js'))).toBe(false) // retired, gone by construction
+    expect(existsSync(join(a, 'web/old.html'))).toBe(false)
+    expect(installedComponentVersion(install, 'app')).toBe('9.9.9')
+    // The previous copy sits aside for rollback until the caller discards it.
+    expect(existsSync(aside!.aside)).toBe(true)
+    expect(readFileSync(join(aside!.aside, 'obsolete.js'), 'utf8')).toBe('old file')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -230,11 +258,15 @@ function applyFixture(): { root: string; bundle: string; install: string } {
   const bundle = join(root, 'bundle')
   const install = join(root, 'install')
   put(bundle, 'AgentHydra.exe', 'new exe')
+  put(bundle, 'app/server.js', 'new daemon')
+  put(bundle, 'app/release.json', '{"version":"9.9.9"}')
   put(bundle, 'orchestrator/orch.py', 'new driver')
   put(bundle, 'misc/lunarwerx-tray.exe', 'new tray')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
   put(install, 'AgentHydra.exe', 'old exe')
+  put(install, 'app/server.js', 'old daemon')
+  put(install, 'app/release.json', '{"version":"9.9.8"}')
   put(install, 'orchestrator/orch.py', 'old driver')
   put(install, 'misc/lunarwerx-tray.exe', 'old tray')
   put(install, 'desk2/server/src/index.ts', 'old desk')
@@ -352,8 +384,10 @@ test('missingComponents names a component that is absent from a bundle install',
     put(root, 'AgentHydra.exe', 'exe')
     put(root, 'misc/lunarwerx-tray.exe', 'tray')
     put(root, 'desk2/server/src/index.ts', 'desk')
-    expect(missingComponents(root)).toEqual(['orchestrator'])
+    expect(missingComponents(root)).toEqual(['app', 'orchestrator'])
     put(root, 'orchestrator/orch.py', 'driver')
+    expect(missingComponents(root)).toEqual(['app'])
+    put(root, 'app/server.js', 'daemon')
     expect(missingComponents(root)).toEqual([])
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -361,14 +395,13 @@ test('missingComponents names a component that is absent from a bundle install',
 })
 
 // A bare single-file .exe legitimately ships none of the folders (release.yml puts them in the
-// .zip only), so on Windows the tray and toolbox folders are not "missing" from it. The one
-// exception is desk2/ (2.0.0): the window lives there, and the lone AgentHydra-<v>-windows-x64.exe
-// download is exactly the install that has to acquire it.
-test('a bare .exe is not damaged, except that it has no window (desk2/)', () => {
+// .zip only), so on Windows the tray and toolbox folders are not "missing" from it. The required
+// parts are app/ (daemon and assets) and desk2/ (window); a bare binary is missing those.
+test('a bare .exe is not damaged, except that it needs the daemon and window', () => {
   const root = scratchRoot()
   try {
     put(root, 'AgentHydra.exe', 'exe')
-    expect(missingComponents(root, 'win32')).toEqual(['desk2'])
+    expect(missingComponents(root, 'win32')).toEqual(['app', 'desk2'])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -382,6 +415,7 @@ test('a healthy POSIX install is complete without misc/', () => {
   const root = scratchRoot()
   try {
     put(root, 'agenthydra', 'exe')
+    put(root, 'app/server.js', 'daemon')
     put(root, 'orchestrator/orch.py', 'driver')
     put(root, 'desk2/server/src/index.ts', 'desk')
     expect(missingComponents(root, 'linux')).toEqual([])
@@ -394,12 +428,13 @@ test('a healthy POSIX install is complete without misc/', () => {
 })
 
 // ...and the bail-out must not swallow the real case there. Unix publishes ONLY tarballs, and
-// every tarball stages orchestrator/, so there is no download that yields a componentless POSIX
+// every tarball stages orchestrator/ and app/, so there is no download that yields a componentless POSIX
 // install - "all missing" on Unix is damage, not a deliberate single-file install.
 test('a POSIX install missing orchestrator/ is damage, not a bare binary', () => {
   const root = scratchRoot()
   try {
     put(root, 'agenthydra', 'exe')
+    put(root, 'app/server.js', 'daemon')
     put(root, 'desk2/server/src/index.ts', 'desk')
     expect(missingComponents(root, 'linux')).toEqual(['orchestrator'])
   } finally {
@@ -492,15 +527,8 @@ test('install.ps1 and the self-updater agree on the release components', () => {
   const names = [...block.slice(0, block.indexOf(')')).matchAll(/Name = '([A-Za-z0-9]+)'/g)].map(
     (m) => m[1],
   )
-  // desk2/ (2.0.0) is not in install.ps1 yet: the manual installer is the packaging task's file.
-  // Named here so the gap is visible, and so this fails once install.ps1 lists it and this set has to be emptied.
-  const notYetInInstallPs1 = new Set(['desk2'])
-  expect(new Set(names)).toEqual(
-    new Set([
-      'exe',
-      ...RELEASE_COMPONENTS.map((c) => c.name).filter((n) => !notYetInInstallPs1.has(n)),
-    ]),
-  )
+  // app/ (the daemon bundle) is install.ps1's alone for now: the updater treats it as part of the exe.
+  expect(new Set(names)).toEqual(new Set(['exe', 'app', ...RELEASE_COMPONENTS.map((c) => c.name)]))
 })
 
 // ── desk2/ as a release component (2.0.0) ────────────────────────────────────────────────────────
@@ -693,144 +721,6 @@ test('a bundle that ships no desk2/ leaves Desk 2 running and its files alone', 
     expect(result.ok).toBe(true)
     expect(events).toEqual([])
     expect(readFileSync(join(install, DESK_INDEX), 'utf8')).toBe('old desk')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-// ── self-repair at boot ─────────────────────────────────────────────────────────────────────────
-//
-// A 1.x install updated by its OLD updater has the 2.0 exe and no desk2/, and so does the lone
-// AgentHydra-2.0.0-windows-x64.exe. A compiled daemon finding that installs desk2/ from its own
-// version's release by itself, once per boot, through the repair path above.
-
-function repairRig(install: string, over: Desk2RepairDeps = {}) {
-  const notices: Array<Desk2InstallNotice | null> = []
-  const logs: string[] = []
-  const applies = { count: 0 }
-  const deps: Desk2RepairDeps = {
-    compiled: true,
-    installDir: install,
-    optedOut: () => false,
-    guard: { ran: false },
-    notify: (n) => notices.push(n),
-    log: (m) => logs.push(m),
-    apply: async () => {
-      applies.count++
-      return {
-        ok: true,
-        message: 'ok',
-        restartRequired: true,
-        status: {} as never,
-        output: [],
-      }
-    },
-    ...over,
-  }
-  return { deps, notices, logs, applies }
-}
-
-test('a compiled install missing desk2/ installs it from its own release at boot, once', async () => {
-  const { root, bundle, install } = applyFixture()
-  try {
-    rmSync(join(install, 'desk2'), { recursive: true, force: true })
-    const { desk, events } = fakeDesk(install)
-    const { deps, notices, applies } = repairRig(install, {
-      // The real apply path, against the scratch install: the "no update available, desk2/ missing"
-      // reinstall of the current version.
-      apply: async () => {
-        applies.count++
-        return applyUpdate(
-          applyDeps(install, bundle, {
-            desk,
-            checkForUpdate: fakeCheckForUpdate({ updateAvailable: false }),
-          }),
-        )
-      },
-    })
-    expect(await repairDesk2AtBoot(deps)).toBe('repaired')
-    expect(readFileSync(join(install, DESK_INDEX), 'utf8')).toBe('new desk')
-    expect(events).toEqual(['start:new desk:window=false']) // nothing to stop; started once it is there
-    expect(notices.map((n) => n?.state ?? null)).toEqual(['installing', null])
-    // Once per boot: asking again, installed or not, does nothing.
-    rmSync(join(install, 'desk2'), { recursive: true, force: true })
-    expect(await repairDesk2AtBoot(deps)).toBe('already-tried')
-    expect(applies.count).toBe(1)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('a checkout never repairs, and neither does a complete install', async () => {
-  const { root, install } = applyFixture()
-  try {
-    rmSync(join(install, 'desk2'), { recursive: true, force: true })
-    const checkout = repairRig(install, { compiled: false })
-    expect(await repairDesk2AtBoot(checkout.deps)).toBe('not-needed')
-    expect(checkout.applies.count).toBe(0)
-    expect(checkout.notices).toEqual([])
-
-    put(install, DESK_INDEX, 'here')
-    const complete = repairRig(install)
-    expect(await repairDesk2AtBoot(complete.deps)).toBe('not-needed')
-    expect(complete.applies.count).toBe(0)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('the lone .exe on Windows is repaired too: it is the install that has no window', async () => {
-  const root = scratchRoot()
-  try {
-    put(root, 'AgentHydra.exe', 'exe')
-    const { deps, applies } = repairRig(root, { platform: 'win32' })
-    expect(await repairDesk2AtBoot(deps)).toBe('repaired')
-    expect(applies.count).toBe(1)
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('with the update check off nothing is downloaded, and the page says how to get the window', async () => {
-  const { root, install } = applyFixture()
-  try {
-    rmSync(join(install, 'desk2'), { recursive: true, force: true })
-    const { deps, notices, applies, logs } = repairRig(install, { optedOut: () => true })
-    expect(await repairDesk2AtBoot(deps)).toBe('opted-out')
-    expect(applies.count).toBe(0)
-    expect(notices).toHaveLength(1)
-    expect(notices[0]?.state).toBe('opted-out')
-    expect(notices[0]?.message).toContain('AGENTHYDRA_NO_PING')
-    expect(notices[0]?.message).toContain(`AgentHydra-${VERSION}-${currentTarget()}`)
-    expect(logs.join('\n')).toContain('desk2/ is missing')
-  } finally {
-    rmSync(root, { recursive: true, force: true })
-  }
-})
-
-test('a failed repair is logged and shown with what to do, and is not retried this boot', async () => {
-  const { root, install } = applyFixture()
-  try {
-    rmSync(join(install, 'desk2'), { recursive: true, force: true })
-    const { deps, notices, applies, logs } = repairRig(install)
-    deps.apply = async () => {
-      applies.count++
-      return {
-        ok: false,
-        message: 'download failed (HTTP 503)',
-        restartRequired: false,
-        status: {} as never,
-        output: [],
-      }
-    }
-    expect(await repairDesk2AtBoot(deps)).toBe('failed')
-    const last = notices.at(-1)
-    expect(last?.state).toBe('failed')
-    expect(last?.message).toContain('download failed (HTTP 503)')
-    expect(last?.message).toContain('github.com/LunarWerxs/agenthydra/releases')
-    expect(logs.join('\n')).toContain('could not install desk2/')
-    expect(await repairDesk2AtBoot(deps)).toBe('already-tried')
-    expect(applies.count).toBe(1)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

@@ -54,6 +54,7 @@ describe('release notes', () => {
     expect(body).not.toContain('**Everything in 2.0.0**')
     expect(body).not.toContain('Old.')
     expect(body.indexOf('## Downloads')).toBeGreaterThan(body.indexOf('</details>'))
+    expect(body).toContain('The `.exe` is a small launcher')
   })
 
   test('refused: a 1.x version, a long section with no TL;DR (also [Unreleased]), a version with no section', () => {
