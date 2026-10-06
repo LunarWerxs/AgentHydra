@@ -43,17 +43,16 @@ function fakeRedesign(): Fake {
       }
       if (u.pathname === '/api/run') {
         state.runs.push((await req.json()) as Record<string, unknown>)
-        return json({ runId: 'run-1' })
+        return json({ runId: `run-${state.runs.length}` })
       }
-      if (u.pathname === '/api/runs/run-1') {
-        return json({
-          status: 'done',
-          jobs: [1, 2, 3, 4].map((n) => ({ id: `job-${n}`, status: 'ok', modelId: 'm-a', file: `run-1/out-${n}.html` }))
-        })
+      const run = /^\/api\/runs\/run-(\d+)$/.exec(u.pathname)
+      if (run) {
+        const body = state.runs[Number(run[1]) - 1] as { models: string[] }
+        return json({ status: 'done', jobs: body.models.map((m, n) => ({ id: `job-${run[1]}-${n + 1}`, status: 'ok', modelId: m, file: `run-${run[1]}/out-${n + 1}.html` })) })
       }
       if (u.pathname.startsWith('/output-raw/')) return json({ caption: 'A calm two-column layout' })
       if (u.pathname === '/api/output/screenshot') return new Response(PNG, { headers: { 'content-type': 'image/png' } })
-      if (u.pathname === '/api/runs/run-1/design-md') return new Response(`# spec for ${u.searchParams.get('job')}`)
+      if (/^\/api\/runs\/run-\d+\/design-md$/.test(u.pathname)) return new Response(`# spec for ${u.searchParams.get('job')}`)
       return json({ error: 'not found' }, 404)
     }
   })
@@ -131,15 +130,18 @@ describe('redesign connector', () => {
     const out = JSON.parse(text(res).split('\n\n').slice(1).join('\n\n')) as { run: string; options: { option: number; image: string; markdown: string; description: string }[] }
     expect(out.run).toBe('run-1')
     expect(out.options).toHaveLength(4)
+    expect(JSON.parse(readFileSync(join(outDir, 'run-1', 'options.json'), 'utf8'))).toHaveLength(4)
     expect(out.options[1]).toMatchObject({ option: 2, description: 'A calm two-column layout' })
     expect(out.options[1]?.markdown).toBe(`![Option 2: Model A](${out.options[1]?.image})`)
     for (const o of out.options) expect(readFileSync(o.image).equals(PNG)).toBe(true)
     expect(fake.uploads[0]).toEqual({ name: 'current.png', bytes: PNG.length })
-    // only the model with a key is used, four times
-    expect(fake.runs[0]).toMatchObject({ inputs: ['input-1'], models: ['m-a'], modelQuantities: { 'm-a': 4 }, mock: false, prompts: { presets: [], custom: 'a settings page' } })
+    // only the model with a key is used, four times: one run per style-hint instance, the first with the brief as written
+    expect(fake.runs).toHaveLength(4)
+    expect(fake.runs[0]).toMatchObject({ inputs: ['input-1'], models: ['m-a'], modelQuantities: { 'm-a': 1 }, mock: false, prompts: { presets: [], custom: 'a settings page' } })
+    expect(new Set(fake.runs.map((r) => (r.prompts as { custom: string }).custom)).size).toBe(4)
 
     const pick = await mcp.handle(rpc(3, 'tools/call', { name: 'design_pick', arguments: { run: 'run-1', option: 2 } }))
-    expect(text(pick)).toContain('# spec for job-2')
+    expect(text(pick)).toContain('# spec for job-2-1')
     expect(text(pick)).toContain('option-2.png')
     const bad = await mcp.handle(rpc(4, 'tools/call', { name: 'design_pick', arguments: { run: 'run-1', option: 9 } }))
     expect((bad as { result: { isError: boolean } }).result.isError).toBe(true)
@@ -151,7 +153,7 @@ describe('redesign connector', () => {
     const res = await mcp.handle(rpc(1, 'tools/call', { name: 'design_options', arguments: { brief: 'x', mock: true, count: 3 } }))
     expect((res as { result: { isError?: boolean } }).result.isError).toBeUndefined()
     expect(fake.uploads[0]?.name).toBe('brief-only.png')
-    expect(fake.runs.at(-1)).toMatchObject({ mock: true, modelQuantities: { 'm-a': 3 } })
+    expect(fake.runs.slice(-3).every((r) => r.mock === true && JSON.stringify(r.models) === '["m-a"]')).toBe(true)
   })
 
   test('redesign-mcp: no working key and not mock is a clear error that sends the person to ReDesign', async () => {
@@ -242,7 +244,8 @@ describe('redesign connector', () => {
     try {
       const mcp = createRedesignMcp({ baseUrl: `http://127.0.0.1:${server.port}`, outDir: join(tmp, 'out-cool'), pollMs: 5 })
       await mcp.handle(rpc(1, 'tools/call', { name: 'design_options', arguments: { brief: 'x', count: 3 } }))
-      expect(runs[0]).toMatchObject({ models: ['m-b'], modelQuantities: { 'm-b': 3 } })
+      // the pool with failing keys is skipped; the other model gets all three jobs, and a cooled pool is never retried with a replacement
+      expect(runs.map((r) => r.models)).toEqual([['m-b'], ['m-b'], ['m-b']])
       cooled = true
       const res = (await mcp.handle(rpc(2, 'tools/call', { name: 'design_options', arguments: { brief: 'x', count: 3 } }))) as { result: { isError: boolean } }
       expect(res.result.isError).toBe(true)

@@ -18,9 +18,9 @@ import { join } from 'node:path'
 
 /** HSwarm list -> the ReDesign pools it feeds, and how many keys each pool is topped up to. */
 export const KEY_PLAN: readonly { list: string; pools: readonly string[]; want: number }[] = [
-  { list: 'gemini', pools: ['GEMINI_FLASH_API_KEYS', 'GEMINI_PRO_API_KEYS'], want: 5 },
+  { list: 'gemini', pools: ['GEMINI_FLASH_API_KEYS', 'GEMINI_PRO_API_KEYS'], want: 6 },
   { list: 'anthropic', pools: ['ANTHROPIC_API_KEYS'], want: 3 },
-  { list: 'mistral', pools: ['MISTRAL_API_KEYS'], want: 5 }
+  { list: 'mistral', pools: ['MISTRAL_API_KEYS'], want: 8 }
 ]
 
 export interface PoolResult {
@@ -40,6 +40,8 @@ export interface CopyResult {
   okInHswarm: Record<string, number>
   /** Live checks spent per list. */
   checked?: Record<string, number>
+  /** Fingerprints of the keys whose live check failed in this call. */
+  failed?: string[]
   error?: string
 }
 
@@ -50,6 +52,10 @@ export interface CopyOptions {
   fetchImpl?: typeof fetch
   /** Whether one key of an HSwarm list answers a tiny request; default liveCheck. */
   checkKey?: (list: string, key: string) => Promise<boolean>
+  /** Only these HSwarm lists (default: all of KEY_PLAN). */
+  lists?: readonly string[]
+  /** Fingerprints of keys whose live check failed a while ago: not tried again, so repeated top-ups walk further down a list instead of re-testing the same dead keys. */
+  skip?: ReadonlySet<string>
 }
 
 /** Live checks spent per HSwarm list at most, so a list of dead keys cannot run on for minutes. */
@@ -149,7 +155,8 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
 
   const check = opts.checkKey ?? ((list: string, key: string) => liveCheck(list, key, doFetch))
   for (const plan of KEY_PLAN) {
-    const ok = readList(join(home, 'secrets', `${plan.list}_api_keys`)).filter((k) => !skip.has(fingerprint(k)))
+    if (opts.lists && !opts.lists.includes(plan.list)) continue
+    const ok = readList(join(home, 'secrets', `${plan.list}_api_keys`)).filter((k) => !skip.has(fingerprint(k)) && !opts.skip?.has(fingerprint(k)))
     result.okInHswarm[plan.list] = ok.length
     const rows: PoolResult[] = plan.pools.filter((pool) => poolTotals.has(pool)).map((pool) => ({ pool, before: poolTotals.get(pool) ?? 0, added: 0, fingerprints: [] }))
     result.pools.push(...rows)
@@ -158,7 +165,10 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
       const open = rows.filter((row) => row.before + row.added < plan.want)
       if (!open.length || checks >= CHECK_LIMIT) break
       checks++
-      if (!(await check(plan.list, key))) continue
+      if (!(await check(plan.list, key))) {
+        result.failed = [...(result.failed ?? []), fingerprint(key)]
+        continue
+      }
       for (const row of open) {
         let res: Response
         try {

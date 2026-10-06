@@ -138,4 +138,20 @@ describe('copyHswarmKeys', () => {
     expect(r.pools.MISTRAL_API_KEYS).toHaveLength(5)
     expect(out.pools.map((p) => p.pool)).toContain('MISTRAL_API_KEYS')
   })
+  test('lists limits the top-up to those HSwarm lists, and keys that failed their live check before are skipped and reported by fingerprint', async () => {
+    const home = hswarmHome()
+    const r = fakeRedesign()
+    const checked: string[] = []
+    const checkKey = async (_list: string, key: string) => {
+      checked.push(key)
+      return key !== 'test-mist-2'
+    }
+    const skip = new Set([fingerprint('test-mist-1')])
+    const out = await copyHswarmKeys({ redesignUrl: 'http://x', hswarmHome: home, fetchImpl: r.fetchImpl, checkKey, lists: ['mistral'], skip })
+    expect(checked.every((k) => k.startsWith('test-mist-'))).toBe(true)
+    expect(checked).not.toContain('test-mist-1')
+    expect(out.failed).toEqual([fingerprint('test-mist-2')])
+    expect(r.pools.MISTRAL_API_KEYS).toHaveLength(3)
+    expect(r.pools.GEMINI_FLASH_API_KEYS).toEqual([])
+  })
 })

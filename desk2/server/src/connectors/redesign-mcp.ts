@@ -11,8 +11,11 @@
 //   input:  `screenshot` (an absolute path) is POSTed to /api/inputs/upload as base64; `url` is captured to a PNG
 //           with headless Edge or Chrome and uploaded the same way; with neither, a 1x1 placeholder goes in and the
 //           brief alone steers the models.
-//   run:    POST /api/run with the brief as the one custom prompt, `count` outputs spread over the models that have
-//           a key (a mock run skips the network but ReDesign still takes a key from the pool first), polled on GET /api/runs/:id until it ends (10 min cap).
+//   run:    POST /api/run (the brief, plus a style hint for a second or third job on the same model) for the models
+//           redesign-plan.ts ranks as working (recent success, keys not cooling, no socket cut-off); `count` jobs, a model
+//           repeated when fewer work; polled on GET /api/runs/:id. A failed or stalled job is replaced on another working
+//           model until `count` options landed or the ~5 minute budget ends; the answer then says what is missing. A thin
+//           pool (under 6 working keys) is first topped up from HSwarm (redesign-keys.ts, each key checked live).
 //   images: ReDesign's outputs are HTML pages; each is rendered by GET /api/output/screenshot (ReDesign's own
 //           headless browser) and written to <DESIGN_OPTIONS_DIR>/<run>/option-N.png.
 // Real runs need provider keys the person adds in ReDesign itself; this server never asks for or sees a key.
@@ -22,8 +25,17 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
+import { CHECK_LIMIT, copyHswarmKeys } from './redesign-keys'
+import { MIN_WORKING_KEYS, failureKind, listsToRefill, loadHealth, planJobs, rankModels, saveHealth, styledBrief, type Health, type KeyEntry, type KeyPool, type ModelInfo, type Ranked } from './redesign-plan'
 
-const MAX_WAIT_MS = 10 * 60_000
+/** A run is given about this long to reach `count` options, replacing failed jobs on other models as it goes. */
+const BUDGET_MS = 5 * 60_000
+/** A replacement job takes up to ReDesign's 2-minute job limit, so none is started with less than this left. */
+const MIN_START_MS = 100_000
+/** A job still unanswered after this long is given up on (ReDesign's own limit is 2 minutes, yet a job can hang far past it while it retries other keys) and replaced; if it answers later it still counts. */
+const STALL_MS = 135_000
+/** How long past the budget a job already running is still waited for. */
+const GRACE_MS = 20_000
 const KEY_HINT =
   'ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page. Do not ask for the key in chat. (A mock run also needs some key present in ReDesign, but spends nothing.)'
 
@@ -42,7 +54,13 @@ export interface RedesignMcpOptions {
   pollMs?: number
   /** Turns a web page into a PNG file; default is headless Edge or Chrome. */
   captureUrl?: (url: string, png: string) => Promise<void>
-  maxWaitMs?: number
+  /** Time budget for one design_options call (default 5 min). */
+  budgetMs?: number
+  minStartMs?: number
+  graceMs?: number
+  stallMs?: number
+  /** Tops up ReDesign's key pools from HSwarm for these lists; default copyHswarmKeys (value-blind, each key checked live). */
+  refill?: (lists: string[]) => Promise<string>
 }
 
 interface RpcMessage {
@@ -58,34 +76,13 @@ interface Job {
   modelId?: string
   file?: string | null
   caption?: string | null
+  error?: string | null
 }
 
 interface Manifest {
   status: string
   jobs?: Job[]
   error?: string | null
-}
-
-interface ModelInfo {
-  id: string
-  label?: string
-  keyEnv?: string
-  vision?: boolean
-  enabled?: boolean
-  starred?: boolean
-}
-
-interface KeyEntry {
-  cooldownUntil?: number | null
-  lastError?: string | null
-  lastUsedAt?: number | null
-  lastSuccessAt?: number | null
-}
-
-interface KeyPool {
-  pool: string
-  available: number
-  entries?: KeyEntry[]
 }
 
 /** A pool whose every key's last word was an error (no success since its last use). Unknown (no entries): not failing. */
@@ -215,20 +212,6 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     return id
   }
 
-  /**
-   * The models a run should use: enabled vision models with a key in their pool (a mock run needs one too), starred
-   * first. Models whose pool is failing (poolFailing) are used only when no other pool is left.
-   */
-  async function pickModels(): Promise<ModelInfo[] | null> {
-    const boot = await api<{ models?: ModelInfo[]; keys?: { pools?: KeyPool[] } }>('/api/bootstrap')
-    const pools = new Map((boot.keys?.pools ?? []).map((p) => [p.pool, p]))
-    const usable = (boot.models ?? []).filter((m) => m.enabled !== false && m.vision !== false && m.keyEnv && (pools.get(m.keyEnv)?.available ?? 0) > 0)
-    if (!usable.length) return null
-    const starred = (a: ModelInfo, b: ModelInfo) => Number(b.starred === true) - Number(a.starred === true)
-    const healthy = usable.filter((m) => !poolFailing(pools.get(m.keyEnv as string)))
-    return (healthy.length ? healthy : usable).sort(starred)
-  }
-
   /** Why a run made nothing, and what to do; for a cooled pool, when its first key comes back and the provider's last error. */
   async function noOptionsMessage(runId: string, manifest: Manifest): Promise<string> {
     const errors = (manifest.jobs ?? []).map((j) => (j as Job & { error?: string }).error).filter(Boolean) as string[]
@@ -258,14 +241,77 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
   /** The finished options of a run, in the order ReDesign wrote them. */
   const okJobs = (m: Manifest): Job[] => (m.jobs ?? []).filter((j) => j.status === 'ok' && j.file)
 
+  const healthFile = join(o.outDir, 'model-health.json')
+
+  async function planInputs(): Promise<{ models: ModelInfo[]; pools: KeyPool[] }> {
+    const boot = await api<{ models?: ModelInfo[]; keys?: { pools?: KeyPool[] } }>('/api/bootstrap')
+    return { models: boot.models ?? [], pools: boot.keys?.pools ?? [] }
+  }
+
+  /**
+   * Copies keys from HSwarm into the thin pools (counts only, never a value); a line for the run's note. Keys whose live check
+   * failed in the last 6 hours are remembered by fingerprint and not tried again, so each pass walks further down HSwarm's list
+   * (a list can hold 170 keys of which most answer 429); up to 3 passes while a pool is still under MIN_WORKING_KEYS.
+   */
+  async function topUp(lists: string[]): Promise<string> {
+    if (o.refill) return o.refill(lists)
+    const file = join(o.outDir, 'key-checks.json')
+    const failed: Record<string, number> = loadHealth(file) as unknown as Record<string, number>
+    const now = Date.now()
+    for (const [fp, at] of Object.entries(failed)) if (now - Number(at) > 6 * 3_600_000) delete failed[fp]
+    const added: Record<string, number> = {}
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const stop = new Promise<null>((r) => (timer = setTimeout(() => r(null), 150_000)))
+    try {
+      for (let pass = 0; pass < 3; pass++) {
+        const res = await Promise.race([copyHswarmKeys({ redesignUrl: base, lists, fetchImpl: doFetch, skip: new Set(Object.keys(failed)) }), stop])
+        if (!res) return `the HSwarm key top-up was still checking keys after 2.5 minutes, so the run went on without it${summary(added)}`
+        if (!res.ok) return `key top-up skipped: ${res.error}`
+        for (const fp of res.failed ?? []) failed[fp] = Date.now()
+        for (const p of res.pools) added[p.pool] = (added[p.pool] ?? 0) + p.added
+        const thin = res.pools.some((p) => p.before + p.added < MIN_WORKING_KEYS)
+        const exhausted = Object.values(res.checked ?? {}).every((n) => n < CHECK_LIMIT)
+        if (!thin || exhausted) break
+      }
+    } finally {
+      clearTimeout(timer)
+      saveHealth(file, failed as unknown as Health)
+    }
+    return summary(added).trim() || 'no HSwarm key passed the live check'
+  }
+  const summary = (added: Record<string, number>): string => {
+    const parts = Object.entries(added).filter(([, n]) => n > 0).map(([pool, n]) => `${pool} +${n}`)
+    return parts.length ? ` topped up ReDesign's keys from HSwarm (${parts.join(', ')})` : ''
+  }
+
+  const reason = (error: string): string => {
+    const kind = failureKind(error)
+    return kind === 'cutoff' ? 'the provider cut the connection off' : kind === 'stalled' ? 'no answer in time' : kind === 'recitation' ? 'an empty or blocked reply' : kind === 'cooling' ? 'its keys were cooling down' : kind === 'quota' ? 'rate limited' : error.slice(0, 80)
+  }
+
   async function designOptions(args: Record<string, unknown>, progress: (done: number, total: number, msg: string) => void): Promise<ToolResult> {
     const brief = typeof args.brief === 'string' ? args.brief.trim() : ''
     if (!brief) return fail('design_options needs a brief: what is being designed and the feel wanted.')
     const mock = args.mock === true
     const askOwner = args.ask_owner === true
     const count = Math.max(3, Math.min(6, Math.round(Number(args.count) || 4)))
-    const models = await pickModels()
-    if (!models) return fail(KEY_HINT)
+    let { models, pools } = await planInputs()
+    const health: Health = loadHealth(healthFile)
+    let ranked = rankModels(models, pools, health)
+    if (!ranked.length) return fail(KEY_HINT)
+    const notes: string[] = []
+    // Enough working keys behind the models we are about to use: top thin pools up from HSwarm (each key checked live there).
+    const lists = listsToRefill(ranked, planJobs(ranked, count), pools)
+    if (lists.length) {
+      try {
+        notes.push(await topUp(lists))
+        ;({ models, pools } = await planInputs())
+        ranked = rankModels(models, pools, health)
+      } catch {
+        notes.push('the HSwarm key top-up failed')
+      }
+      if (!ranked.length) return fail(KEY_HINT)
+    }
 
     // The input image.
     let inputId: string
@@ -290,41 +336,70 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       inputId = await uploadInput('brief-only.png', 'image/png', PLACEHOLDER_PNG)
     }
 
-    // One output per option: the first `count` models once each, wrapping round when there are fewer models.
-    const quantities: Record<string, number> = {}
-    for (let i = 0; i < count; i++) {
-      const id = (models[i % models.length] as ModelInfo).id
-      quantities[id] = (quantities[id] ?? 0) + 1
+    const label = (id: string) => models.find((m) => m.id === id)?.label ?? id
+    interface RunState {
+      id: string
+      expected: number
+      handled: Set<string>
+      /** Jobs given up on as unanswered; they no longer count as on their way. */
+      stalled: Set<string>
+      startedAt: number
+      ended: boolean
     }
-    const { runId } = await post<{ runId: string }>('/api/run', {
-      inputs: [inputId],
-      models: Object.keys(quantities),
-      prompts: { presets: [], custom: brief },
-      modelQuantities: quantities,
-      mock,
-      label: 'design-options'
-    })
+    const runs: RunState[] = []
+    const taken = new Map<string, number>() // jobs started per model; also the model's next style-hint instance
+    const blocked = new Set<string>()
+    const strikes = new Map<string, number>()
+    const failedJobs: Job[] = []
+    const why: string[] = []
+    const options: { option: number; model: string; description: string; image: string | null; markdown: string | null; page: string; run: string; job: string }[] = []
+    let primary = ''
+    let dir = ''
 
-    // Wait for it.
-    const deadline = Date.now() + (o.maxWaitMs ?? MAX_WAIT_MS)
-    let manifest: Manifest
-    for (;;) {
-      manifest = await api<Manifest>(`/api/runs/${encodeURIComponent(runId)}`)
-      if (manifest.status !== 'queued' && manifest.status !== 'running') break
-      progress(okJobs(manifest).length, count, `ReDesign is making options (${okJobs(manifest).length}/${count})`)
-      if (Date.now() >= deadline) return fail(`Run ${runId} was still going after 10 minutes. Ask for it later with design_pick once it is done, or tell the person.`)
-      await sleep(o.pollMs ?? 1500)
+    /** One ReDesign run per style-hint instance: ReDesign takes one prompt per run, and the models in it share that prompt. */
+    const startJobs = async (ids: string[]): Promise<void> => {
+      const groups = new Map<number, string[]>()
+      for (const id of ids) {
+        const n = taken.get(id) ?? 0
+        taken.set(id, n + 1)
+        groups.set(n, [...(groups.get(n) ?? []), id])
+      }
+      for (const [instance, group] of groups) {
+        const { runId } = await post<{ runId: string }>('/api/run', {
+          inputs: [inputId],
+          models: group,
+          prompts: { presets: [], custom: styledBrief(brief, instance) },
+          modelQuantities: Object.fromEntries(group.map((id) => [id, 1])),
+          mock,
+          label: 'design-options'
+        })
+        runs.push({ id: runId, expected: group.length, handled: new Set(), stalled: new Set(), startedAt: Date.now(), ended: false })
+        if (!primary) {
+          primary = runId
+          dir = join(o.outDir, runId)
+          mkdirSync(dir, { recursive: true })
+        }
+      }
     }
-    const jobs = okJobs(manifest).slice(0, count)
-    if (!jobs.length) return fail(await noOptionsMessage(runId, manifest))
 
-    // Each option to a picture on disk.
-    const dir = join(o.outDir, runId)
-    mkdirSync(dir, { recursive: true })
-    const options = []
-    for (const [i, job] of jobs.entries()) {
-      const n = i + 1
-      const label = models.find((m) => m.id === job.modelId)?.label ?? job.modelId ?? 'model'
+    const onFailure = (job: Job, error: string) => {
+      const id = job.modelId ?? ''
+      const kind = failureKind(error)
+      why.push(`${label(id)}: ${reason(error)}`)
+      failedJobs.push({ ...job, error })
+      health[id] = { ...health[id], failAt: Date.now(), why: kind }
+      const pool = models.find((m) => m.id === id)?.keyEnv
+      if (kind === 'cutoff' || kind === 'cooling') for (const m of models) if (m.keyEnv === pool) blocked.add(m.id)
+      if (kind === 'recitation' || kind === 'stalled') blocked.add(id)
+      const n = (strikes.get(id) ?? 0) + 1
+      strikes.set(id, n)
+      if (n >= 2) blocked.add(id)
+    }
+
+    /** A finished job becomes option N: its picture is rendered now, while the other jobs run on. */
+    const land = async (run: RunState, job: Job): Promise<void> => {
+      const n = options.length + 1
+      const name = label(job.modelId ?? '')
       const imagePath = join(dir, `option-${n}.png`).replace(/\\/g, '/')
       let image: string | null = imagePath
       try {
@@ -337,17 +412,77 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       const caption = await caption_(job)
       options.push({
         option: n,
-        model: label,
-        description: caption ?? `${label}, from the brief`,
+        model: name,
+        description: caption ?? `${name}, from the brief`,
         image,
-        markdown: image ? `![Option ${n}: ${label}](${image})` : null,
-        page: `${base}/output/${job.file}`
+        markdown: image ? `![Option ${n}: ${name}](${image})` : null,
+        page: `${base}/output/${job.file}`,
+        run: run.id,
+        job: job.id
       })
-      progress(n, jobs.length, `Rendered option ${n}`)
+      health[job.modelId ?? ''] = { ...health[job.modelId ?? ''], okAt: Date.now() }
+      // design_pick finds option N's real run and job here, since replacements live in other ReDesign runs.
+      writeFileSync(join(dir, 'options.json'), JSON.stringify(options.map((x) => ({ option: x.option, run: x.run, job: x.job }))))
+      progress(n, count, `Option ${n} of ${count} is ready (${name})`)
     }
-    const missing = options.some((x) => !x.image)
+
+    const started = Date.now()
+    const budget = o.budgetMs ?? BUDGET_MS
+    const inflight = () => runs.reduce((n, r) => n + (r.ended ? 0 : r.expected - r.handled.size - r.stalled.size), 0)
+    await startJobs(planJobs(ranked, count))
+    let replacements = 0
+    for (;;) {
+      for (const r of runs) {
+        if (r.ended) continue
+        let m: Manifest
+        try {
+          m = await api<Manifest>(`/api/runs/${encodeURIComponent(r.id)}`)
+        } catch {
+          continue // one missed poll is not a failure
+        }
+        for (const job of m.jobs ?? []) {
+          if (r.handled.has(job.id)) continue
+          if (job.status === 'ok' && job.file) {
+            r.handled.add(job.id)
+            r.stalled.delete(job.id)
+            if (options.length < count) await land(r, job)
+          } else if (job.status === 'error' || job.status === 'skipped' || job.status === 'cancelled') {
+            r.handled.add(job.id)
+            r.stalled.delete(job.id)
+            onFailure(job, String(job.error ?? job.status))
+          } else if (!r.stalled.has(job.id) && Date.now() - r.startedAt > (o.stallMs ?? STALL_MS)) {
+            r.stalled.add(job.id)
+            onFailure(job, `no answer within ${Math.round((Date.now() - r.startedAt) / 1000)} s`)
+          }
+        }
+        if (m.status !== 'queued' && m.status !== 'running') r.ended = true
+      }
+      if (options.length >= count) break
+      const elapsed = Date.now() - started
+      const need = count - options.length - inflight()
+      if (need > 0 && replacements < count * 3 && budget - elapsed >= (o.minStartMs ?? MIN_START_MS)) {
+        // A job failed: start replacements on other models that still work, until `count` options exist or the budget is spent.
+        const next = planJobs(rankModels(models, pools, health, blocked), need, taken, 1)
+        if (next.length) {
+          replacements += next.length
+          await startJobs(next)
+          progress(options.length, count, `Started ${next.length} replacement job(s) after a failure`)
+        } else if (!inflight()) break
+      } else if (!inflight()) break
+      if (elapsed >= budget + (o.graceMs ?? GRACE_MS)) break
+      progress(options.length, count, `ReDesign is making options (${options.length}/${count})`)
+      await sleep(o.pollMs ?? 1500)
+    }
+    for (const r of runs) if (!r.ended) await post(`/api/runs/${encodeURIComponent(r.id)}/cancel`, {}).catch(() => {})
+    saveHealth(healthFile, health)
+
+    if (!options.length) return fail(await noOptionsMessage(primary, { status: 'failed', jobs: failedJobs }))
+    const seconds = Math.round((Date.now() - started) / 1000)
+    if (options.length < count) notes.push(`Only ${options.length} of ${count} options came back after ${seconds} s${why.length ? ` (${[...new Set(why)].join('; ')})` : ''}. Say so to the person; call design_options again later for more.`)
+    const shown = options.map(({ run: _run, job: _job, ...rest }) => rest)
+    const missing = shown.some((x) => !x.image)
     return ok(
-      { run: runId, mock, ask_owner: askOwner, options },
+      { run: primary, mock, ask_owner: askOwner, requested: count, ...(notes.length ? { note: notes.join(' ') } : {}), options: shown },
       (askOwner
         ? 'The options are now shown to the person in the chat as a ReDesign card, where they can choose one, add notes, ask for more or reply in words. Do not paste the images and do not call design_pick yet: end your turn and wait. Their reply arrives as their next message (a chosen option number and notes, a request for more options, or free text). Then call design_pick for the option they chose, or call design_options again if they want more.'
         : 'The options are shown to the person in the chat as a ReDesign card. Say which one you pick and why (you decide; do not wait for them), then call design_pick with it.') +
@@ -369,10 +504,21 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     const run = typeof args.run === 'string' ? args.run : ''
     const n = Math.round(Number(args.option))
     if (!run || !(n >= 1)) return fail('design_pick needs run (the id design_options gave) and option (1 or more).')
-    const jobs = okJobs(await api<Manifest>(`/api/runs/${encodeURIComponent(run)}`))
-    const job = jobs[n - 1]
-    if (!job) return fail(`Run ${run} has ${jobs.length} option(s); there is no option ${n}.`)
-    const spec = await doFetch(`${base}/api/runs/${encodeURIComponent(run)}/design-md?job=${encodeURIComponent(job.id)}`)
+    // Options of a run with replacements live in several ReDesign runs: the sidecar written at landing says where option N is.
+    let from = { run, job: '' }
+    let known = 0
+    const sidecar = join(o.outDir, run, 'options.json')
+    if (existsSync(sidecar)) {
+      const rows = JSON.parse(readFileSync(sidecar, 'utf8')) as { option: number; run: string; job: string }[]
+      known = rows.length
+      from = rows.find((r) => r.option === n) ?? from
+    } else {
+      const jobs = okJobs(await api<Manifest>(`/api/runs/${encodeURIComponent(run)}`))
+      known = jobs.length
+      from = { run, job: jobs[n - 1]?.id ?? '' }
+    }
+    if (!from.job) return fail(`Run ${run} has ${known} option(s); there is no option ${n}.`)
+    const spec = await doFetch(`${base}/api/runs/${encodeURIComponent(from.run)}/design-md?job=${encodeURIComponent(from.job)}`)
     if (!spec.ok) return fail(`ReDesign could not write the spec: ${spec.status} ${(await spec.text()).slice(0, 200)}`)
     const image = join(o.outDir, run, `option-${n}.png`).replace(/\\/g, '/')
     return ok({ run, option: n, image: existsSync(image) ? image : null, spec: await spec.text() }, `Build to this spec (option ${n}).`)
