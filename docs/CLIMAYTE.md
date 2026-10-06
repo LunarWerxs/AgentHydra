@@ -675,6 +675,26 @@ sub-agents for estimating time until they can actually estimate time properly."
   `etaNote` turns it into the sentence `briefArgs` appends to `WORKER_BRIEF`: within 1.25x either way
   "Your estimates have been close ...", otherwise "Calibrate your ETA: ... Multiply your first guess
   by about X before you write it." So the prompt corrects itself as the samples come in.
+- **The ledger (owner, 2026-10-06: "if you track it, it will get better").** `eta.jsonl` in the corch
+  folder (`climayte-eta-ledger.ts`), append-only: a `said` row (exact `ETA:` line, the text block it
+  was in, the message, kind, model, effort, account), a `settled` row (working `tookS`, `wallS` = what
+  the owner waited, attempts and moves since, `ratio`, bucket `close` within 1.25x / `over` / `under`)
+  and a `review` row. Calibration and the scorecard read its tail (1 MB, cached on size and mtime)
+  merged with the live workers, once per estimate, so removing a worker loses nothing.
+- **Asking why.** An ordinary worker (not a chat, not sealed) gets an http `Stop` hook to the daemon,
+  `POST /api/corch/stop/:id` (`climayteStopHook`). It answers `{}` unless the worker has an open
+  estimate, `stop_hook_active` is false, it is not ending its turn to ask, it was not asked for this
+  message, and the working time is outside 1.5x either way (`REVIEW_BAND`). Then it settles `tookS`
+  at that moment and blocks with the question: its exact ETA line, the minutes it took, the ratio, and
+  two lines to answer, `ETA-REVIEW: <why, and what it would estimate next time>` and `CAUSE:` one of
+  `human-pace, scope-smaller, scope-larger, slow-commands, waiting, rework, padding, unclear-ask,
+  other` (an unknown word is `other`, the word kept). The answer is stored as `eta.review` and a
+  `review` row. `classifyAttempt` drops those two lines from the report, so `result`, `results`,
+  checks and verdicts are unchanged. A daemon that is down just skips that one review.
+- **Feeding it back.** `climayteScorecard().estimates` also has `recent` (the newest 20 settled
+  samples) and `causes` (`{cause, n, medianRatio}` over the newest 100 reviews). From 3 reviews,
+  `etaNote` adds the most common cause with its count and a quote (at most 160 characters) of the
+  newest review of it, within about 450 characters in all.
 - **Where it shows.** `climayte_status` rows carry `etaMin`, `etaLeftMin` (while live; negative is
   over) and `tookMin`; `climayteScorecard().estimates` has `all`, `byKind` and the current `note`.
   Desk 2's running-tasks row says "about N min left" from the latest estimate of a running worker,

@@ -8,6 +8,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Hono } from 'hono'
 import {
   climayteCancel,
   climayteJournal,
@@ -16,24 +17,43 @@ import {
   climayteReports,
   climayteRun,
   climayteScorecard,
+  climayteStopHook,
   climayteWait,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
 } from '../src/climayte'
+import { registerStopHookRoute } from '../src/climayte-ask-mcp'
 import { workers } from '../src/climayte-core'
 import {
+  type CliMayteEta,
   ETA_MIN_SAMPLES,
   type EtaSample,
   etaCalibration,
+  etaFullOfEvent,
   etaNote,
   etaOfEvent,
   etaSamples,
   etaTookSeconds,
   parseEta,
+  parseEtaFull,
+  parseReview,
+  reviewQuestion,
+  stopDecision,
+  stripReview,
 } from '../src/climayte-eta'
+import {
+  allEtaSamples,
+  appendEtaRow,
+  etaReport,
+  readEtaRows,
+  resetEtaLedgerCache,
+  samplesOfRows,
+  settledRow,
+} from '../src/climayte-eta-ledger'
 import { cliArgv } from '../src/climayte-launch'
-import { WORKER_BRIEF } from '../src/climayte-lib'
+import { type CliMayteWorker, classifyAttempt, WORKER_BRIEF } from '../src/climayte-lib'
+import { workerHooks } from '../src/climayte-signal'
 
 describe('parseEta', () => {
   test('reads the shapes a worker writes', () => {
@@ -252,4 +272,320 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
     expect(card.byKind.find((c) => c.kind === 'code')?.samples).toBeGreaterThanOrEqual(6)
     expect(card.all?.samples).toBeGreaterThanOrEqual(6)
   }, 40_000)
+})
+
+const say = (text: string) => ({
+  type: 'assistant',
+  message: { content: [{ type: 'text', text }] },
+})
+
+describe('the exact words of an estimate', () => {
+  test('the whole line and the text block it was in are kept, cut at their limits', () => {
+    const got = etaFullOfEvent(
+      say('Reading the code first.\n**ETA:** ~12 minutes (tests included)\nStarting.'),
+    )
+    expect(got).toMatchObject({ minutes: 12, line: '**ETA:** ~12 minutes (tests included)' })
+    expect(got?.text).toContain('Reading the code first.')
+    expect(parseEtaFull('ETA: 5 min')).toEqual({ minutes: 5, line: 'ETA: 5 min' })
+    expect(parseEtaFull(`ETA: 5 min ${'x'.repeat(400)}`)?.line).toHaveLength(300)
+    expect(etaFullOfEvent(say(`ETA: 5 min\n${'y'.repeat(3000)}`))?.text).toHaveLength(2000)
+  })
+})
+
+describe('the review answer', () => {
+  test('two lines parse; an unknown cause is other with the word kept; no review line is null', () => {
+    expect(
+      parseReview('ETA-REVIEW: The tests were slow; I would say 20 min.\nCAUSE: slow-commands'),
+    ).toEqual({ why: 'The tests were slow; I would say 20 min.', cause: 'slow-commands' })
+    expect(parseReview('ETA-REVIEW: x\n**CAUSE:** Padding.')?.cause).toBe('padding')
+    expect(parseReview('ETA-REVIEW: x\nCAUSE: vibes')).toEqual({
+      why: 'x',
+      cause: 'other',
+      raw: 'vibes',
+    })
+    expect(parseReview('CAUSE: padding')).toBeNull()
+    expect(stripReview('ETA-REVIEW: x\nCAUSE: other')).toBe('')
+    expect(stripReview('Done: it works.\n\nETA-REVIEW: x\nCAUSE: other')).toBe('Done: it works.')
+  })
+
+  test('a review message never becomes the report', () => {
+    const events = [
+      say('Report: the change is committed as abc123.'),
+      {
+        type: 'user',
+        message: {
+          content: [
+            { type: 'text', text: `Stop hook feedback:\n${reviewQuestion({ minutes: 5 }, 1800)}` },
+          ],
+        },
+      },
+      say('ETA-REVIEW: I padded it.\nCAUSE: padding'),
+      {
+        type: 'result',
+        is_error: false,
+        result: 'ETA-REVIEW: I padded it.\nCAUSE: padding',
+        num_turns: 3,
+      },
+    ]
+    const v = classifyAttempt(events, '', true)
+    expect(v.outcome).toBe('done')
+    expect(v.result).toBe('Report: the change is committed as abc123.')
+    expect(v.turnTexts).toEqual(['Report: the change is committed as abc123.'])
+    // Mixed with report text, only the review lines go.
+    const mixed = classifyAttempt(
+      [{ type: 'result', is_error: false, result: 'All done.\nETA-REVIEW: x\nCAUSE: other' }],
+      '',
+      true,
+    )
+    expect(mixed.result).toBe('All done.')
+    expect(mixed.turnTexts).toEqual(['All done.'])
+  })
+})
+
+describe('the ledger', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ah-eta-ledger-'))
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
+  const worker = (id: string, eta: CliMayteWorker['eta']) =>
+    ({
+      id,
+      kind: 'code',
+      model: 'sonnet',
+      effort: 'medium',
+      title: 'Example task',
+      message: 'do the example',
+      prompt: 'do the example',
+      attempts: [{ account: { id: 'acct-1' }, startedAt: 0, endedAt: 1 }],
+      eta,
+    }) as unknown as CliMayteWorker
+
+  test('rows round-trip, calibration reads them with the worker gone, and a live copy counts once', () => {
+    const path = join(dir, 'eta.jsonl')
+    for (let i = 0; i < 5; i++) {
+      const eta = {
+        minutes: 10,
+        at: 1_000 * i,
+        attempt: 0,
+        tookS: 1200,
+        doneAt: 1_000 * i + 5,
+        line: 'ETA: 10 min',
+      }
+      appendEtaRow(settledRow(worker(`w-${i}`, eta), eta), path)
+    }
+    appendEtaRow(
+      {
+        t: 'review',
+        id: 'w-4',
+        saidAt: 4_000,
+        at: 4_100,
+        why: 'slow tests',
+        cause: 'slow-commands',
+      },
+      path,
+    )
+    resetEtaLedgerCache()
+    const rows = readEtaRows(path)
+    expect(rows.map((r) => r.t)).toEqual([
+      'settled',
+      'settled',
+      'settled',
+      'settled',
+      'settled',
+      'review',
+    ])
+    expect(rows[0]).toMatchObject({
+      ratio: 2,
+      bucket: 'under',
+      wallS: 0,
+      attempts: 1,
+      moves: 0,
+      line: 'ETA: 10 min',
+    })
+    // No worker on record any more: the samples are all still there.
+    const gone = allEtaSamples([], path)
+    expect(gone).toHaveLength(5)
+    expect(etaCalibration(gone, 'code')).toMatchObject({ samples: 5, ratio: 2 })
+    expect(gone.find((s) => s.id === 'w-4')?.review?.cause).toBe('slow-commands')
+    // Two of them are also still on a worker: nothing is counted twice.
+    const live = ['w-3', 'w-4'].map((id, i) =>
+      worker(id, {
+        minutes: 10,
+        at: 1_000 * (3 + i),
+        attempt: 0,
+        tookS: 1200,
+        doneAt: 1_000 * (3 + i) + 5,
+      }),
+    )
+    expect(allEtaSamples(live, path)).toHaveLength(5)
+    expect(samplesOfRows(rows)).toHaveLength(5)
+  })
+
+  test('only the tail is read, and a cut first line is dropped', () => {
+    const path = join(dir, 'big.jsonl')
+    for (let i = 0; i < 50; i++) {
+      const eta = { minutes: 5, at: i, attempt: 0, tookS: 300, doneAt: i + 1 }
+      appendEtaRow(settledRow(worker(`w-${i}`, eta), eta), path)
+    }
+    resetEtaLedgerCache()
+    const rows = readEtaRows(path, 2_000)
+    expect(rows.length).toBeGreaterThan(0)
+    expect(rows.length).toBeLessThan(50)
+    expect(rows.at(-1)?.id).toBe('w-49')
+  })
+
+  test('the report lists recent samples and the causes of the newest reviews', () => {
+    const mk = (i: number, tookMin: number, cause?: string): EtaSample => ({
+      ...sample('code', 10, tookMin, 100 - i),
+      title: `t${i}`,
+      line: 'ETA: 10 min',
+      wallS: 99,
+      ...(cause ? { review: { why: `because ${cause}`, cause } } : {}),
+    })
+    const samples = [
+      mk(0, 30, 'padding'),
+      mk(1, 25, 'padding'),
+      mk(2, 2, 'scope-smaller'),
+      mk(3, 10),
+    ]
+    const rep = etaReport(samples)
+    expect(rep.recent[0]).toMatchObject({
+      minutes: 10,
+      tookMin: 30,
+      wallMin: 1.7,
+      ratio: 3,
+      bucket: 'under',
+      cause: 'padding',
+    })
+    expect(rep.recent[3]).toMatchObject({ bucket: 'close', cause: null, why: null })
+    expect(rep.causes).toEqual([
+      { cause: 'padding', n: 2, medianRatio: 2.75 },
+      { cause: 'scope-smaller', n: 1, medianRatio: 0.2 },
+    ])
+  })
+})
+
+describe('the brief learns why', () => {
+  const reviewed = (cause: string, why: string, i: number): EtaSample => ({
+    ...sample('code', 10, 30, 100 - i),
+    review: { why, cause },
+  })
+
+  test('under three reviews the note is the ratio sentence alone', () => {
+    const s = [
+      ...Array.from({ length: 5 }, (_, i) => sample('code', 10, 30, i)),
+      reviewed('padding', 'x', 9),
+    ]
+    expect(etaNote(etaCalibration(s, 'code'), s)).toBe(etaNote(etaCalibration(s, 'code')))
+  })
+
+  test('from three it names the most common cause and quotes the newest, within 450 chars', () => {
+    const long = 'The commands were slow. '.repeat(20)
+    const s = [
+      reviewed('slow-commands', long, 0),
+      reviewed('padding', 'I padded.', 1),
+      reviewed('slow-commands', 'older words', 2),
+      reviewed('slow-commands', 'oldest', 3),
+      sample('code', 10, 30, 50),
+    ]
+    const note = etaNote(etaCalibration(s, 'code'), s) ?? ''
+    expect(note).toContain(
+      'Most common reason an estimate missed: slow-commands (3 of 4); newest: "The commands were slow.',
+    )
+    expect(note).not.toContain('older words')
+    expect(note.length).toBeLessThanOrEqual(450)
+    expect(note).toStartWith('Calibrate your ETA: over the last 5 code tasks')
+  })
+})
+
+describe('the Stop hook decision', () => {
+  const eta = (over: Partial<CliMayteEta> = {}): CliMayteEta => ({
+    minutes: 10,
+    at: 0,
+    attempt: 0,
+    line: 'ETA: 10 min',
+    ...over,
+  })
+  const ask = (
+    e: CliMayteEta | undefined,
+    tookS: number | null,
+    over: { stopHookActive?: boolean; asking?: boolean } = {},
+  ) => stopDecision({ eta: e, tookS, stopHookActive: false, asking: false, ...over })
+
+  test('blocks only a miss beyond 1.5x either way, with the exact words and numbers', () => {
+    expect(ask(eta(), 600)).toBeNull() // right
+    expect(ask(eta(), 840)).toBeNull() // 1.4x
+    expect(ask(eta(), 480)).toBeNull() // 0.8x
+    expect(ask(eta(), 960)).toContain('The working time it took was 16 min, 1.6x the estimate.')
+    const under = ask(eta(), 240) // 0.4x
+    expect(under).toContain('Your estimate for this message was "ETA: 10 min" (10 min).')
+    expect(under).toContain('4 min, 0.40x')
+    expect(under).toContain('ETA-REVIEW: <why the estimate was off')
+    expect(under).toContain('CAUSE: <one of human-pace, scope-smaller')
+    expect(under).toContain('Your report above stands')
+  })
+
+  test('not without an open estimate, while a review is running, to ask, or twice', () => {
+    expect(ask(undefined, 5000)).toBeNull()
+    expect(ask(eta(), 5000, { stopHookActive: true })).toBeNull()
+    expect(ask(eta(), 5000, { asking: true })).toBeNull()
+    expect(ask(eta({ reviewAskedAt: 1 }), 5000)).toBeNull()
+    expect(ask(eta({ tookS: 5000, doneAt: 1 }), 5000)).toBeNull()
+  })
+
+  test('the daemon settles the estimate at the hook, asks once, and never asks a chat', () => {
+    const now = Date.now()
+    const w = {
+      id: 'w-stop-1',
+      kind: 'code',
+      status: 'running',
+      title: 'Example task',
+      prompt: 'p',
+      message: 'p',
+      attempts: [{ account: { id: 'a1' }, startedAt: now - 3_000_000, endedAt: null }],
+      eta: { minutes: 10, at: now - 3_000_000, attempt: 0, line: 'ETA: 10 min' },
+      pending: [],
+      results: [],
+    } as unknown as CliMayteWorker
+    workers.set(w.id, w)
+    try {
+      expect(climayteStopHook('nope', {})).toEqual({})
+      expect(climayteStopHook(w.id, { stop_hook_active: true })).toEqual({})
+      w.question = { text: 'q?', at: now }
+      expect(climayteStopHook(w.id, {})).toEqual({})
+      delete w.question
+      const out = climayteStopHook(w.id, {}) as { decision?: string; reason?: string }
+      expect(out.decision).toBe('block')
+      expect(out.reason).toContain('50 min, 5.0x')
+      expect(w.eta?.tookS).toBeGreaterThanOrEqual(2999)
+      expect(w.eta?.doneAt).toBeGreaterThanOrEqual(now)
+      expect(w.eta?.reviewAskedAt).toBeDefined()
+      expect(climayteStopHook(w.id, {})).toEqual({}) // once per message
+      w.chat = true
+      expect(climayteStopHook(w.id, {})).toEqual({})
+    } finally {
+      workers.delete(w.id)
+    }
+  })
+})
+
+describe('the Stop hook wiring', () => {
+  test('an ordinary worker gets an http Stop hook at the daemon; without a url, none', () => {
+    const on = workerHooks({
+      signalFile: 'C:/x/s.json',
+      claims: null,
+      stopUrl: 'http://127.0.0.1:1/api/corch/stop/w-1',
+    })
+    expect(on.Stop).toEqual([
+      { hooks: [{ type: 'http', url: 'http://127.0.0.1:1/api/corch/stop/w-1', timeout: 10 }] },
+    ])
+    expect(workerHooks({ signalFile: 'C:/x/s.json', claims: null }).Stop).toBeUndefined()
+  })
+
+  test('the route answers the decision, and {} for an unknown worker or a body that is not JSON', async () => {
+    const app = new Hono()
+    registerStopHookRoute(app)
+    const post = async (id: string, body: string) =>
+      (await app.request(`/api/corch/stop/${id}`, { method: 'POST', body })).json()
+    expect(await post('nobody', '{"stop_hook_active":false}')).toEqual({})
+    expect(await post('nobody', 'not json')).toEqual({})
+  })
 })

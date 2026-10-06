@@ -10,7 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CliMayteEta } from './climayte-eta'
+import { type CliMayteEta, stripReview } from './climayte-eta'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
 import {
   type CliMaytePlacement,
@@ -972,8 +972,11 @@ interface AttemptScan {
 function noteTurnText(scan: AttemptScan, ev: any): void {
   if (ev?.type === 'assistant') {
     for (const b of ev.message?.content ?? [])
-      if (b?.type === 'text' && typeof b.text === 'string' && b.text.trim())
-        scan.said.push(b.text.trim())
+      if (b?.type === 'text' && typeof b.text === 'string') {
+        // The answer to the Stop hook's ETA question is not part of the report (stripReview).
+        const text = stripReview(b.text)
+        if (text) scan.said.push(text)
+      }
   } else if (ev?.type === 'user') {
     if (scan.said.length && isStopHookFeedback(ev)) scan.turnTexts.push(scan.said.join('\n\n'))
     scan.said = []
@@ -1106,8 +1109,17 @@ export function classifyAttempt(
   const scan = scanAttempt(events)
   const { last, rejected, apiErrors, turnTexts } = scan
   const errored = last?.is_error === true
-  const resultText = typeof last?.result === 'string' ? last.result : null
-  if (last && !errored && resultText?.trim()) turnTexts.push(resultText.trim())
+  const rawResult = typeof last?.result === 'string' ? last.result : null
+  // A last turn that only answers the Stop hook's ETA question leaves the report before it as the
+  // result (stripReview): the earlier turn's text was already kept when the hook's feedback came.
+  const stripped = rawResult === null ? null : stripReview(rawResult)
+  const reviewOnly = !errored && !!rawResult?.trim() && !stripped
+  const resultText = reviewOnly
+    ? (turnTexts.at(-1) ?? null)
+    : stripped !== null && stripped !== rawResult?.trim()
+      ? stripped
+      : rawResult
+  if (last && !errored && stripped) turnTexts.push(stripped)
   const errText = errored ? (resultText ?? '') : ''
   const stderrLines = last
     ? []

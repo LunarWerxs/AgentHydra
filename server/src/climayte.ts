@@ -88,9 +88,17 @@ import {
   type EtaCalibration,
   etaCalibration,
   etaNote,
-  etaSamples,
   etaTookSeconds,
+  stopDecision,
 } from './climayte-eta'
+import {
+  allEtaSamples,
+  appendEtaRow,
+  etaReport,
+  reviewRow,
+  saidRow,
+  settledRow,
+} from './climayte-eta-ledger'
 import {
   appendJournal,
   type CliMayteJournalEntry,
@@ -1391,7 +1399,20 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
   // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.
   if (!w.chat && !w.eta && r.eta) {
-    w.eta = { minutes: r.eta.minutes, at: r.eta.at, attempt: w.attempts.length - 1 }
+    w.eta = {
+      minutes: r.eta.minutes,
+      at: r.eta.at,
+      attempt: w.attempts.length - 1,
+      line: r.eta.line,
+    }
+    appendEtaRow(saidRow(w, w.eta, r.eta.text))
+    changed(w)
+  }
+  // Its answer to why the estimate missed (the Stop hook asked, climayteStopHook): kept on the
+  // estimate and in the ledger.
+  if (!w.chat && w.eta?.reviewAskedAt !== undefined && !w.eta.review && r.review) {
+    w.eta.review = r.review
+    appendEtaRow(reviewRow(w.id, w.eta, r.review, Date.now()))
     changed(w)
   }
   if (exited) finish(w, r.events)
@@ -1863,6 +1884,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   ) {
     w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
     w.eta.doneAt = now
+    appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
   }
   // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
@@ -2983,6 +3005,35 @@ const QUESTION_MAX = 2000
 const OPTION_MAX = 200
 const OPTIONS_MAX = 8
 
+/** The Stop hook a worker's CLI calls when its turn is about to end (climayte-signal.ts workerHooks),
+ *  answered by the daemon: `{}` lets it stop; `{decision: 'block', reason}` makes it answer, in the
+ *  same turn and with its context warm, why its estimate missed (climayte-eta.ts stopDecision). The
+ *  estimate settles here, at the moment the work was done, not after the review turn. A worker
+ *  that is not running, a chat and a sealed worker are never asked. */
+export function climayteStopHook(
+  id: string,
+  input: { stop_hook_active?: unknown } | null,
+): { decision: 'block'; reason: string } | Record<string, never> {
+  load()
+  const w = workers.get(id)
+  if (!w || w.chat || w.sealed || w.status !== 'running' || !w.eta) return {}
+  const now = Date.now()
+  const tookS = etaTookSeconds(w.eta, w.attempts, now)
+  const reason = stopDecision({
+    eta: w.eta,
+    stopHookActive: input?.stop_hook_active === true,
+    asking: !!w.question,
+    tookS,
+  })
+  if (!reason) return {}
+  w.eta.tookS = tookS
+  w.eta.doneAt = now
+  w.eta.reviewAskedAt = now
+  appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+  changed(w)
+  return { decision: 'block', reason }
+}
+
 /** A worker's question (the climayte_ask tool, climayte-ask-mcp.ts): recorded on it, journaled and
  *  pinged to whoever started it (climayte-ping.ts 'asking'). The worker ends its turn after asking;
  *  the answer is climayteSend, which resumes the same session and clears the question. Nothing
@@ -3590,11 +3641,15 @@ export function climayteScorecard(): {
   }>
   /** How the workers' own time estimates compared with the time they took (climayte-eta.ts): every
    *  kind's, each kind's with enough samples, and the note the next brief carries. */
-  estimates: { all: EtaCalibration | null; byKind: EtaCalibration[]; note: string | null }
+  estimates: {
+    all: EtaCalibration | null
+    byKind: EtaCalibration[]
+    note: string | null
+  } & ReturnType<typeof etaReport>
 } {
   load()
   const rows = scoreRows(workers.values())
-  const samples = etaSamples(workers.values())
+  const samples = allEtaSamples(workers.values())
   const all = etaCalibration(samples, null)
   const byKind = [...new Set(samples.map((s) => s.kind).filter((k): k is string => !!k))]
     .map((k) => etaCalibration(samples, k))
@@ -3631,7 +3686,7 @@ export function climayteScorecard(): {
           ladderIndex({ model: ladderModel(r.model), effort: r.effort }) === best,
       }
     }),
-    estimates: { all, byKind, note: etaNote(all) },
+    estimates: { all, byKind, note: etaNote(all, samples), ...etaReport(samples) },
   }
 }
 

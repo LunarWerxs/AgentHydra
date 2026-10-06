@@ -24,7 +24,7 @@ import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
-import { registerAskMcpRoute } from './climayte-ask-mcp'
+import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import {
   APP_ROOT,
@@ -431,6 +431,8 @@ app.get('/api/mcp', (c) =>
 registerManagerMcpRoute(app, callerPidOf)
 // --- worker MCP endpoint: `/api/corch/ask/:workerId` gives a worker climayte_ask (climayte-ask-mcp.ts).
 registerAskMcpRoute(app, callerPidOf)
+// --- worker Stop hook: `/api/corch/stop/:workerId` asks a worker whose estimate missed why (climayte-eta.ts).
+registerStopHookRoute(app)
 
 // --- self-update (source: git engine; compiled: GitHub Releases — see server/src/updater.ts) --
 app.get('/api/update', async (c) => {

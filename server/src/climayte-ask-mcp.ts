@@ -7,7 +7,7 @@
 // "Questions from a worker".
 
 import type { Hono } from 'hono'
-import { climayteAsk } from './climayte'
+import { climayteAsk, climayteStopHook } from './climayte'
 import { load, workers } from './climayte-core'
 import type { CliMayteAttempt } from './climayte-lib'
 import { readRunnerPids } from './climayte-runner'
@@ -90,5 +90,20 @@ export function registerAskMcpRoute(
     }
     const { status, json } = await handleMcpHttp(body, ctx, handleRpc)
     return json === null ? c.body(null, status as 202) : c.json(json, status as 200)
+  })
+}
+
+/** POST /api/corch/stop/:workerId: the worker's Stop hook (climayte-signal.ts workerHooks), answered
+ *  with climayteStopHook. The daemon-wide loopback guard covers it; a call for an unknown worker, or
+ *  with a body that is not JSON, gets `{}` (let it stop), never an error the CLI would show. */
+export function registerStopHookRoute(app: Hono): void {
+  app.post('/api/corch/stop/:workerId', async (c) => {
+    let body: { stop_hook_active?: unknown } | null = null
+    try {
+      body = (await c.req.json()) as typeof body
+    } catch {
+      body = null
+    }
+    return c.json(climayteStopHook(c.req.param('workerId'), body))
   })
 }

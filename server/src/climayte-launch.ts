@@ -36,7 +36,8 @@ import {
   workers,
 } from './climayte-core'
 import { copySessionToCwd } from './climayte-cwd'
-import { etaCalibration, etaNote, etaSamples, MAX_PAST_ETAS } from './climayte-eta'
+import { etaCalibration, etaNote, MAX_PAST_ETAS } from './climayte-eta'
+import { allEtaSamples } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
 import {
   type CliMayteAccount,
@@ -465,6 +466,11 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
       hooks: workerHooks({
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
+        // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
+        stopUrl:
+          w.chat || w.sealed
+            ? null
+            : `${getOrchestratorDaemonUrl() ?? `http://127.0.0.1:${PORT}`}/api/corch/stop/${w.id}`,
       }),
     }),
   )
@@ -569,7 +575,8 @@ function briefArgs(w: CliMayteWorker): string[] {
   if (!w.chat) {
     // How the newest estimates compared with the real time (climayte-eta.ts): nothing until there
     // are enough samples, then the ratio to multiply a first guess by.
-    const note = etaNote(etaCalibration(etaSamples(workers.values()), w.kind ?? null))
+    const samples = allEtaSamples(workers.values())
+    const note = etaNote(etaCalibration(samples, w.kind ?? null), samples)
     return ['--append-system-prompt', note ? `${WORKER_BRIEF} ${note}` : WORKER_BRIEF]
   }
   const home = ownerHome()

@@ -40,7 +40,12 @@ export interface HookGroup {
 export interface WorkerHooks {
   PreToolUse?: HookGroup[]
   PostToolUse: HookGroup[]
+  Stop?: Array<{ hooks: Hook[] }>
 }
+
+/** Longest the Stop hook waits for the daemon. It answers from memory; a daemon that has not
+ *  answered in this long is gone, and the worker stops as it would have without the hook. */
+export const STOP_HOOK_TIMEOUT_S = 10
 
 /** The hooks of a worker's own settings file, as the daemon writes them.
  *  - PostToolUse, every tool: the wind-down signal, in its shell form (the runner swaps in the http
@@ -52,9 +57,25 @@ export interface WorkerHooks {
  *    interpreter does when it cannot open the file, and an exit 2 from a PreToolUse hook denies the
  *    edit: the shell form's `|| true` absorbed that, so the launcher below runs the script only if
  *    it is still there (proven against the real CLI 2.1.286: a missing script blocked every Write).
- *    `-S` skips the site import (the script reads only the standard library). */
-export function workerHooks(opts: { signalFile: string; claims: string | null }): WorkerHooks {
+ *    `-S` skips the site import (the script reads only the standard library).
+ *  - Stop, when `stopUrl` is given (an ordinary worker, not a chat or a sealed one): an http hook the
+ *    DAEMON answers, unlike the signal. It asks a worker whose estimate missed by more than
+ *    REVIEW_BAND why, in the same turn (climayte-eta.ts stopDecision, climayteStopHook). It must be
+ *    the daemon: the decision reads the worker's record. A daemon that is down or restarting makes
+ *    the hook a non-blocking error, so the worker just stops, and one review is skipped. */
+export function workerHooks(opts: {
+  signalFile: string
+  claims: string | null
+  stopUrl?: string | null
+}): WorkerHooks {
   return {
+    ...(opts.stopUrl
+      ? {
+          Stop: [
+            { hooks: [{ type: 'http', url: opts.stopUrl, timeout: STOP_HOOK_TIMEOUT_S } as Hook] },
+          ],
+        }
+      : {}),
     ...(opts.claims
       ? {
           PreToolUse: [
