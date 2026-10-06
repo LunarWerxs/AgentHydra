@@ -387,6 +387,29 @@ export const INSTANCE_MODE_WINDOW_SIZE = { width: 700, height: 760 }
  * through the real spawn-and-parse path without spending quota.
  */
 export function resolveClaudeExe(): string {
+  const primary = resolveClaudeExeUnguarded()
+  // The install guard (claude-install-guard.ts) points launches at a verified last-known-good copy
+  // while this path is broken.
+  return claudeExeFallback.path && claudeExeFallback.primary === primary
+    ? claudeExeFallback.path
+    : primary
+}
+
+/** Claude Code's own updater (`npm install -g` run from inside a chat or worker CLI) must never run
+ *  on AgentHydra's watch: on 2026-10-06 an update that stopped half way left a placeholder claude.exe
+ *  and every CliMayte launch died. Every CLI the daemon spawns inherits this; updates happen only
+ *  through version-drift's install-then-verify path. DISABLE_AUTOUPDATER is the CLI's documented
+ *  switch (present in the 2.1.292 binary). */
+process.env.DISABLE_AUTOUPDATER = '1'
+
+/** Set by the install guard while the npm-global executable is broken and a verified copy exists. */
+export const claudeExeFallback: { primary: string | null; path: string | null } = {
+  primary: null,
+  path: null,
+}
+
+/** The executable resolveClaudeExe would name, before any last-known-good swap. */
+export function resolveClaudeExeUnguarded(): string {
   const configured = appEnv('CLAUDE_PATH')?.trim()
   if (configured) return configured
 

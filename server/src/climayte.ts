@@ -36,12 +36,14 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { claudeInstallState, INSTALL_BROKEN_HEAD, installStatusView } from './claude-install-guard'
 import {
   accountsProvider,
   acctLabel,
   basisText,
   changed,
   chargeAttempt,
+  claudeCommand,
   configDirOf,
   freshRead,
   HOOKS,
@@ -134,6 +136,7 @@ import {
   climayteModel,
   climaytePriority,
   contextTokens,
+  isInstantEmptyDeath,
   isLoginWall,
   isOrgDisabled,
   isWalledNow,
@@ -188,6 +191,7 @@ import {
   waveDone,
   writeWave,
 } from './climayte-wave'
+import { resolveClaudeExe } from './config'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
@@ -219,6 +223,8 @@ export function climayteCapacity(now = Date.now()): {
   running: number
   waiting: number
   waitUntil: string | null
+  /** Whether a Claude Code CLI can be started: false holds every task (claude-install-guard.ts). */
+  claudeInstall: ReturnType<typeof installStatusView>
 } {
   load()
   let accounts: CliMayteAccount[] = []
@@ -247,6 +253,7 @@ export function climayteCapacity(now = Date.now()): {
     running,
     waiting,
     waitUntil: until.sort()[0] ?? null,
+    claudeInstall: installStatusView(),
   }
 }
 
@@ -1582,6 +1589,27 @@ function withStops(
   return v
 }
 
+/** A CLI that died at once with nothing on stdout or stderr and no runner pid is either killed from
+ *  outside or unable to run at all. A fresh look at the install tells them apart: when it does not
+ *  run (or the last-known-good copy had to stand in), the death is the install's, not the task's:
+ *  'install-broken' spends no retry and moves nothing (2026-10-06: a placeholder claude.exe read as
+ *  "interrupted" three times and failed the chat). */
+export function installBroken(
+  at: CliMayteWorker['attempts'][number],
+  v: ReturnType<typeof classifyAttempt>,
+  events: unknown[],
+  stderr: string,
+  hadRunnerPid: boolean,
+): ReturnType<typeof classifyAttempt> {
+  if (v.outcome !== 'interrupted' && v.outcome !== 'error') return v
+  const livedMs = (at.endedAt ?? Date.now()) - at.startedAt
+  if (!isInstantEmptyDeath({ livedMs, events, stderr, hadRunnerPid })) return v
+  if (claudeCommand()[0] !== resolveClaudeExe()) return v
+  const st = claudeInstallState(true)
+  if (st.ok && !st.usingLastKnownGood) return v
+  return { ...v, outcome: 'install-broken', notice: st.reason }
+}
+
 /** Every turn's closing text, not just the last: a repo's Stop hook can force a turn after the
  *  report (field note 13), and a limit can cut the session after one. `result` is them joined. */
 function keepResults(
@@ -1669,7 +1697,7 @@ function resumeInterrupted(w: CliMayteWorker, stderr: string): void {
 }
 
 /** The worker's next state from how its attempt ended, with the account's wall where it earned one. */
-function settleWorker(
+export function settleWorker(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
   v: ReturnType<typeof classifyAttempt>,
@@ -1702,6 +1730,13 @@ function settleWorker(
       break
     case 'interrupted':
       resumeInterrupted(w, stderr)
+      break
+    case 'install-broken':
+      // Held where it is: no retry spent, no wall, no move. The next tick's guard says why and
+      // releases it the moment the install runs.
+      w.status = 'waiting'
+      w.error = `${INSTALL_BROKEN_HEAD}: ${v.notice ?? 'the CLI cannot start'}.`
+      w.waitUntil = null
       break
     default:
       w.status = 'failed'
@@ -1848,9 +1883,17 @@ function addToWaveBatch(w: CliMayteWorker, now: number, judged = false): void {
 function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
+  const hadRunnerPid =
+    !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
   cleanUpRunner(w, at)
   const stderr = tailText(at.errLog, 4_000)
-  const v = withStops(at, classifyAttempt(events, stderr, at.started === true))
+  const v = installBroken(
+    at,
+    withStops(at, classifyAttempt(events, stderr, at.started === true)),
+    events,
+    stderr,
+    hadRunnerPid,
+  )
   rmSync(signalPath(w.id), { force: true })
   removeWorkerFiles(w.id)
   forgetRead(at.log)
@@ -1986,6 +2029,9 @@ function journalFinish(
       break
     case 'interrupted':
       journal(w, 'interrupted', { account, retry: w.retries })
+      break
+    case 'install-broken':
+      journal(w, 'install-broken', { account, notice })
       break
   }
 }

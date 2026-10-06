@@ -1437,6 +1437,33 @@ the task runs on its API route once, as does a worker that fails; a cancelled HS
 worker. A free planned leg (an NVIDIA or other $0 model) always stays on the API. These workers show in
 the CliMayte view like any other, under the chat that called HSwarm.
 
+## A broken Claude Code install holds work: `server/src/claude-install-guard.ts` (2026-10-06)
+
+An npm update of the CLI that stopped half way left bin/claude.exe a 500-byte placeholder, then a truncated
+binary. Every launch died within a second with no output and was called `interrupted`: three retries, then
+the chat failed, and it looked like the account was broken. Now:
+
+- **Preflight.** Before a launch the scheduler asks the guard whether the resolved `claude` runs: it exists,
+  is not a stub (a native `.exe` under 5 MB), and `claude --version` answers within 8 s. Cached by path + size +
+  mtime, so it costs nothing while the file is unchanged (an unhealthy verdict is re-probed every 30 s).
+- **Held, not failed.** Unhealthy: no launch, no retry spent, no account move. The task goes to `waiting` with
+  "Waiting: Claude Code install broken: <why>" (shown on its row, in climayte_status's `claudeInstall`, and as
+  journal events `install-broken` / `install-repaired`) and starts by itself the tick the install answers again.
+- **Last-known-good.** A verified copy of a healthy claude.exe is kept in `<data dir>/claude-lkg`. While the
+  global install is broken, launches use it (`claudeExeFallback`, read by `resolveClaudeExe`), so nothing waits
+  when a copy exists.
+- **Self-repair, one at a time.** Re-runs the package's `install.cjs` when its native package is complete, else
+  `npm install -g @anthropic-ai/claude-code@<version in its package.json>`; verifies with `--version`; on failure
+  backs off (1, 2, 5, 15, 30 min) and raises ONE incident (scope `claude-install`; list_incidents / ack_incident).
+- **Classification.** An attempt that dies in under 10 s with empty stdout, empty stderr and no runner pid
+  triggers a fresh preflight; if the install is broken it is `install-broken`, not `interrupted`.
+- **No self-updating CLI.** `DISABLE_AUTOUPDATER=1` is set daemon-wide (config.ts) and in every worker's
+  environment (scrubbedEnv). Updates come only through version-drift's `npm install -g`, which now verifies the
+  result and reports a failed update when the new install does not run.
+
+`AGENTHYDRA_CLAUDE_PATH` (an explicit override, e.g. the mock-agent tests) is never judged. Tests:
+`server/tests/claude-install-guard.test.ts` (fakes the exe, `--version` and the install step).
+
 ## Routes: `server/src/routes/climayte.ts`
 
 - `GET /api/corch/workers?group=&id=&ids=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`

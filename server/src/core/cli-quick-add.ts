@@ -75,6 +75,7 @@ function scrubbedEnv(configDir: string): Record<string, string> {
   for (const [k, v] of Object.entries(process.env))
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   env.CLAUDE_CONFIG_DIR = configDir
+  env.DISABLE_AUTOUPDATER = '1'
   return env
 }
 

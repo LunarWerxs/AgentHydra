@@ -52,6 +52,7 @@ export type AttemptOutcome =
   | 'transient'
   | 'auth'
   | 'interrupted' // the CLI ended with no result and no error: killed (a daemon restart), not failed
+  | 'install-broken' // died at once with no output while the Claude Code install does not run: held, no retry spent
   | 'handoff' // wound down near its limit and wrote a handoff; the task goes on in a fresh session
   | 'error'
   | 'cancelled'
@@ -932,6 +933,8 @@ export function scrubbedEnv(configDir: string, workerId?: string): Record<string
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   }
   env.CLAUDE_CONFIG_DIR = configDir
+  // No self-update from inside a worker (config.ts): an interrupted one broke every launch.
+  env.DISABLE_AUTOUPDATER = '1'
   if (workerId) env.AGENTHYDRA_CLIMAYTE_WORKER = workerId
   return env
 }
@@ -1091,6 +1094,21 @@ function unfinishedVerdict(
   if (!last && !apiErrors.length && (started || !stderr.trim()))
     return verdictOf(base, 'interrupted', INTERRUPTED_NOTICE)
   return verdictOf(base, 'error', null)
+}
+
+/** An attempt that died within INSTANT_DEATH_MS with nothing on stdout, nothing on stderr and no
+ *  runner pid file: the shape of a CLI that cannot execute at all (a placeholder or truncated
+ *  claude.exe, 2026-10-06), not of a daemon restart, which leaves the CLI's own output behind. */
+export const INSTANT_DEATH_MS = 10_000
+export function isInstantEmptyDeath(a: {
+  livedMs: number
+  events: unknown[]
+  stderr: string
+  hadRunnerPid: boolean
+}): boolean {
+  return (
+    a.livedMs < INSTANT_DEATH_MS && a.events.length === 0 && !a.stderr.trim() && !a.hadRunnerPid
+  )
 }
 
 /** `started`: the CLI logged system/init (the caller may know it when the events list was cut).

@@ -1,11 +1,14 @@
 // CliMayte's scheduling pass (climayte.ts tick): for each due task, pick an account and start it
 // there, or say what it waits for (room, a reset, an account). Split out of climayte.ts so each
 // file can be read whole; the state it works on (workers, walls, journal) is climayte-core.ts's.
+
+import { claudeInstallState, INSTALL_BROKEN_HEAD, type InstallState } from './claude-install-guard'
 import {
   accountsProvider,
   acctLabel,
   basisText,
   changed,
+  claudeCommand,
   journal,
   memoryReader,
   overageAllowed,
@@ -59,6 +62,7 @@ import {
   weekPacePct,
 } from './climayte-placement'
 import { remoteActiveCounts } from './climayte-remote'
+import { resolveClaudeExe } from './config'
 
 /** One tick's view of the fleet: built once, and kept current as the tick starts work. */
 interface TickState {
@@ -483,6 +487,49 @@ function holdForMemory(w: CliMayteWorker, short: string): void {
 const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
   !readingPending(acct, s.now) && !memoryShort(s.memory, s.growing)
 
+/** Test seam: what the scheduler asks before launching (null: the real guard, which only judges the
+ *  real launcher). */
+let installGuard: (() => InstallState) | null = null
+export function setInstallGuard(fn: (() => InstallState) | null): void {
+  installGuard = fn
+}
+
+/** The Claude Code install does not run (claude-install-guard.ts): launching would only die at once,
+ *  and an instant death must not spend a retry or move the task to another account. The task waits
+ *  here, with the reason on its row, and is released on the first tick the install answers again.
+ *  True: held (do not place it). */
+function holdForInstall(w: CliMayteWorker): boolean {
+  // Only the real launcher on the real CLI is judged: a test's fake launcher or argv is not ours.
+  const real = launcher === launch && claudeCommand()[0] === resolveClaudeExe()
+  const st = installGuard ? installGuard() : real ? claudeInstallState() : null
+  if (!st) return false
+  if (!st.ok) {
+    const retry = st.repairing
+      ? ' A repair is running.'
+      : st.nextRepairAt
+        ? ` The next repair try is at ${new Date(st.nextRepairAt).toLocaleTimeString()}.`
+        : ''
+    const why = `${INSTALL_BROKEN_HEAD}: ${st.reason ?? 'unknown'}.${retry} AgentHydra repairs it by itself; this task starts the moment it runs again, on its own account.`
+    if (w.status !== 'waiting' || w.error !== why) {
+      if (!w.error?.startsWith(INSTALL_BROKEN_HEAD))
+        journal(w, 'install-broken', { notice: firstLine(why) })
+      w.status = 'waiting'
+      w.error = why
+      w.waitUntil = null
+      changed(w)
+    }
+    return true
+  }
+  if (w.status === 'waiting' && w.error?.startsWith(INSTALL_BROKEN_HEAD)) {
+    journal(w, 'install-repaired', { notice: `Claude Code ${st.version ?? ''} runs again` })
+    w.status = 'queued'
+    w.error = null
+    w.waitUntil = null
+    changed(w)
+  }
+  return false
+}
+
 let launcher = launch
 
 /** Test seam: start tasks with `fn` instead of a real CLI (null: the real one). */
@@ -622,6 +669,7 @@ function holdForAccount(
  *  line and its continuation is placed again); else it waits. At 11:05 that day priority-1 tasks
  *  sat waiting behind a flat 4-worker cap and an unbounded wait for room while #35 had room. */
 export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
+  if (holdForInstall(w)) return
   const { now, accounts } = s
   // No cap from the dispatcher: the default, which counts Pro windows (groupCap).
   const cap = perAccount[w.group] ?? null

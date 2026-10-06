@@ -30,6 +30,8 @@ export type CliMayteJournalEvent =
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
   | 'cleaned' // its attempt ended and what the session left running was ended (`notice`: which)
   | 'waiting' // no account it may use is free
+  | 'install-broken' // the Claude Code install does not run: held, no retry spent (`notice`: why)
+  | 'install-repaired' // the install runs again: held work released
   | 'spill' // no account within its group's per_account took it: it started past it (`notice`: why)
   | 'start-short' // no account had room for it, none refills within five minutes: it started where the most room is (`notice`)
   | 'turn-done' // a turn finished and a queued follow-up comes next

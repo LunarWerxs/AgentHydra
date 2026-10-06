@@ -47,6 +47,7 @@ import {
 import { copyFile, link, mkdir, rename, rm } from 'node:fs/promises'
 import { homedir, release } from 'node:os'
 import { join } from 'node:path'
+import { claudeInstallState } from './claude-install-guard'
 import { repointClaudeStartShortcut } from './claude-start-shortcut'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
@@ -800,6 +801,16 @@ export const defaultFixDeps: FixDeps = {
       { timeoutMs: NPM_TIMEOUT_MS },
     )
     const tail = (run.stderr || run.stdout).trim().split(/\r?\n/).slice(-3).join(' ')
+    // Install, then VERIFY (2026-10-06: an update that stopped half way, or timed out here and had
+    // its npm killed, left a placeholder claude.exe and every launch died). The guard looks at the
+    // result fresh: when it does not run, launches stay on the verified last-known-good copy and the
+    // guard's own repair takes over; this update is reported as failed, not as done.
+    const state = claudeInstallState(true)
+    if (!state.ok || state.usingLastKnownGood)
+      return {
+        ok: false,
+        detail: `the new install does not run (${state.reason ?? 'unknown'}); ${state.usingLastKnownGood ? 'launches use the last-known-good copy while it is repaired' : 'it is being repaired'}`,
+      }
     return { ok: run.code === 0, detail: run.timedOut ? 'npm timed out' : tail }
   },
   updateDesktop: squirrelUpdate,
