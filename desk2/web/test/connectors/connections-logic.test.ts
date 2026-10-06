@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConnectorView } from '../../../shared/connectors'
-import { bypassRow, chatScopeAllowed, chipText, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, starState } from '../../src/components/connectors/connections-logic'
+import { bypassRow, chatScopeAllowed, chipText, connectionsServerInfo, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, signInLine, starState } from '../../src/components/connectors/connections-logic'
 
 const view = (over: Partial<ConnectorView>): ConnectorView => ({
   id: 'connections', name: 'Connections', blurb: '', homepage: 'https://example.com', installable: false, pane: false,
@@ -73,4 +73,22 @@ test('the Bypass permissions row shows a check and On / Off, and is hidden when 
   expect(bypassRow(ws(undefined))).toBeNull()
   expect(bypassRow(ws(true, false))).toBeNull()
   expect(bypassRow(null)).toBeNull()
+})
+
+describe('the Connections pane', () => {
+  test('names the transport from the address: HTTP with one, stdio without', () => {
+    expect(connectionsServerInfo([view({ url: 'http://127.0.0.1:7791/mcp', version: '1.2.3' })])).toEqual({ transport: 'HTTP', url: 'http://127.0.0.1:7791/mcp', stateText: 'Running', running: true, version: '1.2.3' })
+    expect(connectionsServerInfo([view({})])).toMatchObject({ transport: 'stdio', url: null, running: true })
+  })
+  test('says why a server that is set up does not answer; nothing when it is off or absent', () => {
+    expect(connectionsServerInfo([view({ state: 'failed', reason: 'timed out' })])).toMatchObject({ running: false, stateText: 'Not answering: timed out' })
+    expect(connectionsServerInfo([view({ state: 'absent' })])).toBeNull()
+    expect(connectionsServerInfo([view({ enabled: false })])).toBeNull()
+    expect(connectionsServerInfo(null)).toBeNull()
+  })
+  test('the sign-in line follows the workspace read', () => {
+    expect(signInLine(null)).toBe('Checking')
+    expect(signInLine({ signedIn: true, company: null, scope: 'folder' })).toBe('Signed in')
+    expect(signInLine({ signedIn: false, company: null, scope: 'folder' })).toBe('Signed out')
+  })
 })

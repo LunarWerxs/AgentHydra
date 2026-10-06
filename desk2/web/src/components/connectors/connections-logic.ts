@@ -50,3 +50,23 @@ export const starState = (ws: ConnectionsWorkspace | null, c: ConnectionsCompany
 
 /** The sign-in link the page still has to open: Connections opens it itself when it says so. */
 export const pageShouldOpen = (r: { url: string | null; opened: boolean }): string | null => (r.url && !r.opened && /^https?:\/\//.test(r.url) ? r.url : null)
+
+/** The Connections server this Desk talks to, as the pane shows it: how (stdio or HTTP), where, and whether it answers. */
+export interface ConnectionsServerInfo {
+  transport: 'HTTP' | 'stdio'
+  url: string | null
+  stateText: string
+  running: boolean
+  version: string | null
+}
+
+export function connectionsServerInfo(list: readonly ConnectorView[] | null): ConnectionsServerInfo | null {
+  const c = list?.find((x) => x.id === 'connections')
+  if (!c || !c.enabled || c.state === 'absent') return null
+  const running = c.state === 'running'
+  const text = running ? 'Running' : c.state === 'failed' ? (c.reason ? `Not answering: ${c.reason}` : 'Not answering') : c.state === 'installed' ? 'Not running' : c.state
+  return { transport: c.url ? 'HTTP' : 'stdio', url: c.url ?? null, stateText: text, running, version: c.version ?? null }
+}
+
+/** The pane's sign-in line for this chat's workspace read. */
+export const signInLine = (ws: ConnectionsWorkspace | null): string => (!ws ? 'Checking' : ws.signedIn ? 'Signed in' : 'Signed out')

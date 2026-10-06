@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConnectorView } from '../../../shared/connectors'
-import { pollDelay, repoYetiOf, repoYetiView, showRepoYetiButton } from '../../src/components/connectors/logic'
+import { changesTabFor, parseChangesTab, pollDelay, repoYetiOf, repoYetiView, showChangesSwitch } from '../../src/components/connectors/logic'
 
 const view = (over: Partial<ConnectorView>): ConnectorView => ({
   id: 'repoyeti', name: 'RepoYeti', blurb: '', homepage: 'https://example.com', installable: true, pane: true,
@@ -24,13 +24,23 @@ describe('repoYetiView', () => {
   })
 })
 
-describe('the title-bar button', () => {
-  test('shows when enabled and not absent, never when off or absent', () => {
-    expect(showRepoYetiButton(view({}))).toBe(true)
-    expect(showRepoYetiButton(view({ state: 'installing', url: null }))).toBe(true)
-    expect(showRepoYetiButton(view({ state: 'absent', url: null }))).toBe(false)
-    expect(showRepoYetiButton(view({ enabled: false }))).toBe(false)
-    expect(showRepoYetiButton(null)).toBe(false)
+describe("the Changes pane's switch", () => {
+  test('shows while the connector is listed and on, even when RepoYeti is not installed (the pane offers Install)', () => {
+    expect(showChangesSwitch(view({}))).toBe(true)
+    expect(showChangesSwitch(view({ state: 'absent', url: null }))).toBe(true)
+    expect(showChangesSwitch(view({ enabled: false }))).toBe(false)
+    expect(showChangesSwitch(null)).toBe(false)
+  })
+  test('the remembered side is used only while the switch shows; disabled shows plain Changes', () => {
+    expect(changesTabFor('repoyeti', view({}))).toBe('repoyeti')
+    expect(changesTabFor('repoyeti', view({ enabled: false }))).toBe('changes')
+    expect(changesTabFor('repoyeti', null)).toBe('changes')
+    expect(changesTabFor('changes', view({}))).toBe('changes')
+  })
+  test('storage text that is not a known side reads as Changes', () => {
+    expect(parseChangesTab('repoyeti')).toBe('repoyeti')
+    expect(parseChangesTab('nonsense')).toBe('changes')
+    expect(parseChangesTab(null)).toBe('changes')
   })
 })
 

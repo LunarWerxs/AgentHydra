@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol'
-import { icons, shellGlyphs, shellIcons } from '@/lib/icons'
+import { icons, settingsIcons, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { chatRow, elapsedLabel, folderLabel, glyphDotClass, resetClock, rowMenu, statusGlyph, type RowMenuItem } from '@/components/sidebar/logic'
@@ -10,14 +10,16 @@ import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
 import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
-import { GitBranch, ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { connectorList } from '@/components/connectors/connections-api'
+import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
+import { ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
 
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
 // title bar has one, the session header's fold (components/session-header).
-export type RightPane = 'diff' | 'climayte' | 'servers' | 'repoyeti'
+export type RightPane = 'diff' | 'climayte' | 'servers' | 'connections'
 
 const props = withDefaults(
   defineProps<{
@@ -25,8 +27,6 @@ const props = withDefaults(
     /** Title of a view that is not a chat (CliMayte, Elsewhere, Settings); empty on the new-session screen. */
     title?: string
     pane?: RightPane | null
-    /** The RepoYeti connector is on and installed: its pane button shows. */
-    repoyeti?: boolean
     /** Accounts for the chat menu's "Account" submenu. */
     accounts?: AccountInfo[]
     /** A session running elsewhere: read-only unless it is a Claude Code session. */
@@ -43,7 +43,7 @@ const props = withDefaults(
     /** A failed action to say in the title bar, left of its buttons; empty when there is none. */
     alert?: string
   }>(),
-  { title: '', pane: null, repoyeti: false, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [], tasksOpen: false, tasksRunning: 0, alert: '' }
+  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [], tasksOpen: false, tasksRunning: 0, alert: '' }
 )
 const emit = defineEmits<{
   action: [item: RowMenuItem]
@@ -109,6 +109,8 @@ function run(item: RowMenuItem) {
   else emit('action', item)
 }
 
+const connectionsShown = computed(() => showConnectionsChip(connectorList.value))
+const logoFailed = ref(false)
 const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
 
 const PANE_BTN =
@@ -232,9 +234,10 @@ const PANE_BTN =
           <component :is="shellGlyphs.browser" class="size-4" />
         </button>
       </Tip>
-      <Tip v-if="repoyeti" label="RepoYeti">
-        <button type="button" :class="PANE_BTN" aria-label="RepoYeti" :aria-pressed="pane === 'repoyeti'" @click="emit('toggle-pane', 'repoyeti')">
-          <GitBranch class="size-4" />
+      <Tip v-if="connectionsShown" label="Connections">
+        <button type="button" :class="PANE_BTN" aria-label="Connections" :aria-pressed="pane === 'connections'" @click="emit('toggle-pane', 'connections')">
+          <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-4" @error="logoFailed = true" />
+          <component :is="settingsIcons.connections" v-else class="size-4" />
         </button>
       </Tip>
       <Tip label="View options">

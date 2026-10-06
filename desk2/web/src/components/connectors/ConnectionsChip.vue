@@ -8,55 +8,35 @@
 // while the Connections connector is on and on this machine (GET /api/connectors); the server side is
 // server/src/plugins/56-connections.ts, the decisions are in connections-logic.ts.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ConnectionsCompany, ConnectionsWorkspace } from '@shared/connectors'
 import type { ChatSummary } from '@shared/protocol'
 import { icons, settingsIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
-import { connectorList, readCompanies, readWorkspace, refreshConnectorList, setDefaultWorkspace, startSignin, switchWorkspace } from './connections-api'
-import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassRow, chatScopeAllowed, chipText, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, starState } from './connections-logic'
+import { connectorList, refreshConnectorList } from './connections-api'
+import { NO_SESSION, useConnectionsWorkspace } from './connections-workspace'
+import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassRow, chipText, isCurrent, showConnectionsChip, starState } from './connections-logic'
 
 const props = defineProps<{ chat: ChatSummary }>()
 
-const ws = ref<ConnectionsWorkspace | null>(null)
-const companies = ref<ConnectionsCompany[]>([])
-const query = ref('')
+const { ws, companies, query, note, busy, chatOk, matches, showNone, load, loadCompanies, pick, toggleDefault, signIn } = useConnectionsWorkspace(() => props.chat)
 const menuOpen = ref(false)
 const search = ref<HTMLInputElement | null>(null)
-const note = ref('')
-const busy = ref(false)
 const logoFailed = ref(false)
 const list = ref<HTMLElement | null>(null)
 
 const shown = computed(() => showConnectionsChip(connectorList.value))
 const text = computed(() => chipText(ws.value))
 const bypass = computed(() => bypassRow(ws.value))
-const chatOk = computed(() => chatScopeAllowed(props.chat.sessionId))
-const matches = computed(() => filterCompanies(companies.value, query.value))
-const showNone = computed(() => !query.value.trim() || 'no workspace'.includes(query.value.trim().toLowerCase()))
-const NO_SESSION = 'Available once this chat has started (it has no Claude session yet)'
 
-async function load() {
-  try {
-    ws.value = await readWorkspace(props.chat.id)
-    note.value = ''
-  } catch (e) {
-    note.value = e instanceof Error ? e.message : String(e)
-  }
-}
 async function onOpen(open: boolean) {
   if (!open) return
   note.value = ''
   query.value = ''
   void load()
-  try {
-    companies.value = await readCompanies(props.chat.id)
-    await nextTick()
-    list.value?.querySelector('[data-current=true]')?.scrollIntoView({ block: 'center' })
-  } catch (e) {
-    note.value = e instanceof Error ? e.message : String(e)
-  }
+  await loadCompanies()
+  await nextTick()
+  list.value?.querySelector('[data-current=true]')?.scrollIntoView({ block: 'center' })
 }
 // The search box takes focus the moment the menu opens, so typing filters at once.
 function focusSearch(e: Event) {
@@ -79,42 +59,6 @@ function searchKey(e: KeyboardEvent) {
     }
   }
 }
-async function pick(company: string | null) {
-  if (!chatOk.value) {
-    note.value = NO_SESSION
-    return
-  }
-  busy.value = true
-  try {
-    ws.value = await switchWorkspace({ chat: props.chat.id, company, scope: 'chat' })
-    note.value = ''
-  } catch (e) {
-    note.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    busy.value = false
-  }
-}
-// The star: this workspace becomes (or, on the current default, stops being) the default for NEW chats in the folder.
-// It never switches this chat or any existing chat.
-async function toggleDefault(c: ConnectionsCompany) {
-  try {
-    ws.value = await setDefaultWorkspace({ chat: props.chat.id, company: starState(ws.value, c).on ? null : c.companyId })
-    note.value = ''
-  } catch (e) {
-    note.value = e instanceof Error ? e.message : String(e)
-  }
-}
-async function signIn() {
-  try {
-    const r = await startSignin(props.chat.id)
-    const url = pageShouldOpen(r)
-    if (url) window.open(url, '_blank', 'noopener')
-    note.value = r.url ? 'Approve the sign-in in your browser, then open this again' : ''
-  } catch (e) {
-    note.value = e instanceof Error ? e.message : String(e)
-  }
-}
-
 // Read-only: Desk never writes Bypass permissions; the row only opens Studio, where a person changes it.
 function openStudio() {
   window.open(CONNECTIONS_STUDIO_URL, '_blank', 'noopener')

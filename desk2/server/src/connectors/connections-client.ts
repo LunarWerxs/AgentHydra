@@ -13,12 +13,14 @@ import type { Readable, Writable } from 'node:stream'
 import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { type HttpServerConfig, HttpMcpError, HttpSession, HTTP_IDLE_MS, httpConfig } from './connections-http'
 
 export const IDLE_MS = 60_000
 /** Starting the server (node, then the handshake) may take a while on a cold disk. */
 export const START_TIMEOUT_MS = 20_000
 export const CALL_TIMEOUT_MS = 25_000
 
+/** A stdio entry: one node child per chat. */
 export interface ConnectionsServer {
   command: string
   args: string[]
@@ -45,6 +47,27 @@ export function connectionsServer(file: string = defaultConfigFile()): Connectio
   const env: Record<string, string> = {}
   if (s.env && typeof s.env === 'object') for (const [k, v] of Object.entries(s.env)) if (typeof v === 'string') env[k] = v
   return { command: s.command, args, env }
+}
+
+/** The `connections` entry of a main Claude config, stdio or http; null when it has none (or the file is unreadable). */
+export type ConnectionsEntry = ({ kind: 'stdio' } & ConnectionsServer) | ({ kind: 'http' } & HttpServerConfig)
+
+export function connectionsEntry(file: string = defaultConfigFile()): ConnectionsEntry | null {
+  const http = rawEntry(file)
+  const h = http ? httpConfig(http) : null
+  if (h) return { kind: 'http', ...h }
+  const s = connectionsServer(file)
+  return s ? { kind: 'stdio', ...s } : null
+}
+
+function rawEntry(file: string): Record<string, unknown> | null {
+  try {
+    const servers = (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: Record<string, unknown> } | null)?.mcpServers
+    const s = servers && typeof servers === 'object' ? servers.connections : undefined
+    return s && typeof s === 'object' ? (s as Record<string, unknown>) : null
+  } catch {
+    return null
+  }
 }
 
 /** True when the server's loader file (its first path argument) exists on this machine. */
@@ -186,22 +209,26 @@ export interface CallTarget {
   sessionId: string | null
 }
 
-/** Calls the Connections server of `file` (default: the main config). Children are kept per folder+session. */
+/** Calls the Connections server of `file` (default: the main config). A stdio child, or an HTTP session, is kept per folder+session. */
 export class ConnectionsClient {
   private sessions = new Map<string, Session>()
+  private http = new Map<string, HttpSession>()
 
   constructor(private file: string | null = defaultConfigFile()) {}
 
-  /** The server is set up in the config and its loader is on disk. */
+  /** The server is set up in the config; a stdio one also has its loader on disk. (An HTTP one may be down: a call says so.) */
   available(): boolean {
-    const s = this.file ? connectionsServer(this.file) : null
-    return s !== null && loaderExists(s)
+    const e = this.file ? connectionsEntry(this.file) : null
+    return e !== null && (e.kind === 'http' || loaderExists(e))
   }
 
   async call(target: CallTarget, tool: string, params: object = {}): Promise<string> {
-    const server = this.file ? connectionsServer(this.file) : null
-    if (!server) throw new ConnectionsError('Connections is not installed on this machine')
-    const key = `${target.cwd}\n${target.sessionId ?? ''}`
+    const entry = this.file ? connectionsEntry(this.file) : null
+    if (!entry) throw new ConnectionsError('Connections is not installed on this machine')
+    if (entry.kind === 'http') return this.callHttp(entry, target, tool, params)
+    const server = entry
+    const key = `${target.cwd}
+${target.sessionId ?? ''}`
     let s = this.sessions.get(key)
     if (!s || s.dead) {
       const made: Session = new Session(server, target.cwd, target.sessionId, () => {
@@ -213,9 +240,31 @@ export class ConnectionsClient {
     return s.call(tool, params)
   }
 
+  private async callHttp(cfg: HttpServerConfig, target: CallTarget, tool: string, params: object): Promise<string> {
+    const now = Date.now()
+    for (const [k, v] of this.http) if (now - v.lastUsed > HTTP_IDLE_MS) this.http.delete(k)
+    const key = `${cfg.url}
+${cfg.headersHelper ?? ''}
+${target.cwd}
+${target.sessionId ?? ''}`
+    let s = this.http.get(key)
+    if (!s) {
+      s = new HttpSession(cfg, target.cwd, target.sessionId)
+      this.http.set(key, s)
+    }
+    try {
+      return await s.call(tool, params)
+    } catch (err) {
+      if (err instanceof HttpMcpError) throw new ConnectionsError(err.message)
+      throw err
+    }
+  }
+
   closeAll(): void {
     for (const s of [...this.sessions.values()]) s.close()
     this.sessions.clear()
+    for (const s of this.http.values()) void s.close()
+    this.http.clear()
   }
 }
 

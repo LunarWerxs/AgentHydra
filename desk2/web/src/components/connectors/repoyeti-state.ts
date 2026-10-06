@@ -1,8 +1,8 @@
-// RepoYeti's connector entry, read from GET /api/connectors and shared by the title-bar button and the pane. One
-// polling loop for whoever watches it (the button while a chat is open, the pane while it is shown).
+// RepoYeti's connector entry, read from GET /api/connectors and shared by the Changes pane's switch and the RepoYeti side. One
+// polling loop for whoever watches it (the window while a chat is open, the pane while it is shown).
 import { computed, ref } from 'vue'
 import { CONNECTORS, REPOYETI_REGISTER, connectorAction, type ConnectorAction, type ConnectorsResponse, type ConnectorView, type RepoYetiRegisterResult } from '@shared/connectors'
-import { pollDelay, repoYetiOf } from './logic'
+import { parseChangesTab, pollDelay, repoYetiOf, type ChangesTab } from './logic'
 
 const list = ref<ConnectorView[] | null>(null)
 export const repoYeti = computed(() => repoYetiOf(list.value))
@@ -56,5 +56,25 @@ export async function registerRepoYetiFolder(cwd: string): Promise<RepoYetiRegis
     return res.ok ? ((await res.json()) as RepoYetiRegisterResult) : null
   } catch {
     return null
+  }
+}
+
+// Which side of the Changes pane is open: one choice for the whole Desk, remembered in this browser.
+const CHANGES_TAB_KEY = 'hydra-desk.changes.tab'
+const store = (): Storage | null => {
+  try {
+    return globalThis.localStorage ?? null
+  } catch {
+    return null
+  }
+}
+export const changesTab = ref<ChangesTab>(parseChangesTab(store()?.getItem(CHANGES_TAB_KEY)))
+
+export function setChangesTab(t: ChangesTab): void {
+  changesTab.value = t
+  try {
+    store()?.setItem(CHANGES_TAB_KEY, t)
+  } catch {
+    /* storage is full or blocked: the choice lasts until the window closes */
   }
 }

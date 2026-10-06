@@ -8,9 +8,9 @@ import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
 import { OPEN_BROWSER_EVENT } from '@shared/browser'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
-const DiffPane = lazyPanel(() => import('@/components/panes/DiffPane.vue'))
+const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
-const RepoYetiPane = lazyPanel(() => import('@/components/connectors/RepoYetiPane.vue'))
+const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
 import { clampPane, loadPaneWidth, PANE_KEY } from '@/components/servers/logic'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
 const SettingsView = lazyPanel(loadSettingsView)
@@ -26,8 +26,8 @@ import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@
 import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
-import { showRepoYetiButton } from '@/components/connectors/logic'
-import { repoYeti, watchRepoYeti } from '@/components/connectors/repoyeti-state'
+import { changesTabFor } from '@/components/connectors/logic'
+import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
 import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type View } from './logic'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
@@ -350,9 +350,8 @@ const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
 
 // Right pane
 const pane = ref<RightPane | null>(null)
-// RepoYeti's button shows while the connector is on and RepoYeti is on this machine (GET /api/connectors, polled).
-const repoYetiShown = computed(() => showRepoYetiButton(repoYeti.value))
-let stopWatchingRepoYeti: (() => void) | null = null
+// Changes with RepoYeti selected is as wide as the servers pane (it is a whole page in a frame).
+const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
 function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
@@ -364,7 +363,10 @@ function resizeServers(w: number) {
 }
 const onOpenDiff = () => (pane.value = 'diff')
 const onOpenCliMayte = () => (pane.value = 'climayte')
-const onOpenRepoYeti = () => (pane.value = 'repoyeti')
+const onOpenRepoYeti = () => {
+  setChangesTab('repoyeti')
+  pane.value = 'diff'
+}
 // A Browser card in the transcript: the servers pane shows that browser (it reads the same event itself).
 const onOpenBrowser = () => {
   if (chat.value) pane.value = 'servers'
@@ -469,7 +471,6 @@ function onKey(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  stopWatchingRepoYeti = watchRepoYeti()
   if (!props.demo) takeConnectReturn()
   window.addEventListener('keydown', onKey)
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
@@ -485,7 +486,6 @@ onMounted(() => {
   window.addEventListener('pagehide', saveWidth)
 })
 onBeforeUnmount(() => {
-  stopWatchingRepoYeti?.()
   saveWidth()
   window.removeEventListener('pagehide', saveWidth)
   window.removeEventListener('keydown', onKey)
@@ -578,7 +578,6 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               :chat="isNew ? null : chat"
               :title="viewTitle"
               :pane="pane"
-              :repoyeti="repoYetiShown"
               :accounts="src.accounts.value"
               :external="external"
               :stand-in="standIn"
@@ -615,18 +614,18 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             </div>
           </main>
 
-          <!-- Servers and RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
-               buttons end at the pane's left edge; Changes and CliMayte sit under the title bar. -->
+          <!-- Servers and Changes-with-RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
+               buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. -->
           <aside
             v-if="!tasks && pane && (pane === 'climayte' || chat)"
             class="col-start-2 flex min-h-0 shrink-0 border-l border-border"
-            :class="pane === 'servers' || pane === 'repoyeti' ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
-            :style="pane === 'servers' || pane === 'repoyeti' ? { width: `${serversWidth}px` } : undefined"
-            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'repoyeti' ? 'RepoYeti' : 'CliMayte'"
+            :class="wide ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
+            :style="wide ? { width: `${serversWidth}px` } : undefined"
+            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
-            <DiffPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" />
+            <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
             <ServersPane v-else-if="pane === 'servers' && chat" :cwd="chat.cwd" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
-            <RepoYetiPane v-else-if="pane === 'repoyeti' && chat" :cwd="chat.cwd" @close="pane = null" />
+            <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
 
