@@ -1170,7 +1170,7 @@ onBeforeUnmount(() => {
                 <img
                   :src="img.url"
                   :alt="img.name"
-                  class="size-[120px] rounded-[var(--radius-8)] border border-[#5a5a58] bg-[var(--bg-picture)] object-contain shadow-(--shadow-picture)"
+                  class="size-[120px] rounded-[var(--radius-8)] bg-[var(--bg-picture)] object-contain shadow-(--shadow-picture-light)"
                 />
               </button>
             </Tip>

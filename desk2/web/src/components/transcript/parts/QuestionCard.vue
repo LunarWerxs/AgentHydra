@@ -202,7 +202,7 @@ const summary = computed(() => {
               @paste="onPaste($event, q.question)"
             />
             <div v-if="pictures[q.question]?.length" class="flex flex-wrap gap-1.5">
-              <span v-for="im in pictures[q.question]" :key="im.id" class="group relative size-12 overflow-hidden rounded-md bg-(--bg-picture) shadow-(--shadow-picture)">
+              <span v-for="im in pictures[q.question]" :key="im.id" class="group relative size-12 overflow-hidden rounded-md bg-(--bg-picture) shadow-(--shadow-picture-light)">
                 <img :src="im.url" :alt="im.name" class="size-full object-cover" />
                 <button
                   type="button"

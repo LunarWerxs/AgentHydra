@@ -97,6 +97,8 @@
   /* Every picture (tiles, markdown, attachments, the viewer): a light ring and a drop shadow, so a dark screenshot on the
      dark page still reads as a picture. Outer, not inset: an inset ring is painted under the picture and never shows. */
   --shadow-picture: 0 0 0 1px #ffffff29, 0 2px 4px #00000059, 0 6px 18px #0000008c;
+  /* A picture waiting in the message box: the same ring, only a faint shadow (the full one looked heavy there). */
+  --shadow-picture-light: 0 0 0 1px #ffffff1f, 0 1px 3px #00000033;
   --shadow-picture-lifted: 0 0 0 1px #ffffff33, 0 4px 12px #00000080, 0 18px 56px #000000cc;
 
   --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
