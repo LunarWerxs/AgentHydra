@@ -576,7 +576,11 @@ function briefArgs(w: CliMayteWorker): string[] {
     // How the newest estimates compared with the real time (climayte-eta.ts): nothing until there
     // are enough samples, then the ratio to multiply a first guess by.
     const samples = allEtaSamples(workers.values())
-    const note = etaNote(etaCalibration(samples, w.kind ?? null), samples, etaBandCalibrations(samples))
+    const note = etaNote(
+      etaCalibration(samples, w.kind ?? null),
+      samples,
+      etaBandCalibrations(samples),
+    )
     return ['--append-system-prompt', note ? `${WORKER_BRIEF} ${note}` : WORKER_BRIEF]
   }
   const home = ownerHome()
