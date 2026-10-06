@@ -515,6 +515,10 @@ rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe 
 Chats run through `@anthropic-ai/claude-agent-sdk` 0.3.288. Each chat is a long-lived SDK session with
 your Claude Code settings, CLAUDE.md files, hooks and MCP servers loaded as Claude Code would load them.
 
+A release does not ship Claude Code's binary. AgentHydra fetches it once, on a chat's first start, from
+npm (checked against the registry's sha512 and kept in `~/.hydra-desk-2/claude-code/`), and that chat waits
+for it, showing the download's progress and a Retry if it fails. A checkout uses the installed SDK package.
+
 ## How it plugs into AgentHydra
 
 AgentHydra is the daemon on http://127.0.0.1:7787 (the parent folder of this one). Hydra Desk reads from
