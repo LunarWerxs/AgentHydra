@@ -22,6 +22,8 @@ export type ActionResult = ConnectorView | 'unknown' | 'unsupported'
 export interface ConnectorRegistry {
   list(): ConnectorView[]
   action(id: string, action: ConnectorAction): Promise<ActionResult>
+  /** Starts every enabled, installed, not running connector in the background; never throws. */
+  autoStart(): void
   /** Probes every connector now. */
   refresh(): Promise<void>
   stop(): void
@@ -149,6 +151,8 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
       else disabled.add(def.info.id)
       mkdirSync(opts.home, { recursive: true })
       writeFileSync(join(opts.home, 'connectors.json'), JSON.stringify({ disabled: [...disabled] }, null, 2))
+      // Switching it back on is the person asking for its tools: an installed app that is not running starts now.
+      if (act === 'enable' && def.start && detected.get(def.info.id)?.state === 'installed') return action(id, 'start')
       return view(def)
     }
     if (act === 'install') {
@@ -182,9 +186,18 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
     return 'unsupported'
   }
 
+  /** Starts, hidden and in the background, every enabled connector that is installed but not running (same path as a Start click). */
+  const autoStart = (): void => {
+    for (const def of defs) {
+      if (disabled.has(def.info.id) || !def.start || detected.get(def.info.id)?.state !== 'installed') continue
+      void action(def.info.id, 'start').catch((err) => console.error(`[connectors] auto-start of ${def.info.id} failed:`, firstLine(err)))
+    }
+  }
+
   return {
     list: () => defs.map(view),
     action,
+    autoStart,
     refresh,
     stop() {
       stopped = true
@@ -232,5 +245,6 @@ export async function startConnectors(ctx: ServerContext): Promise<ConnectorRegi
     registry.stop()
     if (active?.registry === registry) active = null
   })
+  registry.autoStart()
   return registry
 }
