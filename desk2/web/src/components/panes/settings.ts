@@ -7,13 +7,14 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'alerts' | 'climayte' | 'connections' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'alerts' | 'climayte' | 'connections' | 'connectors' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
   { id: 'climayte', label: 'CliMayte', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
+  { id: 'connectors', label: 'Connectors', caption: 'Settings' },
   { id: 'diagnostics', label: 'Diagnostics', caption: 'This computer' },
   { id: 'updates', label: 'Updates', caption: 'This computer' },
   { id: 'about', label: 'About', caption: 'This computer' },

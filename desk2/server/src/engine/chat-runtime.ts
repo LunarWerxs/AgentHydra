@@ -39,6 +39,7 @@ import type {
 import { contextPct } from './describe'
 import { deskAppend } from './desk-prompt'
 import { mainMcpOption } from './mcp-servers'
+import { connectorsForChat } from '../connectors/registry'
 import { InputQueue, type QueuedInput } from './input-queue'
 import { createNormalizer, LIMIT_LABEL, type Emission, type Normalizer } from './normalize'
 import { answersWithPictures, checkAnswer, elicitationItem, ruleLine, type ElicitationItem } from './requests'
@@ -326,13 +327,15 @@ export class ChatRuntime {
     const env: Record<string, string | undefined> = { ...this.baseEnv, ...SESSION_STATE_ENV }
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
     else delete env.CLAUDE_CONFIG_DIR
+    const connectors = connectorsForChat(chat.cwd)
+    const connectorPrompts = connectors.prompts.map((p) => `\n\n${p}`).join('')
     const options: Options = {
       cwd: chat.cwd,
       env,
       permissionMode: chat.permissionMode,
       includePartialMessages: true,
       settingSources: ['user', 'project', 'local'],
-      systemPrompt: { type: 'preset', preset: 'claude_code', append: deskAppend(chat.delegateToCliMayte) },
+      systemPrompt: { type: 'preset', preset: 'claude_code', append: `${deskAppend(chat.delegateToCliMayte)}${connectorPrompts}` },
       canUseTool: this.canUseTool,
       // Without it the SDK declines every MCP form, sign-in link or other request for input unseen.
       onElicitation: this.onElicitation,
@@ -356,7 +359,7 @@ export class ChatRuntime {
     const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
     if (swap) {
       options.settings = { claudeMdExcludes: swap.excludes }
-      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${deskAppend(chat.delegateToCliMayte)}
+      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${deskAppend(chat.delegateToCliMayte)}${connectorPrompts}
 
 # User instructions (~/.claude/CLAUDE.md)
 
@@ -364,7 +367,8 @@ ${swap.real}` }
     }
     const mcp = this.agentHydraMcp === undefined ? readAgentHydraMcp() : this.agentHydraMcp
     // What plain `claude` gets in this folder under the main config, on whatever account the chat runs; Hydra Desk's own agenthydra wins.
-    const servers = { ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: mcp } : {}) }
+    // A running connector's servers sit under the person's own config of the same name.
+    const servers = { ...connectors.mcpServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: mcp } : {}) }
     if (Object.keys(servers).length) options.mcpServers = servers
     return options
   }

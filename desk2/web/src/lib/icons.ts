@@ -214,6 +214,7 @@ export const settingsIcons = {
   alerts: BellRing,
   climayte: Bot,
   connections: Plug,
+  connectors: Blocks,
   diagnostics: Activity,
   updates: CloudDownload,
   about: Info,
