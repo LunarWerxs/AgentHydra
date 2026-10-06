@@ -105,13 +105,26 @@ export interface RedesignReply {
   /** Option number -> note. */
   notes: Record<number, string>
   more: boolean
+  /** "Other" is the choice: `text` is what the person typed. */
+  other: boolean
   text: string
 }
 
-/** Something to send: a choice, a request for more, or words. */
-export const canSendReply = (r: RedesignReply): boolean => r.more || r.pick !== null || r.text.trim() !== ''
+/** The choice the card shows selected: an option number, "other", or nothing. */
+export type RedesignChoice = number | 'other' | null
 
-/** The one message the card posts: `ReDesign: I pick option 2. Notes: option 2: "tighter spacing"; option 1: "bigger logo". <free text>`. */
+/** The reply the card sends for a choice: free text counts only under Other, a note only under its own option. */
+export function replyFor(choice: RedesignChoice, notes: Record<number, string>, text: string, more = false): RedesignReply {
+  if (more) return { pick: null, notes: {}, more: true, other: false, text: '' }
+  if (choice === 'other') return { pick: null, notes: {}, more: false, other: true, text }
+  if (choice === null) return { pick: null, notes: {}, more: false, other: false, text: '' }
+  return { pick: choice, notes: { [choice]: notes[choice] ?? '' }, more: false, other: false, text: '' }
+}
+
+/** Something to send: an option, a request for more, or (under Other) words. */
+export const canSendReply = (r: RedesignReply): boolean => r.more || r.pick !== null || (r.other && r.text.trim() !== '')
+
+/** The one message the card posts: `ReDesign: I pick option 2. Notes: option 2: "tighter spacing".`, `ReDesign: more options please.`, or the typed words. */
 export function composeRedesignReply(r: RedesignReply): string {
   const text = r.text.trim()
   const parts: string[] = []

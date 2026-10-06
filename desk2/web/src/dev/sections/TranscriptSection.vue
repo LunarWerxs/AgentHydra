@@ -56,6 +56,23 @@ function inventedPage(): string {
 }
 const call = (id: string, tool: string, params: Record<string, unknown>, result: string, extra: Partial<TranscriptItem> = {}): TranscriptItem =>
   ({ id, ts: Date.now(), kind: 'tool_use', name: 'mcp__connections__connections_execute', input: { local: true, tool_name: tool, params }, status: 'done', startedAt: Date.now(), result: { text: result, isError: false }, ...extra }) as TranscriptItem
+// A ReDesign card: four options of an invented brief. The pictures are /api/redesign/image/gallery-run/option-N.png (served
+// by the Desk server from its design-options folder).
+const redesignOptions = [1, 2, 3, 4].map((option) => ({ option, description: `Layout ${option}`, image: `option-${option}.png` }))
+const redesignItems: TranscriptItem[] = [
+  { id: 'rdu', ts: Date.now(), kind: 'user', text: 'Make a landing page for the example shop.' },
+  {
+    id: 'rd1',
+    ts: Date.now(),
+    kind: 'tool_use',
+    name: 'mcp__desk_redesign__design_options',
+    input: { brief: 'A landing page for an example shop that sells handmade mugs, with a calm look and one clear call to action.', ask_owner: true },
+    status: 'done',
+    startedAt: Date.now(),
+    result: { text: `The options are shown.
+${JSON.stringify({ run: 'gallery-run', options: redesignOptions })}`, isError: false },
+  } as TranscriptItem,
+]
 const browserItems: TranscriptItem[] = [
   { id: 'bu', ts: Date.now(), kind: 'user', text: 'Check the shop admin for unpaid orders.' },
   call('bn1', 'browser_navigate', { url: 'https://example.com/admin', profile: BROWSER_PROFILE }, 'Opened https://example.com/admin'),
@@ -126,6 +143,12 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
+    <div>
+      <h3 class="mb-2 text-[13px] text-text-muted">A ReDesign card asking the owner to pick (4 options)</h3>
+      <div class="h-[900px] overflow-hidden rounded-lg border border-border" data-gallery-redesign>
+        <TranscriptView chat-id="gallery-redesign" :items="redesignItems" :chat="null" />
+      </div>
+    </div>
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">A program's note (an AgentHydra ping), closed</h3>
       <div class="h-[260px] overflow-hidden rounded-lg border border-border" data-gallery-note>

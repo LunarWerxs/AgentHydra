@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { toolFamily } from '../../src/components/transcript/lib/tools'
-import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, redesignState, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
+import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, redesignState, replyFor, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
 
 const OPT = 'mcp__desk_redesign__design_options'
 const PICK = 'mcp__desk_redesign__design_pick'
@@ -27,7 +27,7 @@ const DONE = {
 }
 
 describe('composeRedesignReply', () => {
-  const base = { pick: null, notes: {}, more: false, text: '' }
+  const base = { pick: null, notes: {}, more: false, other: false, text: '' }
   test('a pick with notes, sorted by option, blanks dropped, quotes softened, free text last', () => {
     expect(composeRedesignReply({ ...base, pick: 2, notes: { 2: ' tighter spacing ', 1: 'bigger "logo"', 3: '  ' }, text: 'Thanks.' })).toBe(
       `ReDesign: I pick option 2. Notes: option 1: "bigger 'logo'"; option 2: "tighter spacing". Thanks.`,
@@ -42,12 +42,38 @@ describe('composeRedesignReply', () => {
   test('free text alone', () => {
     expect(composeRedesignReply({ ...base, text: ' none of these ' })).toBe('ReDesign: none of these')
   })
-  test('nothing to send until there is a pick, more, or words', () => {
+  test('nothing to send until there is a pick, more, or words under Other', () => {
     expect(canSendReply(base)).toBe(false)
     expect(canSendReply({ ...base, notes: { 1: 'x' } })).toBe(false)
     expect(canSendReply({ ...base, pick: 1 })).toBe(true)
     expect(canSendReply({ ...base, more: true })).toBe(true)
-    expect(canSendReply({ ...base, text: 'hi' })).toBe(true)
+    expect(canSendReply({ ...base, other: true })).toBe(false)
+    expect(canSendReply({ ...base, other: true, text: '   ' })).toBe(false)
+    expect(canSendReply({ ...base, other: true, text: 'hi' })).toBe(true)
+    expect(canSendReply({ ...base, text: 'hi' })).toBe(false)
+  })
+})
+
+describe('replyFor: the card choice state', () => {
+  const send = (...a: Parameters<typeof replyFor>) => {
+    const r = replyFor(...a)
+    return canSendReply(r) ? composeRedesignReply(r) : null
+  }
+  test('nothing chosen: nothing to send, whatever was typed', () => {
+    expect(send(null, {}, 'stale words')).toBeNull()
+  })
+  test('an option sends its number; only its own note rides along', () => {
+    expect(send(2, { 2: 'tighter', 1: 'ignored' }, 'stale words')).toBe('ReDesign: I pick option 2. Notes: option 2: "tighter".')
+    expect(send(3, {}, '')).toBe('ReDesign: I pick option 3.')
+  })
+  test('Other needs typed words, then sends just them', () => {
+    expect(send('other', { 1: 'x' }, '')).toBeNull()
+    expect(send('other', {}, '  ')).toBeNull()
+    expect(send('other', { 1: 'x' }, ' a warmer palette ')).toBe('ReDesign: a warmer palette')
+  })
+  test('More options is always sendable and carries nothing else', () => {
+    expect(send('other', { 1: 'x' }, 'words', true)).toBe('ReDesign: more options please.')
+    expect(send(null, {}, '', true)).toBe('ReDesign: more options please.')
   })
 })
 
