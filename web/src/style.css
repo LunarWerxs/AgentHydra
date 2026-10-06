@@ -617,3 +617,14 @@
   --color-brand-codex-tile: #fff;
   --shadow-row-selected: inset 3px 0 0 var(--color-primary);
 }
+
+/*
+ * Nothing moves while the window is unfocused, hidden or minimized (src/lib/pause-motion.ts sets the class):
+ * a running row's pulse or spinner would keep the compositor and the GPU process drawing 60 frames a second
+ * for nobody. It resumes where it stopped.
+ */
+html.motion-paused *,
+html.motion-paused *::before,
+html.motion-paused *::after {
+  animation-play-state: paused !important;
+}

@@ -3,6 +3,7 @@ import { installPrivacy } from './composables/usePrivacy'
 import { hydrateSharedPrefs } from './composables/useSharedPrefs'
 import { appModeForPath } from './lib/app-mode'
 import { installImeCompositionGuard } from './lib/ime-composition-guard'
+import { pauseMotionWhenAway } from './lib/pause-motion'
 import { startSignInNudgeSession } from './lib/sign-in-nudge'
 import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import { migrateLegacyUsageFilterScope } from './lib/usage-filter'
@@ -12,6 +13,9 @@ import './style.css'
 // Safari and Chrome-on-macOS the Enter that commits a CJK candidate otherwise submits half-typed
 // text. One document-level guard (kit-synced) instead of a check at ~every Enter handler.
 installImeCompositionGuard()
+
+// Hold animation still while the window is unfocused or hidden (idle GPU).
+pauseMotionWhenAway()
 
 // Before any component setup runs — useStorage reads its key once and keeps it.
 migrateLegacyStorageKeys()
