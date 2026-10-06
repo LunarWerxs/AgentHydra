@@ -15,8 +15,12 @@ import { Comment, Fragment, Text, cloneVNode, defineComponent } from 'vue'
  * Two ways to arm it:
  *  - On an enclosing element, such as a sidebar row: put `v-on="listeners"` on the element that is
  *    there before the overlay mounts (the row's wrapper, or the trigger itself) and branch on `seen`
- *    for the overlay roots. The overlay is mounted by the time the first right-click or click lands
- *    (pointer-enter and focus always come first), so that first one needs no replay.
+ *    for the overlay roots. Pointer-enter does NOT always come before a press (a press with no move
+ *    before it, such as a click right after a wheel scroll, sends enter and down back to back), so the
+ *    swap never happens while a press is in progress: a press runs on the stand-in (which carries the
+ *    control's own listeners, so its click completes there), the swap follows the release, and only
+ *    what opens an overlay is replayed: a pointer-down on a menu trigger, a context menu the stand-in
+ *    could not open. A click that already ran is never replayed.
  *  - On the trigger itself, via `<InterestSlot :listeners="listeners">`: it renders the default slot's
  *    one element with the listeners added. `Tip` does this and passes `{ replay: true }`.
  *
@@ -24,7 +28,7 @@ import { Comment, Fragment, Text, cloneVNode, defineComponent } from 'vue'
  * after arming the composable puts back what the swap would lose: focus goes back to the same
  * descendant of the component's root element (found by its child-index path), and with
  * `replay: true` the arming event is replayed on the new root: a pointer-enter becomes a pointermove
- * (reka opens a tooltip on that, after its normal delay), a pointer-down or key is re-dispatched.
+ * (reka opens a tooltip on that, after its normal delay), a key is re-dispatched.
  *
  * `useFirstInterestSet()` is the same for rows drawn by a `v-for` inside one component.
  *
@@ -76,7 +80,7 @@ function resolve(root: HTMLElement, path: number[]): HTMLElement | null {
   return cur instanceof HTMLElement ? cur : null
 }
 
-function replayOn(event: Event, target: HTMLElement): void {
+function replayOn(event: Event, target: HTMLElement, targetPath: number[] | null): void {
   if (event instanceof PointerEvent) {
     const init: PointerEventInit = {
       bubbles: true,
@@ -94,7 +98,13 @@ function replayOn(event: Event, target: HTMLElement): void {
       metaKey: event.metaKey,
     }
     if (event.type === 'pointerdown') {
-      target.dispatchEvent(new PointerEvent('pointerdown', init))
+      // The press already ran its click on the stand-in. Only a menu trigger still needs it (it opens on
+      // pointerdown), and not one that is already open (its menu root lived outside the swap).
+      const hit = targetPath ? resolve(target, targetPath) : null
+      const trigger = hit?.closest<HTMLElement>('[aria-haspopup]')
+      if (trigger && target.contains(trigger) && trigger.getAttribute('aria-expanded') !== 'true') {
+        trigger.dispatchEvent(new PointerEvent('pointerdown', init))
+      }
     } else if (event.pointerType !== 'touch') {
       // The new trigger sits under a pointer that has not moved, so no pointermove comes by itself.
       const under = document.elementFromPoint(event.clientX, event.clientY)
@@ -116,30 +126,117 @@ function replayOn(event: Event, target: HTMLElement): void {
   }
 }
 
-type Listeners = Record<string, (event: any) => void>
+function replayMenu(menu: MouseEvent, root: HTMLElement): void {
+  const under = document.elementFromPoint(menu.clientX, menu.clientY)
+  const target = under && root.contains(under) ? under : root
+  target.dispatchEvent(
+    new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      clientX: menu.clientX,
+      clientY: menu.clientY,
+      button: menu.button,
+      buttons: menu.buttons,
+      ctrlKey: menu.ctrlKey,
+      shiftKey: menu.shiftKey,
+      altKey: menu.altKey,
+      metaKey: menu.metaKey,
+    })
+  )
+}
 
-function listenersFor(arm: (event: Event) => void, interest: Interest[]): Listeners {
+type Listeners = Record<string, (event: any) => void>
+type Fire = (event: Event, from: HTMLElement | null, menu: MouseEvent | null) => void
+
+/**
+ * The listeners that arm one control. A press must finish on the element it started on, or the browser
+ * sends its click to a common ancestor; so a pointer-down (or a context-menu request) is let through
+ * first and the arming (the swap) waits until the pointer is up. Meanwhile a context menu the stand-in
+ * could not open is held back and handed to `fire`, which replays it on the new element. A hover is
+ * armed one task later and not at all with a button down, so a press that arrives back to back with its
+ * pointer-enter (no move before it) finds the stand-in still there. Focus that a press causes is ignored.
+ */
+function listenersFor(armed: () => boolean, fire: Fire, interest: Interest[]): Listeners {
   const listeners: Listeners = {}
-  if (interest.includes('hover')) listeners.pointerenter = arm
-  if (interest.includes('focus')) listeners.focusin = arm
-  if (interest.includes('press')) listeners.pointerdown = arm
+  let pressing = false
+  let hover = 0
+
+  function now(event: Event): void {
+    if (armed() || pressing) return
+    fire(event, event.currentTarget instanceof HTMLElement ? event.currentTarget : null, null)
+  }
+
+  function press(event: Event): void {
+    if (armed() || pressing) return
+    clearTimeout(hover)
+    pressing = true
+    const from = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+    let menu: MouseEvent | null = null
+    // Bubble phase on window: it runs after the stand-in's own handlers, so a menu they already opened
+    // (defaultPrevented) is not opened twice.
+    const onMenu = (e: Event): void => {
+      if (e.defaultPrevented || menu) return
+      menu = e as MouseEvent
+      e.preventDefault()
+    }
+    const stop = (): void => {
+      window.removeEventListener('pointerup', stop, true)
+      window.removeEventListener('pointercancel', stop, true)
+      window.removeEventListener('blur', stop)
+      // One task later, after the click (and a context menu that comes with the release) went out.
+      setTimeout(() => {
+        window.removeEventListener('contextmenu', onMenu)
+        pressing = false
+        if (!armed()) fire(event, from, menu)
+      }, 0)
+    }
+    window.addEventListener('pointerup', stop, true)
+    window.addEventListener('pointercancel', stop, true)
+    window.addEventListener('blur', stop)
+    window.addEventListener('contextmenu', onMenu)
+    if (event.type === 'contextmenu') stop()
+  }
+
+  if (interest.includes('hover')) {
+    listeners.pointerenter = (event: PointerEvent) => {
+      if (event.buttons) return
+      const from = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+      clearTimeout(hover)
+      hover = window.setTimeout(() => {
+        if (!armed() && !pressing) fire(event, from, null)
+      }, 0)
+    }
+  }
+  if (interest.includes('focus')) listeners.focusin = now
+  if (interest.includes('press')) {
+    listeners.pointerdown = press
+    listeners.contextmenu = press
+  }
   if (interest.includes('key')) {
     listeners.keydown = (event: KeyboardEvent) => {
-      if (KEYS.has(event.key)) arm(event)
+      if (KEYS.has(event.key)) now(event)
     }
   }
   return listeners
 }
 
 /** Flip to seen, then put back what swapping the trigger for a new element loses (see the doc above). */
-function settle(event: Event, before: HTMLElement | null, after: () => HTMLElement | null, replay: boolean): void {
+function settle(
+  event: Event,
+  before: HTMLElement | null,
+  after: () => HTMLElement | null,
+  replay: boolean,
+  menu: MouseEvent | null
+): void {
   const active = document.activeElement
   const focusPath = before && active && before.contains(active) ? pathTo(before, active) : null
+  const targetPath = before && event.target instanceof Element ? pathTo(before, event.target) : null
   void nextTick(() => {
     const root = after()
     if (!root) return
     if (focusPath) resolve(root, focusPath)?.focus({ preventScroll: true })
-    if (replay) replayOn(event, root)
+    if (menu) replayMenu(menu, root)
+    else if (replay || event.type === 'pointerdown') replayOn(event, root, targetPath)
   })
 }
 
@@ -151,14 +248,14 @@ export function useFirstInterest(options: FirstInterestOptions = {}): {
   const seen = ref(false)
   const root = (): HTMLElement | null => firstElement((instance?.vnode.el as Node | null) ?? null)
 
-  function arm(event: Event): void {
+  function arm(event: Event, _from: HTMLElement | null, menu: MouseEvent | null): void {
     if (seen.value) return
     const before = root()
     seen.value = true
-    settle(event, before, root, options.replay === true)
+    settle(event, before, root, options.replay === true, menu)
   }
 
-  return { seen, listeners: listenersFor(arm, options.interest ?? ['hover', 'focus', 'press', 'key']) }
+  return { seen, listeners: listenersFor(() => seen.value, arm, options.interest ?? ['hover', 'focus', 'press', 'key']) }
 }
 
 /**
@@ -179,12 +276,16 @@ export function useFirstInterestSet(options: { interest?: Interest[] } = {}): {
     listeners(id) {
       let found = cache.get(id)
       if (!found) {
-        found = listenersFor((event) => {
-          if (ids.has(id)) return
-          const parent = event.currentTarget instanceof HTMLElement ? event.currentTarget.parentElement : null
-          ids.add(id)
-          settle(event, parent, () => parent, false)
-        }, interest)
+        found = listenersFor(
+          () => ids.has(id),
+          (event, from, menu) => {
+            if (ids.has(id)) return
+            const parent = from?.parentElement ?? null
+            ids.add(id)
+            settle(event, parent, () => parent, false, menu)
+          },
+          interest
+        )
         cache.set(id, found)
       }
       return found
