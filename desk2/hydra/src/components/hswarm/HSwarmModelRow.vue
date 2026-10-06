@@ -15,7 +15,7 @@ const props = defineProps<{
 </script>
 
 <template>
-  <TableRow :variant="row.switched_off || !row.enabled ? 'faded' : 'default'" class="group/row">
+  <TableRow :variant="row.switched_off || !row.enabled ? 'faded' : 'default'" class="group/row [&>td]:h-[26px]">
     <template v-for="col in columns" :key="col.key">
       <TableCell v-if="col.key === 'modelEnabled'">
         <Switch
