@@ -4,7 +4,7 @@
 // chat its MCP tools while it runs.
 //
 // What RepoYeti's source says (v1.3.0), and what this file does with it:
-// - Its daemon listens on 127.0.0.1:7171 (or the next free port) and records the port it really bound in
+// - Its daemon listens on 127.0.0.1:7171 (or another free port) and records the port it really bound in
 //   <REPOYETI_HOME or ~/.repoyeti>/runtime.json { port, url, pid }, a file that outlives the daemon, so a runtime
 //   file alone proves nothing: running means GET <url>/api/health answers { service: 'repoyeti' }.
 // - `repoyeti start` runs the daemon; only a bare double-click of the release exe (no arguments) opens a browser, so
@@ -24,21 +24,20 @@ import { installedApp, installFromRelease, startHidden } from '../release'
 
 const REPO = 'LunarWerxs/RepoYeti'
 const ASSET = 'repoyeti-windows-x64.exe'
-const DEFAULT_URL = 'http://127.0.0.1:7171'
 const PROBE_MS = 1500
 
 /** RepoYeti's own state folder (it honours REPOYETI_HOME), read at call time so a test can point it elsewhere. */
 const stateDir = (): string => process.env.REPOYETI_HOME || join(homedir(), '.repoyeti')
 
-/** The url its runtime.json records, or the default one. A stale file only costs a failed probe. */
-function runtimeUrl(): string {
+/** The url its runtime.json records, or null without one (it always writes it when it listens). A stale file only costs a failed probe. */
+function runtimeUrl(): string | null {
   try {
     const url = (JSON.parse(readFileSync(join(stateDir(), 'runtime.json'), 'utf8')) as { url?: unknown }).url
     if (typeof url === 'string' && /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):\d+$/.test(url)) return url
   } catch {
     /* no file: it never ran, or exited cleanly */
   }
-  return DEFAULT_URL
+  return null
 }
 
 /** The version when `url` answers as RepoYeti, else null. */
@@ -76,7 +75,8 @@ const repoyeti: ConnectorFactory = ({ home }): ConnectorDef => {
   const waitRunning = async (ms: number): Promise<void> => {
     const until = Date.now() + ms
     while (Date.now() < until) {
-      if (await probe(runtimeUrl())) return
+      const url = runtimeUrl()
+      if (url && (await probe(url))) return
       await new Promise((r) => setTimeout(r, 500))
     }
     throw new Error(`RepoYeti did not answer within ${Math.round(ms / 1000)} s; see ${log}`)
@@ -85,7 +85,8 @@ const repoyeti: ConnectorFactory = ({ home }): ConnectorDef => {
   const start = async (): Promise<void> => {
     const file = exe()
     if (!file) throw new Error('RepoYeti is not installed')
-    if (await probe(runtimeUrl())) return
+    const running = runtimeUrl()
+    if (running && (await probe(running))) return
     if (startHidden([file, 'start'], { log, env: { REPOYETI_NO_OPEN: '1' } }) === null) throw new Error(`RepoYeti would not start; see ${log}`)
     await waitRunning(30_000)
   }
@@ -102,8 +103,8 @@ const repoyeti: ConnectorFactory = ({ home }): ConnectorDef => {
 
     async detect(): Promise<Detected> {
       const url = runtimeUrl()
-      const up = await probe(url)
-      if (up) return { state: 'running', url, version: up.version ?? installedApp(dest)?.version ?? null }
+      const up = url ? await probe(url) : null
+      if (url && up) return { state: 'running', url, version: up.version ?? installedApp(dest)?.version ?? null }
       if (installedApp(dest) || machineExe()) return { state: 'installed', url: null, version: installedApp(dest)?.version ?? null }
       return { state: 'absent', url: null, version: null, reason: 'not on this machine' }
     },

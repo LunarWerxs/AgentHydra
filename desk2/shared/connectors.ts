@@ -89,3 +89,14 @@ export interface ConnectionsSwitch {
   /** chat: this chat alone. folder: every chat in this folder, and the folder's default from now on. */
   scope: 'chat' | 'folder'
 }
+
+/** POST { chat }: starts Connections' browser sign-in for this machine; answers ConnectionsSignin. */
+export const CONNECTIONS_SIGNIN = `${CONNECTORS}/connections/signin`
+
+export interface ConnectionsSignin {
+  /** The approval page to open; null when the machine is already signed in. */
+  url: string | null
+  /** Connections already opened `url` in the system browser itself, so the page does not open it again. */
+  opened: boolean
+  signedIn: boolean
+}

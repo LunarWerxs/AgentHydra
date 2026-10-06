@@ -9,6 +9,7 @@ import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
+import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
 import { GitBranch, ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
@@ -188,6 +189,7 @@ const PANE_BTN =
           <span class="tnum">{{ chat.climayteActive }}</span>
         </button>
       </Tip>
+      <ConnectionsChip :chat="chat" />
     </template>
     <template v-else-if="external">
       <span class="truncate px-1 font-medium text-text">{{ external.title }}</span>
