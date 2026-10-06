@@ -675,6 +675,17 @@ sub-agents for estimating time until they can actually estimate time properly."
   `etaNote` turns it into the sentence `briefArgs` appends to `WORKER_BRIEF`: within 1.25x either way
   "Your estimates have been close ...", otherwise "Calibrate your ETA: ... Multiply your first guess
   by about X before you write it." So the prompt corrects itself as the samples come in.
+- **Calibration by size (owner, 2026-10-06: the estimates were "badly off").** Measured over 10 days
+  of transcripts, 315 `ETA:` lines against the real working time: first guesses under 10 min ran a
+  median 1.01x (right), 10-19 min 0.58x, 20-39 min 0.60x, 40 min or more 0.22x (a 90-minute guess
+  typically took about 20); 112 of the 315 were exactly `ETA: 10 min`. One flat multiplier shortens
+  the right small guesses and leaves the big ones 3-5x long, so `etaBandCalibrations` also gives the
+  median and quartiles of took/estimated per `ETA_BANDS` band (under 10, 10-19, 20-39, 40 and over),
+  over the newest `ETA_BAND_SAMPLES` = 200 samples of every kind; a band with under 5 samples is left
+  out. When one qualifies, `etaNote` says "Calibrate your ETA by its size: first guesses under 10 min
+  have run 1.0x (keep them), 10-19 min 0.58x ... scale your first guess by its band before you write
+  it." instead of the flat sentence (kept when no band qualifies); the cause sentence follows, all
+  within 450 characters. `climayte_scorecard().estimates.byBand` shows the bands.
 - **The ledger (owner, 2026-10-06: "if you track it, it will get better").** `eta.jsonl` in the corch
   folder (`climayte-eta-ledger.ts`), append-only: a `said` row (exact `ETA:` line, the text block it
   was in, the message, kind, model, effort, account), a `settled` row (working `tookS`, `wallS` = what

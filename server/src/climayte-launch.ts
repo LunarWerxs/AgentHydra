@@ -36,7 +36,7 @@ import {
   workers,
 } from './climayte-core'
 import { copySessionToCwd } from './climayte-cwd'
-import { etaCalibration, etaNote, MAX_PAST_ETAS } from './climayte-eta'
+import { etaBandCalibrations, etaCalibration, etaNote, MAX_PAST_ETAS } from './climayte-eta'
 import { allEtaSamples } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
 import {
@@ -576,7 +576,7 @@ function briefArgs(w: CliMayteWorker): string[] {
     // How the newest estimates compared with the real time (climayte-eta.ts): nothing until there
     // are enough samples, then the ratio to multiply a first guess by.
     const samples = allEtaSamples(workers.values())
-    const note = etaNote(etaCalibration(samples, w.kind ?? null), samples)
+    const note = etaNote(etaCalibration(samples, w.kind ?? null), samples, etaBandCalibrations(samples))
     return ['--append-system-prompt', note ? `${WORKER_BRIEF} ${note}` : WORKER_BRIEF]
   }
   const home = ownerHome()

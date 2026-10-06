@@ -315,6 +315,54 @@ export function etaCalibration(samples: EtaSample[], kind: string | null): EtaCa
   }
 }
 
+/** The estimate-size bands, in minutes: from (inclusive) up to `to` (exclusive). Measured 2026-10-06
+ *  over 315 estimates: under 10 min ran 1.01x, 10-19 min 0.58x, 20-39 min 0.60x, 40 min or more
+ *  0.22x, so one flat multiplier fits none of them. */
+export const ETA_BANDS: ReadonlyArray<{ label: string; from: number; to: number }> = [
+  { label: 'under 10 min', from: 0, to: 10 },
+  { label: '10-19 min', from: 10, to: 20 },
+  { label: '20-39 min', from: 20, to: 40 },
+  { label: '40 min or more', from: 40, to: Infinity },
+]
+/** The banded calibration reads this many of the newest samples (every kind), so bands fill. */
+export const ETA_BAND_SAMPLES = 200
+
+/** How the newest estimates of one size band compare with the real time. */
+export interface EtaBandCalibration {
+  band: string
+  from: number
+  /** The band's end in minutes, exclusive; null for the open-ended last band. */
+  to: number | null
+  samples: number
+  ratio: number
+  low: number
+  high: number
+}
+
+/** The calibration of each size band over the newest ETA_BAND_SAMPLES samples of every kind; a band
+ *  with fewer than ETA_MIN_SAMPLES samples is left out. `samples` is newest first. */
+export function etaBandCalibrations(samples: EtaSample[]): EtaBandCalibration[] {
+  const pick = samples.slice(0, ETA_BAND_SAMPLES)
+  const out: EtaBandCalibration[] = []
+  for (const b of ETA_BANDS) {
+    const ratios = pick
+      .filter((s) => s.minutes >= b.from && s.minutes < b.to)
+      .map((s) => s.tookS / 60 / s.minutes)
+      .sort((x, y) => x - y)
+    if (ratios.length < ETA_MIN_SAMPLES) continue
+    out.push({
+      band: b.label,
+      from: b.from,
+      to: Number.isFinite(b.to) ? b.to : null,
+      samples: ratios.length,
+      ratio: round2(quantile(ratios, 0.5)),
+      low: round2(quantile(ratios, 0.25)),
+      high: round2(quantile(ratios, 0.75)),
+    })
+  }
+  return out
+}
+
 const times = (n: number): string => `${n < 1 ? n.toFixed(2) : n.toFixed(1)}x`
 
 /** A worker's reviews count toward the brief from this many. */
@@ -344,9 +392,19 @@ function causeSentence(reviews: EtaSample[], room: number): string | null {
 
 /** The sentence the worker brief ends with, or null when there is nothing to say yet. `reviews`
  *  (newest first) adds why the misses happened once there are REVIEW_NOTE_MIN of them. */
-export function etaNote(c: EtaCalibration | null, reviews: EtaSample[] = []): string | null {
+export function etaNote(
+  c: EtaCalibration | null,
+  reviews: EtaSample[] = [],
+  bands: EtaBandCalibration[] = [],
+): string | null {
   let base: string | null = null
-  if (c) {
+  if (bands.length) {
+    const parts = bands.map((b, i) => {
+      const close = b.ratio <= CLOSE && b.ratio >= 1 / CLOSE
+      return `${i === 0 ? 'first guesses ' : ''}${b.band} ${i === 0 ? 'have run ' : ''}${times(b.ratio)}${close ? ' (keep them)' : ''}`
+    })
+    base = `Calibrate your ETA by its size: ${parts.join(', ')}; scale your first guess by its band before you write it.`
+  } else if (c) {
     const over = `over the last ${c.samples}${c.kind ? ` ${c.kind}` : ''} tasks the real working time was a median ${times(c.ratio)} the estimate (half fell between ${times(c.low)} and ${times(c.high)})`
     if (c.ratio <= CLOSE && c.ratio >= 1 / CLOSE)
       base = `Your estimates have been close: ${over}. Keep estimating the same way.`

@@ -27,8 +27,10 @@ import { registerStopHookRoute } from '../src/climayte-ask-mcp'
 import { workers } from '../src/climayte-core'
 import {
   type CliMayteEta,
+  ETA_BANDS,
   ETA_MIN_SAMPLES,
   type EtaSample,
+  etaBandCalibrations,
   etaCalibration,
   etaFullOfEvent,
   etaNote,
@@ -264,13 +266,16 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
       seeded.push(copy.id)
     }
     const brief = cliArgv(rec, 'sid', false, 'hooks.json', null).at(-1) ?? ''
-    expect(brief.startsWith(`${WORKER_BRIEF} Calibrate your ETA: over the last 6 code tasks`)).toBe(
-      true,
-    )
-    expect(brief).toContain('Multiply your first guess by about 2.0 before you write it.')
+    expect(
+      brief.startsWith(
+        `${WORKER_BRIEF} Calibrate your ETA by its size: first guesses under 10 min have run 2.0x`,
+      ),
+    ).toBe(true)
+    expect(brief).toContain('scale your first guess by its band before you write it.')
     const card = climayteScorecard().estimates
     expect(card.byKind.find((c) => c.kind === 'code')?.samples).toBeGreaterThanOrEqual(6)
     expect(card.all?.samples).toBeGreaterThanOrEqual(6)
+    expect(card.byBand[0]).toMatchObject({ band: 'under 10 min', ratio: 2 })
   }, 40_000)
 })
 
@@ -460,6 +465,78 @@ describe('the ledger', () => {
       { cause: 'padding', n: 2, medianRatio: 2.75 },
       { cause: 'scope-smaller', n: 1, medianRatio: 0.2 },
     ])
+  })
+})
+
+describe('calibration by the size of the estimate', () => {
+  const n = (count: number, minutes: number, tookMin: number, at = 0) =>
+    Array.from({ length: count }, (_, i) => sample('code', minutes, tookMin, at + i))
+
+  test('bands split at 10, 20 and 40 minutes', () => {
+    expect(ETA_BANDS.map((b) => b.label)).toEqual([
+      'under 10 min',
+      '10-19 min',
+      '20-39 min',
+      '40 min or more',
+    ])
+    const at = (minutes: number) => etaBandCalibrations(n(ETA_MIN_SAMPLES, minutes, minutes * 2))
+    const bandOf = (minutes: number) => at(minutes).map((b) => b.band)
+    expect(bandOf(9.9)).toEqual(['under 10 min'])
+    expect(bandOf(10)).toEqual(['10-19 min'])
+    expect(bandOf(19.9)).toEqual(['10-19 min'])
+    expect(bandOf(20)).toEqual(['20-39 min'])
+    expect(bandOf(39.9)).toEqual(['20-39 min'])
+    expect(bandOf(40)).toEqual(['40 min or more'])
+    expect(at(40)[0]).toMatchObject({ from: 40, to: null, samples: 5, ratio: 2, low: 2, high: 2 })
+  })
+
+  test('a band under the minimum is left out, and the median and quartiles are the band own', () => {
+    const s = [
+      ...n(ETA_MIN_SAMPLES - 1, 90, 18, 500),
+      ...[5, 10, 20, 30, 40].map((took, i) => sample('docs', 10, took, 100 + i)),
+    ].sort((a, b) => b.doneAt - a.doneAt)
+    const got = etaBandCalibrations(s)
+    expect(got.map((b) => b.band)).toEqual(['10-19 min'])
+    expect(got[0]).toMatchObject({ ratio: 2, low: 1, high: 3 })
+  })
+
+  test('it reads the newest 200 samples, not only the newest 30', () => {
+    const s = [...n(40, 5, 5, 1000), ...n(ETA_MIN_SAMPLES, 50, 10, 0)].sort(
+      (a, b) => b.doneAt - a.doneAt,
+    )
+    expect(etaBandCalibrations(s).map((b) => b.band)).toEqual(['under 10 min', '40 min or more'])
+  })
+
+  test('the note is per band, keeps close bands, and leaves out thin ones', () => {
+    const s = [...n(6, 5, 5.05, 300), ...n(6, 12, 7, 200), ...n(6, 90, 20, 100), ...n(2, 25, 10, 0)]
+    const note = etaNote(etaCalibration(s, null), s, etaBandCalibrations(s))
+    expect(note).toBe(
+      'Calibrate your ETA by its size: first guesses under 10 min have run 1.0x (keep them), 10-19 min 0.58x, 40 min or more 0.22x; scale your first guess by its band before you write it.',
+    )
+  })
+
+  test('with no qualifying band the flat sentence stays', () => {
+    const s = n(5, 10, 30).map((x) => ({ ...x, minutes: 10 }))
+    const flat = etaNote(etaCalibration(s, 'code'))
+    expect(flat).toStartWith('Calibrate your ETA: over the last 5 code tasks')
+    expect(etaNote(etaCalibration(s, 'code'), s, [])).toBe(flat)
+  })
+
+  test('the cause sentence follows and the whole note stays within 450 chars', () => {
+    const why = 'The commands were slow. '.repeat(20)
+    const reviewed = (cause: string, i: number): EtaSample => ({
+      ...sample('code', 10, 4, 1000 - i),
+      review: { why, cause },
+    })
+    const s = [
+      ...[0, 1, 2, 3, 4].map((i) => reviewed('padding', i)),
+      ...n(6, 5, 5, 300),
+      ...n(6, 90, 20, 100),
+    ]
+    const note = etaNote(etaCalibration(s, null), s, etaBandCalibrations(s)) ?? ''
+    expect(note).toStartWith('Calibrate your ETA by its size: first guesses under 10 min')
+    expect(note).toContain('Most common reason an estimate missed: padding (5 of 5)')
+    expect(note.length).toBeLessThanOrEqual(450)
   })
 })
 

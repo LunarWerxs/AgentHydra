@@ -85,7 +85,9 @@ import {
 } from './climayte-core'
 import { validateCwd } from './climayte-cwd'
 import {
+  type EtaBandCalibration,
   type EtaCalibration,
+  etaBandCalibrations,
   etaCalibration,
   etaNote,
   etaTookSeconds,
@@ -3644,6 +3646,7 @@ export function climayteScorecard(): {
   estimates: {
     all: EtaCalibration | null
     byKind: EtaCalibration[]
+    byBand: EtaBandCalibration[]
     note: string | null
   } & ReturnType<typeof etaReport>
 } {
@@ -3651,6 +3654,7 @@ export function climayteScorecard(): {
   const rows = scoreRows(workers.values())
   const samples = allEtaSamples(workers.values())
   const all = etaCalibration(samples, null)
+  const byBand = etaBandCalibrations(samples)
   const byKind = [...new Set(samples.map((s) => s.kind).filter((k): k is string => !!k))]
     .map((k) => etaCalibration(samples, k))
     .filter((c): c is EtaCalibration => c?.kind != null)
@@ -3686,7 +3690,13 @@ export function climayteScorecard(): {
           ladderIndex({ model: ladderModel(r.model), effort: r.effort }) === best,
       }
     }),
-    estimates: { all, byKind, note: etaNote(all, samples), ...etaReport(samples) },
+    estimates: {
+      all,
+      byKind,
+      byBand,
+      note: etaNote(all, samples, byBand),
+      ...etaReport(samples),
+    },
   }
 }
 
