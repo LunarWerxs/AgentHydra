@@ -231,6 +231,10 @@ const out = resolve(outArg)
 const isWindows = target === 'windows-x64'
 const platform = process.platform === 'win32' ? 'windows' : process.platform
 const hostTarget = `${platform}-${process.arch}`
+// Windows has no execute bit to put in a tar, so a POSIX bundle packaged there ships an `agenthydra`
+// that will not start ("Permission denied"). release.yml packages those targets on Linux.
+if (!isWindows && process.platform === 'win32')
+  fail(`${target} must be packaged on Linux or macOS: Windows cannot mark the launcher executable`)
 
 for (const dist of ['desk2/web/dist', 'desk2/hydra/dist']) {
   if (!existsSync(join(ROOT, dist, 'index.html'))) {
