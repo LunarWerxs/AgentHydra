@@ -3,9 +3,11 @@
 // picture fitted to the window; Space, Esc or Enter close it; Left/Right step through the message's pictures and stop
 // at the ends; the wheel (or + and -) zooms at the pointer with a snap to fit and to true 100%; drag pans a zoomed
 // picture; 0 or 1 or a double click toggles fit and 100%; W fits the width; F goes full screen. Keys: lib/viewer.ts.
+// The pen (or A) annotates the picture (Annotator.vue); Save copy puts the annotated copy in the box beside the original.
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { ChevronLeft, ChevronRight, X } from '@lucide/vue'
-import { closeLightbox, lightbox, stepLightbox } from '../lib/media'
+import { ChevronLeft, ChevronRight, Pencil, X } from '@lucide/vue'
+import { canAnnotate } from '../lib/annotate'
+import { ANNOTATED_EVENT, closeLightbox, lightbox, stepLightbox, type Annotated } from '../lib/media'
 import {
   FIT_VIEW,
   clampPan,
@@ -19,12 +21,15 @@ import {
   type Geometry,
   type ViewState,
 } from '../lib/viewer'
+import Annotator from './Annotator.vue'
 
 const stage = ref<HTMLElement | null>(null)
 const view = ref<ViewState>(FIT_VIEW)
 const natural = ref({ w: 0, h: 0 })
 const area = ref({ w: 0, h: 0 })
 const dragging = ref(false)
+const annotating = ref(false)
+const annotator = ref<InstanceType<typeof Annotator> | null>(null)
 
 const current = computed(() => (lightbox.value ? lightbox.value.items[lightbox.value.index] : null))
 const count = computed(() => lightbox.value?.items.length ?? 0)
@@ -38,6 +43,18 @@ const imgStyle = computed(() => {
   return { width: `${g.iw * scale}px`, height: `${g.ih * scale}px`, transform: `translate(${view.value.panX}px, ${view.value.panY}px)` }
 })
 const percent = computed(() => (natural.value.w ? zoomPercent(view.value, geometry.value) : 0))
+const annotatable = computed(() => !!current.value && canAnnotate(current.value.src))
+
+function startAnnotating() {
+  if (annotatable.value) annotating.value = true
+}
+// The annotated copy goes to the box: right after the original when it is an attachment there, else onto the box on screen.
+function onAnnotated(copy: { dataUrl: string; mediaType: string; name: string }) {
+  const detail: Annotated = { ...copy, ...(current.value?.attachId ? { afterId: current.value.attachId } : {}) }
+  window.dispatchEvent(new CustomEvent<Annotated>(ANNOTATED_EVENT, { detail }))
+  annotating.value = false
+  closeLightbox()
+}
 
 function measure() {
   const el = stage.value
@@ -54,6 +71,7 @@ watch(
   () => {
     view.value = FIT_VIEW
     natural.value = { w: 0, h: 0 }
+    annotating.value = false
   },
 )
 
@@ -110,6 +128,12 @@ function toggleFullscreen() {
 }
 
 function onKey(e: KeyboardEvent) {
+  if (annotating.value) {
+    // Annotating owns every key: none reaches the page behind, and the editor's own (Esc, Ctrl+Z, tools) do nothing else.
+    e.stopImmediatePropagation()
+    if (annotator.value?.handleKey(e)) e.preventDefault()
+    return
+  }
   const action = viewerKeyAction(e)
   if (!action) return
   // The viewer owns its keys while open: the page behind (composer, permission card digits) never sees them.
@@ -131,6 +155,8 @@ function onKey(e: KeyboardEvent) {
       return void (view.value = toggleZoom(view.value, fitWidthZoom(g)))
     case 'fullscreen':
       return toggleFullscreen()
+    case 'annotate':
+      return startAnnotating()
   }
 }
 // Space closed the viewer on key down; its release must not "click" the button that had focus and reopen it.
@@ -161,6 +187,7 @@ watch(
         observer.observe(stage.value)
       }
     } else {
+      annotating.value = false
       window.removeEventListener('keydown', onKey, true)
       observer?.disconnect()
       observer = null
@@ -182,47 +209,62 @@ onBeforeUnmount(() => {
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-150">
       <div v-if="lightbox && current" class="tx-viewer fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'">
-        <div
-          ref="stage"
-          tabindex="-1"
-          class="absolute inset-0 flex items-center justify-center overflow-hidden outline-none"
-          :class="dragging ? 'cursor-grabbing' : view.zoom > 1 ? 'cursor-grab' : 'cursor-zoom-out'"
-          data-testid="viewer-stage"
-          @click="onStageClick"
-          @wheel.prevent="onWheel"
-          @pointerdown="onPointerDown"
-          @pointermove="onPointerMove"
-          @pointerup="onPointerUp"
-          @pointercancel="onPointerUp"
-        >
-          <img
-            :key="current.src"
-            :src="current.src"
-            :alt="current.alt"
-            class="tx-viewer-img max-w-none select-none rounded-6 shadow-[var(--shadow-menu)]"
-            draggable="false"
-            :style="imgStyle"
-            @load="onLoad"
-            @dblclick="onDblClick"
-          />
-        </div>
-        <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 py-3 text-[13px] text-text-muted">
-          <span class="truncate" data-testid="viewer-title">{{ current.alt }}</span>
-          <button type="button" class="tx-action pointer-events-auto" aria-label="Close" @click.stop="closeLightbox"><X class="size-4" /></button>
-        </div>
-        <template v-if="count > 1">
-          <button type="button" class="tx-action absolute left-4 top-1/2 -translate-y-1/2" aria-label="Previous picture" :disabled="index === 0" @click.stop="stepLightbox(-1)">
-            <ChevronLeft class="size-4" />
-          </button>
-          <button type="button" class="tx-action absolute right-4 top-1/2 -translate-y-1/2" aria-label="Next picture" :disabled="index === count - 1" @click.stop="stepLightbox(1)">
-            <ChevronRight class="size-4" />
-          </button>
+        <Annotator v-if="annotating" ref="annotator" :src="current.src" :name="current.alt" @cancel="annotating = false" @save="onAnnotated" />
+        <template v-else>
+          <div
+            ref="stage"
+            tabindex="-1"
+            class="absolute inset-0 flex items-center justify-center overflow-hidden outline-none"
+            :class="dragging ? 'cursor-grabbing' : view.zoom > 1 ? 'cursor-grab' : 'cursor-zoom-out'"
+            data-testid="viewer-stage"
+            @click="onStageClick"
+            @wheel.prevent="onWheel"
+            @pointerdown="onPointerDown"
+            @pointermove="onPointerMove"
+            @pointerup="onPointerUp"
+            @pointercancel="onPointerUp"
+          >
+            <img
+              :key="current.src"
+              :src="current.src"
+              :alt="current.alt"
+              class="tx-viewer-img max-w-none select-none rounded-6 shadow-(--shadow-picture-lifted)"
+              draggable="false"
+              :style="imgStyle"
+              @load="onLoad"
+              @dblclick="onDblClick"
+            />
+          </div>
+          <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 py-3 text-[13px] text-text-muted">
+            <span class="truncate" data-testid="viewer-title">{{ current.alt }}</span>
+            <span class="flex shrink-0 items-center gap-1">
+              <button
+                v-if="annotatable"
+                type="button"
+                class="tx-viewer-pen pointer-events-auto"
+                title="Annotate: draw, highlight, circle (A)"
+                data-testid="viewer-annotate"
+                @click.stop="startAnnotating"
+              >
+                <Pencil class="size-3.5" />Annotate
+              </button>
+              <button type="button" class="tx-action pointer-events-auto" aria-label="Close" @click.stop="closeLightbox"><X class="size-4" /></button>
+            </span>
+          </div>
+          <template v-if="count > 1">
+            <button type="button" class="tx-action absolute left-4 top-1/2 -translate-y-1/2" aria-label="Previous picture" :disabled="index === 0" @click.stop="stepLightbox(-1)">
+              <ChevronLeft class="size-4" />
+            </button>
+            <button type="button" class="tx-action absolute right-4 top-1/2 -translate-y-1/2" aria-label="Next picture" :disabled="index === count - 1" @click.stop="stepLightbox(1)">
+              <ChevronRight class="size-4" />
+            </button>
+          </template>
+          <div class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 px-4 py-3 text-[12px] text-text-muted">
+            <span v-if="count > 1" data-testid="viewer-count">{{ index + 1 }} / {{ count }}</span>
+            <span v-if="percent" data-testid="viewer-zoom">{{ percent }}%</span>
+            <span class="opacity-70">Space or Esc closes · ← → step · wheel or + − zoom · 1 toggles 100% · W fits the width<template v-if="annotatable"> · A annotates</template></span>
+          </div>
         </template>
-        <div class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 px-4 py-3 text-[12px] text-text-muted">
-          <span v-if="count > 1" data-testid="viewer-count">{{ index + 1 }} / {{ count }}</span>
-          <span v-if="percent" data-testid="viewer-zoom">{{ percent }}%</span>
-          <span class="opacity-70">Space or Esc closes · ← → step · wheel or + − zoom · 1 toggles 100% · W fits the width</span>
-        </div>
       </div>
     </Transition>
   </Teleport>
@@ -234,5 +276,22 @@ onBeforeUnmount(() => {
   background-color: #2b2b29;
   background-image: conic-gradient(#3a3a38 25%, transparent 0 50%, #3a3a38 0 75%, transparent 0);
   background-size: 16px 16px;
+}
+.tx-viewer-pen {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: var(--fill-5);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: pointer;
+  transition: background-color 60ms, color 60ms;
+}
+.tx-viewer-pen:hover {
+  background: var(--fill-hover);
+  color: var(--text);
 }
 </style>

@@ -71,7 +71,7 @@ import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
-import { openLightbox } from '@/components/transcript/lib/media'
+import { ANNOTATED_EVENT, openLightbox, type Annotated } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
 import PermissionCard from '@/components/transcript/parts/PermissionCard.vue'
@@ -549,6 +549,26 @@ function moveDraft(path: string) {
   shell.select({ kind: 'new', cwd: path })
 }
 
+// The viewer saved an annotated copy: right after its original when that is attached here, else (a picture from the
+// transcript) attached last. The original stays.
+function onAnnotated(ev: Event) {
+  const copy = (ev as CustomEvent<Annotated>).detail
+  if (copy.taken) return
+  const at = copy.afterId ? images.value.findIndex((i) => i.id === copy.afterId) : -1
+  if (copy.afterId && at < 0) return
+  copy.taken = true
+  if (props.into) return showNotice(props.into.why)
+  const pic: PendingImage = { id: crypto.randomUUID(), name: copy.name, mediaType: copy.mediaType, dataBase64: dataUrlToBase64(copy.dataUrl), url: copy.dataUrl }
+  images.value = at >= 0 ? [...images.value.slice(0, at + 1), pic, ...images.value.slice(at + 1)] : [...images.value, pic]
+}
+function openAttachment(img: PendingImage) {
+  openLightbox(
+    img.url,
+    img.name,
+    images.value.map((i) => ({ src: i.url, alt: i.name, attachId: i.id })),
+  )
+}
+
 // Undo took a message of this chat's out: it comes back in above what is typed, its pictures before those attached.
 function onPutBack(ev: Event) {
   const back = (ev as CustomEvent<PutBack>).detail
@@ -958,6 +978,7 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onShown)
   window.addEventListener('resize', autoGrow)
   window.addEventListener(PUT_BACK_EVENT, onPutBack)
+  window.addEventListener(ANNOTATED_EVENT, onAnnotated)
   loadNewSessionDefaults()
   try {
     models.value = await api.models()
@@ -984,6 +1005,7 @@ onBeforeUnmount(() => {
   recognition?.stop()
   window.removeEventListener('resize', autoGrow)
   window.removeEventListener(PUT_BACK_EVENT, onPutBack)
+  window.removeEventListener(ANNOTATED_EVENT, onAnnotated)
   cancelAnimationFrame(growFrame)
 })
 </script>
@@ -1144,11 +1166,11 @@ onBeforeUnmount(() => {
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
-              <button type="button" class="block cursor-zoom-in" :aria-label="`Open ${img.name}`" @click="openLightbox(img.url, img.name)">
+              <button type="button" class="block cursor-zoom-in" :aria-label="`Open ${img.name}`" @click="openAttachment(img)">
                 <img
                   :src="img.url"
                   :alt="img.name"
-                  class="size-[120px] rounded-[var(--radius-8)] border border-[#444444] bg-[var(--bg-page)] object-contain"
+                  class="size-[120px] rounded-[var(--radius-8)] border border-[#5a5a58] bg-[var(--bg-picture)] object-contain shadow-(--shadow-picture)"
                 />
               </button>
             </Tip>

@@ -95,6 +95,7 @@ export type ViewerAction =
   | { type: 'toggle100' }
   | { type: 'fitWidth' }
   | { type: 'fullscreen' }
+  | { type: 'annotate' }
 
 export interface KeyLike {
   key: string
@@ -106,7 +107,7 @@ export interface KeyLike {
 /**
  * Route one key press. Space, Esc and Enter close (keys.rs keydown_lifecycle); Left/Right and PgUp/PgDn flip
  * to the previous/next picture of the message; + and - (with or without Ctrl) zoom a step; 0 or 1 toggle
- * fit and true 100% (Ctrl+0 in SageThumbs); W toggles fit-width; F or F11 toggles full screen.
+ * fit and true 100% (Ctrl+0 in SageThumbs); W toggles fit-width; F or F11 toggles full screen; A starts annotating.
  */
 export function viewerKeyAction(e: KeyLike): ViewerAction | null {
   if (e.altKey) return null
@@ -140,6 +141,9 @@ export function viewerKeyAction(e: KeyLike): ViewerAction | null {
       return mod ? null : { type: 'fullscreen' }
     case 'F11':
       return { type: 'fullscreen' }
+    case 'a':
+    case 'A':
+      return mod ? null : { type: 'annotate' }
     default:
       return null
   }

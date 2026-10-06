@@ -38,6 +38,23 @@ export function formatSize(bytes: number | undefined): string {
 export interface ViewerPicture {
   src: string
   alt: string
+  /** A picture attached in the box and not yet sent: its id there, so an annotated copy lands right after it. */
+  attachId?: string
+}
+
+/** The viewer saved an annotated copy: the window event, whose detail is an Annotated. */
+export const ANNOTATED_EVENT = 'hydra-desk:annotated'
+
+/**
+ * An annotated copy for the box. With `afterId` the box holding that attachment puts it right after it; without
+ * (a picture already in the transcript) the box on screen attaches it. The box that takes it sets `taken`.
+ */
+export interface Annotated {
+  dataUrl: string
+  mediaType: string
+  name: string
+  afterId?: string
+  taken?: boolean
 }
 
 /** The viewer's state while it is open: the pictures of one message and which one shows; null when closed. */

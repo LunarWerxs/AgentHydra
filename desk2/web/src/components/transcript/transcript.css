@@ -289,7 +289,7 @@
   color: var(--accent-text);
 }
 
-/* Markdown pictures, measured: at most 360 high, r5, 1px white-10% ring, zoom-in cursor. */
+/* Markdown pictures, measured: at most 360 high, r5, zoom-in cursor; the picture ring and drop shadow (style.css). */
 .md-img {
   display: block;
   max-width: 100%;
@@ -303,7 +303,8 @@
   max-height: 360px;
   width: auto;
   border-radius: 5px;
-  border: 1px solid var(--border);
+  background: var(--bg-picture);
+  box-shadow: var(--shadow-picture);
 }
 .tx-inline-picture {
   align-self: flex-start;
@@ -338,14 +339,15 @@
   vertical-align: middle;
 }
 
-/* Picture tiles (user bubble, tool results): 8px rounded, 96 high, the white-10% ring. */
+/* Picture tiles (user bubble, tool results): 8px rounded, 96 high, the picture ring and drop shadow (style.css). */
 .tx-tile {
   display: block;
   flex: none;
   max-width: 100%;
   overflow: hidden;
   border-radius: 8px;
-  box-shadow: inset 0 0 0 1px var(--border);
+  background: var(--bg-picture);
+  box-shadow: var(--shadow-picture);
   cursor: zoom-in;
 }
 .tx-tile img {

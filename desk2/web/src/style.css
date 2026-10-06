@@ -94,6 +94,10 @@
   --shadow-menu: 0 8px 24px #00000052, 0 2px 6px #0003;
   --shadow-composer: inset 0 0 0 1px #ffffff1a, 0 4px 20px #00000009;
   --shadow-popover: inset 0 0 0 1px #ffffff1a, 0 8px 24px #000000;
+  /* Every picture (tiles, markdown, attachments, the viewer): a light ring and a drop shadow, so a dark screenshot on the
+     dark page still reads as a picture. Outer, not inset: an inset ring is painted under the picture and never shows. */
+  --shadow-picture: 0 0 0 1px #ffffff29, 0 2px 4px #00000059, 0 6px 18px #0000008c;
+  --shadow-picture-lifted: 0 0 0 1px #ffffff33, 0 4px 12px #00000080, 0 18px 56px #000000cc;
 
   --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-snap: cubic-bezier(0.32, 0.72, 0, 1);
@@ -274,6 +278,7 @@
   --shadow-composer-focus: inset 0 0 0 1px #ffffff33, 0 4px 20px #00000009; /* not measured: ring goes border-strong */
   --ease-composer: cubic-bezier(0.4, 0, 0.2, 1);
   --radius-4: 4px; /* badges (Recommended, Default, counts) */
+  --bg-picture: #232322; /* behind a picture while it loads, and through a transparent one */
 }
 
 /* Composer polish: the send glyph while the box shows a suggested next prompt (user/window.webp). */
