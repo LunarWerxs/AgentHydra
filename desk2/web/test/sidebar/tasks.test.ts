@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test'
-import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
-import { nestTasks, unplacedHeading, type TaskNode } from '../../src/components/sidebar/tasks'
+import type { CliMayteWorker, CloudSession, ExternalSession, SwarmJob } from '@shared/protocol'
+import type { CloudGroup } from '../../src/components/cloud/logic'
+import type { ChatGroup, SidebarEntry } from '../../src/components/sidebar/logic'
+import { addToCloudGroups, addToDeskGroups, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -64,8 +66,8 @@ test("a session's running tasks sit under it, a manager's wave under the manager
   expect(tasks.byRow.has('cloud:s-mgr2')).toBe(false)
   const listed = [...tasks.byRow.values()].flat().map((n) => n.worker.id)
   expect(listed.length).toBe(new Set(listed).size)
-  // Every running task is under a row or drawn as one, so none is listed again at the top.
-  expect(tasks.unplaced).toEqual([])
+  // Every running task is under a row or drawn as one, so no row is added for one.
+  expect(tasks.added).toEqual([])
 })
 
 test('a running task deep in a chain is still listed, at the deepest indent, with the finished task above it', () => {
@@ -92,7 +94,7 @@ test('managers that name each other still give each row an answer, each task onc
 })
 
 // The owner, 2026-10-04: "Under the chat which spawned them. Not as its own stand alone table".
-test('a task sits only under the row that spawned it: one from a session no row draws is listed nowhere', () => {
+test('a task sits only under the row that spawned it: one from a session no row draws is under no drawn row', () => {
   const done = { status: 'done', active: false }
   const workers = [
     // The Desk chat runs as a worker: the row stands for it.
@@ -132,15 +134,15 @@ test("another PC's tasks sit under the chat that spawned them there, a wave unde
 })
 
 // (owner, 2026-10-05, AgentHydra's CliMayte list against Desk's sidebar: "Is one smaller than six? Yes ... Why?")
-test('a running task no row lists is still shown, at the top, one block per PC with a stand-in per chat, and every running task is shown once', () => {
+test('a running task no row lists is still shown: its chat, else the task itself, is added as a row, and every running task is shown once', () => {
   const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
   const workers = [
     // Under its chat, as before.
     worker('placed', 1, { originSessionId: 's-chat' }),
-    // Its chat is not in the list: the finished manager above it comes too.
+    // Its chat is not in the list: the finished manager above it comes too, under that chat's row.
     worker('mgr', 2, { originSessionId: 's-hidden', status: 'done', active: false }),
     worker('kid', 3, { originWorkerId: 'mgr', originSessionId: 's-mgr' }),
-    // Nothing here says which chat started it.
+    // Nothing here says which chat started it: the task is a row itself, never under a "No chat" heading.
     worker('loose', 4, { originSessionId: null }),
     // A PC whose older AgentHydra sends no session or origin for any task.
     worker('old1', 5, { ...bare, pc: 'PC-OLD' }),
@@ -160,12 +162,17 @@ test('a running task no row lists is still shown, at the top, one block per PC w
   ]
   const tasks = nestTasks(rows, workers)
   expect(listOf(tasks.byRow.get('chat:1'))).toEqual(['1:here:placed'])
-  expect(tasks.unplaced.map((b) => [b.pc, b.chats.map((c) => [c.title, c.worker, listOf(c.nodes)])])).toEqual([
-    [null, [['A chat · s-hidden', null, ['1:here:mgr', '2:here:kid']], ['No chat', null, ['1:here:loose', '1:here:orphan']]]],
-    ['PC-OLD', [['Unknown chat', null, ['1:PC-OLD:old1', '1:PC-OLD:old2']]]],
-    ['PC-NEW', [['A chat on PC-NEW · s-there', null, ['1:PC-NEW:new']], ['No chat', null, ['1:PC-NEW:new-loose']]]]
+  // An unknown chat takes its first task's title.
+  expect(tasks.added.map((a) => [a.pc, a.title, a.worker?.id ?? null, listOf(a.nodes)])).toEqual([
+    [null, 'mgr', null, ['1:here:mgr', '2:here:kid']],
+    [null, 'loose', 'loose', []],
+    ['PC-OLD', 'old1', 'old1', []],
+    ['PC-OLD', 'old2', 'old2', []],
+    ['PC-NEW', 'new', null, ['1:PC-NEW:new']],
+    ['PC-NEW', 'new-loose', 'new-loose', []],
+    [null, 'orphan', 'orphan', []]
   ])
-  const shown = [...[...tasks.byRow.values()].flat(), ...tasks.unplaced.flatMap((b) => b.chats.flatMap((c) => c.nodes))].map((n) => n.worker)
+  const shown = [...[...tasks.byRow.values()].flat().map((n) => n.worker), ...tasks.added.flatMap((a) => [...(a.worker ? [a.worker] : []), ...a.nodes.map((n) => n.worker)])]
   const running = workers.filter((w) => w.active && w.id !== 'queued-chat')
   expect(shown.filter((w) => w.active).sort((a, b) => a.startedAt! - b.startedAt!)).toEqual(running)
 })
@@ -180,52 +187,85 @@ test("a worker that handed off is two rows' session, and its tasks are listed on
   const tasks = nestTasks([{ key: 'external:s-old', sessionIds: ['s-old'] }, { key: 'external:s-new', sessionIds: ['s-new'] }], workers)
   expect([...tasks.byRow.keys()]).toEqual(['external:s-new'])
   expect(listOf(tasks.byRow.get('external:s-new'))).toEqual(['1:here:k1', '1:here:k2'])
-  expect(tasks.unplaced).toEqual([])
+  expect(tasks.added).toEqual([])
 })
 
-test("one block per PC however different its tasks' reasons, and the heading counts what runs", () => {
+test("an added chat row takes the title, folder and time the window knows its session by; another PC's unknown chat has no folder", () => {
   const bare = { sessionId: null, originSessionId: null, originWorkerId: null }
-  const tasks = nestTasks([], [
-    worker('a', 1, { ...bare, pc: 'PC-X' }),
-    worker('b', 2, { ...bare, pc: 'PC-X', originSessionId: 's-gone-1234' }),
-    worker('c', 3, { ...bare, pc: 'PC-Y' }),
-    worker('d', 4, { ...bare })
+  const known = new Map([
+    ['s-desktop', { title: 'Example chat', cwd: 'C:/Users/me/Projects/app', at: 50 }],
+    // The other PC's chat the chat sync brought here: the same session id.
+    ['s-synced', { title: 'Example synced chat', cwd: 'D:/Work/app', at: 60 }]
   ])
-  expect(tasks.unplaced.map((b) => [b.pc, b.chats.length])).toEqual([[null, 1], ['PC-X', 2], ['PC-Y', 1]])
-  expect(unplacedHeading(tasks.unplaced[1]!)).toEqual({ title: 'On PC-X', count: 2 })
-  expect(unplacedHeading(tasks.unplaced[0]!).title).toBe('On this PC')
+  const tasks = nestTasks([], [
+    worker('a', 1, { originSessionId: 's-desktop' }),
+    worker('b', 2, { ...bare, cwd: 'C:/Users/me/Projects/other' }),
+    worker('c', 3, { pc: 'PC-X', originSessionId: 's-synced' }),
+    worker('d', 4, { pc: 'PC-X', originSessionId: 's-remote-0123456789', originTitle: 'Example remote chat' }),
+    worker('e', 5, { ...bare, pc: 'PC-X' })
+  ], [], known)
+  expect(tasks.added.map((a) => [a.pc, a.title, a.cwd, a.at])).toEqual([
+    [null, 'Example chat', 'C:/Users/me/Projects/app', 50],
+    [null, 'b', 'C:/Users/me/Projects/other', 2],
+    ['PC-X', 'Example synced chat', 'D:/Work/app', 60],
+    ['PC-X', 'Example remote chat', null, 4],
+    ['PC-X', 'e', null, 5]
+  ])
 })
 
-test("three tasks from one unlisted chat on another PC share one stand-in, titled as that PC titles it, else by a short id", () => {
+test("another PC's task whose own session the window knows runs in that session's folder, and its chat's row with it", () => {
+  // The chat sync brought the task's session here, with its folder; nothing here knows the chat that started it.
+  const known = new Map([
+    ['s-t1', { title: 'Example task', cwd: 'D:/Work/app', at: 1 }],
+    // An earlier session of a task that handed off.
+    ['s-t3-old', { title: 'Example task', cwd: 'D:/Work/other', at: 1 }]
+  ])
+  const tasks = nestTasks([], [
+    worker('t1', 1, { pc: 'PC-X', originSessionId: 's-remote-chat-0123' }),
+    worker('t2', 2, { pc: 'PC-X', originSessionId: null }),
+    worker('t3', 3, { pc: 'PC-X', originSessionId: null, sessionId: 's-t3-new', sessions: ['s-t3-old', 's-t3-new'] })
+  ], [], known)
+  expect(tasks.added.map((a) => [a.title, a.cwd])).toEqual([
+    ['t1', 'D:/Work/app'],
+    ['t2', null],
+    ['t3', 'D:/Work/other']
+  ])
+})
+
+test('three tasks from one unlisted chat on another PC share one row, titled as that PC titles it, else after its first task', () => {
   const from = { pc: 'PC-X', originSessionId: '0123456789abcdef' }
   const named = nestTasks([], [
     worker('t1', 1, { ...from }),
     worker('t2', 2, { ...from, originTitle: 'Example refactor chat' }),
     worker('t3', 3, { ...from })
   ])
-  const [block] = named.unplaced
-  expect(block!.chats.map((c) => [c.title, listOf(c.nodes)])).toEqual([['Example refactor chat', ['1:PC-X:t1', '1:PC-X:t2', '1:PC-X:t3']]])
-  expect(block!.chats[0]!.note).toContain("is on PC-X and is not in this PC's session list")
+  expect(named.added.map((a) => [a.title, a.sessionId, listOf(a.nodes)])).toEqual([['Example refactor chat', '0123456789abcdef', ['1:PC-X:t1', '1:PC-X:t2', '1:PC-X:t3']]])
   const plain = nestTasks([], [worker('t1', 1, { ...from }), worker('t2', 2, { ...from })])
-  expect(plain.unplaced[0]!.chats.map((c) => c.title)).toEqual(['A chat on PC-X · 01234567'])
+  expect(plain.added.map((a) => a.title)).toEqual(['t1'])
 })
 
-test("a Desk chat running as a worker on another PC is its own stand-in, with its task one step in", () => {
+test('a Desk chat running as a worker on another PC is its own row, with its task one step in and its HSwarm job', () => {
   const chat = worker('desk-chat', 1, { pc: 'PC-X', group: 'hydra-desk', title: 'Example Desk chat' })
-  const tasks = nestTasks([], [chat, worker('task', 2, { pc: 'PC-X', originWorkerId: 'desk-chat', originSessionId: 's-desk-chat' })])
-  const [c] = tasks.unplaced[0]!.chats
-  expect(tasks.unplaced[0]!.chats).toHaveLength(1)
-  expect(c!.title).toBe('Example Desk chat')
-  expect(c!.worker).toBe(chat)
-  expect(listOf(c!.nodes)).toEqual(['1:PC-X:task'])
-  expect(unplacedHeading(tasks.unplaced[0]!).count).toBe(2)
+  const tasks = nestTasks(
+    [],
+    [chat, worker('task', 2, { pc: 'PC-X', originWorkerId: 'desk-chat', originSessionId: 's-desk-chat' })],
+    [swarmJob('j-desk', { callerSessionId: 's-desk-chat', pc: 'PC-X' })]
+  )
+  expect(tasks.added).toHaveLength(1)
+  const [row] = tasks.added
+  expect(row!.title).toBe('Example Desk chat')
+  expect(row!.worker).toBe(chat)
+  expect(listOf(row!.nodes)).toEqual(['1:PC-X:task'])
+  expect(row!.jobs.map((j) => j.id)).toEqual(['j-desk'])
+  expect(addedStatus(row!)).toBe('working')
+  expect(runningTasksIn([row!.nodes]) + runningJobsIn([row!.jobs])).toBe(2)
 })
 
 test("a task dispatched from a remote worker's earlier session sits under that worker", () => {
   const mgr = worker('mgr', 1, { pc: 'PC-X', originSessionId: 's-chat-abcd', sessionId: 's-new', sessions: ['s-old', 's-new'] })
   const kid = worker('kid', 2, { pc: 'PC-X', originSessionId: 's-old' })
   const tasks = nestTasks([], [mgr, kid])
-  expect(tasks.unplaced[0]!.chats.map((c) => listOf(c.nodes))).toEqual([['1:PC-X:mgr', '2:PC-X:kid']])
+  expect(tasks.added.map((a) => listOf(a.nodes))).toEqual([['1:PC-X:mgr', '2:PC-X:kid']])
 })
 
 // HSwarm jobs: nested under the row of the session that called HSwarm, apart from the CliMayte tasks.
@@ -233,7 +273,6 @@ function swarmJob(id: string, o: Partial<SwarmJob> = {}): SwarmJob {
   return { id, title: id, status: 'running', active: true, startedAt: 1, endedAt: null, tasks: { total: 4, done: 1, failed: 0, cancelled: 0 }, callerSessionId: null, callerHostSessionId: null, callerTitle: null, pc: null, ...o }
 }
 
-// (The old rule dropped a finished job with no drawn chat; it now sits under its stand-in like a finished task.)
 test("an HSwarm job sits under the row of its caller's session, or of its host session, apart from the CliMayte tasks", () => {
   const rows = [
     { key: 'chat:a', sessionIds: ['11111111-2222-4333-8444-555555555555'] },
@@ -250,43 +289,46 @@ test("an HSwarm job sits under the row of its caller's session, or of its host s
   expect(nested.jobsByRow.get('chat:a')?.map((j) => j.id)).toEqual(['j-session'])
   expect(nested.jobsByRow.get('chat:b')?.map((j) => j.id)).toEqual(['j-host', 'j-prefix'])
   expect(nested.byRow.has('chat:b')).toBe(false)
-  expect(nested.unplaced).toEqual([])
+  expect(nested.added).toEqual([])
 })
 
-test('an HSwarm job no row has goes under its stand-in on this PC, finished or running, titled from callerTitle else by short id', () => {
+test('a running HSwarm job no row has adds its caller as a row, titled from callerTitle else after the job, or is a row itself; a finished one only joins a row', () => {
   const jobs = [
-    swarmJob('j-lost', { callerSessionId: '99999999' }),
-    swarmJob('j-old', { callerSessionId: '99999999', status: 'done', active: false }),
-    swarmJob('j-named', { callerSessionId: '11111111-2222-3333-4444-555555555555', callerTitle: 'Example chat', status: 'done', active: false })
+    swarmJob('j-lost', { callerSessionId: '99999999', startedAt: 5 }),
+    swarmJob('j-old', { callerSessionId: '99999999', startedAt: 4, status: 'done', active: false }),
+    swarmJob('j-named', { callerSessionId: '11111111-2222-3333-4444-555555555555', callerTitle: 'Example chat', startedAt: 3 }),
+    // Finished, and no row is there for its caller: drawn nowhere, as a finished task is.
+    swarmJob('j-gone', { callerSessionId: '88888888', startedAt: 2, status: 'done', active: false }),
+    // Nothing says which chat called it.
+    swarmJob('j-alone', { startedAt: 1 })
   ]
   const nested = nestTasks([{ key: 'chat:a', sessionIds: ['s-a'] }], [], jobs)
   expect(nested.jobsByRow.size).toBe(0)
-  expect(nested.unplaced).toHaveLength(1)
-  const [block] = nested.unplaced
-  expect(block!.pc).toBeNull()
-  expect(block!.chats.map((c) => [c.title, c.jobs.map((j) => j.id), c.nodes.length])).toEqual([
-    ['A chat · 99999999', ['j-lost', 'j-old'], 0],
-    ['Example chat', ['j-named'], 0]
+  expect(nested.added.map((a) => [a.title, a.job?.id ?? null, a.jobs.map((j) => j.id), a.cwd])).toEqual([
+    ['j-lost', null, ['j-lost', 'j-old'], null],
+    ['Example chat', null, ['j-named'], null],
+    ['j-alone', 'j-alone', [], null]
   ])
-  // Only the running one counts in the heading.
-  expect(unplacedHeading(block!).count).toBe(1)
+  // Every running job is drawn once: under its row, or as the row itself.
+  const drawn = nested.added.flatMap((a) => [...(a.job ? [a.job] : []), ...a.jobs])
+  expect(drawn.filter((j) => j.active).map((j) => j.id)).toEqual(['j-lost', 'j-named', 'j-alone'])
+  expect(runningTasksIn(nested.added.map((a) => a.nodes)) + runningJobsIn(nested.added.map((a) => a.jobs))).toBe(2)
 })
 
-test('a job and a task of the same unlisted chat share one stand-in, whether the job has the full id or its prefix', () => {
+test('a job and a task of the same unlisted chat share one row, whether the job has the full id or its prefix', () => {
   const sid = '11111111-2222-3333-4444-555555555555'
   const nested = nestTasks([], [worker('w1', 1, { originSessionId: sid })], [swarmJob('j-full', { callerSessionId: sid }), swarmJob('j-prefix', { callerSessionId: '11111111', status: 'done', active: false })])
-  const chats = nested.unplaced.flatMap((b) => b.chats)
-  expect(chats.map((c) => [c.nodes.length, c.jobs.map((j) => j.id)])).toEqual([[1, ['j-full', 'j-prefix']]])
+  expect(nested.added.map((a) => [a.nodes.length, a.jobs.map((j) => j.id)])).toEqual([[1, ['j-full', 'j-prefix']]])
 })
 
-test('an 8-character prefix that two rows share places the job under its stand-in, not under a guessed row', () => {
+test('an 8-character prefix that two rows share adds a row for the job, not a guess between the two', () => {
   const rows = [
     { key: 'chat:a', sessionIds: ['abcdef12-0000-4000-8000-000000000001'] },
     { key: 'chat:b', sessionIds: ['abcdef12-0000-4000-8000-000000000002'] }
   ]
   const nested = nestTasks(rows, [], [swarmJob('j-amb', { callerSessionId: 'abcdef12' })])
   expect(nested.jobsByRow.size).toBe(0)
-  expect(nested.unplaced[0]!.chats.map((c) => [c.title, c.jobs.map((j) => j.id)])).toEqual([['A chat · abcdef12', ['j-amb']]])
+  expect(nested.added.map((a) => [a.title, a.jobs.map((j) => j.id)])).toEqual([['j-amb', ['j-amb']]])
 })
 
 test('in the cloud list (rows keyed cloud:<id>) a job sits under the cloud row of its caller session', () => {
@@ -294,18 +336,70 @@ test('in the cloud list (rows keyed cloud:<id>) a job sits under the cloud row o
   const rows = [{ key: `cloud:${sid}`, sessionIds: [sid] }]
   const nested = nestTasks(rows, [], [swarmJob('j-cloud', { callerSessionId: sid })])
   expect(nested.jobsByRow.get(`cloud:${sid}`)?.map((j) => j.id)).toEqual(['j-cloud'])
-  expect(nested.unplaced).toEqual([])
+  expect(nested.added).toEqual([])
 })
 
-test("the other PC's job goes under the row that has its session, else into that PC's block", () => {
+test("the other PC's job goes under the row that has its session, else under a row added on its PC", () => {
   const sid = '11111111-2222-3333-4444-555555555555'
   const other = swarmJob('j-other', { callerSessionId: sid, pc: 'Other-PC' })
   const placed = nestTasks([{ key: 'cloud:x', sessionIds: [sid] }], [], [other])
   expect(placed.jobsByRow.get('cloud:x')?.map((j) => j.id)).toEqual(['j-other'])
   const lost = nestTasks([], [], [other, swarmJob('j-here', { callerSessionId: sid })])
-  expect(lost.unplaced.map((b) => [b.pc, b.chats.map((c) => c.jobs.map((j) => j.id))])).toEqual([
-    [null, [['j-here']]],
-    ['Other-PC', [['j-other']]]
+  expect(lost.added.map((a) => [a.pc, a.jobs.map((j) => j.id)])).toEqual([
+    ['Other-PC', ['j-other']],
+    [null, ['j-here']]
   ])
-  expect(unplacedHeading(lost.unplaced[1]!).title).toBe('On Other-PC')
+})
+
+// The rows added for running work, drawn inline in their folder's group (owner, 2026-10-05: "I shouldn't even be
+// able to tell the difference between ones on his computer and mine, besides them having a Cloud icon").
+const addedRow = (id: string, cwd: string | null, at: number): AddedRow => ({ id: `added::task:${id}`, title: id, pc: null, cwd, at, sessionId: null, worker: null, job: null, nodes: [], jobs: [] })
+
+function deskRow(id: string, at: number, cwd: string | null): SidebarEntry {
+  const session: ExternalSession = { id, title: id, cwd, source: 'cli', instance: null, status: 'idle', activity: null, lastActivityAt: at, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null }
+  return { kind: 'external', id, at, session }
+}
+
+test("the desk list draws an added row in its folder's group among its own rows, a folder it has no group for after its groups", () => {
+  const app: ChatGroup = { key: 'C:/Users/me/Projects/app', label: 'app', cwd: 'C:/Users/me/Projects/app', entries: [deskRow('s-a', 30, 'C:/Users/me/Projects/app'), deskRow('s-b', 10, 'C:/Users/me/Projects/app')] }
+  const moved: ChatGroup = { key: 'group:Example', label: 'Example', cwd: null, entries: [deskRow('s-c', 20, 'C:/Users/me/Projects/app')] }
+  // The same folder spelled another way; a row the saved order already places, and one it does not.
+  const recorded = addedRow('recorded', 'c:\\users\\me\\projects\\app\\', 20)
+  const fresh = addedRow('fresh', 'C:/Users/me/Projects/app', 40)
+  const out = addToDeskGroups([app, moved], [recorded, fresh, addedRow('new-folder', 'C:/Users/me/Projects/new', 5), addedRow('no-folder', null, 7), addedRow('hidden', 'C:/Users/me/Projects/hid', 50)], {
+    order: { groups: [], rows: ['s-a', recorded.id, 's-b'] },
+    hidden: new Set(['c:/users/me/projects/hid']),
+    showHidden: false
+  })
+  expect(out.map((g) => [g.label, g.cwd, g.entries.map((e) => e.id)])).toEqual([
+    ['app', 'C:/Users/me/Projects/app', [fresh.id, 's-a', recorded.id, 's-b']],
+    ['Example', null, ['s-c']],
+    ['No folder', null, ['added::task:no-folder']],
+    ['new', 'C:/Users/me/Projects/new', ['added::task:new-folder']]
+  ])
+  // A moved-to group is no folder's: it is left as it was.
+  expect(out[1]).toBe(moved)
+  expect(out[0]!.entries[0]!.kind).toBe('external')
+})
+
+const cloudRow = (id: string, at: number, cwd: string | null): CloudSession => ({ id, title: id, cwd, lastCwd: null, source: 'claude', instance: null, lastActivityAt: at, createdAt: null, messageCount: 1, dispatched: false, archived: false, fromPc: null, model: null, effort: null, instanceNum: null })
+
+test("the cloud list draws another PC's chat in the group of its synced folder among its rows, with that PC on it", () => {
+  const known = new Map([['s-synced', { title: 'Example synced chat', cwd: 'd:\\work\\app', at: 60 }]])
+  const { added } = nestTasks([], [worker('t', 1, { pc: 'PC-X', originSessionId: 's-synced' }), worker('u', 2, { pc: 'PC-X', originSessionId: 's-other' })], [], known)
+  const app: CloudGroup = { key: 'cloud:d:/work/app', label: 'app', cwd: 'D:/Work/app', orderKey: 'd:/work/app', rows: [cloudRow('s-desk', 70, 'D:/Work/app'), cloudRow('s-cloud', 50, 'D:/Work/app')] }
+  const out = addToCloudGroups([app], added, {
+    order: { groups: [], rows: [] },
+    hidden: new Set<string>(),
+    showHidden: false,
+    orderKey: (id) => id,
+    onDesk: (id) => id === 's-desk'
+  })
+  // A row the desk list lacks goes after the desk's rows, as the cloud list puts its own.
+  expect(out.map((g) => [g.label, g.rows.map((r) => r.id)])).toEqual([
+    ['app', ['s-desk', 'added:PC-X:chat:s-synced', 's-cloud']],
+    ['No folder', ['added:PC-X:chat:s-other']]
+  ])
+  expect(out[0]!.rows[1]!.fromPc).toBe('PC-X')
+  expect(out[1]!.orderKey).toBe('')
 })

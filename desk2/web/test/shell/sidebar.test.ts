@@ -26,8 +26,10 @@ import {
   rowMenu,
   rowPatch,
   runningSessionIds,
+  runPulse,
   shortcutItem,
   statusGlyph,
+  SWARM_RUNNING,
   type ChatGroup,
   type RowMenuEntry,
   type RowMenuItem
@@ -320,9 +322,20 @@ describe('status glyph language', () => {
     expect(glyphDotClass(statusGlyph({ status: 'idle', unread: true }))).toBe('bg-[var(--status-done)]')
     expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-needs-you)]')
     expect(glyphDotClass(statusGlyph({ status: 'needs_you', unread: true }))).toBe('bg-[var(--status-needs-you)] animate-dot-pulse')
-    expect(glyphDotClass(statusGlyph({ status: 'working', unread: false }))).toBe('bg-[var(--status-working)] animate-dot-blink')
+    expect(glyphDotClass(statusGlyph({ status: 'working', unread: false }))).toBe('bg-[var(--status-working)] run-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'limited', unread: true }))).toBe('border-[1.5px] border-[var(--status-limited)]')
     expect(glyphDotClass(statusGlyph({ status: 'error', unread: true }))).toBe('bg-[var(--status-error)]')
+  })
+
+  it('only an HSwarm job is blue, pulsing as a working dot does (owner, 2026-10-05)', () => {
+    const chats = (['starting', 'working', 'needs_you', 'idle', 'stopped', 'error', 'limited', 'closed'] as const).flatMap((status) =>
+      [true, false].map((unread) => statusGlyph({ status, unread }))
+    )
+    const outside = (['working', 'needs_you', 'idle', 'stale'] as const).flatMap((status) => [true, false].map((unread) => externalGlyph({ status, unread })))
+    for (const g of [...chats, statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }), ...outside]) expect(glyphDotClass(g)).not.toContain('accent')
+    // A CliMayte task's mark is gray; an HSwarm job's dot pulses as a working chat's gray dot does, only blue.
+    expect(runPulse('gray')).not.toContain('accent')
+    expect(glyphDotClass(SWARM_RUNNING).replace('bg-accent-text', 'bg-[var(--status-working)]')).toBe(glyphDotClass(statusGlyph({ status: 'working', unread: false })))
   })
 
   it('formats elapsed time short', () => {

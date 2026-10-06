@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The selected CliMayte task (CliMayteView.vue's right-hand pane): what it is, where it ran, what it did,
+// The selected CliMayte task (CliMayteView.vue's detail, in place of its list): what it is, where it ran, what it did,
 // and a box to message or continue it.
 //
 // Three parts at their natural height: a header (title, Stop, then one row of stat chips: status,

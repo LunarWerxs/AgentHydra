@@ -35,6 +35,8 @@ export default {
     prioritySr: 'priority {n}',
     starIt: 'Star it: AUTO tries starred models first',
     more: '{n} more: search to narrow',
+    // The CliMayte row's count and its hover: the tasks that can still change (HSwarmView.vue).
+    climayteActive: 'CliMayte tasks queued or running: {n}',
     helpSearch: 'contact support question key token cost price free tier ask doctor',
     clientNames: {
       'claude-code': 'Claude Code',

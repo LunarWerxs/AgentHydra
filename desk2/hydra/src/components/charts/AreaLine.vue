@@ -15,7 +15,9 @@
 // and the pointer maths is a subtraction.
 //
 // A crosshair rather than per-point dots: at hourly buckets over a month there are hundreds of
-// points, and a marker on each is noise. One series, so no legend.
+// points, and a marker on each is noise. One series, so no legend. `accentPeak` draws the line gray
+// with one accent dot on the peak, for a page where colour marks only what matters (Analytics,
+// owner, 2026-10-05).
 import { useElementSize } from '@vueuse/core'
 import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
 import ChartTip from '@/components/charts/ChartTip.vue'
@@ -30,6 +32,8 @@ const props = defineProps<{
   valueLabel: string
   changeLabel: string
   peakLabel: string
+  /** A gray line, the accent only on the peak point. Unset keeps the accent-coloured line. */
+  accentPeak?: boolean
 }>()
 
 const H = 150
@@ -69,6 +73,12 @@ const tip = shallowRef({ x: 0, y: 0 })
 const tipHolder = { pos: tip }
 /** The series peak, once per change of points rather than once per hover. */
 const peak = computed(() => Math.max(...props.points.map((p) => p.value)))
+/** Where the first peak sits, for the `accentPeak` dot; null on an empty or all-zero series. */
+const peakXY = computed(() => {
+  if (!props.accentPeak || !(peak.value > 0)) return null
+  const i = props.points.findIndex((p) => p.value === peak.value)
+  return i < 0 ? null : (xy.value[i] ?? null)
+})
 const area = computed(() => areaPath(xy.value, plotH))
 const line = computed(() => linePath(xy.value))
 
@@ -153,13 +163,24 @@ onBeforeUnmount(() => {
         class="fill-muted-foreground text-3xs tabular-nums"
       >{{ axisText(t) }}</text>
 
-      <path :d="area" class="fill-(--viz-seq) opacity-14" />
+      <path
+        :d="area"
+        :class="accentPeak ? 'fill-muted-foreground opacity-10' : 'fill-(--viz-seq) opacity-14'"
+      />
       <path
         :d="line"
         fill="none"
-        class="stroke-(--viz-seq)"
+        :class="accentPeak ? 'stroke-muted-foreground' : 'stroke-(--viz-seq)'"
         stroke-width="2"
         stroke-linejoin="round"
+      />
+      <circle
+        v-if="peakXY"
+        :cx="peakXY.x"
+        :cy="peakXY.y"
+        r="4"
+        class="fill-(--viz-seq) stroke-background"
+        stroke-width="2"
       />
 
       <g v-if="hover !== null && xy[hover]">
@@ -177,7 +198,8 @@ onBeforeUnmount(() => {
           :cx="xy[hover]?.x"
           :cy="xy[hover]?.y"
           r="4"
-          class="fill-(--viz-seq) stroke-background"
+          class="stroke-background"
+          :class="accentPeak ? 'fill-foreground' : 'fill-(--viz-seq)'"
           stroke-width="2"
         />
       </g>

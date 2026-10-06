@@ -4,6 +4,10 @@
 //
 // One series, so no legend: the caption above the chart names it. Hovering a bar shows its exact
 // value, because the axis is deliberately sparse and reading a value off it is not the job.
+//
+// GRAY, WITH THE CURRENT PERIOD IN THE ACCENT (owner, 2026-10-05: "my eyeballs don't know what to
+// focus on"): the caller says which bars are now (`isAccent`) and names that period beside the
+// caption, so the one blue on the chart is where to look and says why.
 import { useElementSize } from '@vueuse/core'
 import { computed, ref, shallowRef } from 'vue'
 import ChartTip from '@/components/charts/ChartTip.vue'
@@ -17,6 +21,8 @@ const props = defineProps<{
   valueLabel: string
   shareLabel: string
   peakLabel: string
+  /** Is this bar the current period? Drawn in the accent; every other bar is gray. */
+  isAccent?: (key: string) => boolean
 }>()
 
 // Sized from the container for the same reason AreaLine is: a fixed viewBox in a wider element is
@@ -119,8 +125,10 @@ function onEnter(i: number, e: MouseEvent) {
           :width="barW"
           :height="Math.max(0, plotH - yOf(p.value))"
           rx="2"
-          class="fill-(--viz-seq)"
-          :class="hover === null || hover === i ? 'opacity-100' : 'opacity-45'"
+          :class="[
+            isAccent?.(p.key) ? 'fill-(--viz-seq)' : 'fill-muted-foreground/45',
+            hover === null || hover === i ? 'opacity-100' : 'opacity-45',
+          ]"
         />
       </g>
 

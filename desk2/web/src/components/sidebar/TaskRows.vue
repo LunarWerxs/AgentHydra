@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, type Component } from 'vue'
-import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, LoaderCircle, Network } from '@lucide/vue'
+import { computed, h, ref, type Component, type FunctionalComponent } from 'vue'
+import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, Network } from '@lucide/vue'
 import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
 import { useClock } from '@/lib/clock'
-import { elapsedLabel } from './logic'
+import { elapsedLabel, runPulse } from './logic'
 import type { TaskNode } from './tasks'
 import { rowLeave } from '@/lib/row-leave'
 
@@ -24,11 +24,16 @@ const now = useClock()
 /** The session it opens here: none for another PC's (Sidebar.vue openTask). */
 const ownSession = (w: CliMayteWorker) => (w.pc ? null : w.sessionId)
 
-const STATUS: Record<string, { icon: Component; tone: string; spin?: boolean; label: string }> = {
+// A running task's mark is the 6px dot a working chat has, in the 12px box of the other marks; its color is the text's.
+const RunDot: FunctionalComponent = () => h('span', { class: 'flex items-center justify-center', 'aria-hidden': 'true' }, [h('span', { class: 'size-1.5 rounded-full bg-current' })])
+// A task that runs, here or on another PC, pulses gray as a working chat's dot does, and one running its check
+// pulses its mark the same way: blue is HSwarm's alone and nothing in the sidebar spins (owner, 2026-10-05: "Only
+// the HSwarm items should have blue"). Finished, failed, waiting and queued marks hold still.
+const STATUS: Record<string, { icon: Component; tone: string; label: string }> = {
   queued: { icon: Clock, tone: 'text-text-muted', label: 'Queued' },
-  running: { icon: LoaderCircle, tone: 'text-accent-text', spin: true, label: 'Running' },
+  running: { icon: RunDot, tone: runPulse('gray'), label: 'Running' },
   waiting: { icon: Hourglass, tone: 'text-warning-text', label: 'Waiting' },
-  checking: { icon: ListChecks, tone: 'text-accent-text', label: 'Running its check' },
+  checking: { icon: ListChecks, tone: runPulse('gray'), label: 'Running its check' },
   done: { icon: CircleCheck, tone: 'text-success-text', label: 'Done' },
   failed: { icon: CircleX, tone: 'text-danger-text', label: 'Failed' }
 }
@@ -80,7 +85,7 @@ const hot = ref<string | null>(null)
       @focus="hot = key"
       @blur="hot = null"
     >
-      <component :is="status.icon" class="size-3 shrink-0" :class="[status.tone, status.spin ? 'animate-[spin_2.5s_linear_infinite]' : '']" aria-hidden="true" />
+      <component :is="status.icon" class="size-3 shrink-0" :class="status.tone" aria-hidden="true" />
       <span class="sr-only">{{ status.label }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ n.worker.title }}</span>
       <!-- Another PC's task: a little cloud, its PC in the tooltip, so the title keeps the room (owner,
@@ -100,7 +105,8 @@ const hot = ref<string | null>(null)
       class="flex h-[22px] w-full min-w-0 cursor-default items-center gap-1 rounded-r-[var(--radius-6)] pl-1 pr-1 text-left text-[12px] leading-4 text-text-2 transition-colors duration-[var(--dur-fast)] hover:bg-fill-hover"
       @click="emit('open-job', j)"
     >
-      <Network class="size-3 shrink-0" :class="j.active ? 'text-accent-text' : j.tasks.failed ? 'text-danger-text' : 'text-text-muted'" aria-hidden="true" />
+      <!-- A running job's network mark is the sidebar's one blue, pulsing slowly (owner, 2026-10-05: "a slow blue pulsing icon"). -->
+      <Network class="size-3 shrink-0" :class="j.active ? runPulse('blue') : j.tasks.failed ? 'text-danger-text' : 'text-text-muted'" aria-hidden="true" />
       <span class="sr-only">HSwarm job, {{ j.status }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ j.title }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ j.tasks.done }}/{{ j.tasks.total }}</span>

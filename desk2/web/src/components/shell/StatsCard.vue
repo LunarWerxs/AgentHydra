@@ -13,7 +13,7 @@ import { ChevronRight } from '@lucide/vue'
 import type { ChatSummary } from '@shared/protocol'
 import { computeStats } from './logic'
 import { useShellSource } from './source'
-import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, heatTitle, homeFooter, homeModels, homeSources, homeTiles, statsFooter, statsTiles } from './stats'
+import { DESK_ONLY_OFFLINE, DESK_ONLY_WAITING, foldModels, heatTitle, homeFooter, homeModels, homeSources, homeTiles, percent, statsFooter, statsTiles } from './stats'
 
 // The stats card of the new-session screen (480 wide, r12, #ffffff0d): tabs, ranges, nine tiles, the
 // sources and the activity grid, over every source AgentHydra counts (owner, 2026-10-04: "the overview
@@ -84,6 +84,11 @@ function toggleSources(): void {
   }
 }
 const maxModel = computed(() => Math.max(1, ...models.value.map((m) => m.sessions)))
+// The Models tab lists the models that matter; the rest wait behind one "+N more" row that opens them in
+// place and folds them again (owner, 2026-10-05: "it gets really, really long"; foldModels in stats.ts).
+const modelFold = computed(() => foldModels(models.value))
+const moreModels = ref(false)
+const MODEL_ROW = 'relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[13px] leading-[19px]'
 
 const footer = computed(() => {
   if (home.value) return homeFooter(home.value)
@@ -148,11 +153,25 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
     </template>
 
     <div v-else class="mt-[18px] flex min-h-[217px] flex-col gap-[5px]">
-      <div v-for="m in models" :key="m.label" class="relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[13px] leading-[19px]">
+      <div v-for="m in modelFold.shown" :key="m.label" :class="MODEL_ROW">
         <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
         <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
         <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
       </div>
+      <template v-if="modelFold.rest.length">
+        <button type="button" class="flex h-7 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-left text-[13px] leading-[19px] text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
+          <ChevronRight class="size-3 shrink-0 transition-transform" :class="moreModels ? 'rotate-90' : ''" aria-hidden="true" />
+          <span class="min-w-0 flex-1 truncate">+{{ modelFold.rest.length }} more</span>
+          <span class="tnum">{{ percent(modelFold.restShare) }}</span>
+        </button>
+        <div v-if="moreModels" id="stats-more-models" class="flex flex-col gap-[5px]">
+          <div v-for="m in modelFold.rest" :key="m.label" :class="MODEL_ROW">
+            <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
+            <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
+            <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
+          </div>
+        </div>
+      </template>
       <p v-if="!models.length" class="text-[12px] leading-4 text-text-muted">No sessions in this range yet.</p>
     </div>
 

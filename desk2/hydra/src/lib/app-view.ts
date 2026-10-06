@@ -53,7 +53,7 @@ const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
   instances: 'desktop',
   // Hydra Desk 2's copy has no Sessions tab (2026-10-04): Desk's cloud list is it.
   sessions: 'hswarm',
-  // CliMayte moved into the HSwarm tab as its first page (2026-10-05).
+  // CliMayte moved into the HSwarm tab, a node of its tree (2026-10-05).
   climayte: 'hswarm',
 }
 
@@ -189,3 +189,7 @@ export function createViewReady(
 
 /** Provided by App.vue: lets a nested view switch the tab (e.g. a stats card's "open HSwarm"). */
 export const OPEN_VIEW: InjectionKey<(view: AppView) => void> = Symbol('open-view')
+
+/** A node of the HSwarm tab's tree asked for from outside it (App.vue: the CliMayte shortcut and tiles,
+ *  Desk's task rows, a stats card's "open HSwarm"). HSwarmView selects it and clears it. */
+export const hswarmNodeAsk = ref<string | null>(null)

@@ -265,8 +265,8 @@ const openThinking = computed(() => (showThinking.value ? items.value.filter((i)
 
 // Hydra Desk 2: AgentHydra slides in over the chat side (the sidebar stays), pushing the chat out to the
 // left; the same button or the pane's own "← Desk" button slides the chat back. While it is open the
-// sidebar is the list of AgentHydra's current tab where it has one (CliMayte's tasks, HSwarm's tree:
-// components/hydra/HydraSidebar.vue), else AgentHydra's session list (the cloud list, turned on for it
+// sidebar is the list of AgentHydra's current tab where it has one (HSwarm's tree, CliMayte among its
+// nodes: components/hydra/HydraSidebar.vue), else AgentHydra's session list (the cloud list, turned on for it
 // and off again after unless it was already on); a session clicked there opens on Desk's side. Picking anything of Desk's own in
 // the sidebar slides the chat back. The cloud button turns the sidebar's list into every session of
 // both PCs on its own too (components/cloud).
@@ -308,7 +308,7 @@ function toggleTasks() {
   showTasks.value = !showTasks.value
   if (!showTasks.value) return
   toggleSidebar(true)
-  // An AgentHydra tab with a list of its own (CliMayte, HSwarm) has the sidebar while it is open, so the
+  // An AgentHydra tab with a list of its own (HSwarm's tree) has the sidebar while it is open, so the
   // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
   // does nothing in the sidebar").
   if (hydraOpen.value && hydraSidebar.value) toggleHydra(false)

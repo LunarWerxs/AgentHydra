@@ -1,8 +1,15 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
 // left-handed sidebar"). A tree on the left (Overview, Providers > each provider > its models, All models,
-// Routing & roles, Clients > each client, Jobs > recent jobs, Help) picks what the right pane shows; each
-// page is its own component in ./hswarm/. Below 900px the tree is a drawer, as in the console.
+// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte, Help) picks what the right pane
+// shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
+// is a drawer, as in the console.
+//
+// The tree is the tab's only list (owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm
+// sidebar. Routing should be an option under the HSwarm in the sidebar, and CliMayte should also be an
+// item under that, and then the things would show on the right side"). Routing holds HSwarm's routing and
+// AgentHydra's cost routing between API keys and subscriptions; CliMayte lists its tasks in the pane, as
+// a manager. Both are AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
 //
 // In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04: one
 // sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
@@ -15,6 +22,7 @@ import {
   Layers,
   LayoutGrid,
   Menu,
+  Network,
   PiggyBank,
   Plug,
   Plus,
@@ -24,20 +32,23 @@ import {
   Server,
   X,
 } from '@lucide/vue'
-import { type Component, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { type Component, computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: used as a component in the template, which Biome cannot see; a type-only import left the search box an unstyled <input>
 import { Input } from '@/components/ui/input'
+import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
-import { EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
+import { hswarmNodeAsk } from '@/lib/app-view'
+import { isCliMayteActive } from '@/lib/climayte-status'
+import { deskSwarmAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
-import { hswarmJobAsk } from '@/lib/hswarm-pages'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
+import HSwarmCostRouting from './hswarm/HSwarmCostRouting.vue'
 import HSwarmJobs from './hswarm/HSwarmJobs.vue'
 import HSwarmModels from './hswarm/HSwarmModels.vue'
 import HSwarmOverview from './hswarm/HSwarmOverview.vue'
@@ -46,9 +57,14 @@ import HSwarmRouting from './hswarm/HSwarmRouting.vue'
 import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
 
+// CliMayte's page loads the first time its node is opened (its task detail is most of it).
+const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
+
 const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
   useHswarmApi()
+// CliMayte's shared task list (kept warm by lib/warm-data.ts): its node counts the tasks that can still change.
+const { workers: climayteTasks } = useCliMayteData()
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
@@ -155,11 +171,22 @@ function jobDot(s: string): Dot {
 }
 
 const hasKeys = computed(() => !!state.value?.providers?.some((p: any) => p.keys > 0))
+const climayteActive = computed(() => climayteTasks.value.filter(isCliMayteActive).length)
 
-// The console's tree: a model is part of its provider, so each provider opens onto its models.
+// The console's tree: a model is part of its provider, so each provider opens onto its models. Routing and
+// CliMayte are there before HSwarm's state is (or while HSwarm is down): their pages are AgentHydra's.
 const nodes = computed<TreeNode[]>(() => {
   const s = state.value
-  if (!s) return []
+  const routing: TreeNode = { id: 'routing', label: t('hswarm.routing'), icon: Route }
+  const active = climayteActive.value
+  const climayte: TreeNode = {
+    id: 'climayte',
+    label: t('climayte.title'),
+    icon: Network,
+    count: active || null,
+    dotTitle: active ? t('hswarm.nav.climayteActive', { n: active }) : undefined,
+  }
+  if (!s) return [routing, climayte]
   const provs = [...(s.providers ?? [])].sort(
     (a, b) => Number(b.keys > 0) - Number(a.keys > 0) || a.name.localeCompare(b.name),
   )
@@ -200,7 +227,7 @@ const nodes = computed<TreeNode[]>(() => {
       }),
     },
     { id: 'models', label: t('hswarm.nav.allModels'), icon: Cpu, count: s.models?.length ?? 0 },
-    { id: 'routing', label: t('hswarm.routing'), icon: Route },
+    routing,
     {
       id: 'clients',
       label: t('hswarm.clients'),
@@ -232,6 +259,7 @@ const nodes = computed<TreeNode[]>(() => {
         search: j.job_id,
       })),
     },
+    climayte,
     { id: 'help', label: t('hswarm.help'), icon: Info, search: t('hswarm.nav.helpSearch') },
   ]
 })
@@ -339,6 +367,8 @@ const page = computed(() => {
       return { component: HSwarmClients, props: { client: a } }
     case 'jobs':
       return { component: HSwarmJobs, props: { jobId: a } }
+    case 'climayte':
+      return { component: CliMayteView, props: {} }
     case 'help':
       return { component: HSwarmTools, props: {} }
     default:
@@ -367,6 +397,15 @@ function select(id: string, o: { adding?: boolean } = {}) {
 // A page asked to show one object (a provider in the providers table, a model just added): select its row.
 function openPath(path: string[]) {
   select(path.map(enc).join('/'))
+}
+
+// A click on a row (here or in Desk's sidebar). The CliMayte row always shows its task list, as its own
+// back button does: CliMayteView stays built behind the other nodes, so a task it had open would
+// otherwise be what the row shows. A Desk task row (hswarmNodeAsk) selects the node without this.
+const climayteHome = ref(0)
+function pick(id: string) {
+  if (id === 'climayte') climayteHome.value++
+  select(id)
 }
 
 // The tree's star, as in the console: ☆ gives the model the next priority number, ★n clears it.
@@ -449,7 +488,7 @@ function onTreeKey(e: KeyboardEvent) {
       break
     case 'Enter':
     case ' ':
-      select(r.sel)
+      pick(r.sel)
       break
     default:
       return
@@ -465,7 +504,7 @@ function onSearchKey(e: KeyboardEvent) {
     treeEl.value?.focus()
   } else if (e.key === 'Enter') {
     const h = list.find((r) => r.n.hit && !r.hasKids) ?? list.find((r) => r.n.hit)
-    if (h) select(h.sel)
+    if (h) pick(h.sel)
   } else if (e.key === 'Escape' && query.value) {
     query.value = ''
     e.stopPropagation()
@@ -557,6 +596,7 @@ const ICON_NAME = new Map<Component, EmbedIcon>([
   [Route, 'route'],
   [Plug, 'plug'],
   [Layers, 'layers'],
+  [Network, 'network'],
   [Info, 'info'],
 ])
 function deskRow(r: TreeRow): SidebarRow {
@@ -592,7 +632,6 @@ const running = computed(() => !!status.value?.running && !!state.value)
 // the rows that changed and no more new objects than that.
 let sentRows: SidebarRow[] = []
 const deskRows = computed<SidebarRow[]>(() => {
-  if (!running.value) return []
   sentRows = reconcileList(sentRows, rows.value.map(deskRow), (r) => r.key)
   return sentRows
 })
@@ -612,6 +651,11 @@ useDeskSidebar(
         disabled: !status.value?.running || isRefreshing.value,
       },
     ],
+    // HSwarm down: its part of the tree is gone and this says why; Routing and CliMayte stay.
+    banner:
+      !loading.value && !status.value?.running
+        ? { text: t('hswarm.notRunning'), tone: 'warning', icon: 'cloud-off' }
+        : undefined,
     search: running.value
       ? { value: query.value, placeholder: t('hswarm.nav.search'), label: t('hswarm.nav.searchAria') }
       : undefined,
@@ -624,13 +668,9 @@ useDeskSidebar(
         ]
       : undefined,
     legendNote: status.value?.running ? t('hswarm.nav.port', { port: status.value.port }) : undefined,
-    sections: running.value ? [{ key: 'tree', rows: deskRows.value }] : [],
+    sections: [{ key: 'tree', rows: deskRows.value }],
     selected: sel.value,
-    empty: !running.value
-      ? loading.value
-        ? undefined
-        : t('hswarm.notRunning')
-      : t('hswarm.nav.nothingMatches', { q: query.value }),
+    empty: t('hswarm.nav.nothingMatches', { q: query.value }),
     loading: loading.value && !state.value,
     footer: hasKeys.value
       ? [
@@ -641,7 +681,7 @@ useDeskSidebar(
   }),
   (e) => {
     const row = 'key' in e ? rows.value.find((r) => r.id === e.key) : undefined
-    if (e.action === 'select' && row) select(row.sel)
+    if (e.action === 'select' && row) pick(row.sel)
     else if (e.action === 'toggle' && row?.hasKids) toggle(row.id)
     else if (e.action === 'star' && row) void toggleStar(row.n)
     else if (e.action === 'search') query.value = e.value
@@ -654,15 +694,28 @@ useDeskSidebar(
   },
 )
 
+// A node asked for from outside the tree (lib/app-view.ts hswarmNodeAsk): the CliMayte shortcut and
+// tiles, Desk's task rows (CliMayteView then opens the task), a stats card's "open HSwarm".
+watch(
+  hswarmNodeAsk,
+  (id) => {
+    if (!id) return
+    hswarmNodeAsk.value = null
+    select(id)
+  },
+  { immediate: true },
+)
+
 // Desk asked for one job (its sidebar's job rows): selected once the jobs list is in, which shows its detail
 // (HSwarmJobs opens the job it is given). The job is selected even when the list shows only the newest few.
+// An ask without a job wanted only the tab, which App.vue already showed.
 watch(
-  [hswarmJobAsk, jobs],
+  [deskSwarmAsk, jobs],
   () => {
-    const id = hswarmJobAsk.value
-    if (!id || !jobs.value) return
-    hswarmJobAsk.value = null
-    select(`jobs/${enc(id)}`)
+    const ask = deskSwarmAsk.value
+    if (!ask || (ask.job && !jobs.value)) return
+    deskSwarmAsk.value = null
+    if (ask.job) select(`jobs/${enc(ask.job)}`)
   },
   { immediate: true },
 )
@@ -697,7 +750,7 @@ async function handleRefresh() {
   <div class="flex h-full flex-col">
     <!-- Below 900px the tree is a drawer: a thin strip holds its button and the status -->
     <div
-      v-if="!EMBEDDED && status?.running && state"
+      v-if="!EMBEDDED"
       class="flex items-center gap-2 border-b border-border px-2 py-1 min-[900px]:hidden"
     >
       <Button
@@ -711,26 +764,12 @@ async function handleRefresh() {
         <Menu class="size-4" />
       </Button>
       <span class="truncate text-xs text-muted-foreground">
-        {{ t('hswarm.statusRunning', { port: status.port }) }}
+        {{ status?.running ? t('hswarm.statusRunning', { port: status.port }) : t('hswarm.notRunning') }}
       </span>
     </div>
 
-    <!-- Error state -->
-    <Alert v-if="error || !status?.running" variant="destructive" class="m-2 w-auto">
-      <AlertCircle class="h-4 w-4" />
-      <AlertTitle>{{ t('hswarm.notRunning') }}</AlertTitle>
-      <AlertDescription>
-        {{ error ? t('hswarm.errorLoading') : (status?.lastError ? t('hswarm.statusError', { error: status.lastError }) : t('hswarm.notRunning')) }}
-      </AlertDescription>
-    </Alert>
-
-    <!-- Loading state (first load only: a reload keeps the tree and the page in place) -->
-    <div v-if="loading && !state" class="flex items-center justify-center py-4">
-      <div class="text-muted-foreground">{{ t('hswarm.loading') }}</div>
-    </div>
-
     <!-- Main content: the tree on the left, the selected page on the right -->
-    <div v-else-if="status?.running && state" class="relative flex min-h-0 flex-1">
+    <div class="relative flex min-h-0 flex-1">
       <div
         v-if="navOpen && !EMBEDDED"
         class="fixed inset-0 z-20 bg-black/40 min-[900px]:hidden"
@@ -827,7 +866,7 @@ async function handleRefresh() {
             ]"
             :style="{ paddingInlineStart: `calc(4px + ${r.depth} * 14px)` }"
             :title="r.n.dotTitle"
-            @click="select(r.sel)"
+            @click="pick(r.sel)"
           >
             <span
               class="flex size-4 shrink-0 items-center justify-center text-muted-foreground"
@@ -910,14 +949,38 @@ async function handleRefresh() {
 
       <!-- The selected page; each is its own component in ./hswarm/ -->
       <div class="min-h-0 min-w-0 flex-1 overflow-auto" :class="page.component === HSwarmTools ? 'p-3' : ''">
-        <component
-          :is="page.component"
-          :key="`${sel}|${adding}|${addNonce}`"
-          :state="state"
-          v-bind="page.props"
-          @changed="handleRefresh"
-          @open="openPath"
-        />
+        <!-- CliMayte's tasks are AgentHydra's: shown whether or not HSwarm runs. Kept built while another
+             node is open, so its float window (picture-in-picture) stays open across nodes. -->
+        <KeepAlive>
+          <CliMayteView v-if="page.component === CliMayteView" :home="climayteHome" @open="openPath" />
+        </KeepAlive>
+        <template v-if="page.component !== CliMayteView">
+          <!-- Error state -->
+          <Alert v-if="error || !status?.running" variant="destructive" class="m-2 w-auto">
+            <AlertCircle class="h-4 w-4" />
+            <AlertTitle>{{ t('hswarm.notRunning') }}</AlertTitle>
+            <AlertDescription>
+              {{ error ? t('hswarm.errorLoading') : (status?.lastError ? t('hswarm.statusError', { error: status.lastError }) : t('hswarm.notRunning')) }}
+            </AlertDescription>
+          </Alert>
+
+          <!-- Loading state (first load only: a reload keeps the tree and the page in place) -->
+          <div v-if="loading && !state" class="flex items-center justify-center py-4">
+            <div class="text-muted-foreground">{{ t('hswarm.loading') }}</div>
+          </div>
+          <component
+            :is="page.component"
+            v-else-if="status?.running && state"
+            :key="`${sel}|${adding}|${addNonce}`"
+            :state="state"
+            v-bind="page.props"
+            @changed="handleRefresh"
+            @open="openPath"
+          />
+          <!-- HSwarm down: the Routing page keeps the cost routing between API keys and subscriptions,
+               which is AgentHydra's -->
+          <HSwarmCostRouting v-else-if="page.component === HSwarmRouting" class="px-5 py-3" />
+        </template>
       </div>
     </div>
   </div>

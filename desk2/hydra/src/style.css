@@ -423,19 +423,13 @@ html.desk-hidden *::after {
   }
 }
 
-/* --- width transition (side-list/SideBar collapse; bars use transform, not this) --------------------------------------------
-   Tailwind ships no named transition for width, and width is a layout property, so transition-all
+/* --- max-width transition (the app shell, App.vue) ---------------------------------------------
+   Tailwind ships no named transition for max-width, and it is a layout property, so transition-all
    would also animate everything else on the element. A real utility (not a plain class) so it sits
    in the utilities layer and still reads the duration-* / ease-* set beside it, exactly as
-   Tailwind's own transition-* utilities do. */
-@utility transition-width {
-  transition-property: width;
-  transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
-  transition-duration: var(--tw-duration, var(--default-transition-duration));
-}
-
-/* The same, for the app shell (App.vue): its max-width eases out when a view asks for the wide cap,
-   and the header and main column ease their padding when a push-in panel opens beside them. */
+   Tailwind's own transition-* utilities do. The app shell's max-width eases out when a view asks for
+   the wide cap, and the header and main column ease their padding when a push-in panel opens beside
+   them. */
 @utility transition-max-width {
   transition-property: max-width;
   transition-timing-function: var(--tw-ease, var(--default-transition-timing-function));
@@ -507,14 +501,6 @@ html.desk-hidden *::after {
   .expand-area-leave-active {
     transition-duration: 0.01ms;
   }
-}
-
-/* --- sessions sidebar width (SessionsView) ------------------------------------------------------
-   The dragged width arrives as --sidebar-w on the aside and is inherited by its content column, so
-   both read one number. Never wider than the viewport allows: a 340px sidebar on a 390px phone
-   would crush the transcript. */
-.sessions-sidebar-w {
-  width: min(var(--sidebar-w), calc(100vw - 56px));
 }
 
 /* --- instance rows arriving and leaving (InstancesView's <TransitionGroup name="row-fade">) ----- */

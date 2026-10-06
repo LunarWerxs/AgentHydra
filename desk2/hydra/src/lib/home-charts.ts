@@ -1,4 +1,4 @@
-// web/src/lib/home-charts.ts — data shaping for the Instances landing page's charts band.
+// web/src/lib/home-charts.ts — data shaping for the Instances landing page: its accounts and charts.
 // Pure and clock-free: every call takes `asOf` (ms), so a chart never shifts between refreshes.
 
 import { windowUsedPct } from './usage'
@@ -77,3 +77,24 @@ export function severityOf(pct: number): 'ok' | 'warn' | 'high' {
 
 /** A window whose reset has passed is back to 0% used (its stored % describes the ended window). */
 export const usedPct = windowUsedPct
+
+type UsageWindow = { pct: number; resetsAt?: string | null } | null | undefined
+
+/**
+ * The landing's headline: how many accounts can take work right now. Usable = signed in, with
+ * neither its 5-hour nor its weekly window used up. A window whose reset has passed is back (usedPct),
+ * and one never read does not hold an account back: no reading is not a spent limit.
+ */
+export function usableNow(
+  accounts: Array<{ signedIn: boolean; session: UsageWindow; week: UsageWindow }>,
+  at: number,
+): { signedIn: number; spent: number; usable: number } {
+  let signedIn = 0
+  let spent = 0
+  for (const a of accounts) {
+    if (!a.signedIn) continue
+    signedIn++
+    if ([a.session, a.week].some((w) => (usedPct(w, at) ?? 0) >= 100)) spent++
+  }
+  return { signedIn, spent, usable: signedIn - spent }
+}

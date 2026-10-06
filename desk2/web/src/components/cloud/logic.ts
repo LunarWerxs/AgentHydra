@@ -60,7 +60,8 @@ export const INSTANCE_DEFAULT = 'default'
 export const INSTANCE_OTHER = 'other'
 
 export interface CloudScopes {
-  source: CloudSource[]
+  /** The ticked apps (AgentHydra's `source` in the query). */
+  apps: CloudSource[]
   /** null: every instance (no narrowing); else the ticked names, 'default' and 'other' included. */
   instance: string[] | null
   dispatched: DispatchedValue[]
@@ -74,10 +75,11 @@ export interface CloudScopes {
   onlyThisView: boolean
 }
 
-/** What the list shows until its owner picks otherwise: AgentHydra's Sessions defaults (every source but
- *  HSwarm, live sessions only, the last 24 hours), both PCs. */
+/** What the list shows until its owner picks otherwise: Claude alone (owner, 2026-10-05: "I don't
+ *  necessarily want to see open code or ChatGPT in my sidebar by default, but I want to be able to"),
+ *  live sessions only, the last 24 hours, both PCs. */
 export const DEFAULT_SCOPES: CloudScopes = {
-  source: SOURCE_VALUES.filter((s) => s !== 'zswarm'),
+  apps: ['claude'],
   instance: null,
   dispatched: [...DISPATCHED_VALUES],
   rateLimit: [...RATE_LIMIT_VALUES],
@@ -90,7 +92,7 @@ export const DEFAULT_SCOPES: CloudScopes = {
 
 /** No narrowing at all: what a search looks through unless "Only this view" is ticked. */
 const WIDE: Omit<CloudScopes, 'onlyThisView' | 'pcs'> = {
-  source: [...SOURCE_VALUES],
+  apps: [...SOURCE_VALUES],
   instance: null,
   dispatched: [...DISPATCHED_VALUES],
   rateLimit: [...RATE_LIMIT_VALUES],
@@ -117,7 +119,7 @@ export function parseScopes(stored: string | null | undefined): CloudScopes {
   }
   const d = DEFAULT_SCOPES
   return {
-    source: pick(o.source, SOURCE_VALUES, d.source),
+    apps: pick(o.apps, SOURCE_VALUES, d.apps),
     instance: names(o.instance),
     dispatched: pick(o.dispatched, DISPATCHED_VALUES, d.dispatched),
     rateLimit: pick(o.rateLimit, RATE_LIMIT_VALUES, d.rateLimit),
@@ -153,11 +155,11 @@ export function effectiveScopes(s: CloudScopes, search: string): CloudScopes {
  */
 export function cloudQuery(s: CloudScopes, search: string): string {
   const q = new URLSearchParams()
-  const claude = s.source.includes('claude')
+  const claude = s.apps.includes('claude')
   q.set('period', s.period)
   q.set('archived', s.archived.length ? s.archived.join(',') : 'none')
   const nonHswarm = SOURCE_VALUES.filter((v) => v !== 'zswarm')
-  const source = allOf(s.source, nonHswarm) && s.source.length === nonHswarm.length ? '-zswarm' : scope(s.source, SOURCE_VALUES)
+  const source = allOf(s.apps, nonHswarm) && s.apps.length === nonHswarm.length ? '-zswarm' : scope(s.apps, SOURCE_VALUES)
   if (source) q.set('source', source)
   if (claude && s.instance) q.set('instance', s.instance.length ? s.instance.join(',') : 'none')
   const dispatched = claude ? scope(s.dispatched, DISPATCHED_VALUES) : undefined
@@ -189,8 +191,9 @@ export function sessionShape(s: Pick<CloudSession, 'messageCount' | 'createdAt' 
 /** The PC a row came from: the chat sync's name for another PC's chat, else this one. */
 export const pcOf = (s: Pick<CloudSession, 'fromPc'>, thisPc: string): string => s.fromPc ?? thisPc
 
-/** The words of the cloud icon on another PC's chat, in both lists (AgentHydra's Sessions tab says the same). */
-export const fromPcLabel = (pc: string): string => `From ${pc}, through the chat sync`
+/** The words of the cloud icon on another PC's chat, in both lists (AgentHydra's Sessions tab says the same); the app too when it is not Claude. */
+export const fromPcLabel = (pc: string, source = 'claude'): string =>
+  source === 'claude' ? `From ${pc}, through the chat sync` : `${sourceName(source)} chat from ${pc}, through the chat sync`
 
 /** A source in words: AgentHydra's by their menu names, any other as it is. */
 export const sourceName = (s: string): string => SOURCE_LABELS[s as CloudSource] ?? s
@@ -200,12 +203,20 @@ export function originLabel(r: Pick<CloudSession, 'source' | 'instance' | 'insta
   return [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc)}`].filter(Boolean).join(' · ')
 }
 
+/** What a row leads with: a cloud (another PC's chat) with its words, a muted mark for its app with its words, or nothing (its dot). */
+export type RowLead = { kind: 'cloud'; label: string } | { kind: 'app'; app: string; label: string } | null
+
 /**
- * The words of the cloud icon on a row only the cloud list has, one the desk list does not show (owner,
- * 2026-10-04: "none display a cloud icon"), and where it comes from.
+ * The cloud means another PC, nothing else (owner, 2026-10-05: "why chats on my computer are considered
+ * cloud ... it's not cloud"). A chat of another app on this PC the desk list does not show leads with
+ * its app's mark instead. A row added for running work (`added`) has a cloud only for another PC.
  */
-export const cloudOnlyLabel = (r: Pick<CloudSession, 'source' | 'instance' | 'instanceNum' | 'fromPc'>, thisPc: string): string =>
-  `Only in the cloud list, from ${originLabel(r, thisPc)}`
+export function rowLead(r: Pick<CloudSession, 'source' | 'fromPc'>, thisPc: string, o: { onDesk: boolean; added: boolean }): RowLead {
+  const pc = r.fromPc && r.fromPc !== thisPc ? r.fromPc : null
+  if (pc) return { kind: 'cloud', label: o.added ? `On ${pc}` : fromPcLabel(pc, r.source) }
+  if (o.added || o.onDesk || r.source === 'claude') return null
+  return { kind: 'app', app: r.source, label: `${sourceName(r.source)} chat on this PC` }
+}
 
 /** Every PC the rows name, this one first. */
 export function pcsIn(rows: Pick<CloudSession, 'fromPc'>[], thisPc: string): string[] {
@@ -309,7 +320,7 @@ export function deskPlaces(chats: DeskChat[], external: DeskExternal[]): Map<str
  */
 function keepsDeskRow(r: CloudSession, s: CloudScopes, thisPc: string): boolean {
   const named = (SOURCE_VALUES as readonly string[]).includes(r.source)
-  const sourceOk = named ? s.source.includes(r.source as CloudSource) : allOf(s.source, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
+  const sourceOk = named ? s.apps.includes(r.source as CloudSource) : allOf(s.apps, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
   if (!sourceOk || !s.archived.includes(r.archived ? 'archived' : 'active')) return false
   if (s.pcs !== null && !s.pcs.includes(pcOf(r, thisPc))) return false
   if (!allOf(s.shape, SHAPE_VALUES)) return false
@@ -411,7 +422,7 @@ export function scopesNarrowed(s: CloudScopes): boolean {
   const d = DEFAULT_SCOPES
   const same = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((v) => b.includes(v))
   return (
-    !same(s.source, d.source) ||
+    !same(s.apps, d.apps) ||
     s.instance !== null ||
     !same(s.dispatched, d.dispatched) ||
     !same(s.rateLimit, d.rateLimit) ||

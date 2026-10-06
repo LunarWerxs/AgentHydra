@@ -25,21 +25,28 @@ const held: DeskMessage[] = []
 // Whether the pane is in view: the frame stays loaded behind the chat, and out of view its polls rest.
 let visible = false
 
-/** HydraPane: a frame was (re)created, or went away. Its sidebar is gone until it describes one again. */
+/** HydraPane: a frame was (re)created, or went away. Its sidebar is gone until it describes one again.
+ *  The same frame again changes nothing: dropping its sidebar then would leave Desk with none, since a
+ *  frame that is already listening never says ah:ready again. */
 export function attachHydraFrame(win: Window | null): void {
+  if (win === frame) return
   frame = win
   ready = false
   hydraSidebar.value = null
 }
 
-/** HydraPane: the frame said ah:ready. */
-export function hydraReady(): void {
+/** HydraPane: the frame said ah:ready (it loaded, or reloaded in place). It is told whether it is in
+ *  view, and on desk:visible true it sends its current sidebar again, so what Desk holds is never one
+ *  from before (lib/desk-embed.ts in the copy). */
+export function hydraReady(win: Window): void {
+  frame = win
   ready = true
-  frame?.postMessage({ type: 'desk:visible', visible } satisfies DeskMessage, window.location.origin)
-  for (const m of held.splice(0)) frame?.postMessage(m, window.location.origin)
+  win.postMessage({ type: 'desk:visible', visible } satisfies DeskMessage, window.location.origin)
+  for (const m of held.splice(0)) win.postMessage(m, window.location.origin)
 }
 
-/** HydraPane: the pane slid in or out. Only the latest counts, so it is never held. */
+/** HydraPane: the pane slid in or out. Only the latest counts, so it is never held. Sliding in, the copy
+ *  answers with its current sidebar (desk:visible true), whatever Desk held while it was away. */
 export function setHydraVisible(v: boolean): void {
   if (v === visible) return
   visible = v
@@ -57,13 +64,13 @@ export function showInstanceInHydra(num: number, kind: 'desktop' | 'cli'): void 
   openHydra()
 }
 
-/** Slides AgentHydra in on the HSwarm tab (it cannot open one job). */
+/** Slides AgentHydra in on the HSwarm tab, on that job of its Jobs node when one is named. */
 export function openSwarmInHydra(job?: string): void {
   tellHydra({ type: 'desk:open-hswarm', job })
   openHydra()
 }
 
-/** Slides AgentHydra in on a CliMayte task, open on the CliMayte entry of the HSwarm tab; `pc` for another PC's. */
+/** Slides AgentHydra in on a CliMayte task, open on the CliMayte node of the HSwarm tab; `pc` for another PC's. */
 export function openWorkerInHydra(id: string, pc?: string | null): void {
   tellHydra(pc ? { type: 'desk:open-worker', id, pc } : { type: 'desk:open-worker', id })
   openHydra()

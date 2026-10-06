@@ -18,8 +18,10 @@ const props = defineProps<{
   order?: readonly string[]
   /** Rendered value, e.g. money or a compact count. */
   format: (n: number) => string
-  /** One hue for every row (magnitude), instead of one per entity (identity). */
-  mono?: boolean
+  /** Gray bars with the one accent only where it means something: 'top' on the largest row,
+   *  'none' on no row (owner, 2026-10-05: "adding, like, a thousand colors to it isn't gonna
+   *  help"). Wins over `order`; unset keeps one colour per entity. */
+  accent?: 'top' | 'none'
 }>()
 
 const expanded = ref(false)
@@ -31,7 +33,17 @@ const max = computed(() =>
 const shown = computed(() => (expanded.value ? [...props.rows, ...(props.more ?? [])] : props.rows))
 // The colour order is built once per rows change, not once per row per render.
 const colorOrder = computed(() => props.order ?? props.rows.map((r) => r.key))
-const colorFor = (key: string) => (props.mono ? 'var(--viz-seq)' : seriesColor(key, colorOrder.value))
+/** The largest row, folded tail included, so the accent cannot move when the tail is revealed. */
+const topKey = computed(() => {
+  let best: { key: string; value: number } | undefined
+  for (const r of [...props.rows, ...(props.more ?? [])]) if (!best || r.value > best.value) best = r
+  return best && best.value > 0 ? best.key : null
+})
+const NEUTRAL = 'color-mix(in oklab, var(--color-muted-foreground) 45%, transparent)'
+const colorFor = (key: string) => {
+  if (props.accent) return props.accent === 'top' && key === topKey.value ? 'var(--viz-seq)' : NEUTRAL
+  return seriesColor(key, colorOrder.value)
+}
 </script>
 
 <template>
@@ -54,7 +66,7 @@ const colorFor = (key: string) => (props.mono ? 'var(--viz-seq)' : seriesColor(k
     <li v-if="more?.length">
       <button
         type="button"
-        class="mt-0.5 text-2xs font-medium text-primary hover:underline"
+        class="mt-0.5 text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline"
         @click="expanded = !expanded"
       >
         {{ expanded ? $t('analytics.showLess') : moreLabel }}

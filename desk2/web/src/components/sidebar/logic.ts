@@ -386,11 +386,12 @@ export function sourceLabel(source: ExternalSession['source']): string {
  * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Hydra Desk
  * paints every "waiting for you" state orange: a question or permission (pulsing) and a finished turn
  * not looked at yet (solid; the real app uses blue there). Error is red, a usage limit a pink hollow
- * ring (it waits for the reset, not for you), closed dims the title.
+ * ring (it waits for the reset, not for you), closed dims the title. Blue is HSwarm's alone: only a row
+ * that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
  */
 export interface StatusGlyph {
   shape: 'ring' | 'dot'
-  tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited'
+  tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
   dim: boolean // the row title is dimmed (closed)
   label: string // aria-label of the dot, in words
@@ -428,7 +429,21 @@ function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: num
     : { shape: 'ring', tone: 'muted', motion: 'none', dim, label: idle }
 }
 
-/** The 6px dot's classes for a glyph; every place that draws a status dot uses these. */
+/** The dot of a row that stands for a running HSwarm job no chat is known to have called (tasks.ts AddedRow.job). */
+export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', dim: false, label: 'HSwarm job running' }
+
+/**
+ * A running mark's classes: the one shared pulse (style.css .run-pulse, the working dot's blink, still under
+ * reduced motion) in its tone. Gray for a CliMayte task, as for a chat that works here or on another PC; blue for
+ * an HSwarm job, and for nothing else in the sidebar, where nothing spins (owner, 2026-10-05: "Only the HSwarm
+ * items should have blue ... a slow blue pulsing icon"). The tone is the text color: an icon takes it, a dot
+ * draws it with bg-current.
+ */
+export function runPulse(tone: 'gray' | 'blue'): string {
+  return `run-pulse ${tone === 'blue' ? 'text-accent-text' : 'text-[var(--status-working)]'}`
+}
+
+/** The 6px dot's classes for a glyph; every place that draws a status dot uses these. Working blinks with runPulse's pulse. */
 export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>): string {
   if (g.shape === 'ring') {
     return g.tone === 'limited'
@@ -440,9 +455,10 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
     warning: 'bg-[var(--status-needs-you)]',
     success: 'bg-[var(--status-done)]',
     danger: 'bg-[var(--status-error)]',
-    limited: 'bg-[var(--status-limited)]'
+    limited: 'bg-[var(--status-limited)]',
+    swarm: 'bg-accent-text'
   }[g.tone]
-  const motion = { none: '', blink: ' animate-dot-blink', pulse: ' animate-dot-pulse' }[g.motion]
+  const motion = { none: '', blink: ' run-pulse', pulse: ' animate-dot-pulse' }[g.motion]
   return tone + motion
 }
 

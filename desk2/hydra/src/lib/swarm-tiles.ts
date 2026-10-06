@@ -1,5 +1,6 @@
 // The HSwarm stat tiles (saved today / 7 days / all time, tasks and tokens today), shared by the
-// plain card (SwarmStatsCard.vue) and the combined CliMayte + HSwarm card (OffloadStatsCard.vue).
+// plain card (SwarmStatsCard.vue), the combined CliMayte + HSwarm card (OffloadStatsCard.vue) and
+// the HSwarm tile in Analytics' lead row (AnalyticsView.vue).
 import { computed, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatCompact, formatUsd } from '@/lib/format'

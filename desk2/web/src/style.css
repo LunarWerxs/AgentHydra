@@ -158,6 +158,24 @@
 @keyframes code-user-bubble-enter { 0% { opacity: 0; transform: scale(0.92) translateY(6px); } 100% { opacity: 1; transform: none; } }
 @keyframes epitaxy-approval-inline-enter { 0% { opacity: 0; } 100% { opacity: 1; } }
 
+/*
+ * The sidebar's running marks pulse and never spin (owner, 2026-10-05: "instead of being blue spinning icons,
+ * ... a slow blue pulsing icon. And also ... for chats that are remote ... gray pulsing"): the working dot's
+ * blink, gray for a chat, a CliMayte task or another PC's chat, blue for an HSwarm job alone. Only the motion
+ * lives here; the tone is the mark's (components/sidebar/logic.ts runPulse, glyphDotClass). It holds still
+ * when the system asks for reduced motion.
+ */
+@layer components {
+  .run-pulse {
+    animation: var(--animate-dot-blink);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .run-pulse {
+      animation: none;
+    }
+  }
+}
+
 @layer base {
   html {
     color-scheme: dark;

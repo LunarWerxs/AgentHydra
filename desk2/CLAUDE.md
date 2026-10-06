@@ -16,9 +16,9 @@ between server/ and web/.
   The daemon is not copied: two would both run work on the same accounts. The copy has no Sessions tab
   (removed 2026-10-04): Desk's cloud list and its session header (`web/src/components/session-header`)
   replace it, and the copy's "open this chat" goes to Desk (`hydra/src/lib/desk-embed.ts`). Desk owns the one
-  sidebar: a copy tab with a sidebar of its own (HSwarm, whose pages are CliMayte, Routing and HSwarm's tree,
-  `hydra/src/lib/hswarm-pages.ts`) describes it with `useDeskSidebar`
-  and Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
+  sidebar: a copy tab with a sidebar of its own (HSwarm's tree, whose nodes include Routing and CliMayte,
+  `hydra/src/components/HSwarmView.vue`) describes it with `useDeskSidebar(view, build, onEvent)`, keyed by
+  the tab's AppView, and only the tab on screen (App.vue's `setDeskView`) is sent; Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.
 - `../devwebui/` is a whole copy of Michael's DevWebUI (LunarWerxs/DevWebUI at 69c766dc, copied 2026-10-05),

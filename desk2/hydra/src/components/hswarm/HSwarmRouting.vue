@@ -1,5 +1,7 @@
 <script setup lang="ts">
 // The HSwarm tab's routing view. Strings: i18n/locales/en/hswarm/routing.ts (t('hswarm.v.routing.<key>')).
+// Below HSwarm's own routing it carries AgentHydra's cost routing between API keys and subscriptions
+// (HSwarmCostRouting.vue), so the tree's one Routing item holds both.
 import { AlertCircle, Route } from '@lucide/vue'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -21,6 +23,7 @@ import { Switch } from '@/components/ui/switch'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { formatUsd } from '@/lib/kit'
+import HSwarmCostRouting from './HSwarmCostRouting.vue'
 
 const props = defineProps<{ state: HswarmState }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -404,5 +407,7 @@ async function handlePreview() {
         </CollapsibleContent>
       </Collapsible>
     </Card>
+
+    <HSwarmCostRouting class="mt-1 border-t pt-3" />
   </div>
 </template>

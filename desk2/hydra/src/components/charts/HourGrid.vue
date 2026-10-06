@@ -8,10 +8,11 @@
 // lot of empty card. They are now sized FROM the container: one measured width, one cell edge, and
 // every cell a square of exactly that edge, so the grid grows to fill whatever it is given.
 //
-// SEQUENTIAL, ONE HUE, light to dark. Never a rainbow: a rainbow implies categories, and these
-// cells differ only in magnitude. Encoded as opacity over a single validated hue, so the ramp is
-// monotonic by construction and cannot cross a hue boundary. Every cell keeps a faint track, so an
-// hour with nothing in it reads as EMPTY rather than as absent.
+// SEQUENTIAL, ONE COLOUR, light to dark. Never a rainbow: a rainbow implies categories, and these
+// cells differ only in magnitude. Encoded as opacity over a single colour, so the ramp is monotonic
+// by construction. Every cell keeps a faint track, so an hour with nothing in it reads as EMPTY
+// rather than as absent. The colour is a neutral gray and only the busiest hour takes the accent
+// (owner, 2026-10-05: "There's just a ton of blue"): that one square is the answer to the question.
 import { useElementSize } from '@vueuse/core'
 import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -85,6 +86,18 @@ const tipTitle = computed(() => {
   return `${DAYS[Math.floor(i / 24)]} ${String(i % 24).padStart(2, '0')}:00`
 })
 
+/** The busiest slot, the one square drawn in the accent; -1 on an empty week. */
+const peak = computed(() => {
+  let best = -1
+  let bestValue = 0
+  props.hours.forEach((v, i) => {
+    if (v > bestValue) {
+      bestValue = v
+      best = i
+    }
+  })
+  return best
+})
 /** Floor at a faint tint so a cell with ONE turn in it is still visibly not empty. */
 const intensity = (v: number) => (v === 0 ? 0 : 0.15 + 0.85 * (v / max.value))
 /** The accessible name for one cell. The rich hover card is a mouse affordance; this is what a
@@ -136,7 +149,8 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21]
             @mouseleave="hover = null"
           >
             <div
-              class="size-full rounded-xs bg-(--viz-seq) opacity-(--hg-alpha)"
+              class="size-full rounded-xs opacity-(--hg-alpha)"
+              :class="peak === d * 24 + (h - 1) ? 'bg-(--viz-seq)' : 'bg-muted-foreground'"
               :style="{ '--hg-alpha': intensity(hours[d * 24 + (h - 1)] ?? 0) }"
             ></div>
           </div>

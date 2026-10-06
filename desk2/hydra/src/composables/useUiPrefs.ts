@@ -72,12 +72,6 @@ const desktopSortDirection = useStorage('agenthydra.instances.desktopSortDirecti
 /** Mask account e-mail addresses across the UI, for screenshots and screen-shares. */
 const privacyMode = useStorage('agenthydra.privacyMode', false)
 
-// The width a side list (components/side-list/SideBar.vue) may be dragged to.
-export const SIDEBAR_MIN = 240
-export const SIDEBAR_MAX = 560
-export const SIDEBAR_DEFAULT = 340
-export const clampWidth = (w: number) => Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, w))
-
 // Mirrored through the daemon, at module scope, for the reasons in the header.
 registerSharedPref(APP_VIEW_KEY, storedView, APP_VIEWS)
 registerSharedPref('agenthydra.instances.desktopSortKey', desktopSortKey)

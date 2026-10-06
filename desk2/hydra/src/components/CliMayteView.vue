@@ -1,40 +1,26 @@
 <script setup lang="ts">
-// CliMayte view: the tasks a chat handed to the owner's Claude CLI accounts (server/src/climayte.ts,
-// docs/CLIMAYTE.md). A task list grouped by hand-off on the left, the selected task on the right
-// (CliMayteWorkerDetail.vue). Polls the list every 3 s while a task can still change, every 15 s
-// otherwise (the totals, scorecard, other PCs and waves only every 30 s), not at all while the page is
-// hidden, and again when the page is shown or the window regains focus. The list asks for the newest
-// 150 finished tasks; "Show older" asks for all of them.
+// CliMayte, a node of the HSwarm tab's tree (HSwarmView.vue): the tasks a chat handed to the owner's
+// Claude CLI accounts (server/src/climayte.ts, docs/CLIMAYTE.md), shown as a manager sees them (owner,
+// 2026-10-05: "while viewing them in the HSwarm, I would see less details because ... it's kind of just
+// a manager ... it would act more like the Jobs tab"). One line per task, newest first: its status, its
+// title, the account and model it runs on, and how long it has been active; the rest rides on the hover.
+// Running shows only the tasks that can still change (queued, running, waiting or being checked), All
+// every one, and another PC's tasks come with a cloud while the queue is shared. A click opens the task
+// (CliMayteWorkerDetail.vue, whose log is CliMayte's journal) in place of the list; its back button, or
+// a click on the CliMayte row, goes back to the list where it was. The waves and the scorecard (the
+// totals and "What works", OffloadStatsCard.vue) sit above the list, each folded until it is opened.
+// None of it goes into Desk's sidebar: on the HSwarm tab that is HSwarm's tree.
 //
-// Layout (2026-09-30 review, three lenses agreeing): the header comes first and says what CliMayte is;
-// the list is one bordered panel with the hand-off as a subheader. On a wide screen the list and the
-// task fill the rest of the window and the page does not scroll (owner, 2026-10-01): the list scrolls
-// inside itself, so a row low in a long list still opens its task beside it, and in the task only its
-// long parts (result, event log, journal) scroll, each in its own box, sharing the height that is
-// left. A narrow screen stacks them at their natural height. "Hide finished" leaves only the tasks
-// still queued, running, waiting or being checked (owner, 2026-10-01). It sits on the CLI tab under the CLI
-// accounts table (CliView.vue), whose Quick add is where an account is added, so it has none of its
-// own.
-//
-// The totals and "What works" (the scorecard) live in the one stats card above the task
-// (OffloadStatsCard.vue), shared with HSwarm, so the sidebar header is only the title, the filter
-// and the waves.
-//
-// In Hydra Desk 2 the task list is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04:
-// one sidebar for everything): this view describes it, row for row as the SideBar below says it, and
-// hides its own; the waves move to the top of the task column, and Desk can ask for a task by id.
+// The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts: the page
+// reads it again when it is shown, when the window or the Desk pane comes back, and after a change. The
+// list asks for the newest 150 finished tasks; "Show older" asks for all of them.
 import {
-  Ban,
+  ArrowLeft,
+  BarChart3,
   Check,
-  CircleCheck,
-  CircleX,
-  Clock,
+  ChevronRight,
   Cloud,
   CloudOff,
-  Hourglass,
-  ListChecks,
-  LoaderCircle,
-  type LucideIcon,
   Network,
   PictureInPicture2,
   RefreshCw,
@@ -48,7 +34,7 @@ import {
   computed,
   createApp,
   h,
-  inject,
+  nextTick,
   onActivated,
   onDeactivated,
   onMounted,
@@ -64,18 +50,15 @@ import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
 import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
-import SideBar from '@/components/side-list/SideBar.vue'
-import SideListRow from '@/components/side-list/SideListRow.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
 import { i18n } from '@/i18n'
 import { pii } from '@/composables/usePrivacy'
 import { privacyMode } from '@/composables/useUiPrefs'
-import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import type {
   CliMayteRemotePc,
   CliMayteRemoteWorker,
@@ -84,26 +67,25 @@ import type {
 import {
   getCliMayteWorker,
 } from '@/lib/api'
-import { OPEN_VIEW } from '@/lib/app-view'
 import {
-  climayteFailedStory,
   climayteQueuedNote,
   climayteRunLabel,
-  climayteStatusMeta,
-  climayteStoryLines,
   climayteVerdictMark,
   firstLine,
   isCliMayteActive,
 } from '@/lib/climayte-status'
-import { deskWorkerAsk, EMBEDDED, PANE_OPEN_EVENT, useDeskSidebar } from '@/lib/desk-embed'
+import { deskWorkerAsk, PANE_OPEN_EVENT } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
-import type { SideListGroup } from '@/lib/side-list'
 import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
+/** `home`: HSwarmView bumps it when the CliMayte row is clicked, which goes back to the list. */
+const props = defineProps<{ home?: number }>()
+/** `open`: a tree path for HSwarmView to show (the scorecard's HSwarm link opens HSwarm's savings). */
+const emit = defineEmits<{ open: [path: string[]] }>()
+
 const { t, locale } = useI18n()
-const openView = inject(OPEN_VIEW, () => {})
 const { pipWindow, isOpen: floatIsOpen, open: openFloat, close: closeFloat } = useCliMayteFloat()
 
 let floatApp: ReturnType<typeof createApp> | null = null
@@ -150,33 +132,31 @@ watch(
   },
   { immediate: true },
 )
+/** The open task's row key; null while the list is on screen. */
 const selectedId = ref<string | null>(null)
 const detail = ref<(CliMayteWorkerView & { events: string[] }) | null>(null)
 const now = ref(Date.now())
 
-/** Show only tasks that can still change (isCliMayteActive), kept in this browser. */
-const hideFinished = useStorage('agenthydra.climayte.hideFinished', false)
+/** Running: only the tasks that can still change (isCliMayteActive); All: every one. Kept in this
+ *  browser, under the key of the "Hide finished" switch it replaces, so the choice carries over. */
+const runningOnly = useStorage('agenthydra.climayte.hideFinished', false)
+const activeCount = computed(() => rows.value.reduce((n, w) => n + (isCliMayteActive(w) ? 1 : 0), 0))
+/** The list under the filter, newest first. */
 const listed = computed(() =>
-  hideFinished.value ? rows.value.filter(isCliMayteActive) : rows.value,
+  (runningOnly.value ? rows.value.filter(isCliMayteActive) : [...rows.value]).sort(
+    (a, b) => b.createdAt - a.createdAt,
+  ),
 )
 const hiddenCount = computed(() => rows.value.length - listed.value.length)
+// A page of lines at a time, "Show more" adds a page: a busy queue is thousands of tasks, and every
+// line is redrawn while any task runs.
+const PAGE = 150
+const limit = ref(PAGE)
+const shown = computed(() => listed.value.slice(0, limit.value))
+const notShown = computed(() => listed.value.length - shown.value.length)
 
-/** Hand-offs ordered by their newest task, tasks inside newest first. */
-const groups = computed(() => {
-  const sorted = [...listed.value].sort((a, b) => b.createdAt - a.createdAt)
-  const map = new Map<string, ListRow[]>()
-  for (const w of sorted) {
-    const list = map.get(w.group)
-    if (list) list.push(w)
-    else map.set(w.group, [w])
-  }
-  return [...map.entries()].map(([group, items]) => ({ group, items }))
-})
-
-/** The same groups for SideList: the hand-off as the header line, rows keyed per PC. */
-const sideGroups = computed<SideListGroup<ListRow>[]>(() =>
-  groups.value.map((g) => ({ key: g.group, label: g.group, items: g.items, keyOf: rowKey })),
-)
+/** Folded until opened, and kept that way in this browser: the list comes first. */
+const scoreOpen = useStorage('agenthydra.climayte.scoreOpen', false)
 
 const selectedRow = computed(() => rows.value.find((w) => rowKey(w) === selectedId.value) ?? null)
 /** The remote row that is open, shown read-only from what the row has. */
@@ -262,9 +242,8 @@ function showOlder() {
   void load()
 }
 
-/** Opening the tab, its refresh button and the pane being shown again: read the shared list now, open
- *  the first task on the first look, and read the open task's detail. Between those, lib/warm-data.ts
- *  keeps the list fresh (about every 2 minutes). */
+/** Opening the page, its refresh button and the pane being shown again: read the shared list now, and
+ *  the open task's detail. Between those, lib/warm-data.ts keeps the list fresh (about every 2 minutes). */
 async function load(opts: { silent?: boolean; side?: boolean } = {}) {
   const wasLoaded = loaded.value
   await refreshCliMayte(opts)
@@ -274,18 +253,11 @@ async function load(opts: { silent?: boolean; side?: boolean } = {}) {
   }
   pruneRowViews()
   now.value = Date.now()
-  if (!selectedId.value) {
-    // First paint: open the newest live task, else the newest one.
-    const first =
-      [...workers.value].sort((a, b) => b.createdAt - a.createdAt).find(isCliMayteActive) ??
-      groups.value[0]?.items[0]
-    if (first) selectedId.value = rowKey(first)
-  }
   await loadDetail()
 }
 
-// The tab stays built while another is shown (App.vue's KeepAlive): it reads again only while it is the
-// one on screen, when it comes back, and when the window or the Desk pane is shown again.
+// The page stays built while another tab is shown (App.vue's KeepAlive): it reads again only while it is
+// the one on screen, when it comes back, and when the window or the Desk pane is shown again.
 let active = false
 function onVisible() {
   if (active && document.visibilityState === 'visible') void load({ silent: true, side: true })
@@ -300,20 +272,43 @@ async function findWorker(id: string): Promise<ListRow | undefined> {
   return workers.value.find((x) => x.id === id)
 }
 
-/** A wave's manager link: open that worker's row. */
+/** A wave's manager link: open that worker. */
 async function selectManager(id: string) {
   const m = await findWorker(id)
   if (m) select(m)
 }
 
+// The list's scroll when a task was opened, so going back lands where the click was.
+const listEl = ref<HTMLElement | null>(null)
+let listScroll = 0
+
+/** Opens a task in place of the list. */
 function select(w: ListRow) {
   const key = rowKey(w)
   if (selectedId.value === key) return
+  if (selectedId.value === null) listScroll = listEl.value?.scrollTop ?? 0
   selectedId.value = key
   detail.value = null
   // A remote row has no local worker to ask about: it shows what the row has.
   if (!w.remote) void loadDetail()
 }
+
+/** Back to the list, scrolled where it was, with the row that was open focused. */
+async function back() {
+  const key = selectedId.value
+  if (key === null) return
+  selectedId.value = null
+  detail.value = null
+  await nextTick()
+  const el = listEl.value
+  if (!el) return
+  el.scrollTop = listScroll
+  el.querySelector<HTMLElement>(`[data-task="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
+}
+watch(
+  () => props.home,
+  () => void back(),
+)
 
 /** The float's own app (its window is a separate document): unmounted with the window, however it closed. */
 function unmountFloat() {
@@ -377,9 +372,9 @@ function remoteWaited(w: ListRow): string | null {
   })
 }
 
-/** The row's hover: the title in full, its account, and the one line that needs attention (a
- *  failure's reason, what a waiting or re-queued task waits for, what a running one is doing).
- *  Masked whole in privacy mode: a server's reason can name an account too. */
+/** The row's hover: the title in full, its hand-off, its account, and the one line that needs
+ *  attention (a failure's reason, what a waiting or re-queued task waits for, what a running one is
+ *  doing). Masked whole in privacy mode: a server's reason can name an account too. */
 function rowHint(w: ListRow): string {
   return pii(rowHintText(w))
 }
@@ -408,6 +403,7 @@ function rowHintText(w: ListRow): string {
     w.title,
     w.remote ? remoteLabel(w) : null,
     t('climayte.rowIdHint', { id: w.id }),
+    `${t('climayte.detailGroup')}: ${w.group}`,
     w.account ?? t('climayte.noAccount'),
     ...runs,
     line,
@@ -419,8 +415,8 @@ function rowHintText(w: ListRow): string {
     .join('\n')
 }
 
-/** The row's small tag: the model that ran (else the one asked for) and the effort, e.g.
- *  `Opus 5.5 · max`; amber when the CLI ran a different model than the one asked for. */
+/** The row's model: the one that ran (else the one asked for) and the effort, e.g. `Opus 5.5 · max`;
+ *  amber when the CLI ran a different model than the one asked for. */
 function runTag(w: CliMayteWorkerView): { text: string; differs: boolean } | null {
   const run = climayteRunLabel(w)
   if (!run) return null
@@ -440,8 +436,8 @@ interface RowView {
   tag: ReturnType<typeof runTag>
   hint: string
   time: string
-  /** Desk's version of the row, built when Desk's sidebar first needs it. */
-  desk?: SidebarRow
+  /** The account, masked in privacy mode. */
+  account: string
 }
 const rowViews = new Map<
   string,
@@ -460,6 +456,7 @@ function rowView(w: ListRow): RowView {
     tag: runTag(w),
     hint: rowHint(w),
     time: activeLabel(activeS(w)),
+    account: w.account ? pii(w.account) : t('climayte.noAccount'),
   }
   rowViews.set(key, { w, clock, tasks, words, view })
   return view
@@ -471,173 +468,8 @@ function pruneRowViews() {
   for (const key of rowViews.keys()) if (!keep.has(key)) rowViews.delete(key)
 }
 
-// Hydra Desk 2: the list as Desk's sidebar draws it (shared/hydra-embed.ts), saying per row what
-// SideListRow and CliMayteStatusBadge say here.
-const STATUS_ICON = new Map<LucideIcon, EmbedIcon>([
-  [Clock, 'clock'],
-  [LoaderCircle, 'loader'],
-  [Hourglass, 'hourglass'],
-  [ListChecks, 'list-checks'],
-  [CircleCheck, 'circle-check'],
-  [CircleX, 'circle-x'],
-  [Ban, 'ban'],
-  [Network, 'network'],
-])
-const VARIANT_TONE: Record<string, EmbedTone> = {
-  info: 'info',
-  success: 'success',
-  warning: 'warning',
-  destructive: 'danger',
-}
-function deskStatus(w: ListRow): SidebarRow['status'] {
-  const meta = climayteStatusMeta(w.status, w.hold)
-  const story = climayteFailedStory(w, workers.value)
-  const said = story
-    ? climayteStoryLines(story, (key, values) => t(key, values)).join('\n')
-    : t(meta.hint)
-  return {
-    icon: STATUS_ICON.get(meta.icon) ?? 'clock',
-    tone: VARIANT_TONE[meta.variant ?? ''] ?? 'muted',
-    spin: meta.spin,
-    label: `${t(meta.label)}: ${said}`,
-  }
-}
-function buildDeskRow(w: ListRow, view: RowView): SidebarRow {
-  const { tag, mark } = view
-  return {
-    key: rowKey(w),
-    label: w.title,
-    status: deskStatus(w),
-    badge: w.remote ? { icon: 'cloud', label: remoteLabel(w) } : undefined,
-    chip: w.priority
-      ? {
-          text: t('climayte.rowPriority', { n: w.priority }),
-          hint: t('climayte.rowPriorityHint', { n: w.priority }),
-        }
-      : undefined,
-    tag: tag ? { text: tag.text, tone: tag.differs ? 'warning' : 'muted' } : undefined,
-    time: view.time,
-    mark: mark
-      ? {
-          icon: mark.kind === 'pass' ? 'check' : mark.kind === 'retry' ? 'retry' : 'x',
-          tone: mark.kind === 'pass' ? 'success' : mark.kind === 'retry' ? 'warning' : 'danger',
-          label: mark.label,
-          hint: mark.hint,
-        }
-      : undefined,
-    dim: !!w.remote?.stale,
-    hint: view.hint,
-  }
-}
-/** The row as Desk's sidebar draws it, built once per change of the row (rowView). */
-function deskRow(w: ListRow): SidebarRow {
-  const view = rowView(w)
-  return (view.desk ??= buildDeskRow(w, view))
-}
-// Desk's list: every task that can still change and the open one, then the newest finished ones up to
-// a page; "Show more" adds a page. All 1,754 of a busy queue were 1.3 MB per update and 23k nodes in
-// Desk's sidebar (2026-10-04), redrawn while any task ran.
-const DESK_PAGE = 150
-const deskLimit = ref(DESK_PAGE)
-const deskGroups = computed(() => {
-  let finished = 0
-  let cut = 0
-  const out: { group: string; items: ListRow[] }[] = []
-  for (const g of groups.value) {
-    const items = g.items.filter((w) => {
-      if (isCliMayteActive(w) || rowKey(w) === selectedId.value) return true
-      if (finished < deskLimit.value) {
-        finished++
-        return true
-      }
-      cut++
-      return false
-    })
-    if (items.length) out.push({ group: g.group, items })
-  }
-  return { groups: out, cut }
-})
-const deskFooter = computed(() => [
-  ...(deskGroups.value.cut
-    ? [
-        {
-          id: 'more',
-          icon: 'plus' as const,
-          label: t('climayte.deskShowMore', {
-            n: Math.min(DESK_PAGE, deskGroups.value.cut),
-            total: deskGroups.value.cut,
-          }),
-        },
-      ]
-    : []),
-  ...(hasOlder.value ? [{ id: 'older', icon: 'plus' as const, label: t('climayte.showOlder') }] : []),
-])
-useDeskSidebar(
-  'climayte',
-  () => ({
-    view: 'climayte',
-    title: t('climayte.title'),
-    icon: 'network',
-    count: rows.value.length || undefined,
-    info: t('climayte.subtitle'),
-    warn: remoteNotes.value.length
-      ? remoteNotes.value.map((n) => pii(n.note)).join('\n')
-      : undefined,
-    buttons: [
-      ...(hasPictureInPictureAPI.value
-        ? [{ id: 'pip', icon: 'pip' as const, label: t('climayte.floatButton'), on: floatIsOpen.value }]
-        : []),
-      {
-        id: 'refresh',
-        icon: 'refresh' as const,
-        label: t('climayte.refresh'),
-        spin: loading.value,
-        disabled: loading.value,
-      },
-    ],
-    banner:
-      loaded.value && unreachable.value
-        ? { text: t('climayte.staleBanner'), tone: 'warning', icon: 'cloud-off' }
-        : undefined,
-    switches: rows.value.length
-      ? [
-          {
-            id: 'hideFinished',
-            label: t('climayte.hideFinished'),
-            note: hiddenCount.value > 0 ? t('climayte.hiddenCount', { n: hiddenCount.value }) : undefined,
-            on: hideFinished.value,
-          },
-        ]
-      : undefined,
-    sections: deskGroups.value.groups.map((g) => ({
-      key: g.group,
-      label: g.group,
-      rows: g.items.map(deskRow),
-    })),
-    selected: selectedId.value,
-    empty: !loaded.value
-      ? undefined
-      : rows.value.length
-        ? t('climayte.allHidden', { n: hiddenCount.value })
-        : t('climayte.emptyTitle'),
-    loading: !loaded.value && loading.value,
-    footer: deskFooter.value.length ? deskFooter.value : undefined,
-  }),
-  (e) => {
-    if (e.action === 'select') {
-      const w = rows.value.find((r) => rowKey(r) === e.key)
-      if (w) select(w)
-    } else if (e.action === 'button') {
-      if (e.id === 'refresh') void load()
-      else if (e.id === 'pip') void toggleFloat()
-      else if (e.id === 'more') deskLimit.value += DESK_PAGE
-      else if (e.id === 'older') showOlder()
-    } else if (e.action === 'switch' && e.id === 'hideFinished') hideFinished.value = e.on
-  },
-)
-
-// Desk asked for a task (its sidebar's task rows): opened once the list is in, shown even when
-// "Hide finished" would hide it.
+// Desk asked for a task (its sidebar's task rows; App.vue showed this node): opened once the list is in,
+// shown even when Running would leave it out.
 watch(
   [deskWorkerAsk, loaded],
   async () => {
@@ -649,15 +481,16 @@ watch(
       ? remoteRows.value.find((x) => x.id === ask.id && x.remote?.name === ask.pc)
       : await findWorker(ask.id)
     if (!w) return
-    if (hideFinished.value && !isCliMayteActive(w)) hideFinished.value = false
+    if (runningOnly.value && !isCliMayteActive(w)) runningOnly.value = false
     select(w)
   },
   { immediate: true },
 )
 
+// HSwarmView keeps this page in a KeepAlive, so this runs when its node is first opened too.
 onActivated(() => {
   active = true
-  // Shown (first time or back again): what the shared list has is on screen already; read it now.
+  // On screen: what the shared list has is there already; read it now.
   void load({ silent: loaded.value })
 })
 onDeactivated(() => {
@@ -685,49 +518,64 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0">
-    <!-- The same sidebar as the Sessions tab (SideBar.vue: rail, resize, grouped rows): a header
-         that never scrolls (title, counter, hide finished, waves) over the task list. -->
-    <SideBar v-if="!EMBEDDED" storage-key="agenthydra.climayte" :groups="sideGroups" :empty="!groups.length">
-        <template #header>
-    <header class="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2 pe-11">
-      <div class="flex min-w-0 flex-1 flex-col gap-1">
-        <h2 class="flex items-center gap-2 text-base font-semibold">
-          <Network class="size-4.5" />
-          {{ $t('climayte.title') }}
-          <span v-if="rows.length" class="font-normal text-muted-foreground">({{ rows.length }})</span>
-          <!-- What CliMayte is, behind an info bubble (owner, 2026-10-01: a description is never a
-               paragraph over the UI). -->
-          <InfoHint :text="$t('climayte.subtitle')" />
-          <!-- Another PC on an older (or newer) AgentHydra: one yellow mark to hover, never a banner
-               that stays up (owner, 2026-10-04). -->
-          <span
-            v-if="remoteNotes.length"
-            role="img"
-            tabindex="0"
-            class="inline-flex text-warning"
-            :aria-label="`${$t('climayte.remoteVersions')}: ${remoteNotes.map((n) => $pii(n.note)).join(' ')}`"
-            :title="remoteNotes.map((n) => $pii(n.note)).join('\n')"
-          >
-            <TriangleAlert class="size-3.5" aria-hidden="true" />
-          </span>
-        </h2>
-      </div>
-      <div class="flex gap-1">
+  <div class="flex h-full min-h-0 flex-col">
+    <!-- One line: the title with what CliMayte is behind its info mark (owner, 2026-10-01: a
+         description is never a paragraph over the UI), the filter, the float and refresh. -->
+    <header class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 pb-2">
+      <h2 class="flex min-w-0 items-center gap-2 text-base font-semibold">
+        <Network class="size-4.5 shrink-0" aria-hidden="true" />
+        {{ $t('climayte.title') }}
+        <span v-if="rows.length" class="font-normal text-muted-foreground">({{ rows.length }})</span>
+        <InfoHint :text="$t('climayte.subtitle')" />
+        <!-- Another PC on an older (or newer) AgentHydra: one yellow mark to hover, never a banner
+             that stays up (owner, 2026-10-04). -->
+        <span
+          v-if="remoteNotes.length"
+          role="img"
+          tabindex="0"
+          class="inline-flex text-warning"
+          :aria-label="`${$t('climayte.remoteVersions')}: ${remoteNotes.map((n) => $pii(n.note)).join(' ')}`"
+          :title="remoteNotes.map((n) => $pii(n.note)).join('\n')"
+        >
+          <TriangleAlert class="size-3.5" aria-hidden="true" />
+        </span>
+      </h2>
+      <div class="ms-auto flex items-center gap-1">
+        <div
+          v-if="!selectedId && rows.length"
+          class="me-1 flex items-center gap-1"
+          role="group"
+          :aria-label="$t('climayte.filterLabel')"
+        >
+          <Button
+            size="xs"
+            :variant="runningOnly ? 'secondary' : 'ghost'"
+            :aria-pressed="runningOnly"
+            :title="$t('climayte.filterRunningHint')"
+            @click="runningOnly = true"
+          >{{ $t('climayte.filterRunning', { n: activeCount }) }}</Button>
+          <Button
+            size="xs"
+            :variant="runningOnly ? 'ghost' : 'secondary'"
+            :aria-pressed="!runningOnly"
+            @click="runningOnly = false"
+          >{{ $t('climayte.filterAll', { n: rows.length }) }}</Button>
+        </div>
         <Button
           v-if="hasPictureInPictureAPI"
-          variant="outline"
-          size="icon"
+          variant="ghost"
+          size="icon-sm"
           :aria-label="$t('climayte.floatButton')"
           :title="$t('climayte.floatButton')"
-          :class="floatIsOpen ? 'bg-accent' : ''"
+          :aria-pressed="floatIsOpen"
+          :class="floatIsOpen ? 'text-primary' : ''"
           @click="toggleFloat()"
         >
-          <PictureInPicture2 class="size-4" />
+          <PictureInPicture2 />
         </Button>
         <Button
-          variant="outline"
-          size="icon"
+          variant="ghost"
+          size="icon-sm"
           :disabled="loading"
           :aria-label="$t('climayte.refresh')"
           :title="$t('climayte.refresh')"
@@ -738,142 +586,50 @@ onUnmounted(() => {
       </div>
     </header>
 
-          <p
-            v-if="loaded && unreachable"
-            role="status"
-            class="mx-3 mb-2 flex items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
-          >
-            <CloudOff class="size-3.5 shrink-0" />
-            {{ $t('climayte.staleBanner') }}
-          </p>
+    <p
+      v-if="loaded && unreachable"
+      role="status"
+      class="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning"
+    >
+      <CloudOff class="size-3.5 shrink-0" />
+      {{ $t('climayte.staleBanner') }}
+    </p>
 
-          <div v-if="rows.length" class="flex flex-col gap-1.5 px-3 pb-2">
-            <label class="flex cursor-pointer items-center justify-between gap-2 text-xs text-muted-foreground">
-              <span>
-                {{ $t('climayte.hideFinished') }}
-                <span v-if="hiddenCount > 0" class="tabular-nums">· {{ $t('climayte.hiddenCount', { n: hiddenCount }) }}</span>
-              </span>
-              <Switch v-model="hideFinished" />
-            </label>
-            <CliMayteWaves
-              :waves="waves"
-              :workers="workers"
-              :more="hasOlder"
-              :now="now"
-              @select-worker="selectManager"
-            />
-          </div>
-        </template>
+    <div
+      v-if="!loaded && unreachable"
+      role="alert"
+      class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+    >
+      <CloudOff class="size-7 text-muted-foreground" />
+      <p class="text-sm font-medium">{{ $t('climayte.loadFailedTitle') }}</p>
+      <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.loadFailedBody') }}</p>
+      <Button variant="outline" class="mt-2" @click="load()">
+        <RefreshCw /> {{ $t('climayte.retry') }}
+      </Button>
+    </div>
 
-        <template #empty>
-          <div v-if="!loaded && loading" class="flex flex-col gap-2 p-3" aria-busy="true">
-            <Skeleton v-for="i in 3" :key="i" class="h-8" />
-          </div>
-          <p
-            v-else-if="loaded && rows.length"
-            class="px-3 py-6 text-center text-xs text-muted-foreground"
-          >
-            {{ $t('climayte.allHidden', { n: hiddenCount }) }}
-          </p>
-        </template>
+    <div v-else-if="!loaded" class="flex flex-col gap-1.5 px-4" aria-busy="true">
+      <Skeleton v-for="i in 5" :key="i" class="h-7" />
+    </div>
 
-        <template #row="{ item: w }">
-          <!-- One line per task (owner, 2026-09-30): the status as an icon, the title, when it
-               started. The account and what it is doing or why it stopped ride on the hover;
-               the detail pane has all of it. -->
-          <SideListRow
-            :label="w.title"
-            :selected="rowKey(w) === selectedId"
-            :dim="!!w.remote?.stale"
-            :hint="rowView(w).hint"
-            :chip="w.priority ? $t('climayte.rowPriority', { n: w.priority }) : undefined"
-            :chip-hint="w.priority ? $t('climayte.rowPriorityHint', { n: w.priority }) : undefined"
-            :tag="rowView(w).tag?.text"
-            :tag-tone="rowView(w).tag?.differs ? 'warning' : 'muted'"
-            :time="rowView(w).time"
-            @click="select(w)"
-          >
-            <template #status>
-              <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
-            </template>
-            <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
-            <template v-if="w.remote" #badge>
-              <Cloud
-                class="size-3.5 shrink-0 text-muted-foreground"
-                :aria-label="remoteLabel(w)"
-                :title="remoteLabel(w)"
-              />
-            </template>
-            <!-- Its own hover (the span's title wins over the row's): who judged it and what
-                 they said. A failed check on a task still working is amber and a retry
-                 arrow, never the red cross: ten running rows with a red cross read as "lots
-                 of chats failed" (owner, 2026-10-02). -->
-            <template #mark>
-              <span v-if="rowView(w).mark" class="inline-flex shrink-0" :title="rowView(w).mark?.hint">
-                <Check
-                  v-if="rowView(w).mark?.kind === 'pass'"
-                  class="size-3.5 text-success"
-                  :aria-label="rowView(w).mark?.label"
-                />
-                <RotateCcw
-                  v-else-if="rowView(w).mark?.kind === 'retry'"
-                  class="size-3.5 text-warning"
-                  :aria-label="rowView(w).mark?.label"
-                />
-                <X v-else class="size-3.5 text-destructive" :aria-label="rowView(w).mark?.label" />
-              </span>
-            </template>
-          </SideListRow>
-        </template>
+    <div
+      v-else-if="rows.length === 0"
+      class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
+    >
+      <Network class="size-7 text-muted-foreground" />
+      <p class="text-sm font-medium">{{ $t('climayte.emptyTitle') }}</p>
+      <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.empty') }}</p>
+    </div>
 
-        <!-- The list reads the newest finished tasks; this reads every older one too. -->
-        <div v-if="hasOlder" class="px-3 py-2">
-          <Button variant="outline" size="sm" class="w-full" @click="showOlder()">
-            {{ $t('climayte.showOlder') }}
-          </Button>
-        </div>
-    </SideBar>
-
-    <section class="flex min-h-0 min-w-0 flex-1 flex-col p-4">
-      <!-- In Desk the list is in Desk's sidebar, so the waves head the task column instead. -->
-      <CliMayteWaves
-        v-if="EMBEDDED"
-        class="mb-2 shrink-0"
-        :waves="waves"
-        :workers="workers"
-        :more="hasOlder"
-        :now="now"
-        @select-worker="selectManager"
-      />
-      <OffloadStatsCard
-        class="mb-2 shrink-0"
-        :totals="totals"
-        :scorecard="scorecard"
-        @open="openView('hswarm')"
-      />
-      <div
-        v-if="!loaded && unreachable"
-        role="alert"
-        class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
-      >
-        <CloudOff class="size-7 text-muted-foreground" />
-        <p class="text-sm font-medium">{{ $t('climayte.loadFailedTitle') }}</p>
-        <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.loadFailedBody') }}</p>
-        <Button variant="outline" class="mt-2" @click="load()">
-          <RefreshCw /> {{ $t('climayte.retry') }}
+    <!-- One task, in place of the list. On a wide screen it fills the height and only its long parts
+         scroll; a narrow one stacks it at its natural height and the pane scrolls. -->
+    <div v-else-if="selectedId" class="flex flex-col gap-2 px-4 pb-4 lg:min-h-0 lg:flex-1">
+      <div class="flex shrink-0 items-center">
+        <Button size="sm" variant="ghost" class="-ms-2" @click="back()">
+          <ArrowLeft />
+          {{ $t('climayte.backToTasks') }}
         </Button>
       </div>
-
-      <div
-        v-else-if="loaded && rows.length === 0"
-        class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
-      >
-        <Network class="size-7 text-muted-foreground" />
-        <p class="text-sm font-medium">{{ $t('climayte.emptyTitle') }}</p>
-        <p class="max-w-md text-xs text-muted-foreground">{{ $t('climayte.empty') }}</p>
-      </div>
-
-      <template v-else-if="loaded">
       <!-- Another PC's task is read-only: what its row has, no controls, no call for it here. -->
       <section
         v-if="selectedRemote"
@@ -920,14 +676,106 @@ onUnmounted(() => {
       </section>
       <CliMayteWorkerDetail
         v-else
-        class="min-h-0 flex-1"
+        class="lg:min-h-0 lg:flex-1"
         :worker="selected"
         :tasks="workers"
-        :events-loading="!!selectedId && !detail"
+        :events-loading="!detail"
         :now="now"
         @changed="load({ silent: true, side: true })"
       />
-      </template>
-    </section>
+    </div>
+
+    <!-- The list, under the waves and the scorecard (each folded until opened). -->
+    <div v-else ref="listEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <CliMayteWaves
+        class="mb-2"
+        :waves="waves"
+        :workers="workers"
+        :more="hasOlder"
+        :now="now"
+        @select-worker="selectManager"
+      />
+      <Collapsible v-model:open="scoreOpen" class="mb-2 flex flex-col gap-1.5">
+        <CollapsibleTrigger as-child>
+          <button
+            type="button"
+            class="group flex items-center gap-1.5 self-start rounded-md px-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <ChevronRight
+              class="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
+              aria-hidden="true"
+            />
+            <BarChart3 class="size-3.5" aria-hidden="true" />
+            {{ $t('climayte.scorecard') }}
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <OffloadStatsCard :totals="totals" :scorecard="scorecard" @open="emit('open', ['savings'])" />
+        </CollapsibleContent>
+      </Collapsible>
+
+      <!-- One line per task, as the Jobs page lists jobs: the status as an icon (a failed one tells its
+           story on hover), the title, the account and model it runs on, how long it has been active. -->
+      <ul v-if="shown.length" class="flex flex-col rounded-lg border bg-card py-0.5" :aria-label="$t('climayte.listLabel')">
+        <li v-for="w in shown" :key="rowKey(w)">
+          <button
+            type="button"
+            :data-task="rowKey(w)"
+            class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            :class="w.remote?.stale ? 'opacity-60' : ''"
+            :title="rowView(w).hint"
+            @click="select(w)"
+          >
+            <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
+            <span class="min-w-0 flex-1 truncate text-sm">{{ w.title }}</span>
+            <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
+            <Cloud
+              v-if="w.remote"
+              class="size-3.5 shrink-0 text-muted-foreground"
+              :aria-label="remoteLabel(w)"
+            />
+            <span
+              v-if="w.priority"
+              class="shrink-0 rounded bg-muted px-1 text-2xs text-warning"
+              :title="$t('climayte.rowPriorityHint', { n: w.priority })"
+            >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
+            <!-- Its own hover: who judged it and what they said. A failed check on a task still
+                 working is amber and a retry arrow, never the red cross (owner, 2026-10-02). -->
+            <span v-if="rowView(w).mark" class="inline-flex shrink-0" :title="rowView(w).mark?.hint">
+              <Check
+                v-if="rowView(w).mark?.kind === 'pass'"
+                class="size-3.5 text-success"
+                :aria-label="rowView(w).mark?.label"
+              />
+              <RotateCcw
+                v-else-if="rowView(w).mark?.kind === 'retry'"
+                class="size-3.5 text-warning"
+                :aria-label="rowView(w).mark?.label"
+              />
+              <X v-else class="size-3.5 text-destructive" :aria-label="rowView(w).mark?.label" />
+            </span>
+            <span class="hidden w-44 shrink-0 truncate text-muted-foreground sm:block">{{ rowView(w).account }}</span>
+            <span
+              class="hidden w-36 shrink-0 truncate md:block"
+              :class="rowView(w).tag?.differs ? 'text-warning' : 'text-muted-foreground'"
+            >{{ rowView(w).tag?.text }}</span>
+            <span class="w-14 shrink-0 text-end tabular-nums text-muted-foreground">{{ rowView(w).time }}</span>
+          </button>
+        </li>
+      </ul>
+      <p v-else class="px-1 py-6 text-center text-xs text-muted-foreground">
+        {{ $t('climayte.allHidden', { n: hiddenCount }) }}
+      </p>
+
+      <!-- More of the list, then the finished tasks older than the ones read. -->
+      <div v-if="notShown || hasOlder" class="mt-2 flex gap-2">
+        <Button v-if="notShown" variant="outline" size="sm" class="flex-1" @click="limit += PAGE">
+          {{ $t('climayte.listShowMore', { n: Math.min(PAGE, notShown), total: notShown }) }}
+        </Button>
+        <Button v-if="hasOlder" variant="outline" size="sm" class="flex-1" @click="showOlder()">
+          {{ $t('climayte.showOlder') }}
+        </Button>
+      </div>
+    </div>
   </div>
 </template>

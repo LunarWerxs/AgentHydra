@@ -67,10 +67,3 @@ export function lastDaysSaved(days: SwarmStatsDay[], n = 7): WindowSum {
   }
   return { sum: measured > 0 ? sum : null, measured, total: window.length }
 }
-
-/** Saved per day for the sparkline, in the given (oldest to newest) order; null = not measured. */
-export function sparklineSeries(
-  days: SwarmStatsDay[],
-): Array<{ day: string; value: number | null }> {
-  return days.map((d) => ({ day: d.day, value: d.saved_usd ?? null }))
-}

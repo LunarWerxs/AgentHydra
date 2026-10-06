@@ -1,8 +1,8 @@
 // Analytics view — spend, activity and health, drawn from per-session totals.
 export default {
   title: 'Analytics',
-  // Said before any chart. These are subscription accounts, so nobody is billed per token; the
-  // dollar figure answers "what would this have cost on the API", which is the useful comparison.
+  // Behind the title's and the cost tile's info icons. These are subscription accounts, so nobody is
+  // billed per token; the dollar figure answers "what would this have cost on the API".
   listPrice:
     'Costed at published list prices. A subscription plan is not billed per token, so read these as what the same work would cost on the API.',
   partial: 'Totals cover {n} of {total} sessions scanned so far.',
@@ -30,22 +30,37 @@ export default {
   // daemon running older code serves buckets with a cost and no token figures at all.
   noTokenData:
     'This build has no token figures for this chart yet. Restart AgentHydra to pick them up, or switch back to money.',
-  // --- headline numbers ---
-  totalCost: 'Cost',
-  // Shown instead of the plain "Cost" when a bulk-rate discount is set (Routing page).
-  totalCostAtRate: 'Cost at your rate',
-  atYourRateTip: 'At list price: {list}',
+  // --- the lead row: the four numbers that matter most, each beside what it compares with (owner,
+  // 2026-10-05: "my eyeballs don't know what to focus on and what I'm supposed to see out of it") ---
+  leadUsed: 'Tokens used',
+  leadUsedNote:
+    'Everything sent and received, cache reads included. On a 30-day or all-time window it is the newest 7 days, compared with the 7 before.',
+  leadCost: 'Cost at API rates',
+  leadAtRate: '{cost} at your rate',
+  leadSaved: 'Saved by HSwarm',
+  leadSavedOpen: 'Open HSwarm',
+  leadModel: 'Busiest model',
+  leadModelNote:
+    'The model with the most use in this window, in the unit the tab shows, and its share of all the models in the model chart.',
+  leadModelCost: '{pct} of the cost',
+  leadModelTokens: '{pct} of the tokens',
+  leadUp: '▲ {pct} vs the 7 days before',
+  leadDown: '▼ {pct} vs the 7 days before',
+  leadSame: 'Same as the 7 days before',
+  leadNoneBefore: 'None in the 7 days before',
+  leadNoWeekBefore: 'Pick 30 days or All time to compare weeks',
+  // --- sessions and tokens: the volume, its kinds and its tools ---
+  volume: 'Sessions and tokens',
+  volumeNote:
+    'How much went through in this window. Tokens is everything sent and received; weighted tokens is a cost-shaped total.',
   totalTokens: 'Tokens',
-  // Why the two token tiles disagree, said where they disagree. Raw is everything sent and
-  // received; weighted discounts cache reads and multiplies output to approximate cost, so the
-  // raw figure is routinely several times the weighted one and neither is wrong.
-  totalTokensNote: 'Everything sent and received, uncounted by price.',
   sessions: 'Sessions',
   agentHours: 'Agent hours',
+  // Why the raw and weighted token figures disagree, said where they sit side by side. Weighted
+  // discounts cache reads and multiplies output to approximate cost, so the raw figure is
+  // routinely several times the weighted one and neither is wrong.
   tokens: 'Weighted tokens',
   tokensNote: 'Cache reads ×0.1, output ×5: a cost-shaped total, not a raw count.',
-  // --- token split ---
-  tokenSplit: 'Where the tokens went',
   tokenSplitNote:
     'Cached reads cost about a tenth of fresh input, and output costs several times either, so the split matters more than the total.',
   tokenInput: 'Fresh input',
@@ -61,8 +76,15 @@ export default {
   tokensByMonth: 'Tokens by month',
   costByHour: 'Cost by hour',
   tokensByHour: 'Tokens by hour',
+  timeNote:
+    'Hover a bar for its exact value, its share of the window and the busiest bar. The current period is blue, the rest gray.',
+  // The one accent on the time panel marks the current period; this names it beside the title.
+  accentToday: 'Today',
+  accentWeek: 'Last 7 days',
+  accentMonth: 'This month',
   grainDay: 'Daily',
   grainMonth: 'Monthly',
+  grainBars: 'Bars',
   costByModel: 'Cost by model',
   costByProject: 'Cost by project',
   tokensByModel: 'Tokens by model',
@@ -86,7 +108,7 @@ export default {
     'Only work AgentHydra dispatched: every run records the account it used, so this is known rather than guessed.',
   accountDetail: '{sessions} session(s)',
   modelDetail: '{turns} replies across {sessions} session(s)',
-  showMore: 'Show {n} more',
+  showMore: '+{n} more',
   showLess: 'Show fewer',
   allVendors: 'All providers',
   sourceFilter: 'Sources',
@@ -114,20 +136,21 @@ export default {
   tipSessions: 'Sessions',
   tipChange: 'Change',
   tipPeak: 'Peak',
-  whenYouWork: 'When the work happens',
-  hourNote: 'Replies by hour of the week, darker where there were more.',
-  // Two grains, two questions. The hour grid answers "what time of day do I work" and throws the
-  // calendar away to do it, so it could never answer "which weeks was I actually working", which
-  // over a window of months is the one people open this panel for.
+  hoursTitle: 'Busiest hours of the week',
+  hourNote:
+    'Replies by hour of the week, darker where there were more. The busiest hour is blue.',
+  // Two views, two questions. The hour grid answers "what time of day do I work" and throws the
+  // calendar away to do it, so it could never answer "which weeks was I actually working": that is
+  // the time panel's calendar view.
   grainCalendar: 'Calendar',
-  grainHour: 'Hour of week',
-  calendarNote: 'One square per day, darker where more went through. Gaps are days with nothing.',
+  calendarNote:
+    'One square per day, darker where more went through. Gaps are days with nothing. The current period is blue.',
   concurrency: 'Sessions running at once',
   concurrencyNote: 'How many sessions were alive in each window.',
-  toolMix: 'Tool mix',
+  toolMix: 'Tools agents call most',
   // Token sinks: WHY the spend happened, not only how much. Weighted tokens, the same unit as the
-  // headline, so the sinks rank against each other.
-  sinks: 'Where the tokens went',
+  // weighted total under "Sessions and tokens", so the sinks rank against each other.
+  sinks: 'What eats tokens',
   sinksNote:
     'Ranked in weighted tokens. Structural sinks are configuration, behavioral ones are how sessions ran. They overlap, so the shares do not add up to 100%.',
   sinkDeadSkills: 'Skills loaded but never used',
@@ -156,7 +179,7 @@ export default {
     '{deep} of {calls} calls ran past the deep-context threshold. {spawns} subagents spawned.',
   cacheByAccount: 'Prompt served from cache, per account',
   sinkUnlinked: 'Not linked to an account',
-  health: 'Worth a look',
+  health: 'Sessions worth a look',
   healthNote:
     'Sessions with a run of failing tools, heavy edit churn, a context compaction, or code that mostly did not survive. A signal to go and read one, not a verdict.',
   healthNone: 'Nothing stood out in this window.',
@@ -170,7 +193,7 @@ export default {
   editsNote: 'Paths only, grouped by project. Newest first.',
   editsNone: 'No file changes recorded in this window.',
   // --- recurring mistakes (fail-then-fix command pairs) ---
-  mistakes: 'Recurring mistakes',
+  mistakes: 'Commands agents keep getting wrong',
   mistakesNote:
     'Shell commands that failed with a recognisable error and were fixed a few commands later, grouped by kind and command. Read from the newest transcripts when you ask; nothing is stored.',
   mistakesScan: 'Scan',

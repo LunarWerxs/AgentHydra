@@ -1,15 +1,34 @@
 <script setup lang="ts">
-// The Jobs page: the jobs running now, then every recent job. A click on a job opens its summary
-// and task results right under its row, inside the table (owner, 2026-10-04: "The HSwarm jobs
-// should expand in place on the table to show the data instead of making it appear on the
-// bottom."). One job is open at a time; a second click, its close button or Escape closes it.
-import { AlertCircle, ChevronRight, RefreshCw, X } from '@lucide/vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+// The Jobs page: the jobs running now, then every recent job. A click on a job opens it right under
+// its row, inside the table (owner, 2026-10-04: "The HSwarm jobs should expand in place on the table
+// to show the data instead of making it appear on the bottom."). One job is open at a time; a second
+// click, its close button or Escape closes it.
+//
+// An open job is short (owner, 2026-10-05: the page "is, like, way too verbose ... it doesn't, like,
+// collapse or scroll"): one line of summary (label, state, counts, cost, time, the chat that called
+// it), then its task results, one line per task, folded past FOLD_AT tasks and scrolling in a box of
+// their own. A task's line opens its whole answer in a box that scrolls too; what the list is for is
+// behind the info icon on its heading.
+import {
+  AlertCircle,
+  Ban,
+  ChevronRight,
+  CircleCheck,
+  CircleX,
+  Clock,
+  LoaderCircle,
+  MessageSquare,
+  RefreshCw,
+  X,
+} from '@lucide/vue'
+import type { Component } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
@@ -19,9 +38,14 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { pii } from '@/composables/usePrivacy'
+import type { ChatListResult } from '@/lib/api'
+import { j as getJson } from '@/lib/api'
+import { EMBEDDED, openInDesk } from '@/lib/desk-embed'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { formatTokens, formatUsd } from '@/lib/kit'
+import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
 const { apiCall } = useHswarmApi()
@@ -29,6 +53,12 @@ const { apiCall } = useHswarmApi()
 // jobId: set when the HSwarm tree picked one job; the page opens with that job open under its row.
 const props = defineProps<{ state: HswarmState; jobId?: string }>()
 const emit = defineEmits<{ changed: [] }>()
+
+interface CallerStamp {
+  session_id?: string | null
+  chat_id?: string | null
+  instance?: string | null
+}
 
 interface Job {
   job_id: string
@@ -39,22 +69,33 @@ interface Job {
   cost_usd: number
   tokens?: number
   created: string
-  finished?: string
+  /** When it ended; '' (or nothing) while it runs. */
+  finished?: string | boolean | null
+  /** hswarm/caller.py key(): '<instance> / <8 chars of the session> / <folder>'. */
+  caller?: string | CallerStamp | null
+  /** The caller's full ids: a Claude Desktop chat has an empty session_id and a chat_id ('local_...'). */
+  caller_ids?: CallerStamp | null
+}
+
+interface TaskResult {
+  id: string
+  status: string
+  model?: string
+  /** Missing when its cost is not known; 0 is free. */
+  cost_usd?: number | null
+  answer?: string
+  error?: string
+  data?: unknown
 }
 
 interface JobDetail {
-  status?: Job
+  /** The job's status (no created, finished or caller: those are its row's), or { error } for a job HSwarm lost. */
+  status?: Partial<Job> & { error?: string }
   results?: {
-    results: Array<{
-      id: string
-      status: string
-      model: string
-      cost_usd: number
-      usage?: { in_hit?: number; in_miss?: number; out?: number }
-      answer?: string
-      error?: string
-      data?: any
-    }>
+    /** The finished tasks, in task order (a record read from disk lists its unfinished ones here too). */
+    results?: TaskResult[]
+    /** A live job's running tasks, with how long each has run. */
+    running?: Array<{ id: string; elapsed_s?: number }>
     error?: string
   }
   error?: string
@@ -75,7 +116,7 @@ const isCancelling = ref(false)
 const detailError = ref<string | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 
-const runningJobs = computed(() => jobs.value.filter((j) => jobDot(j.state) === 'run'))
+const runningJobs = computed(() => jobs.value.filter((job) => jobDot(job.state) === 'run'))
 
 const allJobs = computed(() => jobs.value)
 
@@ -96,8 +137,8 @@ const sections = computed(() => {
 const detailIn = computed<Where | null>(() => {
   const id = selectedJobId.value
   if (!id) return null
-  if (openIn.value === 'running' && runningJobs.value.some((j) => j.job_id === id)) return 'running'
-  return allJobs.value.some((j) => j.job_id === id) ? 'all' : null
+  if (openIn.value === 'running' && runningJobs.value.some((job) => job.job_id === id)) return 'running'
+  return allJobs.value.some((job) => job.job_id === id) ? 'all' : null
 })
 
 const isOpen = (where: Where, jobId: string) =>
@@ -137,30 +178,75 @@ function formatDate(dateStr: string): string {
   }
 }
 
-const costText = (cost: number) => formatUsd(cost, { style: 'fine' })
+const costText = (cost: number | null | undefined) => formatUsd(cost, { style: 'fine' })
 
-function usageTokens(u?: { in_hit?: number; in_miss?: number; out?: number }): number | undefined {
-  if (!u) return undefined
-  return (u.in_hit ?? 0) + (u.in_miss ?? 0) + (u.out ?? 0)
+/** "4m", "2h 5m": how long something ran. */
+function spanText(totalS: number): string {
+  const m = Math.floor(totalS / 60)
+  if (m < 1) return t('hswarm.v.jobs.spanSeconds', { s: Math.max(0, Math.floor(totalS)) })
+  if (m < 60) return t('hswarm.v.jobs.spanMinutes', { m })
+  const h = Math.floor(m / 60)
+  if (h < 24) return t('hswarm.v.jobs.spanHours', { h, m: m % 60 })
+  return t('hswarm.v.jobs.spanDays', { d: Math.floor(h / 24), h: h % 24 })
 }
 
-// The first 50 characters of a result's data, worked out once per payload, not on every render.
-const previews = new WeakMap<object, string>()
-function dataPreview(data: unknown): string {
-  if (typeof data !== 'object' || data === null) return JSON.stringify(data).substring(0, 50)
-  let text = previews.get(data)
-  if (text === undefined) {
-    text = JSON.stringify(data).substring(0, 50)
-    previews.set(data, text)
+// --- task counts ----------------------------------------------------------------------------------
+// HSwarm counts tasks by their own status (ok, error, timeout, loop, cancelled, pending, running); the
+// page says done, failed, running, queued and cancelled.
+interface Tally {
+  done: number
+  failed: number
+  running: number
+  queued: number
+  cancelled: number
+}
+const NOT_FAILED = new Set(['ok', 'running', 'pending', 'cancelled'])
+const isFailed = (status: string) => !NOT_FAILED.has(status)
+
+function tally(counts?: Record<string, number>): Tally {
+  const out: Tally = { done: 0, failed: 0, running: 0, queued: 0, cancelled: 0 }
+  for (const [status, n] of Object.entries(counts ?? {})) {
+    if (status === 'ok') out.done += n
+    else if (status === 'running') out.running += n
+    else if (status === 'pending') out.queued += n
+    else if (status === 'cancelled') out.cancelled += n
+    else out.failed += n
   }
-  return text
+  return out
 }
 
-function getTaskCounts(job: Job): string {
-  if (!job.counts || Object.keys(job.counts).length === 0) return '–'
-  return Object.entries(job.counts)
-    .map(([status, count]) => `${count} ${status}`)
-    .join(', ')
+const TALLY_KEY: Record<keyof Tally, string> = {
+  done: 'hswarm.v.jobs.countDone',
+  failed: 'hswarm.v.jobs.countFailed',
+  running: 'hswarm.v.jobs.countRunning',
+  queued: 'hswarm.v.jobs.countQueued',
+  cancelled: 'hswarm.v.jobs.countCancelled',
+}
+const TALLY_TONE: Record<keyof Tally, string> = {
+  done: 'text-success',
+  failed: 'text-destructive',
+  running: 'text-info',
+  queued: 'text-muted-foreground',
+  cancelled: 'text-muted-foreground',
+}
+// Always said, a zero included: the three the summary is read for.
+const ALWAYS = new Set<keyof Tally>(['done', 'failed', 'running'])
+
+/** "12 done · 1 failed": the counts that are not zero, '–' when there are none. */
+function tallyText(counts?: Record<string, number>): string {
+  const c = tally(counts)
+  const parts = (Object.keys(c) as Array<keyof Tally>)
+    .filter((k) => c[k] > 0)
+    .map((k) => t(TALLY_KEY[k], { n: c[k] }))
+  return parts.length ? parts.join(' · ') : '–'
+}
+
+/** The summary's counts, each in its own colour: done, failed and running always, the rest when there are some. */
+function countParts(counts?: Record<string, number>) {
+  const c = tally(counts)
+  return (Object.keys(c) as Array<keyof Tally>)
+    .filter((k) => c[k] > 0 || ALWAYS.has(k))
+    .map((k) => ({ key: k, text: t(TALLY_KEY[k], { n: c[k] }), tone: c[k] > 0 ? TALLY_TONE[k] : 'text-muted-foreground' }))
 }
 
 async function loadJobs() {
@@ -176,6 +262,215 @@ async function loadJobs() {
   } finally {
     isLoading.value = false
   }
+}
+
+// --- the open job ---------------------------------------------------------------------------------
+
+// The open job's own row in the list: its created, finished and caller (the list is HSwarm's verbose read).
+const openRow = computed(() => jobs.value.find((job) => job.job_id === selectedJobId.value))
+
+/** "took 4m" for a finished job, "running for 4m" for a running one; its dates on hover. */
+function jobTime(job: Job | undefined): { time: string; timeHint: string } {
+  const created = job?.created ?? ''
+  const start = created ? Date.parse(created) : Number.NaN
+  if (!job || !Number.isFinite(start)) return { time: '–', timeHint: '' }
+  const finished = typeof job.finished === 'string' ? job.finished : ''
+  const end = finished ? Date.parse(finished) : Number.NaN
+  if (Number.isFinite(end)) {
+    return {
+      time: t('hswarm.v.jobs.tookTime', { span: spanText((end - start) / 1000) }),
+      timeHint: t('hswarm.v.jobs.timeHintFinished', { created: formatDate(created), finished: formatDate(finished) }),
+    }
+  }
+  const timeHint = t('hswarm.v.jobs.timeHint', { created: formatDate(created) })
+  if (jobDot(job.state) === 'run') {
+    return { time: t('hswarm.v.jobs.runningTime', { span: spanText((Date.now() - start) / 1000) }), timeHint }
+  }
+  return { time: formatDate(created), timeHint }
+}
+
+// The open job's one-line summary: the detail's fresh status where it has one, else the job's row.
+const summary = computed(() => {
+  const row = openRow.value
+  const s = jobDetail.value?.status
+  // A job HSwarm could not read answers only { error }; a job-wide error rides beside a real status.
+  const live = s?.job_id ? s : undefined
+  const tokens = live?.tokens ?? row?.tokens
+  return {
+    label: live?.label || row?.label || '',
+    state: live?.state ?? row?.state ?? '',
+    counts: countParts(live?.counts ?? row?.counts),
+    total: row?.tasks,
+    cost: costText(live?.cost_usd ?? row?.cost_usd),
+    costHint:
+      tokens == null
+        ? t('hswarm.v.money.atListPrice')
+        : t('hswarm.v.jobs.costHint', { tokens: formatTokens(tokens) }),
+    ...jobTime(row),
+    // The one job-wide reason its tasks failed (no credit left), or why HSwarm could not read the job.
+    error: s?.error ?? '',
+  }
+})
+
+// --- the chat that called it ----------------------------------------------------------------------
+
+/** The caller's ids from the job's stamp; an older answer has only the key's 8-character session prefix. */
+function callerIdsOf(job: Job | undefined): { sessionId: string; chatId: string } | null {
+  if (!job) return null
+  const ids = job.caller_ids ?? (job.caller && typeof job.caller === 'object' ? job.caller : null)
+  if (ids) {
+    const sessionId = ids.session_id || ''
+    const chatId = ids.chat_id || ''
+    return sessionId || chatId ? { sessionId, chatId } : null
+  }
+  const part = typeof job.caller === 'string' ? (job.caller.split(' / ')[1]?.trim() ?? '') : ''
+  return part && part !== '-' ? { sessionId: part, chatId: '' } : null
+}
+
+// Chat titles by the id they were asked for, from AgentHydra's chat list (archived chats too: a finished
+// job's chat often is by now). Each chat is asked once while the page is up; one it does not know (a chat
+// run outside Claude Desktop) stays unnamed.
+const chatNames = reactive(new Map<string, { sessionId: string; title: string | null }>())
+const chatAsked = new Set<string>()
+
+// A whole id only, which no other chat holds: a prefix could match two chats, and a caller is never a guess.
+const callerQuery = computed(() => {
+  const ids = callerIdsOf(openRow.value)
+  if (ids?.chatId) return ids.chatId
+  return ids && ids.sessionId.length > 8 ? ids.sessionId : ''
+})
+
+watch(
+  callerQuery,
+  (q) => {
+    if (!q || chatAsked.has(q)) return
+    chatAsked.add(q)
+    void getJson<ChatListResult>(`/api/chats?q=${encodeURIComponent(q)}&archived=include&limit=1`).then(
+      (res) => {
+        const row = res.rows?.[0]
+        if (row) chatNames.set(q, { sessionId: row.sessionId ?? '', title: row.title ?? null })
+      },
+      // Asked again the next time the job opens.
+      () => chatAsked.delete(q),
+    )
+  },
+  { immediate: true },
+)
+
+const caller = computed(() => {
+  const ids = callerIdsOf(openRow.value)
+  if (!ids) return null
+  const named = chatNames.get(callerQuery.value)
+  const sessionId = named?.sessionId || ids.sessionId
+  const short = (ids.chatId || ids.sessionId).replace(/^local_/, '').slice(0, 8)
+  return {
+    name: named?.title ? pii(named.title) : t('hswarm.v.jobs.callerUnnamed', { id: short }),
+    // Desk opens a chat by its whole CLI session id; the old key's prefix is not one.
+    open: EMBEDDED && sessionId.length > 8 ? sessionId : '',
+  }
+})
+
+function openCaller() {
+  const id = caller.value?.open
+  if (id) openInDesk({ session_id: id, source: 'claude' })
+}
+
+// --- the task results -----------------------------------------------------------------------------
+
+// Past this many tasks the list opens folded to its heading; it is decided once per opened job, so a
+// running job that grows past it does not fold under the person reading it.
+const FOLD_AT = 5
+// Lines drawn at a time: a job can hold thousands of tasks.
+const TASK_PAGE = 150
+
+interface TaskMark {
+  icon: Component
+  tone: string
+  spin?: boolean
+  label: string
+}
+
+interface TaskRow {
+  id: string
+  status: string
+  model: string
+  cost: number | null | undefined
+  mark: TaskMark
+  /** The first line of what it said (a failed task's error first), for its one line. */
+  first: string
+  firstTone: string
+  /** Everything it said, for the box its line opens. */
+  full: string
+}
+
+function taskMark(status: string): TaskMark {
+  if (status === 'ok') return { icon: CircleCheck, tone: 'text-success', label: t('hswarm.v.jobs.markDone') }
+  if (status === 'running')
+    return { icon: LoaderCircle, tone: 'text-info', spin: true, label: t('hswarm.v.jobs.markRunning') }
+  if (status === 'pending') return { icon: Clock, tone: 'text-muted-foreground', label: t('hswarm.v.jobs.markQueued') }
+  if (status === 'cancelled')
+    return { icon: Ban, tone: 'text-muted-foreground', label: t('hswarm.v.jobs.markCancelled') }
+  return { icon: CircleX, tone: 'text-destructive', label: t('hswarm.v.jobs.markFailed', { status }) }
+}
+
+const firstLine = (text: string) => (text.split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 300)
+
+function resultRow(r: TaskResult): TaskRow {
+  const failed = isFailed(r.status)
+  // With a schema the answer is `data` (HSwarm drops an `answer` that only repeats it).
+  const hasData = r.data !== undefined && r.data !== null
+  const dataLine = !hasData ? '' : typeof r.data === 'string' ? r.data : JSON.stringify(r.data)
+  const dataFull = !hasData ? '' : typeof r.data === 'string' ? r.data : JSON.stringify(r.data, null, 2)
+  const head = failed && r.error ? r.error : r.answer || dataLine || r.error || ''
+  const full = [failed ? r.error : '', r.answer, dataFull, failed ? '' : r.error].filter(Boolean).join('\n\n')
+  return {
+    id: r.id,
+    status: r.status,
+    model: r.model ?? '',
+    cost: r.cost_usd,
+    mark: taskMark(r.status),
+    first: firstLine(head),
+    firstTone: failed ? 'text-destructive' : '',
+    full: full || t('hswarm.v.jobs.noAnswer'),
+  }
+}
+
+// The running tasks first (what is happening now), then the finished ones in task order.
+const taskRows = computed<TaskRow[]>(() => {
+  const r = jobDetail.value?.results
+  if (!r) return []
+  const running = (r.running ?? []).map(
+    (x): TaskRow => ({
+      id: x.id,
+      status: 'running',
+      model: '',
+      cost: undefined,
+      mark: taskMark('running'),
+      first: t('hswarm.v.jobs.runningTime', { span: spanText(x.elapsed_s ?? 0) }),
+      firstTone: 'text-muted-foreground',
+      full: t('hswarm.v.jobs.noAnswerYet'),
+    }),
+  )
+  return [...running, ...(r.results ?? []).map(resultRow)]
+})
+
+const taskCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const row of taskRows.value) counts[row.status] = (counts[row.status] ?? 0) + 1
+  return counts
+})
+
+const resultsError = computed(() => jobDetail.value?.results?.error ?? '')
+const resultsOpen = ref(true)
+const taskLimit = ref(TASK_PAGE)
+const shownTasks = computed(() => taskRows.value.slice(0, taskLimit.value))
+// One task's answer open at a time.
+const openTask = ref<string | null>(null)
+// The job the fold was decided for: a reload of the same job keeps the person's choice.
+let foldedFor: string | null = null
+
+function toggleTask(id: string) {
+  openTask.value = openTask.value === id ? null : id
 }
 
 // Bumped by every detail fetch: an answer that lands after a newer fetch began (another job was
@@ -196,6 +491,12 @@ async function loadJobDetail(jobId: string, quiet = false) {
     if (seq !== detailSeq) return
     jobDetail.value = response
     detailError.value = null
+    if (foldedFor !== jobId) {
+      foldedFor = jobId
+      resultsOpen.value = taskRows.value.length <= FOLD_AT
+      taskLimit.value = TASK_PAGE
+      openTask.value = null
+    }
   } catch (err) {
     if (seq !== detailSeq) return
     detailError.value = err instanceof Error ? err.message : t('hswarm.v.jobs.jobNotFound')
@@ -227,6 +528,8 @@ function closeJob() {
   const detail = where && id ? document.getElementById(detailId(where, id)) : null
   if (where && id && detail?.contains(document.activeElement)) toggleEl(where, id)?.focus()
   selectedJobId.value = null
+  // Opened again, it starts as a fresh open: folded by its size, no answer open.
+  foldedFor = null
 }
 
 function toggleJob(jobId: string, where: Where) {
@@ -393,7 +696,7 @@ onBeforeUnmount(() => {
                     </Badge>
                   </TableCell>
                   <TableCell class="text-right text-sm">
-                    {{ getTaskCounts(job) }}
+                    {{ tallyText(job.counts) }}
                   </TableCell>
                   <TableCell class="text-right font-mono text-sm">
                     {{ formatTokens(job.tokens) }}
@@ -417,7 +720,7 @@ onBeforeUnmount(() => {
                   </TableCell>
                 </TableRow>
 
-                <!-- The open job's summary and task results, right under its row -->
+                <!-- The open job, right under its row: a one-line summary, then its task results -->
                 <tr
                   v-if="isOpen(section.key, job.job_id)"
                   :id="detailId(section.key, job.job_id)"
@@ -428,9 +731,57 @@ onBeforeUnmount(() => {
                          open from zero height in CSS alone (starting: is @starting-style), with no measuring. -->
                     <div class="grid w-0 min-w-full grid-rows-[1fr] transition-[grid-template-rows] duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
                       <div class="min-h-0 overflow-hidden">
-                        <div class="p-4">
-                          <div class="flex items-center justify-between mb-2">
-                            <h4 class="font-semibold">{{ t('hswarm.v.jobs.summary') }}</h4>
+                        <div class="flex flex-col gap-2 px-3 py-2">
+                          <div class="flex items-start gap-2">
+                            <div class="min-w-0 flex-1">
+                              <!-- Detail Error -->
+                              <Alert v-if="detailError" variant="destructive">
+                                <AlertCircle class="h-4 w-4" />
+                                <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
+                                <AlertDescription>{{ detailError }}</AlertDescription>
+                              </Alert>
+
+                              <!-- Detail Loading -->
+                              <Skeleton v-else-if="isLoadingDetail" class="h-7 w-full" />
+
+                              <!-- The summary: one line of facts, wrapping only on a narrow pane -->
+                              <template v-else>
+                                <div class="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                                  <span class="min-w-0 max-w-full truncate text-sm font-medium" :title="job.job_id">{{ summary.label || job.job_id }}</span>
+                                  <Badge :class="getStateColor(summary.state)">{{ summary.state || '–' }}</Badge>
+                                  <span
+                                    class="inline-flex flex-wrap gap-x-2 tabular-nums"
+                                    :title="summary.total != null ? t('hswarm.v.jobs.countsHint', { n: summary.total }) : undefined"
+                                  >
+                                    <span v-for="c in summary.counts" :key="c.key" :class="c.tone">{{ c.text }}</span>
+                                  </span>
+                                  <span class="font-mono tabular-nums" :title="summary.costHint">{{ summary.cost }}</span>
+                                  <span class="inline-flex items-center gap-1 text-muted-foreground" :title="summary.timeHint || undefined">
+                                    <Clock class="size-3.5 shrink-0" aria-hidden="true" />{{ summary.time }}
+                                  </span>
+                                  <!-- The chat that called it; a click opens it in Desk -->
+                                  <button
+                                    v-if="caller?.open"
+                                    type="button"
+                                    class="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    :title="t('hswarm.v.jobs.callerOpen')"
+                                    @click="openCaller"
+                                  >
+                                    <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span class="truncate">{{ caller.name }}</span>
+                                  </button>
+                                  <span
+                                    v-else-if="caller"
+                                    class="inline-flex min-w-0 max-w-64 items-center gap-1 text-muted-foreground"
+                                    :title="t('hswarm.v.jobs.callerHint')"
+                                  >
+                                    <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
+                                    <span class="truncate">{{ caller.name }}</span>
+                                  </span>
+                                </div>
+                                <p v-if="summary.error" class="mt-1 text-xs text-destructive">{{ summary.error }}</p>
+                              </template>
+                            </div>
                             <Button
                               size="sm"
                               variant="ghost"
@@ -443,129 +794,81 @@ onBeforeUnmount(() => {
                             </Button>
                           </div>
 
-                          <!-- Detail Error -->
-                          <Alert v-if="detailError" variant="destructive" class="mb-2">
-                            <AlertCircle class="h-4 w-4" />
-                            <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
-                            <AlertDescription>{{ detailError }}</AlertDescription>
-                          </Alert>
-
-                          <!-- Detail Loading -->
-                          <div v-else-if="isLoadingDetail" class="space-y-2">
-                            <Skeleton class="h-6 w-full" />
-                            <Skeleton class="h-6 w-full" />
-                            <Skeleton class="h-6 w-full" />
-                          </div>
-
-                          <!-- Detail Content -->
-                          <div v-else-if="jobDetail?.status" class="space-y-2 text-sm">
-                            <div class="grid grid-cols-2 gap-2">
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.jobId') }}:</span>
-                                <div class="font-mono text-xs mt-1 break-all">{{ jobDetail.status.job_id }}</div>
-                              </div>
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.label') }}:</span>
-                                <div class="mt-1">{{ jobDetail.status.label || '–' }}</div>
-                              </div>
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.state') }}:</span>
-                                <div class="mt-1">
-                                  <Badge :class="getStateColor(jobDetail.status.state)">
-                                    {{ jobDetail.status.state }}
-                                  </Badge>
-                                </div>
-                              </div>
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.cost') }}:</span>
-                                <div class="font-mono mt-1">{{ formatTokens(jobDetail.status.tokens) }}</div>
-                                <div v-if="jobDetail.status.tokens != null" class="text-xs text-muted-foreground">{{ costText(jobDetail.status.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
-                              </div>
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.tasks') }}:</span>
-                                <div class="mt-1">{{ getTaskCounts(jobDetail.status) }}</div>
-                              </div>
-                              <div>
-                                <span class="text-muted-foreground">{{ t('hswarm.v.jobs.table.created') }}:</span>
-                                <div class="mt-1 text-xs">
-                                  {{ formatDate(jobDetail.status.created) }}
-                                </div>
-                              </div>
+                          <!-- Task results: one line per task under a heading that folds them (folded past
+                               FOLD_AT tasks), in a box that scrolls instead of growing the page -->
+                          <Collapsible
+                            v-if="jobDetail?.results && !detailError && !isLoadingDetail"
+                            v-model:open="resultsOpen"
+                            class="flex flex-col gap-1.5 border-t pt-2"
+                          >
+                            <div class="flex min-w-0 items-center gap-1.5">
+                              <CollapsibleTrigger as-child>
+                                <button
+                                  type="button"
+                                  class="group flex min-w-0 items-center gap-1.5 rounded-md px-1 text-xs font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  <ChevronRight
+                                    class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+                                    aria-hidden="true"
+                                  />
+                                  <span class="shrink-0">{{ t('hswarm.v.jobs.taskResults') }}</span>
+                                  <span class="truncate font-normal text-muted-foreground tabular-nums">({{ taskRows.length }}) {{ tallyText(taskCounts) }}</span>
+                                </button>
+                              </CollapsibleTrigger>
+                              <InfoHint :text="t('hswarm.v.jobs.taskResultsHint', { n: FOLD_AT })" />
                             </div>
-
-                            <!-- Task Results -->
-                            <div v-if="jobDetail.results" class="mt-3 border-t pt-4">
-                              <h5 class="font-semibold mb-3">
-                                {{ t('hswarm.v.jobs.taskResults') }}
-                                <span v-if="jobDetail.results.results" class="text-sm font-normal text-muted-foreground">
-                                  ({{ jobDetail.results.results.length }})
-                                </span>
-                              </h5>
-
-                              <div v-if="jobDetail.results.error" class="text-red-600 text-sm mb-2">
-                                {{ jobDetail.results.error }}
-                              </div>
-
-                              <div
-                                v-else-if="!jobDetail.results.results?.length"
-                                class="text-muted-foreground text-sm"
-                              >
+                            <CollapsibleContent>
+                              <p v-if="resultsError" class="px-1 text-xs text-destructive">{{ resultsError }}</p>
+                              <p v-else-if="!taskRows.length" class="px-1 text-xs text-muted-foreground">
                                 {{ t('hswarm.v.jobs.noResults') }}
-                              </div>
-
-                              <div v-else class="border rounded-lg overflow-x-auto">
-                                <Table class="[&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-                                  <TableHeader>
-                                    <TableRow>
-                                      <TableHead class="w-20">
-                                        {{ t('hswarm.v.jobs.table.jobId') }}
-                                      </TableHead>
-                                      <TableHead>
-                                        {{ t('hswarm.v.jobs.taskStatus') }}
-                                      </TableHead>
-                                      <TableHead>
-                                        {{ t('hswarm.v.jobs.taskModel') }}
-                                      </TableHead>
-                                      <TableHead class="text-right">
-                                        {{ t('hswarm.v.jobs.taskCost') }}
-                                      </TableHead>
-                                      <TableHead>
-                                        {{ t('hswarm.v.jobs.taskAnswer') }}
-                                      </TableHead>
-                                    </TableRow>
-                                  </TableHeader>
-                                  <TableBody>
-                                    <TableRow v-for="result in jobDetail.results.results" :key="result.id">
-                                      <TableCell class="font-mono text-xs">
-                                        {{ result.id.substring(0, 8) }}
-                                      </TableCell>
-                                      <TableCell>
-                                        <Badge
-                                          :class="
-                                            result.status === 'ok'
-                                              ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
-                                              : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
-                                          "
-                                        >
-                                          {{ result.status }}
-                                        </Badge>
-                                      </TableCell>
-                                      <TableCell class="font-mono text-xs">
-                                        {{ result.model || '–' }}
-                                      </TableCell>
-                                      <TableCell class="text-right font-mono text-xs">
-                                        {{ formatTokens(usageTokens(result.usage)) }}
-                                        <div v-if="usageTokens(result.usage) != null" class="text-muted-foreground">{{ costText(result.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
-                                      </TableCell>
-                                      <TableCell class="text-xs max-w-xs truncate">
-                                        {{ result.answer || result.error || (result.data ? dataPreview(result.data) : '–') }}
-                                      </TableCell>
-                                    </TableRow>
-                                  </TableBody>
-                                </Table>
-                              </div>
-                            </div>
-                          </div>
+                              </p>
+                              <template v-else>
+                                <ul
+                                  class="scroll-slim flex max-h-96 flex-col overflow-y-auto rounded-lg border bg-card py-0.5"
+                                  :aria-label="t('hswarm.v.jobs.taskListLabel')"
+                                >
+                                  <li v-for="task in shownTasks" :key="task.id">
+                                    <!-- One line: how it ended, its id, the model, the cost, the first line of its answer -->
+                                    <button
+                                      type="button"
+                                      class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                                      :aria-expanded="openTask === task.id"
+                                      @click="toggleTask(task.id)"
+                                    >
+                                      <span class="relative inline-flex shrink-0" :class="task.mark.tone" :title="task.mark.label">
+                                        <component
+                                          :is="task.mark.icon"
+                                          class="size-3.5"
+                                          :class="task.mark.spin ? 'animate-spin' : ''"
+                                          aria-hidden="true"
+                                        />
+                                        <span class="sr-only">{{ task.mark.label }}</span>
+                                      </span>
+                                      <span class="w-24 shrink-0 truncate font-mono" :title="task.id">{{ task.id }}</span>
+                                      <span class="hidden w-36 shrink-0 truncate text-muted-foreground sm:block" :title="task.model || undefined">{{ task.model || '–' }}</span>
+                                      <span class="w-16 shrink-0 text-end font-mono tabular-nums text-muted-foreground" :title="t('hswarm.v.money.atListPrice')">{{ costText(task.cost) }}</span>
+                                      <span class="min-w-0 flex-1 truncate" :class="task.firstTone">{{ task.first || '–' }}</span>
+                                    </button>
+                                    <!-- Its whole answer, in a box of its own height that scrolls -->
+                                    <pre
+                                      v-if="openTask === task.id"
+                                      tabindex="0"
+                                      class="scroll-slim mx-2.5 mb-1.5 max-h-64 overflow-auto rounded-md border bg-background p-2 font-mono text-xs whitespace-pre-wrap wrap-break-word"
+                                    >{{ task.full }}</pre>
+                                  </li>
+                                </ul>
+                                <Button
+                                  v-if="taskRows.length > taskLimit"
+                                  variant="outline"
+                                  size="sm"
+                                  class="mt-1.5 w-full"
+                                  @click="taskLimit += TASK_PAGE"
+                                >
+                                  {{ t('hswarm.v.jobs.taskShowMore', { n: Math.min(TASK_PAGE, taskRows.length - taskLimit), total: taskRows.length - taskLimit }) }}
+                                </Button>
+                              </template>
+                            </CollapsibleContent>
+                          </Collapsible>
                         </div>
                       </div>
                     </div>

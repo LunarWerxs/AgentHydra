@@ -15,21 +15,29 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
   after Back and Forward (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
-  HSwarm it lists the tab's pages first (CliMayte, Routing, then HSwarm, `hydra/src/lib/hswarm-pages.ts`), and
-  under the page on screen its own rows, CliMayte's task list or HSwarm's tree, drawn in Desk's look (the
-  copy describes them in `shared/hydra-embed.ts` and hides its own; a click goes back to it); on every
-  other tab the cloud list below. CliMayte has no tab of its own (owner, 2026-10-05: "move what is
-  currently on the CliMayte tab into HSwarm ... and have it be on the sidebar as CliMayte"). The Routing
-  page (`hydra/src/components/RoutingView.vue`) holds AgentHydra's cost routing between API keys and the
-  Claude subscriptions: the on/off switch, the API-or-subscription split used when the two costs are
-  close (default 60 / 40 to API keys), the close band, a bulk-rate discount per provider, and tables of
-  each plan's measured worth and each model's list price, price at your rate and subscription
-  equivalent; every change is saved at once (`PUT /api/routing/settings`) and synced to the other PC by
-  login sync. How the choice is made is in `../docs/COST-MODEL.md`. CliMayte's waves move to the top of
-  its task column. The copy has no Sessions
+  HSwarm it is HSwarm's tree alone (`hydra/src/components/HSwarmView.vue`), Routing and CliMayte two of its
+  nodes (CliMayte after Jobs; owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm sidebar.
+  Routing should be an option under the HSwarm in the sidebar, and CliMayte should also be an item under
+  that"), drawn in Desk's look (the copy describes it in `shared/hydra-embed.ts` and hides its own; a click
+  goes back to it); with HSwarm down the tree holds just Routing and CliMayte under a "not running"
+  banner. On every other tab the cloud list is below. Only the tab on screen decides Desk's sidebar
+  (App.vue's `setDeskView`), and the copy sends it again on every `desk:visible` and on a click of the tab
+  already on screen, so no other tab's rows are left behind. CliMayte has no tab of its own (owner,
+  2026-10-05: "move what is currently on the CliMayte tab into HSwarm"): its node shows a compact manager
+  list inside the pane, one line per task (status, title, account, model, time, a cloud for another PC's
+  task), Running / All, the waves above it and the scorecard closed; a click opens the task with "Back to
+  tasks", and CliMayte's tasks never go into Desk's sidebar. Desk's links land on the node: a task row
+  opens CliMayte on that task, a job row Jobs on that job. The Routing node is one page: HSwarm's
+  routing first (`hswarm/HSwarmRouting.vue`), then AgentHydra's cost routing between API keys and the
+  Claude subscriptions (`hswarm/HSwarmCostRouting.vue`, alone while HSwarm is down): the on/off switch, the
+  API-or-subscription split used when the two costs are close (default 60 / 40 to API keys), the close
+  band, a bulk-rate discount per provider, and tables of each plan's measured worth and each model's list
+  price, price at your rate and subscription equivalent; every change is saved at once (`PUT
+  /api/routing/settings`) and synced to the other PC by login sync. How the choice is made is in
+  `../docs/COST-MODEL.md`. The copy has no Sessions
   tab: the cloud list is the session list, and a session clicked there slides the chat
   back and opens it in Desk's own view, under the session header below. A chat the copy itself is asked
-  to open (the Instances move dialog's list, the landing page's session tiles) comes back to Desk the
+  to open (the Instances move dialog's list, the landing page's session rows) comes back to Desk the
   same way. Every other AgentHydra tab (Instances, Analytics, HSwarm) is there as usual.
   Escape, the AgentHydra button again, or picking one of Desk's own chats slides the chat back. The pane
   has no strip of its own above the copy (owner, 2026-10-05: "remove the header bar ... and remove the
@@ -49,10 +57,18 @@ sidebar on the left stays put, and only the pane on the right changes.
   nothing (owner, 2026-10-04: "for some reason they change order"): both lists keep one saved order, so a
   row the desk list shows sits in the same group at the same place, and is there even when it is older
   than the cloud list's time period; the rows only the cloud list has come after the desk's in their group
-  (and their groups after the desk's groups), each kept where it first appeared. Those rows lead with a
-  cloud icon, their tooltip saying where they come from; a chat that came over from the other PC through
-  AgentHydra's chat sync also shows that PC's name (the desk list marks it with the same cloud), and each
-  row shows its AgentHydra instance number (#37), as AgentHydra's rows do. A row the desk list shows keeps
+  (and their groups after the desk's groups), each kept where it first appeared. The cloud icon means the
+  other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
+  different app, sure, but it's not cloud"): a row from the other PC leads with a cloud, its tooltip naming
+  that PC (and the app when it is not Claude), pulsing gray while that chat works, and shows the PC's name
+  in a gray chip (the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and
+  other apps' chats lead with a small muted mark for their app (`rowLead` in `web/src/components/cloud/logic.ts`).
+  Each row shows its AgentHydra instance number (#37), as AgentHydra's rows do. The Filter menu opens with
+  Apps, one checkbox per app (Claude, Codex, OpenCode, Hermes, DSH, HSwarm), one click each, and starts at
+  Claude alone (owner, 2026-10-05: "I don't necessarily want to see open code or ChatGPT in my sidebar by
+  default, but I want to be able to"); search still looks through every app unless Only this view is
+  ticked. The scopes call it `apps`, so a filter saved before (as `source`, every app ticked) comes back at
+  Claude alone with the rest of it kept. A row the desk list shows keeps
   its dot, and the dot moves as it does there: gray and pulsing while the session works, orange while it
   waits on you (owner, 2026-10-05: "the gray dots in the sidebar should pulse when they're working"). A session the desk list does
   not show goes under the folder it
@@ -72,9 +88,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   2026-10-05: "items in the sidebar need to be draggable to rearrange order"). A cloud list row has a
   right-click menu: a row the desk list shows gets its desk menu, any other Open, Pin and Copy session
   ID. A pinned outside session stays listed however long it has been idle. A row the desk list shows
-  idle has the dimmer hollow ring, as Claude draws one, in the cloud list too. Motion is calmer: a
-  working dot blinks every 2.4 s (was 1.2), a waiting one pulses every 3 s (was 2), and the sidebar's
-  spinner turns once in 2.5 s.
+  idle has the dimmer hollow ring, as Claude draws one, in the cloud list too. Motion is calmer, and
+  nothing in the sidebar spins (owner, 2026-10-05: "instead of being blue spinning icons, ... a slow blue
+  pulsing icon"). Blue is HSwarm's alone: a running HSwarm job's mark (its line's icon, its Count badge, a
+  row that is the job itself) pulses slowly in blue. A running CliMayte task, here or on the other PC, and
+  a chat working on the other PC pulse gray, as a working chat's dot does. All of them share the working
+  dot's 2.4 s blink (`.run-pulse` in `web/src/style.css`, `runPulse` and `glyphDotClass` in
+  `sidebar/logic.ts`) and hold still when the system asks for reduced motion; a waiting dot pulses orange
+  every 3 s.
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
   list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
   because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden
@@ -101,29 +122,37 @@ sidebar on the left stays put, and only the pane on the right changes.
   the third step's indent), and so does every finished task above it: the server keeps those past its
   "20 newest finished" cut. Turning it on while an AgentHydra tab with its own list is open slides back to
   the desk so the tasks show. Every task AgentHydra's CliMayte list shows running is in the sidebar
-  (owner, 2026-10-05: "Is one smaller than six?"): tasks no row in the list started sit at
-  the top, one heading per PC ("On <PC name>", "On this PC") with its running count. Under it, each chat that started
-  them has a stand-in row (a chat icon, its title, an ⓘ on hover saying why it is there) with its tasks one step in:
-  titled from that PC when its AgentHydra shares the chat's title, else "A chat on <PC> · <short id>"; a Desk chat
-  run as a worker on that PC is its own stand-in, with its status and a click that opens it; "No chat" and "Unknown
-  chat" (that PC's AgentHydra is too old to say) hold the rest. Once the chat is in the list, its tasks move under
-  it. The other PCs' tasks show only while the cloud is on. A folded group's heading
-  carries a blue dot with how many CliMayte tasks run under it and a green dot with how many of its chats
-  run (owner, 2026-10-05).
+  (owner, 2026-10-05: "Is one smaller than six?"). Running work that no drawn row lists is added as a row
+  in its folder's group, among that group's rows and in the list's order, drawn exactly like them; another
+  PC's row differs only by its cloud (owner, 2026-10-05: "inline identical. I shouldn't even be able to
+  tell the difference between ones on his computer and mine, besides them having a Cloud icon"). The row
+  is the chat that started the work, its tasks one step in, titled and filed as this window knows that
+  chat (a synced chat, an outside session or a Desk chat), else as its PC titles it, else after its first
+  task; when nothing says which chat started it (a Desk chat run as a worker, a dispatcher that is gone, a
+  PC whose AgentHydra is too old), the task is the row (`nestTasks` and `addToDeskGroups` /
+  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares no folders for its
+  tasks, so its chat that is not synced here goes in a "No folder" group after the list's own. Added rows
+  stay out while a search is typed, under the Archived filter and in a hidden group, as the list's own
+  rows do; with the cloud off only this PC's are added. A folded group's heading carries a gray dot with
+  how many CliMayte tasks run under it, a blue dot with how many HSwarm jobs, and a green dot with how
+  many of its chats run (owner, 2026-10-05).
 - **HSwarm jobs in the sidebar.** While the robot button is on, a chat's row also lists the HSwarm jobs it
   started, after its CliMayte tasks (owner, 2026-10-05: "ZSwarm threads should also be displayed on the
-  HydraDesk 2 sidebar"), placed by the same rules: under the chat's row in either list, else under a
-  stand-in for that chat titled with the chat's name, in the block at the top (a prefix that could be two
-  chats goes to the stand-in, never a guess). Desk 2's server reads the jobs with the CliMayte workers on
+  HydraDesk 2 sidebar"), placed by the same rules: under the chat's row in either list, else under the
+  added row of its caller on the job's PC. A running job with no such row adds one, its caller's row
+  (titled from the caller's title, else the job) or the job itself when nothing names the caller; a
+  finished job only joins a row that is already there, and a prefix that could be two chats adds a row,
+  never a guess. Desk 2's server reads the jobs with the CliMayte workers on
   one poller (`server/src/bridge/poller.ts`, jobs at most every 10 s) and pushes them to every window
   (`swarm.update`); HSwarm stamps each job with its caller's full ids, and a Claude Desktop chat's id
   (`local_...`) is turned into its session and title through AgentHydra's chat list, archived chats
   included (a finished job's chat is often archived by the time it is listed). With the cloud on, the other
-  PC's jobs (shared in its queue snapshot) show under that PC's chats or in its "On <PC>" block. A job
+  PC's jobs (shared in its queue snapshot) show under that PC's chats or as its added rows. A job
   click opens that job on AgentHydra's HSwarm page.
 - **A list or a count per kind.** The Filter menu's Sub-items choose, per kind, whether a row shows its
   CliMayte tasks and HSwarm jobs as lines (List) or as a small badge with the kind's icon and how many run
-  (Count; muted when only finished ones are left) at the row's right edge; defaults: CliMayte List,
+  (Count: blue for running HSwarm jobs, light gray for running CliMayte tasks, muted when only finished
+  ones are left, its icon pulsing while any run) at the row's right edge; defaults: CliMayte List,
   HSwarm Count (owner, 2026-10-05: "just an icon, like a number ... not insanely cluttering up my
   sidebar"). A badge's tooltip names up to eight of them; a click shows that row's lines inline until the
   next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
@@ -161,7 +190,36 @@ sidebar on the left stays put, and only the pane on the right changes.
   CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
   and with AgentHydra away the card shows Desk's own chats and says so. Each square of the activity grid
   says its day and its number on hover (owner, 2026-10-05), and the Sources list folds up: folded at
-  first, then as you last left it.
+  first, then as you last left it. The Models tab lists only the models that matter (owner, 2026-10-05:
+  "it gets really, really long"): most sessions first, while each has at least 2% of the sessions and
+  those shown cover under 95%, never more than 8, and all of them when there are six or fewer. The rest
+  go into one "+N more" row with their combined share, which opens them in place and folds them again
+  (`foldModels` in `web/src/components/shell/stats.ts`).
+- **Analytics and the Instances landing read top down, in gray** (owner, 2026-10-05: "my eyeballs don't
+  know what to focus on ... a ton of blue. And no, adding a thousand colors to it isn't gonna help").
+  Analytics (`hydra/src/components/AnalyticsView.vue`) leads with four numbers, each with its comparison:
+  tokens in the last 7 days against the 7 before (on a 30-day or All window), cost at API rates with the
+  same work at your rate under it once a Routing discount is set, saved by HSwarm in the last 7 days
+  against the 7 before (it opens HSwarm; the rest of HSwarm's card is behind its info icon), and the
+  busiest model with its share. Then cost over time (bars or calendar in one panel), by model, project
+  and account, sessions and tokens, what eats tokens, sessions worth a look, tools, busiest hours,
+  sessions at once, recurring mistakes, recent edits and the coding tools here. The Instances landing
+  ("At a glance", `hydra/src/components/InstancesHomeView.vue`) leads with how many CLI and desktop
+  accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars, and the
+  accounts nearest their limit; then CliMayte's and this PC's session numbers, the 24-hour charts, and
+  HSwarm by account. On both, every section has a short title with its explanation behind an info icon,
+  long lists show their top 5 behind "+N more", charts are gray, and colour means something: Analytics'
+  one blue marks the current period or the top item, the landing's accent marks an account at 70% or
+  more of a limit, and warning colours only a real warning.
+- **HSwarm's Jobs page is short** (owner, 2026-10-05: "the Jobs tab is way too verbose ... a whole task
+  results section ... it doesn't collapse or scroll"). An open job is a one-line summary (label, state,
+  done / failed / running counts, cost, how long it ran, and the chat that called it, which opens in
+  Desk), then its task results, one line per task (a state mark, id, model, cost, the answer's first
+  line). The list starts folded past 5 tasks, scrolls in a box of its own and shows 150 lines at a time;
+  a line opens its whole answer in a box that scrolls. What the list is for is behind the info icon on
+  its heading (`hydra/src/components/hswarm/HSwarmJobs.vue`). CliMayte's page stays built behind the
+  tree's other nodes, so its float window stays open, and its node always shows the task list (a Desk
+  task link opens the task).
 - **Background tasks, as the real app shows them.** The Background tasks panel works for a session
   running outside Desk too (owner, 2026-10-05: "it currently says, 'No running, no finished,' but there
   actually is one running and one finished"): it lists that session's running and finished background
@@ -345,5 +403,3 @@ it, and works without it:
 
 If AgentHydra is not running, the window says so in a banner and those lists stay empty; your own chats
 keep working.
-
-This folder is part of AgentHydra's public repo: everything committed here is published.

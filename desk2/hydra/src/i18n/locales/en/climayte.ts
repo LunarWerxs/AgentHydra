@@ -97,11 +97,18 @@ export default {
   offloadedHint:
     'Every task listed here, from every chat. {runs} {sessions} separate CLI conversations: a handoff starts a new one, a resume or a move carries one on. Tokens: {input} input, {output} output, {cacheRead} cache read and {cacheWrite} cache write, about {cost} at list prices. Cache reads are most of it: every request re-reads the conversation so far, at a tenth of the input price.',
   offloadedRuns: 'Runs: {list}.',
-  hideFinished: 'Hide finished',
-  hiddenCount: '{n} hidden',
+  // The list's filter (CliMayteView.vue): Running is every task that can still change.
+  filterLabel: 'Show tasks',
+  filterRunning: 'Running ({n})',
+  filterRunningHint: 'Only the tasks queued, running, waiting for an account or being checked',
+  filterAll: 'All ({n})',
   allHidden: 'Nothing is queued or running. {n} finished tasks are hidden.',
-  // Hydra Desk 2's sidebar lists every open task and the newest finished ones (CliMayteView.vue).
-  deskShowMore: 'Show {n} more ({total} older not shown)',
+  listLabel: 'CliMayte tasks',
+  // The list shows a page of lines at a time (CliMayteView.vue).
+  listShowMore: 'Show {n} more ({total} not shown)',
+  backToTasks: 'Back to tasks',
+  // The folded section over the list: the totals and "What works" (OffloadStatsCard.vue).
+  scorecard: 'Scorecard',
   offloadedReread:
     'Re-reading a conversation into an empty cache when a run picks it up again (after a move, a limit, a handoff or a gap) took {share}% of what they used: {pct}% of a Pro 5-hour window.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',

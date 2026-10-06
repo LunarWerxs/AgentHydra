@@ -137,6 +137,51 @@ export function homeModels(s: HomeStats): { label: string; sessions: number }[] 
   return [...byName].map(([label, sessions]) => ({ label, sessions })).sort((a, b) => b.sessions - a.sessions)
 }
 
+export interface ModelRow {
+  label: string
+  sessions: number
+}
+
+/** The Models tab's rows: the models that matter, and the rest behind one "+N more" row. */
+export interface ModelFold {
+  shown: ModelRow[]
+  rest: ModelRow[]
+  /** The folded models' part of every session, 0..1. */
+  restShare: number
+}
+
+// The Models tab shows the models that matter and folds the rest (owner, 2026-10-05: "have it automatically,
+// dynamically display ones of significance and hide the rest, 'cause some of them use such a small
+// percentage, it's not even worth showing them"): most sessions first, while each holds 2% of the sessions
+// and the ones shown cover under 95%, never more than 8. Six or fewer all show, and a lone leftover shows
+// rather than fold into a "+1 more" row the size of its own.
+const MODELS_ALL_SHOWN = 6
+const MODELS_MAX_SHOWN = 8
+const MODEL_MIN_SHARE = 0.02
+const MODELS_COVERED = 0.95
+
+export function foldModels(models: ModelRow[]): ModelFold {
+  const sorted = [...models].sort((a, b) => b.sessions - a.sessions)
+  const total = sorted.reduce((sum, m) => sum + m.sessions, 0)
+  let n = sorted.length
+  if (n > MODELS_ALL_SHOWN) {
+    n = 1 // the biggest always shows
+    let covered = sorted[0]!.sessions
+    while (n < Math.min(sorted.length, MODELS_MAX_SHOWN) && covered < total * MODELS_COVERED && sorted[n]!.sessions >= total * MODEL_MIN_SHARE)
+      covered += sorted[n++]!.sessions
+    if (n === sorted.length - 1 && n < MODELS_MAX_SHOWN) n++
+  }
+  const rest = sorted.slice(n)
+  return { shown: sorted.slice(0, n), rest, restShare: total ? rest.reduce((sum, m) => sum + m.sessions, 0) / total : 0 }
+}
+
+/** 3.4%, 12%, or <0.1% for a sliver: a share at a glance. */
+export function percent(share: number): string {
+  const p = share * 100
+  if (p > 0 && p < 0.1) return '<0.1%'
+  return `${p < 9.95 ? p.toFixed(1) : Math.round(p)}%`
+}
+
 /** One real sentence, and a second while AgentHydra is still reading sessions. */
 export function homeFooter(s: HomeStats): string[] {
   const sources = s.sources.filter((x) => x.sessions > 0).length

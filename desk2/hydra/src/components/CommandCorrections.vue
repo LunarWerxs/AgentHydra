@@ -6,8 +6,11 @@
 // transcripts, and a tab that reads a few hundred of them each time it is shown would be slow for a
 // list that changes over days. "Copy as rules" is the point of it: a mistake that keeps coming back
 // becomes a rules file the agents read, with the counts that justify it.
-import { ClipboardCopy, RefreshCw, TriangleAlert } from '@lucide/vue'
-import { ref } from 'vue'
+//
+// The most frequent few show; the rest fold behind "+N more", like every list on the Analytics tab
+// (owner, 2026-10-05).
+import { ClipboardCopy, RefreshCw } from '@lucide/vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
@@ -19,6 +22,11 @@ import InfoHint from '@/shell/InfoHint.vue'
 const { t } = useI18n()
 const report = ref<CorrectionReport | null>(null)
 const loading = ref(false)
+/** Groups shown before the fold. */
+const TOP = 5
+const expanded = ref(false)
+const groups = computed(() => report.value?.groups ?? [])
+const shownGroups = computed(() => (expanded.value ? groups.value : groups.value.slice(0, TOP)))
 
 const KIND_KEYS: Record<CommandErrorKind, string> = {
   'unknown-flag': 'analytics.mistakeUnknownFlag',
@@ -55,8 +63,8 @@ async function copyRules() {
 
 <template>
   <section class="rounded-lg border border-border p-3">
-    <h3 class="mb-1 flex items-center gap-1.5 text-xs font-medium">
-      <TriangleAlert class="size-3.5" />{{ $t('analytics.mistakes') }}
+    <h3 class="mb-2 flex items-center gap-1.5 text-xs font-medium">
+      {{ $t('analytics.mistakes') }}
       <InfoHint :text="$t('analytics.mistakesNote')" />
       <span class="ms-auto flex gap-1">
         <Button
@@ -89,8 +97,8 @@ async function copyRules() {
       <p v-if="!report.groups.length" class="text-2xs text-muted-foreground">
         {{ $t('analytics.mistakesNone') }}
       </p>
-      <ul v-else class="scroll-slim max-h-96 space-y-2 overflow-y-auto">
-        <li v-for="g in report.groups" :key="`${g.kind}:${g.base}`" class="text-2xs">
+      <ul v-else class="space-y-2">
+        <li v-for="g in shownGroups" :key="`${g.kind}:${g.base}`" class="text-2xs">
           <p class="flex items-center gap-2">
             <code class="font-mono font-medium">{{ g.base }}</code>
             <Badge variant="outline" class="shrink-0">
@@ -111,6 +119,15 @@ async function copyRules() {
               <span class="block truncate">{{ ex.right }}</span>
             </li>
           </ul>
+        </li>
+        <li v-if="groups.length > TOP">
+          <button
+            type="button"
+            class="text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+            @click="expanded = !expanded"
+          >
+            {{ expanded ? $t('analytics.showLess') : $t('analytics.showMore', { n: groups.length - TOP }) }}
+          </button>
         </li>
       </ul>
     </template>

@@ -3,14 +3,16 @@
 //
 // WHY IT EXISTS BESIDE HourGrid. That one answers "what time of day do I work" by collapsing every
 // date into a 7x24 hour-of-week grid — the calendar is thrown away, so it cannot answer "when" over
-// months at all. Both are useful and they are different questions, so this is a second grain on the
-// same panel rather than a replacement: hour-of-week for the daily rhythm, calendar for the arc of
-// a project.
+// months at all. Both are useful and they are different questions: hour-of-week for the daily
+// rhythm, calendar for the arc of a project. On Analytics the calendar is the time panel's second
+// view, beside the per-day bars it draws the same figures as.
 //
-// SAME VISUAL RULES AS HourGrid, deliberately: sequential, ONE hue, encoded as opacity over
-// --viz-seq so the ramp is monotonic by construction and cannot cross a hue boundary, with a faint
-// track under every cell so a quiet day reads as EMPTY rather than as missing. A rainbow would
-// imply categories; these cells differ only in magnitude.
+// SAME VISUAL RULES AS HourGrid, deliberately: sequential, encoded as opacity over ONE colour so
+// the ramp is monotonic by construction, with a faint track under every cell so a quiet day reads
+// as EMPTY rather than as missing. A rainbow would imply categories; these cells differ only in
+// magnitude. The colour is a neutral gray, and the accent (--viz-seq) only on the days the caller
+// marks as the current period (owner, 2026-10-05: "There's just a ton of blue"), the same days the
+// time panel's bars mark.
 //
 // CELLS SIZED FROM THE CONTAINER, like HourGrid, but from the WEEK COUNT rather than a fixed 24 —
 // a fortnight and three years both have to fill the same card without overflowing it.
@@ -28,6 +30,8 @@ const props = defineProps<{
   format: (n: number) => string
   /** What the value IS, for the hover card's row label ("Tokens", "Cost"). */
   valueLabel: string
+  /** Is this day (`YYYY-MM-DD`) in the current period? Its square is drawn in the accent. */
+  isAccent?: (key: string) => boolean
 }>()
 
 const DAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
@@ -147,8 +151,17 @@ const cellLabel = (c: { date: Date; value: number }) =>
 /** The cells split into the seven weekday rows, each with its label, built once per change of data
  *  rather than once per render. */
 const rows = computed(() => {
-  const out: { cell: (typeof cells.value)[number]; label: string }[][] = [[], [], [], [], [], [], []]
-  for (const c of cells.value) out[c.row]?.push({ cell: c, label: cellLabel(c) })
+  const out: { cell: (typeof cells.value)[number]; label: string; accent: boolean }[][] = [
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+    [],
+  ]
+  for (const c of cells.value)
+    out[c.row]?.push({ cell: c, label: cellLabel(c), accent: props.isAccent?.(c.key) ?? false })
   return out
 })
 
@@ -197,7 +210,7 @@ function onEnter(key: string, e: MouseEvent) {
         <span class="w-(--cg-label) shrink-0 text-3xs text-muted-foreground">{{ label }}</span>
         <div class="relative h-(--cg-cell) w-(--cg-grid)">
           <div
-            v-for="{ cell: c, label: cellAria } in rows[row]"
+            v-for="{ cell: c, label: cellAria, accent } in rows[row]"
             :key="c.key"
             class="absolute top-0 left-(--cg-x) size-(--cg-cell) rounded-xs bg-muted"
             :class="hover === c.key ? 'ring-1 ring-foreground/40' : ''"
@@ -208,7 +221,8 @@ function onEnter(key: string, e: MouseEvent) {
             @mouseleave="hover = null"
           >
             <div
-              class="size-full rounded-xs bg-(--viz-seq) opacity-(--cg-alpha)"
+              class="size-full rounded-xs opacity-(--cg-alpha)"
+              :class="accent ? 'bg-(--viz-seq)' : 'bg-muted-foreground'"
               :style="{ '--cg-alpha': intensity(c.value) }"
             ></div>
           </div>

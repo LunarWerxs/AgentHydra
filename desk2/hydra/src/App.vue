@@ -51,9 +51,8 @@ import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
-import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { hswarmNodeAsk, INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
-import { hswarmJobAsk, showHSwarmPage } from '@/lib/hswarm-pages'
 import {
   deskInstanceAsk,
   deskWorkerAsk,
@@ -63,7 +62,8 @@ import {
   flashRow,
   openInDesk,
   PANE_OPEN_EVENT,
-  publishSidebar,
+  resendSidebar,
+  setDeskView,
   showSessionsInDesk,
 } from '@/lib/desk-embed'
 import { refreshForView } from '@/lib/warm-data'
@@ -86,7 +86,7 @@ const QueueView = lazyView(() => import('@/components/QueueView.vue'))
 const SettingsView = lazyView(() => import('@/components/SettingsView.vue'))
 const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
 const CliView = lazyView(() => import('@/components/CliView.vue'))
-const HSwarmTab = lazyView(() => import('@/components/HSwarmTab.vue'))
+const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
 const InstancesHomeView = lazyView(() => import('@/components/InstancesHomeView.vue'))
 const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
@@ -120,36 +120,44 @@ watch(pendingSessionJump, (j) => {
   if (j) openInDesk(takeSessionJump() ?? j)
 })
 
-// In Desk, the HSwarm tab (CliMayte and HSwarm's own page, lib/hswarm-pages.ts) draws its sidebar in Desk's
-// own (lib/desk-embed.ts useDeskSidebar); any other tab has none, so Desk shows its cloud list beside it.
-const DESK_SIDEBAR_VIEWS: readonly AppView[] = ['hswarm']
-if (EMBEDDED) {
-  watch(
-    view,
-    (v) => {
-      if (!DESK_SIDEBAR_VIEWS.includes(v)) publishSidebar(null)
-    },
-    { immediate: true },
-  )
+// In Desk, the tab on screen decides Desk's sidebar (lib/desk-embed.ts): the HSwarm tab's is its tree
+// (HSwarmView useDeskSidebar), and any other tab has none, so Desk shows its cloud list beside it.
+if (EMBEDDED) watch(view, (v) => setDeskView(v), { immediate: true })
+// A click on the tab already on screen changes nothing here, so it sends Desk that tab's sidebar again:
+// the one thing anyone tries when the sidebar beside it looks wrong.
+function pickTab(id: AppView) {
+  if (view.value === id) resendSidebar()
+  view.value = id
 }
-// CliMayte has no tab of its own: it is the first page of the HSwarm tab.
+// CliMayte has no tab of its own: it is a node of the HSwarm tab's tree (owner, 2026-10-05: "CliMayte
+// should also be an item under that").
 function openClimayte() {
-  showHSwarmPage('climayte')
+  hswarmNodeAsk.value = 'climayte'
   view.value = 'hswarm'
 }
-// Desk's sidebar asked for a CliMayte task: the HSwarm tab on its CliMayte page, which opens it
-// (CliMayteView takes the ask).
-watch(deskWorkerAsk, (id) => {
-  if (id) openClimayte()
-})
-// Desk's sidebar asked for an HSwarm job: the HSwarm tab on its own page, which selects that job (HSwarmView takes the ask).
-watch(deskSwarmAsk, (ask) => {
-  if (!ask) return
-  deskSwarmAsk.value = null
-  hswarmJobAsk.value = ask.job ?? null
-  showHSwarmPage('hswarm')
+// "Open HSwarm" from a stats card (its numbers are HSwarm's savings): the Savings node, not whatever node
+// the tree showed last, CliMayte's included.
+function openHswarmSavings() {
+  hswarmNodeAsk.value = 'savings'
   view.value = 'hswarm'
-})
+}
+// Desk's sidebar asked for a CliMayte task: the HSwarm tab on its CliMayte node, which opens it
+// (CliMayteView takes the ask). Sync, so the tab is switched before anything takes the ask.
+watch(
+  deskWorkerAsk,
+  (id) => {
+    if (id) openClimayte()
+  },
+  { flush: 'sync' },
+)
+// Desk's sidebar asked for an HSwarm job: the HSwarm tab, whose tree selects that job (HSwarmView takes the ask).
+watch(
+  deskSwarmAsk,
+  (ask) => {
+    if (ask) view.value = 'hswarm'
+  },
+  { flush: 'sync' },
+)
 // Desk's session header asked for an account's row in Instances: its table (desktop or CLI), else the
 // other one, scrolled to and marked.
 watch(deskInstanceAsk, async (ask) => {
@@ -220,7 +228,6 @@ useShortcuts([
     labelKey: 'app.shortcutHswarm',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
-      showHSwarmPage('hswarm')
       view.value = 'hswarm'
     },
   },
@@ -306,8 +313,7 @@ async function onShutdown() {
   }
 }
 
-// Top-level tabs. Instances is a group: clicking it opens the landing page, and its two sub-pages
-// sit in a hover dropdown. The group reads as active on any of its three views.
+// Top-level tabs. Instances opens the landing page; its account categories sit in a hover dropdown.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
@@ -323,7 +329,7 @@ const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
   'instances-home': InstancesHomeView,
   cli: CliView,
-  hswarm: HSwarmTab,
+  hswarm: HSwarmView,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
 const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'desktop'))
@@ -384,7 +390,7 @@ function onInstancesOpenAutoFocus(e: Event) {
   instancesMenuViaKeyboard = false
 }
 function pickInstancesSub(id: AppView) {
-  view.value = id
+  pickTab(id)
   setInstancesMenu(false)
 }
 
@@ -394,13 +400,13 @@ function onHomeNavigate(
 ) {
   if (to === 'sessions') showSessionsInDesk()
   else if (to === 'climayte') openClimayte()
+  else if (to === 'hswarm') openHswarmSavings()
   else view.value = to === 'instances' ? 'desktop' : to
 }
 
 provide(OPEN_VIEW, (v: AppView) => {
-  // "Open HSwarm" (a stats card's link) means HSwarm's own page, not the CliMayte page beside it.
-  if (v === 'hswarm') showHSwarmPage('hswarm')
-  view.value = v
+  if (v === 'hswarm') openHswarmSavings()
+  else view.value = v
 })
 
 
@@ -545,7 +551,7 @@ onUnmounted(stopAvailabilityPolling)
                   :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
                   @pointerdown.stop
                   @keydown="onInstancesTabKeydown"
-                  @click="view = n.id"
+                  @click="pickTab(n.id)"
                 >
                   <component :is="n.icon" />
                   <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
@@ -588,7 +594,7 @@ onUnmounted(stopAvailabilityPolling)
             size="sm"
             :title="$t(n.labelKey)"
             :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
-            @click="view = n.id"
+            @click="pickTab(n.id)"
           >
             <component :is="n.icon" />
             <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>

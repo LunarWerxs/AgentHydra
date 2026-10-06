@@ -8,26 +8,37 @@
 //
 // The segments carry a 2px surface gap between them, which keeps two adjacent fills legible without
 // a border that would darken the whole bar.
+//
+// GRAY, THE LARGEST PART IN THE ACCENT (owner, 2026-10-05: "adding, like, a thousand colors to it
+// isn't gonna help"). Four hues made four things to decode; the order is fixed and every part is
+// named with its number and share in the readout, so identity never rested on colour anyway.
 import { computed } from 'vue'
 import type { TokenBreakdown } from '@/lib/api'
 import { formatCompact } from '@/lib/format'
 
 const props = defineProps<{ tokens: TokenBreakdown }>()
 
-/** Fixed order and a fixed colour per category, so a category never changes hue because another is
- *  empty — the same "colour follows the entity" rule the model chart uses. */
+/** Fixed order, so the bar and the readout under it always line up left to right. */
 const PARTS = [
-  { key: 'input', labelKey: 'analytics.tokenInput', color: 'var(--viz-1)' },
-  { key: 'cacheRead', labelKey: 'analytics.tokenCacheRead', color: 'var(--viz-3)' },
-  { key: 'cacheWrite', labelKey: 'analytics.tokenCacheWrite', color: 'var(--viz-5)' },
-  { key: 'output', labelKey: 'analytics.tokenOutput', color: 'var(--viz-2)' },
+  { key: 'input', labelKey: 'analytics.tokenInput' },
+  { key: 'cacheRead', labelKey: 'analytics.tokenCacheRead' },
+  { key: 'cacheWrite', labelKey: 'analytics.tokenCacheWrite' },
+  { key: 'output', labelKey: 'analytics.tokenOutput' },
 ] as const
 
 const rows = computed(() => {
   const total = props.tokens.total || 1
+  let top: string | null = null
+  let best = 0
+  for (const p of PARTS) {
+    if (props.tokens[p.key] > best) {
+      best = props.tokens[p.key]
+      top = p.key
+    }
+  }
   return PARTS.map((p) => {
     const value = props.tokens[p.key]
-    return { ...p, value, pct: (value / total) * 100 }
+    return { ...p, value, pct: (value / total) * 100, top: p.key === top }
   })
 })
 
@@ -43,8 +54,9 @@ const share = (pct: number, value: number) =>
       <div
         v-for="r in rows"
         :key="r.key"
-        class="h-full w-(--seg-w) bg-(--seg-color) first:rounded-s-full last:rounded-e-full"
-        :style="{ '--seg-w': `${Math.max(r.value > 0 ? 0.5 : 0, r.pct)}%`, '--seg-color': r.color }"
+        class="h-full w-(--seg-w) first:rounded-s-full last:rounded-e-full"
+        :class="r.top ? 'bg-(--viz-seq)' : 'bg-muted-foreground/45'"
+        :style="{ '--seg-w': `${Math.max(r.value > 0 ? 0.5 : 0, r.pct)}%` }"
         :title="`${$t(r.labelKey)}: ${formatCompact(r.value)}`"
       ></div>
     </div>
@@ -53,7 +65,10 @@ const share = (pct: number, value: number) =>
     <dl class="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
       <div v-for="r in rows" :key="r.key" class="min-w-0">
         <dt class="flex items-center gap-1.5 text-2xs text-muted-foreground">
-          <span class="size-2 shrink-0 rounded-xs bg-(--seg-color)" :style="{ '--seg-color': r.color }"></span>
+          <span
+            class="size-2 shrink-0 rounded-xs"
+            :class="r.top ? 'bg-(--viz-seq)' : 'bg-muted-foreground/45'"
+          ></span>
           <span class="truncate">{{ $t(r.labelKey) }}</span>
         </dt>
         <dd class="ps-3.5 text-sm font-medium tabular-nums">

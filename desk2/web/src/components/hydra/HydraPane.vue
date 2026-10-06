@@ -67,7 +67,7 @@ watch(frame, (f) => attachHydraFrame(f?.contentWindow ?? null), { flush: 'post' 
 function onMessage(e: MessageEvent) {
   if (e.origin !== window.location.origin || !frame.value || e.source !== frame.value.contentWindow) return
   const m = e.data as AhMessage | null
-  if (m?.type === 'ah:ready') hydraReady()
+  if (m?.type === 'ah:ready') hydraReady(e.source as Window)
   else if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
   else if (m?.type === 'ah:sidebar') hydraSidebar.value = m.model && Array.isArray(m.model.sections) ? m.model : null

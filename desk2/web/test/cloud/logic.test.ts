@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, localOnly } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, type RowLead, rowLead } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -9,25 +9,52 @@ import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrde
 const params = (s: CloudScopes, search = '') => Object.fromEntries(new URLSearchParams(cloudQuery(effectiveScopes(s, search), search)))
 
 describe('cloudQuery', () => {
-  test('the defaults ask for every source but HSwarm, live sessions, the last 24 hours', () => {
-    expect(params(DEFAULT_SCOPES)).toEqual({ period: '24h', archived: 'active', source: '-zswarm', othersPass: '1' })
+  test('the defaults ask for Claude alone, live sessions, the last 24 hours', () => {
+    expect(params(DEFAULT_SCOPES)).toEqual({ period: '24h', archived: 'active', source: 'claude', othersPass: '1' })
+  })
+
+  test('every app but HSwarm is the -zswarm shorthand', () => {
+    expect(params({ ...DEFAULT_SCOPES, apps: ['claude', 'codex', 'opencode', 'hermes', 'dsh'] })).toMatchObject({ source: '-zswarm' })
   })
 
   test('nothing ticked is AgentHydra\'s none, not "no narrowing"', () => {
-    expect(params({ ...DEFAULT_SCOPES, source: [], archived: [] })).toMatchObject({ source: 'none', archived: 'none' })
+    expect(params({ ...DEFAULT_SCOPES, apps: [], archived: [] })).toMatchObject({ source: 'none', archived: 'none' })
   })
 
   test('instance, queued work and usage limits go only with Claude ticked', () => {
     const narrowed: CloudScopes = { ...DEFAULT_SCOPES, instance: ['default'], dispatched: ['queued'], rateLimit: ['pending'] }
-    expect(params(narrowed)).toMatchObject({ source: '-zswarm', instance: 'default', dispatched: 'queued', ratelimited: 'pending' })
-    const noClaude = params({ ...narrowed, source: ['codex'] })
+    expect(params(narrowed)).toMatchObject({ source: 'claude', instance: 'default', dispatched: 'queued', ratelimited: 'pending' })
+    const noClaude = params({ ...narrowed, apps: ['codex'] })
     expect(noClaude).toEqual({ period: '24h', archived: 'active', source: 'codex', othersPass: '1' })
   })
 
   test('a search looks at everything, unless Only this view keeps the filters', () => {
-    const narrowed: CloudScopes = { ...DEFAULT_SCOPES, source: ['claude'], period: '7d' }
+    const narrowed: CloudScopes = { ...DEFAULT_SCOPES, apps: ['claude'], period: '7d' }
     expect(params(narrowed, ' kit ')).toEqual({ period: 'all', archived: 'active,archived', othersPass: '1', title: 'kit' })
     expect(params({ ...narrowed, onlyThisView: true }, 'kit')).toEqual({ period: '7d', archived: 'active', source: 'claude', othersPass: '1', title: 'kit' })
+  })
+})
+
+// Owner, 2026-10-05: the saved filters had `source` with every app ticked; Apps comes back at Claude alone, the rest stays.
+describe('parseScopes', () => {
+  test('an old stored `source` list is dropped for the Apps default, the period kept', () => {
+    const stored = JSON.stringify({ source: ['claude', 'codex', 'opencode', 'hermes', 'dsh'], period: '7d' })
+    expect(parseScopes(stored)).toMatchObject({ apps: ['claude'], period: '7d' })
+  })
+})
+
+// The cloud means another PC, nothing else; this PC's other apps lead with their own mark.
+describe('rowLead', () => {
+  const lead = (source: string, fromPc: string | null, onDesk: boolean, added = false) => rowLead({ source, fromPc }, 'HERE', { onDesk, added })
+  test.each<[string, RowLead, RowLead]>([
+    ["another PC's Claude chat", lead('claude', 'THERE', false), { kind: 'cloud', label: 'From THERE, through the chat sync' }],
+    ["another PC's OpenCode chat", lead('opencode', 'THERE', false), { kind: 'cloud', label: 'OpenCode chat from THERE, through the chat sync' }],
+    ["this PC's OpenCode chat", lead('opencode', null, false), { kind: 'app', app: 'opencode', label: 'OpenCode chat on this PC' }],
+    ["this PC's Claude chat on the desk list", lead('claude', null, true), null],
+    ["a row added for this PC's work", lead('claude', null, false, true), null],
+    ["a row added for the other PC's work", lead('claude', 'THERE', false, true), { kind: 'cloud', label: 'On THERE' }]
+  ])('%s', (_name, got, want) => {
+    expect(got).toEqual(want)
   })
 })
 
@@ -239,8 +266,8 @@ describe('groupCloud', () => {
     const answer = [row('recent', 'D:/conn', 50)]
     const ids = (s: CloudScopes, ranked = false) => groupCloud(answer, s, 'PC', { desk, ranked }).flatMap((g) => g.rows.map((r) => r.id))
     expect(listed(groupCloud(answer, all, 'PC', { desk }))).toEqual([['conn', ['recent', 'chat-session', 'old-desktop']]])
-    // Source, archived and PC are read off the desk's facts.
-    expect(ids({ ...all, source: ['codex'] })).toEqual(['recent'])
+    // App, archived and PC are read off the desk's facts.
+    expect(ids({ ...all, apps: ['codex'] })).toEqual(['recent'])
     expect(ids({ ...all, archived: ['archived'] })).toEqual(['recent'])
     expect(ids({ ...all, pcs: ['PC'] })).toEqual(['recent', 'chat-session', 'old-desktop'])
     // Shape and instance are AgentHydra's facts: narrowed, they keep the desk's rows out.

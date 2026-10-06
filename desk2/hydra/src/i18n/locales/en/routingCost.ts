@@ -1,6 +1,7 @@
-// The Routing page of the HSwarm tab (components/RoutingView.vue): API keys or subscriptions.
+// The cost routing section of HSwarm's Routing page (components/hswarm/HSwarmCostRouting.vue): API keys
+// or subscriptions.
 export default {
-  title: 'Routing',
+  title: 'API keys or subscriptions',
   subtitle:
     'Where a task runs: on an API key (HSwarm) or on a Claude subscription (CliMayte), by what each would cost.',
   loadFailed: 'Could not load the cost model',

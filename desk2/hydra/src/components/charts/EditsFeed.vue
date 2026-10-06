@@ -6,30 +6,19 @@
 // with the same thirty characters. This leads with the filename, puts the folder under it in a
 // quieter tone, and drops the repository prefix that is already the group heading.
 //
-// The extension carries a colour chip, which is doing real work: it is the fastest way to see that
-// a burst of activity was all tests, or all styles, without reading a single path.
-import { computed } from 'vue'
+// The extension leads each row in a small chip, so a burst of activity that was all tests, or all
+// styles, shows without reading a path. The chips are gray: they were six hues, one per file type,
+// on a page where colour is kept for what matters (owner, 2026-10-05: "adding, like, a thousand
+// colors to it isn't gonna help"). The newest few files show; the rest fold behind "+N more".
+import { computed, ref } from 'vue'
 import type { EditEntry } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 
 const props = defineProps<{ project: string; edits: EditEntry[] }>()
 
-/** File extensions worth colouring. Anything else takes the neutral chip rather than a generated
- *  hue nobody validated. */
-const EXT_COLOR: Record<string, string> = {
-  ts: 'var(--viz-3)',
-  tsx: 'var(--viz-3)',
-  js: 'var(--viz-6)',
-  mjs: 'var(--viz-6)',
-  vue: 'var(--viz-2)',
-  css: 'var(--viz-5)',
-  py: 'var(--viz-3)',
-  go: 'var(--viz-2)',
-  rs: 'var(--viz-1)',
-  md: 'var(--viz-4)',
-  json: 'var(--viz-6)',
-  sql: 'var(--viz-5)',
-}
+/** Files shown before the fold. */
+const TOP = 5
+const expanded = ref(false)
 
 interface Row {
   key: string
@@ -37,7 +26,6 @@ interface Row {
   /** The path with the project prefix removed: the group heading already says which repo. */
   where: string
   ext: string
-  color: string
   ts: number | null
   /** How many times this same file was touched in the window. */
   count: number
@@ -68,26 +56,25 @@ const rows = computed<Row[]>(() => {
       name,
       where,
       ext,
-      color: EXT_COLOR[ext] ?? 'var(--color-muted-foreground)',
       ts: e.ts,
       count: 1,
     })
   }
   return [...seen.values()].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
 })
+const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, TOP)))
 </script>
 
 <template>
   <ul class="space-y-0.5">
     <li
-      v-for="r in rows"
+      v-for="r in shown"
       :key="r.key"
       class="flex items-baseline gap-2 rounded px-1 py-0.5 hover:bg-muted/50"
       :title="r.key"
     >
       <span
-        class="w-9 shrink-0 truncate rounded-xs bg-(--ext-color)/22 px-1 py-px text-center font-mono text-3xs uppercase leading-4 text-(--ext-color)"
-        :style="{ '--ext-color': r.color }"
+        class="w-9 shrink-0 truncate rounded-xs bg-muted px-1 py-px text-center font-mono text-3xs uppercase leading-4 text-muted-foreground"
       >{{ r.ext || '·' }}</span>
       <span class="min-w-0 flex-1 truncate">
         <span class="text-xs font-medium">{{ r.name }}</span>
@@ -100,6 +87,15 @@ const rows = computed<Row[]>(() => {
       <span class="shrink-0 text-3xs tabular-nums text-muted-foreground">
         {{ r.ts ? timeAgo(r.ts) : '' }}
       </span>
+    </li>
+    <li v-if="rows.length > TOP" class="px-1">
+      <button
+        type="button"
+        class="text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline"
+        @click="expanded = !expanded"
+      >
+        {{ expanded ? $t('analytics.showLess') : $t('analytics.showMore', { n: rows.length - TOP }) }}
+      </button>
     </li>
   </ul>
 </template>

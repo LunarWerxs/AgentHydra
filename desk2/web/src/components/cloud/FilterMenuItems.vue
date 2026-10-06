@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, MessagesSquare, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
+import { Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   DropdownMenuItem,
@@ -55,7 +55,7 @@ const hiddenTip = computed(() =>
 )
 const s = computed(() => cloud.scopes.value)
 const local = computed(() => localOnly(s.value, cloud.thisPc.value))
-const claude = computed(() => s.value.source.includes('claude'))
+const claude = computed(() => s.value.apps.includes('claude'))
 
 function set(patch: Partial<CloudScopes>) {
   cloud.scopes.value = { ...cloud.scopes.value, ...patch }
@@ -77,16 +77,6 @@ function togglePc(pc: string) {
 }
 
 const sub = [
-  {
-    key: 'source',
-    label: 'Source',
-    icon: MessagesSquare,
-    universe: SOURCE_VALUES,
-    labels: SOURCE_LABELS as Record<string, string>,
-    claudeOnly: false,
-    note: '',
-    tip: 'Which apps the sessions come from: Claude, Codex and the rest'
-  },
   {
     key: 'dispatched',
     label: 'Queued work',
@@ -133,6 +123,8 @@ const ticked = (k: SubKey): readonly string[] => s.value[k]
 function flip(k: SubKey, universe: readonly string[], v: string) {
   set({ [k]: toggle(ticked(k), universe, v) } as Partial<CloudScopes>)
 }
+const APP_TIPS: Record<string, string> = { claude: 'Claude chats', codex: "Codex (ChatGPT's coding app) chats", opencode: 'OpenCode chats' }
+const appTip = (v: string, on: boolean) => `${on ? 'Hide' : 'Show'} ${APP_TIPS[v] ?? `${SOURCE_LABELS[v as keyof typeof SOURCE_LABELS]} sessions`}`
 
 const FILTER_TIPS: Record<SidebarFilter, string> = {
   active: 'Show the chats that are not archived',
@@ -154,6 +146,22 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
 </script>
 
 <template>
+  <!-- One click per app; Claude alone until ticked otherwise (owner, 2026-10-05: "I need the ability to toggle on and off, certain items"). -->
+  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Apps</DropdownMenuLabel>
+  <DropdownMenuItem
+    v-for="v in SOURCE_VALUES"
+    :key="v"
+    role="menuitemcheckbox"
+    :aria-checked="s.apps.includes(v)"
+    :title="appTip(v, s.apps.includes(v))"
+    :class="ITEM"
+    @select.prevent="set({ apps: toggle(s.apps, SOURCE_VALUES, v) })"
+  >
+    <span class="flex-1">{{ SOURCE_LABELS[v] }}</span>
+    <component :is="icons.check" v-if="s.apps.includes(v)" class="ml-3" />
+  </DropdownMenuItem>
+
+  <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Desk list</DropdownMenuLabel>
   <DropdownMenuItem
     v-for="(label, key) in FILTER_LABELS"
@@ -275,8 +283,8 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
       </DropdownMenuSubContent>
     </DropdownMenuSub>
 
-    <!-- Instance sits after Source, as in AgentHydra: a fact about Claude sessions, so off without Claude. -->
-    <DropdownMenuSub v-if="m.key === 'source'">
+    <!-- Instance sits first, as in AgentHydra: a fact about Claude sessions, so off without Claude. -->
+    <DropdownMenuSub v-if="m.key === 'dispatched'">
       <DropdownMenuSubTrigger :class="ITEM" :disabled="!claude" title="Which Claude login (account instance) the sessions ran on">
         <Boxes />
         <span class="flex-1">Instance</span>

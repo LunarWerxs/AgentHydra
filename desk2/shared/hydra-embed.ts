@@ -1,9 +1,10 @@
 // What Hydra Desk 2 and its copy of AgentHydra's window (hydra/, in a frame at /ah/?embed=desk) say to each
 // other, as postMessage on the one origin. Desk owns the sidebar (Michael, 2026-10-04: "the left sidebar
 // needs to essentially be the sidebar that exists for everything ... we only have two things, the sidebar
-// and the content"): a tab of the copy that had a sidebar of its own (CliMayte's task list, HSwarm's tree)
-// describes it as a SidebarModel instead, Desk draws it in its own sidebar in its own look, and the clicks
-// come back as DeskMessages. The copy keeps every rule of what a row says; Desk only draws.
+// and the content"): a tab of the copy that had a sidebar of its own (HSwarm's tree, CliMayte and Routing
+// among its nodes) describes it as a SidebarModel instead, Desk draws it in its own sidebar in its own
+// look, and the clicks come back as DeskMessages. The copy keeps every rule of what a row says; Desk only
+// draws.
 
 /** The icons a model may name; Desk maps each to its lucide icon (web/src/components/hydra/HydraSidebar.vue). */
 export type EmbedIcon =
@@ -120,10 +121,11 @@ export type DeskMessage =
   | { type: 'desk:sidebar'; view: string; action: 'search'; value: string }
   /** Show this instance's row in Instances (its desktop or CLI table) and mark it. */
   | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' }
-  /** Open this CliMayte task on the CliMayte entry of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
+  /** Open this CliMayte task on the CliMayte node of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
-  /** Open the HSwarm tab (the copy has no way to open one job). */
+  /** Open the HSwarm tab, on that job of its Jobs node when one is named. */
   | { type: 'desk:open-hswarm'; job?: string }
   /** Whether the pane is in view. Out of view the copy's page counts as hidden (document.hidden), so its
-   *  polls rest until it slides back in; the frame stays loaded either way. */
+   *  polls rest until it slides back in; the frame stays loaded either way. Desk says it when the frame
+   *  is ready and each time the pane slides in or out; on true the copy sends its current sidebar again. */
   | { type: 'desk:visible'; visible: boolean }

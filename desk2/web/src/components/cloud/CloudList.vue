@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Cloud, EyeOff } from '@lucide/vue'
+import { computed, ref, type Component } from 'vue'
+import { Bot, Cloud, Code, Cpu, EyeOff, Network, Sparkles, Terminal } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession, SwarmJob } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
@@ -9,15 +9,15 @@ import { useFirstInterestSet } from '@/lib/first-interest'
 import RowAge from '@/lib/RowAge.vue'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
-import { isAddedRow, runningIn, type TaskNode } from '@/components/sidebar/tasks'
+import { isAddedRow, runningJobsIn, runningTasksIn, type TaskNode } from '@/components/sidebar/tasks'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
-import { glyphDotClass, HIDE_TITLE, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
+import { glyphDotClass, HIDE_TITLE, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
-import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, RESULTS_KEY, scopesNarrowed, sessionShape, SHAPE_LABELS, type CloudGroup } from './logic'
+import { fromPcLabel, modelName, originLabel, RESULTS_KEY, rowLead, scopesNarrowed, sessionShape, SHAPE_LABELS, type CloudGroup } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -37,7 +37,7 @@ const props = defineProps<{
   tasksOf?: (id: string) => TaskNode[] | null
   /** The tasks of a row whose lines are drawn (Count mode leaves them out until its badge is opened); `tasksOf` still counts every one. */
   shownOf?: (id: string) => TaskNode[] | null
-  /** The HSwarm jobs a row's chat started (they count in a folded group's heading); `shownJobsOf` has those whose lines are drawn. */
+  /** The HSwarm jobs a folded group's heading counts under a row (its chat's, and the job an added row is itself); `shownJobsOf` has those whose lines are drawn. */
   jobsOf?: (id: string) => SwarmJob[] | null
   shownJobsOf?: (id: string) => SwarmJob[] | null
   /** Whether a row's session runs now, for a folded group's heading. */
@@ -68,16 +68,18 @@ function toggleGroup(key: string) {
   collapsed.value = next
 }
 
-/** The running tasks under a group's rows, and its rows that run, for its heading while it is folded. */
-const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runningIn(rows.map((r) => props.tasksOf!(r.id)), rows.map((r) => props.jobsOf?.(r.id))) : 0)
+/** The running CliMayte tasks and HSwarm jobs under a group's rows, and its rows that run, for its heading while it is folded. */
+const tasksRunningIn = (rows: readonly CloudSession[]) => (props.tasksOf ? runningTasksIn(rows.map((r) => props.tasksOf!(r.id))) : 0)
+const jobsRunningIn = (rows: readonly CloudSession[]) => (props.jobsOf ? runningJobsIn(rows.map((r) => props.jobsOf!(r.id))) : 0)
 const chatsRunningIn = (rows: readonly CloudSession[]) => (props.running ? rows.filter((r) => props.running!(r.id)).length : 0)
 const foldedRunning = computed(() => {
-  const out = new Map<string, { tasks: number; chats: number }>()
+  const out = new Map<string, { tasks: number; jobs: number; chats: number }>()
   for (const g of shownGroups.value) {
     if (!collapsed.value.has(g.key)) continue
-    const tasks = runningInGroup(g.rows)
+    const tasks = tasksRunningIn(g.rows)
+    const jobs = jobsRunningIn(g.rows)
     const chats = chatsRunningIn(g.rows)
-    if (tasks || chats) out.set(g.key, { tasks, chats })
+    if (tasks || jobs || chats) out.set(g.key, { tasks, jobs, chats })
   }
   return out
 })
@@ -95,8 +97,8 @@ function tooltip(r: CloudSession): string {
   const size = cloud.fromDesk(r.id) ? 'Listed because the desk list shows it' : `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages`
   return [
     r.title,
-    cloud.onDesk(r.id) ? originLabel(r, thisPc.value) : cloudOnlyLabel(r, thisPc.value),
-    pc && fromPcLabel(pc),
+    originLabel(r, thisPc.value),
+    pc && fromPcLabel(pc, r.source),
     [modelName(r.model), r.effort].filter(Boolean).join(' · '),
     `${size}${r.archived ? ' · archived' : ''}`,
     r.cwd,
@@ -105,22 +107,28 @@ function tooltip(r: CloudSession): string {
     .filter(Boolean)
     .join('\n')
 }
-/**
- * The words of a row's leading cloud, null for a row that leads with its dot: a row only this list has, and
- * another PC's chat; a row added for running work (sidebar/tasks.ts) is drawn as the desk list draws it, its dot
- * or, another PC's, a cloud naming that PC (owner, 2026-10-05: "besides them having a Cloud icon").
- */
-function cloudMark(r: CloudSession): string | null {
-  const pc = otherPc(r)
-  if (isAddedRow(r.id)) return pc && `On ${pc}`
-  if (!cloud.onDesk(r.id)) return cloudOnlyLabel(r, thisPc.value)
-  return pc && fromPcLabel(pc)
+/** What a row leads with (logic.ts rowLead): another PC's cloud, this PC's other app's mark, or its dot. */
+const cloudMark = (r: CloudSession) => rowLead(r, thisPc.value, { onDesk: cloud.onDesk(r.id), added: isAddedRow(r.id) })
+/** One muted mark per app that is not Claude. */
+const APP_MARKS: Record<string, Component> = { codex: Code, opencode: Terminal, hermes: Sparkles, dsh: Cpu, zswarm: Network }
+/** The mark of a row from this PC's other app, null for any other row. */
+function appIcon(r: CloudSession): Component | null {
+  const m = cloudMark(r)
+  return m?.kind === 'app' ? (APP_MARKS[m.app] ?? Bot) : null
 }
 /** A row the desk list shows keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
 function dotClass(r: CloudSession): string {
   if (r.archived) return 'border border-text-muted'
   const g = props.glyph?.(r.id)
   return g ? glyphDotClass(g) : 'bg-text-muted'
+}
+/**
+ * Another PC's cloud pulses while its row runs, as the row's dot would (owner, 2026-10-05: "for chats that are
+ * remote ... gray pulsing"): gray, or blue for a row that is a running HSwarm job; still and muted otherwise.
+ */
+function cloudTone(r: CloudSession): string {
+  const g = props.glyph?.(r.id)
+  return g?.motion === 'blink' ? runPulse(g.tone === 'swarm' ? 'blue' : 'gray') : 'text-text-muted'
 }
 // Each row's tooltip, built when the rows change and not on every redraw (the 30 s clock redraws them).
 const tips = computed(() => {
@@ -156,11 +164,13 @@ const ROW =
               >
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
-              <Cloud v-else-if="cloudMark(r)" role="img" :aria-label="cloudMark(r)!" class="size-3.5 text-text-muted" />
+              <Cloud v-else-if="cloudMark(r)?.kind === 'cloud'" role="img" :aria-label="cloudMark(r)!.label" class="size-3.5" :class="cloudTone(r)" />
+              <component :is="appIcon(r)!" v-else-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 text-text-muted" />
               <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
-            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
+            <!-- Muted like the instance number beside it: blue is HSwarm's alone in the sidebar (owner, 2026-10-05). -->
+            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted">{{ r.fromPc }}</span>
             <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
             <RowAge :at="r.lastActivityAt" />
@@ -198,7 +208,7 @@ const ROW =
               class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
               :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
             />
-            <RunningBadge v-if="foldedRunning.get(g.key)" class="ml-1" :tasks="foldedRunning.get(g.key)!.tasks" :chats="foldedRunning.get(g.key)!.chats" />
+            <RunningBadge v-if="foldedRunning.get(g.key)" class="ml-1" :tasks="foldedRunning.get(g.key)!.tasks" :jobs="foldedRunning.get(g.key)!.jobs" :chats="foldedRunning.get(g.key)!.chats" />
           </button>
         </Tip>
         <span class="flex-1" />

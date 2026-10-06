@@ -5,11 +5,11 @@
 // parent window on this same origin; their shapes are desk2/shared/hydra-embed.ts.
 //
 // Desk also owns the one sidebar (Michael, 2026-10-04: "we only have two things, the sidebar and the
-// content"): a tab that had a sidebar of its own (CliMayte, HSwarm) describes it with useDeskSidebar and
-// hides its own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask
-// for an account's row in Instances (its session header's account chip) or a CliMayte task (its sidebar's
-// task rows).
-import { inject, type InjectionKey, onActivated, onDeactivated, onScopeDispose, provide, reactive, ref, watch } from 'vue'
+// content"): a tab with a list of its own (HSwarm's tree) describes it with useDeskSidebar and hides its
+// own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask for an
+// account's row in Instances (its session header's account chip), a CliMayte task or an HSwarm job (its
+// sidebar's task and job rows).
+import { onScopeDispose, ref, shallowReactive, watch } from 'vue'
 import type { AhMessage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
 import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
@@ -40,96 +40,69 @@ export const PANE_OPEN_EVENT = 'hydra:pane-open'
 export type SidebarEvent = Extract<DeskMessage, { type: 'desk:sidebar' }>
 
 const sidebarHandlers = new Map<string, (e: SidebarEvent) => void>()
+
+// Which sidebar Desk shows is decided here, from one fact: the tab on screen (App.vue's view, set with
+// setDeskView). Only that tab's build is read, so a tab that is fading out, or stays built behind the
+// next one (App.vue's KeepAlive), never speaks for Desk's sidebar, and a tab without one sends null the
+// moment it is picked. A tab counts as active until its fade-out ends, so a tab deciding for itself
+// could send its tree after the next tab's null (owner, 2026-10-05: the sidebar "didn't change ... some
+// kind of holdover").
+const currentView = ref<string | null>(null)
+const builds = shallowReactive(new Map<string, () => SidebarModel | null>())
+
 // What Desk was last sent, so a rebuild that changed nothing it shows sends nothing. Compared by value
-// (rows a tab keeps between builds are the same objects, so they cost one check each), not by a
-// JSON string of the whole model.
+// (rows a tab keeps between builds are the same objects, so they cost one check each), not by a JSON
+// string of the whole model.
 let lastSent: SidebarModel | null | undefined
 
-/** The current tab's sidebar to Desk, or null for a tab without one (App.vue, on a change of tab). */
-export function publishSidebar(model: SidebarModel | null): void {
-  if (!EMBEDDED) return
-  if (lastSent !== undefined && sameData(lastSent, model)) return
+function publish(model: SidebarModel | null, force = false): void {
+  if (!force && lastSent !== undefined && sameData(lastSent, model)) return
   lastSent = model
   tellDesk({ type: 'ah:sidebar', model })
 }
 
-// Whether the page is out of view (document.hidden, which says so for a pane Desk slid away, see below):
-// the sidebar is not rebuilt while it is, and is the moment it is seen again.
-const pageHidden = ref(typeof document !== 'undefined' && document.hidden)
-if (EMBEDDED) document.addEventListener('visibilitychange', () => (pageHidden.value = document.hidden))
-
-/** A tab made of pages (HSwarm: its own page, CliMayte, later more) provides this: each page's view
- *  describes its part with useDeskSidebar as before, and the tab (useDeskSidebarHost) publishes one
- *  model made of them. `intercept` sees Desk's clicks first and answers true for one it took. */
-interface SidebarHost {
-  parts: Map<string, () => SidebarModel | null>
-  intercept: (view: string, e: SidebarEvent) => boolean
+function currentModel(): SidebarModel | null {
+  const build = currentView.value === null ? undefined : builds.get(currentView.value)
+  return build ? build() : null
 }
-const SIDEBAR_HOST: InjectionKey<SidebarHost> = Symbol('desk-sidebar-host')
 
-/** Publishes `build()` while the tab is on screen (and says so again when it comes back). */
-function publishWhileActive(build: () => SidebarModel | null): void {
-  // The tab stays built behind the next one (App.vue's KeepAlive): only the tab on screen speaks for
-  // the sidebar, and it says so again when it comes back. Out of view the getter reads nothing, so no
-  // change of the tab's data rebuilds the model.
-  const active = ref(true)
-  watch(
-    () => (!active.value || pageHidden.value ? undefined : build()),
-    (model) => {
-      if (model !== undefined) publishSidebar(model)
-    },
-    { immediate: true },
-  )
-  onActivated(() => {
-    active.value = true
-  })
-  onDeactivated(() => {
-    active.value = false
-  })
+/** App.vue: the tab on screen changed. Its sidebar (or null for a tab without one) goes to Desk now. */
+export function setDeskView(view: string): void {
+  if (EMBEDDED) currentView.value = view
+}
+
+/** Sends the tab on screen's sidebar again even when Desk was sent the same: Desk may have dropped it (a
+ *  frame re-attached, the pane closed and opened). On every desk:visible true, and on a click on the tab
+ *  already on screen (App.vue), which is what anyone does when the sidebar looks wrong. */
+export function resendSidebar(): void {
+  if (EMBEDDED) publish(currentModel(), true)
 }
 
 /** In Desk: describes this tab's sidebar (`build` re-runs when what it reads changes) and takes Desk's
- *  clicks on it. Outside Desk it does nothing and the tab draws its own sidebar. The tab after it sends
- *  its own (or App.vue sends null), so leaving sends nothing: Desk never flashes another list between.
- *  Under a tab that is a sidebar host, it hands its part to the host instead of publishing. */
+ *  clicks on it. `view` is the tab's AppView: the model is sent while that tab is on screen, also while
+ *  Desk's pane is out of view, so Desk always holds the current one. Outside Desk it does nothing and
+ *  the tab draws its own sidebar. */
 export function useDeskSidebar(
   view: string,
   build: () => SidebarModel | null,
   onEvent: (e: SidebarEvent) => void,
 ): void {
   if (!EMBEDDED) return
-  const host = inject(SIDEBAR_HOST, null)
-  const handler = host
-    ? (e: SidebarEvent) => {
-        if (!host.intercept(view, e)) onEvent(e)
-      }
-    : onEvent
-  sidebarHandlers.set(view, handler)
-  if (host) host.parts.set(view, build)
-  else publishWhileActive(build)
+  sidebarHandlers.set(view, onEvent)
+  builds.set(view, build)
   onScopeDispose(() => {
-    if (sidebarHandlers.get(view) === handler) sidebarHandlers.delete(view)
-    if (host?.parts.get(view) === build) host.parts.delete(view)
+    if (sidebarHandlers.get(view) === onEvent) sidebarHandlers.delete(view)
+    if (builds.get(view) === build) builds.delete(view)
   })
-}
-
-/** In Desk: the tab's one sidebar, composed by `compose` from the parts its pages describe (a page
- *  that is not mounted yet, or has none, is just absent from `parts`). `intercept` takes the clicks the
- *  tab itself owns (its page entries) before the page that was drawn gets them. */
-export function useDeskSidebarHost(
-  compose: (parts: ReadonlyMap<string, () => SidebarModel | null>) => SidebarModel | null,
-  intercept: (view: string, e: SidebarEvent) => boolean,
-): void {
-  const host: SidebarHost = { parts: reactive(new Map()) as Map<string, () => SidebarModel | null>, intercept }
-  provide(SIDEBAR_HOST, host)
-  if (EMBEDDED) publishWhileActive(() => compose(host.parts))
 }
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
 export const deskInstanceAsk = ref<{ num: number; kind: 'desktop' | 'cli' } | null>(null)
-/** Desk asked for a CliMayte task (CliMayteView opens it once its list is in); `pc` names another PC's. */
-/** Desk asked for the HSwarm tab (App.vue switches to it). */
+/** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the
+ *  job on its Jobs node and clears the ask). */
 export const deskSwarmAsk = ref<{ job?: string } | null>(null)
+/** Desk asked for a CliMayte task (App.vue shows the CliMayte node of the HSwarm tab; CliMayteView opens
+ *  it once its list is in and clears the ask); `pc` names another PC's. */
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
 
 /** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
@@ -199,6 +172,10 @@ function setDeskHidden(next: boolean): void {
 
 if (EMBEDDED) {
   watchDeskVisibility()
+  // The tab on screen's sidebar, sent whenever it changes (the tab, or what its build reads). It is not
+  // held back while the pane is out of view: a tree that changes then (a Desk ask switched the tab) would
+  // leave Desk drawing the old one for a moment when the pane slides back in.
+  watch(currentModel, (model) => publish(model), { immediate: true })
   window.addEventListener('message', (e: MessageEvent) => {
     if (e.source !== window.parent || e.origin !== window.location.origin) return
     const m = e.data as DeskMessage | null
@@ -207,7 +184,12 @@ if (EMBEDDED) {
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
     else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
-    else if (m.type === 'desk:visible') setDeskHidden(!m.visible)
+    else if (m.type === 'desk:visible') {
+      setDeskHidden(!m.visible)
+      // Desk says so when the pane slides in and when a frame (re)attaches (hydraReady): whatever it
+      // held is replaced by what is on screen here, so its sidebar is never a stale or missing one.
+      if (m.visible) resendSidebar()
+    }
   })
   tellDesk({ type: 'ah:ready' })
 }

@@ -9,7 +9,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/compon
 import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
-import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuEntry, type RowMenuItem } from './logic'
+import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from './logic'
 import RowMenuList from './RowMenuList.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
@@ -26,6 +26,8 @@ const props = withDefaults(
     groups?: string[]
     /** The menu in place of an outside session's; without Rename, the row cannot be renamed. */
     entries?: RowMenuEntry[]
+    /** The dot in place of the session's: an added row that is a running HSwarm job pulses blue (Sidebar.vue addedGlyph). */
+    dot?: StatusGlyph
   }>(),
   {
     selected: false,
@@ -34,7 +36,7 @@ const props = withDefaults(
 )
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
 
-const glyph = computed(() => externalGlyph(props.session))
+const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
 const menu = computed(() => props.entries ?? rowMenu(externalRow(props.session), props.groups))
 const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))

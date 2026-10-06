@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * One row of a `SideList`, one line (about 33px): status icon, leading badge, title, trailing
+ * One task row of a side list (CliMayteFloat.vue), one line (about 33px): status icon, leading badge, title, trailing
  * marks, a number chip (`P3`, `#71`), a small "model · effort" tag, and when it last moved. It is a `<button>`, so Enter and
  * Space select it; the `click` listener falls through to the button and receives the MouseEvent
  * (modifier keys included). Other attributes (`data-*`, `class`) land on the button too.

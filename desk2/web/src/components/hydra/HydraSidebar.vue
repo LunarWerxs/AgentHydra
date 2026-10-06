@@ -34,7 +34,7 @@ import { icons } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { tellHydra } from './api'
 
-// Hydra Desk 2: the sidebar of AgentHydra's current tab (CliMayte's tasks, HSwarm's tree), drawn here in
+// Hydra Desk 2: the sidebar of AgentHydra's current tab (HSwarm's tree), drawn here in
 // Desk's sidebar and Desk's look while AgentHydra is open (Michael, 2026-10-04: one sidebar for
 // everything, beside the content). The copy describes it (shared/hydra-embed.ts) and keeps every rule of
 // what a row says; a click goes back to it. Rows are 26px like the desk list; hovers are the native
