@@ -87,24 +87,28 @@ function pcChats(name: string) {
       return 0
     }
   }
+  const viewed = (project: string, sessionId: string) =>
+    join(dir, 'view', project, `${sessionId}.jsonl`)
   const local: ChatLocal = {
     list: () => chats.map((c) => ({ ...c, size: c.project ? size(c.project, c.sessionId) : 0 })),
     read: (project, sessionId, from, to) =>
       new Uint8Array(readFileSync(file(project, sessionId)).subarray(from, to)),
-    size,
-    append(project, sessionId, expected, bytes) {
-      if (size(project, sessionId) !== expected) return false
-      mkdirSync(join(dir, project), { recursive: true })
-      const old = size(project, sessionId)
-        ? readFileSync(file(project, sessionId))
-        : Buffer.alloc(0)
-      writeFileSync(file(project, sessionId), Buffer.concat([old, bytes]))
+    viewSize: (project, sessionId) => {
+      try {
+        return statSync(viewed(project, sessionId)).size
+      } catch {
+        return 0
+      }
+    },
+    viewWrite(project, sessionId, at, bytes) {
+      const path = viewed(project, sessionId)
+      const old = at === 0 ? Buffer.alloc(0) : readFileSync(path)
+      if (old.length !== at) return false
+      mkdirSync(join(dir, 'view', project), { recursive: true })
+      writeFileSync(path, Buffer.concat([old, bytes]))
       return true
     },
-    async land(chat) {
-      chats.push({ ...chat, size: 0 })
-      return { ok: true }
-    },
+    retire: async () => ({ ok: true, kept: false }),
   }
   const id = randomUUID()
   made.queues.push(id)
@@ -154,8 +158,9 @@ const reads = (stats: StatementStat[]) =>
 
 type Hour = { stats: StatementStat[]; reads: number }
 
-/** The sim: a store holding 55 logins and 18 chats (10 of them continued on both PCs, so `diverged`
- *  on this one, the live store's shape), and one hour of both PCs polling it. `busy` adds the changes a
+/** The sim: a store holding 55 logins and 24 chats (18 this PC started, and six of the other PC's whose
+ *  copies sit in this PC's chat list, which this PC never sends), and one hour of both PCs polling it.
+ *  `busy` adds the changes a
  *  working hour brings: another PC refreshing a login a few times, a queue that changes, a chat that
  *  keeps growing. */
 /** The store as another test file left it may hold rows sealed under another key; this hour starts
@@ -181,13 +186,12 @@ async function runHour(busy: boolean, beats: boolean): Promise<Hour> {
   const busyLogins = new Set<string>()
   const stuck = logins.slice(0, 4) // logins a PC downloads and cannot land yet (a session runs on them)
 
-  // This PC (N): 8 chats shared with the other side, 10 continued on both and so diverged.
+  // This PC (N): 18 chats of its own, shared with the other side.
   const n = pcChats('PC-N')
   const other = pcChats('PC-X')
-  const forked: Array<{ n: LocalChat; x: LocalChat }> = []
   for (let i = 0; i < 18; i++) n.add(`{"n":${i}}\n`)
-  // Six chats here share a session with a record the other side shares, and differ from it: this PC
-  // cannot take that record (diverged) and its own record's first chunk is already stored.
+  // Six chats here share a session with a record the other side shares, and differ from it: the
+  // two-way sync landed them here and someone went on in them. They are the other side's, never sent.
   for (let i = 0; i < 6; i++) {
     const twin = other.add(`{"x":${i}}
 `)
@@ -200,14 +204,6 @@ async function runHour(busy: boolean, beats: boolean): Promise<Hour> {
   await syncChats(other.io, clock)
   await syncChats(n.io, clock)
   await syncChats(other.io, clock)
-  for (const c of n.chats.slice(0, 10))
-    forked.push({ n: c, x: other.chats.find((o) => o.id === c.id) as LocalChat })
-  for (const f of forked) {
-    n.extend(f.n, '{"on":"n"}\n')
-    other.extend(f.x, '{"on":"x"}\n')
-  }
-  clock += CHAT_PUSH
-  await syncChats(other.io, clock)
   const frozen = clock // a PC that does not heartbeat sees the clock stand still
   const mirror = new StoreMirror((m, p) => store(m, p) as never)
   const nIo = (): ChatIo => ({ ...n.io, mirror })
@@ -215,7 +211,7 @@ async function runHour(busy: boolean, beats: boolean): Promise<Hour> {
     await mirror.refresh({ tables: ['logins', 'queues', 'chats'] })
     await syncChats(nIo(), clock)
   }
-  await pass() // N meets the forked chats: diverged
+  await pass()
   clock += TICK
   await pass()
 
@@ -274,7 +270,6 @@ async function runHour(busy: boolean, beats: boolean): Promise<Hour> {
   const stats = storeDb.statements()
   return { stats, reads: reads(stats) }
 }
-const CHAT_PUSH = 5 * 60_000
 
 const report = (label: string, hour: Hour) =>
   console.log(`${label}: ${hour.reads} rows read in the hour (${hour.reads * 24} a day)
@@ -285,7 +280,7 @@ ${table(hour.stats)}`)
 test('a quiet hour of both PCs, no heartbeats, reads about 60 rows', async () => {
   const hour = await runHour(false, false)
   report('quiet hour, no heartbeats', hour)
-  expect(hour.reads).toBeLessThanOrEqual(65) // measured 61: the head every 90 s, six refused first chunks an hour, start-up reads
+  expect(hour.reads).toBeLessThanOrEqual(65) // measured 9 (2026-10-05): view only, a copy of the other PC's chat is never offered, so no first chunk is refused
 })
 
 // The older client still writes its queue every 60 s, and this PC's heartbeat is 60 s too: each write

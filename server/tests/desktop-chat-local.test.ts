@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createChatLocal, type ImportArgs } from '../src/core/desktop-chat-local'
-import type { IncomingChat } from '../src/core/desktop-chat-types'
+import { createChatLocal } from '../src/core/desktop-chat-local'
 
 const ACCT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -14,6 +13,7 @@ const STALE = '22222222-2222-4222-8222-222222222222'
 let root: string
 let profile: string
 let projects: string
+let view: string
 
 function record(dir: string, account: string, id: string, extra: Record<string, unknown> = {}) {
   const folder = join(dir, 'claude-code-sessions', account, ORG)
@@ -24,24 +24,11 @@ function record(dir: string, account: string, id: string, extra: Record<string, 
   )
 }
 
-function incoming(over: Partial<IncomingChat> = {}): IncomingChat {
-  return {
-    id: SESSION,
-    sessionId: SESSION,
-    project: 'proj',
-    account: ACCT,
-    org: ORG,
-    record: { title: 'Shared chat', effort: 'high' },
-    archived: false,
-    origin: { pc: 'pc-1', name: 'other-pc' },
-    ...over,
-  }
-}
-
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'chat-local-'))
   profile = join(root, 'profile')
   projects = join(root, 'projects')
+  view = join(root, 'view')
   mkdirSync(profile, { recursive: true })
   mkdirSync(projects, { recursive: true })
   writeFileSync(join(profile, 'config.json'), JSON.stringify({ lastKnownAccountUuid: ACCT }))
@@ -69,83 +56,77 @@ describe('list', () => {
   })
 })
 
-describe('transcripts', () => {
-  test('append writes only at the expected length', () => {
-    const local = createChatLocal({ projectsDir: projects })
-    expect(local.append('proj', SESSION, 0, Buffer.from('abc'))).toBe(true)
-    expect(local.append('proj', SESSION, 1, Buffer.from('zzz'))).toBe(false)
-    expect(readFileSync(join(projects, 'proj', `${SESSION}.jsonl`), 'utf8')).toBe('abc')
-    expect(Buffer.from(local.read('proj', SESSION, 1, 3)).toString()).toBe('bc')
+describe('viewer', () => {
+  test('a write starts the copy over at 0 and appends only at the length it has', () => {
+    const local = createChatLocal({ projectsDir: projects, viewDir: view })
+    expect(local.viewWrite('proj', SESSION, 0, Buffer.from('abc'))).toBe(true)
+    expect(local.viewWrite('proj', SESSION, 1, Buffer.from('zzz'))).toBe(false)
+    expect(local.viewWrite('proj', SESSION, 3, Buffer.from('de'))).toBe(true)
+    expect(local.viewSize('proj', SESSION)).toBe(5)
+    expect(local.viewWrite('proj', SESSION, 0, Buffer.from('x'))).toBe(true)
+    expect(readFileSync(join(view, 'proj', `${SESSION}.jsonl`), 'utf8')).toBe('x')
+    expect(existsSync(join(projects, 'proj'))).toBe(false)
   })
 
   test('a path-escaping project or session name is refused', () => {
-    const local = createChatLocal({ projectsDir: projects })
-    expect(local.append('..', SESSION, 0, Buffer.from('x'))).toBe(false)
-    expect(local.append('a/b', SESSION, 0, Buffer.from('x'))).toBe(false)
-    expect(local.append('C:', SESSION, 0, Buffer.from('x'))).toBe(false)
-    expect(local.append('proj', '../evil', 0, Buffer.from('x'))).toBe(false)
+    const local = createChatLocal({ projectsDir: projects, viewDir: view })
+    expect(local.viewWrite('..', SESSION, 0, Buffer.from('x'))).toBe(false)
+    expect(local.viewWrite('a/b', SESSION, 0, Buffer.from('x'))).toBe(false)
+    expect(local.viewWrite('C:', SESSION, 0, Buffer.from('x'))).toBe(false)
+    expect(local.viewWrite('proj', '../evil', 0, Buffer.from('x'))).toBe(false)
     expect(existsSync(join(root, 'evil.jsonl'))).toBe(false)
-    expect(local.size('..', SESSION)).toBe(0)
+    expect(local.viewSize('..', SESSION)).toBe(0)
   })
 })
 
-describe('land', () => {
-  const faked = () => {
-    const calls = { imports: [] as any[], archives: [] as string[] }
-    return {
-      calls,
-      opts: {
-        profileRoots: () => [profile],
-        projectsDir: projects,
-        isRunning: async () => true,
-        importChat: async (a: ImportArgs) => {
-          calls.imports.push(a)
-          return { ok: true }
-        },
-        archiveChat: async (_p: string, s: string) => {
-          calls.archives.push(s)
-          return { ok: true }
-        },
-        renameChat: async () => ({ ok: true }),
+describe('retire', () => {
+  const landed = (text: string) => {
+    record(profile, ACCT, SESSION)
+    mkdirSync(join(projects, 'C--Users-other-work'), { recursive: true })
+    writeFileSync(join(projects, 'C--Users-other-work', `${SESSION}.jsonl`), text)
+  }
+  const faked = (archive: { ok: boolean; reason?: string } = { ok: true }) => {
+    const archives: string[] = []
+    const local = createChatLocal({
+      profileRoots: () => [profile],
+      projectsDir: projects,
+      viewDir: view,
+      archiveChat: async (_p, s) => {
+        archives.push(s)
+        return archive
       },
-    }
+    })
+    return { archives, local }
   }
 
-  test('imports into the profile signed into the chat account, with its title and settings', async () => {
+  test('archives the copy in the chat list and moves its transcript into the viewer', async () => {
+    landed('{"n":1}\n')
     const f = faked()
-    expect(await createChatLocal(f.opts).land(incoming())).toEqual({ ok: true })
-    expect(f.calls.imports).toHaveLength(1)
-    expect(f.calls.imports[0]).toMatchObject({
-      sessionId: SESSION,
-      instanceDir: profile,
-      title: 'Shared chat',
-      carried: { effort: 'high' },
-    })
+    expect(await f.local.retire(SESSION, 8)).toEqual({ ok: true, kept: false })
+    expect(f.archives).toEqual([SESSION])
+    expect(f.local.viewSize('C--Users-other-work', SESSION)).toBe(8)
+    expect(existsSync(join(projects, 'C--Users-other-work'))).toBe(false)
   })
 
-  test('retries when no profile is signed into that account', async () => {
+  test('a transcript someone here went on in is kept where it is, unarchived', async () => {
+    landed('{"n":1}\n{"here":1}\n')
     const f = faked()
-    const r = await createChatLocal(f.opts).land(incoming({ account: OTHER }))
-    expect(r).toMatchObject({ ok: false, retry: true })
-    expect(f.calls.imports).toHaveLength(0)
+    expect(await f.local.retire(SESSION, 8)).toEqual({ ok: true, kept: true })
+    expect(f.archives).toEqual([])
+    expect(readFileSync(join(projects, 'C--Users-other-work', `${SESSION}.jsonl`), 'utf8')).toBe(
+      '{"n":1}\n{"here":1}\n',
+    )
   })
 
-  test('retries without importing when that profile app is closed', async () => {
-    const f = faked()
-    const r = await createChatLocal({ ...f.opts, isRunning: async () => false }).land(incoming())
-    expect(r).toEqual({
+  test('an archive the app did not confirm leaves the transcript and asks for another try', async () => {
+    landed('{"n":1}\n')
+    const f = faked({ ok: false, reason: 'native archive was not verified' })
+    expect(await f.local.retire(SESSION, 8)).toEqual({
       ok: false,
-      reason: 'its desktop app is closed here; it lands when that app runs',
+      reason: 'native archive was not verified',
       retry: true,
     })
-    expect(f.calls.imports).toHaveLength(0)
-  })
-
-  test('archives the existing copy when the incoming chat is archived', async () => {
-    record(profile, ACCT, SESSION)
-    const f = faked()
-    expect(await createChatLocal(f.opts).land(incoming({ archived: true }))).toEqual({ ok: true })
-    expect(f.calls.archives).toEqual([SESSION])
-    expect(f.calls.imports).toHaveLength(0)
+    expect(existsSync(join(projects, 'C--Users-other-work', `${SESSION}.jsonl`))).toBe(true)
+    expect(f.local.viewSize('C--Users-other-work', SESSION)).toBe(0)
   })
 })

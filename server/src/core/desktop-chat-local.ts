@@ -1,11 +1,13 @@
 // server/src/core/desktop-chat-local.ts — this PC's side of desktop chat sync (the ChatLocal in
-// desktop-chat-types.ts): which desktop chats render here, their transcripts, and landing a chat
-// another PC shared. Never opens or launches a desktop app, and never touches a chat through the
-// UI or a menu: archive and rename go through the production entry points the routes use.
+// desktop-chat-types.ts): which desktop chats render here, their transcripts, the viewer's copies of
+// other PCs' chats (REMOTE_CHATS_DIR), and taking back out of this PC's chat list a chat an earlier
+// version landed there. Never opens or launches a desktop app, and never touches a chat through the
+// UI or a menu: the archive goes through the production entry point the routes use.
 
 import {
   appendFileSync,
   closeSync,
+  copyFileSync,
   existsSync,
   fstatSync,
   mkdirSync,
@@ -13,14 +15,16 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
+  writeFileSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { type CarriedSettings, pickCarriedSettings } from '../chat-settings-carry'
+import { REMOTE_CHATS_DIR } from '../config'
 import { collectChats } from './chat-store-scan'
-import type { ChatLocal, IncomingChat, LandOutcome, LocalChat } from './desktop-chat-types'
-import { readLoginUuid } from './login-state'
+import type { ChatLocal, LocalChat, RetireOutcome } from './desktop-chat-types'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -33,31 +37,15 @@ const isPlainName = (s: string): boolean => PLAIN_NAME.test(s) && !/^\.+$/.test(
 /** How long "no folder holds this transcript" is believed before folders are checked again. */
 const MISS_MS = 5 * 60_000
 
-export interface ImportArgs {
-  sessionId: string
-  instanceDir: string
-  title: string
-  carried: CarriedSettings
-  isInstanceRunning: (dir: string) => Promise<boolean>
-}
-
 export interface ChatLocalOpts {
   /** Desktop profile directories (default: the default install and every `~/.claude-instances/*`). */
   profileRoots?: () => string[]
   /** The folder holding `<project>/<sessionId>.jsonl` (default `~/.claude/projects`). */
   projectsDir?: string
-  /** The production import (session-launch importSessionToDesktop). */
-  importChat?: (args: ImportArgs) => Promise<{ ok: boolean; reason?: string }>
+  /** The viewer's folder of other PCs' chats, laid out the same way (default REMOTE_CHATS_DIR). */
+  viewDir?: string
   /** The production archive of a chat already in `profile`. */
   archiveChat?: (profile: string, sessionId: string) => Promise<{ ok: boolean; reason?: string }>
-  /** The production rename (the chat_rename route's renameChatDiscoveringRenderedTitle). */
-  renameChat?: (
-    profile: string,
-    currentTitle: string,
-    newTitle: string,
-  ) => Promise<{ ok: boolean; detail?: string }>
-  /** Is this profile's desktop app running? */
-  isRunning?: (profile: string) => Promise<boolean>
 }
 
 function defaultProfileRoots(): string[] {
@@ -75,13 +63,6 @@ async function defaultIsRunning(profile: string): Promise<boolean> {
   const { isProfileRunning } = await import('../move-retire-on-close')
   // A scan that cannot answer reads as "not running": the caller then waits instead of acting.
   return isProfileRunning(profile, {}).catch(() => false)
-}
-
-async function defaultImport(args: ImportArgs): Promise<{ ok: boolean; reason?: string }> {
-  const { importSessionToDesktop } = await import('../session-launch')
-  // The import itself refuses (`instance-not-running`) rather than boot a closed profile; the
-  // seam below says the same thing the caller already checked.
-  return importSessionToDesktop(args)
 }
 
 /** The production archive: the running app's own native archive (ok AND verified, no fallback
@@ -103,16 +84,7 @@ async function defaultArchive(
   return { ok: r.ok, reason: r.reason }
 }
 
-async function defaultRename(
-  profile: string,
-  currentTitle: string,
-  newTitle: string,
-): Promise<{ ok: boolean; detail?: string }> {
-  const { renameChatDiscoveringRenderedTitle } = await import('../ui-archive')
-  return renameChatDiscoveringRenderedTitle(profile, currentTitle, newTitle, false)
-}
-
-const retry = (reason: string): LandOutcome => ({ ok: false, reason, retry: true })
+const retry = (reason: string): RetireOutcome => ({ ok: false, reason, retry: true })
 
 function accountOrgOf(metaPath: string): { account: string; org: string } | null {
   const parts = metaPath.split(/[\\/]/)
@@ -147,19 +119,24 @@ function recordOf(c: {
 export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
   const roots = opts.profileRoots ?? defaultProfileRoots
   const projectsDir = opts.projectsDir ?? join(homedir(), '.claude', 'projects')
-  const importChat = opts.importChat ?? defaultImport
+  const viewDir = opts.viewDir ?? REMOTE_CHATS_DIR
   const archiveChat = opts.archiveChat ?? defaultArchive
-  const renameChat = opts.renameChat ?? defaultRename
-  const isRunning = opts.isRunning ?? defaultIsRunning
 
   const projectOf = new Map<string, { project: string | null; at: number }>()
   let folders: string[] | null = null
   let foldersAt = 0
 
-  const transcript = (project: string, sessionId: string): string | null =>
-    isPlainName(project) && isUuid(sessionId)
-      ? join(projectsDir, project, `${sessionId}.jsonl`)
-      : null
+  const fileIn = (dir: string, project: string, sessionId: string): string | null =>
+    isPlainName(project) && isUuid(sessionId) ? join(dir, project, `${sessionId}.jsonl`) : null
+  const transcript = (project: string, sessionId: string) => fileIn(projectsDir, project, sessionId)
+  const viewFile = (project: string, sessionId: string) => fileIn(viewDir, project, sessionId)
+  const sizeOf = (path: string | null): number => {
+    try {
+      return path ? statSync(path).size : 0
+    } catch {
+      return 0
+    }
+  }
 
   function findProject(sessionId: string, cwd: string | null): string | null {
     const seen = projectOf.get(sessionId)
@@ -212,14 +189,8 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     return out
   }
 
-  function size(project: string, sessionId: string): number {
-    const path = transcript(project, sessionId)
-    try {
-      return path ? statSync(path).size : 0
-    } catch {
-      return 0
-    }
-  }
+  const size = (project: string, sessionId: string): number =>
+    sizeOf(transcript(project, sessionId))
 
   function read(project: string, sessionId: string, from: number, to: number): Uint8Array {
     const path = transcript(project, sessionId)
@@ -240,62 +211,49 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     }
   }
 
-  function append(
-    project: string,
-    sessionId: string,
-    expected: number,
-    bytes: Uint8Array,
-  ): boolean {
-    const path = transcript(project, sessionId)
-    if (!path || size(project, sessionId) !== expected) return false
-    mkdirSync(join(projectsDir, project), { recursive: true })
-    appendFileSync(path, bytes)
+  const viewSize = (project: string, sessionId: string): number =>
+    sizeOf(viewFile(project, sessionId))
+
+  function viewWrite(project: string, sessionId: string, at: number, bytes: Uint8Array): boolean {
+    const path = viewFile(project, sessionId)
+    if (!path || (at !== 0 && viewSize(project, sessionId) !== at)) return false
+    mkdirSync(join(viewDir, project), { recursive: true })
+    if (at === 0) writeFileSync(path, bytes)
+    else appendFileSync(path, bytes)
     return true
   }
 
-  /** The profile signed into `account`, or null. */
-  function profileFor(account: string): string | null {
-    const want = account.toLowerCase()
-    return roots().find((dir) => readLoginUuid(dir)?.toLowerCase() === want) ?? null
-  }
-
-  async function land(chat: IncomingChat): Promise<LandOutcome> {
-    if (!isUuid(chat.sessionId)) return { ok: false, reason: 'not a session id', retry: false }
-    const profile = profileFor(chat.account)
-    if (!profile) return retry('no desktop profile on this PC is signed into that account')
-    const title = typeof chat.record.title === 'string' ? chat.record.title.trim() : ''
-    const there = collectChats([{ dir: profile, label: profile }]).find(
-      (c) => !c.staleLogin && c.cliSessionId === chat.sessionId,
-    )
-    if (there) {
-      if (chat.archived) {
-        // Unarchive has no production path, so a copy already archived here stays as it is.
-        if (there.archived) return { ok: true }
-        const r = await archiveChat(profile, chat.sessionId)
-        return r.ok ? { ok: true } : retry(r.reason ?? 'the archive was not confirmed')
-      }
-      // The incoming chat is live but this copy is archived: unarchive has no production path,
-      // so the archived copy stays as it is (ok, not an error).
-      if (title && there.title !== title && !there.archived) {
-        if (!(await isRunning(profile)))
-          return retry('its desktop app is closed here; it lands when that app runs')
-        const r = await renameChat(profile, there.title ?? title, title)
-        if (!r.ok) return retry(r.detail ?? 'the rename was not confirmed')
-      }
-      return { ok: true }
+  async function retire(sessionId: string, bytes: number): Promise<RetireOutcome> {
+    if (!isUuid(sessionId)) return { ok: false, reason: 'not a session id', retry: false }
+    const project = findProject(sessionId, null)
+    if (project && size(project, sessionId) > bytes) return { ok: true, kept: true }
+    for (const dir of roots()) {
+      const shown = collectChats([{ dir, label: dir }]).some(
+        (c) => !c.staleLogin && !c.archived && c.cliSessionId === sessionId,
+      )
+      if (!shown) continue
+      const r = await archiveChat(dir, sessionId)
+      if (!r.ok) return retry(r.reason ?? 'the archive was not confirmed')
     }
-    if (chat.archived) return { ok: true }
-    if (!(await isRunning(profile)))
-      return retry('its desktop app is closed here; it lands when that app runs')
-    const r = await importChat({
-      sessionId: chat.sessionId,
-      instanceDir: profile,
-      title,
-      carried: pickCarriedSettings(chat.record),
-      isInstanceRunning: isRunning,
-    })
-    return r.ok ? { ok: true } : retry(r.reason ?? 'the import was refused')
+    if (!project) return { ok: true, kept: false }
+    const from = transcript(project, sessionId) as string
+    const to = viewFile(project, sessionId) as string
+    try {
+      mkdirSync(join(viewDir, project), { recursive: true })
+      copyFileSync(from, to)
+      unlinkSync(from)
+    } catch (err) {
+      return retry(`its transcript could not be moved yet (${(err as Error).message})`)
+    }
+    projectOf.delete(sessionId)
+    try {
+      // The folder an earlier version made for it goes with its last transcript.
+      rmdirSync(join(projectsDir, project))
+    } catch {
+      /* other transcripts still live there */
+    }
+    return { ok: true, kept: false }
   }
 
-  return { list, read, size, append, land }
+  return { list, read, viewSize, viewWrite, retire }
 }

@@ -1,7 +1,7 @@
 import { join } from 'node:path'
 import { markSessionGone } from './analytics'
 import { climayteEffortBySession, climayteTasksBySession } from './climayte-effort'
-import { chatsFromElsewhere } from './core/desktop-chat-sync'
+import { chatsFromElsewhere, type ElsewhereChat } from './core/desktop-chat-sync'
 import { allInstanceNumbers, instanceRef } from './core/instance-numbers'
 import { mapPool } from './core/map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './core/paths'
@@ -1108,6 +1108,8 @@ function transcriptMatchesInstance(
   // resolution below, which would answer "not this instance" for every one of them.
   if (f.instance) return instance !== 'other' && instanceScopeMatches(f, instance)
   if (f.source !== 'claude') return false
+  // Another PC's chat belongs to none of this PC's accounts.
+  if (f.remote) return instance === 'other'
   const known = idsOf(f)
     .map((id) => mmap.get(id))
     .find(Boolean)
@@ -1124,6 +1126,8 @@ function transcriptArchivedFlag(
   idsOf: (f: TranscriptFile) => string[],
   mmap: Map<string, SessionMeta>,
 ): boolean {
+  // Another PC's chat is archived when that PC archived it, whatever a copy here says.
+  if (f.remote) return chatsFromElsewhere().get(f.session_id)?.archived ?? false
   return f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)
 }
 
@@ -1204,12 +1208,13 @@ function buildSessionSummary(
   collapsed: { counts: Map<string, number> },
   lookups: RowLookups,
 ): SessionSummary {
+  const other = elsewhereFor(tf, lookups)
   return {
     session_id: tf.session_id,
     source: tf.source,
     tool: toolIdOf(tf),
     locator: tf.locator ?? makeLocator(tf),
-    title: m.title,
+    title: other?.title ?? m.title,
     cwd: m.cwd,
     project: tf.project,
     git_branch: m.git_branch,
@@ -1222,7 +1227,7 @@ function buildSessionSummary(
     transcript_path: tf.path,
     queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
     ...instanceFieldsFor(tf, desk, lookups.numberOf),
-    archived: tf.archived || (desk?.archived ?? false),
+    archived: other ? other.archived : tf.archived || (desk?.archived ?? false),
     done:
       dmap.get(sessionMarkKey(tf.source, tf.session_id, tf)) ??
       dmap.get(legacyMarkKey(tf.source, tf.session_id, tf.tool)) ??
@@ -1238,7 +1243,7 @@ function buildSessionSummary(
     model: m.model,
     effort: effortFor(tf, m.effort, desk, lookups.climayteEffort),
     ...offloadsFor(tf, lookups),
-    ...fromPcFor(tf, lookups),
+    ...(other ? { from_pc: other.pc } : {}),
   }
 }
 
@@ -1249,7 +1254,7 @@ interface RowLookups {
   /** HSwarm runs by the 8-character session prefix HSwarm records. */
   hswarmRuns: Map<string, number>
   climayteTasks: Map<string, number>
-  fromPc: Map<string, string>
+  fromPc: Map<string, ElsewhereChat>
 }
 
 const rowLookups = (): RowLookups => ({
@@ -1260,11 +1265,10 @@ const rowLookups = (): RowLookups => ({
   fromPc: chatsFromElsewhere(),
 })
 
-/** The PC a Desktop chat came from through the chat sync, when it was not this one. */
-function fromPcFor(tf: TranscriptFile, lookups: RowLookups): Pick<SessionSummary, 'from_pc'> {
-  const pc = tf.source === 'claude' ? lookups.fromPc.get(tf.session_id) : undefined
-  return pc ? { from_pc: pc } : {}
-}
+/** Another PC's chat in the chat sync's viewer, as that PC shows it: the PC's name, the chat's title
+ *  and whether it is archived there. Undefined for every chat of this PC's. */
+const elsewhereFor = (tf: TranscriptFile, lookups: RowLookups): ElsewhereChat | undefined =>
+  tf.remote ? lookups.fromPc.get(tf.session_id) : undefined
 
 /** The work a Claude chat handed off, by the CLI session id it ran under (CliMayte's origin records
  *  it whole, HSwarm its first 8 characters); absent when it handed off none. */
@@ -1759,7 +1763,7 @@ function deskMetaFor(
   ids: string[],
   mmap: Map<string, SessionMeta>,
 ): SessionMeta | null {
-  if (tf.source !== 'claude') return null
+  if (tf.source !== 'claude' || tf.remote) return null
   for (const id of ids) {
     const hit = mmap.get(id)
     if (hit) return hit
@@ -1949,12 +1953,13 @@ export async function getSession(
   // Same resolution the list uses, so a row does not change its account when you click it.
   const meta = deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
   const lookups = rowLookups()
+  const other = elsewhereFor(tf, lookups)
   return {
     session_id: tf.session_id,
     source: tf.source,
     tool: toolIdOf(tf),
     locator: tf.locator ?? makeLocator(tf),
-    title: m.title,
+    title: other?.title ?? m.title,
     cwd: m.cwd,
     project: tf.project,
     git_branch: m.git_branch,
@@ -1967,7 +1972,7 @@ export async function getSession(
     transcript_path: tf.path,
     queue_status: tf.source === 'claude' ? (qmap.get(tf.session_id) ?? null) : null,
     ...instanceFieldsFor(tf, meta, lookups.numberOf),
-    archived: tf.archived || (meta?.archived ?? false),
+    archived: other ? other.archived : tf.archived || (meta?.archived ?? false),
     done:
       dmap.get(sessionMarkKey(tf.source, sessionId, tf)) ??
       dmap.get(legacyMarkKey(tf.source, sessionId, tf.tool)) ??
@@ -1991,6 +1996,6 @@ export async function getSession(
     model: m.model,
     effort: effortFor(tf, m.effort, meta, lookups.climayteEffort),
     ...offloadsFor(tf, lookups),
-    ...fromPcFor(tf, lookups),
+    ...(other ? { from_pc: other.pc } : {}),
   }
 }

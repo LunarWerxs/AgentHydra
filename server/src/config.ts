@@ -288,6 +288,10 @@ export const DB_PATH = appEnv('DB') ?? resolveDbPath(DATA_DIR)
 /** Per-run logs (+ the detached runner's spec/status sidecars). Overridable so tests (and a
  *  portable install) can isolate them from the default data dir. */
 export const RUN_LOG_DIR = appEnv('RUN_LOG_DIR')?.trim() || join(DATA_DIR, 'run-logs')
+/** The chat sync's viewer: other PCs' desktop chats, filed `<project>/<sessionId>.jsonl` as Claude
+ *  Code files them, kept out of ~/.claude so no Claude app or CLI on this PC takes them for its own
+ *  (core/desktop-chat-sync.ts). The session list reads it as a store of its own (transcript.ts). */
+export const REMOTE_CHATS_DIR = join(DATA_DIR, 'remote-chats')
 
 /**
  * Staging area for "copy the session file to the clipboard".

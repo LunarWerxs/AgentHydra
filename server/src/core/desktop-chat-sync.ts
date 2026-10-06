@@ -11,11 +11,19 @@
 // records share one stream); no row exists at a session id. Whoever appends writes its chunks first
 // and then the record, by compare-and-swap, so a record never points past chunks that exist.
 //
-// A PASS sends what this PC holds that the store lacks, then takes what the store holds that this PC
-// lacks. Chats archived before they were ever shared are never sent (the owner's PC holds thousands of
-// archived chats, about 17 GB). A transcript is only ever read in windows ending at a newline, at most
-// 64 MB per pass in all, and only up to its last complete line. A chat continued on two PCs between
-// passes is `diverged`: neither side takes or sends its new turns.
+// VIEW ONLY (owner, 2026-10-05: "I don't want them to actually sync back and forth. I just want to
+// view the ones running on his computer, and he can view the ones running on mine ... so that we can
+// get stats, know what's running"). Only the PC a chat started on ever writes it to the store. Another
+// PC's chats come down into the viewer folder (REMOTE_CHATS_DIR), which the session list reads, and
+// never into ~/.claude or a Claude Desktop chat list, so nothing here can continue them and send turns
+// back. A chat an earlier version took into ~/.claude (and most into this PC's chat list) is taken back
+// out: its desktop copies archived and its transcript moved into the viewer (kept where it is if
+// someone here went on in it).
+//
+// A PASS sends what this PC started that the store lacks, then takes what the other PCs started that
+// this PC lacks. Chats archived before they were ever shared are never sent (the owner's PC holds
+// thousands of archived chats, about 17 GB). A transcript is only ever read in windows ending at a
+// newline, at most 64 MB per pass in all, and only up to its last complete line.
 //
 // THE STORE IS KEPT SMALL. A chat archived three days ago leaves it (row and transcript); every PC keeps
 // its own copy, and neither sends it again, even unarchived: the other PC's agreed position no longer
@@ -30,7 +38,7 @@ import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'no
 import { dirname, join } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import { cutChunks, openChunk, openRecord, sealRecord, shareableEnd } from './chat-sync-codec'
-import type { ChatIo, ChatSyncRow, IncomingChat, LocalChat } from './desktop-chat-types'
+import type { ChatIo, ChatSyncRow, LocalChat } from './desktop-chat-types'
 import { MIRROR_FRESH_MS } from './login-sync-mirror'
 
 /** Where this PC keeps what each chat agreed with the store (cli-login-sync.ts runs the passes). */
@@ -77,9 +85,14 @@ interface ChatState {
   /** Chunks this PC wrote whose record is not written yet: where the next send resumes. */
   up: { bytes: number; chunks: number } | null
   origin: Origin
-  /** Hashes of the title and archive state last sent, and last landed here. */
+  /** Hash of the title and archive state last sent. */
   sent: string | null
-  landed: string | null
+  /** Another PC's chat whose transcript is in the viewer: every one taken since 2026-10-05. One
+   *  without it was taken by an earlier version into ~/.claude (and most into this PC's chat list),
+   *  and is taken back out first (ChatLocal.retire). */
+  viewer?: boolean
+  /** Another PC's chat: whether that PC has it archived. */
+  archived?: boolean
   state: RowState
   note: string | null
   /** A `waiting` that is worth another try on the next pass. */
@@ -104,7 +117,8 @@ interface StateFile {
 interface StoreRow {
   id: string
   version: number
-  meta: { k?: string; b?: number; a?: number } | null
+  /** Plain: kind, session id, the PC it started on, stream bytes, archived. */
+  meta: { k?: string; s?: string; pc?: string; b?: number; a?: number } | null
   updatedAt?: number
 }
 
@@ -170,12 +184,27 @@ export function chatSyncRows(statePath: string): ChatSyncRow[] {
     }))
 }
 
-let elsewhere: { path: string; mtimeMs: number; size: number; map: Map<string, string> } | null =
-  null
+/** Another PC's chat as that PC shows it. */
+export interface ElsewhereChat {
+  /** The name of the PC it started on. */
+  pc: string
+  title: string | null
+  archived: boolean
+}
 
-/** Session id -> the name of the PC a chat came from, for every chat this PC took from another one
- *  (the Sessions list marks them). Re-read only when the state file changes. */
-export function chatsFromElsewhere(statePath: string = CHATS_STATE_PATH): Map<string, string> {
+let elsewhere: {
+  path: string
+  mtimeMs: number
+  size: number
+  map: Map<string, ElsewhereChat>
+} | null = null
+
+/** Session id -> another PC's chat, for every chat this PC took from another one, those gone from the
+ *  store included (the viewer keeps them; the Sessions list marks them). Re-read only when the state
+ *  file changes. */
+export function chatsFromElsewhere(
+  statePath: string = CHATS_STATE_PATH,
+): Map<string, ElsewhereChat> {
   let st: { mtimeMs: number; size: number }
   try {
     st = statSync(statePath)
@@ -185,8 +214,11 @@ export function chatsFromElsewhere(statePath: string = CHATS_STATE_PATH): Map<st
   const hit = elsewhere
   if (hit && hit.path === statePath && hit.mtimeMs === st.mtimeMs && hit.size === st.size)
     return hit.map
-  const map = new Map<string, string>()
-  for (const r of chatSyncRows(statePath)) if (!r.fromHere) map.set(r.sessionId, r.origin.name)
+  const map = new Map<string, ElsewhereChat>()
+  const s = readState(statePath)
+  for (const c of s ? Object.values(s.chats) : [])
+    if (c.origin.pc !== s?.pc)
+      map.set(c.sessionId, { pc: c.origin.name, title: c.title, archived: c.archived === true })
   elsewhere = { path: statePath, mtimeMs: st.mtimeMs, size: st.size, map }
   return map
 }
@@ -309,6 +341,17 @@ async function pruneArchived(
   }
 }
 
+/** The sessions other PCs started, from the store and from what this PC took: a copy of one here (an
+ *  earlier version landed it, or someone imported it) is never sent, so only the PC a chat started on
+ *  writes it. */
+function foreignSessions(io: ChatIo, state: StateFile, rows: Map<string, StoreRow>): Set<string> {
+  const out = new Set<string>()
+  for (const r of rows.values())
+    if (r.meta?.s && r.meta.pc && r.meta.pc !== io.pc) out.add(r.meta.s)
+  for (const c of Object.values(state.chats)) if (c.origin.pc !== io.pc) out.add(c.sessionId)
+  return out
+}
+
 async function sendAll(
   io: ChatIo,
   state: StateFile,
@@ -319,8 +362,10 @@ async function sendAll(
   fail: (err: unknown) => void,
 ): Promise<void> {
   let budget = PASS_READ_MAX
+  const foreign = foreignSessions(io, state, rows)
   for (const c of local) {
     if (!UUID_RE.test(c.id) || !UUID_RE.test(c.sessionId)) continue
+    if (foreign.has(c.sessionId)) continue
     if (!c.archived && sharer.get(c.sessionId) !== c) continue
     try {
       budget = await sendChat(io, state, rows, c, budget, now)
@@ -335,23 +380,50 @@ async function takeAll(
   state: StateFile,
   rows: Map<string, StoreRow>,
   opened: Awaited<ReturnType<typeof openFresh>>,
-  localIds: Set<string>,
   now: number,
   fail: (err: unknown) => void,
 ): Promise<void> {
   for (const row of rows.values()) {
     const st = state.chats[row.id]
+    // This PC's own chat: only this PC writes it, so nothing in the store is taken back.
+    if ((st?.origin.pc ?? row.meta?.pc) === io.pc) continue
     if (st && st.version === row.version && !st.retry) continue
     try {
-      await takeChat(io, state, row, opened.get(row.id), localIds.has(row.id), now)
+      await takeChat(io, state, row, opened.get(row.id), now)
     } catch (err) {
       fail(err)
     }
   }
 }
 
-/** One chat pass: send what this PC holds that the store lacks, then take what the store holds that
- *  this PC lacks. Does all it can, then throws the first problem. */
+/** Take every other PC's chat an earlier version put into ~/.claude and this PC's chat list back out,
+ *  those gone from the store included. A copy someone here went on in stays, and the viewer starts its
+ *  own. */
+async function retireLanded(
+  io: ChatIo,
+  state: StateFile,
+  fail: (err: unknown) => void,
+): Promise<void> {
+  for (const st of Object.values(state.chats)) {
+    if (st.origin.pc === io.pc || st.viewer) continue
+    try {
+      const out = await io.local.retire(st.sessionId, st.bytes)
+      if (!out.ok) {
+        Object.assign(st, { state: 'waiting', note: out.reason, retry: out.retry })
+        continue
+      }
+      st.viewer = true
+      st.retry = st.state === 'waiting'
+      if (out.kept) Object.assign(st, { bytes: 0, chunks: 0, version: 0 })
+    } catch (err) {
+      fail(err)
+    }
+  }
+}
+
+/** One chat pass: send what this PC started that the store lacks, take the chats an earlier version
+ *  put into ~/.claude back out, then take what the other PCs started into the viewer. Does all it can,
+ *  then throws the first problem. */
 /** Returns whether anything moved (the state file changed): the sync loop polls less often when not. */
 export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> {
   const rows = await readRows(io)
@@ -366,7 +438,6 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> 
   const opened = await openFresh(io, rows, state)
 
   const local = io.local.list()
-  const localIds = new Set(local.map((c) => c.id))
   const sharer = pickSharers(local, rows, state)
 
   // A chat this PC shared or took whose row is no longer listed left the store.
@@ -374,7 +445,8 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> 
 
   try {
     await sendAll(io, state, rows, local, sharer, now, fail)
-    await takeAll(io, state, rows, opened, localIds, now, fail)
+    await retireLanded(io, state, fail)
+    await takeAll(io, state, rows, opened, now, fail)
 
     // A chat archived three days ago leaves the store; each PC keeps its copy.
     await pruneArchived(io, rows, gone, now, fail)
@@ -452,8 +524,8 @@ function sendableState(
 
 /** A shared chat that grew since the last pass and went up less than CHAT_PUSH_EVERY_MS ago is
  *  still being written in: it waits. It goes once it stops growing or the interval is up, and never
- *  sooner than CHAT_MIN_GAP_MS after its last send. An archive change (how a move to the other PC is
- *  asked), a first share, an unfinished upload or a backlog still catching up goes at once. Notes the
+ *  sooner than CHAT_MIN_GAP_MS after its last send. An archive change, a first share, an unfinished
+ *  upload or a backlog still catching up goes at once. Notes the
  *  size seen. */
 function stillWriting(st: ChatState, row: StoreRow, c: LocalChat, now: number): boolean {
   const grew = st.seen !== undefined && c.size !== st.seen
@@ -556,20 +628,19 @@ const newState = (io: ChatIo, c: LocalChat): ChatState => ({
   up: null,
   origin: { pc: io.pc, name: io.name },
   sent: null,
-  landed: null,
   state: 'sending',
   note: null,
   retry: false,
   at: null,
 })
 
-/** Take what the store holds for one chat that this PC lacks: its transcript, then its record. */
+/** Take what the store holds for another PC's chat that the viewer lacks: its new transcript bytes,
+ *  then its title and archive state. */
 async function takeChat(
   io: ChatIo,
   state: StateFile,
   row: StoreRow,
   known: Sealed | undefined,
-  localHas: boolean,
   now: number,
 ): Promise<void> {
   let rec = known
@@ -583,6 +654,7 @@ async function takeChat(
     if (!sealedOk(opened, row.id)) throw new Error('A shared chat is malformed; skipped.')
     rec = opened
   }
+  if (rec.origin.pc === io.pc) return
   const prior = state.chats[row.id]
   const st: ChatState = prior ?? {
     sessionId: rec.sessionId,
@@ -594,7 +666,7 @@ async function takeChat(
     up: null,
     origin: rec.origin,
     sent: null,
-    landed: null,
+    viewer: true,
     state: 'receiving',
     note: null,
     retry: false,
@@ -602,54 +674,32 @@ async function takeChat(
   }
   state.chats[row.id] = st
   st.title = titleOf(rec.record)
+  st.archived = rec.archived
   st.stored = rec.stream.bytes
   st.at = row.updatedAt ?? now
+  // Still in ~/.claude (retireLanded did not get it out yet): the viewer waits for it.
+  if (!st.viewer) return
   st.retry = false
 
-  const have = io.local.size(rec.project, rec.sessionId)
+  // Only the sync writes the viewer's copy, so one that is not the agreed length (removed, or a store
+  // stream shorter than what this PC took) starts over from the first chunk.
+  if (io.local.viewSize(rec.project, rec.sessionId) !== st.bytes || rec.stream.bytes < st.bytes)
+    Object.assign(st, { bytes: 0, chunks: 0 })
   if (rec.stream.bytes > st.bytes) {
-    if (have !== st.bytes) {
-      // This PC's transcript is not the agreed one and the store holds more: both were continued.
-      Object.assign(st, {
-        state: 'diverged',
-        note: 'Continued on both PCs; neither side’s new turns are taken.',
-      })
-      return
-    }
     st.state = 'receiving'
     await receive(io, st, rec)
   }
   if (st.bytes !== rec.stream.bytes) return
 
-  st.chunks = rec.stream.chunks
-  st.version = row.version
-  const hash = shown(rec.record, rec.archived)
-  st.sent = hash
-  if (st.landed === null && localHas) st.landed = hash // already showing here
-  if (st.landed === hash) {
-    st.state = 'synced'
-    st.note = null
-    return
-  }
-  const incoming: IncomingChat = {
-    id: row.id,
-    sessionId: rec.sessionId,
-    project: rec.project,
-    account: rec.account,
-    org: rec.org,
-    record: rec.record,
-    archived: rec.archived,
-    origin: rec.origin,
-  }
-  const out = await io.local.land(incoming)
-  if (out.ok) {
-    Object.assign(st, { landed: hash, state: 'synced', note: null })
-  } else {
-    Object.assign(st, { state: 'waiting', note: out.reason, retry: out.retry })
-  }
+  Object.assign(st, {
+    chunks: rec.stream.chunks,
+    version: row.version,
+    state: 'synced',
+    note: null,
+  })
 }
 
-/** Download and append the chunks from the agreed position up to the record's stream, in order. */
+/** Download the chunks from the agreed position up to the record's stream, in order, into the viewer. */
 async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<void> {
   let from = st.chunks
   while (st.bytes < rec.stream.bytes && from < rec.stream.chunks) {
@@ -663,9 +713,9 @@ async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<void> {
       }
       const bytes = openChunk(io.key, rec.sessionId, ch.seq, ch.blob)
       if (!bytes) throw new Error('A chat’s transcript chunk does not open with this PC’s key.')
-      if (!io.local.append(rec.project, rec.sessionId, st.bytes, bytes))
+      if (!io.local.viewWrite(rec.project, rec.sessionId, st.bytes, bytes))
         throw new Error(
-          'A chat’s transcript changed here while it was being received; next pass retries.',
+          'A chat’s copy changed here while it was being received; next pass retries.',
         )
       st.bytes += bytes.length
       st.chunks = ch.seq + 1

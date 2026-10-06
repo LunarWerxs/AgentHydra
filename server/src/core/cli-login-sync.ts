@@ -52,8 +52,9 @@
 //
 // THE DESKTOP CHATS ride the pass too unless this PC turned them off (`chatsOff`; on by default since
 // 2026-10-05, owner: "sync desktop chat should be default on"):
-// the visible Claude Desktop chats go up and come down compressed and encrypted, each remembering the
-// PC it came from (core/desktop-chat-sync.ts, the store's `chats` and `chat_chunks`). A chat pass can
+// each PC's visible Claude Desktop chats go up compressed and encrypted, each remembering the PC it
+// came from, and the other PCs' come down into AgentHydra's viewer, read only, never into a Claude
+// chat list (core/desktop-chat-sync.ts, the store's `chats` and `chat_chunks`). A chat pass can
 // read tens of MB, so it runs after the logins' part of the pass, not inside it, and at most one at a
 // time. Its error is `chatsError`, apart from `lastError` and `queueError`; it never fails a login pass.
 //

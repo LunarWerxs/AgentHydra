@@ -1,12 +1,13 @@
-// server/tests/desktop-chat-sync.test.ts — two PCs share their desktop chats through the login sync's
-// store (core/desktop-chat-sync.ts).
+// server/tests/desktop-chat-sync.test.ts — two PCs show each other their desktop chats through the
+// login sync's store, view only (core/desktop-chat-sync.ts).
 //
-// The contract: a visible chat one PC shares reaches the other with its transcript byte for byte and
-// its origin; later turns travel as new chunks only; a chat archived before it was ever shared is
-// never uploaded, and archiving a shared one reaches the other PC; a chat continued on both PCs
-// between passes is `diverged` and neither transcript changes; an unfinished last line waits for its
-// newline; a PC with another key writes nothing. The store is the real Worker on bun:sqlite
-// (login-sync-store.ts); each PC is a fake ChatLocal over a temp folder with its own state file.
+// The contract: a visible chat one PC started reaches the other's viewer with its transcript byte for
+// byte and its origin, and never its chat list; later turns travel as new chunks only; a chat archived
+// before it was ever shared is never uploaded, and archiving a shared one reaches the other PC; a copy
+// of another PC's chat never goes up, however it grows; a chat an earlier version took into ~/.claude
+// is taken back out once; an unfinished last line waits for its newline; a PC with another key writes
+// nothing. The store is the real Worker on bun:sqlite (login-sync-store.ts); each PC is a fake
+// ChatLocal over a temp folder with its own state file.
 
 import { afterAll, expect, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -26,15 +27,15 @@ import {
   CHAT_MIN_GAP_MS,
   CHAT_PUSH_EVERY_MS,
   chatSyncRows,
+  chatsFromElsewhere,
   syncChats,
 } from '../src/core/desktop-chat-sync'
 import type {
   ChatIo,
   ChatLocal,
   ChatSyncRow,
-  IncomingChat,
-  LandOutcome,
   LocalChat,
+  RetireOutcome,
 } from '../src/core/desktop-chat-types'
 import { store } from './login-sync-store'
 
@@ -57,55 +58,51 @@ afterAll(async () => {
 interface Pc {
   io: ChatIo
   chats: LocalChat[]
-  landed: IncomingChat[]
-  appends: Array<[string, number]>
-  path: (project: string, sessionId: string) => string
-  /** Give the PC a chat with this transcript text. */
+  /** Every write to the viewer: [session, at]. */
+  writes: Array<[string, number]>
+  /** Every session retire was asked for, in order. */
+  retired: string[]
+  /** Give the PC a chat of its own with this transcript text. */
   add: (over?: Partial<LocalChat>, text?: string) => LocalChat
+  /** A chat's transcript among this PC's own; '' when there is none. */
   text: (c: { project: string | null; sessionId: string }) => string
+  /** The viewer's copy of another PC's chat; '' when there is none. */
+  view: (c: { project: string | null; sessionId: string }) => string
   extend: (c: LocalChat, more: string) => void
-  setLand: (o: LandOutcome) => void
+  setRetire: (f: (sessionId: string) => RetireOutcome) => void
 }
 
 function pc(name: string, useKey = key): Pc {
   const dir = mkdtempSync(join(tmpdir(), 'chat-sync-'))
   tempDirs.add(dir)
   const chats: LocalChat[] = []
-  const landed: IncomingChat[] = []
-  const appends: Array<[string, number]> = []
-  let landOut: LandOutcome = { ok: true }
-  const path = (project: string, sessionId: string) => join(dir, project, `${sessionId}.jsonl`)
-  const size = (project: string, sessionId: string) =>
-    existsSync(path(project, sessionId)) ? statSync(path(project, sessionId)).size : 0
+  const writes: Array<[string, number]> = []
+  const retired: string[] = []
+  let retireOut: (sessionId: string) => RetireOutcome = () => ({ ok: true, kept: false })
+  const own = (project: string, sessionId: string) =>
+    join(dir, 'own', project, `${sessionId}.jsonl`)
+  const viewed = (project: string, sessionId: string) =>
+    join(dir, 'view', project, `${sessionId}.jsonl`)
+  const sizeAt = (path: string) => (existsSync(path) ? statSync(path).size : 0)
+  const textAt = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : '')
   const local: ChatLocal = {
-    list: () => chats.map((c) => ({ ...c, size: c.project ? size(c.project, c.sessionId) : 0 })),
+    list: () =>
+      chats.map((c) => ({ ...c, size: c.project ? sizeAt(own(c.project, c.sessionId)) : 0 })),
     read: (project, sessionId, from, to) =>
-      new Uint8Array(readFileSync(path(project, sessionId)).subarray(from, to)),
-    size,
-    append(project, sessionId, expected, bytes) {
-      if (size(project, sessionId) !== expected) return false
-      mkdirSync(join(dir, project), { recursive: true })
-      writeFileSync(
-        path(project, sessionId),
-        Buffer.concat([
-          existsSync(path(project, sessionId))
-            ? readFileSync(path(project, sessionId))
-            : Buffer.alloc(0),
-          bytes,
-        ]),
-      )
-      appends.push([sessionId, expected])
+      new Uint8Array(readFileSync(own(project, sessionId)).subarray(from, to)),
+    viewSize: (project, sessionId) => sizeAt(viewed(project, sessionId)),
+    viewWrite(project, sessionId, at, bytes) {
+      const path = viewed(project, sessionId)
+      if (at !== 0 && sizeAt(path) !== at) return false
+      mkdirSync(join(dir, 'view', project), { recursive: true })
+      const before = at === 0 ? Buffer.alloc(0) : readFileSync(path)
+      writeFileSync(path, Buffer.concat([before, bytes]))
+      writes.push([sessionId, at])
       return true
     },
-    async land(chat) {
-      landed.push(chat)
-      if (landOut.ok) {
-        const i = chats.findIndex((c) => c.id === chat.id)
-        const next: LocalChat = { ...chat, size: 0 }
-        if (i >= 0) chats[i] = next
-        else chats.push(next)
-      }
-      return landOut
+    async retire(sessionId) {
+      retired.push(sessionId)
+      return retireOut(sessionId)
     },
   }
   const id = randomUUID()
@@ -120,9 +117,8 @@ function pc(name: string, useKey = key): Pc {
       statePath: join(dir, 'state.json'),
     },
     chats,
-    landed,
-    appends,
-    path,
+    writes,
+    retired,
     add(over = {}, text = '') {
       const c: LocalChat = {
         id: randomUUID(),
@@ -137,20 +133,18 @@ function pc(name: string, useKey = key): Pc {
       }
       chats.push(c)
       if (text && c.project) {
-        mkdirSync(join(dir, c.project), { recursive: true })
-        writeFileSync(path(c.project, c.sessionId), text)
+        mkdirSync(join(dir, 'own', c.project), { recursive: true })
+        writeFileSync(own(c.project, c.sessionId), text)
       }
       return c
     },
-    text: (c) =>
-      c.project && existsSync(path(c.project, c.sessionId))
-        ? readFileSync(path(c.project, c.sessionId), 'utf8')
-        : '',
+    text: (c) => (c.project ? textAt(own(c.project, c.sessionId)) : ''),
+    view: (c) => (c.project ? textAt(viewed(c.project, c.sessionId)) : ''),
     extend(c, more) {
-      writeFileSync(path(c.project as string, c.sessionId), self.text(c) + more)
+      writeFileSync(own(c.project as string, c.sessionId), self.text(c) + more)
     },
-    setLand: (o) => {
-      landOut = o
+    setRetire: (f) => {
+      retireOut = f
     },
   }
   return self
@@ -162,44 +156,49 @@ const pastHold = () => Date.now() + CHAT_PUSH_EVERY_MS
 const rowFor = async (id: string) =>
   (await store('GET', '/v1/chats')).json.chats.find((r: { id: string }) => r.id === id)
 
-test('a visible chat A shares reaches B with its transcript, its origin, and A as the source', async () => {
+test('a chat A started reaches B’s viewer with its transcript and origin, and never B’s chat list', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')
   const chat = a.add({}, '{"n":1}\n{"n":2}\n')
   await syncChats(a.io)
   await syncChats(b.io)
 
-  expect(b.text(chat)).toBe(a.text(chat))
-  expect(b.landed.filter((l) => l.id === chat.id)).toHaveLength(1)
-  expect(b.landed[0].origin).toEqual({ pc: a.io.pc, name: 'PC-A' })
+  expect(b.view(chat)).toBe(a.text(chat))
+  expect(b.text(chat)).toBe('')
+  expect(b.chats).toEqual([])
   const row = chatSyncRows(b.io.statePath).find((r) => r.id === chat.id) as ChatSyncRow
   expect(row).toMatchObject({ id: chat.id, fromHere: false, state: 'synced', title: 'A chat' })
-  expect(row.origin.name).toBe('PC-A')
+  expect(row.origin).toEqual({ pc: a.io.pc, name: 'PC-A' })
+  expect(chatsFromElsewhere(b.io.statePath).get(chat.sessionId)).toEqual({
+    pc: 'PC-A',
+    title: 'A chat',
+    archived: false,
+  })
   expect(chatSyncRows(a.io.statePath).find((r) => r.id === chat.id)).toMatchObject({
     fromHere: true,
   })
 
-  // B now holds the chat: it is in step, so a further pass changes nothing and never re-shares it.
+  // B is in step: a further pass changes nothing and never shares it from B.
   const version = (await rowFor(chat.id)).version
   await syncChats(b.io)
   expect((await rowFor(chat.id)).version).toBe(version)
-  expect(b.landed.filter((l) => l.id === chat.id)).toHaveLength(1)
+  expect(b.writes.filter(([s]) => s === chat.sessionId)).toHaveLength(1)
 })
 
-test('A appends turns and B fetches only the new chunks, appending at the length it had', async () => {
+test('A appends turns and B fetches only the new chunks, writing at the length it had', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')
   const chat = a.add({}, '{"n":1}\n')
   await syncChats(a.io)
   await syncChats(b.io)
-  expect(b.appends.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0])
+  expect(b.writes.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0])
 
   a.extend(chat, '{"n":2}\n{"n":3}\n')
   await syncChats(a.io, pastHold())
   await syncChats(b.io)
 
-  expect(b.appends.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0, 8])
-  expect(b.text(chat)).toBe('{"n":1}\n{"n":2}\n{"n":3}\n')
+  expect(b.writes.filter(([s]) => s === chat.sessionId).map(([, n]) => n)).toEqual([0, 8])
+  expect(b.view(chat)).toBe('{"n":1}\n{"n":2}\n{"n":3}\n')
   expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)?.bytes).toBe(24)
 })
 
@@ -212,19 +211,17 @@ test('a chat archived before it was shared never goes up; archiving a shared one
   await syncChats(b.io)
   expect(await rowFor(old.id)).toBeUndefined()
   expect((await store('GET', `/v1/chats/${old.sessionId}/chunks`)).json.chunks).toEqual([])
-  expect(b.landed.filter((l) => l.id === live.id).map((l) => l.archived)).toEqual([false])
-  expect(b.landed.some((l) => l.id === old.id)).toBe(false)
+  expect(chatsFromElsewhere(b.io.statePath).get(live.sessionId)?.archived).toBe(false)
+  expect(chatsFromElsewhere(b.io.statePath).has(old.sessionId)).toBe(false)
 
   const mine = a.chats.find((c) => c.id === live.id) as LocalChat
   mine.archived = true
   await syncChats(a.io)
   await syncChats(b.io)
-  const mineLanded = b.landed.filter((l) => l.id === live.id)
-  expect(mineLanded).toHaveLength(2)
-  expect(mineLanded[1].archived).toBe(true)
+  expect(chatsFromElsewhere(b.io.statePath).get(live.sessionId)?.archived).toBe(true)
 
-  // Three days on, it leaves the store with its transcript; neither PC lists it, and unarchiving it
-  // does not send it again.
+  // Three days on, it leaves the store with its transcript; neither PC lists it, B's viewer keeps
+  // its copy as A's, and unarchiving it does not send it again.
   const later = Date.now() + ARCHIVED_KEEP_MS + 3600_000
   await syncChats(a.io, later)
   expect(await rowFor(live.id)).toBeUndefined()
@@ -232,29 +229,63 @@ test('a chat archived before it was shared never goes up; archiving a shared one
   await syncChats(b.io, later)
   expect(chatSyncRows(a.io.statePath).some((r) => r.id === live.id)).toBe(false)
   expect(chatSyncRows(b.io.statePath).some((r) => r.id === live.id)).toBe(false)
+  expect(b.view(live)).toBe('{"n":1}\n')
+  expect(chatsFromElsewhere(b.io.statePath).get(live.sessionId)?.pc).toBe('PC-A')
   mine.archived = false
   await syncChats(a.io, later)
   expect(await rowFor(live.id)).toBeUndefined()
 })
 
-test('a chat continued on both PCs between passes is diverged and neither transcript changes', async () => {
+test('a copy of A’s chat in B’s chat list never goes up from B, however it grows', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')
   const chat = a.add({}, '{"n":1}\n')
   await syncChats(a.io)
   await syncChats(b.io)
-  const bChat = b.chats.find((c) => c.id === chat.id) as LocalChat
+  const shared = await rowFor(chat.id)
 
-  a.extend(chat, '{"a":1}\n')
-  b.extend(bChat, '{"b":1}\n')
-  const later = pastHold()
-  await syncChats(a.io, later)
+  // The two-way sync put A's chat into B's chat list under its own record id, and someone on B went
+  // on in it: B's passes leave A's chat as A sent it, and A takes nothing.
+  b.add({ id: chat.id, sessionId: chat.sessionId }, '{"n":1}\n{"b":1}\n')
+  await syncChats(b.io, pastHold())
+  await syncChats(b.io, pastHold() + CHAT_PUSH_EVERY_MS)
+  expect(await rowFor(chat.id)).toMatchObject({ version: shared.version, meta: { b: 8 } })
+  await syncChats(a.io, pastHold())
+  expect(a.text(chat)).toBe('{"n":1}\n')
+  expect(a.writes.some(([s]) => s === chat.sessionId)).toBe(false)
+})
+
+test('chats an earlier version took into B’s ~/.claude are taken out once, and the viewer holds them', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const moved = a.add({}, '{"m":1}\n')
+  const kept = a.add({}, '{"k":1}\n')
+  await syncChats(a.io)
   await syncChats(b.io)
-  await syncChats(a.io, later)
+  // As the two-way sync left B's state: no chat marked as being in the viewer.
+  const s = JSON.parse(readFileSync(b.io.statePath, 'utf8'))
+  for (const c of Object.values<{ viewer?: boolean }>(s.chats)) delete c.viewer
+  writeFileSync(b.io.statePath, JSON.stringify(s))
+  b.writes.length = 0
 
-  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)?.state).toBe('diverged')
-  expect(a.text(chat)).toBe('{"n":1}\n{"a":1}\n')
-  expect(b.text(bChat)).toBe('{"n":1}\n{"b":1}\n')
+  // The first try is refused (the app did not confirm the archive): it waits and is tried again.
+  b.setRetire(() => ({ ok: false, reason: 'the archive was not confirmed', retry: true }))
+  await syncChats(b.io)
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === moved.id)).toMatchObject({
+    state: 'waiting',
+    note: 'the archive was not confirmed',
+  })
+
+  // Someone on B went on in `kept`, so it stays in B's chat list and the viewer starts its own copy.
+  b.setRetire((id) => ({ ok: true, kept: id === kept.sessionId }))
+  await syncChats(b.io)
+  await syncChats(b.io)
+  expect(b.retired.filter((id) => id === moved.sessionId)).toHaveLength(2)
+  expect(b.retired.filter((id) => id === kept.sessionId)).toHaveLength(2)
+  expect(b.writes).toEqual([[kept.sessionId, 0]])
+  expect(b.view(kept)).toBe('{"k":1}\n')
+  for (const c of [moved, kept])
+    expect(chatSyncRows(b.io.statePath).find((r) => r.id === c.id)?.state).toBe('synced')
 })
 
 test('a last line with no newline yet is not sent until it ends', async () => {
@@ -263,12 +294,12 @@ test('a last line with no newline yet is not sent until it ends', async () => {
   const chat = a.add({}, '{"n":1}\n{"n":2')
   await syncChats(a.io)
   await syncChats(b.io)
-  expect(b.text(chat)).toBe('{"n":1}\n')
+  expect(b.view(chat)).toBe('{"n":1}\n')
 
   a.extend(chat, '}\n')
   await syncChats(a.io, pastHold())
   await syncChats(b.io)
-  expect(b.text(chat)).toBe('{"n":1}\n{"n":2}\n')
+  expect(b.view(chat)).toBe('{"n":1}\n{"n":2}\n')
 })
 
 test('a chat still being written in goes up when it stops growing or every few minutes; an archive at once', async () => {
@@ -328,9 +359,8 @@ test('a PC with a different key reports it and writes nothing', async () => {
   const other = pc('PC-C', randomBytes(32))
   const own = other.add({}, '{"mine":1}\n')
   await expect(syncChats(other.io)).rejects.toThrow('does not open with this PC’s key')
-  expect(other.landed).toEqual([])
-  expect(other.chats.map((c) => c.id)).toEqual([own.id])
-  expect(other.text(chat)).toBe('')
+  expect(other.writes).toEqual([])
+  expect(other.view(chat)).toBe('')
   expect(existsSync(other.io.statePath)).toBe(false)
   expect(await rowFor(own.id)).toBeUndefined()
 })

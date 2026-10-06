@@ -3,7 +3,7 @@ import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import { readdir as readdirAsync, stat as statAsync } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
-import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH } from './config'
+import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
 import { timeSlice } from './core/loop-yield'
@@ -140,6 +140,12 @@ export interface TranscriptFile {
    * rather than a second account of this one — `tool` already says which product that is.
    */
   instance?: TranscriptInstance
+  /**
+   * Another PC's desktop chat, in the chat sync's viewer (REMOTE_CHATS_DIR). No Desktop record on
+   * this PC speaks for it: an archived copy an earlier sync landed here shares its session id, and
+   * must not make the other PC's live chat read as archived or as one of this PC's accounts.
+   */
+  remote?: true
 }
 
 /** The account that owns a per-account store, carried on every row it holds. */
@@ -650,6 +656,8 @@ interface ClaudeStore {
   /** When set, only this filename is a session; everything else attaches to the nearest ancestor
    *  directory whose name starts with idPrefix. See AgentTool.sessionFile. */
   sessionFile: string
+  /** The chat sync's viewer of other PCs' chats: its rows carry `remote`. */
+  remote?: true
 }
 
 /** `<project>/<session-id>.jsonl` — Claude Code's own layout, and every fork's. */
@@ -723,6 +731,7 @@ function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: Cl
     size_bytes: sizeBytes,
     archived: false,
     tool: store.tool,
+    ...(store.remote ? { remote: true as const } : {}),
   }
 }
 
@@ -780,10 +789,12 @@ async function promoteOrphansAsync(
   }
 }
 
-/** Every claude-format store on this machine: Claude Code's own, then the catalog's. */
+/** Every claude-format store on this machine: Claude Code's own, the chat sync's viewer of other
+ *  PCs' chats, then the catalog's. */
 function claudeStores(): ClaudeStore[] {
   const stores: ClaudeStore[] = [
     { root: CLAUDE_PROJECTS_ROOT, tool: 'claude-code', ...CLAUDE_STORE_DEFAULTS },
+    { root: REMOTE_CHATS_DIR, tool: 'claude-code', ...CLAUDE_STORE_DEFAULTS, remote: true },
   ]
   for (const r of extraRootsWithFormat('claude')) {
     stores.push({

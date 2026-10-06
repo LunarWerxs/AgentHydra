@@ -209,7 +209,7 @@ export default {
     "Each PC shows the other's CliMayte tasks, and work placed on one PC counts on the other, so they do not crowd the same account.",
   syncChats: 'Sync desktop chats',
   syncChatsHint:
-    'Shares the chats your desktop apps show (not archived ones) with your other PCs on this sync, compressed and encrypted. Each chat shows which PC it came from. On by default; turn it off here for this PC.',
+    'Shares the chats your desktop apps show (not archived ones) with your other PCs on this sync, compressed and encrypted, to view only. Their chats show in Sessions with the PC they came from, never in your Claude chat list. On by default; turn it off here for this PC.',
   syncChatsList: 'Synced desktop chats',
   syncChatsNone: 'No chats synced yet.',
   syncChatUntitled: 'Untitled',
