@@ -278,8 +278,10 @@ if (isWindows) {
 }
 if (target === hostTarget) {
   const v = spawnSync(launcher, ['--version'], { cwd: ROOT, encoding: 'utf8' })
-  if (v.status !== 0 || v.stdout.trim() !== VERSION)
-    fail(`${launcher} --version printed "${v.stdout.trim()}", expected ${VERSION}`)
+  const printed = (v.stdout ?? '').trim()
+  if (v.error) fail(`${launcher} --version did not run: ${v.error.message}`)
+  if (v.status !== 0 || printed !== VERSION)
+    fail(`${launcher} --version exited ${v.status} printing "${printed}", expected ${VERSION}`)
 }
 
 // The orchestrator's python half: never tests, bytecode or state.
