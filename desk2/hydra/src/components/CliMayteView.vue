@@ -270,7 +270,7 @@ function prefetch(w: ListRow) {
   detailReading.add(id)
   getCliMayteWorker(id)
     .then((d) => d && remember(id, d))
-    .catch(() => {})
+    .catch(() => {}) // floor-ok: a read-ahead only; opening the task reads again through loadDetail, and `unreachable` speaks for a daemon that is down
     .finally(() => detailReading.delete(id))
 }
 
