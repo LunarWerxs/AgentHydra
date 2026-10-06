@@ -244,7 +244,7 @@ if (import.meta.main) {
   const port = Number(process.env.HYDRA_DESK_PORT) || 7798
   const home = process.env.HYDRA_DESK_HOME || join(homedir(), '.hydra-desk-2')
   const desk = await createServer({ port, home })
-  console.log(`Hydra Desk ${VERSION} on ${desk.url} (home ${home})`)
+  console.log(`AgentHydra ${VERSION} on ${desk.url} (home ${home})`)
   const shutdown = async () => {
     await desk.stop()
     process.exit(0)
