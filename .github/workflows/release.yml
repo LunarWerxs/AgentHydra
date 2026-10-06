@@ -106,11 +106,8 @@ jobs:
 
       - name: Build devwebui
         run: |
-          if [ -d ../devwebui ]; then
-            cd ../devwebui
-            bun install --frozen-lockfile
-            bun run build 2>/dev/null || true
-          fi
+          cd devwebui
+          bun install --frozen-lockfile
 
       - name: Package release
         shell: bash
