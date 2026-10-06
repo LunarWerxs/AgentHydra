@@ -1367,862 +1367,308 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [1.3.1] - 2026-09-25
 
+**TL;DR**
+
+- **Opening and closing a Claude Desktop instance is much faster**
+- **A fan-out that cannot press Send clears its prompt from the composer**
+- **Chats far down a long sidebar or inside a collapsed group are reached**
+- **A spawn whose new chat opened empty is retried once**
+- **Console chats start at high effort instead of max**
+
+**Everything in 1.3.1**
+
 ### Fixed
 
-- **Opening and closing a Claude Desktop instance no longer waits on AgentHydra's own checks**
-  (`server/src/core/instances.ts`, `server/src/claude-native-ready.ts`,
-  `server/src/claude-native-launch.ts`, `server/src/core/process.ts`,
-  `web/src/composables/useInstances.ts`, `web/src/QuickInstancesApp.vue`). Claude's own logs on the
-  owner's PC put its startup at a median 2 s (101 starts) and its quit cleanup at about 1 s (41
-  quits); an Open took 10-15 s and a Close up to 7.5 s because of what AgentHydra did around them.
-  Each check stays; the waiting goes:
-  - The 5 s "did it stay up" window counts from the process's own start time, re-checks the pid
-    with signal 0 instead of a closing full process scan, and reuses the process a managed launch's
-    readiness wait already found. A managed launch that took 5 s to become ready answers at once.
-  - The readiness wait scans once to find Claude's main process and then watches that pid; it used
-    to run a 1.0-1.5 s PowerShell/CIM scan on every 300 ms lap, competing with Claude's startup.
-  - The managed copy is still fully re-hashed on every Open, 8 files at a time in 1 MiB reads:
-    1.5-2.2 s where the old one-file-at-a-time loop took 5.5-8.8 s on the same loaded PC.
-  - Close gives the graceful grace to the main process only, then 1.5 s for its helper processes
-    before forcing them; one lingering helper used to hold every close to the full 5 s.
-  - The Instances tab and the quick window show a confirmed open or close on the row at once and
-    re-list in the background instead of holding the row busy through one more full scan.
-  - The quick window's server keeps a connection open as long as the full daemon's does (255 s,
-    `server/src/instance-mode.ts`); Bun's 10 s default could drop a slow Open's answer while the
-    launch carried on.
-- **A fan_out that cannot press Send no longer leaves its prompt typed in the composer**
-  (`orchestrator/scripts/actuator/submit_composer.ps1`, `spawn_chat.py`, `fan_out.py`). The
-  actuator waits up to ~10 s for an enabled Send, re-finding its own composer each look, and a
-  refusal names every Send button it saw with its enabled state. The last attempt passes
-  `-ClearOnRefuse`, which empties the composer only when its text starts with our prompt; the
-  member's `spawn.composerCleared` and its `not-registered` reason say whether the text is gone.
-- **A chat far down a long sidebar is scrolled to, not refused**
-  (`orchestrator/scripts/actuator/deliver_desktop_chat.ps1`). When no rendered row carries the title,
-  the courier steps the sidebar's own scroll container (left column only) and looks again, and puts
-  the scroll back if the row never appears; `fan_out_send` to a virtualized-out foreman chat used to
-  fail "not rendered in any searched running instance".
-- **A stuck permission prompt in a chat inside a collapsed sidebar group is reached**
-  (`orchestrator/scripts/actuator/approve_prompt.ps1`, `sidebar_groups.ps1`). `-Select` opens the
-  collapsed project groups the way the delivery courier does and looks once more; every group it
-  opens is folded back on exit. A row still missing after that is reported as virtualized out of
-  reach at the front of the refusal. The expand/restore pair is now one shared file.
-- **A spawn whose deeplink landed empty is sent once more** (`orchestrator/scripts/spawn_chat.py`,
-  `fan_out.py`). Some opens of `claude://code/new` gave a chat in the instance's scratch workspace
-  with no prompt typed, so the actuator found no composer holding the text (exit 3) and the member
-  ended `unbound` or `not-registered`. The spawn now sends the deeplink one more time in exactly that
-  case, never when a prompt may have been typed, and the member's `spawn.retried` keeps the first
-  try's answer.
+- **Opening and closing a Claude Desktop instance no longer waits on AgentHydra's own checks.** An
+  Open or a Close used to take several times longer than Claude itself needs. Every check still
+  runs, but faster and without blocking the app's startup, and the Instances tab and the quick
+  window show a confirmed open or close on the row at once.
+- **A fan-out that cannot press Send no longer leaves its prompt typed in the composer.** It waits
+  a few seconds for Send to become available; if it still cannot send, it empties the composer, but
+  only when the text there is its own prompt. The member's record says whether the text is gone.
+- **A chat far down a long sidebar is scrolled to, not refused.** Sending to a chat the sidebar had
+  not drawn yet used to fail. The courier now scrolls the sidebar to find it and puts the scroll
+  back if the chat never appears.
+- **A stuck permission prompt in a chat inside a collapsed sidebar group is reached.** Collapsed
+  project groups are opened to find the chat and folded back afterwards.
+- **A spawn whose new chat opened empty is sent once more.** A new chat sometimes opened with no
+  prompt typed, and the fan-out member ended unbound. The spawn now tries once more in exactly that
+  case, never when a prompt may already have been typed.
 
 ### Changed
 
-- **Console chats start at `--effort high`, not `max`** (`orchestrator/scripts/lib/configlib.py`,
-  `orchestrator/scripts/cli_spawn.py`). `doctrine.console_effort` now ships as `high`. Every console
-  chat is one the fleet started or woke, so it runs at the efficient effort, and the owner's own
-  chats keep theirs (owner, 2026-09-24: "I run chats on ultra, you run them on whatever you know is
-  efficient"; the ruling came the same day from the panel he delegated to). The measured reason:
-  high matched xhigh on 10 of 10 real fixes at 2.3x fewer output tokens. An install that wants the
-  old launch sets `doctrine.console_effort` to `max` in its policy file.
-  `--dangerously-skip-permissions` is unchanged.
+- **Console chats start at high effort, not max.** Chats the fleet starts or wakes run at the more
+  efficient effort, and your own chats keep theirs. Set the console effort back to max in the
+  orchestrator policy if you want the old launch.
 
 ## [1.3.0] - 2026-09-25
 
+**TL;DR**
+
+- **Each Claude Desktop account shows its banked resets, Claude Code credit and usage credits**
+- **Usage advice tells an agent near its limit that the account holds a reset**
+- **The instance tables stop re-sorting on every usage reading**
+- **fan_out on a busy PC answers with a refusal instead of failing silently**
+- **A failed process scan no longer reads as "nothing is running"**
+
+**Everything in 1.3.0**
+
 ### Added
 
-- **What only claude.ai knows about each Claude Desktop account** (`server/src/claude-app-usage.ts`,
-  `server/src/usage-service.ts`, `web/src/components/InstancesView.vue`,
-  `web/src/components/UsageBadge.vue`). The usage check asks each RUNNING app, through its native
-  inspector, for the facts the OAuth usage endpoint never serves; a closed app keeps its last
-  reading, dated, minus anything that has ended since or belonged to another account.
-  - Banked usage-limit resets (Settings > Usage > Resets): a reset icon beside the account name.
-  - The one-time Claude Code & Cowork credit ($250 on Max, until 2026-11-05): a coin icon while
-    money is left, amber when it was never claimed or is held back. It counts as money only when
-    claude.ai confirms the claim, the same rule as claude.ai's own Usage page.
-  - Usage credits (billing past the plan limits): a card icon only while they are on.
-  - This week's usage split by product (Claude Code / Chats / Cowork).
-  - The usage chip's popover lists all of it with the time it was read.
-- **Usage advice names a banked reset near the wall** (`server/src/usage.ts`): `check_my_usage`,
-  `check_usage` and `list_usage` tell an agent at warning/critical (or with a full 5-hour window)
-  that the account holds a reset, and when it can be spent (Claude: a person, in the app; Codex:
-  `redeem_codex_reset_credit` at 100%).
+- **What only claude.ai knows about each Claude Desktop account.** The usage check reads it from
+  each running Claude app; a closed app keeps its last reading, dated. Banked usage-limit resets
+  show as a reset icon beside the account name, the one-time Claude Code & Cowork credit as a coin
+  icon (amber when unclaimed or held back), and usage credits as a card icon while they are on. The
+  usage chip's popover lists all of it, with this week's usage split by Claude Code, Chats and Cowork.
+- **Usage advice names a banked reset near the limit.** When an account is at warning or critical,
+  the usage tools tell an agent that the account holds a reset and how it can be spent.
 
 ### Fixed
 
-- **The instance tables no longer re-sort on every usage reading** (`web/src/composables/useSortable.ts`).
-  A refresh lands readings one by one and each arrival moved rows; rows now move only after the
-  sort inputs have been quiet for 1.5s. A header click still re-sorts at once, and added or
-  removed rows are placed immediately.
-- **`fan_out` on a busy box answers instead of dropping silently** (`server/src/orchestrator.ts`,
-  `server/src/routes/instances.ts`, `server/src/mcp.ts`, `orchestrator/scripts/fan_out.py`,
-  `server/src/core/process.ts`, `server/src/core/instances.ts`). Reported 2026-09-24 (chat
-  ffb5fe39), six fan_out calls right after a PC restart:
-  - A detached run the route would refuse `busy` now gets the 409 at once (`wouldRefuseBusy`),
-    not a 202 and an operation that refuses a tick later. `fan_out` returns that refusal as data,
-    with the holder's operation id, and says no group exists.
-  - fan_out.py writes the group record (`phase: planning`) before ranking accounts, so a ranking
-    that dies on an unready daemon leaves `phase: failed` and `error: daemon not ready: ...`.
-    `fan_out_status` on an id with no record reads the operation that carried `--group-id` and
-    says what happened to it. A placeholder or failed group is never verdict "ok".
-  - A process scan that fails (the 10s CIM query on a pinned box) no longer reads as "nothing is
-    running" in `list_instances` and `/api/fleet`: the listing falls back to the last scan that
-    answered (at most 5 minutes old). Destructive guards still refuse on a failed scan.
-  - `launch_instance` answers "launched" only once the app's main process has been seen and is
-    still there 5 seconds later; an app that exits within seconds is a failed launch.
+- **The instance tables no longer re-sort on every usage reading.** Rows move only once the
+  readings have settled. A header click still re-sorts at once.
+- **fan_out on a busy PC answers instead of dropping silently.** A run that would be refused as
+  busy is refused at once, and fan_out returns that refusal with the operation holding the PC. A
+  fan-out that dies early leaves a failed group record saying why, and a placeholder or failed
+  group never reads as ok.
+- **A failed process scan no longer reads as "nothing is running".** The instance list falls back
+  to the last scan that answered, at most a few minutes old. Destructive actions still refuse.
+- **launch_instance answers "launched" only when the app stays up.** An app that exits within
+  seconds is reported as a failed launch.
 
 ## [1.2.0] - 2026-09-24
 
+**TL;DR**
+
+- **A chat whose background task hung is asked whether it is stuck**
+- **Chats the toolbox launches can run at their own effort**
+- **unblock_prompts is an MCP tool and can target one chat**
+- **Opening a Codex Desktop instance works again**
+- **A fan-out never adopts or types into somebody else's chat**
+- **A moved chat keeps its name**
+- **The "Move chats to account" menu says it lists accounts**
+
+**Everything in 1.2.0**
+
 ### Added
 
-- **Recorded agent CLI sessions replay over a real process boundary** (new
-  `server/tests/mocks/mock-agent.mjs`, `server/tests/mocks/bin/`, `server/tests/mocks/recordings/`,
-  `server/tests/mock-agent-replay.test.ts`, `server/src/config.ts`). A stand-in `claude` / `codex`
-  prints a recorded session in the CLI's own wire format (`-p` text, stream-json, `codex exec
-  --json`, `codex app-server` JSON-RPC), picked by name, by prompt sha256 or by default, so the
-  usage probe, the stream-json parser and the Codex RPC client are tested end to end with no quota
-  spent. New `AGENTHYDRA_CLAUDE_PATH` names the Claude CLI outright, because the npm-global install
-  otherwise wins over any PATH overlay. Idea from nexu-io/open-design (Apache-2.0); no code copied.
-  See docs/REFERENCE.md, "Replaying agent CLIs offline".
-- **A chat that left background work hanging is asked whether it is stuck** (new lane
-  `orchestrator/scripts/stall_watch.py`, `lib/stalllib.py`, scheduled as `stall-watch` every 5
-  minutes, policy group `stallwatch`). A chat's turn can end while a sub-agent, workflow or
-  background command it started hangs; the desktop keeps the chat showing as busy for as long as
-  any of them is registered, the chat's model is idle, and a hung task never sends the notice
-  that would wake it. The first read of the live fleet found 12 chats in that state, holding
-  tasks silent for 2 to 61 hours. The lane reads each live chat's transcript for background tasks
-  that were launched and never ended (a completion notice or a successful TaskStop), measures how
-  long each has written nothing (an agent's transcript, a workflow's folder and each agent its
-  journal says started and never returned, a command's age), and types ONE question into a chat
-  whose turn has ended or gone quiet: which task, its id, `TaskStop <id>`, and for a workflow
-  `resumeFromRunId` so only the stuck agent reruns. It never kills anything itself - only the
-  chat that launched a task can stop it. The same task is asked about again after 30 minutes, at
-  most 3 times, then filed as an incident. Silent threshold 20 minutes, measured: over 10,132
-  agents on this machine, a healthy agent's longest silence was 0.6 min at the median and 18.9
-  min at p99. Plan-only unless the tray icon is up, skips held chats, `stallwatch.enabled` off in
-  the observe-only preset. Tests: `tests/test_stall_watch.py`.
-
-- **Chats the toolbox launches itself can run at their own effort** (`lib/stamplib.py`,
-  `lib/configlib.py`, `cli_spawn.py`, `spawn_chat.py`). Every chat `spawn_chat` starts (and so
-  every fan-out member, chip and manager chat) and every new console chat is recorded by session
-  id in `state/automation-chats.json`. Three new doctrine keys decide what those chats get:
-  `doctrine.automation_ultracode`, `doctrine.automation_effort` and `doctrine.console_effort`
-  (which replaces the hard-coded `--effort max` in `cli_spawn`). The shipped defaults (on, xhigh,
-  max) stamp them exactly as before; turning `automation_ultracode` off runs them at the
-  automation effort with ultracode off while the owner's own chats keep ultracode + xhigh. A
-  measured reason to do so: high matched xhigh on 10 of 10 real fixes at 2.3x fewer output tokens.
-
-- **`unblock_prompts` is a first-class MCP tool, and it can be aimed at ONE chat**
-  (`server/src/mcp.ts`, `orchestrator/scripts/unblock_prompts.py`,
-  `server/tests/unblock-prompts-mcp.test.ts`,
-  `orchestrator/scripts/tests/test_unblock_targeting.py`,
-  `docs/UNBLOCKING-STUCK-PROMPTS.md`). A chat stopped on Allow/Accept/Continue is not slow, it is
-  stopped, and its engine still reads `working` - which is precisely the state `fan_out_send`
-  refuses, so the one tool a manager chat would reach for cannot clear the one stall it hits.
-  Pressing the button existed (the 5-minute unattended lane), but only as a fleet-wide sweep on a
-  schedule, reachable by name through `orchestrator_run`.
-  - `--session <id>` (repeatable, or a comma list) narrows every stage to the named chats. It
-    narrows and never widens: the bypass/spawn doctrine, the hold, the verify snippet and the
-    tri-state verdict over the pending command all still apply. Naming a chat says *which*, never
-    *press it regardless*.
-  - `--min-wait` moves the quiet gate, and a named session defaults it to **0**. The 4-minute wait
-    exists so a *sweep* does not click at a chat whose command is merely still running; a caller
-    naming one session has already looked at it, and making it wait out a window it has usually
-    already waited is what made "clear this stall now" unusable.
-  - A named chat that is **not** waiting is reported (`notFound`), because otherwise "I cleared it"
-    and "it was never stuck" are the same silence.
-  - ⛔ **An unknown flag is now a refusal (exit 3), not a shrug.** Argv was read by lookup, so a
-    mistyped flag was ignored - and the flag most worth mistyping is the one that *narrows*, which
-    means the punishment for a typo was a fleet-wide press. Nothing is scanned or pressed until
-    argv is understood.
-  - ⛔ **A targeted act plans first and refuses on a version skew.** The daemon runs whatever
-    orchestrator copy is installed beside it, not necessarily this checkout; a copy predating
-    `--session` would ignore it and sweep the fleet with `--yes`, and nothing would say so. The
-    script now names its own flags in `--json` (`supports`), and the tool will not attach `--yes`
-    to a run it cannot prove was narrowed.
+- **A chat that left background work hanging is asked whether it is stuck.** A new orchestrator
+  lane finds chats whose sub-agent, workflow or background command has gone silent after the chat's
+  turn ended, and asks the chat once which task it is and how to stop it. It never stops anything
+  itself, asks at most three times and then files an incident. It runs only while the tray icon is
+  up, skips held chats, and is off in the observe-only preset.
+- **Chats the toolbox launches itself can run at their own effort.** Every fan-out member, chip,
+  manager and console chat the toolbox starts is recorded, and new policy settings decide their
+  ultracode and effort. The defaults keep the old behaviour, and your own chats keep theirs.
+- **unblock_prompts is an MCP tool, and it can be aimed at one chat.** A chat stuck on an Allow,
+  Accept or Continue prompt can be cleared by naming it, without waiting for the fleet-wide sweep.
+  Naming a chat narrows the sweep but keeps every safety check, a named chat that is not waiting is
+  reported as such, and a mistyped option is refused instead of turning into a fleet-wide press.
+- **AgentHydra can be pointed at a specific Claude CLI.** A new setting names the Claude CLI to run,
+  for machines where a global npm install would otherwise win.
 
 ### Fixed
 
-- **Opening a Codex Desktop instance works again, and never claims a launch that did not
-  happen** (`server/src/core/codex-desktop.ts`, `server/tests/codex-desktop.test.ts`). Since the
-  OpenAI.Codex 26.917 MSIX build, Windows refuses a plain start of the package's `ChatGPT.exe`
-  ("Access is denied"), and the launcher's exit code was ignored, so `open_codex_desktop_instance`
-  answered "Codex Desktop launched." while nothing opened. A packaged Codex is now started inside
-  its package (`Invoke-CommandInDesktopPackage`), through a hidden PowerShell that sets the
-  instance's `CODEX_HOME` first, because the cmdlet drops the caller's environment and the app
-  otherwise came up on the default, logged-out home. The open now fails with the launcher's own
-  error, and reports success only once a process on the instance's profile appears (its pid is
-  returned).
-- **The Codex terminal launch runs the newest Codex CLI the desktop app installed**
-  (`server/src/config.ts`). Its version folders are content hashes, and the pick was the
-  alphabetically last one, so after an update it could launch the older binary left beside it.
-- **A new CLI instance's MCP seed reads the same [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) Claude Code does**
-  (`server/src/core/cli-instances.ts`). It followed Bun's `os.homedir()`, which on Linux ignores a
-  `HOME` set at runtime where Node's (Claude Code's) honours it; the ubuntu CI leg was red on it.
-- **A fan-out never adopts somebody else's chat** (`orchestrator/scripts/spawn_chat.py`,
-  `orchestrator/scripts/fan_out.py`, `server/src/mcp.ts`). Reported 2026-09-23: a person started
-  a chat on the same account inside a spawn's wait, the spawner took "the newest chat" as its
-  member, typed the fan-out prompt into it, and `fan_out_delete` would have deleted it. A new chat
-  is now bound only when its first user turn IS the spawn's prompt; one that opens with other
-  words is skipped and never typed into, and one that never shows the prompt is recorded as
-  `unbound` rather than claimed. `fan_out_send` and `fan_out_delete` refuse a member whose chat
-  opens with somebody else's words (`--force` included) and unbind it in the group record. A chat
-  that already opens with the prompt is also no longer sent it a second time by the fallback
-  starter.
-- **A moved chat keeps its NAME, instead of arriving on the new account called "General coding
-  session"** (`server/src/session-launch.ts`, `server/src/title-sweep.ts`,
-  `server/src/routes/desktop-sessions.ts`, `server/src/index.ts`,
-  `server/tests/reassert-chat-title.test.ts`, `server/tests/title-sweep.test.ts`). Reported
-  2026-09-09. The title was the one thing about a move that did not survive it, and it had two
-  independent causes stacked on each other:
-  - _The landing's title was a single disk write, and the target app overwrote it._ A hot landing
-    always aims at a RUNNING app, which is holding the record it has just created in memory, where
-    the import handler left the title unset, and re-saves that over the stamp the first time the
-    chat wakes. The file then reads a blank title, and the app renders a blank as its own generic
-    label. This was never hidden: `importSessionToDesktop` has always returned
-    `titleDurable: !running`, which on that path is always `false`. Nothing acted on it. The two
-    other values a move has to defend against the same re-save each had a bounded watcher already
-    (`reassertChatAutomation` for the permission stamp, `reassertChatArchive` for the archive
-    flag); the title, the one a person actually reads, had none. `reassertChatTitle` is that
-    watcher, fired after a verified hot landing. ⛔ Unlike its two siblings it does NOT drive its
-    value home unconditionally: a title has a second legitimate author, and an owner who renames
-    the chat in the app during the window keeps their name. It writes only over a non-name, by the
-    same definition of "non-name" every other surface uses (`chat-title.ts`).
-  - _The floor underneath it had no caller._ `sweepUntitledDesktopChats`, the title janitor, is
-    documented in its own comment as running from the watcher tick, and the CHANGELOG says the
-    same. That stopped being true on 2026-08-29, when the v1 orchestrator that owned the tick was
-    retired whole; the function survived only because it lives in `session-launch.ts`, a file kept
-    for unrelated reasons, and for the eleven days since it was called from nowhere but its own
-    test. So a chat whose title was lost more than ten minutes after its move, or lost before this
-    release, had nothing at all to repair it. `title-sweep.ts` is that wiring and nothing else: the
-    janitor is unchanged and keeps the test it always had. It sweeps closed profiles too, unlike
-    the automation stamp sweep, because a closed store cannot drift but can already BE wrong, and
-    is the one place a repair sticks immediately.
-
-  This is the second time a written, unit-tested, documented-as-scheduled fixer in this codebase
-  turned out to have no production caller (`automation-stamp-sweep.ts` opens with the same sentence
-  about `reassertAutomationStamps`). A green unit test proves a function works and says nothing
-  about whether anything calls it; both were found only when a user reported the symptom the fixer
-  existed to prevent. `title-sweep.test.ts` asserts the wiring itself for that reason.
+- **Opening a Codex Desktop instance works again, and never claims a launch that did not happen.**
+  After a Codex Desktop update Windows refused the plain start while AgentHydra still said
+  "launched". Packaged Codex now starts inside its package on the instance's own profile, and
+  success is reported only once its process appears.
+- **The Codex terminal launch runs the newest Codex CLI the desktop app installed.** After an update
+  it could pick the older copy left beside it.
+- **A new CLI instance copies MCP servers from the same Claude config Claude Code reads.** On Linux
+  it could read a different home folder.
+- **A fan-out never adopts somebody else's chat.** A chat a person started on the same account
+  during a spawn could be taken as a member and typed into. A new chat is now bound only when its
+  first message is the spawn's prompt, sending and deleting refuse a member whose chat opens with
+  someone else's words, and the prompt is no longer sent twice.
+- **A moved chat keeps its name.** Moved chats could arrive on the new account as "General coding
+  session" because the running app overwrote the title. AgentHydra now restores the title for a
+  while after a landing, unless you rename the chat yourself, and the title repair that had stopped
+  running is scheduled again, closed accounts included.
 
 ### Changed
 
-- **The "Move chats to account" submenu says what it is a list OF, and its switch says "accounts"**
-  (`web/src/components/InstancesView.vue`, `web/src/i18n/locales/en/instances.ts`). A switch reading
-  "Show not running", sitting directly under "Move chats to account", reads as a filter on CHATS,
-  and was read that way (owner, 2026-09-09: "does it only move chats that aren't actively
-  running?"). It never was. The move takes every chat on the account that is not archived and not
-  marked done, running or not, and stops a live one's engine first. The list is now headed "Move to
-  which account?", the switch reads "Show accounts that are not running", and the confirm dialog
-  leads with "running or not" instead of stating it halfway through a sentence. Nothing about which
-  chats move changed, only what the menu admits to.
-- **Two comments that outlived their code, both claiming a closed destination gets opened first**
-  (`web/src/components/InstancesView.vue`, `web/src/i18n/locales/en/instances.ts`). "The import has
-  to land in a running app" was true until the server grew its cold landing, which writes the chat
-  straight into a closed account's store for the app to find at its next start. One of the two sat
-  eleven lines above a comment saying the exact opposite.
+- **The "Move chats to account" submenu says it lists accounts.** It is headed "Move to which
+  account?", the switch reads "Show accounts that are not running", and the confirm dialog says
+  every chat moves, running or not. Which chats move did not change.
 
 ## [1.1.0] - 2026-09-22
+
+**TL;DR**
+
+- **AgentHydra says when it runs older code than its folder, and restarts in one click**
+- **The Instances table shows each account's last launch and remembers its sort**
+- **Native control no longer breaks when Claude Desktop updates**
+- **move_chats can stop a live chat itself when the source account is nearly out of usage**
+- **Claude Code sessions keep AgentHydra's tools when another Claude app rewrites its config**
+- **The permission picker no longer reports working chats as unapproved**
+
+**Everything in 1.1.0**
 
 ### Added
 
 - **The app says when AgentHydra is running older code than its folder, and restarts it in one
-  click.** A source install kept serving the code it started with after a commit or a pull, so
-  routes and tools added since simply went missing (a new MCP tool answered with the web page)
-  and nothing anywhere said the daemon was just old. The daemon records the commit it booted on
-  and compares it with its checkout (read from git's own files, no process); when they differ the
-  header shows "Restart to load new code", every MCP tool result carries `daemonRestartNeeded`,
-  and `/api/health` reports `runningCode`. The restart is the existing in-place relaunch, on the
-  same port.
-- **The Instances table shows when each account was last launched on this PC**, and sorts by it.
-  It counts AgentHydra's own Open (stamped the moment the app is spawned) and, on Windows, any
-  launch from anywhere else that the process scan sees running (Start menu, taskbar, Claude
-  itself), keeping the later of the two. Entries are kept per machine, so a data folder shared
-  between PCs never shows another PC's launch as a local one, and they are cleared when an
-  instance is deleted. An account shows a dash until it is next seen starting: there was no
-  record before this.
-- **The Instances table remembers how it was sorted**, across reloads, restarts and the daemon's
-  port hops, through the same mirrored preference store as its collapse state. A remembered
-  column that no longer exists reads as unsorted.
+  click.** After a commit or a pull, a source install kept serving its old code, so new tools went
+  missing silently. The header now shows "Restart to load new code", MCP tool results flag it, and
+  the restart keeps the same port.
+- **The Instances table shows when each account was last launched on this PC**, and sorts by it. It
+  counts launches through AgentHydra and, on Windows, launches from anywhere else, kept per machine.
+  An account shows a dash until it is next seen starting.
+- **The Instances table remembers how it was sorted** across reloads and restarts.
 
 ### Changed
 
-- **Native control no longer pins a Claude Desktop version, so a Claude update stops breaking
-  it.** The supported version, both executable hashes, the Electron inspector-fuse offset and
-  the two bundle chunks the inspector program uses were constants in this repo, and a Claude
-  update invalidated all of them: 2.2553.13 (the first build that runs Opus 5.5) refused to
-  start under native control until a person re-measured the new binary by hand. All of it is
-  derived from whatever is installed now. The guarantees that replace the pins are structural:
-  exactly one Electron fuse wire with the expected layout and the inspector fuse off, a managed
-  copy that differs from the original by that single byte with every other file hashed into its
-  manifest, and, inside the running app, the session manager and preview manager found among
-  already-loaded modules by the exports and method surface they must have, with anything
-  ambiguous failing closed. Which bundle answered is now recorded as evidence in the result
-  rather than compared against a constant. A new account gets
-  `native-only` with the debugger launched on the first free port when it is created or next
-  opened, so it never falls back to Lua/UIA. Choosing "Use standard controls" is remembered and
-  never undone.
-- **`move_chats` kills a live chat on its own when the source account is at 98% or more** of its
-  5-hour or weekly usage (owner's standing order, 2026-09-20). Below that, `terminate_live` is
-  still a person's word; an unreadable usage row never triggers it.
-- **A move whose source row was only disk-flagged is reported as not finished**, because the
-  running source app still shows it. The report leads with it and `sourceStillShown` lists it.
+- **Native control no longer pins a Claude Desktop version, so a Claude update stops breaking it.**
+  Everything it needs is read from the installed app, with the same safety checks, and anything
+  ambiguous refuses. A new account gets native control, with its debugger on its own port, when it
+  is created or next opened; choosing "Use standard controls" is remembered.
+- **move_chats stops a live chat itself when the source account is at 98% or more** of its 5-hour
+  or weekly usage. Below that, ending a live chat still needs a person's word, and an unreadable
+  usage reading never triggers it.
+- **A move whose source row was only flagged on disk is reported as not finished**, because the
+  running source app still shows it.
 
 ### Fixed
 
-- **The permission picker reported working chats as unapproved.** Right after a chat was moved,
-  it said two sidebar rows had the chat's name ("ambiguous:2") and then that the chat was not open,
-  while one row existed and the chat was running in bypass. Claude Desktop now puts the composer's
-  model button at the right of the message box, and the picker used that button to find where the
-  sidebar ends, so it counted the open chat's own header button as a second sidebar row and never
-  looked for it in the pane. The sidebar's edge is now measured off its own chat rows, which works
-  in any language and layout; checked read-only against three open windows.
-- **Claude Code sessions lost AgentHydra's tools when another Claude app rewrote its config.**
-  AgentHydra registered itself in [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) once, at startup. Every running Claude client
-  rewrites that whole file from its own copy, so one that was already open reverted the entry,
-  and a different session hours later found an MCP server with no tools and nothing saying why.
-  The entry is now re-checked every minute while registration is on and restored if it drifted
-  (an unchanged file costs one read), a failure that persists is logged once rather than every
-  minute, and `/api/health` reports whether the registration currently points at this daemon.
-- **A table sort put missing values first when descending.** Stopped instances (no memory, no
-  uptime) and never-launched ones jumped to the top of any descending sort, contrary to the
-  column contract that they sort last. They now sort last in both directions.
-- **A managed Claude copy made while Squirrel was still installing an update was trusted
-  forever.** Squirrel extracts straight into the new app folder, and the newest folder is now the
-  one used, so a launch during that window could copy a complete `claude.exe` with other files
-  missing and name the copy after the same executable as the finished install. The copy is now
-  checked against the installed folder's file list and sizes right after copying and on every
-  reuse; one made from an unfinished install is moved aside and rebuilt, and a refused copy no
-  longer leaves a full-size staging folder behind.
-- **The inspector program now checks the Claude code it relies on before an archive.** With no
-  hash pinning the bundle, it reads the loaded code to confirm that archive still forwards
-  `cleanupWorktree` (which keeps a checkout's files) and that preview cleanup still matches
-  worktrees by prefix (which its preview guard models), and refuses a build that changed either.
-  Module discovery is also scoped to the app folder itself rather than any path sharing its
-  prefix, and a second preview manager in the hinted module now counts as ambiguity.
+- **The permission picker reported working chats as unapproved.** After a Claude Desktop layout
+  change it took the open chat's own header button for a second sidebar row. It now finds the
+  sidebar's edge from its chat rows, in any language and layout.
+- **Claude Code sessions lost AgentHydra's tools when another Claude app rewrote its config.** The
+  registration is now re-checked every minute and restored if it drifted, and the health check says
+  whether it points at this daemon.
+- **A table sort put missing values first when descending.** Stopped and never-launched instances
+  now sort last both ways.
+- **A managed Claude copy made during a Claude update is no longer trusted.** A copy made while the
+  update was still installing could be missing files. Copies are checked against the install on
+  every use and rebuilt when incomplete.
+- **Native archive checks the Claude code it relies on first.** It refuses a Claude build whose
+  archive could remove a checkout's files or whose preview cleanup changed.
 
 ## [1.0.0] - 2026-09-20
 
-### Fixed
+**TL;DR**
 
-- **Sign-in and settings sync reached a domain that no longer exists.** The `.icu` registry
-  suspended `connections.icu` on 2026-09-18 and the whole zone went NXDOMAIN - no DNS record at
-  all - so every call to it failed at resolution from that date. Nothing reported it, because a
-  name with no record returns no status code and writes no log; it fails inside the same path a
-  flaky network uses. The daemon now signs in against `accounts.connectionsapi.com` and its
-  update check asks `studio.connectionsapi.com`.
+- **Sign-in, settings sync and update checks work again after the old domain went offline**
+- **The version line moves to 1.x**
+- **Chats hidden by a re-login are flagged and moved correctly**
+- **In-app archive and rename work again on a menu's first open**
+- **Archiving under a running app removes the row itself, and unarchiving sticks**
+- **Hangs on helper processes are gone: every wait has a deadline**
+- **Finished orchestrator runs end on time and keep their output**
+- **Moves re-check source rows a running app brought back**
 
-  Settings sync needed a second fix and it is the one worth knowing about: the issuer covers
-  sign-in, but the data locker is a SEPARATE base URL that came from `@cnct/connect`'s own
-  default - so sync kept failing while sign-in looked fine. That default is fixed in
-  `@cnct/connect@1.5.2`, which this release takes.
-
-- **The analytics pixel on agenthydra.lunarwerx.com stopped recording** for the same reason, and
-  now loads from `analytics.connectionsapi.com`. The privacy answer in the site's FAQ, which
-  names the host the update check talks to, was updated with it.
-
-### Changed
-
-- **The version line moves to 1.x.** The package now declares 1.0.0 (was 0.43.0), so the next release is 1.0.0 rather than another 0.x (owner directive, 2026-09-18: no public project stays on a zero major).
-
-### Fixed
-
-- **A re-login hid every chat filed under the previous account, and every tool kept saying they
-  were there.** The desktop app files one record per chat under
-  `claude-code-sessions/<accountUuid>/<orgUuid>/` and shows ONLY the folder of the account the
-  profile is signed into (`config.json` `lastKnownAccountUuid`). On 2026-09-18 instance #12 was
-  re-logged into another account twenty minutes after four chats were moved in; the four vanished
-  from the app while `list_chats` and `chat_dossier` reported them unarchived on #12 and every move
-  of them answered "nothing to do: already lives in pap3r rotate2", because every scan globbed
-  `*/*/local_*.json` across all account folders.
-  - Every chat record now carries `accountUuid`, `loginUuid` and `staleLogin`
-    (`core/chat-store-scan.ts`); `list_chats` flags each row and counts the hidden ones in
-    `counts.staleLogin`, and the Instances "Chats" panel shows them in red as "hidden by a
-    re-login". The signed-in-account read moved to `core/login-state.ts` so the side-effect-free
-    scan can share it.
-  - "Already here" and "did it land" ask only the signed-in account's folder
-    (`findVisibleChatMetaPath`: `renderedInStore`, `awaitChatRecord`), so a stale record neither
-    skips an import nor verifies one.
-  - A move to the SAME instance re-homes such a chat: the import sets the old record aside to
-    `~/.agenthydra/backups/stale-login-records/` (never deleted), lands the chat where the app
-    looks, and puts the old record back if nothing lands within 45s. `migrate_chat` no longer
-    short-circuits, verifies, or stamps on a stale-login row, and `choose_match` prefers the copy
-    that is actually on screen.
-  - A cold landing goes into the signed-in account's folder instead of "whichever leaf was touched
-    last" (`chooseStoreLeaf`), which minutes after a re-login is the previous account's.
-- **`chats --console` listed ~220 zswarm and bench jobs as homeless chats.** Only a Claude Code
-  session with no desktop home is a console chat now; other sources are grouped as "headless
-  <source> runs - never a desktop chat". An agent asked for "orphaned chats" read the old list as
-  the orphans and moved 25 old chats nobody asked for.
-
-- **An in-app archive or rename was refused EVERY time, because the app rebuilds a row's menu
-  button the first time its menu opens** (`misc/Manage-DesktopChat.ps1`). The actuator's
-  last-moment re-aim re-read the Name of the kebab handle it took BEFORE opening the menu, to prove
-  it was still aimed at the right row. Measured on instance 13, on two rows, both on the first open
-  of an app session: the kebab is replaced by a NEW element with a new RuntimeId (`...4.664 ->
-  ...4.1452`, `...4.693 -> ...4.1662`), the old handle answers `Name = null` and every pattern call
-  on it throws, and the element it hangs off keeps its id (`...4.663`, `...4.692`). Every real
-  archive is a first open, so every one was refused ("it reads ''"), and because the stale
-  handle's `Collapse()` throws too, every refusal left its menu standing open. The earlier
-  diagnoses ("the sidebar moved", "the tree was re-served, re-read and it will answer") were both
-  wrong, and so was the proposed fix of matching the kebab's own RuntimeId: that id is exactly what
-  does not survive.
-  - The re-aim is by IDENTITY now (`ReAimVerdict`): the kebab's id or its raw-view parent's, both
-    taken before the menu opens, must find exactly one kebab, which must be the Expanded one
-    holding the menu; the title is read from THAT element and the old name check stays the
-    assertion; and the item about to be invoked must sit in the one menu THIS run opened, so a
-    menu an earlier run left open can no longer hand over its row's Archive. A kebab that merely
-    carries the right NAME is never a candidate. Anything unreadable or unfound refuses.
-  - Every exit after the menu opens closes it through the kebab that carries the row's identity
-    (`CloseRowMenu`), never a neighbour's, and a menu found already open is closed and reopened
-    rather than trusted.
-  - `orchestrator/scripts/tests/test_actuator_reaim_identity.py` runs the SHIPPED function's own
-    text (parsed out with PowerShell's parser) through 18 cases, including the measured rebuild
-    and an identically named neighbour holding the open menu, and asserts that nothing between
-    opening the menu and invoking the item looks a row up by name or reads the stale handle's
-    name. Proven against eleven mutants (the old script fails 22 of 23; a name-only re-resolve
-    fails 5; the kebab-id-only match fails 13); the UIA readers were checked read-only on a live
-    Chromium tree. ⛔ NOT YET PROVEN END TO END: the owner stopped all instance launches for the
-    night before one `archive_desktop_chat` could run on a rendered row.
-- **A refused in-app archive reported its tidy-up note instead of the refusal**
-  (`server/src/ui-archive.ts`, `verdictLineOf`). The daemon relayed the actuator's LAST line as the
-  reason, and whenever the run had expanded a sidebar group to find the row, that line was
-  "collapsed N sidebar group(s) back the way they were", printed by the script's `finally` AFTER
-  its `FAIL:` line. The reason is now the last line that starts with one of the actuator's own
-  verdict words (FAIL, AMBIGUOUS, STOPPED, INVOKED), else the last line as before. Proven red on
-  the old logic, green on the new.
-
-- **ELEVEN more unbounded waits on a child process, swept out after the orchestrator one**
-  (`server/src/core/process.ts` and ten call sites). Every `.exited` await in `server/src` was
-  audited; sixteen sites, eleven with no deadline at all, failing in three distinct ways. There is
-  now ONE bounded spawn - `spawnCaptured` / `capturePipedProc` / `awaitExitBounded` in
-  `core/process.ts` - and every site goes through it. What it fixes:
-  - ⛔ **A DEADLOCK in the Windows credential path.** `core/crypto/keys.win.ts` opened
-    `stderr: 'pipe'` and never read it. A DPAPI `Unprotect` failure writes a multi-kilobyte .NET
-    traceback; past the pipe buffer PowerShell BLOCKS on that write, so it never exits, so stdout
-    never closes and `proc.exited` never settles - and nothing anywhere had a deadline to break it.
-    It is the same "child fills one pipe while the other is unread" deadlock the orchestrator
-    adapter's own comment warns about, reached in the file that decrypts account tokens. The helper
-    DRAINS every stream it opens, always, whether the caller wants the text or not.
-  - **An HTTP route that could never answer:** the clipboard copy in `routes/sessions.ts` awaited
-    `proc.exited` with nothing racing it, so a `Set-Clipboard` wedged on a locked or RDP session
-    meant the route simply never replied.
-  - **No deadline on the kill paths themselves:** the graceful and FORCED `taskkill` awaits in
-    `core/codex-desktop.ts` and `core/instances.ts`, so a wedged kill hung the quit it was meant to
-    guarantee. Also bounded: the keychain and `secret-tool` credential reads (both of which prompt
-    a human and can wait forever), the window-focus poke, both shortcut writers, the screen
-    capture, and the port-owner lookup.
-  - **The deadline now kills the TREE, not the pid**, because a grandchild holding the pipe is the
-    thing a bare `proc.kill()` cannot reach; and the drain reads INCREMENTALLY rather than through
-    `new Response(stream).text()`, which cannot be cancelled - so a timed-out run hands back what
-    it already read instead of nothing. (That last one was found by this change's own test, which
-    caught the first cut of the helper losing output on exactly the path it exists for.)
-  `dispatch.ts`'s probe had a killer bounding the process but not the read, so it too could sit
-  past its own timeout on a process that was already dead; the read is raced now as well. Proven by
-  `spawn-captured-bounded.test.ts`: a child that never exits, one that floods the previously-unread
-  stream, and one whose grandchild holds the pipe.
-- **Four MORE of the same shape, found because the first sweep's own grep was truncated**
-  (`ui-archive.ts`, `usage.ts`, `session-keepalive.ts`, and the kit's `tray-bootstrap.mjs`). Three
-  had a timer that killed the PROCESS while the `await` sat on the DRAIN - which ends when the pipe
-  closes, not when the child does - so the chat actuator, the usage probe and the keepalive probe
-  could each outlive their own declared deadline. The fourth had no deadline of any kind.
-- ⛔ **The tray-host probe was unbounded IN EVERY APP THAT VENDORS THE KIT** (fixed at source in
-  `lunarwerx-ui` 62212dd, synced here and into ReDesign). `trayHostProcessState` awaited the stdout
-  drain and then `proc.exited` with nothing racing either, so anything the probe spawned that
-  inherited the handle held it open for as long as it lived. One unbounded await, copied into four
-  products. DevWebUI and RepoYeti still carry the old copy - they had another session's uncommitted
-  work in their trees, so they were left alone; `node ../../lunarwerx-ui/sync.mjs --app <name>`
-  picks it up.
-
-- ⛔ **`reassertChatArchive` could not be called off, so for TEN MINUTES after any archive every
-  unarchive of that chat was silently reverted** - while `archive_desktop_chat` still answered
-  `ok: true, changed: true`. The route already refused to FIRE the watcher on an unarchive
-  (2026-09-17); what nobody handled is the watcher an EARLIER archive left running. Measured live
-  on instance #56 / chat `d9fc4886`: three `archive_desktop_chat {archived:false}` calls **and** a
-  hand-written flip of the JSON, all reverted within ~1.5s, with four `daemon.log` lines reading
-  `re-asserted archived ... (the app's re-save resurrected the twin)` **while the app was CLOSED** -
-  the log blamed Electron for the owner's own write. Proof it was only ever the watcher: once the
-  ten-minute window lapsed the same unarchive stuck and survived an app boot. Now: a watcher
-  registry keyed by profile+session, checked every tick, with a re-arm superseding the previous
-  watcher rather than racing it; `cancelChatArchiveReassert()` called by the unarchive path
-  **before** it writes (cancelling after would only lose the race) and reported as
-  `cancelledWatchers`; the route reads the flag back off disk and returns `flagOnDisk` /
-  `flagStuck` / `flagWarning`, because `changed: true` only ever meant "I wrote it", not "it
-  stuck"; and the log line stops naming the app when the app is not running. Four tests in
-  `server/tests/archive-watcher-cancel.test.ts`, proven red-then-green - with the cancel check
-  disabled the first one reads `restores: 1`, the exact live symptom.
-  **PROVEN ON A RUNNING DAEMON, 2026-09-18** (0.43.0 from source, after a tray restart), on
-  instance #56 / chat `d9fc4886` with the app UP: archive under the running app armed a watcher,
-  and the unarchive that immediately followed answered
-  `cancelledWatchers: ["…\\test9"]` and `flagStuck: true`. The flag then read `false` on disk at
-  5s, 10s, 15s, 20s, 25s and 30s - where the pre-fix behaviour reverted inside ~4s - and
-  `daemon.log` has recorded ZERO `re-asserted archived` lines since the restart, against four in
-  the same chat before it.
-
-### Changed
-
-- ⛔ **The chat actuator is ONE file again, and the copy the daemon was running was the WEAK one**
-  (`misc/Manage-DesktopChat.ps1`; `orchestrator/scripts/actuator/manage_desktop_chat.ps1` is
-  deleted and its six Python callers repointed). The two were forked on 2026-09-01 and drifted for
-  a fortnight. The drift was not cosmetic: the daemon's copy - and therefore **every**
-  `archive_desktop_chat` and `chat_rename` call - ran without window activation (a minimized app
-  reports "not rendered"), without the exact `-Instance` match and the refusal to act on a blank
-  one (a bare `-Instance` fanned the action out over every running account), without taking the
-  app's REAL window instead of whichever `FindFirst` returned first (a hidden helper window reads
-  as "no rows", which a settle reads as "already settled"), without the last-moment re-aim that
-  refuses when the sidebar re-orders under an open menu, without `InPrimaryPane` (the open chat
-  renders a second kebab, so every open chat read as AMBIGUOUS), without folding sidebar groups
-  back the way it found them, and without the locale-independent CSS-palette fallback (a
-  non-English app refused every archive). The one file now carries all of that plus the two flags
-  only the old copy had (`-AllowDuplicateRows`, `-All`) and its rename stale-element retry. It
-  lives under `misc\` because that is what a compiled build embeds (`RUNTIME_MISC_FILES`), so a
-  second copy anywhere is a copy the daemon cannot run.
-
-### Fixed
-
-- **A finished orchestrator run polled `running` for as long as its declared deadline, because
-  the PIPE decided when it was over and not the PROCESS** (`server/src/orchestrator.ts`). The
-  spawn adapter awaited `Promise.all([drainStdout, drainStderr, proc.exited])`, which settles on
-  the slowest of the three - and a grandchild that inherited the child's stdout holds that pipe
-  open for as long as IT lives. A `move_chats` whose child exited after 79 seconds therefore sat
-  `status: 'running', result: null` until the hour-long deadline killed it, losing the per-chat
-  report it was launched for; a hand-run `courier` did the same past its 300s. Reproduced against
-  a real interpreter (a script that spawns an un-redirected `Popen` and exits: 100 ms without a
-  pipe-holder, `timeoutMs + 5s` with one). The child's own exit now starts the same drain
-  countdown a kill does, so the run is reaped in seconds instead of at its wall.
-- **The same run's output died with the process, so a killed run read as a crash with no
-  diagnostic** (`server/src/orchestrator.ts`). Python block-buffers stdout when it is a pipe, so
-  everything two cancelled runs had printed sat in an 8 KB buffer inside the child and went with
-  it: both records read `exitCode: 1, stdout: "", stderr: ""`, which sent the first diagnosis
-  hunting a silent exception that had never happened. `PYTHONUNBUFFERED=1` is pinned alongside
-  the existing UTF-8 pins, so a cancelled or timed-out run now returns every line it got out.
-- **A deadline enforced only by a kill assumes the kill worked** (`server/src/orchestrator.ts`).
-  `realSpawn` killed the tree at `timeoutMs` and then went on awaiting `proc.exited`, which a pid
-  the OS will not reap never settles - the deadline would have been missed with nothing to say so.
-  Two bounds close it: the adapter now answers at `timeoutMs + 30s` whatever the child or its
-  descendants do, and the operation registry closes its own record 90s past a run's declared
-  deadline, killing what is left and naming why, so `running` forever is not a state the daemon
-  can be in. A late result cannot reopen a record the watchdog has already reported.
-  ⚠️ **Latent, not observed.** The 2026-09-18 incident report said both deadlines had passed
-  without firing; the records say both runs were CANCELLED at 79s and 15s, far inside them (the
-  "65 minutes" was a mis-timed poll, corrected at source). These two bounds are defence in depth
-  for a hole found by reading, not a fix for a failure anyone measured.
-- **A source row settled against a RUNNING app was reported as final, and two came back**
-  (`orchestrator/scripts/migrate_chat.py`, `migrate_batch.py`). A two-chat move off a running
-  account settled and tombstoned both source rows; `list_chats` read `unarchived: 0` and the move
-  was reported settled. Seventy-five minutes later the app had re-saved both chats from memory
-  and the owner archived them by hand. A disk read taken seconds after a settle cannot answer
-  what a running app will write next, so: the payload carries `sourceRowProvisional`, the batch
-  runs a fifth phase after the resume that re-reads every provisional row and re-settles or
-  re-tombstones whatever came back, the report says so in prose, and `phase_stamp` leaves the
-  journal on `stamped-source-running` so `migrate_reconcile` keeps re-checking the row long after
-  the process is gone (it advances the row to `settled-verified` itself once it holds).
-- **One stuck delivery could eat a whole courier run** (`orchestrator/scripts/courier.py`). Every
-  step was bounded - the daemon send at `confirm_secs + 120`, the actuator at 300s, the confirm
-  watch at `confirm_secs` - and nothing bounded their sum, so one row's worst case ran past
-  thirteen minutes and a `courier --only a --only b` declared at 300s could spend its entire
-  deadline inside row A with row B never attempted (seen live: A's `attempts` climbing while B
-  stayed at 0). `courier.row_budget_secs` (new, default 420s) is a wall-clock deadline carried
-  down the row: each step takes the smaller of its own timeout and what is left, a step with
-  nothing left is refused rather than half-started, and the loop advances.
-- **A spawned terminal held the daemon's pipes open after its script had exited**
-  (`orchestrator/scripts/cli_spawn.py`). The `Popen` that opens a console redirected nothing, so
-  it inherited the daemon's stdout/stderr - the same defect above, at its source. It now takes
-  `DEVNULL`, and `tests/test_no_inherited_stdio.py` refuses any `Popen` under `scripts/` that
-  does not say where its output goes.
-- **An UNARCHIVE under a running app was silently undone by the route's own watcher**
-  (`server/src/routes/desktop-sessions.ts`). `reassertChatArchive` writes `isArchived=true` and
-  nothing else, for ten minutes or eight restores - it exists to beat a running app's re-save
-  after an ARCHIVE. The route fired it on both paths, so an unarchive was reverted within about a
-  second and the next archive answered `changed:false`, while the response had just promised the
-  flag was written and would land at the next restart. Measured live 2026-09-17 by unarchiving a
-  chat under a running app and reading the dossier back. Now armed only when archiving.
-
-- **A cold app made the actuator report a chat that is plainly on screen as "not rendered"**
-  (`misc/Manage-DesktopChat.ps1`). The MSAA poke is aimed at each `Chrome_RenderWidgetHostHWND`
-  child, but Chromium creates that legacy window lazily, on demand: a freshly launched app has
-  none, so there was nothing to poke, the accessibility tree never switched on, and every query
-  came back empty. `-List` printed an empty chat list and an action exited 3 with "collapsed group
-  or virtualized out" - a confident wrong diagnosis that sends the reader to scroll a sidebar
-  already showing the row. Measured on a just-launched instance: 0 render widgets at launch, 1
-  after repeated requests. Wake now asks repeatedly (top-level MSAA request plus a tree read,
-  eight tries) and BOTH failure paths say when nothing was readable rather than blaming the
-  sidebar. Proven red-then-green against a real cold app. The top-level request is restricted to
-  the cold path on purpose: on a warm window it re-serves the tree and invalidates held elements,
-  which broke the re-aim rail ("the row ... reads ''") in testing.
-
-- **A row menu left open poisoned every later archive of that chat**
-  (`misc/Manage-DesktopChat.ps1`). `ExpandCollapsePattern.Expand()` throws on an already-expanded
-  element, and under `ErrorActionPreference='Stop'` the run died with a bare
-  `+ FullyQualifiedErrorId : InvalidOperationException` - no chat named, no cause - which is what
-  the daemon relayed to its caller. Reachable in normal use: any refusal after the menu opens can
-  leave the popup up. Already-open is now the state the line was trying to reach, not an error.
-
-- **The archive response claimed the app's control "was driven" when nothing was clicked**
-  (`server/src/routes/desktop-sessions.ts`). `verified` is true down two paths - the control fired,
-  or there was no rendered row left because the chat was already off the sidebar - and the note
-  claimed the first for both, so callers read "the control was driven" beside `clicked: false`. A
-  verdict readable two ways is the exact fault the `visibleNow` -> `stillOnScreen` rename was for.
-
-- **Archiving a chat under a RUNNING app now retires the row instead of handing the caller a
-  script to run** (`server/src/routes/desktop-sessions.ts`, `orchestrator/scripts/archive_chat.py`).
-  `POST /api/sessions/:id/desktop-archive` - the route behind the `archive_desktop_chat` MCP tool -
-  wrote the metadata flag and then returned a paragraph explaining that the chat was still on
-  screen and that the caller should go run `misc/Manage-DesktopChat.ps1` themselves. Meanwhile
-  `server/src/ui-archive.ts`'s `uiArchiveChat`, the server-side version of exactly that click with
-  rails that refuse when a different LIVE chat shares the rendered title, had been in the codebase
-  since 2026-08-30 with **no caller at all**. Owner ruling, 2026-09-17, after archiving 17 chats by
-  hand: a built-in that does not do what it says gets FIXED; nobody should be writing a one-off
-  script to finish a basic operation.
-
-  The route now drives that click for every hit it changed under a running app. Bounded at 20s (a
-  measured click is 2-5s, while ui-archive's own spawn guard is 90s - long enough to outlive
-  hydralib's 30s POST default and turn a working endpoint into a caller-side timeout), never
-  throwing, timer always cleared. Losing that race is not hidden: the flag is written, the
-  re-assert watcher still runs, and the answer says the click did not settle and why.
-
-- ⛔ **Caller-visible: the archive response's `visibleNow` is renamed `stillOnScreen`.** The old
-  name shipped beside a note saying the chat WAS on screen, so it could be read either way - fatal
-  now that the route can genuinely retire the row. Nothing consumed it in logic; there is no shim.
-
-- **`archive_chat.py` honours the daemon's own click.** When the app opened in the race window
-  between the fleet read and the POST, it used to exit 7 and tell the caller to re-run; it now
-  continues to verification if the response says the row is already gone.
-
-- **The chat actuator re-pokes MSAA after opening a row menu** (`misc/Manage-DesktopChat.ps1` and
-  `orchestrator/scripts/actuator/manage_desktop_chat.ps1`). Chromium builds the popup's
-  accessibility subtree as lazily as the sidebar's, so every UIA query saw zero MenuItems and the
-  script reported `menu opened but no 'Archive' item matched a known label. Menu showed: ` with an
-  EMPTY list - which reads as a missing locale label when nothing had been rendered at all. An
-  empty `Menu showed:` list means NOT RENDERED; a populated one means a real label gap.
+**Everything in 1.0.0**
 
 ### Added
 
-- **`-All` on `misc/Manage-DesktopChat.ps1`** archives EVERY row carrying one title, one pass at a
-  time, re-invoking itself and capped at 25 passes. That is a different claim from
-  `-AllowDuplicateRows` (which asserts one chat drawn twice): `-All` is several REAL chats sharing
-  a name, measured while cleaning up 17 fan-out judge chats of which three shared one title.
-  Archive only - a rename or unarchive of N same-named rows has no single sensible meaning.
+- **Archive every chat that shares one title.** The chat actuator can archive every row with the
+  same title in one run, up to 25. Rename and unarchive still act on one chat.
+
+### Changed
+
+- **The version line moves to 1.x.** This release is 1.0.0 rather than another 0.x.
+- **The chat actuator is one copy again.** AgentHydra was running an older copy that lacked window
+  activation, exact account matching, the last-moment row check and support for non-English apps, so
+  archive and rename could fail or reach the wrong account. All of it now runs from one copy.
+
+### Fixed
+
+- **Sign-in, settings sync and update checks reach Connections' new hosts.** The old domain was
+  suspended by its registry on 2026-09-18, and every call to it failed without a word. Settings sync
+  needed its own fix in the Connections library, which this release takes. The website's analytics
+  moved too.
+- **A re-login no longer hides chats while every tool says they are there.** The desktop app shows
+  only the chats of the account it is signed into. Chats filed under a previous login are now flagged
+  in list_chats and shown in red in the Instances Chats panel, moves count only chats the app really
+  shows, and moving such a chat to the same instance brings it back into view (the old record is
+  backed up, never deleted).
+- **The console chat list no longer includes headless jobs.** Only Claude Code sessions with no
+  desktop home are listed; swarm and bench runs are grouped separately.
+- **An in-app archive or rename no longer fails every time.** The app rebuilds a row's menu button
+  when the menu first opens, and the actuator lost track of it, refused and left the menu open. It
+  now finds the row by identity, acts only through the menu it opened, and always closes it. This
+  was not yet proven end to end when it shipped.
+- **A refused archive reports the real reason**, not its tidy-up note.
+- **Waits on helper processes have deadlines.** Many places waited on a child process with no limit:
+  reading saved account keys on Windows could deadlock, the clipboard copy could never answer, and
+  quitting an app could hang on a stuck kill. All of them now share one bounded helper that stops the
+  whole process tree at the deadline and keeps what was already read. The shared tray kit got the
+  same fix.
+- **Unarchiving a chat right after archiving it sticks.** The watcher that defends an archive against
+  a running app's re-save kept undoing the unarchive for ten minutes while reporting success. It now
+  runs only for an archive, an unarchive cancels any watcher still running, and the answer says
+  whether the flag stuck.
+- **Archiving a chat under a running app removes the row.** The archive used to write the flag and
+  tell the caller to run a script; it now clicks Archive in the app itself, with a time limit, and
+  says when the click did not settle. Its answer no longer claims a click that did not happen.
+- **A finished orchestrator run is reported finished.** A run whose helper kept its output open stayed
+  "running" until its deadline and lost its report. It now ends when its process does, keeps every
+  line it printed even when cancelled, and can no longer stay "running" forever.
+- **Moves re-check source rows a running app brought back.** A source row settled under a running
+  app could reappear later. Moves now re-check and re-settle such rows after resuming, and keep
+  checking them afterwards.
+- **One stuck delivery no longer eats a whole courier run.** Each row has its own time budget, so
+  the rows after it still get their turn.
+- **A freshly launched app's chats are read correctly.** The actuator now wakes the app's
+  accessibility tree on a cold start and after opening a row menu, and says when nothing was readable
+  instead of blaming the sidebar.
+- **A row menu left open no longer breaks later archives of that chat.**
 
 ## [0.43.0] - 2026-09-17
 
+**TL;DR**
+
+- **The orchestrator has a policy file: set it by wizard, by an AI, or one setting at a time**
+- **A broken policy file stops unattended actions until it is fixed**
+- **A dry-run tool runs the dry loop many times to prove it works**
+- **Fleet liveness is one daemon call, so planning is much faster**
+- **AI answers no longer override a hold you placed by hand**
+- **A move reports chats that went archived while it ran**
+- **Replies are no longer deferred on a turn that has already ended**
+
+**Everything in 0.43.0**
+
 ### Added
 
-- **The orchestrator has a policy file: 86 knobs, one place, every default equal to what was
-  hardcoded** (`orchestrator/scripts/lib/configlib.py`, `orchestrator/scripts/policy.py`,
-  `orchestrator/state/config.json`). Owner ask, 2026-09-17: *"most of the orchestrator should
-  probably be configurable. Like, it should ask which variants or whatever, which toggles,
-  triggers, options the user wants on. And then when we decide that, it orchestrates."* An audit
-  the same day counted **138 user-facing policy knobs spread across 18 files** as module
-  constants and unswitchable `always-on` behaviours, with no config file, no env var and no
-  per-fleet policy anywhere - archive_chat.py's own line was *"the complete set of user-facing
-  knobs; there is no config file"*. Steering the fleet meant editing Python.
-
-  Three ways to set it, because three different things ask: `orch.py policy --wizard` walks a
-  person through every group and writes nothing until they confirm; `orch.py policy --ask` /
-  `--apply answers.json` is the same questionnaire in the ask/apply shape `interview.py`
-  already uses, so an AI can set policy with no terminal; `orch.py policy --set k=v` changes
-  one knob now. Plus `--list`, `--explain <key>`, `--doctor`, and four presets
-  (`default`, `observe-only`, `conservative`, `aggressive`).
-
-  **Installing it changes nothing.** Every default equals the value it replaced, enforced by
-  `test_configlib.test_every_default_matches_the_constant_it_replaced`, which reads the live
-  module values back and fails if any drifted. On a fresh machine `orch.py policy` prints
-  "nothing - every knob is at its default". Precedence is always: a flag a person typed >
-  config.json > the default. Turning a sweep lane off changes what `--all` does; naming that
-  lane on the command line still runs it.
-
-  Covered: the gate's timings and its **four archive signals, one switch each**; archiving
-  (master switch, quiet window, per-run cap, knowledge preservation, the grace window); the
-  sweep's four lanes plus its naming and doctrine passes; the doctrine stamps themselves
-  (bypass, ultracode, effort, held chats, and the global-settings rewrite); the groundskeeper's
-  five duties and every cap; the usage bands; waking (including the exact wake prompt);
-  permission-prompt pressing; delivery; the judgment queue; the standing manager; and all
-  eleven scheduled lanes (on/off and cadence - a lane switched off is now UNREGISTERED by
-  `--apply`, not merely skipped, because a task Windows still ticks is not "off").
-  Deliberately **not** knobs, and listed as such in the menu so their absence reads as a
-  decision: the live-writer rule, the hold rail, the T-0 re-check, post-act verification, the
-  DENY list, the tray-icon switch, and that the shared-cause breaker fires at all.
-
-  ⛔ **A policy file nobody can read stops unattended acting.** Unreadable JSON, a value that
-  fails its check, and an unknown key (`"archive.enable": false` is a typo that reads as
-  "archiving is off" and changes nothing) all fall back to a default, and a lane acting on a
-  default where the owner wrote the opposite undoes his decision. So `armlib.refuse_unless_armed`,
-  the guard every unattended act already calls, refuses while `configlib.problems()` is
-  non-empty, armed or not. `--force` by hand still runs one act; the dry loop names each
-  problem and exits 2; `policy --unset <key>` removes an unknown key. Writes are atomic
-  (per-process temp file, then a swap) and serialized across processes, so two `--set` runs
-  at once both land, and a note a person added by hand (`"_why": ...`) survives a rewrite.
-
-  Found by review before any of this was committed, and fixed with tests:
-  `schedule_jobs --only <lane> --apply` unregistered the other ten lanes; `--pause` (what
-  `orch.py disarm` runs) skipped a lane the policy had switched off, so a lane still
-  registered from before kept firing after a disarm (`--status`, `--pause` and `--remove` now
-  reach every lane, `--resume` skips switched-off ones, and a named lane is registered at its
-  policy cadence); with `archive.enabled` OFF the sweep still ran the archive lane, so three
-  identical refusals tripped the shared-cause breaker and filed a false incident (the sweep
-  and the groundskeeper now skip archiving up front); the wizard's confirm step crashed on
-  every run with a change, so it could never save; an on/off answer the wizard did not
-  understand counted as OFF, so a typed "yse" switched an archive signal off (it now keeps
-  the current value); a JSON `true` passed as the number 1; `--doctor` crashed on the broken
-  file it exists to diagnose; and `--apply` crashed on an answer that was not an object.
-
-- **`dryrun.py` - run the dry loop N times and prove it works** (`orchestrator/scripts/dryrun.py`).
-  Owner ask, same day: *"can we run like 50 dry runs to make sure it's all functioning?"* One
-  run proves it did not crash that time. N runs answer what one structurally cannot: the
-  intermittent-crash rate, whether the loop AGREES WITH ITSELF (it fingerprints every chat's
-  decision and reports **flaps** - a verdict that changed and changed back, which is a
-  timing-dependent bug, as distinct from a verdict that moved once because the fleet moved),
-  where the time goes per stage, and - with `--matrix` - whether flipping a policy knob
-  actually steers the plan. Every run is a fresh subprocess on purpose: looping in one process
-  would let the usage-survey cache and module constants carry over, so later runs would be
-  faster and more identical than reality.
-
-  The matrix judges each variant against **what it claims to change**, on evidence an inert
-  knob cannot fake. It took two rewrites the same day to get there. The first version asked
-  "did anything differ?", and the judgment-queue count drifting on a live fleet made all eight
-  variants pass. The second still compared counts with `>=` or "or unchanged", so a cap
-  nothing read passed whenever the lane was already full, and a switched-off signal passed
-  because "the same number of archive candidates" satisfies "the same or more". Now a cap is
-  checked inside the variant's own run (shown == min(cap, everything waiting)). A signal is
-  checked chat by chat: the plan records what all four archive signals say about every
-  finished chat (`dissent`, switched on or not), and every chat the baseline shows held back
-  ONLY by the switched-off signals must come out released. When the fleet has nothing that
-  could tell a wired knob from an inert one, the verdict is `INCONCLUSIVE`, printed as "not
-  proven", never counted as a pass. The slow-liveness variant names every decision it
-  disagrees with the fast index on. A knob that acts at ACT time and cannot be seen in a dry
-  loop reports `not-visible-here` and names the unit test that covers it.
+- **The orchestrator has a policy file.** Most of what the orchestrator does (archiving, sweeps,
+  doctrine stamps, waking, delivery, usage bands, scheduled lanes and more) can now be switched and
+  tuned in one place, and every default equals the old behaviour. Set it with a step-by-step wizard,
+  with a questionnaire an AI can answer, or one setting at a time; it can also list, explain and
+  check settings and offers four presets. A lane switched off is unscheduled, not merely skipped.
+- **A broken policy file stops unattended actions.** An unreadable file, an invalid value or an
+  unknown key refuses every unattended act until it is fixed, so a typo can never quietly undo your
+  choice. A forced act by hand still runs, and edits from two places at once both land.
+- **A dry-run tool runs the dry loop many times and proves it works.** It reports crashes, verdicts
+  that flip back and forth, and time per stage, and can check that each policy setting really
+  changes the plan, saying "not proven" when the fleet cannot show it.
 
 ### Changed
 
-- **Liveness for the whole fleet is ONE daemon call, not one per chat** (`hydralib.live_index`
-  / `live_from_index`, used by `dashboard.build_plan`; `GET /api/sessions/live?lineage=1`).
-  Measured 2026-09-17: `live_for(sid)` cost **668ms per chat** and `build_plan` called it once
-  per row - 86 of the dry loop's 132 seconds, paid again by every consumer of the plan (the
-  sweep, the groundskeeper, the dashboard page, the courier's cap). The gate itself costs under
-  a millisecond per chat; the wait was entirely HTTP round trips against a registry
-  `/api/sessions/live` hands over in full for one request. Verified equivalent on the live
-  fleet: **128 chats, 0 decision differences, 0 state differences, the same 10 running chats,
-  101.2s -> 2.3s (44x) for `build_plan`.**
-
-  ⛔ **Every alias of every live engine is indexed, because that is the one way a fast
-  liveness read could call a chat with a writer "not live".** Identity rotates: a chat that
-  rolled its cli session id keeps a transcript row under the OLD id while its engine runs under
-  the NEW one. `?lineage=1` makes the daemon return, for each live engine, every id its chat
-  has answered to (`liveLineage` in `server/src/chat-dossier.ts`, the same rule the dossier's
-  own `live` field uses), with `lineage: true` on the answer so a caller can tell it from a
-  daemon that ignored the parameter. Against an older daemon the index does one dossier lookup
-  **per live engine, every one of them** - 13 engines, about 13s, still no walk over 165
-  chats. The first version of this skipped that lookup for any engine whose own id was
-  already a known row, which is exactly when the OLD row is the one at risk; on the live fleet
-  it skipped all 13 engines, so the correction never ran. Caught in review before it shipped.
-  A liveness read that cannot be completed returns `None`, which means "use the slow per-chat
-  path", never "nothing is live". `perf.bulk_liveness` turns it off entirely.
-
-- **The dry loop names the console strays the land lane left out** (`lanes.landNotClaude` in
-  `orch.py loop --json`, and a line under landConsole). It was only in a sweep's own print.
+- **Liveness for the whole fleet is one daemon call, not one per chat.** Planning makes the same
+  decisions many times faster, and a chat whose session id changed still counts as live. It can be
+  turned off in the policy.
+- **The dry loop names the console strays the land lane left out.**
 
 ### Fixed
 
-- **The orchestrator no longer force-archives over a HOLD you placed by hand.** Owner, the same
-  day: *"the orchestrator itself seems to have issues where it, like, forcibly archives or
-  whatever."* `interview.py`'s `_apply_archive` ran **every** AI 'archive' answer as
-  `archive_chat --force`, on the theory that an AI's answer in the judgment queue IS the
-  person-level word the gate wanted. It is not: `--force` is also the one flag that lifts the
-  owner's own hold rail, so a model answering a question could overrule him, silently, with no
-  switch anywhere. It is now `archive.ai_decision_uses_force`, **default OFF** - the one
-  default in the policy file that is deliberately not the old behaviour - and a held chat comes
-  back reported as his word kept, not as a failure. Setting it back ON restores the old
-  behaviour for anyone who wants it.
-
-- **A move now says so when a chat it was never given went archived while it ran**
-  (`orchestrator/scripts/lib/archivewatchlib.py`, used by `migrate_chat` and `migrate_batch`).
-  On 2026-09-16 a four-chat `move_chats` batch settled every chat it was given, and in the same
-  two minutes three chats outside it went archived - one in an account the batch never named.
-  Every rail verified the INTENDED rows, so the report, the exit code and the journal all read
-  clean, and the owner found out from his sidebar. The logs could not name the writer (the
-  daemon's archive paths do not log; the actuator's menu search is already scoped to the target
-  app's own process; the doctrine lane stamped other chats that minute; the other-account
-  archive fell inside the IMPORT phase, not the settle), so a move now proves it instead: every
-  chat record on the machine is read before the first chat moves and after the last phase, and
-  a record that went from visible to archived without sharing an id with the move is
-  **collateral** - named at the top of the report with the account to unarchive it from, filed
-  as an incident, `ok: false`, `migrate_chat` exit 2 (landed, not clean), and `move_chat` /
-  `move_chats` no longer answer `ok: true` for it. It catches the cause whatever it is, which is
-  why the report says "while it ran", never "by".
-
-  Two tightenings beside it. The desktop actuator re-reads the row under its open menu
-  immediately before Archive or Delete fires and refuses if the sidebar re-ordered under it (a
-  batch re-orders the source account's sidebar with every landing); it also prints the row it
-  acted on, and the settle note carries that instead of restating what was intended. And the
-  daemon's per-profile chat lookup (`findChatMetaPath`) accepted its cached answer on a bare
-  `startsWith(profileDir)`, so a lookup scoped to one account could be answered with a SIBLING
-  account's file whose name merely begins the same way (`pap3r rotate` / `pap3r rotate2`) -
-  and its callers archive, stamp and rename what they are handed. It now requires the path to
-  be inside the profile (`path-key.isInsideDir`). No current profile pair collides, so this was
-  latent; it is pinned by a test.
-
-- **A reply is no longer deferred on a turn that has already ended** (`courier.py`). `peer_only`
-  - rail 4 travelling with a delivery, "this chat is mid-turn, never type into it" - is decided
-  when a batch PLANS, and a batch's resume phase plans every chat and then delivers them one at
-  a time, so the peer channel's dead-letter arrives minutes later. Measured 2026-09-17
-  (operation `b2576cf1`): chat `44b8262a` finished its own turn at 17:05:41 and was still being
-  deferred as "the turn is in flight" at 17:08:14, on a flag nothing re-read. The refusal is now
-  re-gated at the moment it is made (this repo's own T-0 rail): still mid-turn defers exactly as
-  before, a turn that has ended takes the composer, and a gate read that fails answers "still
-  mid-turn" - unknown never becomes a licence to type into a live chat.
-
-- **A sidebar pass that sees nothing now says which window it read and what its scan saw**
-  (`actuator/approve_prompt.ps1`, `actuator/manage_desktop_chat.ps1`). Three permission passes in
-  a row refused with "the sidebar rendered NO chat rows at all in 6s" against an app whose rows
-  were plainly on screen, and nothing in that refusal could tell the two causes apart. It now
-  carries the window inventory (every top-level window of that process, its size, whether it is
-  on screen, which one was read - an Electron app owns several and `MainWindowHandle` answers
-  with the first, not the visible) and the scan funnel (buttons seen, how many left of the
-  sidebar boundary, how many row-shaped, with a sample of names). The archive/rename actuator
-  picks the biggest on-screen window rather than whichever came first in tree order, and its
-  "not rendered" refusal names what it searched. The original failure could not be reproduced -
-  the state is gone, and by the time it was investigated that app's sidebar read 47 rows
-  normally - so this is the diagnosis the next occurrence needs, not a claimed fix.
-
-- **A chat waiting on a person is explained by the signal that actually held it**
-  (`dashboard.decide`). It read the raw fields in its own order, so a chat held back only by
-  open recommendations was explained as "the recap does not claim done (yes)", and, now that
-  signals can be switched off, a switched-off signal could be named as the reason. It now reads
-  the same `gatelib.archive_dissent` list the gate decided on.
-
-- **The orchestrator suite's four standing reds were one isolation hole, not two bugs**
-  (`tests/test_migrate_batch.py`, `tests/test_migrate_batch_resume.py`). The batch's naming
-  verdict reads what each account's app is RENDERING (`name_chats.rendered_titles`), which is a
-  real PowerShell UI read of the live desktop, and neither file stubbed it. On a machine with
-  the app open that read came back without the fake chat's title, so two clean batches exited
-  PARTIAL; and the read itself took over a second, so the two bounded-phase cases failed their
-  1.0s budget and were written off as "load-flaky". Both test bases now stub the reader to
-  "could not read the sidebar", the neutral answer that is never read as a miss. 76 of 76 pass,
-  in 18 seconds.
-
-- **`_fmt` in policy.py treated `None` as "no argument"**, so rendering an uncapped knob
-  (`saturate.max_wakes`, `groundskeeper.evacuate_per_run`) crashed `--preset`. Caught by its
-  own test the hour it was written; the sentinel is now explicit.
-
-- **The land-console lane no longer queues sessions that are not Claude chats**
-  (`sweep.build_batch`). Since 0.42.0 the daemon surfaces zswarm jobs, OpenCode and DSH sessions
-  as sessions; measured 2026-09-17, 67 of the lane's 113 "console strays" were `job.json` /
-  `opencode.db` / `session.v3.jsonl.zstd` records no actuator can land, so the lane sat 99 over
-  its cap forever with 46 real chats behind them. It now excludes rows the gate refuses as
-  "unsupported transcript format" (a Claude chat with no transcript YET is still landed), and
-  reports the excluded count as `landNotClaude` instead of shrinking silently. Now +41 over cap.
-
-- **Four policy knobs were decoration and are now wired**: `saturate.max_wakes`,
-  `doctrine.stamp_held_chats`, `groundskeeper.duty_name_stuck`, `overlord.enabled`. Found by a
-  scan whose first version could not fail (it included configlib.py, which names every key);
-  `test_configlib.EveryKnobIsWiredTest` now fails on any knob nothing reads, with a canary that
-  fails if the spec file creeps back into the scanned source.
-
-- **dryrun.py classifies flaps**: a live chat crossing the idle threshold both ways
-  (`leave-alone` <-> `judgment`) is reported as expected, not a defect - both states mean a
-  writer is alive, so neither can archive or move anything. Any other flap fails the run. Found
-  on the first 50-run pass (one busy chat pausing past 180s twice).
-
-- **`policy --wizard` with no one to answer** (piped or tool-driven stdin that still reports a
-  tty on Windows) now says "nothing was written" and points at `--ask` / `--apply`.
+- **The orchestrator no longer force-archives over a hold you placed by hand.** An AI's archive
+  answer used to lift your hold. That is now a policy setting, off by default, and a held chat is
+  reported as your word kept.
+- **A move now says so when a chat it was never given went archived while it ran.** Such a chat is
+  named at the top of the report with the account to unarchive it from, and the move is not reported
+  as clean. The actuator also re-checks the row under its open menu before archiving or deleting,
+  and a lookup for one account can no longer return a similarly named account's chat.
+- **A reply is no longer deferred on a turn that has already ended.** The busy check is re-read at
+  the moment of delivery; if it cannot be read, the chat is still treated as busy.
+- **A sidebar pass that sees nothing now says which window it read and what it saw**, and the
+  archive actuator reads the app's biggest visible window.
+- **A chat waiting on a person is explained by the signal that actually held it.**
+- **The land-console lane no longer queues sessions that are not Claude chats**, and reports how
+  many it left out.
+- **Four policy settings that did nothing are now wired up.**
+- **The dry-run tool treats a live chat crossing the idle threshold as expected**, not as a defect.
+- **The policy wizard with no one to answer says nothing was written**, and showing a preset with
+  an uncapped setting no longer crashes.
 
 ## [0.42.0] - 2026-09-15
 
@@ -2536,73 +1982,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the embedded one and replaced when they differ (`reason: 'refreshed'`); an unreadable comparison
   keeps the old copy rather than churning it.
 
-- **One chat drawn twice is no longer an ambiguity that blocks a rename or an archive**
-  (`misc/Manage-DesktopChat.ps1`'s `-AllowDuplicateRows`, `server/src/ui-archive.ts`,
-  `orchestrator/scripts/rename_chat.py`, `server/tests/ui-archive.test.ts`). The app can render one
-  chat's row in two places at once - documented here since 2026-08 for archive, and measured again
-  2026-09-15 on a chat seconds old - and the actuator refused both actions with "2 rendered chats
-  end with '<title>' - refusing to guess". Identical rendered names cannot be two different chats
-  to choose between, but only the STORE can say a title is unique, so the actuator now acts on
-  duplicate rows only when the caller passed `-AllowDuplicateRows`, having counted exactly one
-  UNARCHIVED chat with that title. Two live chats sharing a title, or a title the store does not
-  carry at all, keep the old refusal exactly.
+- **Duplicate rendered chat rows no longer block archive or rename.** The actuator checks the store itself and only refuses when two unarchived chats share the exact title.
 
-  Found underneath it: those counts were read by walking a path built from the caller's argument,
-  which is an instance LABEL (`temp1`) as often as a directory - so the walk read an empty store
-  and answered 0, which is indistinguishable from a real miss. The count now comes from the same
-  store scan the dossier answers from, and the label/dir reads resolve either form.
+- **Release smoke test no longer fails on cleanup delays.** Scratch directory removal now retries briefly on Windows EBUSY errors.
 
-- **The release smoke test no longer fails a good build while cleaning up** (`scripts/smoke-release.ts`).
-  Every check printed its tick and the run still exited 1: on Windows a killed child keeps its cwd
-  for a moment after `exited` resolves, so removing the scratch directory threw EBUSY - reported as
-  "this release build is broken". Cleanup retries briefly, then says what it left behind, and the
-  verdict stands on the checks.
+- **Chat title mismatches no longer block moves.** The move route now accepts either the session title or the desktop meta title, matching whichever the chat is currently known by. Batch moves can now specify titles per chat.
 
-- **`migrate_batch`/`move_chats` no longer refuses a move when a chat's daemon session title and
-  desktop meta title disagree, and `move_chats` can now name a chat's own title per-chat**
-  (`server/src/routes/desktop-sessions.ts`'s `/api/sessions/:id/import-desktop`, `orchestrator/
-  scripts/migrate_batch.py`'s new `--chat-title`, `server/src/mcp.ts`'s `move_chats`). Found live
-  overnight 2026-09-15 (docs/todo/TODO.md, "Overnight orchestration run", item 1): without
-  `--title`, migrate_chat restates the chat's DOSSIER (desktop meta) title as `confirm_title`, but
-  the import route compared it only against the session list's transcript-derived title - a chat
-  titled by its first message on one side and renamed in the app on the other (session 7e1fa278,
-  "Your market still looks like ..." vs "Logos for Connections products") was refused 400
-  "confirm_title does not match the current title" deterministically, and the breaker then
-  suppressed every retry. The route now reads the desktop record's own title too and accepts
-  either current name restated exactly, same as `/migrate` already did - a title that is neither
-  current name is still refused. `move_chats`' `chats` entries can also be `{chat, title}`, a
-  per-chat door MCP callers had no way through before (`--title` on the batch itself is refused
-  for more than one chat): migrate_batch.py's new `--chat-title` binds to the `--chat` named right
-  before it and reaches migrate_chat as that one chat's own real title, which the naming door
-  always accepts outright.
+- **Idempotency keys no longer keep failed operations stuck.** A failed or cancelled operation frees the key, so retry with the same key can start fresh. Running or succeeded operations stay protected against retries.
 
-- **An idempotency key no longer resurrects a FAILED `move_chats`/`orchestrator/run` operation**
-  (`server/src/orchestrator.ts`'s `startOrchestratorOperation`, `server/tests/orchestrator-
-  operations.test.ts`). Found live overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
-  orchestration run", item 3): the key was pinned by `status === 'running' || ran` - true the
-  moment a child process actually started, whether it went on to succeed or fail - so a
-  deterministic failure (a title mismatch, a refused precondition) kept re-answering the SAME
-  failed operation on retry, with no way past it except perturbing an argument
-  (`wait_secs 60 -> 90` was the workaround that night). The key now pins only a `running` or
-  `done` operation; a `failed` or `cancelled` one leaves it free, so the very next call with that
-  key starts for real. A dropped-connection retry against a still-running or already-succeeded
-  run is unaffected - that is the property the key exists to protect.
-
-- **The daemon writes a crash record before it exits, and one line for every exit it sees**
-  (`server/src/index.ts`'s crash handlers, new `server/src/crash-record.ts`, `server/tests/crash-
-  record.test.ts`). Also observed overnight 2026-09-15 (docs/todo/TODO.md, "Overnight
-  orchestration run"): the daemon died silently three times (09:14:17Z, and 01:10Z / 04:23Z the
-  same night, pids 79360 -> 61040 on the last one), restarted by its supervisor, with no error
-  line in daemon.log to say why - losing in-flight orchestrator operations and a `fan_out` spawn
-  each time. The existing `uncaughtException`/`unhandledRejection` handlers now write a single
-  flattened line (reason, pid, uptime, message, stack) instead of the bare error object, `SIGBREAK`
-  and `SIGHUP` (which carried no handler at all) are now treated as fatal the same way, and a new
-  unconditional `process.on('exit', ...)` records the exit code and uptime for every exit,
-  including a path none of the reason-specific handlers anticipated. Investigated read-only: no
-  Application-log crash entry (Application Error / Windows Error Reporting) names AgentHydra, bun,
-  or either pid at any of the three times, and the Task Scheduler operational log that would show
-  the supervisor task firing is disabled on this machine - so the cause of the three deaths
-  themselves is still not proven; this only guarantees a future one leaves a line.
+- **Daemon crashes now write a single-line record** with reason, exit code, uptime and stack. Handlers for `uncaughtException`, `unhandledRejection`, `SIGBREAK`, `SIGHUP` and normal exits all log before exit.
 
 - **`fan_out` no longer reports a false "ok", cannot be cancelled by a client timeout mid-spawn,
   no longer refuses a status read while a spawn is running, no longer treats a dead account's
@@ -3835,22 +3223,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.37.0] - 2026-09-02
 
+**TL;DR**
+
+- **Orchestrator moved to a separate program—AgentHydra is back to being a pure fleet daemon**
+- **Chats stay held off automation one at a time, never auto-archived when waiting for a person**
+- **The daemon can put a message in a dormant chat, press Send, and get the answer, end to end**
+- **Delivery ledger tracks every staged prompt through delivery or expiry, nothing vanishes silent**
+- **Pre-start check reports all instances, chats, and next step in one read-only call**
+- **Fleet shows one verdict per account—whether it can work—instead of one surprise per failure**
+
+**Everything in 0.37.0**
+
 ### Removed
 
-- **THE ORCHESTRATOR IS GONE FROM THIS REPO, ENTIRELY** (owner order, Michael, 2026-08-31). Every
-  line of it now lives in a separate program, `orchestrator/`, which talks to this daemon over
-  HTTP. AgentHydra is the fleet daemon again: it knows what instances and chats exist and acts on
-  one when asked. Deciding what *should* happen to a chat is no longer its business, and the HTTP
-  boundary is there so the two cannot grow back together.
-
-  Removed: 15 modules (`prestart`, `chat-gate`, `gate-actions`, `gate-sweep`, `sweep-loop`,
-  `zombie-rows`, `deliveries`, `courier`, `courier-deliver`, `ui-deliver`, `holds`, `breaker`,
-  `collisions`, `reconcile`, `name-untitled`) with their 16 test files; 8 MCP tools (`prestart`,
-  `chat_gate`, `chat_act`, `chat_sweep`, `chat_hold`, `courier`, `deliveries`, `sweep_loop`); the
-  `/api/chats/:id/gate`, `/api/chats/:id/act`, `/api/chats/sweep`, `/api/prestart`,
-  `/api/deliveries`, `/api/holds`, `/api/sessions/:id/{hold,release}`, `/api/couriers*` and
-  `/api/sweep-loop*` routes; the `deliveries`, `session_holds` and `action_attempt_log` tables and
-  every `sweep_*` / `courier_enabled` setting; the `/orchestrate` command and `smoke:orchestrator`.
+- **Orchestrator moved out.** The orchestration logic now lives in a separate program that talks to the daemon over HTTP. AgentHydra is a fleet daemon: it knows what instances and chats exist and acts on them when asked.
 
   **Why, in one line each.** It archived chats that were waiting on a person - the gate called a
   recap saying "done" finished unless the message ended in a literal `?`, so *"say the word and
@@ -5171,1417 +4557,642 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.36.0] - 2026-08-26
 
-### Changed
+**TL;DR**
 
-- **The action gate: nothing acts blind anymore** (owner law). Every action the machinery
-  wants - a revive, an archive, an import, a "you crashed, please resume" - is now a
-  PROPOSAL the orchestrator AI must check first. The daemon's detectors (crash orphans,
-  stranded transcripts, deaf processes, usage-window resets, the archive janitor, the
-  visibility sweep) write proposals with full evidence; the reviewer rules on each with a
-  recorded reason, executes the approved ones itself, and reports the outcome. The ledger is
-  served in the feed and audited for a day after each decision, and decide-then-execute is
-  enforced by the API.
-- **Surface purity** (owner law, same day): desktop stays desktop, CLI stays CLI, headless
-  stays headless. The v0.35 auto-revive mechanism - a headless `--resume` imported back into
-  the app - is DELETED, not disabled, and the queue-with-import-back pattern is retired
-  everywhere. Desktop chats get their turns through the desktop app's own message channel,
-  which boots a dormant chat's engine and runs the turn visibly (proven live: zero clicks,
-  zero headless processes). New work is SEEDED as a real desktop chat
-  (`POST /api/sessions/seed-desktop`) and delivered the same way. The monitor's
-  usage-window resumes of desktop threads became revive proposals too.
-- **The reviewer rubric rewritten around the new shape** - one delivery ladder (native
-  same-instance, peer to live chats, relay into other instances, wait visibly when no
-  native route exists), proposals decided first on every wake, and the conflicting
-  queue-era flows removed. Shorter than what it replaces.
+- **Every automatic action is now a proposal the orchestrator AI checks first**
+- **Desktop chats stay desktop chats: no more hidden headless continuations**
+- **A self-test and a screenshot tool to check the orchestration on the real machine**
+- **Codex threads appear in the same attention feed**
+- **A finished thread writes down what it knows before it is archived**
+- **Archiving works for chats started in the app, and says when a chat is still on screen**
+- **One database for every way AgentHydra starts**
+- **The sidebar restart can no longer close an app under a live chat**
+
+**Everything in 0.36.0**
 
 ### Added
 
-- **An orchestration self-test you can run any time**, which reports `visualChecks: false`
-  rather than implying it looked at a screen. Every rail in this feature was added
-  because something silently did the wrong thing on the real machine while the unit tests
-  stayed green, so this runs the real guards against real state and reports what held: the
-  watcher completes a pass, the surface guard recognises the chats that actually exist here,
-  the action gate refuses to act before the AI has ruled, archiving and titling work, imports
-  refuse a closed instance and a live session, every prompt resolves, and the reviewer command
-  is installed. Safe to run against a live fleet by construction - every artifact it touches
-  is one it created, under sacrificial ids in a throwaway directory. It found a real bug on
-  its first run (below). An opt-in deep mode additionally seeds one real chat to prove the
-  app-facing half works, then archives it.
-- **A screenshot endpoint, so a claim about the screen can be looked at.** Everything else the
-  daemon reports is read from disk, and disk is not the screen - the gap is where the archive
-  that stayed visible and the title that got wiped both lived. `POST /api/screenshot` writes a
-  PNG and returns the path; the caller reads it. It interprets nothing on purpose: it is a
-  camera, not a judge, and the reviewer is now told to use it after archives and migrations
-  rather than treating it as a last resort. A deep self-test run leaves one attached.
-- **Codex threads appear in the same attention feed.** AgentHydra manages both agents but the
-  orchestrator watched only one, so a Codex thread that stopped mid-work was invisible to the
-  machinery that babysits every Claude chat. Codex rollouts are now classified the same way
-  (finished, interrupted, stopped mid-turn, with the recap captured) and carried in one feed.
-  Observe-only and labelled as such: Codex exposes no message channel, so every item says
-  `deliverable: false` rather than inviting a nudge that would go nowhere.
-- **A retired thread writes its knowledge down before it is archived** (owner rule). A chat
-  being closed out as finished is the last place its own knowledge exists, so it gets one
-  final turn asking it to bring the repo's markdown current: what it did, what is verified
-  versus merely attempted, what is outstanding, and the gotchas a future session would have
-  to rediscover. It is explicitly allowed to answer "nothing here is worth keeping". A
-  MIGRATED thread is not asked, because it is continuing rather than ending. The wording is
-  an editable prompt like all the others.
+- **An orchestration self-test.** It runs the real safety checks against the real machine and
+  reports what held, touching nothing it did not create itself. An optional deep mode also creates
+  and archives one real chat to prove the app side works.
+- **A screenshot tool.** AgentHydra can take a screenshot so a claim about what is on screen can be
+  checked. The reviewer uses it after archives and migrations.
+- **Codex threads in the attention feed.** Codex threads that stopped mid-work are classified the
+  same way as Claude chats. They are marked observe-only, because Codex has no way to receive a
+  message.
+- **A retired thread writes its knowledge down first.** Before a finished chat is archived, it gets
+  one last turn to bring the repository's notes up to date, and may answer that nothing is worth
+  keeping. Migrated threads are not asked, and the wording is an editable prompt.
 
 ### Changed
 
-- **One cached index instead of six separate walks of the chat store, and the housekeeping
-  sweep is six times faster** (8.5s to 1.4s; the archive sweep alone went from 1.7s to 7ms).
-  Measured, not guessed: an ordinary watch pass was already 132ms, so the time was all in the
-  ten-minute housekeeping - and specifically in a regression from teaching the lookup to match
-  both on-disk chat shapes, which made every miss re-read all 2,130 metadata files. The scan
-  was already cached and already reading every file; it now keeps what the callers need and
-  indexes each chat under both of its possible ids, so one scan answers every question.
+- **Nothing acts without a check.** Revives, archives, imports and resume nudges are now proposals
+  with their evidence. The orchestrator AI rules on each with a recorded reason, carries out the
+  approved ones and reports the outcome.
+- **Desktop stays desktop, CLI stays CLI.** The automatic revive that ran a desktop chat headlessly
+  and imported it back is removed. Desktop chats now get their turns through the desktop app's own
+  message channel, visibly and with no clicks, and new work starts as a real desktop chat.
+- **A simpler reviewer playbook.** One order for delivering messages, proposals decided first on
+  every wake, and the old queue-based flows removed.
+- **Much faster housekeeping.** The chat store is scanned once into a shared index instead of six
+  separate times.
 
 ### Fixed
 
-- **A newly created chat showed as "General coding session" until renamed.** Seeding writes a
-  title into metadata that the running app overwrites the moment the chat first boots - caught
-  by looking at the sidebar in a screenshot, which is the only thing that could have caught it,
-  since every on-disk check said the title was correct. Seeding now reports that the title is
-  not durable, and the reviewer renames through the app immediately after, which shows on
-  screen instantly.
-- **Archiving no longer reports success for a chat that is still on screen.** Asking the app
-  itself right after the call showed the truth: disk said archived, the app still said not
-  archived, and the chat stayed in the sidebar. The endpoint now says so - the flag is
-  written, the chat is still visible, a restart is queued and fires when that instance has no
-  live sessions. It matters most for the instance the reviewer runs in, which can never reach
-  zero live sessions because the reviewer is itself one, so there the app own archive is the
-  only thing that actually retires a chat.
-- **Archiving a chat only worked for one chat in eighty.** It matched the metadata filename,
-  which is how an IMPORTED chat is filed; a chat the owner started in the app is filed under
-  the app's own id with the session id inside. So the archive endpoint returned
-  "no-desktop-chat-found" and quietly did nothing for 1,325 of 1,343 real chats - the same
-  blindness fixed in the surface guard days earlier, in a second place nobody had checked.
-  Found by the new self-test on its first real run, which is precisely what it is for.
-- **A chat frozen at a permission prompt is now diagnosed as that**, instead of being
-  reported as "waiting on dead background tasks" - the wrong diagnosis and the wrong fix.
-  The app creates imported chats in a mode that auto-approves file edits but prompts on every
-  shell command, and a prompt the remote owner can never click is a silent deadlock: alive,
-  idle, nothing in any log. It is indistinguishable from thinking unless you ask whether this
-  chat's mode prompts for the tool it is sitting on, which is exactly what the watcher now
-  asks. Imports also request the unattended mode, and the reviewer's fix is to revive with
-  file tools only.
-- **A desktop chat can no longer be continued by a headless run, at the chokepoint.** This is
-  the owner's reported failure ("every chat you were migrating from desktop to desktop ended
-  up being migrated to a headless thing that I couldn't see"), and an audit of the live
-  database found 11 real cases. The guard now sits in the ONE function every headless run
-  passes through, so all six callers (the HTTP route, run-due, the retry sweep, the
-  scheduler, the monitor, migrate) are covered by one rule instead of five ways in; a route
-  check alone would have left the other five open. New chats are exempt by design, and a
-  single explicit override is recorded on the row for the owner's own deliberate calls.
-- **Migrating a chat between accounts no longer burns a headless turn.** Transcripts are
-  shared across instances, so a move is just "archive the old entry, import into the new
-  one"; the old design ran a one-turn notice through the queue first, which is precisely how
-  a migrated chat spent its first turn invisible. The endpoint also stopped advertising that
-  the moved chat "awaits an activation click", which the zero-click law forbids.
-- **The test suite no longer reads the developer's real desktop-instance store**, so instance
-  discovery is deterministic instead of depending on which apps happen to be installed.
-- **The sidebar-repaint restart can no longer kill a live chat.** Its "zero live sessions"
-  guard compared a real-cased instance path against a lowercased one with strict equality,
-  matched nothing, and had therefore NEVER actually protected anyone - it quit and reopened
-  the work app under a live mid-turn chat (the owner had to hand-resume it). Three
-  independent layers now: case-insensitive path identity everywhere, no restarts at all
-  while any live session has no mapped instance ("unknown account" rows), and direct
-  process-ancestry proof that no live session's process tree hangs off the app about to be
-  quit - with "could not check" treated as "do not restart".
-- **"Revive:" titles can no longer stick to a chat.** The revive era's queue prefix joined
-  the title peelers, so a re-imported thread wears its real name, never the plumbing's
-  (found live: an architect chat re-wearing "CLICK TO RESUME" through an import).
-- **One database, not one per way you started the app.** A source checkout kept its state in
-  the repo's `server/data` while a packaged build used `~/.agenthydra/data`, so `bun run start`
-  and the installed daemon were the same app reading two different sqlite files: settings, the
-  queue, orchestrator acks, `/delayo` holds and the done-mark ledger all diverged silently, and
-  forensics run against the wrong file answered confidently and wrongly (measured on the live
-  pair: one held 22 done-marks, 24 queue rows and 46 acks; the other had no orchestrator tables
-  at all). Both modes now resolve to `~/.agenthydra/data`, a checkout's existing `server/data`
-  is migrated across on first run (by copy when the two live on different volumes, which is the
-  normal Windows layout), and `/api/health` reports `dataDir`, `dbPath` and `dataDirNotice` so
-  "which database is this daemon using" is answered by looking. When BOTH already hold state
-  nothing is moved or merged: the per-user directory wins and the other is named out loud.
-- **An OpenCode session write inside one filesystem tick can no longer be cached away.** Two
-  writes can share a single mtime granule, so the second looked like no write at all to a
-  cache keyed on mtime. It only reproduced inside a full-suite run, because it needs an
-  earlier read in the same process to prime the cache.
+- **New chats no longer keep a generic title.** A newly created chat showed "General coding session"
+  because the app overwrote its title. The reviewer now renames it through the app right after
+  creating it.
+- **Archiving no longer claims success while the chat is still on screen.** It now says when the
+  chat is still visible and queues a restart of that app for when it has no live chats.
+- **Archiving works for chats started in the app.** Only imported chats were found before; the rest
+  were silently skipped.
+- **A chat stuck at a permission prompt is diagnosed as that.** It was mistaken for a chat waiting
+  on dead background tasks. Imported chats now ask for the unattended mode, and the suggested fix is
+  to revive with file tools only.
+- **Desktop chats can no longer be continued by a headless run.** The guard now sits in the one
+  place every headless run passes through, so no route can get around it. New chats are exempt, and
+  a deliberate override is recorded.
+- **Moving a chat between accounts no longer spends a hidden turn.** A move archives the old entry
+  and imports the chat into the new account, with no headless turn in between and no click needed.
+- **The sidebar restart can no longer close an app under a live chat.** Its live-chat check never
+  matched before. It now refuses to restart when any live chat might belong to that app, or when it
+  cannot tell.
+- **"Revive:" no longer sticks to chat titles.** A re-imported thread shows its real name.
+- **One database for every way AgentHydra starts.** A source checkout and an installed build kept
+  separate databases, so settings, the queue and orchestrator state silently diverged. Both now use
+  the same per-user data folder, an existing checkout database moves there on first run, and the
+  health check says which database is in use.
+- **OpenCode sessions written twice in quick succession are picked up.** The second write could be
+  missed by the cache.
 
 ## [0.35.4] - 2026-08-26
 
 ### Fixed
 
-- **Renamed chats appear renamed NOW.** The title janitor fixed names on disk, but a running
-  app keeps showing the old name until it restarts - so freshly named chats still read
-  "General coding session" on screen (owner report). Title renames now feed the same
-  sidebar-visibility restart the archive flow uses: the affected app restarts the moment it
-  has zero live sessions, and the new names show.
+- **Renamed chats show their new name right away.** A running app kept showing the old name until it
+  restarted. Renames now trigger the same restart the archive flow uses, as soon as that app has no
+  live chats.
 
 ## [0.35.3] - 2026-08-26
 
 ### Changed
 
-- **The zero-click law.** Owner order: clicking is impossible for him, permanently (he
-  operates over Remote Desktop while traveling). Nothing may wait on the owner clicking,
-  activating, or dismissing anything: chips are STARTED by the machinery through the queue,
-  handoff continuations on the desktop surface run as queue turns with import-back instead
-  of "click it once to start" handovers, and only true blockers are surfaced - as status
-  text, never as controls. Written into the reviewer rubric's hard rails and the
-  architecture doc.
+- **Nothing waits on a click from you.** Task chips and handoff continuations are started by
+  AgentHydra itself instead of waiting for you to click them. Only real blockers are shown, as
+  status text rather than buttons.
 
 ## [0.35.2] - 2026-08-25
 
 ### Fixed
 
-- **A just-revived chat can no longer be re-flagged deaf 150 seconds later.** Every
-  queue-revive re-imports the chat as a fresh passive process, which the deaf detector would
-  flag again almost immediately. A 30-minute quiet floor on the deaf test turns the cycle
-  into "revive again only once it has genuinely sat" - a sane work cadence for chats with
-  pending work - and the reviewer retires finished threads so the cycle converges.
+- **A just-revived chat is no longer flagged as unresponsive again minutes later.** A chat must now
+  sit quiet for a while before it counts as unresponsive, so revives happen only when a chat has
+  really stalled.
 
 ## [0.35.1] - 2026-08-25
 
 ### Added
 
-- **Archived means gone from the sidebar NOW.** A running app repaints its sidebar only at
-  startup, so archive flags written from outside used to wait for "whenever that app next
-  restarts". Every archive (janitor, API, migrate) now queues an archive-visibility restart:
-  the janitor restarts the affected app the moment it has zero live sessions (nothing to
-  interrupt; the real non-isolated Claude profile is never touched; at most once an hour per
-  app), and the archived chats vanish immediately after.
+- **Archived chats leave the sidebar right away.** A running app only refreshes its sidebar at
+  startup, so every archive now queues a restart of that app as soon as it has no live chats, at
+  most once an hour. Your main, non-isolated Claude profile is never restarted.
 
 ## [0.35.0] - 2026-08-25
 
 ### Changed
 
-- **Auto-revive now runs through the queue, not the keyboard.** The owner operates over
-  Remote Desktop while traveling: his remote input kept the user-idle safety gate closed
-  whenever he was connected, and a disconnected session locks the console where synthetic
-  input cannot land - so UI injection was structurally the wrong tool. Revives now run as a
-  one-turn resume through the queue with the revive prompt (the exact migrate-flow pattern in
-  production since v0.29), landed back into the chat's desktop app by the finalize import.
-  Needs neither the screen nor the keyboard, works connected or disconnected, and the turn's
-  own transcript is the engine verification. The UI-injection path remains in the codebase
-  but no longer drives.
+- **Auto-revive runs through the queue instead of the keyboard.** Typing into the app failed over
+  Remote Desktop and on a locked screen. A revive now runs one resume turn through the queue and
+  lands the chat back in its desktop app, with no screen or keyboard needed.
 
 ## [0.34.4] - 2026-08-25
 
 ### Fixed
 
-- **Session ROLL discovered, and the re-import loop it caused killed.** A desktop chat that
-  continues rolls onto a NEW underlying session id while its sidebar entry keeps the original
-  id in its filename. Every lookup keyed by the new id then reports the original as
-  "invisible", so the visibility sweep re-imported (and re-titled) an already-visible chat
-  every cycle - caught within minutes by the per-import logging added one release earlier.
-  Visibility is now judged by the entry FILE (roll-proof) plus liveness, and revive's engine
-  verification watches the chat's own metadata activity as well as the transcript, so a
-  revive that rolls the session still verifies. The clobbered chat title was restored.
+- **A visible chat is no longer re-imported over and over.** A desktop chat that continues moves to
+  a new session id while its sidebar entry keeps the old one, so the visibility sweep kept
+  re-importing and renaming it. Visibility is now judged by the sidebar entry itself, revive checks
+  follow the move, and the overwritten title was restored.
 
 ## [0.34.3] - 2026-08-25
 
 ### Fixed
 
-- **The chat-row search waits for the app's accessibility tree to wake up.** Chromium builds
-  it lazily on the first query, so the first revive attempt on a freshly-queried window saw
-  only the window frame and safely aborted (chat-row-not-found). The search now retries over
-  ~10s while the tree warms; aborts also report the tree size seen, and the visibility sweep
-  logs each imported session id so a re-import loop can never hide behind a count.
+- **Auto-revive waits for the app to be ready before looking for the chat.** The first attempt on a
+  fresh window often could not find the chat's row and gave up. It now retries for a few seconds,
+  and the visibility sweep logs each chat it imports.
 
 ## [0.34.2] - 2026-08-25
 
 ### Fixed
 
-- **Auto-revive can no longer type into the wrong window, or blind.** First-night lesson:
-  focusing a window can fail silently, and the deep link opens a chat's process without
-  switching the visible chat - so a revive could type into the void (verified caught by the
-  engine check, which correctly refused to call it success). Now nothing is EVER typed
-  unless the target window verifiably holds focus (re-checked right before each keystroke
-  batch), the chat's own sidebar row is located by title through the accessibility tree and
-  clicked, and the composer is found the same way. Any of those missing aborts the attempt -
-  fail safe, retry later, never mistype.
-- **Scratchpad runs stay out of the sidebar.** The visibility sweep imported a temp-folder
-  working session, which auto-revive then dutifully woke. Temp/scratchpad runs are excluded.
+- **Auto-revive never types into the wrong window.** Nothing is typed unless the target window
+  verifiably has focus, the chat's own sidebar row has been found and clicked, and the message box
+  has been found. Otherwise the attempt stops and retries later.
+- **Scratch runs stay out of the sidebar.** Temporary working sessions are no longer imported into
+  the app.
 
 ## [0.34.1] - 2026-08-25
 
 ### Fixed
 
-- **A reviewer's ack can no longer blindfold auto-revive.** Found live within the hour of
-  shipping: the reviewer acked a dead chat's item "awaiting click" (its old playbook), which
-  suppressed the item from the feed, and auto-revive read only the suppressed feed - so the
-  one chat the owner was asking about stayed dead while everything else got revived. Revive
-  candidates are now captured before ack suppression: acks shape the reviewer's reading
-  list, never the reviver's to-do list. The feed meta shows `revivePending` so the queue is
-  observable.
+- **Acknowledging an item no longer stops a dead chat from being revived.** The reviewer's
+  acknowledgements hid dead chats from auto-revive too. Auto-revive now sees every dead chat, and
+  the feed shows how many revives are pending.
 
 ## [0.34.0] - 2026-08-25
 
+**TL;DR**
+
+- **Auto-revive: AgentHydra restarts dead desktop chats itself**
+- **Chats whose engine never started are detected**
+- **Every chat AgentHydra starts ends up visible in a desktop app**
+
+**Everything in 0.34.0**
+
 ### Added
 
-- **Auto-revive: the orchestrator starts dead chats itself.** The platform only runs a
-  desktop chat's turn from its own composer, so imports and restarts left chats that a human
-  had to click and type at - and one sat six hours untouched. The daemon now does the
-  click-and-type at OS level: it opens the chat in its app, pastes the revive prompt,
-  presses Enter, and only claims success after the transcript verifiably grows. Hard gates:
-  never while you have touched the keyboard in the last 45 seconds, never over a chat whose
-  transcript is actively growing, never a retired lineage, never a closed account. On by
-  default (Settings toggle to turn off), Windows only, one attempt per minute with backoff.
-- **Live-but-deaf detection.** Delivery plumbing spawns real processes whose engine never
-  starts; they masqueraded as ordinary idle chats while reviewer nudges queued into a void
-  forever (the Glimmer chat's six hours). Deterministic test now: a process with no
-  transcript record newer than its own spawn time has never run a turn - flagged for
-  auto-revive, and the reviewer is forbidden from messaging it.
-- **The visibility sweep: no invisible chats.** Any completed queue run from the last 48h
-  whose session has no desktop entry anywhere is imported into its owning running instance's
-  app, where the deaf detector and auto-revive take over - everything the machinery starts
-  ends up visible and running on screen.
+- **Auto-revive.** On Windows, AgentHydra opens a dead chat in its app, sends the revive message and
+  counts it a success only once the transcript grows. It never acts while you are typing, over a
+  chat that is working, on a finished thread or on a closed account. On by default, with a switch in
+  Settings.
+- **Unresponsive chats are detected.** A chat process that never ran a turn is flagged for
+  auto-revive, and the reviewer stops sending it messages that go nowhere.
+- **No invisible chats.** A finished queue run from the last two days with no desktop entry is
+  imported into its account's running app, where detection and auto-revive take over.
 
 ## [0.33.0] - 2026-08-25
 
+**TL;DR**
+
+- **Edit every message the orchestrator sends into chats**
+- **Settings split into General and Automation tabs**
+- **Remove and disable the orchestrator with one button**
+- **Chats left mid-turn by a normal restart are found**
+- **New work is spread across accounts' 5-hour windows**
+- **The "Max running chats" setting now saves**
+
+**Everything in 0.33.0**
+
 ### Added
 
-- **The orchestrator's prompts are yours to edit.** Every message the machinery sends into a
-  chat (the resume nudge, handoff request, dead-tasks intervention, hard-cutoff order,
-  overload retry, commit and branch nudges, crash revival, migration notice) is now a named
-  template under Settings -> Automation -> Orchestrator -> Prompts. The shipped texts stay
-  the defaults; edit any of them and your wording is what gets sent, blank one (or hit
-  Reset) and the default returns, so future shipped improvements still land. The reviewer
-  reads its outgoing texts from the live feed, so edits apply on its next wake.
-- **Settings grew tabs: General and Automation.** The scheduler, orchestrator, and
-  auto-resume monitor moved to an Automation tab; deep links (the composer's tomorrow gear,
-  the queue drawer) flip the tab and land on their section as before.
-- **Remove & disable.** One button (and `POST /api/orchestrator/uninstall-command`, MCP
-  `orchestrator_uninstall_command`) turns the orchestrator off and deletes its three shipped
-  slash-command files; Reinstall puts the shipped versions back.
-- **Stranded chats are found, not just crashed ones.** A normal PC restart shuts sessions
-  down gracefully, which deletes the registry residue the crash detector reads, so a chat
-  could sit "CLICK TO RESUME" through a restart, invisible (found live: the owner's
-  architect chat). A transcript-store scan (48h window, ~60ms) now surfaces any non-live,
-  un-archived desktop chat whose tail ends mid-turn as the same orphaned scenario.
-- **5-hour load balancing.** The routing table is now sorted running -> weekly band
-  (reset-soon counts healthy) -> lowest 5-hour session % -> lowest weekly %, and the
-  reviewer spreads same-wake placements across the top rows, so no single account's 5-hour
-  window gets hammered while others sit cold.
+- **Editable orchestrator prompts.** Every message the orchestrator sends into a chat is a named
+  template under Settings → Automation → Orchestrator → Prompts. Clear one or press Reset and the
+  shipped text returns, so later improvements still reach you.
+- **General and Automation tabs in Settings.** The scheduler, orchestrator and auto-resume monitor
+  moved to Automation, and links into those sections still land in the right place.
+- **Remove & disable.** One button turns the orchestrator off and removes its slash commands;
+  Reinstall puts them back.
+- **Stranded chats are found.** A normal restart left no trace for the crash detector, so a chat
+  could sit unfinished out of sight. Desktop chats from the last two days that stopped mid-turn are
+  now reported too.
+- **5-hour load balancing.** Accounts are ranked so new work goes to the ones with the most 5-hour
+  headroom, and several placements at once are spread across them.
 
 ### Fixed
 
-- **"Max running chats" edits from Settings now persist.** The settings route dropped the
-  `maxActiveChats` field on its allowlist, so the UI accepted the number and the daemon
-  forgot it.
+- **"Max running chats" now saves.** Changes made in Settings were accepted and then forgotten.
 
 ## [0.32.0] - 2026-08-25
 
 ### Added
 
-- **A concurrency cap for orchestrated chats, default Unlimited.** `maxActiveChats` (Settings ->
-  Orchestrator -> "Max running chats", 0 = unlimited) caps how many chats may actively work at
-  once across the whole fleet. Past the cap, idle chats wait their turn and rotate round-robin:
-  the chat idle longest gets the next free slot, and a nudged chat re-enters at the back of the
-  line, so everyone cycles through fairly with no extra bookkeeping. The watcher marks the
-  overflow `waitingForSlot` (the reviewer skips those without acking, so they resurface the
-  moment a slot frees) and publishes `runningChats`/`slotsFree` in the feed meta. Only
-  resume-to-work nudges and new work are gated; answering a chat's question, handoff
-  continuations (replacements, not additions), and crash revives never wait.
+- **A limit on how many orchestrated chats run at once.** Set it under Settings → Orchestrator →
+  "Max running chats"; it is unlimited by default. Past the limit, idle chats take turns fairly,
+  while answers to questions, handoffs and crash revives never wait.
 
 ## [0.31.0] - 2026-08-25
 
+**TL;DR**
+
+- **Chats killed by a restart or crash are found and revived**
+- **A finished thread can no longer be continued twice**
+- **Finished chats are archived and untitled chats named automatically**
+- **Parked threads are listed in Settings, with an Unpark button**
+- **A chat whose app was closed is delivered once the app is running**
+
+**Everything in 0.31.0**
+
 ### Added
 
-- **Restart recovery: a session whose process died mid-work is found and revived.** A computer
-  restart (or crash, or kill) used to make chats simply vanish from the orchestrator's view,
-  because the live-registry scan silently dropped dead-pid entries. A registry file that
-  outlived its process is now read as what it is: evidence of an un-graceful death with the
-  thread unfinished. Each becomes an `orphaned` attention item and the reviewer revives it per
-  the surface preference (desktop: the chat still sits in its sidebar, one click; terminal: a
-  visible `--resume` window) with a verify-first prompt, since a killed session's last writes
-  may be half-applied. Superseded, finished, and owner-archived residue is cleaned instead of
-  reported, so the whole flow self-heals as chats come back to life.
-- **One lineage, one continuation: the duplicate-work guard.** Chats were found overwriting
-  each other's work: two sessions continuing the same task. The done-mark ledger
-  (`session_marks`, keyed by session id) is now enforced in code. A done-marked (handed
-  off/migrated/closed) session generates no nudge items, is never a hygiene addressee, and
-  every revival path (terminal resume, desktop import, migrate, the monitor's scheduled
-  auto-resumes) refuses it with 409 `superseded`; `force:true` exists for deliberate
-  resurrections only. The reviewer rubric orders every handoff mark-first, so a crash
-  between collecting a handoff and starting its successor leaves a recoverable gap rather
-  than an unrecoverable duplicate.
-- **The archive janitor: done-marked chats get archived, continuously.** Any session the flow
-  itself marked finished (handed off, migrated onward, closed out) has its desktop entries
-  archived on the same ~10-minute cycle as the title janitor, instead of sitting open in the
-  sidebar after their work moved on. Keyed on the done-mark and nothing else, because
-  prose-reading guesses wrongly and hides live work. The standing caveat applies: a running
-  app shows the change after it next restarts.
-- **The title janitor: thread names are managed continuously, not fixed once.** Plumbing-created
-  desktop chats (imports, migrations) land "Untitled" or with a generic AI name; every ~10
-  minutes the watcher now hands the scanner's real title to any desktop entry that has none.
-  A person's rename always outranks it, and generic candidates are never written.
-- **The deaf-chat revive.** An imported chat the owner never clicked is live-but-deaf to peer
-  messages. `POST /api/sessions/:id/migrate` now takes an optional `prompt`, so the reviewer
-  revives such a chat by same-instance re-dispatch: the nudge runs as a real turn on its own
-  account and the chat lands back imported, awake. The rubric detects deafness by a nudge that
-  produces no transcript movement.
-- **Minimum plan is a dropdown** (Max 20× / Max 5× / Pro) in the Orchestrator settings instead
-  of a free-text box.
-- **Parked threads are listed, and can be unparked, from Settings.** A `/delayo` hold has no
-  expiry, but the app only ever showed a COUNT of them - so the only way to lift one was to
-  remember which chat you parked and type `/resumeo` inside it. The Orchestrator group now lists
-  each parked thread with its name, repo and how long ago, each with an Unpark button, and shows
-  up only when something is parked. (Three real threads were sitting parked, from one to three
-  hours, when this was built.)
+- **Restart recovery.** A chat whose process died mid-work in a restart, crash or kill is reported
+  and revived in its own surface, with a prompt to check half-finished work first. Leftovers from
+  finished or archived chats are cleaned up instead.
+- **No duplicate continuations.** A thread marked done (handed off, migrated or closed) gets no
+  nudges, and every revive path refuses it unless forced on purpose. Handoffs mark the old thread
+  first, so a crash cannot leave two copies running.
+- **The archive janitor.** Chats marked done are archived from the desktop sidebar every few
+  minutes. A running app shows this after its next restart.
+- **The title janitor.** Imported or migrated desktop chats with no title get their real one
+  automatically, and your own renames always win.
+- **Waking a chat that stopped listening.** Migrating a chat can now carry a message, so the
+  reviewer can wake an imported chat by running that message as a real turn on its own account.
+- **Minimum plan is a dropdown** in the orchestrator settings.
+- **Parked threads in Settings.** Each thread parked with /delayo is listed with its name,
+  repository and age, with an Unpark button.
 
 ### Fixed
 
-- **A chat that could not be delivered to the desktop app is no longer just lost.** Importing a
-  finished run into an instance's app only works while that app is RUNNING - firing it at a
-  closed one would boot that account, so it correctly refuses. But that refusal was terminal:
-  one line in the console, and the work never appeared anywhere while its queue row still read
-  "completed". Since overnight migration exists precisely for when nobody is watching, "their
-  app happened to be shut right then" was enough to silently lose the whole delivery. A
-  completed run is now armed rather than fired once: an always-on sweep retries every minute
-  until it lands, gives up after 24 hours unreachable, and records the last refusal either way.
-  The queue shows a badge on a finished run whose chat has not appeared yet, so a waiting or
-  abandoned delivery is visible instead of inferred. Covers all three import paths - the migrate
-  menu, migrate-on-limit and the desktop handoff surface. A delivery that lands but cannot write
-  the chat's title counts as delivered: the conversation is in the app, and re-firing would not
-  name it any better.
+- **Deliveries to a closed app are retried.** A finished run whose desktop app was closed used to be
+  silently lost. It is now retried every minute for up to a day, and the queue shows a badge until
+  the chat appears.
 
 ## [0.30.0] - 2026-08-25
 
 ### Added
 
-- **Dead background tasks no longer excuse a chat forever.** A session that looks "waiting on
-  background tasks" used to be skipped indefinitely by the reviewer; sessions were found sitting
-  9-12 hours on tasks whose output had stopped. The watcher now reads each session's task-output
-  mtimes: transcript AND task outputs both silent past `staleTaskMins` (default 120) flags the
-  chat as stuck on dead tasks, and the /orchestrate rubric sends an intervention ("check the
-  tasks, kill or restart, continue; do not go back to waiting") instead of deferring. Task
-  files carry no liveness metadata, so this is deliberately a silence judgment - a wedged-alive
-  task after two silent hours deserves the same poke.
-- **A limit-migrated chat now lands in the borrowed account's desktop app.** Migrate-on-limit
-  moved a 5-hour-walled run onto another account and it kept working, but headlessly: nothing
-  imported it, so the owner never saw it anywhere. The migrated resume now carries the same
-  `import_to`/`import_title` the "Migrate to another account" menu route uses, so `finalize()`
-  delivers the completed run into that instance's app as a visible chat. A same-account
-  auto-resume still imports nothing (its chat is already where it belongs, and transcripts are
-  shared), and unlike the menu route this one does not archive the old entries first - it fires
-  unattended, and archive-then-failed-import would leave the thread visible in no app at all.
-  Chat titles are peeled back to the thread's own name, so a third stop no longer reads
-  "Migrated resume: Auto-resume: Ship the parser".
+- **Chats stuck on dead background tasks get a nudge.** When a chat and its background tasks have
+  all been silent for a set time (two hours by default), the reviewer tells it to check, restart or
+  stop the tasks and carry on, instead of leaving it waiting forever.
+- **Limit-migrated chats appear in the other account's desktop app.** A run moved to another account
+  at its 5-hour limit now lands there as a visible chat, and its title no longer stacks up repeated
+  prefixes.
 
 ## [0.29.0] - 2026-08-25
 
+**TL;DR**
+
+- **The orchestrator: a watcher that looks after every open Claude chat (off by default)**
+- **Handoff continuations open in a visible terminal window**
+- **/delayo and /resumeo park and unpark a thread**
+- **Archive desktop chats, and imported chats keep their titles**
+- **Migrate a chat to another account from its menu, or automatically at the 5-hour limit**
+- **An Orchestrator section in Settings**
+- **Instance detection survives unusual characters in process arguments**
+
+**Everything in 0.29.0**
+
 ### Added
 
-- **The orchestrator: a watcher that babysits every open Claude chat** (`docs/ORCHESTRATOR.md`).
-  Off by default. A deterministic daemon pass reads the CLI's live-session registry and each live
-  chat's transcript tail every minute and publishes an attention feed: chats idle and pending
-  input (with the recap to judge from), chats whose context is past a handoff threshold, per-
-  account usage band crossings/spikes with a reset-soon exemption, repos left dirty with all
-  their sessions idle, off-main branches, and offered task chips. `GET/POST /api/orchestrator`,
-  `POST /api/orchestrator/ack`, `POST /api/orchestrator/check`, plus matching MCP tools
-  (`get_orchestrator`, `set_orchestrator`, `orchestrator_ack`, `orchestrator_check`). The
-  judgment half is an interactive reviewer chat running the shipped `/orchestrate` command
-  (`docs/orchestrate-command.md`), because peer messaging is only available to interactive
-  sessions - measured, and written into the docs. The command file ships inside the daemon
-  (bundled into compiled builds): enabling the orchestrator installs it to
-  [`~/.claude/commands/`](docs/CLAUDE-CONFIG-LAYOUT.md) when absent, and `POST /api/orchestrator/install-command` (or the
-  `orchestrator_install_command` MCP tool) installs or force-refreshes it on any machine; an
-  edited copy is never overwritten without force.
-
-- **Handoff continuations are visible now: launch a new session in a real terminal window.**
-  `POST /api/sessions/launch-terminal` (+ the `launch_terminal_session` MCP tool) opens an
-  interactive `claude` in a visible terminal, pinned to an instance's account, with the prompt
-  delivered byte-exact via a temp file. Unlike a headless queue run it appears on screen, joins
-  the live peer registry, and stays steerable by the orchestrator (proven end-to-end: launch →
-  register → cross-session message → reply). The launcher prefers the pinned instance's own
-  bundled CLI (the globally installed npm CLI, at 2.1.220, registered but hosted no messaging
-  socket) and starts from a sanitized environment (a daemon restarted from inside a Claude
-  session leaked that session's CLAUDE_CODE_* vars into launches: child-session marker,
-  transcript saving off, wrong account).
-- **The orchestrator feed now carries the desktop fleet as a routing table** (`instances`:
-  running state, account, plan, weekly %, band, reset-soon, staleness). Open means running -
-  a running instance with zero chats is open capacity (the first live run undercounted exactly
-  that case). New reviewer policy settings: `openInstances` (`never` by default /
-  `when-exhausted`), `openMinPlan`, `reviewerReservePct` (the reviewer's own account stays
-  under 75% so it can always keep orchestrating), `handoffSurface` (`terminal` / `queue`).
-
-- **`/delayo` and `/resumeo`: park a thread, unpark a thread.** Typed in any chat, `/delayo`
-  marks that session held: the watcher generates no items for it (no resume nudges, no
-  handoffs, no hygiene pings) until `/resumeo` lifts the hold. Holds persist across restarts,
-  never expire on their own, and are listed in the feed (`holds`) so a parked thread stays
-  visible as parked. `POST /api/orchestrator/hold` + the `orchestrator_hold` MCP tool are the
-  API form; both commands ship in the daemon and install alongside `/orchestrate`.
-
-- **Desktop-chat archiving** (`POST /api/sessions/:id/desktop-archive` + the
-  `archive_desktop_chat` MCP tool): flips the desktop's own per-chat metadata flag in every
-  profile that carries the chat. Honest caveat carried in the response: an instance whose app
-  is running shows the change only after that app next restarts; for closed instances it is
-  reliable. The /orchestrate handoff flow now archives the old chat's desktop entry alongside
-  the done-mark.
-- **Imports keep their titles.** The desktop app derives no title at import time (three
-  migrated threads all landed as "Untitled"), so `import-desktop` now takes a `title` and
-  writes it into the chat's metadata the moment the app creates it - the same `{title,
-  titleSource}` pair the app's own rename writes. The /orchestrate flow passes the original
-  thread's title on every import. Session-management note that shipped alongside: a chat in
-  the SAME instance as an agent can be renamed and archived live through the app's own session
-  tools; cross-instance changes go through the metadata (visible on that app's next restart).
-- **Migrate a chat to another account, from the chat's own menu.** Every Claude chat's "…" menu
-  gained "Migrate to another account": a flyout of running instances (with their accounts);
-  picking one stops the chat's live process if it has one, archives its old desktop entries,
-  runs a one-turn migration under the new account, and auto-imports the chat into that
-  instance's desktop app under its real title (`POST /api/sessions/:id/migrate`; the
-  queue-completion import hook `import_to`/`import_title` does the landing, so nothing polls).
-- **Migrate-on-limit: a 5-hour-limited run keeps working on another account.** Off by default
-  (`migrateOnLimit` in the Orchestrator settings): when a run hits its 5-hour limit but its
-  weekly is fine, the auto-resume monitor resumes it immediately on another running account
-  with headroom instead of parking it until the reset; the original account rejoins the pool
-  once its window resets. Falls back to the scheduled resume when no viable target exists.
-- **Settings gained an Orchestrator section** (between Scheduler and the auto-resume monitor):
-  the watcher's master switch with a live status line (live chats / pending items / parked
-  threads), new-chat model+effort+ultracode, handoff surface, open-instances policy with the
-  minimum plan, and the tuning numbers behind an Advanced disclosure - every knob the API had
-  that the UI did not.
-- **New-chat defaults: every orchestrator-started chat runs Opus 5 at max effort with the
-  `ultracode` opt-in by default.** Settings `newChatModel` / `newChatEffort` /
-  `newChatUltracode` govern handoff continuations, chip launches, and terminal launches; the
-  /orchestrate rubric applies them on every dispatch, and `launch-terminal` gained an
-  `--effort` pass-through.
-- **`import-desktop` refuses instances that are not running.** Aimed at a closed instance the
-  import spawn would not fail - it would BOOT that instance (measured; a display-name-derived
-  path started a sixth desktop app). The endpoint now enforces the same open-instances-only
-  rule the reviewer routing follows.
+- **The orchestrator.** A watcher checks every live Claude chat each minute and lists what needs
+  attention: idle chats waiting for input, chats near their context limit, jumps in account usage,
+  repositories left dirty, off-main branches and offered task chips. A reviewer chat running the
+  shipped /orchestrate command makes the decisions; the command installs itself when you turn the
+  orchestrator on.
+- **Visible handoff continuations.** A new session can open as an interactive Claude in a real
+  terminal window, tied to an account, where it shows on screen and can still be steered. It starts
+  from a clean environment so it uses the right account.
+- **Account routing for the orchestrator.** The feed lists every desktop account with its state,
+  plan and usage. New settings decide when closed accounts may be opened, the minimum plan, a usage
+  reserve for the reviewer's own account and where handoffs go.
+- **/delayo and /resumeo.** /delayo parks a chat so the orchestrator leaves it alone until /resumeo.
+  Holds survive restarts and are shown in the feed.
+- **Desktop chat archiving.** Archives a chat in every desktop profile that holds it; a running app
+  shows the change after its next restart. Handoffs archive the old chat too.
+- **Imports keep their titles.** Imported chats used to land as "Untitled"; they now get the
+  original thread's title.
+- **Migrate to another account.** A chat's "…" menu lists the running accounts. Picking one stops
+  the chat, archives its old entry, runs one turn on the new account and imports it there under its
+  real title.
+- **Migrate-on-limit** (off by default). A run that hits its 5-hour limit with weekly headroom left
+  continues right away on another running account, and falls back to the scheduled resume when none
+  fits.
+- **An Orchestrator section in Settings** with the master switch, a live status line, new-chat model
+  and effort, handoff and account-opening policy, and advanced tuning.
+- **New-chat defaults.** Chats the orchestrator starts use Opus 5 at max effort with ultracode by
+  default, all adjustable.
+- **Imports refuse closed accounts.** Importing into a closed instance would have started that app,
+  so it is now refused.
 
 ### Fixed
 
-- **One exotic character in one process's arguments no longer blinds instance detection.**
-  Windows PowerShell 5.1 encodes piped output in the legacy codepage, so a command line
-  containing e.g. "→" came back with raw SUB control bytes that unparsed the whole
-  `Get-CimInstance` JSON; the wmic fallback does not exist on current Windows, and every
-  instance read as not-running. The scan now forces UTF-8 output and defensively strips raw
-  control bytes before parsing.
-- **An unset numeric setting no longer clamps to its minimum.** `Number('') === 0` is finite, so
-  a settings key with no stored value and no `DEFAULT_SETTINGS` entry came out as the MIN clamp
-  instead of the intended default. The orchestrator registers its defaults and its reader also
-  treats the empty string as "unset" outright.
+- **Instance detection survives unusual characters.** One process with a character such as an arrow
+  in its command line made every instance read as not running.
+- **Empty number settings use their default.** An unset number setting used to fall to its minimum.
 
 ## [0.28.0] - 2026-08-20
 
 ### Added
 
-- **"Copy session file location" can now put a prompt and the session's name on the clipboard too.**
-  The bare path is a fact about the disk, and it is not the thing people do next with it: they hand
-  the session to another agent and ask it to carry on, which needs what the conversation was CALLED
-  and a sentence to open with. Both are switches under Settings -> Appearance -> Advanced, both
-  default on, and the prompt is editable (pre-filled "Resume where we left off"). A live preview in
-  the settings row shows exactly what will land on the clipboard, because a clipboard format
-  described in prose is one nobody can picture.
-
-  Turning both off gives back the bare path, byte for byte - a test pins that, because this action
-  shipped long before the settings did and a path with anything appended stops working the moment
-  it is pasted into a terminal. An empty prompt adds nothing rather than a leading blank line, and
-  an untitled session contributes no blank line either.
+- **"Copy session file location" can include a prompt and the session's name.** Two switches under
+  Settings → Appearance → Advanced, both on by default, with an editable prompt and a live preview.
+  With both off you get the bare path, as before.
 
 ### Fixed
 
-- **The usage-limit badge now disappears when the session is no longer stuck at the limit.** It was
-  shown for any session that had EVER hit a wall, which meant a chat that hit one in the morning and
-  was finished in the afternoon still wore it - and a badge that never clears stops meaning "this
-  one needs you", which is the only thing it is for. It now appears only while the wall is still the
-  last thing in the transcript, which is exactly the `pending` verdict the detector already
-  computed. Self-clearing, too: resuming a session appends to its file, the scan re-runs, and the
-  badge goes on its own. "Ever hit a limit" is still reachable, as a filter, where a historical
-  question belongs.
+- **The usage-limit badge clears once a session is past the limit.** It now shows only while the
+  session is still stopped at the limit; the Usage limits filter still finds sessions that ever hit
+  one.
 
 ## [0.27.0] - 2026-08-20
 
 ### Added
 
-- **A split conversation now says WHY it split, on the row.** 0.26.0 labelled the parts and guessed
-  at the cause in a tooltip ("usually because it was interrupted and resumed"), which was a guess
-  wearing the clothes of a fact. The cause is not a guess: it is the last thing that happened in the
-  file, and it is written there. Across the 30 multi-transcript conversations on this machine the
-  superseded parts ended 18x on the user pressing stop, 6x on a safety filter refusing the message,
-  3x on an ordinary turn that was picked up again later, and 2x on a server overload (529).
-
-  So the chip carries it: **"part 1 of 2 · you stopped it"**, or "· server was overloaded", or "· a
-  safety filter refused it". The last part says nothing extra, because it has nothing to explain.
-  The full sentence is on hover. The reason is on the row rather than only in the tooltip because
-  the question it answers is asked by LOOKING, not by hovering.
-
-  The reason rides the scan that already reads every record, so it costs no extra I/O, and it goes
-  through the same evidence gate as the usage-limit badge: only the CLI's own report counts. A
-  conversation that merely discusses being overloaded did not end that way. The interrupt marker in
-  particular is anchored and accepted only on a user turn, because the runtime writes it as the
-  whole content of one - an assistant repeating the phrase is quoting it, and a row claiming "you
-  stopped it" when nobody did would spend the credibility of every other reason next to it. That
-  distinction is a test, and it caught the loose first version.
+- **A split conversation says why it split.** The "part 1 of 2" chip now names the cause, such as
+  "you stopped it", "server was overloaded" or "a safety filter refused it", with the full sentence
+  on hover. The cause is taken only from the CLI's own record.
 
 ## [0.26.0] - 2026-08-20
 
 ### Added
 
-- **A conversation stored as several transcripts now says so, instead of looking like several
-  chats.** Interrupt a session and resume it and the CLI does not keep writing to the same file: it
-  opens a new transcript, replays the history and carries on. One conversation therefore becomes
-  two or three rows with the same title, different message counts, and no visible relationship  - 
-  which is what "why is this here twice?" looks like from the outside. Those rows now carry a
-  "part 1 of 2" chip explaining that they are one conversation split by an interruption.
-
-  **They are labelled rather than folded, and that was a measurement rather than a preference.**
-  Hiding all but the fullest copy is the obvious fix and it is wrong. Across all 36 duplicate
-  transcripts on a real store, EVERY older copy held turns the newer one did not - and they were
-  not bookkeeping, they were things the user had typed, usually the last thing said before the
-  interruption ("See you soon.", "skip domains4sale.uk,, do the rest"), which the resumed file
-  never carried over. Not one of the 36 could have been absorbed without deleting somebody's words,
-  so nothing is hidden.
-
-  The grouping key is the first message's uuid, captured on the scan that already reads every
-  record. A uuid is unique, so two transcripts whose first message is the same message necessarily
-  share that history - no content comparison, no reading a second file, and no reliance on the
-  title, which genuinely different chats routinely share. Copies are numbered oldest first, so the
-  numbering reads chronologically and the message count grows with it.
+- **A conversation saved as several transcripts is labelled as one.** Interrupting and resuming a
+  session makes the CLI start a new transcript, which looked like duplicate chats. Those rows now
+  carry a "part 1 of 2" chip. They are labelled rather than merged, because each older copy holds
+  messages the newer one lacks.
 
 ## [0.25.2] - 2026-08-20
 
 ### Fixed
 
-- **Most of the "Unknown account" rows turned out to be a second copy of a chat already in the
-  list, and they can now be named.** Reading all 64 of them settled what they actually were: none
-  was a subagent, three were continuations of a compacted chat, and 27 were the same conversation
-  stored twice - same folder, same minute, and 93-100% of the smaller transcript's messages present
-  in the larger, checked by message id rather than by title. Claude Desktop keeps its record
-  pointing at one copy, so the other copy has no id to be found by, and that is the one that showed
-  up with nothing against it.
-
-  The origin join added in 0.25.1 was already the right instrument; its window was just far too
-  narrow. Desktop stamps a chat's creation time when it opens the chat, while the CLI stamps its
-  first turn only once the model has answered, and on a cold start that gap is seconds, not
-  milliseconds. Widening it from 2s to 60s takes the unattributed rows from 64 to 13.
-
-  60s is measured, not chosen for feeling right. Every candidate width was run against the ~300
-  sessions Desktop DOES link by id, asking not "how many does this recover" but "does it ever
-  contradict an account we already know": 60s is correct on 305 of them with zero wrong answers and
-  zero ambiguous origins, the first ambiguity appears at 120s, and the first wrong answer at 240s.
-  The constant carries that table, and a test pins the boundary in both directions so widening it
-  has to be a deliberate decision with the cross-check re-run.
-
-  Three of the twin pairs share a title and share no messages at all - different conversations that
-  happen to be called the same thing. That is exactly why this join keys on where and when a
-  conversation began and never on what it is called.
+- **Most "Unknown account" rows now show their account.** Many were a second copy of a chat already
+  in the list, stored with no account link. They are now matched to an account by working folder and
+  start time, within a margin checked so it never contradicts a known account.
 
 ## [0.25.1] - 2026-08-20
 
+**TL;DR**
+
+- **Sessions with no known account say "Unknown account"**
+- **More sessions are matched to their account**
+- **The instance filter and the instance chip always agree**
+
+**Everything in 0.25.1**
+
 ### Fixed
 
-- **A session with no account no longer looks like a session whose account we forgot to draw.** The
-  chip naming which Claude instance ran a conversation was simply omitted when we did not know, and
-  an omitted chip is invisible: on a real store that was 64 of the newest 400 sessions, all of them
-  launched from Desktop, showing nothing at all where the account belongs. Worse, the chip before it
-  is the session's SIZE, so on those rows "Marathon" became the last word on the line and read like
-  somebody's name. The account chip is now always present for a Claude session, saying "Unknown
-  account" with a tooltip explaining that Claude Desktop kept no record rather than that AgentHydra
-  is hiding one - and the size chip explains on hover that it is a size, from message count and
-  elapsed time, and not a name.
-
-- **19 of those 64 turned out to be knowable after all.** Desktop links its metadata to a transcript
-  by session id, and for these it had written no such row. It had, however, written down the same
-  conversation's working directory and creation instant. Matching on those two - and ONLY where the
-  answer is unique, never where two accounts could both claim it - recovers the account without
-  going near the title match this module has always refused, because two chats in one project are
-  routinely called the same thing while a folder plus a millisecond timestamp is not a coincidence
-  that happens. The remaining 45 have no Desktop record anywhere on disk, verified by searching
-  every store it keeps, so "unknown" there is the true answer and not a gap.
-
-- **The instance filter and the instance chip can no longer disagree.** They were answering from
-  different places: the filter looked through every id a row speaks for, while the chip asked only
-  about the surviving one. Both now go through a single resolver, so a row the filter returns always
-  displays the account it was filtered by.
+- **"Unknown account" instead of nothing.** Sessions launched from Desktop with no account record
+  now say so, with a tooltip explaining why. The size chip explains on hover that it is a size and
+  not a name.
+- **Some unknown accounts are recovered.** A session is matched to its account by working folder and
+  exact start time, but only when exactly one account fits.
+- **The instance filter and chip agree.** Both use the same lookup, so a filtered row always shows
+  the account it was filtered by.
 
 ## [0.25.0] - 2026-08-20
 
+**TL;DR**
+
+- **List the sessions a usage limit stopped, with a badge on each**
+- **MCP clients can read all chat history, not just the last day**
+- **Body search finds conversations from Cursor, Windsurf, Zed, Copilot and others**
+- **Each session shows where its title came from**
+
+**Everything in 0.25.0**
+
 ### Added
 
-- **The sessions a usage limit killed are now a list you can pull up.** AgentHydra could already
-  tell that a conversation had died at a quota wall - that is how the auto-resume monitor decides
-  what to restart - but the only place that verdict surfaced was the monitor's own to-do list,
-  which hides anything already resolved. So "which of my chats got cut off, and which are still
-  sitting there?" had no answer. It does now: **List options -> Usage limits** narrows the session
-  list to the conversations a wall stopped, or to the ones *still* stopped at one, and every row
-  carries a badge with the provider's own notice on hover ("You've hit your weekly limit · resets
-  3am"). On the machine this was written against that is 79 sessions, 40 of them still parked.
-  Over MCP the same thing is `list_rate_limited_sessions`, plus a `rateLimited` scope on
-  `list_sessions` and a `limit_stop` field on every session row.
-
-  The judgment behind it was not re-implemented for the list. It was lifted out of the monitor's
-  tail-reader into one shared accumulator, so the badge and the auto-resume queue physically cannot
-  disagree, and it keeps that reader's hard-won evidence rule: only the CLI's own error report
-  counts, never model prose or tool output, because the loose version marked every run that merely
-  TALKED about rate limits. A transient 529 is still not a usage limit. Claude only - Codex and
-  OpenCode record an error, but not in a form worth trusting, and a false badge is worse than a
-  missing one.
-
-  It costs nothing to compute. The list scanner already JSON-parses every record of every
-  transcript to work out a title and a message count; the verdict rides along on that pass and is
-  persisted with it, so the filter is a SQLite query rather than a thousand file reads. Cached
-  scans now carry a version stamp, because a row written before the scanner learned this would
-  answer "was this rate limited?" with NULL forever - and a NULL there reads as "no", which would
-  have shipped as an empty list on a machine full of stopped sessions.
-
-- **An MCP client can finally read ALL the local chat history, rather than the last day of it.**
-  `list_sessions` had no time parameter and the route it calls defaults to 24 hours, so an agent
-  asked to go through "all my chat histories" issued the only call available to it and got one
-  day - 19 rows out of 1,231 here - with nothing to indicate anything had been withheld. The tool
-  now takes `period`, explicit `since`/`until` bounds, `offset` for paging past the 500-row
-  ceiling, `project`, `instance` and `archived`, and its description states the 24-hour default in
-  its first sentence, because a parameter only helps a client that knows it needs one. `foreign`
-  joined the `source` enum as well, so the conversations from Cursor, Windsurf, Zed, Copilot CLI
-  and the rest are addressable rather than invisible.
-
-  New `list_projects` is the index of the index: every folder that has conversations in it, with a
-  session count and a per-provider breakdown, read from the transcript index rather than from any
-  transcript. A thousand sessions collapse to a few dozen rows, which is small enough to hand to an
-  agent whole - and it is how a client finds out what "all" contains before querying it.
+- **A usage-limit list.** List options → Usage limits shows the sessions a usage limit stopped, or
+  only those still stopped, each with a badge showing the provider's notice on hover. It works over
+  MCP too and uses the same judgment as auto-resume.
+- **Full chat history over MCP.** Listing sessions over MCP now takes a time range, paging, and
+  project, instance and archive filters, and says up front that it defaults to the last day.
+  Conversations from other tools can be listed, and a new project list shows every folder that has
+  conversations.
 
 ### Fixed
 
-- **Searching conversation bodies now finds the ones from Cursor, Windsurf, Zed, Copilot and the
-  rest.** Body search streams each transcript line by line and JSON-parses every line - right for
-  Claude and Codex, and wrong for the fourth reader, whose stores are directories of JSON, one big
-  JSON document, or a database. Not a line of those parses as a record, so every one was skipped and
-  the file reported zero matches. These rows were already in the sweep, so the miss was silent: the
-  session was listed, searched, and declared clean. Measured on a real store before the fix, a
-  9-line Copilot workspace yielded 0 parseable lines and 0 usable events; after it, one ordinary
-  word turned up 11 of these sessions. Search now asks each store's own adapter, exactly as the
-  transcript view and the exporter already did. A confident zero is the worst answer a search can
-  give, because it is the one that makes the caller stop looking.
-
-- **Every session now says where its title came from.** Threads were turning up under names their
-  owner did not recognise, and there was no way to ask the app which of the four title sources had
-  produced one. Rows carry `title_source` (`custom` / `ai` / `store` / `envelope` / `message` /
-  `id`) and the UI puts it on the title's tooltip. The case worth naming is `envelope`: when the
-  first turn arrives wrapped in a pseudo-tag carrying a `name` attribute - `<scheduled-task
-  name="nightly-sweep">` - that name becomes the title, so the string was chosen by whatever wrote
-  the wrapper (a scheduler, a hook, a harness) and may match nothing the user has ever named. Those
-  rows now print the tag beside the title instead of leaving an unattributable label sitting there.
+- **Search covers other tools' conversations.** Body search silently skipped conversations from
+  Cursor, Windsurf, Zed, Copilot and similar tools; it now reads them the way the transcript view
+  does.
+- **Each session says where its title came from.** The title's tooltip names its source, and a title
+  taken from a wrapper tag, such as a scheduled task's name, shows that tag beside it.
 
 ## [0.24.3] - 2026-08-18
 
 ### Fixed
 
-- **Two windows of AgentHydra can now be on two different tabs.** Opening a second window to watch
-  Sessions beside Instances did not work: clicking a tab in one window moved the other window to
-  the same tab, live. Which tab you were on was a single `localStorage` key, and the storage helper
-  behind it listens for the browser's cross-window `storage` event by default - two windows of the
-  app are the same origin, so every click was broadcast to the other one. That key was doing two
-  different jobs at once, and they have been split. Which tab THIS window is showing now lives in
-  `sessionStorage`, the one storage scoped the way people expect: it survives a reload (an update,
-  a restart, a stray F5 - the reason the tab was ever remembered), the browser copies it into a
-  duplicated tab so the duplicate opens on what you were looking at, and from that moment the two
-  windows are independent, because sessionStorage has no cross-window event to leak through. Which
-  tab a BRAND-NEW window opens on is still the shared, daemon-mirrored preference, so a first
-  launch - or a launch on a hopped port with an empty localStorage - still lands where you left
-  off. A window that has been somewhere is never relocated by anything but its own user, and a
-  click made while that shared value is still being fetched now beats the answer it is racing.
+- **Two AgentHydra windows can sit on different tabs.** Switching tabs in one window used to switch
+  the other too. Each window now remembers its own tab across reloads, and a brand-new window still
+  opens where you last were.
 
 ## [0.24.2] - 2026-08-15
 
 ### Fixed
 
-- **Quitting from the tray icon while an update is installing no longer leaves you with no app at
-  all.** Applying an update starts the replacement daemon and shuts the old one down 800ms later.
-  For that fraction of a second the replacement was a CHILD of the daemon on its way out, and the
-  tray's Quit does not stop one process, it force-kills a whole process tree. A Quit landing in
-  that window therefore killed the outgoing daemon and the incoming one together. Neither
-  `detached: true` nor `.unref()` removes a child from its parent's tree on Windows, which is
-  exactly why the shared launch helper the browser and editor launches already went through
-  exists; the relaunch simply never used it. Measured directly: with the old spawn the replacement
-  dies to a tray-style tree-kill, with the new one it survives.
-- **The relaunch now survives Windows throwing away the environment.** That launch helper hands the
-  process off to Windows' own process-creation service, which does not pass on environment
-  variables, and the port and the "you are the replacement" signal were both environment
-  variables. Left as they were, the replacement would have concluded it was an ordinary second
-  copy, seen the outgoing daemon still answering, and exited, which is the zero-daemons failure
-  again by a different route. Both now travel as command-line arguments, which that service does
-  deliver, with the environment kept as a fallback for macOS and Linux.
+- **Quitting from the tray during an update no longer leaves no app running.** The new daemon was
+  started as a child of the old one, so Quit closed both. It now starts independently.
+- **The relaunch after an update keeps its settings on Windows.** The port and the handoff signal
+  now reach the replacement, so it no longer exits thinking it is a second copy.
 
 ## [0.24.1] - 2026-08-15
 
+**TL;DR**
+
+- **Updates keep AgentHydra on the same port, so the open tab keeps working**
+- **Dropdown menus fit their items**
+- **A chat's toolbar is four buttons, and composer settings are icons until you change them**
+
+**Everything in 0.24.1**
+
 ### Fixed
 
-- **An update no longer moves the daemon to a different port and kills the tab you had open.** The
-  auto-update relaunch handed its successor `PORT`, the port this daemon *preferred*, rather than
-  the port it was actually serving on. Those are the same number only until something else takes the
-  preferred port once; from then on every update aimed the successor at the wrong one, and the
-  successor uses that value for both of its jobs. So it waited out its full 8-second handoff timeout
-  on a socket its predecessor never held and nobody was going to release, and then bound the
-  preferred port instead of the one your browser was talking to, so the open dashboard's event
-  stream died against a daemon that was otherwise perfectly healthy. That is the "localhost keeps
-  breaking and I have to restart it by hand" report: the runtime pointer follows the new port, the
-  window does not, and relaunching the executable just finds the new daemon answering and exits
-  without opening anything. In one field log all eleven auto-update relaunches moved off the
-  configured port, ten of them after burning the full 13 seconds of both port waits. The successor
-  is now given the bound port, so the wait applies to the socket actually being released and the
-  daemon holds one address across updates.
-- **Dropdown menus are as wide as their widest item, not as wide as the button that opened them.**
-  The kit's `DropdownMenuContent` pinned its width to `--reka-dropdown-menu-trigger-width`, so a
-  menu hanging off an icon button was ~30px wide, i.e. clamped to the `min-w-32` floor, and every
-  label wrapped onto two or three lines. Nobody noticed because each usage site passed a fixed
-  `w-52`/`w-56`/`w-72` that overrode it, which is the other half of the same bug: fifteen hand-picked
-  widths that pad short menus out and go stale the moment the labels change. The binding is gone
-  (`SelectContent` keeps its own on purpose, because a select panel really should match its field),
-  and every usage site's `w-N` became `max-w-N`, so no menu can be wider than it is today and
-  anything shorter shrinks. The transcript ⋯ menu went 274px → 203px, list options 224px → 212px,
-  the instance filter submenu 320px → 209px, with nothing wrapping. Same fix ContextMenuContent
-  received for the same reason; it lives in `lunarwerx-ui`, so the other kit apps pick it up on
-  their next sync.
+- **Updates no longer move AgentHydra to another port.** After an update the new daemon could start
+  on a different port, so the open tab lost its connection. It now takes over the port actually in
+  use.
+- **Dropdown menus are as wide as their widest item.** Menus opened from small buttons were squeezed
+  and wrapped their labels; they now size to their content.
 
 ### Changed
 
-- **An open chat's toolbar is four buttons instead of nine, and the composer's run settings are
-  icons until you change one.** The header row above a transcript had grown to find, display, open,
-  save, copy-file, copy-path, reopen-in-terminal, session-id and close. It shares a wrapping flex
-  with the session title and its metadata, so on any narrow pane that row of icons pushed the
-  title's own line out of the way, and nine unlabelled glyphs is a row you read rather than aim at.
-  Find, copy-the-path and copy-the-session-id stay out, because those are the ones you reach for
-  mid-read or paste into another tool; close stays out because a close button belongs nowhere else.
-  Everything else moved into a ⋯ menu, the same treatment the session list's own toolbar already
-  had. The display toggles keep their trigger's "something is hidden" state on the ⋯ button, so a
-  filtered transcript still says so while collapsed. Menu rows carry no explanatory second line:
-  the labels are full sentences already, and a menu that explains every row is one you read rather
-  than aim at. The path button did stop sharing the clipboard glyph with the session-id button next
-  to it, since two identical glyphs side by side are indistinguishable at icon size.
-
-  In the composer, model, effort and permissions are overrides on top of what the chat is already
-  running with, and the common case is that none of them are set, so three chips reading
-  "Model · Effort · Permissions" spent the row's width naming dimensions rather than stating facts.
-  Each is now an icon while it sits at the default and grows a label only once you override it, with
-  a rich tooltip carrying the name and what it does. The row reads as "what did I change". Account
-  and working directory name a fact rather than an override, so they keep their labels wherever
-  there is room. The whole row is a container query, not a viewport one, because the sessions
-  sidebar is drag-resizable and a wide window can still leave this box narrow: at 392px every label
-  drops and the row is nine icons on one line. The queue builder, where a new chat is started and
-  nothing is inherited, keeps its full labels.
-
-- The kit drift-check is now reachable as `check:local`, a name a pre-push runner can look for. It
-  is the one gate GitHub structurally cannot run, since it compares this app's synced copies against
-  a private sibling repo a public workflow can never check out, so its only enforcement was a
-  pre-commit hook that `--no-verify` skips and that silently does nothing on a machine without the
-  sibling checkout. Developer-facing only; nothing about the app changes.
+- **A simpler chat toolbar.** Find, copy path, copy session id and close stay on the toolbar, and
+  the rest moved into a ⋯ menu that still shows when display filters are on. The path and session-id
+  buttons now have different icons.
+- **Composer settings are icons until you change them.** Model, effort and permissions show as icons
+  at their defaults and gain a label once overridden, and the row adapts to the width of its pane.
+  The queue builder keeps full labels.
 
 ## [0.24.0] - 2026-08-15
 
 ### Added
 
-- **One conversation is now one row, however many files Claude Code split it into.** Three rows
-  titled "rQubit T10-M06 v1 piece hash parity" with 823, 1071 and 3179 messages were not three
-  chats and were not subagents. They were one conversation that ran out of context twice: 881
-  message uuids appear in more than one of those files, 96.4% of the smallest. When Claude Code
-  compacts a session it does not keep writing to the same transcript, it opens a NEW file with a
-  NEW session id, replays a summary of what came before, and carries on; resuming a compacted
-  session does it again. Every one of those files is a legitimate transcript with its own id, so an
-  index keyed on session id, which is the only key the store offers, saw three conversations and
-  listed three rows. On this machine 94 of 1,208 conversations are continuations, so this was never
-  a one-off.
-
-  What links them is a `logicalParentUuid` on the continuation's opening record, naming the message
-  in the previous transcript it was compacted from. That target is an ordinary message sitting
-  anywhere in the parent (82% of the way through, in the case above), not a header, so resolving it
-  means reading candidate transcripts. That work happens BETWEEN sweeps, never inside one, and its
-  answers are written to disk: a transcript's history cannot change once written, so each link is
-  resolved at most once ever. The search tries candidates in order of how close their last-write
-  time is to the continuation's, because a compaction is immediately followed by the continuation
-  that replaces it, so the parent is almost always the first file opened.
-
-  The row that survives is the LAST in the chain, because that is where the conversation actually
-  is: clicking it opens what you were doing, not the truncated original. Superseded transcripts stay
-  in the index exactly as subagents do, so nothing that counts tokens or money loses sight of them,
-  and a transcript whose successor is missing is kept rather than hidden, because it is then the
-  only surviving evidence that the conversation happened.
+- **One conversation is one row, however many files it was split into.** When Claude Code compacts a
+  session it continues in a new file, which showed up as several rows with the same title. They are
+  now linked and the row opens the latest part. Earlier parts are still counted in costs, and a part
+  whose continuation is missing stays listed.
 
 ## [0.23.1] - 2026-08-14
 
 ### Fixed
 
-- **Opening a chat took 16 to 23 seconds, and how big the chat was had nothing to do with it.** A
-  672 KB conversation was as slow as a 12.6 MB one, which is the tell: the wait was never the file,
-  it was the queue in front of it. AgentHydra keeps an index of every transcript on the machine,
-  23,000 files and 8.9 GB on the machine this was found on, and building it takes seconds. The
-  index stamped itself with a clock reading taken **before** that build and then trusted it for two
-  seconds, so a snapshot was already ~9 s old the instant it was stored and could never once be
-  considered fresh. Every request therefore scheduled another rebuild, forever. Worse, the rebuild
-  that was described as running in the background used the **synchronous** builder, which holds
-  Bun's event loop for its entire duration, so `/api/health`, a route that reads nothing at all,
-  answered in 6.6 seconds. The daemon spent essentially all of its time rebuilding an index it
-  could never keep, and every request queued behind that.
-
-  A snapshot is now stamped when the sweep **finishes**, which is when it actually became true, and
-  is trusted for 10 s: comfortably longer than a sweep, and deliberately just under the 12 s
-  session-list poll, because a lifetime longer than the poll consuming it leaves the list a full
-  cycle behind. Revalidation goes through the async builder, and the sync and async paths now share
-  one in-flight guard instead of two that could not see each other. A lookup for a session that is
-  not in the snapshot (a chat created moments ago, or a deleted one the UI is still polling) no
-  longer buys a blocking whole-store scan: the routes that can wait now await a sweep that yields.
-
-  Two stores were re-read from scratch on every sweep and are now kept against file mtime and size:
-  VS Code Copilot, whose chats have to be JSON-parsed in full because that is the only place their
-  titles live (5.2 s for 355 chats, the single largest slice), and OpenCode, whose listing sizes
-  each session with a subquery that walks the whole message table once per row (939 ms). The VS Code
-  reader also yields while it parses, so the first sweep after launch cannot freeze the app.
-
-  Measured on the same machine, same three chats: opening a chat 16,540-23,211 ms → 1-5 ms; a warm
-  sweep ~9,500 ms → ~1,050 ms; the worst event-loop stall in steady state ~9,000 ms and continuous →
-  64 ms; the stall on the first cold sweep after launch 6,490 ms → 1,523 ms. A CI guardrail now
-  fails the build if the index is stamped before its own sweep, if its lifetime drops below the time
-  a sweep takes, if it exceeds the poll that consumes it, or if revalidation goes back to the
-  blocking builder.
-
-- **The chat pane and the session list could stack up requests against a slow server.** Neither poll
-  checked whether its previous request had come back, so a server that answered slower than the
-  interval asking it accumulated a queue of identical questions whose answers were all discarded but
-  the last. The newest, the only one that mattered, waited behind every stale one. Both now
-  hold off while a request is outstanding. The session list **coalesces** rather than skips, because
-  every filter control calls the same refresh: dropping one would leave the list showing the old
-  filter until the next tick. A chat read that fails after you have already clicked away no longer
-  blanks the conversation you moved to.
-
-- **`bun run dist` said `EACCES: permission denied` when the real problem was that AgentHydra was
-  running.** Windows cannot unlink a running executable, so wiping `dist/` fails whenever a
-  previously built AgentHydra is still up, which is the normal state on a machine where the app is
-  installed from this checkout. The error named a permission and a directory, so it sent you
-  looking at ACLs and elevation; the actual fix is to quit one process. The wipe now goes file by
-  file (one lock cannot take the whole clear down with it) and, when something is locked, names the
-  offending process and its pid, plus the `--outfile` escape hatch for building without touching
-  the running app. Verified against a real lock, not a simulated one: a running `dist/AgentHydra.exe`
-  now produces `pid 85060  D:\...\dist\AgentHydra.exe` and the command to end it.
+- **Opening a chat is near instant.** It took many seconds whatever the chat's size, because the
+  transcript index always counted as stale and rebuilt itself while blocking the app. The index now
+  stays fresh, rebuilds in the background, and re-reads VS Code Copilot and OpenCode chats only when
+  they change.
+- **The chat pane and session list no longer pile up requests.** Each waits for its previous request
+  before sending another, a filter change still takes effect right away, and a failed read no longer
+  blanks the chat you moved to.
 
 ## [0.23.0] - 2026-08-13
 
+**TL;DR**
+
+- **An agent can tell which account it is spending, including in Claude Desktop**
+- **Usage checks work for Desktop accounts**
+- **Every agent gets AgentHydra's operating rules automatically**
+- **Usage budget works with no arguments and for the default login**
+- **Every instance shows its rate-limit tier**
+
+**Everything in 0.23.0**
+
 ### Fixed
 
-- **An agent can now tell which of your accounts it is spending.** `whoami` read one environment
-  variable, `CLAUDE_CONFIG_DIR`, and fell back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when it was unset.
-  That is right for a CLI instance and wrong for **every Claude Desktop session**, which sets no
-  such variable at all: the account is chosen by the Electron host's `--user-data-dir`. So a Desktop
-  agent reported `instance: null` and the default login while actually spending a different
-  account's quota, and `check_my_usage` then read that default login's `.credentials.json` and came
-  back `check_failed` with every percentage null. An agent asking "how much do I have left?" got no
-  answer, about the wrong account.
-
-  Identification is now layered and stops at the first signal that lands: `CODEX_HOME` →
-  `CLAUDE_CONFIG_DIR` → `CLAUDE_CODE_EXECPATH` → the instance folder holding this session's
-  `claude-code-sessions/**/<hostSessionId>.json` → the parent `claude.exe`'s image path → the
-  grandparent Electron host's `--user-data-dir`. `CLAUDE_CONFIG_DIR` deliberately outranks the
-  desktop signals, because when it is set that is the credential `claude` uses, even in a terminal
-  opened from inside a Desktop instance.
-
-  **The obvious fixes are all wrong, and each was tried first.** Identifying by the session's own
-  transcript fails because a Desktop-instance session still writes to the DEFAULT
-  [`~/.claude/projects/…`](docs/CLAUDE-CONFIG-LAYOUT.md): that proves where a session LOGS, not which account PAYS. Reading
-  [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md)'s `oauthAccount.emailAddress` fails because it is the machine's default login,
-  not the running session's credential; it looks authoritative and is not. And reading
-  `CLAUDE_CODE_EXECPATH` alone fails **only where it matters**: a stdio MCP server gets a reduced
-  environment without it, so that detector passes every shell test and then does nothing in
-  production. Hence the session-file and process-ancestry layers, and hence the regression test
-  built on the exact environment an MCP server really sees.
-
-  Nothing is asserted without proof. Every answer carries `confidence` (`exact` when a signal named
-  the credential store, `assumed` when it is the default login by elimination, `none` when this is
-  not Claude Code at all), the `method` that won, the literal `clues` that produced it (an env
-  value, a file path, a pid), and everything `ruledOut` and why. A `warning` appears only when the
-  answer is uncertain or when two signals disagree, so its absence is itself the signal that a
-  number can be quoted without a hedge. Collapsing "I could not tell" into "it is the default
-  login" is precisely how the original bug reported a confident wrong account.
-
-- **`check_my_usage` reads the desktop credential store.** A desktop instance keeps its token in
-  Electron safeStorage, not in a `.credentials.json`, so the old `configDir` read could not open it
-  even when pointed at the right folder. The self-check now routes through the instance number and
-  its full credential chain (own token → linked CLI login → dispatch account), which is the same
-  path `/api/usage?instance=N` already used. An unmanaged desktop user-data dir is answered
-  in-process for the same reason.
+- **Agents can tell which account they are using.** Claude Desktop sessions reported no account and
+  then checked the wrong one. AgentHydra now tries several signals in order, and each answer says
+  how sure it is, which signal decided it and what was ruled out, with a warning only when it is
+  unsure.
+- **Usage checks read Desktop credentials.** Checking usage from a Desktop instance now reads that
+  instance's own login instead of failing.
 
 ### Added
 
-- **AgentHydra now ships its own operating rules to every agent, so a human never has to type
-  them.** Two channels, because they reach different moments:
-
-  The MCP `initialize` handshake returns `instructions` (the shared engine gained an optional
-  passthrough, so every sibling app can do this too). The client shows that block to the model once
-  per session, **before it calls anything**. That timing is the entire point: a tool description is
-  only read once the model has already decided to call that tool, which is useless for the two
-  behaviours that matter, checking quota BEFORE the expensive thing and saving your work BEFORE
-  being cut off. Neither is discoverable from a tool list. It is deliberately short, and a test
-  caps its length: it rides in context on every request of the session, so each line is rent, and a
-  guidance block that grows a line at a time ends up skimmed instead of read.
-
-  And every usage or identity answer now carries a `nextStep`: ONE line naming the single action to
-  take, ordered by urgency so the most expensive mistake is always the sentence shown. `advice`
-  already described the situation; this is the instruction, at the top level, because an agent
-  reading a nested object has to decide for itself what a severity implies and the decision it
-  skips when busy is exactly the one that costs the task. When the account could not be confirmed
-  the line suppresses the account name entirely rather than guessing: a confident wrong
-  attribution gets acted on, a missing one gets questioned.
-
-- **`usage_budget {}` with no arguments budgets the caller.** It used to throw unless you named an
-  instance, dir or account, which meant the one caller who most needs a burn rate, an agent deciding
-  whether it can finish, had to already know its own instance number, and a Desktop session had no
-  way to learn it. The response carries an `identity` block naming the account it measured.
-
-- **`/api/usage/budget?configDir=…`.** The plain [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login belongs to no instance and no
-  dispatch account, so it could get a percentage from `/api/usage` but never a burn rate, which is
-  the number that actually decides whether to keep working.
-
-- **Rate-limit `tier` on every instance row** (`Pro`, `Max 5×`, `Max 20×`), beside the existing
-  `plan`. They answer different questions and can disagree: `plan` is what the subscription is
-  called (an org seat reads "Team"), `tier` is what the quota is. Headroom differs by roughly 20×
-  between Pro and Max 20×, so pacing cannot be read off the plan name.
+- **Operating rules for every agent.** An agent connecting over MCP receives a short set of rules up
+  front, such as checking quota before expensive work and saving before being cut off. Every usage
+  answer also carries one line naming the next step, and leaves out the account name when it is not
+  confirmed.
+- **Usage budget without arguments.** With no arguments it budgets the calling agent's own account
+  and says which account it measured.
+- **Usage budget for the default login.** The plain Claude login, which belongs to no instance, can
+  get a burn rate too.
+- **Rate-limit tier on every instance.** Each instance shows Pro, Max 5× or Max 20× beside its plan
+  name, because the plan name does not tell you the quota.
 
 ## [0.22.0] - 2026-08-13
 
 ### Fixed
 
-- **OpenCode subagents are no longer listed as separate conversations.** OpenCode is the one store
-  that keeps a subagent as a row in the same `session` table as a real chat, told apart only by a
-  `parent_id` column this repo never read. So a single six-way review filled the sidebar with seven
-  near-identical rows, one conversation and six `(@investigator subagent)`, and on the machine this
-  was found on, 45 of 92 OpenCode sessions were subagents. Claude and Codex already reach this
-  verdict in `server/src/transcript.ts`; OpenCode now reaches it one layer later, in the list
-  builder, for the reason below.
-
-  **The obvious fix would have deleted money.** Those child rows carry their own tokens, 1.74M of
-  them, about a sixth of all OpenCode spend, against models the parent never ran (21 of 45 children
-  used a different model). The analytics scan walks every index row by id, so dropping subagents
-  from the index would have silently removed that spend from every total, and `findTranscript`
-  would have stopped resolving them for the open, export and delete routes. They stay indexed and
-  are filtered only where the list of *conversations* is built, so totals and lookups are untouched.
-
-  Two edges are handled rather than assumed away. A store without the column (an older OpenCode, or
-  Kilo, which writes this same SQLite) would have thrown into the one `catch` that guards the
-  listing and returned an empty array, reporting **no sessions at all** rather than no subagents; a
-  `pragma` probe asks before naming the column. And parentage that does not form a tree (a row
-  claiming itself, or two rows claiming each other) would have seen an existing parent on every side
-  and hidden all of them, so ownership is resolved by walking the chain to a real top-level session:
-  anything else keeps its row, on the existing rule that nothing may be silently unowned.
+- **OpenCode subagents are no longer listed as separate chats.** They are hidden from the session
+  list but still counted in costs, and still open, export and delete normally. Older OpenCode and
+  Kilo stores keep working.
 
 ### Added
 
-- **A session row says when it stands for a fan-out.** Rows that spawned subagents now carry a
-  `5 subagents` chip. Hiding 45 rows with nothing on screen to account for them is how a fix reads
-  as data loss, and the count is credited to the top-level session rather than to the immediate
-  parent, so a chain two deep still reports on the row a reader can actually see.
+- **A row says how many subagents it ran.** Sessions that spawned subagents carry a chip such as "5
+  subagents".
 
 ## [0.21.0] - 2026-08-13
 
+**TL;DR**
+
+- **Spend totals corrected for Claude, Codex and OpenCode**
+- **More tools read: Claude Cowork, Grok, Kimi, VS Code Copilot, Copilot CLI and Zed**
+- **About forty more agent tools detected and listed**
+- **Prices downloaded daily, and OpenAI models priced**
+- **Analytics shows the token split, tokens by tool and a provider filter**
+- **The background scan now covers the whole store**
+- **Better charts: accurate hover cards, expandable lists, monthly bars for long ranges**
+
+**Everything in 0.21.0**
+
 ### Added
 
-- **The background warm now finishes.** It was a single 120-second burst, which covered a whole
-  store back when the scan read 1,229 Claude transcripts; now that it also reads their 16,579
-  subagent transcripts, one burst reaches about a third of the store and stops. That left the
-  analytics tab showing a partial answer with no sign anything would ever complete it, and a Rescan
-  button the user was expected to keep pressing. It now runs in bounded chunks with a pause between
-  them until the store is covered, and stops the moment a chunk makes no progress.
-
-- **`bun run audit`: prove the numbers against the store.** Three counting errors shipped in one
-  day and every one of them passed a green test suite, which is the part worth fixing. A unit test
-  over a hand-written fixture pins the behaviour its author believed in; when the belief is wrong,
-  the fixture encodes the same wrong belief and the test agrees enthusiastically.
-
-  So the audit does two things a unit test cannot. It **accounts for every file**: each transcript
-  in each store is either indexed as a session, attached to one, or excluded for a NAMED reason,
-  and anything left over is a failure by definition, because nobody decided about it. And it
-  **recounts the tokens by a second implementation** that shares no code with the first: no import
-  of the usage parser, no call into the analytics scanner, enforced by a test that reads the source.
-  Two implementations only catch a wrong assumption while they are genuinely two.
-
-  It found real problems on its first run. Cowork's sandbox keeps a whole Claude Code home of its
-  own, so a run's directory holds the audit log, the CLI's own transcript and that session's
-  subagent tree; the file check reported them unowned. Chasing that surfaced two more: the store
-  scanner skipped dot-directories, so those nested transcripts were invisible to the indexer
-  entirely, and some Cowork runs write no audit log at all, so their nested transcript has to become
-  the session rather than attach to one that is not there.
-
-- **Prices are downloaded rather than frozen into the build.** A hand-typed price table is correct
-  on the day it is written and decays from then on: providers cut prices, and every model missing
-  from the table was reported as unpriced. AgentHydra now pulls LiteLLM's public price catalogue
-  (about 3,600 models across OpenAI, Anthropic, DeepSeek, xAI, Google, Moonshot and the rest), caches
-  it beside the database, and re-checks it daily. The table shipped with the build is still there
-  and still answers on a first run, an offline machine, or a failed download; a downloaded price
-  simply wins when one is in force. Either way the analytics header now says which it is and how old
-  the rates are, because a dollar figure without its price date is a number nobody can audit.
-
-  Service-tier variants (batch, flex, priority, long-context bands) are deliberately ignored: a
-  stored transcript does not record which tier a request used, so picking one would be a guess
-  dressed as precision.
-
-- **OpenAI models are priced.** GPT-5.6 Sol/Terra/Luna/Cyber, the 5.5, 5.4, 5.3-codex, 5.2, 5.1 and
-  5 families, at published rates. Codex spend now carries a dollar figure instead of a token count,
-  and the cache rates are modelled properly: cached input at a tenth, and cache *writes* free
-  before GPT-5.6 and 1.25x from 5.6 on, which are genuinely different numbers rather than one
-  averaged one.
-
-- **A model routed as `provider/model` prices as the model behind it.** OpenCode records what it
-  routed to (`openai/gpt-5.5`, `deepseek/deepseek-v4-pro`), which missed a table keyed on bare ids
-  even where both sides plainly agreed. The exact id is still tried first. Bedrock and Vertex ids
-  still do not match, which is correct: those are partner-operated with their own pricing.
-
-- **Five more tools are read, not just detected.** Each got an adapter built against real files
-  rather than a guessed schema:
-
-  **Claude Cowork** turned out to be the easiest and the biggest: it runs Claude Code inside a
-  sandbox and keeps the run's own transcript at `local_<id>/audit.jsonl`, and those records are
-  Claude Code's exactly, model id, message id and a full usage block included. So it needed a path
-  pattern, not a parser, and its sessions arrive with full transcripts, costs and analytics like any
-  other Claude session.
-
-  **Grok**, **Kimi**, **VS Code Copilot**, **Copilot CLI** and **Zed** share nothing with those
-  three stores or with each other, but they do share the one thing that matters: a list of
-  conversations that can be read, and no per-token usage to account for. They get one new reader
-  between them and a small adapter each. Their sessions are listed, readable, searchable and
-  exportable, and contribute nothing to the spend charts, because none of these tools records what
-  a turn cost. Copilot bills credits and never writes a token count at all. A zero there would be a
-  claim the work was free.
-
-  Copilot CLI is the honest exception even among those: it stores state and checkpoints but no
-  conversation, so its sessions carry everything the store does record (repository, branch, folder,
-  both timestamps) and open to its checkpoint list rather than to a transcript.
-
-  A session row now shows which PRODUCT wrote it rather than which format it happens to share, so a
-  Grok chat is labelled Grok and a Cowork run is not filed under Claude Code.
-
-- **Speculative support for the wider agent ecosystem.** Where a tool keeps its conversations is now
-  a table of about sixty entries rather than three constants, with paths compiled from the registry
-  in [agentsview](https://github.com/kenn-io/agentsview) (MIT), covering Windows, macOS and Linux.
-  Tools that write a format AgentHydra already reads are indexed for real, with full transcripts and
-  analytics: **OpenClaude** (Claude Code's JSONL), **TraeX** (byte-compatible Codex rollouts), and
-  **Kilo, MiMo Code and IcodeMate** (OpenCode's SQLite under other filenames). Sessions now record
-  which *product* wrote them, not only which format, so a fork is not mislabelled as its parent.
-
-  Everything else (Gemini CLI, Copilot, Cursor, Amp, Qwen, Zed, Warp, Goose and some forty more)
-  is **detected and listed** with its store location, file count and last activity, marked as not
-  yet readable, with the reason where there is one (Antigravity and Trae encrypt their conversations;
-  Copilot and the IDE integrations bill credits rather than tokens). Listing them is the point:
-  silence would read as "AgentHydra looked and found nothing", which is a different claim entirely.
-
-  One store root is deliberately narrow: Gemini CLI is looked for under `.gemini/tmp` rather than
-  `.gemini`, because the parent also holds settings and the entire Antigravity tree, and pointing at
-  it reported hundreds of files for a Gemini CLI that had never been run.
-
-  These entries are speculative and bounded by construction. A path that does not exist costs one
-  filesystem check and produces nothing; a format claim that turns out to be wrong yields a store
-  that parses to zero sessions. Neither can affect the three stores that were already supported.
+- **The background scan finishes.** It now continues in chunks until the whole store is covered, so
+  Analytics no longer stays partial.
+- **Prices are downloaded.** AgentHydra fetches LiteLLM's public price list daily, covering
+  thousands of models, and falls back to its built-in table offline. Analytics says which prices are
+  in use and how old they are.
+- **OpenAI models are priced.** The GPT-5 to GPT-5.6 families are priced, with cached input and
+  cache writes handled correctly, so Codex spend shows in dollars.
+- **Routed model names are priced.** A model recorded as provider/model, as OpenCode does, is priced
+  as the model behind it.
+- **More tools are read.** Claude Cowork runs appear as full Claude sessions with costs. Grok, Kimi,
+  VS Code Copilot, Copilot CLI and Zed conversations are listed, readable, searchable and
+  exportable, without spend because those tools do not record it. Each row names the product that
+  wrote it.
+- **Wider agent support.** OpenClaude, TraeX, Kilo, MiMo Code and IcodeMate are read in full, since
+  they use formats AgentHydra already knows. About forty more tools, from Gemini CLI to Cursor, are
+  detected and listed with where they keep their data, marked as not yet readable.
+- **Where the tokens went.** Analytics splits tokens into fresh input, cached input, cache writes
+  and output.
+- **Tokens by tool,** showing how much of the work Claude, Codex and OpenCode did.
 
 ### Fixed
 
-- **A third of Codex spend was filed under a model that does not exist.** Codex announces the model
-  in one event and the token count in another, and does not guarantee the naming comes first: of
-  4,860 rollouts on the machine this was found on, 2,067 spend tokens before ever naming a model,
-  and 331 billion tokens were landing under a placeholder id called `codex` that no price table
-  could ever match. Those turns are now attributed to the model their own file names moments later,
-  falling back to the model the rest of that rollout used, and only staying unknown when nothing in
-  it ever said.
-
-- **Claude spend was also UNDERSTATED, by more than half, and for a different reason.** A Task-tool
-  subagent gets its own transcript, nested under the session that spawned it, and makes its own API
-  calls with its own usage blocks. The index only ever globbed one level deep, so none of it was
-  counted. Measured here: 1,229 top-level transcripts hold 64.5 billion tokens and **16,552 subagent
-  transcripts hold another 89.8 billion**, so the totals were reporting 42% of real Claude spend.
-
-  Those files now attach to the session that spawned them and are read as part of it. They are still
-  not session rows: a subagent is an implementation detail of the turn behind it, and listing
-  thousands of them would bury the conversations. Summing them is safe in a way it explicitly is not
-  for Codex, because every Claude record carries its own request id and the duplicate check below is
-  shared across all of a session's files.
-
-- **A long window charts by month instead of by day.** Past seventy bars a day-by-day chart stops
-  being readable and becomes a texture. The rollup keys off how many buckets there actually are, so
-  a sparse "all time" still shows its days.
-
-- **Claude spend was overstated by 57%, since long before this cycle.** Claude Code does not write
-  one transcript record per assistant reply. It writes one PER CONTENT BLOCK, and stamps the same
-  complete `usage` object on every one, so a reply that says something and then makes two tool calls
-  is three records each claiming the full input, cache-read and output of the single request behind
-  them. Every total built by summing records charged that request three times.
-
-  Measured across 1,230 transcripts here: 445,317 assistant records carry usage, but only 185,264
-  distinct requests. The naive sum reports 148.8 billion tokens where the real figure is 64.6
-  billion. Of a 5,000-group sample, 4,997 are identical copies rather than a growing partial count,
-  so this is content-block fan-out and not streaming.
-
-  A request is now charged once, keeping the largest output figure recorded for it, which also
-  handles the rarer streaming case where an early record carries a partial count and the final one
-  the billed count. Everything downstream moves with it: session costs, the analytics totals, the
-  hour grid (which now counts replies rather than records) and the quota calibration, whose numerator
-  and denominator both come from this parser and so stay self-consistent.
-
-  Not fixed, and stated rather than hidden: a resumed session copies its parent's earlier messages
-  into its own transcript, so a request billed once can appear in two sessions. That is another
-  10.8 billion tokens, about 7% of the naive total. Per-session totals cannot see across sessions,
-  and the quota window (which reads several files at once) now does dedupe across them.
-
-- **Codex spend was overstated by 53x, by a "fix" in this same unreleased cycle.** Codex writes one
-  rollout file per execution thread, and it looks exactly as though each file carries that thread's
-  own spend, so summing a conversation's files looks like the cure for an undercount. It is not.
-  `total_token_usage` is a SESSION-WIDE running total that every thread writes into its own file, so
-  each rollout replays the whole conversation's counter from the beginning.
-
-  Measured rather than reasoned: in one real conversation the main rollout and three sub-agent
-  rollouts all open at exactly the same totals, and three sub-agents that ran inside a nine-minute
-  window each record 5,090 counter events climbing to 552 million tokens. No nine-minute thread
-  makes five thousand API calls; they are one counter seen four times. Summing 679 files turned a
-  700-million-token conversation into 92.9 billion, and the store total from 11.9 billion into 637
-  billion, which wrongly made Codex look like the largest provider on that machine.
-
-  A conversation is now the LARGEST of its rollouts, never the sum. Across 109 real conversations
-  that is the main rollout 107 times; the two exceptions are conversations whose main rollout
-  stopped being written before a sub-agent did, and taking the maximum gets those right too. Because
-  the extra files are copies rather than spend, they are no longer read at all, which also removes
-  gigabytes of pointless I/O from every scan.
-
-- **The statistics were Claude-only.** Codex and OpenCode sessions reported zero tokens, which read
-  as "you have not used them" rather than "we did not look". Both record their spend; they simply
-  record it in shapes the Claude parser does not understand. On this machine that was **12.2 billion
-  Codex tokens across 136 sessions** and 57 OpenCode sessions, all previously invisible.
-
-  Codex has two traps in it. It writes a RUNNING total alongside a per-turn delta, and summing the
-  deltas overcounts, because the same turn is emitted more than once: measured 5% high on a real
-  3,476-event rollout. It also counts cached input INSIDE its input figure where Anthropic reports
-  it alongside, and on a real session that cached part is 98% of the input, so taking it at face
-  value double-counts nearly everything. OpenCode needed no parser at all, only a read: its totals
-  are already columns on its session row, and it computes its own cost, which is now used rather
-  than recomputed.
-
-- **Models with no published price showed as $0.** That is not "we could not price this", it is
-  "this was free", which for a month of GPT usage is simply false. The cost chart now lists only
-  what it can actually cost, and names the rest underneath with their token counts.
-
-### Added
-
-- **Where the tokens went.** Fresh input, cached input, cache writes and output, as a share and as
-  four numbers. They cost wildly different amounts per token, so the split explains a bill in a way
-  the total never can: on a real store, cached reads are 97% of all volume.
-
-- **Tokens by tool,** so which of Claude, Codex and OpenCode is doing the work is answerable at a
-  glance.
+- **Codex spend filed under the wrong model.** Turns that spent tokens before naming their model are
+  now credited to the right one.
+- **Claude subagent spend was missing.** Subagent transcripts now count as part of the session that
+  spawned them, without being listed as rows.
+- **Claude spend was counted several times per request.** Each request is now counted once, which
+  corrects session costs, analytics totals, the hour grid and quota calibration. A resumed session
+  can still repeat some of its parent's requests.
+- **Codex spend was hugely overstated.** A conversation's rollout files all repeat the same running
+  total, so a conversation now counts as its largest file, not the sum.
+- **Statistics cover Codex and OpenCode.** Their sessions no longer show zero tokens.
+- **Unpriced models are not shown as free.** The cost chart lists only what it can price and names
+  the rest with their token counts.
+- **Long ranges chart by month** when a day-by-day chart would be unreadable.
 
 ### Changed
 
-- **The concurrency chart's hover pointed at the wrong place.** An SVG with a viewBox is scaled to
-  fit and centred inside a wider element, so mapping the pointer across the element's full width
-  read every position as further right than it was: over a hundred pixels of error at the left edge
-  of a wide card. Both time charts are now drawn at exactly the width they are given, so one unit is
-  one pixel, nothing is letterboxed, and neither chart clips or scrolls.
-
-- **Charts have proper hover cards.** They used the browser's own tooltip, which waits about a
-  second before appearing, so sweeping across a heatmap (which is how a heatmap is read) showed
-  nothing at all. The cards appear on the pointer event and carry context rather than a repeat of
-  the label: an hour cell says its share of the week and its day and hour totals, the day chart says
-  its share of the window and the busiest day, and the concurrency line says what changed since the
-  previous point. Cells keep an accessible name, so the grid is not mouse-only.
-
-- **The folded "N more" rows expand.** Every ranked chart hid its tail with no way to see it. The
-  scale still spans the whole list, so revealing the tail never resizes the bars already on screen.
-
-- **Analytics can be filtered by provider** (Anthropic, OpenAI, DeepSeek and the rest), derived from
-  the model id, so a store with five vendors in it can be read one vendor at a time.
-
-- **The hour-of-week grid is square and fills its card.** Its cells were stretching into rectangles
-  on a wide card, which stopped it reading as a calendar.
-
-- **The recently-edited feed is readable.** It was absolute paths in a monospace column, so every
-  row began with the same thirty characters and the useful part sat off to the right. It now leads
-  with the filename, tags the file type, collapses repeated edits to one row with a count, and says
-  how long ago.
+- **Chart hover lands where you point.** The concurrency chart's hover was offset; both time charts
+  are now drawn at their real width.
+- **Instant hover cards on charts** with useful context, such as share of the week or the busiest
+  day. Cells keep accessible names.
+- **"N more" rows expand** without resizing the bars already shown.
+- **Filter Analytics by provider,** such as Anthropic, OpenAI or DeepSeek.
+- **A square hour-of-week grid** that fills its card.
+- **A readable recently-edited feed** that leads with the file name, tags the type, groups repeated
+  edits and says how long ago.
 
 ## [0.20.0] - 2026-08-13
 
+**TL;DR**
+
+- **An Analytics tab: cost, activity, tool use and concurrency across your sessions**
+- **The cost of each queued run and each open session**
+- **Export a session as Markdown or a single HTML file, with secrets removed**
+- **Transcripts render markdown with highlighted code, plus display filters and find in session**
+- **Instant content search from a small index that stores none of your text**
+- **Agents can search transcripts over MCP and tell a miss from a timeout**
+- **Reopen a finished session in a terminal, and see which overnight runs died**
+- **Keyboard shortcuts with a ? sheet, and a verified one-line Windows install**
+
+**Everything in 0.20.0**
+
 ### Added
 
-- **An Analytics tab: where the time and the money went.** The scanner that builds the session list
-  already opens every transcript and reads every line, works out a title, and throws the rest away.
-  It now keeps the totals: tokens per model, a sparse day and hour histogram, tool counts, and four
-  counters. On a real 1,435-session store that is **556 KB**, a fraction of a percent of the
-  transcripts it describes. It is emphatically not a full-text index: not one word of a message is
-  stored, and every value is a number or a key that came from a tool name, a model id or a date.
-
-  The tab answers cost by day, by model, by project and by dispatching account; when in the week the
-  work actually happens; how many sessions were running at once; the tool mix; which files have been
-  edited lately; and which sessions are worth a second look because a tool failed repeatedly, the
-  edits churned, or the context was compacted. There is also `--spend --json` for scripts, and
-  `get_spend` / `get_activity` / `get_recent_edits` / `get_run_cost` over MCP.
-
-  **Cost per queued run is the one AgentsView structurally cannot do.** It did not dispatch the work,
-  so it cannot tell which turns belong to which run. AgentHydra recorded the session id and the exact
-  instants the run started and finished, so a run's cost is simply that session's own per-turn usage
-  restricted to that window. It is computed on demand and never stored, which is what makes it
-  impossible for it to drift from the session's own total.
-
-  Two honest limits, both stated in the app rather than only in the code. The costs are published
-  list prices, and a subscription plan is not billed per token, so they answer "what would this have
-  cost on the API". And "agent hours" is engaged time (the gaps between turns, each capped), not
-  wall clock, because a session left open over lunch is not six hours of work.
-
-  No charting library was added. The charts are hand-written SVG, and the palette is a validated one:
-  the kit's own chart colours fail a colourblind-safety check in light mode, with two of its five
-  slots indistinguishable even to full-colour vision.
-
-- **A session you can hand to someone.** The only export was the raw `.jsonl`, which is complete and
-  unreadable. Sessions now save as Markdown, or as one self-contained HTML file that opens in any
-  browser with nothing beside it. Both cover the WHOLE session rather than the window the viewer
-  shows, because a silently truncated document is worse than none: the reader has no way to know
-  what is missing. The raw file is still there, and is still the only lossless one.
-
-  Secrets in recognisable formats are replaced on the way out, and the document says so in its own
-  header rather than only in the code. That is the same guardrail the ChatGPT context pack has
-  always used, now shared between them instead of copied.
-
-- **What a session printed that it should not have.** A transcript keeps whatever scrolled past,
-  including the time a tool echoed a key. The session header now shows a count when there is one,
-  with a redacted list of what and where. It matches unmistakable formats only (private keys, AWS
-  key ids, provider tokens), so a count of zero is not a clean bill of health and the UI says that
-  too. There is no reveal button, and no endpoint that could serve one: the transcript is already
-  open one panel away, so revealing here would only add a second place credentials live.
-
-- **Reopen a finished session in a terminal.** You could type into a running session but not sit
-  back down in a finished one. The session header now runs `claude --resume` in a new terminal.
-  Where no terminal can be opened (an unusual Linux setup, a machine where the CLI is not on PATH),
-  the command lands on your clipboard instead, because a feature that fails silently on an odd setup
-  is worse than one that hands you the string.
-
-- **Which sessions AgentHydra queued, and which you drove by hand.** Known exactly rather than
-  guessed: every dispatch names the session id on the command line, so this is a fact the daemon
-  already had. Each row now says which it is, and the list can narrow to either. Narrowing is always
-  something you ask for; nothing is hidden on our initiative.
-
-- **A dot for how live each session is,** working / idle / stale, derived from the same timestamp the
-  list is already sorted by and sitting right next to it. It is a claim about file activity, not
-  about whether a person is present, which is the only thing a transcript can honestly support.
-
-- **Session shape: quick, standard, deep, marathon, automation.** Two sessions with similar titles
-  can be a two-minute question and a six-hour build. Shape is worked out from the message count and
-  the elapsed time together, taking whichever makes the session notable: thirty messages over six
-  hours is a long sitting, three hundred in ten minutes is a grind, and counting messages alone
-  would call the first one "quick". Also a filter.
-
-- **Keyboard shortcuts, and a `?` sheet that lists them.** There was no shared layer and no way to
-  discover a binding. The sheet is generated from what is actually registered, and a view's
-  shortcuts unregister when it unmounts, so it cannot list something that is not really there.
-  Ctrl/Cmd+F finds in the open session, Ctrl/Cmd+K jumps to the filter, Ctrl/Cmd+1 and +2 switch
-  tabs, Escape backs out one step.
-
-- **`--version --json`**, emitting a schema-versioned object with the version, the commit and the
-  build time. Auto-update is a `git pull`, so two machines can sit on the same version number and
-  different code; the commit is the field that tells them apart. Release binaries carry a stamp
-  applied at compile time (asking git at runtime would describe whatever checkout the exe was copied
-  into), and a source checkout answers from git, where that IS the build. Still no database
-  and still no port, so the fast path is intact.
-
-- **A one-line Windows install** that verifies what it downloaded. `install.ps1` detects the
-  architecture, fetches the release ZIP and its published SHA-256, and refuses to unpack anything on
-  a mismatch or a missing checksum entry. There is no skip switch, because a checksum you can opt
-  out of is decoration. It installs under `%LOCALAPPDATA%`, so it never asks for Administrator.
-
-- **A long session can now be read.** Two things were missing and they compound: there was no way to
-  change what a transcript shows, and no way to find anything inside the one on screen.
-
-  A **Display** menu in the session header now controls both what is fetched and how densely it is
-  drawn: *only what I typed*, *show tool activity*, *show reasoning*, and a *compact layout*. The
-  filters are applied on the daemon **before** the turn window is counted, which is the whole point:
-  asking for a person's turns on a 2,000-message session returns their last few dozen questions, not
-  whatever handful survives a filter over the last 40 mixed turns. Reasoning blocks are newly
-  *visible* at all (they were unconditionally discarded before, so there was no way to see what a
-  model had been thinking), and they stay off by default, because they are the bulkiest and least
-  skimmable part of a transcript. Every choice persists and is mirrored through the daemon, so it
-  survives the port hop that gives the browser a fresh origin. Also on the MCP `tail_session` tool,
-  where `humanOnly` is the cheapest way for an agent to find out what a session was actually asked
-  to do.
-
-  **Find in session** (the toolbar's magnifier, or Ctrl+F) searches the open transcript with a match
-  count, next/previous and Escape to close. It is client-side over what is already loaded, so there
-  is no request behind a keystroke. Matching is done against what the reader sees rather than the
-  underlying HTML: a message containing `a & b` is `a &amp; b` by the time it is markup, and a
-  search that ignores that finds nothing for `&` and a phantom hit for `amp`. Tag names, class
-  names and link targets are never matched, and the only tag highlighting adds is `<mark>` around
-  text that is still escaped, so it cannot turn inert transcript text into live markup.
-
-- **An open session now shows what it cost.** Every assistant turn in a transcript records its own
-  token usage, and the daemon was already parsing those blocks, but only inside a quota lookback
-  window and only to derive a percentage denominator, so there was no token count and no dollar
-  figure anywhere in the product. The session header now carries both, computed on demand by
-  streaming that one file: no new table, no new column, nothing written to disk. Cache reads and
-  cache writes are priced separately, and cache writes are further split by TTL, because a one-hour
-  write costs twenty times a read; collapsing them into one "input" rate produces a number that
-  looks precise and means nothing. Prices ship bundled and dated (no network call, ever), and a
-  model with no published price is reported as unpriced rather than guessed at: its tokens still
-  count, and the cost is marked as a floor. Also on `GET /api/sessions/:id/usage`. Claude sessions
-  only, because Codex and OpenCode record their spend in their own shapes and a second parser is how
-  two numbers start disagreeing.
-
-- **Transcripts read as markdown, with highlighted code, and no new dependency.** Replies rendered
-  as one undifferentiated wall of plain text: no headings, no lists, no code blocks. They now render
-  properly, and fenced code is syntax-highlighted. A census of 150 real transcripts decided the
-  scope: of 682 code fences, 57% carry no language tag at all and five families (JS/TS, Python,
-  JSON, shell, plus untagged) cover 99%, so a grammar library would have been most of a megabyte
-  serving a 1% tail. The renderer and the highlighter are about 300 lines between them and add
-  nothing to `package.json`.
-
-  Transcript text is untrusted, so the safety property is stated plainly and tested: the source is
-  HTML-escaped ONCE, before any markdown is interpreted, which means every tag in the output was
-  written by the renderer and none can come from the transcript. There is no sanitiser to configure
-  and no gap between what a parser accepts and what a sanitiser strips. A model that writes a script
-  tag gets a visible script tag. Links are limited to http, https, mailto and in-page targets, so a
-  `javascript:` URL renders as plain text.
-
-- **You can see which overnight runs died, without opening any of them.** The daemon has always had
-  ground truth on this: the detached runner reports the child's exit code and the run's status is
-  finalized from it, so nothing is inferred from a transcript. It was only ever shown as an exit
-  number on a card. The finished list now filters to "only the ones that didn't finish", covering
-  everything terminal that isn't a completion (failed, canceled, rate-limited, overloaded), because
-  from "did the work happen?" those are the same answer. The run viewer shows how its run ended
-  instead of just stopping. And `get_run_events` now returns the outcome alongside the events, so an
-  agent reading a log that simply stops can tell a short answer from a crash or a kill.
-
-- **Content search is instant, from a 13 MB index that stores none of your text.** A full-text
-  index was previously declined because it drops a large file on the user's machine. Measuring the
-  store first showed why that was only half right: of 389 MB of searchable text, 88% is tool output
-  (file reads, greps, build logs) and only 46 MB is conversation. So this indexes what was said and
-  skips what was pasted, and holds it contentlessly, meaning the index alone with no second copy of
-  the text. Measured on a real 4.4 GB store: **13.2 MB for 1,359 sessions**, roughly a quarter of a
-  percent of what it covers, versus around 200 MB to index everything. Searches drop from seven
-  seconds covering a fifth of the store to well under a second covering all of it.
-
-  It is an accelerator, never a dependency. Missing, half-built or deleted, the streaming scan
-  answers exactly as before; the index only takes over once it covers 98% of the store, and it
-  builds in the background rather than inside anyone's request. Its two real limits are stated on
-  every answer rather than hidden: it matches whole words and phrases rather than substrings, and
-  it does not cover tool output. Both the web UI and the `search_sessions` tool say which path
-  answered and offer the exhaustive scan; a regex search always takes the scan. `GET` and `DELETE
-  /api/search-index` report its size and remove it, and it rebuilds itself from the transcripts. Settings
-  shows its size and offers to delete it, because an index you cannot see or remove is a different
-  promise from one you can.
-
-- **Agents can search transcripts, and can tell a miss from a timeout.** The MCP server had 37 tools
-  and not one of them searched: an agent could list, get and tail sessions, but could not find one
-  by something said inside it. `search_sessions` now exposes the body search that the web UI has
-  always had. It also had to stop lying by omission. The search runs under a seven-second budget
-  and returned a bare list, so "this text is nowhere on your machine" and "we gave up early" were
-  the same answer. Every caller now gets `budgetExhausted`, `limitReached` and the file counts
-  behind them, and the UI says so above the results. This is not theoretical: on a real store of
-  1,357 transcripts a search reached 126 of them before the budget expired, so the old answer was
-  a 9% sample presented as a complete one.
+- **An Analytics tab.** Cost by day, model, project and account; when in the week the work happens;
+  how many sessions ran at once; the tool mix; recently edited files; and sessions worth a second
+  look. Costs are API list prices, agent hours count engaged time rather than wall clock, and no
+  message text is stored. Also available over MCP and from the command line.
+- **The cost of a queued run.** Because AgentHydra dispatched the run, it can price exactly the
+  turns inside it.
+- **Session export.** Save a whole session as Markdown or as one self-contained HTML file.
+  Recognisable secrets are replaced, and the document says so.
+- **Leaked secrets are counted.** The session header shows how many recognisable keys or tokens a
+  session printed, with a redacted list. There is no way to reveal them.
+- **Reopen a finished session in a terminal.** Where no terminal can open, the resume command is
+  copied to your clipboard instead.
+- **Queued or by hand.** Each row says whether AgentHydra queued it or you ran it yourself, and the
+  list can filter to either.
+- **A liveness dot** on each session: working, idle or stale, based on file activity.
+- **Session shape.** Quick, standard, deep, marathon or automation, worked out from message count
+  and elapsed time together; also a filter.
+- **Keyboard shortcuts and a ? sheet** that lists them: find in session, jump to the filter, switch
+  tabs and back out.
+- **Version as JSON.** The command line can print the version, commit and build time, so two
+  machines on the same version can be told apart.
+- **A one-line Windows install** that checks the download's checksum and refuses a mismatch. It does
+  not need Administrator.
+- **Display options and find in session.** A Display menu shows only your own messages, tool
+  activity, reasoning or a compact layout, and filters apply before the turn window so you still see
+  enough turns. Find in session searches the open transcript with next and previous.
+- **The cost of an open session.** The session header shows tokens and dollar cost, with cache reads
+  and writes priced separately and unpriced models marked. Claude sessions only.
+- **Markdown transcripts with highlighted code.** Replies render headings, lists and code blocks
+  with syntax highlighting, with no new dependency. Transcript text cannot inject markup, and only
+  safe link types are clickable.
+- **See which overnight runs died.** The finished list can show only runs that did not complete, the
+  run viewer shows how a run ended, and agents reading a run's events get its outcome.
+- **Instant content search.** A small word index of what was said, skipping tool output and storing
+  no text, makes searches near instant across the whole store. Without it the full scan answers as
+  before, and Settings shows its size and can delete it.
+- **Agents can search transcripts.** A new MCP search tool exposes body search, and every search
+  says when it ran out of time or hit its limit, so a partial answer is not mistaken for a complete
+  one.
 
 ### Fixed
 
-- **Content search was returning "session not found" for everyone.** `GET /api/sessions/search` was
-  registered after `GET /api/sessions/:id`, and the parameterised route wins, so every advanced
-  search in the web UI resolved to a lookup for a session literally called "search" and 404ed. The
-  search route now sits above it, with a comment saying why it has to stay there.
-
-- **The README screenshot run works again.** Its fixture table had no entry for `/api/ui-prefs` or
-  `/api/notifications/events`, so those requests escaped to whatever daemon happened to be running
-  and the capture refused to keep the images. That refusal is correct: a fixture gap is how real
-  session data reaches a public screenshot. Both are stubbed now.
+- **Content search no longer says "session not found".** Every advanced search in the web UI failed
+  this way.
 
 ## [0.19.3] - 2026-08-11
+
+**TL;DR**
+
+- **Tooltips are reachable on a phone.**
+
+**Everything in 0.19.3**
 
 ### Fixed
 
@@ -6598,6 +5209,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   [#16](https://github.com/LunarWerxs/RepoYeti/issues/16).
 
 ## [0.19.2] - 2026-08-10
+
+**TL;DR**
+
+- **The periodic update check now doubles as an anonymous install ping.**
+
+**Everything in 0.19.2**
 
 ### Changed
 
@@ -6616,6 +5233,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   replaced with this disclosure.
 
 ## [0.19.1] - 2026-08-10
+
+**TL;DR**
+
+- **The system-tray icon is back in the Windows download.**
+- **The tray icon survives an Explorer restart.**
+- **A tray icon that fails to appear at startup now retries instead of giving up.**
+- **A packaged build no longer tries to run `bun install` on itself.**
+
+**Everything in 0.19.1**
 
 ### Fixed
 
@@ -6638,6 +5264,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   so every step fired, on the one layout guaranteed to have no Bun.
 
 ## [0.19.0] - 2026-08-10
+
+**TL;DR**
+
+- **Every remembered layout choice now survives a port change, not just the usage filter.**
+- **The usage filter stops forgetting whether it was on.**
+
+**Everything in 0.19.0**
 
 ### Changed
 
@@ -6687,6 +5320,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.18.1] - 2026-08-09
 
+**TL;DR**
+
+- **A detached launch no longer breaks on a path containing `&`, `|`, `^`, or a space.**
+- **The console-window guardrail no longer reads prose as code.**
+
+**Everything in 0.18.1**
+
 ### Fixed
 
 - **A detached launch no longer breaks on a path containing `&`, `|`, `^`, or a space.** Windows
@@ -6716,6 +5356,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   the rest of the file and produces false positives rather than misses.
 
 ## [0.18.0] - 2026-08-07
+
+**TL;DR**
+
+- **Quick Instances gets the quota columns and the usage filter, and remembers how you left them in
+  the full manager.**
+- **The app checks for updates on its own, and says so where you can see it.**
+- **The update tells you what it is doing.**
+- **Clicking update on a downloaded release no longer spins forever after the update has already
+  succeeded.**
+- **Toasts have a close button.**
+- **Opening the app no longer resolves every instance over the network.**
+- **The Instances tab no longer probes every account's quota at once on open.**
+- **A crashed daemon no longer costs half a second on the next boot.**
+
+**Everything in 0.18.0**
 
 ### Added
 
@@ -6787,6 +5442,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.17.0] - 2026-08-07
 
+**TL;DR**
+
+- **Every instance now has a permanent number, and you can talk to the MCP server in numbers.**
+- **The usage filter can now set aside an account for its 5-hour window as well, on its own
+  threshold.**
+- **The usage flyout is laid out as labelled sections over cards**
+
+**Everything in 0.17.0**
+
 ### Added
 
 - **Every instance now has a permanent number, and you can talk to the MCP server in numbers.**
@@ -6851,6 +5515,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   slider sits beside the presets for setting a figure that isn't one of the four.
 
 ## [0.16.2] - 2026-08-06
+
+**TL;DR**
+
+- **A Codex Desktop you didn't create through this app is now listed.**
+- **Codex / ChatGPT instances now have a real identity, a plan, and a quota reading.**
+- **A 5-hour reset no longer notifies for an account you have filtered out.**
+- **A free account no longer shows as "Max 20×".**
+- **The account one-liner no longer leaks a raw tier string.**
+- **A usage reading whose window has already reset no longer poses as current.**
+
+**Everything in 0.16.2**
 
 ### Added
 
@@ -6928,6 +5603,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.16.1] - 2026-08-06
 
+**TL;DR**
+
+- **A paid account no longer shows as "Free".**
+
+**Everything in 0.16.1**
+
 ### Fixed
 
 - **A paid account no longer shows as "Free".** Two independent faults in the same evidence chain,
@@ -6950,6 +5631,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
     no grant to ask.
 
 ## [0.16.0] - 2026-08-06
+
+**TL;DR**
+
+- **Usage filter.**
+- **Expanding and collapsing a section animates.**
+- **Reset toasts no longer deal themselves into the wrong slots, or jitter under the pointer.**
+- **A backlog of resets is one toast, not ten.**
+- **The Instances tab stopped starting a PowerShell process every few seconds.**
+- **The account column fills at page load instead of a second and a half later.**
+- **The Instances tab opens on the quota columns.**
+- **Inter is served by the app, not fetched from Google.**
+- **Settings that belong to a screen now live on that screen.**
+
+**Everything in 0.16.0**
 
 ### Added
 
@@ -7046,6 +5741,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.15.0] - 2026-08-05
 
+**TL;DR**
+
+- **Reset notifications.**
+- **Usage mode**
+- **A CLI instance carried across the CC Manager UI rename lost its login.**
+
+**Everything in 0.15.0**
+
 ### Added
 
 - **Reset notifications.** The app already kept every instance's quota percentage warm; it now
@@ -7105,6 +5808,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.14.0] - 2026-08-04
 
+**TL;DR**
+
+- **CC Manager UI is now AgentHydra.**
+- **New logo.**
+
+**Everything in 0.14.0**
+
 ### Changed
 
 - **CC Manager UI is now AgentHydra.** The old name described a Claude Code manager, and the app
@@ -7157,6 +5867,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.13.0] - 2026-07-30
 
+**TL;DR**
+
+- **Quick instance mode**
+
+**Everything in 0.13.0**
+
 ### Added
 
 - **Quick instance mode** opens a compact Claude/Codex instance launcher without starting the
@@ -7200,6 +5916,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   entries.
 
 ## [0.12.1] - 2026-07-26
+
+**TL;DR**
+
+- **Codex Desktop instances can now run side by side.**
+- **Provider settings and manual ChatGPT handoff.**
+
+**Everything in 0.12.1**
 
 ### Added
 
@@ -7248,6 +5971,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   default by a few milliseconds.
 
 ## [0.11.0] - 2026-07-23
+
+**TL;DR**
+
+- **Claude, Codex, and OpenCode conversations now share one Sessions view.**
+- **Codex CLI instances can be managed alongside Claude instances.**
+- **Provider browsing cannot leak into Claude execution.**
+- **OpenCode full-body search now filters and extracts text inside SQLite.**
+- **Development now uses Bun's native parallel workspace runner.**
+- **Manually added dispatch credentials remain portable SQLite values.**
+
+**Everything in 0.11.0**
 
 ### Added
 
@@ -7308,6 +6042,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.10.0] - 2026-07-23
 
+**TL;DR**
+
+- **A session's original file location can be copied as text.**
+- **Settings can shut down the complete app.**
+- **Codex, ChatGPT and OpenCode support has a concrete scoping document.**
+- **`bun run screenshots` regenerates the README images.**
+- **The shared tray launcher can forward dropped files and folders.**
+- **Settings puts the everyday controls up front.**
+- **The version number is now the update status and control.**
+- **Generic Anthropic tiers are treated as Free.**
+- **The README screenshots now match the current interface.**
+
+**Everything in 0.10.0**
+
 ### Added
 
 - **A session's original file location can be copied as text.** The transcript header and the
@@ -7354,6 +6102,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.9.0] - 2026-07-21
 
+**TL;DR**
+
+- **The interface follows Claude's own surfaces.**
+- **The accent is no longer used as a background wash.**
+- **Text fields paint their own surface.**
+
+**Everything in 0.9.0**
+
 ### Changed
 
 - **The interface follows Claude's own surfaces.** The window used to be a single near-black sheet:
@@ -7379,6 +6135,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   `download-artifact` and `setup-qemu-action` move to their current majors.
 
 ## [0.8.0] - 2026-07-21
+
+**TL;DR**
+
+- **The Instances table has a Plan column.**
+- **Usage refreshes on load.**
+- **The account cell shows a name, not an address.**
+- **The README now shows the app.**
+- **0.5.0 has its own section again.**
+
+**Everything in 0.8.0**
 
 ### Added
 
@@ -7414,6 +6180,26 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   listed.
 
 ## [0.7.0] - 2026-07-18
+
+**TL;DR**
+
+- **The session list now has a time window, set to the last 24 hours.**
+- **Finished runs can be cleared out of the queue.**
+- **The scheduler indicators are now the way to reach the scheduler.**
+- **Instances and CLI instances are collapsible.**
+- **Queueing a run for later uses the same picker as the chat composer.**
+- **The instance editor applies as you type.**
+- **The transcript editor setting hides its input until you want it.**
+- **The two create buttons are icons until you hover them.**
+- **Settings no longer has an Accounts section.**
+- **Most sessions were named after a warning notice instead of their contents.**
+- **The list was full of sessions that were never conversations.**
+- **The auto-resume monitor listed work that was long finished.**
+- **Advanced options in the queue builder was quietly broken.**
+- **Settings had one seam with no gap, and one list with no separators.**
+- **A single instance could occupy several rows in the usage cache.**
+
+**Everything in 0.7.0**
 
 ### Added
 
@@ -7510,6 +6296,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.6.0] - 2026-07-17
 
+**TL;DR**
+
+- **"Filter by instance" opened nothing and froze the whole app.**
+- **"Open the session file" asked which app to use instead of just opening.**
+- **Right-click a session.**
+- **Mark a session as done.**
+- **Archived sessions are recognised, and hidden by default.**
+- **One list-options menu.**
+- **A CI guard against vendored-library export drift**
+
+**Everything in 0.6.0**
+
 ### Fixed
 
 - **"Filter by instance" opened nothing and froze the whole app.** Clicking it appeared to do
@@ -7558,6 +6356,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   fix cannot recur silently.
 
 ## [0.5.0] - 2026-07-16
+
+**TL;DR**
+
+- **Stray console windows could flash on an ordinary click.**
+- **A run could be stuck "running" forever after a crash, and cancelling it could kill an unrelated
+  program.**
+- **A 529 overload was treated as your rate limit, so the run died instead of retrying.**
+- **The composer claimed "this session is busy" the moment you hit send, with nothing running.**
+- **The auto-resume monitor was blind to every session it hadn't launched itself.**
+- **A downloaded transcript was named after the session's UUID, not the session.**
+- **CI actually typechecks now, and it covers the tests too.**
+- **Copy the session file to the clipboard.**
+- **A 10-minute stepper in the composer's "queue for later".**
+- **The scheduler status chip in the header is now a link**
+- **Pink means "you can click this now".**
+
+**Everything in 0.5.0**
 
 ### Fixed
 
@@ -7655,7 +6470,17 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   for then** was pink even before a date was picked, when it did nothing. It is now grey until
   you pick one. The hours/minutes button beside it had the same flaw at 0h 0m and follows the
   same rule.
+
 ## [0.4.0] - 2026-07-16
+
+**TL;DR**
+
+- **The portable window opens at a usable size instead of filling the screen.**
+- **A launch onto an already-running portable profile now sizes correctly too.**
+- **The loopback guard is now one shared, audited implementation.**
+- **The release build was broken while the typecheck passed.**
+
+**Everything in 0.4.0**
 
 ### Added
 
@@ -7693,36 +6518,126 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.3.0] - 2026-07-16
 
-### Security
+**TL;DR**
 
-- **Fixed a drive-by remote-code-execution hole in the local API.** The daemon binds localhost and
-  its API had no cross-site protection, so any web page you visited while it was running could quietly
-  POST to it, queuing a `claude` run with `--permission-mode bypassPermissions`, an attacker-chosen
-  prompt and directory, using your own logged-in credentials with no approval prompt, or read your
-  session transcripts. The daemon now rejects browser cross-site requests (via `Sec-Fetch-Site` /
-  `Origin` / `Host`, which also defeats the "simple request" CORS bypass and DNS rebinding) while
-  still allowing the app's own UI, the dev server, and non-browser tools (the tray, MCP clients).
-  `permission_mode` is now validated server-side before it can ever reach the CLI.
+- **A quota percentage is now quantified into something you can plan with.**
+- **The usage MCP tools now work with the app closed.**
+- **Usage checks now hit the quota endpoint directly instead of spawning `claude`.**
+- **CLI instances can be linked to a desktop instance.**
+- **Background auto-refresh of usage, on by default.**
+- **Usage responses carry an `advice` verdict.**
+- **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.**
+- **A CLI login is now a usable usage-check source in its own right.**
+- **CLI instances.**
+- **Usage-check subsystem.**
+- **AI self-check guidance.**
+- **Auto-resume monitor (opt-in, off by default).**
+- **Quitting could kill your real Claude Desktop chat.**
+- **The MSIX warning banner could be flat wrong.**
+- **A run pinned to a specific account could silently run as the wrong one.**
+- **A queued run's account wasn't shown on its card**
+- **Deleting a desktop instance could orphan its linked CLI login**
+- **A run recovered after a restart could briefly be double-dispatched**
+- **A run that merely TALKED about rate limits was marked rate-limited.**
+- **The auto-resume monitor did nothing at all unless you had added an account.**
+- **Sending a message opened a console window that stayed on screen for the whole run.**
+- **The session view showed conversation the CLI was having with itself.**
+- **"exit -1" now says what it means.**
+- **Finished runs fold away in the queue.**
+- **The composer's busy warning says what will happen to your message.**
+- **Queuing a run resumes a session from a searchable list instead of a pasted UUID.**
+- **The run builder leads with three fields, not thirteen.**
+- **Settings is one scrolling page.**
+- **The queue toolbar's scheduler indicator is an icon with a hover, not a text pill**
+
+**Everything in 0.3.0**
 
 ### Added
 
-- **Real executables on every release.** A tag push cross-compiles self-contained binaries (Bun
-  embedded, no install step) for Windows x64, Linux x64/arm64, and macOS x64/arm64, smoke-tests each
-  on real hardware for its OS, and attaches them to a draft GitHub release. The binary carries every
-  process mode as a subcommand (`--version`, `--mcp`, the detached dispatch runner), keeps state under
-  `~/.ccmanagerui/`, serves the SPA from a sidecar `web/dist/`, and the Windows zip ships the tray
-  toolkit (no Bun on PATH required).
-- **Packaged builds now self-update.** A compiled build checks GitHub Releases, downloads the newer
-  platform bundle, verifies the new binary runs before swapping it in place, and relaunches, the
-  same Settings check/apply/auto-update controls the source build has. (Source builds still self-update
-  via `git`.)
-- **Run queued work as any signed-in instance, no token pasting.** The queue's "Run as" picker lists
-  every signed-in desktop/CLI instance; the runner extracts that instance's own OAuth token at spawn
-  time and fails the run with a clear "signed out?" message rather than silently falling back to the
-  ambient login. Signing in on the Instances tab is now how accounts get added, the Settings
-  paste-a-token form is gone (existing credentials still work; the raw API remains for headless use).
-- **CLI sign-in on every instance row**, from the row's actions menu (create-on-demand when no CLI
-  login is linked yet), replacing the single inline table sub-line.
+- **A quota percentage is now quantified into something you can plan with.** "98% used" is not a
+  decision: 98% with a reset in 20 minutes is fine, while 98% with a reset in four days at 1%/hour
+  means being cut off mid-task in about two hours. Same number, opposite action. Anthropic publishes
+  no quota size (`limit_dollars` / `used_dollars` / `remaining_dollars` are all null on a
+  subscription, and there are no token counts anywhere in the response), so the numbers are derived
+  instead. `server/src/usage-history.ts` keeps the readings the background sweep already takes and
+  differentiates them into a burn rate, an hours-of-headroom figure, and `exhaustsBeforeReset`, the
+  one field that actually decides anything. `server/src/usage-tokens.ts` counts what was really spent
+  from the Claude Code transcripts (which do carry exact per-turn token counts and the model), and
+  `server/src/usage-budget.ts` divides one by the other to MEASURE the size of one percent in tokens,
+  reported as "~N more assistant turns" because an agent can reason about turns but cannot predict its
+  own raw token totals. New `usage_budget` MCP tool and `GET /api/usage/budget`.
+- **The usage MCP tools now work with the app closed.** `check_my_usage`, `list_usage` and
+  `usage_budget` need nothing the daemon uniquely owns (the OAuth tokens are files on disk, the quota
+  endpoint is a plain HTTPS GET, the transcripts are local JSONL), so when the daemon is not running
+  they execute in-process instead of failing. The queue and dispatch tools deliberately do not get
+  this: they mutate shared sqlite state and supervise real processes, where a second uncoordinated
+  executor would be a correctness bug, so they still fail loudly and say why.
+- **Usage checks now hit the quota endpoint directly instead of spawning `claude`.** The CLI's own
+  `/usage` screen is just a GET against `https://api.anthropic.com/api/oauth/usage`, Bearer-authenticated
+  with an OAuth access token; calling it ourselves (`server/src/usage-api.ts`) skips booting the
+  ~250 MB Bun-compiled `claude` binary entirely. Measured on one machine: the old spawn path took
+  9,353 / 9,262 / 9,218ms per check, the direct GET took 372 / 424 / 169ms, roughly 25 to 50x faster.
+  It is also richer than the text screen: `resets_at` is a real ISO-8601 timestamp (the text screen
+  prints a yearless human string like "Jul 19, 3:59am"), `severity` (normal/warning/critical) is
+  computed server-side instead of guessed from a threshold, and a per-model weekly sub-limit carries
+  its own name via `scope.model.display_name`. Reading usage costs no quota: it is a read, not an
+  inference call. The `claude -p "/usage"` spawn remains as a fallback for the cases the direct path
+  can't serve: no OAuth token in hand, an account configured with an API key instead (the endpoint is
+  OAuth-only), or the server rejecting the token with 401 (expired); the daemon deliberately does not
+  refresh the token itself, since rotating the user's refresh token could break their real login, so an
+  expired token falls back to the CLI's own refresh instead.
+- **CLI instances can be linked to a desktop instance.** `CliInstance.associatedDesktopDir` records
+  that a CLI instance and a desktop instance are the same Anthropic account under two independent
+  logins, so each can serve as the other's usage-check fallback when one token is expired or missing:
+  a desktop instance's chain is its own token, then a linked CLI instance's login, then a dispatch
+  account matching the email; a CLI instance's chain is its own login, then an associated dispatch
+  account, then a linked desktop instance's token. New `link_cli_instance_to_desktop` MCP tool.
+- **Background auto-refresh of usage, on by default.** A staggered sweep keeps every instance's usage
+  number warm without a manual refresh, skipping any instance with no usable credential up front. Each
+  check costs about 300ms and no quota, so polling on a loop is no longer the liability it was when it
+  meant spawning `claude`. Toggle and interval live in Settings → General, alongside separate toggles to
+  show or hide the desktop and CLI instances tables.
+- **Usage responses carry an `advice` verdict.** Every usage check (`check_usage`, `check_my_usage`,
+  `list_usage`, the UI's usage cell) now includes `{ severity, bindingPct, shouldOffload, safeToFanOut,
+  advice }` alongside the raw percentages, so a caller does not have to re-derive "is this bad" from
+  thresholds itself. `shouldOffload: true` means the caller is close to being cut off mid-task.
+- **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.** It falls
+  back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when `CLAUDE_CODE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` is unset,
+  which previously made the self-check error out for the everyday case of the session the user is
+  actually talking to. New `list_usage` MCP tool surveys every managed instance (desktop and CLI) at
+  once, each with its own `advice` verdict, for picking an account with headroom before routing heavy
+  work.
+- **A CLI login is now a usable usage-check source in its own right.** `<CLAUDE_CONFIG_DIR>/.credentials.json`
+  is plain JSON (`claudeAiOauth.accessToken` plus `.scopes`, no DPAPI/safeStorage layer), so a CLI
+  instance that has run `/login` gives a usage-capable token directly, independent of any desktop
+  instance.
+- **CLI instances.** A CLI instance is a `CLAUDE_CONFIG_DIR` associated with an account and logged in
+  once, the command-line counterpart to a desktop instance (which isolates via `--user-data-dir`).
+  The Instances view now manages them alongside desktop instances: create one (the app makes its
+  config dir), open a terminal to use it, a one-click "Log in" helper that opens a terminal for you to
+  run `/login` (the app never performs the login itself), associate it with a dispatch account, rename,
+  and a guarded delete. Persisted as plain JSON under `~/.ccmanagerui`, never a token.
+- **Usage-check subsystem.** Read an account's remaining Claude subscription quota (session 5-hour %,
+  weekly all-models %, and per-model weekly %) by running `claude -p "/usage"` with the account's auth
+  injected. A DESKTOP instance is polled using its OWN decrypted OAuth token (never persisted), so it
+  works with no dispatch account and no CLI login; a registered dispatch account or a logged-in CLI
+  instance also work. The desktop token cache holds two grants (a full CLI grant and a profile-only
+  grant); the usage path deliberately selects the `user:inference`-scoped grant, since the profile
+  grant runs `/usage` but returns no numbers. The probe also sets `CLAUDE_CODE_OAUTH_SCOPES` from
+  that grant: without it `claude` quietly stops treating `/usage` as a command and prints a cost
+  summary with no percentages, which only shows up when the daemon runs outside a Claude Code
+  session (for example the tray, launched from Explorer). Surfaced three ways: a per-row usage cell in the
+  Instances table (the binding weekly % color-coded, with a hover breakdown), a `check_usage` MCP
+  tool, and a `check_my_usage` self-check any agent can call. Checks are on demand (each spawns a real
+  `claude`) and cached with an age; a no-data result shows ", " with a reason rather than silently.
+- **AI self-check guidance.** `docs/AI_USAGE_SELFCHECK.md` plus a README note teach agents that they
+  can read their own quota and that the weekly all-models % is the binding cap to pace by.
+- **Auto-resume monitor (opt-in, off by default).** A session killed mid-work by a 5-hour rate limit
+  can auto-resume once the window clears, gated on the weekly cap not being maxed. Detection reuses the
+  existing structured `rate_limited` run status; a resume is a normal queued `--resume` run scheduled
+  for just after the reset. Safety rails: a per-session resume cap, idempotent scheduling, a global
+  switch plus per-account overrides, and a status chip ("resumes ~HH:MM" / "blocked: weekly maxed" /
+  "needs human"). Settings and `get_monitor` / `set_monitor` MCP tools expose it.
 
 ### Fixed
 
@@ -7818,94 +6733,23 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   both on and off states at a glance. The redundant "Queue resume" button was removed, "New run"
   already opens the builder in resume mode.
 
-### Added
-
-- **A quota percentage is now quantified into something you can plan with.** "98% used" is not a
-  decision: 98% with a reset in 20 minutes is fine, while 98% with a reset in four days at 1%/hour
-  means being cut off mid-task in about two hours. Same number, opposite action. Anthropic publishes
-  no quota size (`limit_dollars` / `used_dollars` / `remaining_dollars` are all null on a
-  subscription, and there are no token counts anywhere in the response), so the numbers are derived
-  instead. `server/src/usage-history.ts` keeps the readings the background sweep already takes and
-  differentiates them into a burn rate, an hours-of-headroom figure, and `exhaustsBeforeReset`, the
-  one field that actually decides anything. `server/src/usage-tokens.ts` counts what was really spent
-  from the Claude Code transcripts (which do carry exact per-turn token counts and the model), and
-  `server/src/usage-budget.ts` divides one by the other to MEASURE the size of one percent in tokens,
-  reported as "~N more assistant turns" because an agent can reason about turns but cannot predict its
-  own raw token totals. New `usage_budget` MCP tool and `GET /api/usage/budget`.
-- **The usage MCP tools now work with the app closed.** `check_my_usage`, `list_usage` and
-  `usage_budget` need nothing the daemon uniquely owns (the OAuth tokens are files on disk, the quota
-  endpoint is a plain HTTPS GET, the transcripts are local JSONL), so when the daemon is not running
-  they execute in-process instead of failing. The queue and dispatch tools deliberately do not get
-  this: they mutate shared sqlite state and supervise real processes, where a second uncoordinated
-  executor would be a correctness bug, so they still fail loudly and say why.
-- **Usage checks now hit the quota endpoint directly instead of spawning `claude`.** The CLI's own
-  `/usage` screen is just a GET against `https://api.anthropic.com/api/oauth/usage`, Bearer-authenticated
-  with an OAuth access token; calling it ourselves (`server/src/usage-api.ts`) skips booting the
-  ~250 MB Bun-compiled `claude` binary entirely. Measured on one machine: the old spawn path took
-  9,353 / 9,262 / 9,218ms per check, the direct GET took 372 / 424 / 169ms, roughly 25 to 50x faster.
-  It is also richer than the text screen: `resets_at` is a real ISO-8601 timestamp (the text screen
-  prints a yearless human string like "Jul 19, 3:59am"), `severity` (normal/warning/critical) is
-  computed server-side instead of guessed from a threshold, and a per-model weekly sub-limit carries
-  its own name via `scope.model.display_name`. Reading usage costs no quota: it is a read, not an
-  inference call. The `claude -p "/usage"` spawn remains as a fallback for the cases the direct path
-  can't serve: no OAuth token in hand, an account configured with an API key instead (the endpoint is
-  OAuth-only), or the server rejecting the token with 401 (expired); the daemon deliberately does not
-  refresh the token itself, since rotating the user's refresh token could break their real login, so an
-  expired token falls back to the CLI's own refresh instead.
-- **CLI instances can be linked to a desktop instance.** `CliInstance.associatedDesktopDir` records
-  that a CLI instance and a desktop instance are the same Anthropic account under two independent
-  logins, so each can serve as the other's usage-check fallback when one token is expired or missing:
-  a desktop instance's chain is its own token, then a linked CLI instance's login, then a dispatch
-  account matching the email; a CLI instance's chain is its own login, then an associated dispatch
-  account, then a linked desktop instance's token. New `link_cli_instance_to_desktop` MCP tool.
-- **Background auto-refresh of usage, on by default.** A staggered sweep keeps every instance's usage
-  number warm without a manual refresh, skipping any instance with no usable credential up front. Each
-  check costs about 300ms and no quota, so polling on a loop is no longer the liability it was when it
-  meant spawning `claude`. Toggle and interval live in Settings → General, alongside separate toggles to
-  show or hide the desktop and CLI instances tables.
-- **Usage responses carry an `advice` verdict.** Every usage check (`check_usage`, `check_my_usage`,
-  `list_usage`, the UI's usage cell) now includes `{ severity, bindingPct, shouldOffload, safeToFanOut,
-  advice }` alongside the raw percentages, so a caller does not have to re-derive "is this bad" from
-  thresholds itself. `shouldOffload: true` means the caller is close to being cut off mid-task.
-- **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.** It falls
-  back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when `CLAUDE_CODE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` is unset,
-  which previously made the self-check error out for the everyday case of the session the user is
-  actually talking to. New `list_usage` MCP tool surveys every managed instance (desktop and CLI) at
-  once, each with its own `advice` verdict, for picking an account with headroom before routing heavy
-  work.
-- **A CLI login is now a usable usage-check source in its own right.** `<CLAUDE_CONFIG_DIR>/.credentials.json`
-  is plain JSON (`claudeAiOauth.accessToken` plus `.scopes`, no DPAPI/safeStorage layer), so a CLI
-  instance that has run `/login` gives a usage-capable token directly, independent of any desktop
-  instance.
-- **CLI instances.** A CLI instance is a `CLAUDE_CONFIG_DIR` associated with an account and logged in
-  once, the command-line counterpart to a desktop instance (which isolates via `--user-data-dir`).
-  The Instances view now manages them alongside desktop instances: create one (the app makes its
-  config dir), open a terminal to use it, a one-click "Log in" helper that opens a terminal for you to
-  run `/login` (the app never performs the login itself), associate it with a dispatch account, rename,
-  and a guarded delete. Persisted as plain JSON under `~/.ccmanagerui`, never a token.
-- **Usage-check subsystem.** Read an account's remaining Claude subscription quota (session 5-hour %,
-  weekly all-models %, and per-model weekly %) by running `claude -p "/usage"` with the account's auth
-  injected. A DESKTOP instance is polled using its OWN decrypted OAuth token (never persisted), so it
-  works with no dispatch account and no CLI login; a registered dispatch account or a logged-in CLI
-  instance also work. The desktop token cache holds two grants (a full CLI grant and a profile-only
-  grant); the usage path deliberately selects the `user:inference`-scoped grant, since the profile
-  grant runs `/usage` but returns no numbers. The probe also sets `CLAUDE_CODE_OAUTH_SCOPES` from
-  that grant: without it `claude` quietly stops treating `/usage` as a command and prints a cost
-  summary with no percentages, which only shows up when the daemon runs outside a Claude Code
-  session (for example the tray, launched from Explorer). Surfaced three ways: a per-row usage cell in the
-  Instances table (the binding weekly % color-coded, with a hover breakdown), a `check_usage` MCP
-  tool, and a `check_my_usage` self-check any agent can call. Checks are on demand (each spawns a real
-  `claude`) and cached with an age; a no-data result shows ", " with a reason rather than silently.
-- **AI self-check guidance.** `docs/AI_USAGE_SELFCHECK.md` plus a README note teach agents that they
-  can read their own quota and that the weekly all-models % is the binding cap to pace by.
-- **Auto-resume monitor (opt-in, off by default).** A session killed mid-work by a 5-hour rate limit
-  can auto-resume once the window clears, gated on the weekly cap not being maxed. Detection reuses the
-  existing structured `rate_limited` run status; a resume is a normal queued `--resume` run scheduled
-  for just after the reset. Safety rails: a per-session resume cap, idempotent scheduling, a global
-  switch plus per-account overrides, and a status chip ("resumes ~HH:MM" / "blocked: weekly maxed" /
-  "needs human"). Settings and `get_monitor` / `set_monitor` MCP tools expose it.
-
 ## [0.2.0] - 2026-07-13
+
+**TL;DR**
+
+- **Per-instance icon and color.**
+- **An instance is named after the account it is signed into, not the folder it lives in.**
+- **Accounts resolve themselves; the "Resolve" button is gone.**
+- **The Instances table's quota numbers stay current while you watch them.**
+- **Fewer rules on the Instances screen.**
+- **Renaming an instance is now instant and works while it is running.**
+- **A running instance's row leads with Focus.**
+- **Header and panel cleanup.**
+- **A burn rate of "zero" no longer means "work freely".**
+- **Rebuild.bat could leave a STALE daemon serving old code while reporting success.**
+- **Mutating API routes no longer 500 on an odd request body.**
+
+**Everything in 0.2.0**
 
 ### Added
 
@@ -8001,92 +6845,61 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.1.0] - 2026-07-13
 
+**TL;DR**
+
+- **MSIX install warning (Instances tab)**
+- **Portable mode**
+- **MCP stdio server**
+- **Background auto-update loop**
+- **Quitting CC Manager UI no longer closes the Claude Desktop instances it launched.**
+- **The Instances ⋮ "More actions" menu opens again.**
+- **The Instances refresh icon no longer spins on every poll.**
+- **Instance discovery no longer breaks on profile paths that contain a space.**
+- **Composer toasts render as real toasts.**
+- **Open drawers no longer cover the header buttons.**
+- **Push panels no longer crush the centered shell (kit-wide).**
+- **The composer lost its top divider line**
+- **Queue moved from a tab to a slide-in drawer.**
+- **Settings split into tabs.**
+- **One Updates group, and it explains itself.**
+- **Queue resume lives in the queue drawer.**
+- **Multi-select banner is count-only.**
+- **Drawer headers/footers lost their divider lines (kit-wide).**
+- **Header cleanup**
+- **Default port moved 8787 → 7787.**
+
+**Everything in 0.1.0**
+
 ### Added
 
-- **Queued `claude` runs now survive quitting (or auto-updating) CC Manager UI.** A dispatched run
-  used to be a direct child of the daemon, so a tray Quit (which force tree-kills the daemon) or an
-  auto-update relaunch killed the run mid-flight and left it stuck marked "running". Now the daemon
-  launches each run through a detached supervisor (`server/src/dispatch-runner.ts`) that owns the
-  `claude` process and streams its output to a per-run log file the daemon tails; the run keeps
-  executing to completion even with the daemon gone. On the next launch the daemon **reattaches** , 
-  rebuilds the run's events from its log and resumes the live view, or records the final status if it
-  finished while the daemon was down (`reattachRuns`, `server/src/dispatch.ts`). On Windows the
-  supervisor is created via WMI (`Win32_Process.Create`) so it escapes the daemon's job object;
-  verified end-to-end that a run survives a `taskkill /T /F` of the daemon and a graceful shutdown,
-  then reattaches and completes. The run's account secret is read from the DB by the supervisor (never
-  written to disk), and cancel still works (it kills `claude`; the run finalizes as "canceled").
-- **Auto-update waits for the queue to go idle.** Auto-update relaunches the daemon; even though runs
-  now survive that, it now defers applying an update while any dispatch run is in flight (rechecked
-  the next interval), so a relaunch never churns a live run's stream (`server/src/auto-update.ts`).
-- **Per-instance desktop shortcuts.** Each row's ⋮ menu on the Instances tab gained
-  **Create desktop shortcut**, which drops a launcher on the desktop that opens that one
-  instance directly (`Claude --user-data-dir=<dir>`) without going through the manager. On
-  Windows it writes a `.lnk` (via `WScript.Shell`) whose target is the STABLE root
-  `claude.exe` Squirrel stub, so the shortcut keeps working after Claude Desktop updates to a
-  new versioned build, and it takes its icon from the stable `app.ico`; macOS gets a
-  `.command` script and Linux a `.desktop` entry. Values are passed to PowerShell through the
-  environment (never string-interpolated), and the failure path reuses the same MSIX-aware
-  message as Open (`POST /api/instances/:dir/shortcut`, `server/src/core/shortcut.ts`).
-- **Rename an instance.** Each row's ⋮ menu on the Instances tab gained **Rename**, which opens a
-  dialog (prefilled with the current name) to give a stopped instance a new name, renaming its
-  profile folder in place. It runs through the same guards as delete: refused while the instance
-  is running, for the protected default profile, for external instances, and on an invalid or
-  colliding name (`POST /api/instances/:dir/rename`, `server/src/core/lifecycle.ts`).
-- **Live per-instance memory and uptime.** The Instances table's Uptime column now fills in from
-  each running instance's process start time, and the former (always-empty) Size column is
-  replaced by **Memory**, the summed working set across the instance's whole Electron process
-  tree (main plus renderer/gpu/utility children). Both are read from the same `Win32_Process`
-  snapshot the table already takes each poll (`WorkingSetSize` plus `CreationDate`), so there is
-  no extra process scan.
-- **Brand icon everywhere.** The orange CC Manager UI mark is now the browser favicon
-  (`web/public/favicon.svg` + a `favicon.ico` fallback) and the tray/taskbar icon. The old
-  `misc/Make-Icon.ps1` drew a placeholder violet ">_" tile programmatically; it now rebuilds
-  `misc/CCManagerUI.ico` from the committed `misc/CCManagerUI-icon.png` master (re-rendered from
-  the favicon), matching the sibling apps' icon-generator convention.
-- **Sessions across every Claude Desktop instance, with an instance filter.** Each desktop
-  instance keeps per-session metadata whose `cliSessionId` names the CLI transcript in the
-  shared [`~/.claude/projects`](docs/CLAUDE-CONFIG-LAYOUT.md) store; the daemon now scans those to label every session with
-  its instance (`instance`: an [`~/.claude-instances`](docs/CLAUDE-CONFIG-LAYOUT.md) dir name, "default" for the main
-  install, or null for plain CLI). The sidebar shows the instance on each row and gained a
-  filter dropdown (All / Default / each instance / CLI-other) that scopes the list
-  SERVER-side, before the newest-200 cap, so a quiet instance's older sessions finally
-  surface (`GET /api/sessions?instance=`).
-- **Open / save the raw session file.** Two transcript-header buttons: one opens the
-  session's `.jsonl` with the OS default handler on the daemon's machine
-  (`POST /api/sessions/:id/open-file`), the other downloads a copy through the browser
-  (`GET /api/sessions/:id/file`, works over remote access too).
-- **Favicon.** The app finally has one (`web/public/favicon.svg`).
-- **Update remote wired up.** Repository published at `LunarWerxs/ccmanagerui`, so the
-  Settings Updates panel checks against something real instead of reporting that updates
-  can't be checked.
-- **Chat composer on the Sessions tab.** An open transcript now has a message box at the
-  bottom, like a chat: type, press Enter, and the message is dispatched to that session
-  immediately (a queue item is created and run in one step). Option chips under the input
-  (model, effort, permissions, account, working directory) all default to "inherit" and only
-  need touching for an override; the working directory defaults to the session's own. A
-  Queue button adds the message to the queue instead, and a clock button offers "queue for
-  later" presets (15 min / 1 h / 4 h / tomorrow 9:00) plus a date-time picker. Sessions with
-  a run already in progress queue new messages instead of double-resuming.
-- **Multi-select messaging.** A select toggle above the session list turns rows into
-  checkboxes (with select-all over the current filter); the composer then targets every
-  checked session, so "send `resume` to five chats" is one message and one click, creating
-  one queue item per session, each in its own working directory.
-- **Scheduled queue items.** Queue items gained an optional "Run at" time (`not_before`
-  column): the scheduler skips them until the time passes, without blocking later items.
-  Scheduled cards show a "runs HH:MM" badge; manual Run still fires immediately.
-- **Edit queued items.** Non-running queue cards now have an edit button that opens the
-  builder dialog prefilled (including the new Run-at field) and saves via PATCH.
-- **Live transcript follow.** While the selected session has an active queue run, the
-  transcript refreshes on its own (and once more when the run starts or finishes), so
-  replies stream into the open chat without pressing Refresh.
-- **Per-session run lock.** The daemon now refuses to start a second run against a session
-  that already has one active (manual Run returns 409, the scheduler skips to the next
-  eligible item), so two `claude --resume` children can never interleave writes to the
-  same transcript. The composer treats that 409 as "queued" rather than "failed".
-- **Run due (n) button in the queue drawer.** One click dispatches every currently-due
-  queued item at once (`POST /api/queue/run-due`). Like the per-card Run button it ignores
-  the scheduler's enabled/spacing/concurrency limits, but it honors the per-session lock:
-  items whose session is (or just became) busy stay queued and are reported as skipped.
+- **MSIX install warning (Instances tab)**: the daemon now detects which Claude Desktop build
+  is installed on Windows (`GET /api/desktop-install`, `server/src/core/desktop-install.ts`).
+  Anthropic's current download page ships a ~7 MB `ClaudeSetup.exe` bootstrapper that installs
+  the MSIX package under the ACL-locked `C:\Program Files\WindowsApps`; that build can't be
+  launched with `--user-data-dir`, so instance create/open can't work with it. When only the
+  MSIX build (or no Claude Desktop at all) is present, the Instances tab shows a warning
+  banner linking the classic ~217 MB Squirrel installer
+  (`https://claude.ai/api/desktop/win32/x64/exe/latest/redirect`).
+  `CCMANAGERUI_FAKE_DESKTOP_INSTALL` (msix-only | none | ok) forces the detection result for
+  dev/testing.
+- **Portable mode**: a server-persisted setting (Settings → Appearance → Portable window) that
+  opens CC Manager UI in its own chromeless Chromium app window (`msedge`/`chrome --app=`, no
+  tabs or address bar) instead of a browser tab. Applies both to the in-app toggle (`POST
+  /api/portable-window`) and the desktop tray launcher, which now opens the UI through the
+  portable-mode-aware `Open-AppUi` helper. The window gets its own dedicated Chromium profile
+  (`~/.ccmanagerui/portable-profile`, `--user-data-dir`) so it remembers its size/position
+  across launches instead of sharing the main browser profile; both open paths derive the same
+  profile dir from `runtime.json`'s location.
+- **MCP stdio server** (`server/src/mcp.ts`, `bun run mcp`), exposes CC Manager UI's
+  sessions/queue/instances API over MCP stdio for use from Claude Code / Claude Desktop.
+- **Background auto-update loop**: an opt-in daemon-wide timer that checks the update remote on
+  a schedule and, when a newer commit is available and the working tree is clean, pulls +
+  reinstalls + rebuilds + self-relaunches so the running daemon stays current unattended. Off by
+  default; never touches a dirty working tree.
+- Repo hygiene pass to bring the tree up to the standard of its LunarWerx siblings: CI
+  (`.github/workflows/ci.yml`, lint + typecheck + build + test on ubuntu/windows), an Architect
+  config (`.arkitect/`) with a gating bundle-weight-budget check, an MIT `LICENSE`,
+  `.editorconfig`, `bunfig.toml`, and a documented `.env.example`.
 
 ### Fixed
 
@@ -8168,33 +6981,3 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   `wrangler dev`'s default. Set `PORT` to override; the daemon still hops to the next free port
   if its preferred one is busy and records where it landed in `~/.ccmanagerui/runtime.json`.
 
-### Added
-
-- **MSIX install warning (Instances tab)**: the daemon now detects which Claude Desktop build
-  is installed on Windows (`GET /api/desktop-install`, `server/src/core/desktop-install.ts`).
-  Anthropic's current download page ships a ~7 MB `ClaudeSetup.exe` bootstrapper that installs
-  the MSIX package under the ACL-locked `C:\Program Files\WindowsApps`; that build can't be
-  launched with `--user-data-dir`, so instance create/open can't work with it. When only the
-  MSIX build (or no Claude Desktop at all) is present, the Instances tab shows a warning
-  banner linking the classic ~217 MB Squirrel installer
-  (`https://claude.ai/api/desktop/win32/x64/exe/latest/redirect`).
-  `CCMANAGERUI_FAKE_DESKTOP_INSTALL` (msix-only | none | ok) forces the detection result for
-  dev/testing.
-- **Portable mode**: a server-persisted setting (Settings → Appearance → Portable window) that
-  opens CC Manager UI in its own chromeless Chromium app window (`msedge`/`chrome --app=`, no
-  tabs or address bar) instead of a browser tab. Applies both to the in-app toggle (`POST
-  /api/portable-window`) and the desktop tray launcher, which now opens the UI through the
-  portable-mode-aware `Open-AppUi` helper. The window gets its own dedicated Chromium profile
-  (`~/.ccmanagerui/portable-profile`, `--user-data-dir`) so it remembers its size/position
-  across launches instead of sharing the main browser profile; both open paths derive the same
-  profile dir from `runtime.json`'s location.
-- **MCP stdio server** (`server/src/mcp.ts`, `bun run mcp`), exposes CC Manager UI's
-  sessions/queue/instances API over MCP stdio for use from Claude Code / Claude Desktop.
-- **Background auto-update loop**: an opt-in daemon-wide timer that checks the update remote on
-  a schedule and, when a newer commit is available and the working tree is clean, pulls +
-  reinstalls + rebuilds + self-relaunches so the running daemon stays current unattended. Off by
-  default; never touches a dirty working tree.
-- Repo hygiene pass to bring the tree up to the standard of its LunarWerx siblings: CI
-  (`.github/workflows/ci.yml`, lint + typecheck + build + test on ubuntu/windows), an Architect
-  config (`.arkitect/`) with a gating bundle-weight-budget check, an MIT `LICENSE`,
-  `.editorconfig`, `bunfig.toml`, and a documented `.env.example`.
