@@ -25,14 +25,17 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join } from 'node:path'
 import {
   accountsProvider,
   acctLabel,
@@ -103,6 +106,7 @@ import {
   atCeiling,
   type CliMayteAccount,
   type CliMayteLiveUsage,
+  type CliMayteSealed,
   type CliMayteSizing,
   type CliMayteWalls,
   type CliMayteWave,
@@ -1339,7 +1343,8 @@ function stopWindDown(
   // small session there; without, it waits for the first account with room (waitUntil). Until then
   // a session with nowhere to go worked on into the wall: w-228dcdcc on #98, 85% to 100% in 15
   // requests, outcome quota.
-  if (!watching || at.windDown || at.overage || at.ceiling) return
+  // A sealed worker has no Write tool for a handoff: it stops at the ceiling and its session moves.
+  if (!watching || at.windDown || at.overage || at.ceiling || w.sealed) return
   const why = windDownAt(r.live, accountLive, now, contextTokens(r.events))
   if (why) signalWindDown(w, at, why)
 }
@@ -1993,11 +1998,60 @@ function autoPicksSoFar(): Map<CliMayteKind, number> {
   return autoSoFar
 }
 
+/** A task's `sealed` option, validated: both files absolute and there, the MCP config one with an
+ *  `mcpServers` object, at least one allowed tool. Throws on anything else, so a sealed task never
+ *  starts with nothing to act with. */
+export function sealedOf(v: unknown): CliMayteSealed {
+  const s = (v && typeof v === 'object' ? v : {}) as Record<string, unknown>
+  const file = (key: 'systemPromptFile' | 'mcpConfig'): string => {
+    const path = s[key]
+    if (typeof path !== 'string' || !isAbsolute(path))
+      throw new Error(`sealed.${key} must be an absolute file path`)
+    if (!existsSync(path) || !statSync(path).isFile())
+      throw new Error(`sealed.${key} '${path}' is not an existing file`)
+    return path
+  }
+  const systemPromptFile = file('systemPromptFile')
+  const mcpConfig = file('mcpConfig')
+  let servers: unknown
+  try {
+    servers = (JSON.parse(readFileSync(mcpConfig, 'utf8')) as { mcpServers?: unknown }).mcpServers
+  } catch {
+    servers = null
+  }
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers))
+    throw new Error(`sealed.mcpConfig '${mcpConfig}' is not JSON with an mcpServers object`)
+  const tools: unknown = s.allowedTools
+  if (
+    !Array.isArray(tools) ||
+    !tools.length ||
+    tools.some((t) => typeof t !== 'string' || !t.trim())
+  )
+    throw new Error('sealed.allowedTools must be a non-empty array of tool names or patterns')
+  return { systemPromptFile, mcpConfig, allowedTools: tools.map((t: string) => t.trim()) }
+}
+
+/** A sealed task as the rest of a dispatch reads it: `sealed` validated, and its prompt the task's
+ *  own or `sealed.prompt`. Any other task as it came. */
+function sealedTask(t: RunTask, i: number): RunTask {
+  if (t?.sealed === undefined || t.sealed === null) return t
+  if (t.chat === true) throw new Error(`task ${i + 1}: a sealed task cannot be a chat`)
+  try {
+    return { ...t, sealed: sealedOf(t.sealed), prompt: t.prompt || (t.sealed.prompt ?? '') }
+  } catch (err) {
+    throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
+  }
+}
+
 /** Refuse a task that could not run: no prompt, no such folder, a check that is not one command. */
 function assertRunnable(t: RunTask, i: number): void {
   if (typeof t?.prompt !== 'string' || !t.prompt.trim())
     throw new Error(`task ${i + 1}: prompt is empty`)
-  if (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
+  // A sealed task names no folder: it runs in an empty one of its own (newWorker).
+  if (
+    !t.sealed &&
+    (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
+  )
     throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
   if (
     t.check !== undefined &&
@@ -2107,7 +2161,7 @@ function newWorker(
     id: `w-${hex(8)}`,
     group,
     title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
-    cwd: t.cwd,
+    cwd: t.sealed ? mkdtempSync(join(tmpdir(), 'climayte-sealed-')) : t.cwd,
     prompt: t.prompt,
     pending: [],
     model: setting?.model ?? null,
@@ -2115,6 +2169,7 @@ function newWorker(
     kind: setting?.kind ?? null,
     ...(setting?.auto ? { auto: true } : {}),
     ...(t.chat === true ? { chat: true } : {}),
+    ...(t.sealed ? { sealed: sealedOf(t.sealed) } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(size ? { size } : {}),
     priority: setting?.priority ?? 0,
@@ -2262,6 +2317,9 @@ export function climayteRun(input: {
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
     chat?: boolean
+    /** Launch sealed (CliMayteSealed, sealedOf); `prompt` here stands in for an empty task prompt,
+     *  and the task's `cwd` is not read. */
+    sealed?: CliMayteSealed & { prompt?: string }
   }>
   group?: string
   accounts?: string[]
@@ -2286,6 +2344,7 @@ export function climayteRun(input: {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
+  input = { ...input, tasks: input.tasks.map(sealedTask) }
   const groupAuto = isAutoSetting(input.model)
   const defaults: RunDefaults = {
     auto: groupAuto,
@@ -2672,6 +2731,11 @@ export function climayteHandoff(id: string): { ok: boolean; message: string } {
   if (w.status !== 'running' || !at || attemptExited(w, at))
     return { ok: false, message: 'Only a running worker can hand off; this one is not running.' }
   if (at.windDown) return { ok: true, message: 'It is already winding down.' }
+  if (w.sealed)
+    return {
+      ok: false,
+      message: 'A sealed worker has no Write tool, so it cannot write a handoff.',
+    }
   signalWindDown(w, at, { reason: 'request' })
   return {
     ok: true,

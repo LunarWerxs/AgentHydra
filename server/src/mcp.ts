@@ -822,6 +822,28 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   "Default false. true only for one of the OWNER'S OWN interactive chats run headless (a chat front end sends each later message with climayte_send): it launches like his own `claude` in that folder, with no worker brief, his full CLAUDE.md, skills, MCP servers and connectors, and Opus xhigh unless the task names its own (no modelWhy needed; the scorecard never picks for it). Never for a delegated task: the workers a chat dispatches are ordinary.",
               },
+              sealed: {
+                type: 'object',
+                description:
+                  'Launch this task sealed: the CLI gets `systemPromptFile` in place of its own system prompt and ONLY the MCP servers in `mcpConfig`; no built-in tool, no CLAUDE.md, hook, skill or owner MCP server, no worker brief, and an empty temp folder as its folder (`cwd` is not read). For a worker that needs one prompt and one MCP server, such as a simulated visitor: an ordinary worker carries about 38,000 tokens before its first move. Its report is its final text. Account choice, usage stops, pings, verdicts and status are as for any worker. Refused when a file is missing or `allowedTools` is empty.',
+                properties: {
+                  systemPromptFile: { type: 'string', description: 'Absolute path.' },
+                  mcpConfig: {
+                    type: 'string',
+                    description: 'Absolute path to a JSON file with an `mcpServers` object.',
+                  },
+                  allowedTools: {
+                    type: 'array',
+                    items: { type: 'string' },
+                    description: 'The tools it may call, e.g. ["mcp__sue-hands__*"].',
+                  },
+                  prompt: {
+                    type: 'string',
+                    description: 'The first message, when the task `prompt` is empty.',
+                  },
+                },
+                required: ['systemPromptFile', 'mcpConfig', 'allowedTools'],
+              },
             },
             required: ['prompt', 'cwd'],
           },
