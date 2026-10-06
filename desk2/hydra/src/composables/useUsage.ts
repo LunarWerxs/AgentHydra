@@ -74,10 +74,15 @@ let hydrating: Promise<void> | null = null
 /** One read at a time: the CLI and desktop kinds both refresh it, and share a running request.
  *  `skipSame` (the background refresh) writes nothing when the cache is the one already read. */
 function hydrate(skipSame = false): Promise<void> {
+  // The cli and desktop kinds load 1.5s apart at startup: the second one reuses the read just made.
+  if (!hydrating && skipSame && Date.now() - hydratedAt < HYDRATE_REUSE_MS) return Promise.resolve()
   return (hydrating ??= hydrateOnce(skipSame).finally(() => {
+    hydratedAt = Date.now()
     hydrating = null
   }))
 }
+const HYDRATE_REUSE_MS = 5_000
+let hydratedAt = 0
 
 async function hydrateOnce(skipSame: boolean): Promise<void> {
   const res = await guard(api.getUsageCache())
