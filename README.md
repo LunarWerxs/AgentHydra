@@ -115,7 +115,10 @@ CliMayte can use, with its usage loaded.
 queue with my other PCs" shows each PC's CliMayte tasks on the other, read-only and marked with a
 cloud, and each PC counts the other's running work when it picks an account, so the two never crowd
 one. The queue travels encrypted through your own Login sync store, whose Worker needs the queue
-routes of the current `cloud/login-sync-worker/worker.js`.
+routes of the current `cloud/login-sync-worker/worker.js`. A second switch shares Claude Desktop chats
+the same way, view only: each PC sends only the chats it started, and the other PC's show in Sessions
+with that PC's name. They never appear in your Claude chat list, and nothing you do on one PC is sent
+back into the other's chat.
 
 CLI accounts never raise a quota-reset notification: CliMayte runs them around the clock, so only
 desktop accounts announce their resets.

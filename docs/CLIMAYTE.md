@@ -1199,6 +1199,29 @@ beside `login-sync.json` and survives turning the switch off. Status carries `sh
 `chatsError` (apart from `lastError` and `queueError`) and `chats` (empty while off). Test:
 `server/tests/cli-login-sync-chats.test.ts`.
 
+**View only (owner, 2026-10-05):** "I don't want them to actually sync back and forth. I just want to
+view the ones running on his computer, and he can view the ones running on mine." The two-way sync had
+landed the other PC's chats in this PC's Claude Desktop sidebar (written into `~/.claude/projects`,
+then imported), where someone could go on in them and send turns back. Now:
+
+- Only the PC a chat started on (`origin.pc`) writes it. A copy of another PC's chat is never sent,
+  however it grows here.
+- Another PC's chats come down into the viewer, `DATA_DIR/remote-chats/<project>/<session>.jsonl`
+  (`REMOTE_CHATS_DIR`), never into `~/.claude` or a desktop chat list. The session list reads it as a
+  Claude store marked `remote`, so Sessions and Desk 2's cloud list show those rows with `from_pc` and
+  the origin's title and archive state.
+- When the store's copy of a PC's own chat is not what that PC last wrote (a chat the two-way sync
+  marked `diverged`, or one a PC still on that version wrote into), the starting PC deletes the
+  session's rows, which takes the transcript chunks with them, and sends its own transcript again from
+  byte 0.
+- A chat the two-way sync landed is taken back out once (`retire` in `core/desktop-chat-local.ts`): its
+  desktop records are archived (never deleted) and every copy of its transcript moves into the viewer.
+  It stays where it is if someone on this PC went on in it, and the viewer then downloads its own copy.
+  On MPC-HELL that took out Jacob's 3 chats (4 transcript files: one he had moved between folders had
+  been written under both).
+
+Tests: `server/tests/desktop-chat-sync.test.ts`, `server/tests/desktop-chat-local.test.ts`.
+
 The store stays small (2026-10-03): a chat archived three days ago leaves it, row and transcript, and is
 never sent again (`ARCHIVED_KEEP_MS`); the Worker refuses chunks past 400 MB of chats (`CHAT_STORE_MB`
 raises it), under D1's 500 MB free-plan database that the logins share, and `chatsError` says so.

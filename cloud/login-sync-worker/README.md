@@ -92,7 +92,10 @@ token, never the token.
 **Client use.** Each PC keeps one mirror of the three lists (`server/src/core/login-sync-mirror.ts`): the first pass reads the full lists and starts the cursor at the lowest `x-store-rev`; later passes ask only `GET /v1/changes?since=<cursor>` (upsert rows, drop `gone`), and a missing route, a list without `x-store-rev` or `{full: true}` means the full lists again. The daemon ticks every 30 s but runs a pass only when one is due: after a pass that found nothing new and had nothing to upload the next waits 30 s, then doubles up to 5 minutes (`IDLE_MAX_MS`, `server/src/core/login-sync-pace.ts`), and it is back to 30 s at once on a local change (a login file, a live CliMayte worker), a manual sync or a launch. An unchanged CliMayte queue is never re-uploaded: the other PC reads this one as alive from its polls (`x-seen`).
 
 The chat routes (desktop chat sync) need this Worker **redeployed** too: paste the new `worker.js` over
-the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables.
+the old one. Chats and chunks live in their own `chats` and `chat_chunks` tables. The Worker does not
+check who writes a chat. Since 2026-10-05 the clients keep each chat view only: only the PC it started
+on writes its row and chunks. That PC starts its copy over with `DELETE /v1/chats/:id` and a fresh
+upload whenever another PC has written into it.
 
 **Room for chats.** Transcripts take at most 400 MB of the database (a running total in
 `chat_usage`), because D1's free plan stops a whole database at 500 MB and the logins live in the same
