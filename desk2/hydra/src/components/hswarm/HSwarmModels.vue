@@ -1,26 +1,24 @@
 <script setup lang="ts">
-// The HSwarm tab's models view. Strings: i18n/locales/en/hswarm/models.ts (t('hswarm.v.models.<key>')).
+// The HSwarm tab's models view. Uses the shared InstanceTable component.
+// Strings: i18n/locales/en/hswarm/models.ts (t('hswarm.v.models.<key>')).
 
-import { AlertCircle, Plus, Star } from '@lucide/vue'
+import { AlertCircle, Plus } from '@lucide/vue'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import InstanceTable from '@/components/InstanceTable.vue'
+import HSwarmModelRow from '@/components/hswarm/HSwarmModelRow.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { TableBody } from '@/components/ui/table'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { hswarmModelColumns, hswarmModelTypedColumns } from '@/lib/hswarm-table'
+import type { HSwarmModelRowModel } from '@/lib/hswarm-table'
 
 interface Model {
   name: string
@@ -151,6 +149,50 @@ const shownModels = computed(() =>
 )
 
 const typedModels = computed(() => filteredModels.value.filter((m) => m.kind === 'typed'))
+
+const modelRowModels = computed((): HSwarmModelRowModel[] => {
+  return shownModels.value.map((m) => ({
+    id: m.name,
+    name: m.name,
+    label: m.label,
+    enabled: !!m.enabled,
+    switched_off: !!m.switched_off,
+    priority: m.priority ?? null,
+    provider: m.provider,
+    kind: m.kind,
+    usd_per_1m: m.usd_per_1m,
+    ctx: m.ctx,
+    custom: !!m.custom,
+    vision: !!m.vision,
+    tools: m.tools,
+    auto: !!m.auto,
+    onEnabledChange: (v) => toggleModel(m.name, v),
+    onPriorityChange: (p) => setPriority(m.name, p),
+    onToggleStar: () => toggleStar(m.name),
+  }))
+})
+
+const typedModelRowModels = computed((): HSwarmModelRowModel[] => {
+  return typedModels.value.map((m) => ({
+    id: m.name,
+    name: m.name,
+    label: m.label,
+    enabled: !!m.enabled,
+    switched_off: !!m.switched_off,
+    priority: m.priority ?? null,
+    provider: m.provider,
+    kind: m.kind,
+    usd_per_1m: m.usd_per_1m,
+    ctx: m.ctx,
+    custom: !!m.custom,
+    vision: !!m.vision,
+    tools: m.tools,
+    auto: !!m.auto,
+    onEnabledChange: (v) => toggleModel(m.name, v),
+    onPriorityChange: (p) => setPriority(m.name, p),
+    onToggleStar: () => toggleStar(m.name),
+  }))
+})
 
 const starredModels = computed(() => {
   const starred = allModels.value.filter((m: Model) => m.priority)
@@ -480,148 +522,60 @@ onMounted(() => {
     </div>
 
     <!-- Models table -->
-    <div class="overflow-x-auto rounded-lg border border-border">
-      <Table class="[&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-        <TableHeader>
-          <TableRow>
-            <TableHead class="w-12">{{ t('hswarm.v.models.colEnabled') }}</TableHead>
-            <TableHead class="w-12">{{ t('hswarm.v.models.colPriority') }}</TableHead>
-            <TableHead>{{ t('hswarm.v.models.colModel') }}</TableHead>
-            <TableHead
-              v-if="allModels.some((m: any) => m.provider)"
-              class="w-32"
-            >
-              {{ t('hswarm.v.models.colProvider') }}
-            </TableHead>
-            <TableHead class="w-20">{{ t('hswarm.v.models.colKind') }}</TableHead>
-            <TableHead class="w-24 text-right">{{ t('hswarm.v.models.colPrice') }}</TableHead>
-            <TableHead class="w-16 text-right">{{ t('hswarm.v.models.colContext') }}</TableHead>
-          </TableRow>
-        </TableHeader>
+    <InstanceCard>
+      <InstanceTable
+        :columns="hswarmModelColumns"
+        :indicator-for="() => null"
+        :empty="
+          regularModels.length === 0
+            ? {
+                icon: AlertCircle,
+                title: t('hswarm.v.models.noModels'),
+                hint: t('hswarm.v.models.noModelsHint'),
+              }
+            : null
+        "
+      >
         <TableBody>
-          <TableRow
-            v-for="m in shownModels"
-            :key="m.name"
-            :class="{ 'opacity-60': m.switched_off || !m.enabled }"
-          >
-            <TableCell>
-              <Switch
-                :model-value="!m.switched_off && m.enabled"
-                :disabled="busyModels.has(m.name)"
-                @update:model-value="(v) => toggleModel(m.name, v)"
-                :aria-label="`Toggle ${m.name}`"
-              />
-            </TableCell>
-            <TableCell>
-              <Button
-                v-if="m.auto || m.priority"
-                variant="ghost"
-                size="sm"
-                class="h-7 px-2 text-xs font-semibold"
-                :disabled="busyModels.has(m.name)"
-                @click="toggleStar(m.name)"
-              >
-                <Star
-                  :class="{ 'fill-current': m.priority }"
-                  class="h-3 w-3"
-                />
-                {{ m.priority ? m.priority : '' }}
-              </Button>
-              <span
-                v-else
-                class="text-xs text-muted-foreground"
-              >
-                –
-              </span>
-            </TableCell>
-            <TableCell class="font-medium">{{ m.label || m.name }}</TableCell>
-            <TableCell
-              v-if="allModels.some((m: any) => m.provider)"
-              class="text-sm"
-            >
-              {{ m.provider }}
-            </TableCell>
-            <TableCell class="text-sm">
-              <span
-                v-if="m.custom"
-                class="inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100"
-              >
-                {{ t('hswarm.v.models.badgeCustom') }}
-              </span>
-              <span
-                v-if="m.vision"
-                class="inline-block rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-900 dark:bg-purple-900 dark:text-purple-100"
-              >
-                {{ t('hswarm.v.models.badgeVision') }}
-              </span>
-            </TableCell>
-            <TableCell class="text-right font-mono text-sm">
-              {{ m.usd_per_1m ? `$${Number(m.usd_per_1m).toFixed(4)}` : '–' }}
-            </TableCell>
-            <TableCell class="text-right text-sm">
-              {{ m.ctx ? `${m.ctx}k` : '–' }}
-            </TableCell>
-          </TableRow>
-          <TableRow
-            v-if="regularModels.length === 0"
-            class="hover:bg-transparent"
-          >
-            <TableCell
-              :colspan="allModels.some((m: any) => m.provider) ? 7 : 6"
-              class="py-4 text-center text-muted-foreground"
-            >
-              {{ t('hswarm.v.models.noModels') }}
-            </TableCell>
-          </TableRow>
+          <HSwarmModelRow
+            v-for="row in modelRowModels"
+            :key="row.id"
+            :columns="hswarmModelColumns"
+            :row="row"
+          />
         </TableBody>
-      </Table>
-    </div>
-
-    <Button
-      v-if="regularModels.length > FOLD && !props.model"
-      size="sm"
-      variant="outline"
-      class="self-start"
-      @click="showAll = !showAll"
-    >
-      {{ showAll ? t('hswarm.v.models.showFewer') : t('hswarm.v.models.showAll', { n: regularModels.length }) }}
-    </Button>
+      </InstanceTable>
+      <div v-if="regularModels.length > FOLD && !props.model" class="p-3">
+        <Button
+          size="sm"
+          variant="outline"
+          @click="showAll = !showAll"
+        >
+          {{ showAll ? t('hswarm.v.models.showFewer') : t('hswarm.v.models.showAll', { n: regularModels.length }) }}
+        </Button>
+      </div>
+    </InstanceCard>
 
     <!-- Typed models section -->
-    <div
-      v-if="typedModels.length > 0"
-      class="flex flex-col gap-3"
-    >
-      <h3 class="text-sm font-semibold">{{ t('hswarm.v.models.helpersTitle') }}</h3>
-      <p class="text-sm text-muted-foreground">{{ t('hswarm.v.models.helpersDesc') }}</p>
-      <div class="overflow-x-auto rounded-lg border border-border">
-        <Table class="[&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-          <TableHeader>
-            <TableRow>
-              <TableHead class="w-12">{{ t('hswarm.v.models.colEnabled') }}</TableHead>
-              <TableHead>{{ t('hswarm.v.models.colModel') }}</TableHead>
-              <TableHead class="w-32">{{ t('hswarm.v.models.colProvider') }}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            <TableRow
-              v-for="m in typedModels"
-              :key="m.name"
-            >
-              <TableCell>
-                <Switch
-                  :model-value="!m.switched_off && m.enabled"
-                  :disabled="busyModels.has(m.name)"
-                  @update:model-value="(v) => toggleModel(m.name, v)"
-                  :aria-label="`Toggle ${m.name}`"
-                />
-              </TableCell>
-              <TableCell class="font-medium">{{ m.label || m.name }}</TableCell>
-              <TableCell class="text-sm">{{ m.provider }}</TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
+    <InstanceCard v-if="typedModels.length > 0">
+      <div class="p-3 space-y-2">
+        <h3 class="text-sm font-semibold">{{ t('hswarm.v.models.helpersTitle') }}</h3>
+        <p class="text-sm text-muted-foreground">{{ t('hswarm.v.models.helpersDesc') }}</p>
       </div>
-    </div>
+      <InstanceTable
+        :columns="hswarmModelTypedColumns"
+        :indicator-for="() => null"
+        :empty="null"
+      >
+        <TableBody>
+          <HSwarmModelRow
+            v-for="row in typedModelRowModels"
+            :key="row.id"
+            :columns="hswarmModelTypedColumns"
+            :row="row"
+          />
+        </TableBody>
+      </InstanceTable>
+    </InstanceCard>
   </div>
 </template>

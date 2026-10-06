@@ -1,28 +1,29 @@
 <script setup lang="ts">
-import { AlertCircle, CheckCircle2, Clock, Eye, EyeOff, Plus, Trash2, Zap } from '@lucide/vue'
+import { AlertCircle, Plus, Zap } from '@lucide/vue'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import HSwarmKeyStorage from '@/components/hswarm/HSwarmKeyStorage.vue'
+import HSwarmKeyRow from '@/components/hswarm/HSwarmKeyRow.vue'
+import HSwarmProviderRow from '@/components/hswarm/HSwarmProviderRow.vue'
+import HSwarmModelRow from '@/components/hswarm/HSwarmModelRow.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
+import InstanceTable from '@/components/InstanceTable.vue'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { Collapsible } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Switch } from '@/components/ui/switch'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { TableBody } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import type { SortDirection } from '@/composables/useSortable'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { hswarmProviderColumns, hswarmKeyColumns, hswarmModelColumns } from '@/lib/hswarm-table'
+import type { HSwarmProviderRowModel, HSwarmKeyRowModel, HSwarmModelRowModel } from '@/lib/hswarm-table'
 
 const { t } = useI18n()
 const { apiCall, state: apiState } = useHswarmApi()
@@ -63,16 +64,50 @@ const addProviderForm = ref({
 
 const showAddProvider = ref(!!props.adding)
 
+// Table sorting (all providers list)
+const providersSortBy = ref<'name' | 'state'>('state')
+const providersSortDir = ref<SortDirection>(null)
+
 // Derived data
 const sortedProviders = computed(() => {
   if (!apiState.value?.providers) return []
-  return [...apiState.value.providers].sort((a, b) => {
-    const aReady = a.keys > 0 ? 1 : 0
-    const bReady = b.keys > 0 ? 1 : 0
-    if (aReady !== bReady) return bReady - aReady
+  let sorted = [...apiState.value.providers].sort((a, b) => {
+    // Default sort: by state (ready first), then by name
+    const aStatus = getProviderStatus(a)
+    const bStatus = getProviderStatus(b)
+    const statusOrder = { ready: 0, resting: 1, disabled: 2, nokeys: 3 }
+    const statusDiff =
+      (statusOrder[aStatus as keyof typeof statusOrder] ?? 3) -
+      (statusOrder[bStatus as keyof typeof statusOrder] ?? 3)
+    if (statusDiff !== 0) return statusDiff
     return a.name.localeCompare(b.name)
   })
+
+  // Apply explicit sort if selected
+  if (providersSortBy.value === 'name' && providersSortDir.value !== null) {
+    sorted = sorted.sort((a, b) => {
+      const cmp = a.name.localeCompare(b.name)
+      return providersSortDir.value === 'asc' ? cmp : -cmp
+    })
+  } else if (providersSortBy.value === 'state' && providersSortDir.value !== null) {
+    sorted = sorted.sort((a, b) => {
+      const aStatus = getProviderStatus(a)
+      const bStatus = getProviderStatus(b)
+      const statusOrder = { ready: 0, resting: 1, disabled: 2, nokeys: 3 }
+      const statusDiff =
+        (statusOrder[aStatus as keyof typeof statusOrder] ?? 3) -
+        (statusOrder[bStatus as keyof typeof statusOrder] ?? 3)
+      return providersSortDir.value === 'asc' ? statusDiff : -statusDiff
+    })
+  }
+
+  return sorted
 })
+
+function getProviderIndicator(key: string): SortDirection {
+  if (key === providersSortBy.value) return providersSortDir.value
+  return null
+}
 
 const selectedProviderData = computed(() => {
   if (!selectedProvider.value) return null
@@ -285,37 +320,93 @@ function getProviderStatus(p: any) {
   return 'nokeys'
 }
 
-function getProviderStatusBadge(status: string) {
+function getProviderStatusLabel(status: string): { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' } {
   switch (status) {
     case 'ready':
-      return { variant: 'default', icon: CheckCircle2 }
+      return { label: t('hswarm.v.providers.statusReady'), variant: 'default' }
     case 'resting':
-      return { variant: 'secondary', icon: Clock }
+      return { label: t('hswarm.v.providers.statusResting'), variant: 'secondary' }
     case 'disabled':
-      return { variant: 'destructive', icon: AlertCircle }
+      return { label: t('hswarm.v.providers.statusDisabled'), variant: 'destructive' }
     default:
-      return { variant: 'outline', icon: AlertCircle }
+      return { label: t('hswarm.v.providers.statusNoKeys'), variant: 'outline' }
   }
 }
+
+const providerRowModels = computed((): HSwarmProviderRowModel[] => {
+  return sortedProviders.value.map((p, idx) => ({
+    id: p.name,
+    name: p.name,
+    state: getProviderStatusLabel(getProviderStatus(p)),
+    readyCount: p.ready ?? 0,
+    restingCount: p.resting ?? 0,
+    disabledCount: p.disabled ?? 0,
+    keyCount: p.keys ?? 0,
+    enabled: !!p.enabled,
+    onEnabledChange: (v) => setProviderEnabled(p.name, v),
+    onOpen: (path) => emit('open', path),
+  }))
+})
+
+const keyRowModels = computed((): HSwarmKeyRowModel[] => {
+  if (!selectedProvider.value) return []
+  return selectedProviderKeys.value.map((k) => ({
+    id: k.fingerprint,
+    fingerprint: k.fingerprint,
+    masked: k.masked,
+    priority: k.priority ?? null,
+    state: getKeyStateLabel(k),
+    disabled: !!k.disabled,
+    resting_s: k.resting_s,
+    free_only: !!k.free_only,
+    editable: !!k.editable,
+    onPriorityChange: (p) => setKeyPriority(selectedProvider.value!, k.fingerprint, p),
+    onEnabledChange: (v) => setKeyEnabled(selectedProvider.value!, k.fingerprint, v),
+    onCheck: () => checkKey(selectedProvider.value!, k.fingerprint),
+    onRemove: () => removeKey(selectedProvider.value!, k.fingerprint),
+  }))
+})
+
+function getKeyStateLabel(k: Key): { label: string; variant: 'default' | 'secondary' | 'destructive' } {
+  if (k.disabled) {
+    const label = k.free_only ? t('hswarm.v.providers.disabledFree') : t('hswarm.v.providers.disabledKey')
+    return { label, variant: 'destructive' }
+  }
+  if (k.state === 'resting') {
+    const label = `${t('hswarm.v.providers.resting')} ${Math.round(k.resting_s || 0)}${t('hswarm.v.providers.seconds')}`
+    return { label, variant: 'secondary' }
+  }
+  return { label: t('hswarm.v.providers.keyReady'), variant: 'default' }
+}
+
+const modelRowModels = computed((): HSwarmModelRowModel[] => {
+  if (!selectedProvider.value) return []
+  return modelsForSelectedProvider.value.map((m) => ({
+    id: m.name,
+    name: m.name,
+    label: m.label,
+    enabled: !!m.enabled,
+    switched_off: !!m.switched_off,
+    priority: m.priority ?? null,
+    provider: m.provider,
+    kind: m.kind,
+    usd_per_1m: m.usd_per_1m,
+    ctx: m.ctx,
+    custom: !!m.custom,
+    vision: !!m.vision,
+    tools: m.tools,
+    auto: !!m.auto,
+    onEnabledChange: (v) => {},
+    onPriorityChange: (p) => {},
+    onToggleStar: () => {},
+  }))
+})
 
 function selectProvider(name: string) {
   selectedProvider.value = name
   if (!keys.value[name]) {
     fetchKeys(name)
   }
-}
-
-// The all-providers table's State column.
-function stateVariant(p: any): 'default' | 'secondary' | 'destructive' | 'outline' {
-  const v = { ready: 'default', resting: 'secondary', disabled: 'destructive' } as const
-  return v[getProviderStatus(p) as keyof typeof v] ?? 'outline'
-}
-function stateLabel(p: any) {
-  const s = getProviderStatus(p)
-  if (s === 'ready') return t('hswarm.v.providers.statusReady')
-  if (s === 'resting') return t('hswarm.v.providers.statusResting')
-  if (s === 'disabled') return t('hswarm.v.providers.statusDisabled')
-  return t('hswarm.v.providers.statusNoKeys')
 }
 
 onMounted(() => {
@@ -398,54 +489,30 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
 
     <!-- Main content -->
     <div class="flex-1 min-h-0 flex gap-2 overflow-hidden">
-      <!-- All providers (the tree's Providers row): one table, as the console's; the tree is the provider list -->
+      <!-- All providers (the tree's Providers row): one table with shared components -->
       <div v-if="!props.provider" class="flex-1 flex flex-col gap-2 overflow-y-auto">
-        <h3 class="font-semibold text-sm">{{ t('hswarm.v.providers.allProviders') }}</h3>
-        <div v-if="sortedProviders.length === 0" class="text-xs text-muted-foreground py-4">
-          {{ t('hswarm.v.providers.noProviders') }}
-        </div>
-        <div v-else class="overflow-x-auto rounded-lg border border-border">
-          <Table class="text-sm [&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{{ t('hswarm.v.providers.state') }}</TableHead>
-                <TableHead>{{ t('hswarm.v.providers.colProvider') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.readyKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.restingKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.disabledKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.colKeys') }}</TableHead>
-                <TableHead class="w-12">{{ t('hswarm.v.providers.on') }}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow v-for="p in sortedProviders" :key="p.name" :class="{ 'opacity-60': !p.enabled }">
-                <TableCell>
-                  <Badge :variant="stateVariant(p)" class="text-xs">{{ stateLabel(p) }}</Badge>
-                </TableCell>
-                <TableCell>
-                  <button
-                    type="button"
-                    class="font-medium text-primary hover:underline"
-                    @click="emit('open', ['providers', p.name])"
-                  >
-                    {{ p.name }}
-                  </button>
-                </TableCell>
-                <TableCell class="text-right font-mono">{{ p.ready ?? 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.resting || 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.disabled || 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.keys }}</TableCell>
-                <TableCell>
-                  <Switch
-                    :model-value="!!p.enabled"
-                    :aria-label="t('hswarm.v.providers.useProvider', { name: p.name })"
-                    @update:model-value="(v: boolean) => setProviderEnabled(p.name, v)"
-                  />
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </div>
+        <InstanceTable
+          :columns="hswarmProviderColumns"
+          :indicator-for="getProviderIndicator"
+          :empty="
+            sortedProviders.length === 0
+              ? {
+                  icon: AlertCircle,
+                  title: t('hswarm.v.providers.noProviders'),
+                  hint: t('hswarm.v.providers.addOneNow'),
+                }
+              : null
+          "
+        >
+          <TableBody>
+            <HSwarmProviderRow
+              v-for="row in providerRowModels"
+              :key="row.id"
+              :columns="hswarmProviderColumns"
+              :row="row"
+            />
+          </TableBody>
+        </InstanceTable>
       </div>
 
       <!-- Provider details (one provider picked in the tree) -->
@@ -488,12 +555,15 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         </div>
 
         <!-- Keys section -->
-        <Card size="sm">
-          <CardHeader>
-            <CardTitle>{{ t('hswarm.v.providers.keys') }}</CardTitle>
-            <CardDescription>{{ t('hswarm.v.providers.keysDesc') }}</CardDescription>
-          </CardHeader>
-          <CardContent class="space-y-2">
+        <InstanceCard>
+          <InstanceSectionHeader
+            title="hswarm.v.providers.keys"
+            :count="selectedProviderKeys.length"
+            :refreshing="loading"
+            :refresh-label="t('hswarm.v.providers.probeBalance')"
+            @refresh="() => probeBalance(selectedProviderData.name)"
+          />
+          <div class="p-3 space-y-2">
             <!-- Add key input -->
             <div class="flex gap-2">
               <Input
@@ -505,179 +575,78 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               <Button
                 @click="() => addKey(selectedProviderData.name, newKeyInput)"
                 :disabled="loading || !newKeyInput.trim()"
+                size="sm"
               >
                 {{ t('hswarm.v.providers.add') }}
               </Button>
             </div>
 
             <!-- Keys table -->
-            <div v-if="loading && selectedProviderKeys.length === 0" class="text-sm text-muted-foreground">
-              {{ t('hswarm.loading') }}
-            </div>
-            <div
-              v-else-if="selectedProviderKeys.length === 0"
-              class="text-sm text-muted-foreground py-4"
+            <InstanceTable
+              v-if="selectedProviderKeys.length > 0"
+              :columns="hswarmKeyColumns"
+              :indicator-for="() => null"
+              :empty="null"
             >
+              <TableBody>
+                <HSwarmKeyRow
+                  v-for="row in keyRowModels.slice(0, showAllKeys ? keyRowModels.length : FOLD)"
+                  :key="row.id"
+                  :columns="hswarmKeyColumns"
+                  :row="row"
+                  :multiple-keys="selectedProviderKeys.length > 1"
+                />
+              </TableBody>
+            </InstanceTable>
+
+            <div v-else class="text-sm text-muted-foreground py-4 text-center">
               {{ t('hswarm.v.providers.noKeysYet') }}
             </div>
-            <Table v-else class="text-sm [&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{{ t('hswarm.v.providers.key') }}</TableHead>
-                  <TableHead>{{ t('hswarm.v.providers.fingerprint') }}</TableHead>
-                  <TableHead>{{ t('hswarm.v.providers.priority') }}</TableHead>
-                  <TableHead>{{ t('hswarm.v.providers.state') }}</TableHead>
-                  <TableHead class="w-16 text-right">
-                    {{ t('hswarm.v.providers.actions') }}
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-for="k in shownKeys" :key="k.fingerprint">
-                  <TableCell class="font-mono text-xs">{{ k.masked }}</TableCell>
-                  <TableCell class="font-mono text-xs">{{ k.fingerprint }}</TableCell>
-                  <TableCell>
-                    <Input
-                      v-if="selectedProviderKeys.length > 1"
-                      type="number"
-                      :value="k.priority ?? ''"
-                      class="w-16 text-xs"
-                      :placeholder="t('hswarm.v.providers.noPriority')"
-                      @change="
-                        (e: Event) => {
-                          const v = (e.target as HTMLInputElement).value
-                          setKeyPriority(
-                            selectedProviderData.name,
-                            k.fingerprint,
-                            v ? parseInt(v) : null,
-                          )
-                        }
-                      "
-                    />
-                    <span v-else class="text-xs text-muted-foreground">—</span>
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      v-if="k.disabled"
-                      variant="destructive"
-                      class="text-xs"
-                    >
-                      {{ k.free_only ? t('hswarm.v.providers.disabledFree') : t('hswarm.v.providers.disabledKey') }}
-                    </Badge>
-                    <Badge
-                      v-else-if="k.state === 'resting'"
-                      variant="secondary"
-                      class="text-xs"
-                    >
-                      {{ t('hswarm.v.providers.resting') }} {{ Math.round(k.resting_s || 0) }}{{ t('hswarm.v.providers.seconds') }}
-                    </Badge>
-                    <Badge v-else variant="default" class="text-xs">
-                      {{ t('hswarm.v.providers.keyReady') }}
-                    </Badge>
-                  </TableCell>
-                  <TableCell class="text-right">
-                    <div class="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        @click="() => setKeyEnabled(selectedProviderData.name, k.fingerprint, !k.disabled)"
-                        :title="k.disabled ? 'Enable' : 'Disable'"
-                      >
-                        <component
-                          :is="k.disabled ? Eye : EyeOff"
-                          class="size-4"
-                        />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        @click="() => checkKey(selectedProviderData.name, k.fingerprint)"
-                        :disabled="loading"
-                        :title="t('hswarm.v.providers.checkKeyTitle')"
-                      >
-                        <CheckCircle2 class="size-4" />
-                      </Button>
-                      <Button
-                        v-if="k.editable"
-                        size="sm"
-                        variant="ghost"
-                        @click="() => removeKey(selectedProviderData.name, k.fingerprint)"
-                        :disabled="loading"
-                        :title="t('hswarm.v.providers.removeKeyTitle')"
-                      >
-                        <Trash2 class="size-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+
             <Button
               v-if="selectedProviderKeys.length > FOLD"
               size="sm"
               variant="outline"
-              class="mt-2"
               @click="showAllKeys = !showAllKeys"
             >
               {{ showAllKeys ? t('hswarm.v.providers.showFewer') : t('hswarm.v.providers.showAllKeys', { n: selectedProviderKeys.length }) }}
             </Button>
-
-            <!-- Probe button -->
-            <div class="pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                @click="() => probeBalance(selectedProviderData.name)"
-                :disabled="loading"
-              >
-                {{ t('hswarm.v.providers.probeBalance') }}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+          </div>
+        </InstanceCard>
 
         <!-- Models section -->
-        <Card size="sm" v-if="modelsForSelectedProvider.length > 0">
-          <CardHeader>
-            <CardTitle>{{ t('hswarm.v.providers.models') }}</CardTitle>
-            <CardDescription>
-              {{ modelsForSelectedProvider.length }}
-              {{ t('hswarm.v.providers.modelsAvailable') }}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Table class="text-sm [&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>{{ t('hswarm.v.providers.name') }}</TableHead>
-                  <TableHead>{{ t('hswarm.v.providers.enabled') }}</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow v-for="m in shownModels" :key="m.name">
-                  <TableCell class="font-medium">{{ m.label || m.name }}</TableCell>
-                  <TableCell>
-                    <Badge v-if="m.enabled" variant="default">
-                      {{ t('hswarm.v.providers.on') }}
-                    </Badge>
-                    <Badge v-else variant="secondary">
-                      {{ t('hswarm.v.providers.off') }}
-                    </Badge>
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
+        <InstanceCard v-if="modelsForSelectedProvider.length > 0">
+          <InstanceSectionHeader
+            title="hswarm.v.providers.models"
+            :count="modelsForSelectedProvider.length"
+            :refreshing="false"
+            :refresh-label="t('hswarm.refresh')"
+            @refresh="() => {}"
+          />
+          <InstanceTable
+            :columns="hswarmModelColumns"
+            :indicator-for="() => null"
+            :empty="null"
+          >
+            <TableBody>
+              <HSwarmModelRow
+                v-for="row in modelRowModels.slice(0, showAllModels ? modelRowModels.length : FOLD)"
+                :key="row.id"
+                :columns="hswarmModelColumns"
+                :row="row"
+              />
+            </TableBody>
+          </InstanceTable>
+          <div v-if="modelsForSelectedProvider.length > FOLD" class="p-3">
             <Button
-              v-if="modelsForSelectedProvider.length > FOLD"
               size="sm"
               variant="outline"
-              class="mt-2"
               @click="showAllModels = !showAllModels"
             >
               {{ showAllModels ? t('hswarm.v.providers.showFewer') : t('hswarm.v.providers.showAllModels', { n: modelsForSelectedProvider.length }) }}
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </InstanceCard>
 
         <!-- Remove provider section -->
         <Card size="sm" v-if="!selectedProviderData.builtin" class="border-destructive/50">

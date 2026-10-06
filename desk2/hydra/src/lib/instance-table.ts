@@ -28,6 +28,27 @@ export type InstanceColumnKey =
   | 'lastActive'
   | 'tokens'
   | 'actions'
+  // HSwarm provider columns
+  | 'providerState'
+  | 'providerName'
+  | 'readyCount'
+  | 'restingCount'
+  | 'disabledCount'
+  | 'keyCount'
+  | 'enabled'
+  // HSwarm key columns
+  | 'keyMasked'
+  | 'keyFingerprint'
+  | 'keyPriority'
+  | 'keyState'
+  // HSwarm model columns
+  | 'modelEnabled'
+  | 'modelPriority'
+  | 'modelName'
+  | 'modelProvider'
+  | 'modelKind'
+  | 'modelPrice'
+  | 'modelContext'
 
 /** One column as the table draws it. The sort key is the column key. */
 export interface InstanceColumn {
@@ -150,9 +171,10 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     skeleton: 'h-3 w-14',
   },
-  // What the account has run, from its own transcripts on this PC. The window flyout and the
-  // per-account totals plug in here and nowhere else: `flyout` and `cell` below.
-  ...(['cli', 'desktop'] as const).map(
+  // What the account has run, from its own transcripts on this PC (a Free login's: estimated from the
+  // text Desk sent and got back). The window flyout and the per-account totals plug in here and nowhere
+  // else: `flyout` and `cell` below.
+  ...(['cli', 'desktop', 'free'] as const).map(
     (kind): ColumnDef => ({
       key: 'tokens',
       label: 'cliInstances.colTokens',
@@ -257,6 +279,8 @@ export interface InstanceRowModel {
   lastRunning?: { label: string; running: boolean; title?: string } | null
   /** The account's tokens for the span the table's switch has chosen; null when not known. */
   tokens?: TokenParts | null
+  /** The Tokens hover's second and third lines, for figures that are not a transcript's (a Free login's estimate). */
+  tokensNote?: { breakdown: string; source: string }
   /** The ⋯ menu: its header's icon actions and its width. Its items come in the `menu` slot. */
   menu?: { name: string; actions: MenuIconAction[]; class?: string }
 }
