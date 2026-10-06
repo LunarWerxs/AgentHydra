@@ -1,6 +1,6 @@
-// The live preview of a Browser card: one small JPEG of the profile's page, fetched every few seconds by the newest
-// card of that profile only. The open/closed answer is one shared, briefly cached read of the saved browsers.
-import { BROWSER_PREVIEW, BROWSER_PROFILES, type BrowserProfiles } from '@shared/browser'
+// The live preview of a Browser card: a low-fps stream of the profile's page (server/src/browser/preview.ts), or, when
+// that fails, one small JPEG fetched every few seconds; either way by the newest on-screen card of that profile only. The open/closed answer is one shared, briefly cached read of the saved browsers.
+import { BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, type BrowserPreviewOut, type BrowserProfiles } from '@shared/browser'
 
 export const PREVIEW_EVERY_MS = 3000
 
@@ -32,4 +32,112 @@ export async function nextFrame(cwd: string, profile: string): Promise<string | 
     return null
   }
   return url
+}
+
+/** BROWSER_PREVIEW_STREAM's address for a page at `loc`. */
+export function previewStreamUrl(loc: { protocol: string; host: string }, cwd: string, profile: string): string {
+  return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}${BROWSER_PREVIEW_STREAM}?${new URLSearchParams({ cwd, profile })}`
+}
+
+/** Whether a card should be fed: the newest card of an open, named profile that is on screen in a visible window. */
+export function previewWanted(s: { named: boolean; newest: boolean; onScreen: boolean; visible: boolean; hasCwd: boolean }): boolean {
+  return s.named && s.newest && s.onScreen && s.visible && s.hasCwd
+}
+
+/** Opens the card's stream; frames come as `data:` addresses, onEnd fires once when it closes, fails or says closed. Returns the closer. */
+export function openPreviewStream(cwd: string, profile: string, onFrame: (src: string) => void, onEnd: () => void): () => void {
+  let done = false
+  const ws = new WebSocket(previewStreamUrl(location, cwd, profile))
+  const end = (): void => {
+    if (done) return
+    done = true
+    onEnd()
+  }
+  ws.onmessage = (ev) => {
+    try {
+      const m = JSON.parse(String(ev.data)) as BrowserPreviewOut
+      if (m.type === 'frame') onFrame(`data:image/jpeg;base64,${m.data}`)
+      else end()
+    } catch {
+      // floor-ok: not a message of ours
+    }
+  }
+  ws.onclose = end
+  ws.onerror = end
+  return () => {
+    done = true
+    ws.onmessage = ws.onclose = ws.onerror = null
+    try {
+      ws.close()
+    } catch {
+      // floor-ok: already closed
+    }
+  }
+}
+
+export interface PreviewFeedDeps {
+  openStream(onFrame: (src: string) => void, onEnd: () => void): () => void
+  /** One still, as the 3 s poll fetches it; resolves when it is shown. */
+  poll(): Promise<void>
+}
+
+/**
+ * What feeds a card that is wanted: its stream while that works; else the 3 s poll, with the stream tried again every
+ * `retryMs`. The picture on screen is never cleared here, so a failed stream keeps the last frame until a poll replaces it.
+ */
+export class PreviewFeed {
+  private on = false
+  private close: (() => void) | null = null
+  private pollTimer: ReturnType<typeof setInterval> | null = null
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private waitTimer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(
+    private readonly deps: PreviewFeedDeps,
+    private readonly onFrame: (src: string) => void,
+    private readonly opts: { pollMs?: number; retryMs?: number; firstFrameMs?: number } = {},
+  ) {}
+
+  /** True while a stream is open. */
+  get streaming(): boolean {
+    return this.close !== null
+  }
+
+  setWanted(on: boolean): void {
+    if (on === this.on) return
+    this.on = on
+    this.teardown()
+    if (on) this.connect()
+  }
+
+  private connect(): void {
+    this.close = this.deps.openStream(
+      (src) => {
+        if (this.waitTimer) clearTimeout(this.waitTimer)
+        this.waitTimer = null
+        if (this.on) this.onFrame(src)
+      },
+      () => this.fallBack(),
+    )
+    this.waitTimer = setTimeout(() => this.fallBack(), this.opts.firstFrameMs ?? 4000)
+  }
+
+  private fallBack(): void {
+    if (!this.on) return
+    this.teardown()
+    void this.deps.poll()
+    this.pollTimer = setInterval(() => void this.deps.poll(), this.opts.pollMs ?? PREVIEW_EVERY_MS)
+    this.retryTimer = setTimeout(() => {
+      this.teardown()
+      if (this.on) this.connect()
+    }, this.opts.retryMs ?? 15_000)
+  }
+
+  private teardown(): void {
+    this.close?.()
+    this.close = null
+    for (const t of [this.waitTimer, this.retryTimer]) if (t) clearTimeout(t)
+    if (this.pollTimer) clearInterval(this.pollTimer)
+    this.waitTimer = this.retryTimer = this.pollTimer = null
+  }
 }

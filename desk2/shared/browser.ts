@@ -26,6 +26,12 @@ export const BROWSER_TABS = `${BROWSER_BASE}/tabs`
 export const BROWSER_PREVIEW = `${BROWSER_BASE}/preview`
 /** WebSocket ?cwd=&profile=&tab=<id, optional>: BrowserLiveOut from the server, BrowserLiveIn from the page. */
 export const BROWSER_LIVE = `${BROWSER_BASE}/live`
+/**
+ * WebSocket ?cwd=&profile=: BrowserPreviewOut from the server, nothing accepted from the page (input is never forwarded).
+ * The transcript Browser card's low-fps stream of the profile's page: at most about 5 frames a second, about 640px wide,
+ * shared with the pane's live view when that shows the page. 409 when the profile is not open, 404 for another workspace's.
+ */
+export const BROWSER_PREVIEW_STREAM = `${BROWSER_BASE}/preview-stream`
 
 /**
  * The window event the transcript's Browser card fires, detail BrowserOpenRequest: DeskFrame opens the servers pane
@@ -94,6 +100,13 @@ export type BrowserLiveOut =
   | { type: 'frame'; data: string; width: number; height: number }
   | { type: 'page'; tab: BrowserTab; canGoBack: boolean; canGoForward: boolean }
   | { type: 'tabs'; tabs: BrowserTab[] }
+  | { type: 'closed'; reason: string }
+
+/** Server to card over BROWSER_PREVIEW_STREAM. */
+export type BrowserPreviewOut =
+  /** One frame: base64 JPEG, and its size in pixels (0 when unknown). */
+  | { type: 'frame'; data: string; width: number; height: number }
+  /** The stream ended (the browser closed, or the page could not be shown); the card falls back to polling. */
   | { type: 'closed'; reason: string }
 
 /** Page to server over BROWSER_LIVE. Coordinates are page CSS pixels; modifiers is CDP's bit field (Alt 1, Ctrl 2, Meta 4, Shift 8). */

@@ -216,6 +216,48 @@ export function liveFrame(port: number): Buffer | null {
   return newest ? Buffer.from(newest.data, 'base64') : null
 }
 
+export interface TappedFrame {
+  data: string
+  width: number
+  height: number
+}
+
+const frameTaps = new Map<number, Set<(f: TappedFrame) => void>>()
+const liveWatchers = new Set<(port: number) => void>()
+
+/** Whether the pane is showing a page of this Chrome live (its screencast runs, so no second one is needed). */
+export function hasLiveSession(port: number): boolean {
+  return (liveSessions.get(port)?.size ?? 0) > 0
+}
+
+/** The newest live frame with its size, for a viewer that joins between frames. */
+export function liveFrameSized(port: number): TappedFrame | null {
+  let newest: { at: number; f: TappedFrame } | null = null
+  for (const s of liveSessions.get(port) ?? []) if (s.frame && (!newest || s.frame.at > newest.at)) newest = { at: s.frame.at, f: { data: s.frame.data, width: s.frame.width, height: s.frame.height } }
+  return newest?.f ?? null
+}
+
+/** Calls fn with every frame a live session of this port receives; the returned function stops it. */
+export function tapLiveFrames(port: number, fn: (f: TappedFrame) => void): () => void {
+  const set = frameTaps.get(port) ?? new Set()
+  set.add(fn)
+  frameTaps.set(port, set)
+  return () => {
+    set.delete(fn)
+    if (set.size === 0 && frameTaps.get(port) === set) frameTaps.delete(port)
+  }
+}
+
+/** Calls fn(port) when a live session starts or ends on that port. */
+export function onLiveChange(fn: (port: number) => void): () => void {
+  liveWatchers.add(fn)
+  return () => void liveWatchers.delete(fn)
+}
+
+function liveChanged(port: number): void {
+  for (const fn of [...liveWatchers]) fn(port)
+}
+
 /** One page of a profile's Chrome, shown live: frames and page changes out, input in. */
 export class LiveSession {
   private cdp: WebSocket | null = null
@@ -228,7 +270,7 @@ export class LiveSession {
   /** Bumped by every attach, so events of a socket that was replaced are dropped. */
   private epoch = 0
   /** The newest screencast frame (base64 JPEG), kept for liveFrame(). */
-  frame: { at: number; data: string } | null = null
+  frame: { at: number; data: string; width: number; height: number } | null = null
   /** The page size the viewer asked for, re-applied on every attach. */
   private size: { width: number; height: number } | null = null
 
@@ -248,6 +290,7 @@ export class LiveSession {
     const mine = liveSessions.get(this.port) ?? new Set<LiveSession>()
     mine.add(this)
     liveSessions.set(this.port, mine)
+    liveChanged(this.port)
     await this.attach(tab)
     this.poll = setInterval(() => void this.watch(), 1000)
   }
@@ -326,8 +369,11 @@ export class LiveSession {
         // floor-ok: the socket went away; the next frame never comes
       })
       if (epoch === this.epoch && typeof msg.params.data === 'string') {
-        this.frame = { at: Date.now(), data: msg.params.data }
-        this.out({ type: 'frame', data: msg.params.data, width: Math.round(meta.deviceWidth ?? 0), height: Math.round(meta.deviceHeight ?? 0) })
+        const width = Math.round(meta.deviceWidth ?? 0)
+        const height = Math.round(meta.deviceHeight ?? 0)
+        this.frame = { at: Date.now(), data: msg.params.data, width, height }
+        this.out({ type: 'frame', data: msg.params.data, width, height })
+        for (const tap of [...(frameTaps.get(this.port) ?? [])]) tap({ data: msg.params.data, width, height })
       }
       return
     }
@@ -415,6 +461,7 @@ export class LiveSession {
     const mine = liveSessions.get(this.port)
     mine?.delete(this)
     if (mine?.size === 0) liveSessions.delete(this.port)
+    liveChanged(this.port)
   }
 
   /** One message from the page. Anything malformed is dropped. */

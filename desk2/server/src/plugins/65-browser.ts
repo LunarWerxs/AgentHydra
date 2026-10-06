@@ -6,9 +6,10 @@
 // guard. A request names a profile, never a port: the port comes from that profile folder's DevToolsActivePort.
 
 import type { Hono } from 'hono'
-import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened } from '@shared/browser'
+import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
 import { capturePreview, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
+import { previewHub } from '../browser/preview'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
 import type { ServerContext } from '../context'
 
@@ -109,6 +110,51 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     } catch {
       return c.json({ error: `'${profile}' did not answer` }, 502)
     }
+  })
+
+  // The Browser card's stream: frames only, at most ~5 a second, shared with the pane's live view; nothing the card sends is read.
+  const previews = new WeakMap<object, () => void>()
+  ctx.wsRoute<{ port: number }>(BROWSER_PREVIEW_STREAM, {
+    async accept(req) {
+      const why = notOwnPage(req.headers)
+      if (why) return Response.json({ error: why }, { status: 403 })
+      const q = new URL(req.url).searchParams
+      const cwd = q.get('cwd')
+      const profile = q.get('profile')
+      if (!cwd || !profile) return Response.json({ error: 'cwd and profile required' }, { status: 400 })
+      const listing = await listProfiles(cwd)
+      const ref = listing.refs.find((r) => r.profile.name === profile)
+      if (!ref) return Response.json({ error: `no browser '${profile}' for this chat's workspace` }, { status: ofAnotherWorkspace(listing, profile) ? 403 : 404 })
+      if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
+      return { data: { port: ref.port } }
+    },
+    open(ws, data) {
+      const send = (msg: BrowserPreviewOut): void => {
+        try {
+          ws.send(JSON.stringify(msg))
+        } catch {
+          // floor-ok: a socket closing mid-send is dropped by its close handler
+        }
+      }
+      previews.set(
+        ws,
+        previewHub.subscribe(data.port, {
+          send: (f) => send({ type: 'frame', data: f.data, width: f.width, height: f.height }),
+          closed: (reason) => {
+            send({ type: 'closed', reason })
+            ws.close()
+          },
+          backed: () => ws.getBufferedAmount() > 512 * 1024,
+        }),
+      )
+    },
+    message() {
+      // Input is never forwarded from the card.
+    },
+    close(ws) {
+      previews.get(ws)?.()
+      previews.delete(ws)
+    },
   })
 
   ctx.wsRoute<LiveData>(BROWSER_LIVE, {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The AI used its browser: one compact preview card that opens that browser live in the side pane (DeskFrame listens
 // for OPEN_BROWSER_EVENT). A run of browser calls is one card showing the latest (`run`). The picture is, in order,
-// the browser live (newest card of an open profile, on screen, window visible), the run's latest screenshot, a quiet
+// the browser live (a stream, else a 3 s poll; newest card of an open profile, on screen, window visible), the run's latest screenshot, a quiet
 // placeholder; the caption along the bottom is faint until the pointer is over it.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Globe, Maximize2 } from '@lucide/vue'
@@ -9,7 +9,7 @@ import type { TranscriptItem } from '@shared/protocol'
 import { OPEN_BROWSER_EVENT } from '@shared/browser'
 import { browserOpenRequest, DEFAULT_BROWSER, parseBrowserCall } from '../lib/tools'
 import { imageSrc, openLightbox } from '../lib/media'
-import { nextFrame, openProfiles, PREVIEW_EVERY_MS } from '../lib/browserPreview'
+import { nextFrame, openPreviewStream, openProfiles, PreviewFeed, previewWanted } from '../lib/browserPreview'
 import { useTranscript } from '../context'
 import StatusIcon from './StatusIcon.vue'
 
@@ -60,9 +60,14 @@ const visible = ref(typeof document === 'undefined' || document.visibilityState 
 const live = ref<string | null>(null)
 const named = computed(() => info.value.profile !== DEFAULT_BROWSER)
 const newest = computed(() => named.value && ctx.newestBrowser?.value.get(info.value.profile) === props.item.id)
-const watching = computed(() => newest.value && onScreen.value && visible.value && !!ctx.cwd.value)
+const watching = computed(() => previewWanted({ named: named.value, newest: newest.value, onScreen: onScreen.value, visible: visible.value, hasCwd: !!ctx.cwd.value }))
 
-let timer: ReturnType<typeof setInterval> | null = null
+// A picture is a stream frame (a data: address) or a polled still (an object URL that is revoked when replaced).
+function show(src: string | null) {
+  const old = live.value
+  live.value = src
+  if (old?.startsWith('blob:')) URL.revokeObjectURL(old)
+}
 let busy = false
 async function tick() {
   const cwd = ctx.cwd.value
@@ -78,27 +83,17 @@ async function tick() {
       return
     }
     if (!frame && !closed) return
-    const old = live.value
-    live.value = frame
-    if (old) URL.revokeObjectURL(old)
+    show(frame)
   } finally {
     busy = false
   }
 }
-function stop() {
-  if (timer) clearInterval(timer)
-  timer = null
-}
-watch(
-  watching,
-  (on) => {
-    stop()
-    if (!on) return
-    void tick()
-    timer = setInterval(() => void tick(), PREVIEW_EVERY_MS)
-  },
-  { immediate: true },
+// The stream feeds the picture while it works; the 3 s poll takes over when it fails or the browser is closed.
+const feed = new PreviewFeed(
+  { openStream: (onFrame, onEnd) => openPreviewStream(ctx.cwd.value ?? '', info.value.profile, onFrame, onEnd), poll: tick },
+  show,
 )
+watch(watching, (on) => feed.setWanted(on), { immediate: true })
 
 let observer: IntersectionObserver | null = null
 const onVisibility = () => (visible.value = document.visibilityState === 'visible')
@@ -110,10 +105,10 @@ onMounted(() => {
   }
 })
 onBeforeUnmount(() => {
-  stop()
+  feed.setWanted(false)
   observer?.disconnect()
   document.removeEventListener('visibilitychange', onVisibility)
-  if (live.value) URL.revokeObjectURL(live.value)
+  show(null)
 })
 
 const picture = computed(() => live.value ?? shot.value)
