@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The transcript: a windowed list (only the rows near the viewport are in the DOM, so a 3,000-item
-// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send takes it back to the
-// bottom), and a Working row under
-// the last item while the chat's turn runs.
+// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send, the jump button or
+// scrolling back down takes it back to the bottom), and a Working row under the last item while the
+// chat's turn runs.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch, type Directive } from 'vue'
 import { icons } from '@/lib/icons'
 
@@ -111,9 +111,16 @@ function estimateRow(r: DisplayRow): number {
   return estimateHeight(it) + (it.kind === 'user' || r.endOfTurn ? 28 : 0)
 }
 
-// Auto-scroll: pinned to the bottom until Jacob scrolls up; scrolling back near the bottom re-pins.
+// Auto-scroll: pinned to the bottom until Jacob scrolls up by any means (wheel, touchpad, scrollbar, keys); only
+// scrolling back down to the bottom, the jump button or a send re-pins. A reply growing never pulls him down.
 const pinned = ref(true)
 let lastTop = 0
+/** How far the bottom is below the screen, for the jump button. */
+const fromBottom = ref(0)
+/** The jump button (WhatsApp's down arrow, bottom right) shows once he is more than half a screen up, never for a few lines. */
+const showJump = computed(() => !pinned.value && fromBottom.value > Math.max(200, viewHeight.value / 2))
+
+const distanceOf = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight
 
 function scrollToBottom() {
   const el = scroller.value
@@ -121,17 +128,31 @@ function scrollToBottom() {
   el.scrollTop = el.scrollHeight
   scrollTop.value = el.scrollTop
   lastTop = el.scrollTop
+  fromBottom.value = 0
+}
+
+/** Keeps a pinned transcript at its bottom. A scroll up that onScroll has not seen yet (a scrollbar drag or a key in
+ *  the same frame as a streamed line) lets go here instead of being overwritten. */
+function follow() {
+  const el = scroller.value
+  if (!el || !pinned.value) return
+  if (el.scrollTop < lastTop - 1 && distanceOf(el) > 1) return onScroll()
+  scrollToBottom()
 }
 
 function onScroll() {
   const el = scroller.value
   if (!el) return
   const top = el.scrollTop
-  const distance = el.scrollHeight - top - el.clientHeight
-  if (distance <= 24) pinned.value = true
-  else if (top < lastTop - 1) pinned.value = false
+  const distance = distanceOf(el)
+  // Any move up lets go, however small (the browser clamping a shrunk list at the very bottom is not a move); only a
+  // move down to within 24px of the bottom takes hold again.
+  const up = top < lastTop - 1
+  if (up && distance > 1) pinned.value = false
+  else if (!up && distance <= 24) pinned.value = true
   lastTop = top
   scrollTop.value = top
+  fromBottom.value = distance
 }
 
 function onWheel(e: WheelEvent) {
@@ -142,7 +163,7 @@ function jumpToLatest() {
   pinned.value = true
   scrollToBottom()
   // Rows near the bottom get measured after this render; follow them down.
-  requestAnimationFrame(scrollToBottom)
+  requestAnimationFrame(follow)
 }
 
 // Sending from this chat's composer goes to the bottom, even scrolled up, and stays pinned for the reply.
@@ -192,7 +213,7 @@ onMounted(() => {
   viewObserver = new ResizeObserver(() => {
     if (!scroller.value) return
     viewHeight.value = scroller.value.clientHeight
-    if (pinned.value) scrollToBottom()
+    follow()
   })
   if (scroller.value) {
     viewObserver.observe(scroller.value)
@@ -211,11 +232,12 @@ onBeforeUnmount(() => {
   clearFind()
 })
 
-// Follow new items, streaming growth and re-measured rows while pinned.
+// Follow new items, streaming growth and re-measured rows while pinned; scrolled up, they only tell the jump button how far down the bottom is.
 watch(
   [offsets, showWorking, () => props.items[props.items.length - 1]],
   () => {
-    if (pinned.value) nextTick(scrollToBottom)
+    if (pinned.value) return void nextTick(follow)
+    if (scroller.value) fromBottom.value = distanceOf(scroller.value)
   },
   { flush: 'post' },
 )
@@ -332,7 +354,7 @@ watch(
   (now, before) => {
     const el = scroller.value
     if (!el || now === before) return
-    if (pinned.value) return scrollToBottom()
+    if (pinned.value) return follow()
     if (el.scrollTop <= 0 && now > before) return
     el.scrollTop += now - before
     scrollTop.value = lastTop = el.scrollTop
@@ -384,11 +406,11 @@ watch(
       leave-active-class="transition duration-150"
     >
       <button
-        v-if="!pinned"
+        v-if="showJump"
         type="button"
         aria-label="Scroll to bottom"
         title="Scroll to bottom"
-        class="tx-scroll-bottom absolute bottom-4 left-1/2 -translate-x-1/2"
+        class="tx-scroll-bottom absolute bottom-4 right-5"
         @click="jumpToLatest"
       >
         <ArrowDown class="size-5 mix-blend-luminosity" />
