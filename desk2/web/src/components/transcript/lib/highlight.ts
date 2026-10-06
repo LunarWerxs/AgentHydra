@@ -76,6 +76,25 @@ export function ensureShiki(): void {
 const highlighted = new Map<string, string>()
 const KEEP_BLOCKS = 200
 
+// V8 stores a block sliced out of a reply that holds any character above U+00FF (an em dash, a curly quote)
+// as a two-byte string even when the block itself is plain ASCII, and every shiki regex then takes its slower
+// two-byte path: a 240-line TypeScript block highlighted 2.3x slower cold and 3.3x slower warm (MPC-Plex,
+// 2026-10-06; the same finding as claude.ai's speed sprint, claude.dev 2026-09-23). A block whose own characters
+// all fit in one byte is copied back into a one-byte string before it is highlighted.
+const ONE_BYTE = /^[\u0000-\u00ff]*$/
+
+function oneByte(code: string): string {
+  if (!ONE_BYTE.test(code)) return code
+  let out = ''
+  for (let i = 0; i < code.length; i += 4096) {
+    const part = code.slice(i, i + 4096)
+    const units = new Array<number>(part.length)
+    for (let j = 0; j < part.length; j++) units[j] = part.charCodeAt(j)
+    out += String.fromCharCode(...units)
+  }
+  return out
+}
+
 const highlight: Highlight = (code, lang) => {
   if (!highlighter) {
     ensureShiki()
@@ -87,7 +106,7 @@ const highlight: Highlight = (code, lang) => {
   const kept = highlighted.get(key)
   if (kept !== undefined) return kept
   try {
-    const html = highlighter.codeToHtml(code, { lang: id, theme: 'github-dark-default' })
+    const html = highlighter.codeToHtml(oneByte(code), { lang: id, theme: 'github-dark-default' })
     highlighted.set(key, html)
     if (highlighted.size > KEEP_BLOCKS) highlighted.delete(highlighted.keys().next().value!)
     return html
