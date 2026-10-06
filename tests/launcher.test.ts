@@ -109,6 +109,8 @@ describe.skipIf(!win)('tray launcher', () => {
     const script = cfg.openCommand.args.at(-1)
     expect(join(APP, 'misc', script)).toBe(join(APP, 'desk2', 'launcher', 'start.vbs'))
     expect(existsSync(join(APP, 'misc', script))).toBe(true)
+    // ...and a bundle without desk2/ keeps Open on the URL only if `requires` guards that same script
+    expect(cfg.openCommand.requires).toBe(script)
   })
 
   test('the .ico has a tray-sized (<=48px) frame (a 256-only icon renders blank)', () => {

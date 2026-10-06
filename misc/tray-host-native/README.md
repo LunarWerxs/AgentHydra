@@ -76,12 +76,19 @@ browser, or in an app-mode window in portable mode. An app whose window is a nat
 names it with `openCommand`, and Open runs that instead, windowless:
 
 ```json
-"openCommand": { "exe": "%SystemRoot%\\System32\\wscript.exe", "args": ["//B", "//Nologo", "..\\desk2\\launcher\\start.vbs"] }
+"openCommand": {
+  "exe": "%SystemRoot%\\System32\\wscript.exe",
+  "args": ["//B", "//Nologo", "..\\desk2\\launcher\\start.vbs"],
+  "requires": "..\\desk2\\launcher\\start.vbs"
+}
 ```
 
 `exe` and the args are expanded like every other value, a relative `exe` resolves against the
-config's folder, the command runs in that folder, and `{URL}` in an arg is the live URL. A command
-that cannot be started falls back to the URL. A malformed `openCommand` is ignored.
+config's folder, the command runs in that folder, and `{URL}` in an arg is the live URL. `requires`
+(optional, resolved the same way) names a file the command needs; while it is absent, Open shows the
+URL instead, checked at each Open. Name it whenever the window can be missing from a bundle:
+`wscript //B` on a missing script fails without a word, so Open would do nothing. A command that
+cannot be started falls back to the URL. A malformed `openCommand` is ignored.
 
 **`--background`** (`lunarwerx-tray.exe App-Tray.json --background`) starts the tray without
 opening anything, and exits quietly when the tray is already running. It is for an app's own window

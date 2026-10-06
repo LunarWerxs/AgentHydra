@@ -110,16 +110,26 @@ pub struct FirstRunStep {
 /// `exe` and each arg are expanded like every other value, a relative `exe` resolves against the
 /// config's folder, the command runs IN that folder (so a relative script path in `args` means the
 /// same thing as the config's own relative paths), and `{URL}` in an arg is the daemon's live URL.
+/// `"requires": "launch.vbs"` (resolved the same way) names a file the command needs: while it is
+/// absent, Open shows the daemon's URL instead (a bundle that does not ship the window yet, where
+/// `wscript //B` on a missing script would fail without a word).
 #[derive(Debug, Clone)]
 pub struct OpenCommand {
     pub exe: PathBuf,
     pub args: Vec<String>,
     pub cwd: PathBuf,
+    pub requires: Option<PathBuf>,
 }
 
 impl OpenCommand {
     pub fn args_for(&self, url: &str) -> Vec<String> {
         self.args.iter().map(|a| a.replace("{URL}", url)).collect()
+    }
+
+    /// Whether Open runs this command now, rather than showing the URL: asked at each Open, so a
+    /// window installed after the tray started is used from then on.
+    pub fn ready(&self) -> bool {
+        self.requires.as_ref().is_none_or(|p| p.exists())
     }
 }
 
@@ -276,14 +286,24 @@ fn resolve_open_command(v: &Json, script_dir: &Path) -> Option<OpenCommand> {
             .collect::<Option<Vec<_>>>()?,
         Some(_) => return None,
     };
-    Some(OpenCommand {
-        exe: if exe.is_absolute() {
-            exe
+    let in_dir = |p: PathBuf| {
+        if p.is_absolute() {
+            p
         } else {
-            script_dir.join(exe)
-        },
+            script_dir.join(p)
+        }
+    };
+    let requires = match spec.get("requires") {
+        None => None,
+        Some(r) => Some(in_dir(PathBuf::from(expand(
+            r.as_str().filter(|s| !s.is_empty())?,
+        )))),
+    };
+    Some(OpenCommand {
+        exe: in_dir(exe),
         args,
         cwd: script_dir.to_path_buf(),
+        requires,
     })
 }
 
@@ -527,10 +547,37 @@ mod tests {
             r#", "openCommand": { "exe": "" }"#,
             r#", "openCommand": { "exe": "a.exe", "args": [1] }"#,
             r#", "openCommand": { "exe": "a.exe", "args": "x" }"#,
+            r#", "openCommand": { "exe": "a.exe", "requires": 1 }"#,
+            r#", "openCommand": { "exe": "a.exe", "requires": "" }"#,
         ] {
             let cfg = config_at(r"C:\apps\demo\misc\demo-tray.json", extra);
             assert!(cfg.open_command.is_none(), "{extra}");
         }
+    }
+
+    #[test]
+    fn open_runs_the_command_only_while_the_file_it_requires_is_there() {
+        // The crate's own Cargo.toml exists; a sibling that never will does not.
+        let cfg_path = format!(r"{}\demo-tray.json", env!("CARGO_MANIFEST_DIR"));
+        let with = |requires: &str| {
+            config_at(
+                &cfg_path,
+                &format!(r#", "openCommand": {{ "exe": "a.exe", "requires": "{requires}" }}"#),
+            )
+            .open_command
+            .expect("openCommand is set")
+        };
+        let present = with("Cargo.toml");
+        assert_eq!(
+            present.requires,
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        );
+        assert!(present.ready());
+        assert!(!with("not-shipped-yet.vbs").ready());
+        let none = config_at(&cfg_path, r#", "openCommand": { "exe": "a.exe" }"#)
+            .open_command
+            .expect("set");
+        assert!(none.ready(), "no requires: always ready");
     }
 
     #[test]

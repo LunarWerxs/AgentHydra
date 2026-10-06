@@ -10,8 +10,9 @@
     "",
     "Open shows Hydra Desk 2, AgentHydra's window from 2026-10-06 (owner): openCommand runs its",
     "launcher, which starts Desk 2's server when it is down and opens or focuses its window. The",
-    "launcher in turn starts this tray (--background), so either one brings up the other. A release",
-    "zip must ship desk2/ beside misc/ for this path to exist."
+    "launcher in turn starts this tray (--background), so either one brings up the other. Where",
+    "desk2/ is not beside misc/ (a release zip until it ships Desk 2), `requires` keeps Open on the",
+    "daemon's URL, the old window, instead of a script that is not there."
   ],
 
   "displayName": "AgentHydra",
@@ -22,7 +23,8 @@
   "appRoot": "..",
   "openCommand": {
     "exe": "%SystemRoot|C:\\Windows%\\System32\\wscript.exe",
-    "args": ["//B", "//Nologo", "..\\desk2\\launcher\\start.vbs"]
+    "args": ["//B", "//Nologo", "..\\desk2\\launcher\\start.vbs"],
+    "requires": "..\\desk2\\launcher\\start.vbs"
   },
 
   "port": 7787,
