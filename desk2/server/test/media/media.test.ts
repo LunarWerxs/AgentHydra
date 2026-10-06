@@ -78,6 +78,28 @@ describe('media cache', () => {
     expect(c.fileRef(root)).toBeNull()
   })
 
+  test('the path memo is capped: past 2000 files the oldest is read again', () => {
+    const root = temp('cap')
+    const c = createMediaCache(join(root, 'media'))
+    const first = join(root, 'first.png')
+    writeFileSync(first, PNG)
+    const when = new Date(Date.now() - 60_000)
+    utimesSync(first, when, when)
+    const url = c.fileRef(first)!.url
+    // Same size and mtime, other bytes: only a memo hit can still answer with the old url.
+    const other = Buffer.from(PNG)
+    other[other.length - 5] ^= 0xff
+    writeFileSync(first, other)
+    utimesSync(first, when, when)
+    expect(c.fileRef(first)!.url).toBe(url!)
+    for (let i = 0; i < 2000; i++) {
+      const p = join(root, `n${i}.png`)
+      writeFileSync(p, PNG)
+      c.fileRef(p)
+    }
+    expect(c.fileRef(first)!.url).not.toBe(url!)
+  })
+
   test('a sent image keeps its url, never its base64', () => {
     const c = createMediaCache(join(temp('sent'), 'media'))
     const stored = toStoredImage({ mediaType: 'image/png', dataBase64: PNG_B64, name: 'paste.png' }, c)

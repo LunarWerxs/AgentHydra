@@ -17,6 +17,8 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 export const MAX_GIF_BYTES = 30 * 1024 * 1024
 /** Videos (screen recordings, test runs) are copied in, never read whole: they may be far bigger. */
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024
+/** How many picture files fileRef remembers. */
+const KNOWN_MAX = 2000
 export const MEDIA_ROUTE = '/api/media/'
 
 type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm'
@@ -178,7 +180,10 @@ export function createMediaCache(dir: string): MediaCache {
         try {
           const ref = put(new Uint8Array(readFileSync(path)), name)
           if (ref) {
+            // Delete first so the newest path goes to the end; past the cap the oldest one is dropped.
+            seen.delete(path)
             seen.set(path, { size, mtimeMs, ref })
+            if (seen.size > KNOWN_MAX) seen.delete(seen.keys().next().value!)
             return { ...ref }
           }
         } catch {

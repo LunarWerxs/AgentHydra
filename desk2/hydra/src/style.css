@@ -207,6 +207,14 @@ html.desk-hidden *::after {
   animation-play-state: paused !important;
 }
 
+/* The same while the window is unfocused or hidden (lib/pause-motion.ts sets the class): embedded, the focus that
+   counts is Desk's, and standalone it is this page's own. It resumes where it stopped. */
+html.motion-paused *,
+html.motion-paused *::before,
+html.motion-paused *::after {
+  animation-play-state: paused !important;
+}
+
 /* --- rendered transcript markdown (lib/markdown.ts) -------------------------------------------
    Scoped under .md so it can only ever affect a rendered message body, never the app chrome. The
    type scale stays close to the surrounding chat text: a transcript is a conversation being read
