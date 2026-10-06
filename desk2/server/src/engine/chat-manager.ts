@@ -57,6 +57,8 @@ import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
+import { buildHandoff, CONTINUE_TEXT, HANDOFF_TOKENS, sessionTokens } from './handoff'
+import type { QueuedInput } from './input-queue'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -64,6 +66,11 @@ export interface ChatManagerOptions {
   home: string
   /** The home folder whose .claude a chat with no account folder is seeded into (default: the user's own). Tests pass a temp folder so they never write into the real Claude config. */
   claudeHome?: string
+  /** A move to another account starts a fresh session from a condensed handoff above this many tokens of
+   *  session (SPEC "Account failover"). Default HYDRA_DESK_HANDOFF_TOKENS, else HANDOFF_TOKENS. */
+  handoffTokens?: number
+  /** Hydra Desk's own address, which a handoff names for the full transcript. */
+  deskUrl?: string
   emit(event: ServerEvent): void
   settings: () => DeskSettings
   bridge: ManagerBridge
@@ -260,6 +267,8 @@ export class ChatManager {
   private readonly settingsOf: () => DeskSettings
   private readonly bridge: ManagerBridge
   private readonly claudeHome: string | undefined
+  private readonly handoffTokens: number
+  private readonly deskUrl: string
   private readonly queryImpl: QueryImpl
   private readonly env?: Record<string, string | undefined>
   private readonly agentHydraMcp?: McpServerConfig | null
@@ -285,6 +294,8 @@ export class ChatManager {
     this.settingsOf = o.settings
     this.bridge = o.bridge
     this.claudeHome = o.claudeHome
+    this.handoffTokens = o.handoffTokens ?? (Number(process.env.HYDRA_DESK_HANDOFF_TOKENS) || HANDOFF_TOKENS)
+    this.deskUrl = o.deskUrl ?? `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
     // A host outlives the server; with no server it ends after the idle-close minutes once its chat is not working.
     this.queryImpl = o.queryImpl ?? chatQueryImpl({ home: o.home, orphanMinutes: () => o.settings().idleCloseMinutes })
     this.env = o.env
@@ -1566,23 +1577,67 @@ export class ChatManager {
       this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
       return
     }
-    const sends = rt.unansweredSends()
+    const { cut, sends } = rt.carrySends()
+    const big = this.bigSession(e)
     tried.push(next.id)
     chat.account = accountRef(next)
     chat.accountAuto = true
+    // A big session is not copied: the chat starts a fresh one from the handoff, so there is nothing slow to wait for.
+    const out: QueuedInput[] = big ? [this.handoffSend(e, big, signIn ? 'signed out' : window ? `${window} limit` : 'usage limit', sends)] : []
     // Said before the session copy, which can take a while on a long chat.
     this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
+    if (big) this.systemLine(chat.id, 'handoff', 'info', `The session had grown to about ${Math.round(big.tokens / 1000)}k tokens, so it continues as a fresh session from a condensed handoff instead of a copy. This chat keeps the whole record.`)
     this.changed(chat)
-    const cannot = await this.seedResume(e)
-    if (cannot) {
-      this.moveFailed(e, rt, cannot)
-      return
+    if (!big) {
+      const cannot = await this.seedResume(e)
+      if (cannot) {
+        this.moveFailed(e, rt, cannot)
+        return
+      }
+      // A turn that had replied is told to go on, once; its message would only ask it to start over.
+      out.push(...(cut ? [{ text: CONTINUE_TEXT }, ...sends] : sends))
     }
     if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
     await rt.close()
     if (this.chats.get(chat.id) !== e) return
     this.changed(chat)
-    rt.replay(sends)
+    rt.replay(out)
+  }
+
+  /** The session the chat leaves and its size, when it is too big to copy and resume on another account; else null. */
+  private bigSession(e: Entry): { sessionId: string; tokens: number } | null {
+    const sessionId = e.chat.sessionId
+    if (!sessionId) return null
+    const ranIn = ranInOf(e)
+    const file = findSessionJsonl(sessionId, [...(ranIn === undefined ? [] : [this.root(ranIn)]), ...this.bridge.sessionRoots()], e.chat.cwd)
+    const tokens = file ? sessionTokens(file) : null
+    return tokens !== null && tokens > this.handoffTokens ? { sessionId, tokens } : null
+  }
+
+  /**
+   * The chat leaves its big session for a fresh one (no resume): the old session joins pastSessions and the
+   * first message is the condensed handoff built from the chat file, with the sends the old session had not
+   * answered after it.
+   */
+  private handoffSend(e: Entry, big: { sessionId: string; tokens: number }, why: string, sends: QueuedInput[]): QueuedInput {
+    const chat = e.chat
+    const text = buildHandoff({
+      chatId: chat.id,
+      title: chat.title,
+      cwd: chat.cwd,
+      items: this.store.loadItems(chat.id),
+      sessions: [big.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
+      tokens: big.tokens,
+      why,
+      deskUrl: this.deskUrl,
+    })
+    e.pastSessions = [...(e.pastSessions ?? []), big.sessionId]
+    chat.sessionId = null
+    chat.forkedFrom = null
+    e.forkAt = undefined
+    const images = sends.flatMap((s) => s.images ?? [])
+    const pending = sends.length ? `\n\n## The owner's messages the old session had not answered yet\n${sends.map((s) => s.text).join('\n\n')}` : ''
+    return images.length ? { text: text + pending, images } : { text: text + pending }
   }
 
   /** The move could not be made: the chat keeps the error state, said once and notified. */

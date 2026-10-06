@@ -241,6 +241,10 @@ export class ChatRuntime {
   private closeOnIdle = false
   /** What this runtime was sent that no finished turn has answered yet, oldest first (images with their bytes). */
   private unanswered: Sent[] = []
+  /** The turn under way has replied (an assistant message that is no API error): cut short, it continues rather than being asked again. */
+  private replied = false
+  /** What a usage limit cut short: whether that turn had replied, and the sends (uuids) the CLI had not taken up yet. */
+  private cut: { replied: boolean; waiting: Set<string> } | null = null
   private input: InputQueue | null = null
   private normalizer: Normalizer | null = null
   private loop: Promise<void> | null = null
@@ -388,6 +392,8 @@ ${swap.real}` }
     this.stopping = false
     this.stderrTail = ''
     this.unanswered = []
+    this.replied = false
+    this.cut = null
     mkdirSync(join(this.store.home, 'logs'), { recursive: true })
     const carry = attach ? readCarry(attach.hello.carry) : null
     this.baseCost = carry?.baseCostUsd ?? this.chat.costUsd
@@ -501,6 +507,7 @@ ${swap.real}` }
     const c = this.chat
     const busy = c.status === 'working' || c.status === 'needs_you' || (c.status === 'starting' && c.turnStartedAt !== null)
     this.limitAnnounced = false
+    if (!busy) this.replied = false
     this.dispatch({ type: 'userSent', now: this.clock() })
     // The transcript has the send already (written when it was sent): only the queue is rebuilt.
     const item = msg.uuid ? stored.get(msg.uuid) : undefined
@@ -560,6 +567,7 @@ ${swap.real}` }
     const before = this.chat
     const busy = before.status === 'working' || before.status === 'needs_you' || (before.status === 'starting' && before.turnStartedAt !== null)
     this.limitAnnounced = false
+    if (!busy) this.replied = false
     const msg = this.input!.push({ text, images }, messageId)
     this.unanswered.push({ text, images, uuid: msg.uuid })
     this.dispatch({ type: 'userSent', now: this.now() })
@@ -576,9 +584,16 @@ ${swap.real}` }
     return { queued: busy }
   }
 
-  /** The sends no finished turn has answered: what a turn cut short by a usage limit asked. */
-  unansweredSends(): QueuedInput[] {
-    return this.unanswered.map(({ uuid: _u, replayed: _r, ...s }) => s)
+  /**
+   * What a move to another account carries (SPEC "Account failover"). A turn cut before it replied sends
+   * its messages again; one cut after it replied, or one the CLI started itself (a background task's end,
+   * no message of ours), is `cut`: it continues, and only the sends the CLI had not taken up go along.
+   */
+  carrySends(): { cut: boolean; sends: QueuedInput[] } {
+    const strip = ({ uuid: _u, replayed: _r, ...s }: Sent): QueuedInput => s
+    if (!this.cut?.replied && this.unanswered.length) return { cut: false, sends: this.unanswered.map(strip) }
+    const waiting = this.cut?.waiting ?? new Set<string>()
+    return { cut: true, sends: this.unanswered.filter((s) => s.uuid !== undefined && waiting.has(s.uuid)).map(strip) }
   }
 
   /** Sends them again on a fresh start (the chat moved to another account); the transcript already has them. */
@@ -922,6 +937,10 @@ ${swap.real}` }
       this.liveTasks = new Set((Array.isArray(tasks) ? tasks : []).map((t) => String(t.task_id)))
     }
     this.takeUp(msg)
+    if (m.type === 'assistant' && !(msg as { error?: unknown }).error && !(msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
+      const said = assistantText(msg)
+      if (!isUsageLimitText(said) && !isSignInFailureText(said)) this.replied = true
+    }
 
     const before = this.chat.status
     let limitFromResult = false
@@ -963,6 +982,7 @@ ${swap.real}` }
     let emissions = this.normalizer?.handle(msg) ?? []
     if (limitFromResult) emissions = emissions.filter((x) => !(x.type === 'notify' && x.reason === 'error'))
     const limitedNow = this.chat.status === 'limited' && before !== 'limited' && !this.limitAnnounced
+    if (limitedNow) this.cut = { replied: this.replied, waiting: new Set(this.queued.keys()) }
     const announced = emissions.some((x) => x.type === 'notify' && x.reason === 'limited')
     // A replayed limit was carried (or not) by the server that saw it; one no server saw is carried once adopt is done.
     if (limitedNow && this.replaying && !this.replaySeen) this.missedLimit = { window: limitWindow(msg), signIn }
@@ -996,7 +1016,10 @@ ${swap.real}` }
       // The CLI's count says how many sends still wait; without it the oldest one starts the next turn now.
       this.syncQueued(reportedQueued ?? Math.max(0, stillQueued - 1))
       // A limited turn answered nothing: its sends stay for the manager to carry to another account.
-      if (this.chat.status !== 'limited') this.unanswered.splice(0, Math.max(0, this.unanswered.length - this.queued.size))
+      if (this.chat.status !== 'limited') {
+        this.unanswered.splice(0, Math.max(0, this.unanswered.length - this.queued.size))
+        this.replied = false
+      }
       // Without session_state_changed events (older CLIs, recordings) the result is the turn's end.
       if (!this.sawSessionState && stillQueued === 0) this.dispatch({ type: 'stateChanged', state: 'idle', now })
       if (!this.replaying) void this.refreshContext()

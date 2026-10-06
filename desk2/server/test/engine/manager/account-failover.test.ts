@@ -10,6 +10,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo, TranscriptItem } from '@shared/protocol'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatManager, pickHealthy, type ManagerBridge } from '../../../src/engine/chat-manager'
+import { CONTINUE_TEXT, MAX_HANDOFF_CHARS } from '../../../src/engine/handoff'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
 
@@ -59,9 +60,16 @@ const EXPIRED = 'Failed to authenticate: OAuth session expired and could not be 
 const rejected = (): SDKMessage =>
   ({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour', resetsAt: 1_791_086_400 }, uuid: uuid(), session_id: 's' }) as unknown as SDKMessage
 const pause = (ms = 30) => new Promise((r) => setTimeout(r, ms))
+const said = (text: string, error?: string): SDKMessage =>
+  ({ type: 'assistant', message: { id: `msg_${++n}`, type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text }], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } }, parent_tool_use_id: null, ...(error ? { error } : {}), uuid: uuid(), session_id: SID }) as unknown as SDKMessage
+const finished = (): SDKMessage =>
+  ({ type: 'result', subtype: 'success', is_error: false, result: '', duration_ms: 1, duration_api_ms: 1, num_turns: 1, total_cost_usd: 0, usage: { input_tokens: 1, output_tokens: 1 }, modelUsage: {}, permission_denials: [], uuid: uuid(), session_id: SID }) as unknown as SDKMessage
+const LIMIT = "You've hit your session limit · resets 9:10pm"
+/** The CLI's own words when a 5-hour window runs out mid-turn: a rate_limit assistant line, then the failed result. */
+const limitHit = (): SDKMessage[] => [said(LIMIT, 'rate_limit'), failed(LIMIT)]
 
 /** A session on #126 (signed in as far as AgentHydra's list says), with #61 healthy and #70 signed out. */
-async function setup() {
+async function setup(o: { sessionLine?: string; handoffTokens?: number } = {}) {
   const home = temp('desk-fo-home-')
   const cwd = temp('desk-fo-cwd-')
   process.env.HYDRA_DESK_HOME = home
@@ -70,7 +78,7 @@ async function setup() {
   const c = account(70, { signedIn: false })
   const file = join(a.configDir!, 'projects', encodeProjectDir(cwd), `${SID}.jsonl`)
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, '{"type":"user"}\n')
+  writeFileSync(file, `{"type":"user"}\n${o.sessionLine ?? ''}`)
   const q = fakeQueries()
   // A move reads the accounts first: holdMoves keeps it there.
   const hold = { gate: Promise.resolve() }
@@ -79,7 +87,7 @@ async function setup() {
     return [a, c, b]
   }
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts }
-  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', handoffTokens: o.handoffTokens, deskUrl: 'http://127.0.0.1:7798' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: SID, cwd, title: 'Outside', configDir: a.configDir })
   return { m, q, a, b, chat, hold }
@@ -174,6 +182,71 @@ test('an error that is not the account is shown where it happened: no move, no r
   expect(q.all).toHaveLength(1)
   expect(m.get(chat.id).account.number).toBe(126)
   expect(systemTexts(m.listItems(chat.id)).some((s) => s.startsWith('Moved'))).toBe(false)
+})
+
+test('a limit in a turn the CLI started itself (a background task ended) moves and continues the work, not nothing', async () => {
+  const { m, q, b, chat } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(said('Started the playtest in the background.'), finished())
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  // The background task's end starts a turn with no message of ours; the 5-hour window runs out in it.
+  q.last().push(said('The playtest finished; reading its log.'), ...limitHit())
+
+  await waitFor(() => q.all.length === 2)
+  expect(q.last().options).toMatchObject({ resume: SID, env: { CLAUDE_CONFIG_DIR: b.configDir } })
+  await waitFor(() => userTexts(q.last()).length === 1)
+  expect(userTexts(q.last())[0]).toContain(CONTINUE_TEXT)
+  expect(userTexts(q.last())[0]).not.toContain('carry on')
+  expect(systemTexts(m.listItems(chat.id))).toContain('Moved from #126 (limit reached) to #61.')
+})
+
+test('a limit after the turn had replied continues it too, instead of asking the message again', async () => {
+  const { m, q, chat } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(said('Reading the files now.'), ...limitHit())
+  await waitFor(() => q.all.length === 2)
+  await waitFor(() => userTexts(q.last()).length === 1)
+  expect(userTexts(q.last())[0]).toContain(CONTINUE_TEXT)
+  expect(userTexts(q.last())[0]).not.toContain('carry on')
+})
+
+test('a session over the size cap moves as a fresh session whose first message is the condensed handoff', async () => {
+  const usage = { input_tokens: 5, cache_creation_input_tokens: 1000, cache_read_input_tokens: 200_000, output_tokens: 300 }
+  const { m, q, b, chat } = await setup({ sessionLine: `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage } })}\n` })
+  const goal = `Build the planet game: one tap sends ships. ${'Every detail of the brief. '.repeat(2000)}`
+  await m.send(chat.id, goal)
+  await waitFor(() => q.all.length === 1)
+  q.last().push(said('Wrote the map and the ship routes; 40 tests pass.'), finished())
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  await m.send(chat.id, 'now add the win bar')
+  q.last().push(said('Adding the win bar now.'), ...limitHit())
+
+  await waitFor(() => q.all.length === 2)
+  expect(q.last().options.resume).toBeUndefined()
+  expect(q.last().options.env).toMatchObject({ CLAUDE_CONFIG_DIR: b.configDir })
+  await waitFor(() => userTexts(q.last()).length === 1)
+  const first = q.last().sent[0]!.message.content
+  const text = typeof first === 'string' ? first : JSON.stringify(first)
+  expect(text.length).toBeLessThanOrEqual(MAX_HANDOFF_CHARS + 200)
+  for (const want of ['about 201k tokens', `/api/chats/${chat.id}/transcript`, `session_id ${SID}`, 'Build the planet game', 'now add the win bar', 'Wrote the map and the ship routes', 'Adding the win bar now.', 'do not redo finished steps']) expect(text).toContain(want)
+  expect(m.get(chat.id).sessionId).toBeNull()
+  // The old session is still this chat's, never listed as an outside one.
+  expect(m.sessionIds()).toContain(SID)
+  expect(systemTexts(m.listItems(chat.id)).some((s) => s.startsWith('The session had grown to about 201k tokens'))).toBe(true)
+})
+
+test('a session under the size cap is still copied and resumed', async () => {
+  const usage = { input_tokens: 5, cache_read_input_tokens: 20_000, output_tokens: 300 }
+  const { m, q, chat } = await setup({ sessionLine: `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage } })}\n` })
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(...limitHit())
+  await waitFor(() => q.all.length === 2)
+  expect(q.last().options.resume).toBe(SID)
+  await waitFor(() => userTexts(q.last()).length === 1)
+  expect(userTexts(q.last())[0]).toContain('carry on')
 })
 
 test('pickHealthy skips signed-out, full and tried accounts and prefers the least used', () => {
