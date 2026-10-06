@@ -604,10 +604,10 @@ export const CLASSIC_DESKTOP_INSTALLER_URL =
 export const DESKTOP_DOWNLOAD_PAGE_URL = 'https://claude.com/download'
 
 // --- self-update --------------------------------------------------------------
-/** /api/update returns the engine status PLUS the daemon's distribution: a 'release' (packaged
+/** /api/update returns the engine status PLUS the daemon's distribution: a 'compiled' (packaged
  *  release) build can't git-pull, so the UI hides the update controls and points at Releases. */
 export type UpdateStatusWithDistribution = UpdateStatus & {
-  distribution?: 'source' | 'release'
+  distribution?: 'source' | 'compiled'
 }
 export const checkUpdate = () => j<UpdateStatusWithDistribution>('/api/update')
 
@@ -653,7 +653,7 @@ export interface Health {
   ok: boolean
   service: string
   version: string
-  distribution: 'release' | 'source'
+  distribution: 'compiled' | 'source'
   /** Is the daemon serving older code than its checkout? Absent on a daemon that predates it. */
   runningCode?: { bootCommit: string | null; diskCommit: string | null; restartNeeded: boolean }
   ts: number
