@@ -154,7 +154,9 @@ export class DevWebDaemon {
 
   private async launchReal(): Promise<void> {
     if (!existsSync(join(DEVWEBUI_DIR, 'server', 'src', 'index.ts'))) throw new Error(`the server manager is not at ${DEVWEBUI_DIR}`)
-    const bun = Bun.which('bun') ?? process.execPath
+    // The bun that runs Desk 2's own server (desk2/runtime/bun.exe in a release bundle), never a PATH lookup: npm's
+    // bun.cmd shim can come first on PATH, and spawn refuses a .cmd without a shell (EINVAL).
+    const bun = process.execPath
     if (!existsSync(join(DEVWEBUI_DIR, 'node_modules'))) {
       const code = await runHidden([bun, 'install'], DEVWEBUI_DIR, this.logFile)
       if (code !== 0) throw new Error(lastLine(this.logFile) ?? 'bun install failed in the server manager folder')
