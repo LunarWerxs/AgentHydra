@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 from ..errors import ClaudeError
 from ..state import STATE_DIR, atomic_write
@@ -75,9 +76,13 @@ def bootstrap_config(html):
         "datadogRumProxyEnabled",
     }
     result = {key: value[key] for key in keys if key in value}
-    if not isinstance(result.get("sessionId"), str) or not result["sessionId"]:
+    if value.get("authStatus") != "logged_in" and not result.get("sessionId"):
         raise ValueError("Missing request correlation ID")
-    # sessionId is a page/request correlation ID, not the account session cookie.
+    # sessionId is a page/request correlation ID, not the account session cookie. ChatGPT's newer page
+    # (served to some accounts since 2026-10) has none: such a page load gets a fresh one, as the
+    # classic page does on every load. The preparation runs before any message, so a refusal sends nothing.
+    if not isinstance(result.get("sessionId"), str) or not result["sessionId"]:
+        result["sessionId"] = str(uuid.uuid4())
     return {**result, "session": None, "user": None}
 
 

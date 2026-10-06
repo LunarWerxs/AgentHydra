@@ -21,6 +21,30 @@ class HttpError(ClaudeError):
     """A credential-free error suitable for the CLI."""
 
 
+def model_refusal(response: Any) -> str | None:
+    """Claude's own message when a 403 refuses only the chosen model, else None.
+
+    A free account can be offered a model it may not use right now (seen 2026-10-06: its own default was one
+    claude.ai no longer gives free accounts): claude.ai answers 403 permission_error, error_code
+    model_not_available, before anything is sent. Any other 403 stays a sign-in or verification problem.
+    """
+    try:
+        if "json" not in response.headers.get("content-type", ""):
+            return None
+        body = b""
+        for chunk in response.iter_content(8192):
+            body += chunk
+            if len(body) > 65536:
+                return None
+        error = json.loads(body).get("error") or {}
+        if (error.get("details") or {}).get("error_code") != "model_not_available":
+            return None
+        message = error.get("message")
+        return message.strip()[:300] if isinstance(message, str) and message.strip() else "This model isn't available right now."
+    except Exception:
+        return None
+
+
 def account_label(name: Any, email: Any) -> str | None:
     """Short display name: the name unless it is an address, else an address's local part."""
     name = name.strip() if isinstance(name, str) else ""
@@ -154,7 +178,10 @@ class ClaudeHttp:
             return response
         status = response.status_code
         # Rejected responses are never logged, and their connections still close.
+        refusal = model_refusal(response) if status == 403 else None
         response.close()
+        if refusal:
+            raise HttpError(refusal, code="model_not_available", status=status)
         if status == 401:
             raise HttpError(
                 "The saved login expired. Run 'python claudfree.py login' to sign in again.",

@@ -194,7 +194,7 @@ def execute(args, *, api, on_text=None) -> dict:
                     )
                     break
                 except ClaudeError as error:
-                    if error.code != "http_rejected" or i == len(tried) - 1:
+                    if error.code not in ("http_rejected", "model_not_available") or i == len(tried) - 1:
                         raise
             return {"nudged": True, "organization_id": org}
         if args.command == "usage":
@@ -319,20 +319,35 @@ def execute(args, *, api, on_text=None) -> dict:
                     temporary=not args.regular,
                     status="pending",
                 )
+            # A model claude.ai refuses (model_not_available: a 403 before anything is sent) is followed by the
+            # model a chat would get without the account's own default, then the cheapest one, each tried once.
+            # A model asked for by name is never swapped.
+            fallbacks = (
+                []
+                if args.model
+                else [client.model_for(org, "sonnet", own_default=False), client.model_for(org, "haiku", own_default=False)]
+            )
+            tried = [m for m in dict.fromkeys([model, *fallbacks]) if m]
             try:
-                result = client.send(
-                    org,
-                    prompt,
-                    model,
-                    chat_id=active_chat if conversation is not None else None,
-                    new_chat_id=active_chat if conversation is None else None,
-                    existing=conversation,
-                    temporary=not args.regular,
-                    web_search=args.web_search,
-                    timezone=args.timezone,
-                    locale=args.locale,
-                    on_text=on_text,
-                )
+                for i, attempt in enumerate(tried):
+                    try:
+                        result = client.send(
+                            org,
+                            prompt,
+                            attempt,
+                            chat_id=active_chat if conversation is not None else None,
+                            new_chat_id=active_chat if conversation is None else None,
+                            existing=conversation,
+                            temporary=not args.regular,
+                            web_search=args.web_search,
+                            timezone=args.timezone,
+                            locale=args.locale,
+                            on_text=on_text,
+                        )
+                        break
+                    except ClaudeError as error:
+                        if error.code != "model_not_available" or i == len(tried) - 1:
+                            raise
             except ClaudeError as error:
                 # Failure does not prove the server rejected the POST. Read before retrying.
                 error.chat_id = active_chat
