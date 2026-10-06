@@ -917,468 +917,175 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.42.0] - 2026-09-15
 
+**TL;DR**
+
+- **DeepSeek Harness and DeepSeek zswarm chats now list, search, export and show their cost beside Claude and Codex**
+- **A new table manages DeepSeek Harness homes: launch, open, stop, one per account**
+- **Codex chats can move between accounts, and the copy is verified before the original is archived**
+- **Codex accounts show their own remaining quota**
+- **Clicking a weekly quota cell copies the exact date and time it resets**
+- **A stuck run can be cancelled, and a "kill and move" request no longer needs a hand-kill**
+- **A killed batch move leaves findable, repairable half-moves instead of silent duplicates**
+- **Many fixes for moving chats, usage readings, compiled builds and the daemon's start and crash behaviour**
+
+**Everything in 0.42.0**
+
 ### Added
 
-- **The DeepSeek zswarm is now a seventh session source, plus its own cost source and routing advice**
-  (`server/src/zswarm-sessions.ts`, `server/src/zswarm-cost.ts`, `server/src/config.ts`'s
-  `ZSWARM_HOME`, `'zswarm'` joining `SessionSource` in `server/src/types.ts`, and every non-compiler-
-  enforced site DSH's own addition documented needing one). `~/.zswarm/jobs/<id>/job.json` reads as a
-  session (a task's prompt/result standing in for a turn, since the zswarm has no back-and-forth
-  conversation of its own), listable, searchable, exportable and tailable exactly like every other
-  source - and unlike DSH's zstd log, job.json is plain JSON, so it opens in an editor same as a
-  Claude transcript would. `~/.zswarm/ledger.jsonl` is summed by day/model/backend
-  (`summarizeZswarmCost`), and the account's live DeepSeek balance (`deepseekBalance`, key read from
-  `~/.dsh/.credentials.yaml` at runtime, 3s timeout, 5-minute cache, degrades to `status: 'unknown'`
-  rather than ever throwing) now rides beside the per-account Claude/Codex quotas in `list_usage`'s
-  `deepseek` field. `list_usage` and `fan_out`'s own descriptions, and the MCP server's standing
-  instructions, now name `zswarm_run` as where mechanical/checkable batch work belongs once every
-  Claude account reads at or above 90% weekly, rather than queuing it behind N account resets.
+- **DeepSeek Harness chats are a full session source.** They list, search, follow, export and are priced from
+  DeepSeek's published rates, read straight from the Harness folder with nothing to set up. Archived chats and
+  per-turn spend are shown, and the transcript hides the harness's own bookkeeping.
+- **DeepSeek zswarm jobs are a session source too.** Each job reads as a chat, daily cost is summed by model, and the
+  live DeepSeek balance appears next to the Claude and Codex quotas. Usage advice now points batch work at it
+  once every Claude account is at or above 90% of its week.
+- **DeepSeek Harness homes can be managed.** A new table lists every home with whether it is serving, on which port
+  and how many chats it holds. You can launch, open and stop one. The sign-in link never leaves the daemon, and the
+  default home can never be deleted.
+- **Codex chats move between accounts.** The chat is copied with its visible history, imported, confirmed, and only
+  then archived at the source, so an interrupted move leaves two readable chats rather than none. Every safety
+  check runs before anything connects.
+- **Codex quota is read per account.** A signed-in Codex home reports its own remaining quota, and a signed-out one
+  stops showing an old reading.
+- **Copy a reset time.** Clicking a weekly quota cell copies the date and local time it resets, such as
+  09/18/2026 9:59 AM. A cell with no known reset time is not clickable.
+- **Cancel a running operation.** Agents can stop an orchestrator run that is still going. Cancelling is not an undo:
+  what already finished stays finished, so read the fleet afterwards.
+- **Repair half-moves.** A new tool finds batch moves that were killed part-way, says which chats are half-moved,
+  and can finish or reverse them.
+- **Kill-and-move.** A move that asks to end the live engines now takes over from a patient move of the same chats,
+  instead of being refused as busy.
+- **Safer pushes to a public repo.** A push now announces that the repo is public and stops unless you confirm, a
+  release tag is refused while open work remains, and a bundled commit must list every file it swept.
+- **Restart the daemon on demand.** The daemon can relaunch itself gracefully, and refuses while runs are in flight
+  unless forced.
 
-- **`migrate_reconcile.py` - the half-moves a killed batch leaves, found and repairable**
-  (`orchestrator/scripts/migrate_reconcile.py`, `lib/mutationlib.py`'s `advance_phase`,
-  `migrate_chat.py`'s three phases, and two suites). A move is FOUR acts - import, verify, settle
-  the source row, stamp the mode - and only the first pair was ever written down. So when the
-  25-chat batch of 2026-09-13 was killed mid-flight, 14 archived chats sat imported onto the
-  target and still unarchived on the source (duplicates, not moves) with nothing on the machine
-  saying which of the 25 were which; the fleet read taken right after even showed all 25 still on
-  the source, so the run was honestly reported as "nothing landed" and the truth surfaced twenty
-  minutes later, by eye.
-
-  Every migrate mutation now carries a PHASE, advanced by the phases themselves, and the new
-  script re-checks each unfinished row against the chat's CURRENT state rather than trusting the
-  journal: `unsettled` (the half-move), `not-landed` (the ledger and the machine disagree - the
-  loudest row here), `settled` (the journal is advanced so it is never re-read), `gone`, and
-  `unknown` for a failed read, which is counted WITH the unsettled ones because ignorance is not
-  a pass. `--finish` re-drives `migrate_chat`'s own `phase_settle`/`phase_stamp`; `--reverse`
-  hands the row to `undo.py`. It owns no actuator of its own.
-
-- **"Kill it and move it" no longer needs a `taskkill`: a `terminate_live` move preempts a patient
-  move of the same chats** (`server/src/orchestrator.ts`, `server/tests/orchestrator-preempt.test.ts`).
-  The route lock is keyed by SCRIPT NAME, so on 2026-09-12 a patient `move_chats` sitting out its
-  300s wait refused the same move with `terminate_live` as `409 busy`, and the only way through
-  was to find the engine's pid by hand and kill its tree - outside every rail these tools exist to
-  provide. Two conditions, both necessary: the incoming call carries `--terminate-live` (a
-  person's word, overriding the very wait it is queued behind), and its chats COVER the holder's,
-  so nothing the kill strands is left un-redone. A holder naming chats the new call does not is
-  still refused, with `orchestrator_cancel` named - that abandonment is a person's decision, and
-  `migrate_reconcile.py` now exists to find what it leaves.
-
-- **Clicking a Weekly cell copies the date and time that window resets, as `09/18/2026 9:59 AM`**
-  (`web/src/components/CopyResetDate.vue`, the three instance tables, `web/src/lib/usage-reset.ts`,
-  `web/tests/usage-reset.test.ts`). The bar says `4d 9h`, which is the right thing to READ and the
-  wrong thing to paste into a calendar or a message; working the date out of a countdown is
-  arithmetic nobody should do by hand. Owner request, 2026-09-14; the local time was added
-  2026-09-15, because "the 18th" alone does not say whether the quota is back at breakfast or at
-  midnight. A cell with no ISO reset instant
-  (the `claude -p "/usage"` fallback prints a YEARLESS "Sep 18, 9:59am") is not a button at all,
-  rather than copying a date whose year was guessed.
-
-- **`orchestrator_cancel { id }` - a run that is still going can be stopped, without finding a pid**
-  (`server/src/mcp.ts`, `server/tests/orchestrator-mcp.test.ts`). The daemon has had
-  `cancelOrchestratorOperation` and `POST /api/orchestrator/operations/:id/cancel` all along; only
-  the MCP surface was missing, and `orchestrator_operation`'s own description says it "starts
-  nothing and cancels nothing", so every agent that read it correctly concluded no cancel existed.
-  On 2026-09-12 that sent a stuck one-chat batch to a hand-run `taskkill /PID <pid> /T /F`, which is
-  outside every rail these tools exist to provide.
-
-  Two things are in the description because both bite. ⛔ **Cancel is not an undo:** whatever the
-  run already did stays done, chats a `migrate_batch` already landed stay landed, and it stops only
-  the remainder. ⛔ **The per-item report dies with the process,** so what actually happened is
-  established by READING THE FLEET afterwards, never by assuming the run had not got that far.
-  Cancelling also frees the route lock the daemon keys by script name, which is what lets a
-  corrected call run at once instead of being refused `409 busy`. A finished operation is a safe
-  no-op that answers with the status it already had.
-
-- **The public-push rule has teeth: a pre-push hook announces a PUBLIC remote and refuses the push
-  unless told to, refuses a release tag while the local work queue has an open section, and a
-  bundle commit must name every file it swept** (`.githooks/pre-push`, `check-public-push.mjs`,
-  `.githooks/commit-msg`, `check-bundle-message.mjs`, `scripts/save-bundle.ts`, `bun run
-  save:bundle`, two suites under `.githooks/tests/`). This repository is public and a push to
-  `main` is a release for every source install, so the standing rule was "check visibility,
-  announce it with an unmissable heading, let the owner decide". It lived only in memory, and on
-  2026-09-11 a session that had not read it pushed a peer's half-finished work unannounced. Now:
-
-  - **`git push` looks the remote up on GitHub** (stripping `.git`, which reads as 404 for a public
-    repo too) and, when it is public or cannot be proven private, prints
-    `# WARNING: THIS REPOSITORY IS **PUBLIC**` with the refs and stops. `AGENTHYDRA_PUSH_PUBLIC=1`
-    on that one command prints the heading again and proceeds: the rule is announce-then-do.
-    Fail-closed on purpose: a non-GitHub remote, a timeout or a rate limit all read as public.
-    With neither node nor bun on PATH it refuses rather than guesses.
-  - **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has a section below its Contents**,
-    naming them. No override: the item gets done or the owner deletes it (nothing pending ships
-    past a release). The queue is local and gitignored, so a clone without it has nothing to gate
-    on and passes.
-  - **A `wip: bundle` commit carries `Mine:` and `Swept:` blocks** listing every path in the
-    commit, checked against the index by the commit-msg hook so a stale list cannot pass. `bun run
-    save:bundle -- --mine <paths>` sweeps the tree and writes the message from what is actually
-    dirty; a `--mine` path that is not dirty is refused. Bundling a peer's work is legitimate when
-    the owner asks for it (2026-09-12); publishing it without the author being able to find it in
-    the log was the hazard.
-
-- **A Codex chat moves between accounts, and the copy is verified before the original is archived**
-  (`server/src/core/codex-chat-move.ts`, `core/codex-transcript-copy.ts`, `core/codex-rpc.ts`, the
-  routes `GET /api/codex-instances/:id/move-chats` and `POST /api/codex-instances/:id/move-chat`,
-  and four suites). Codex itself has no move: a thread belongs to the home it was written in. So
-  this copies the rollout under a fresh id, imports it into the destination, confirms it really
-  landed, and only then archives the source, which means an interrupted move leaves two readable
-  chats rather than none.
-
-  - **The copy keeps its DISPLAYED history, not merely its model messages.** Paginated ordinals and
-    `item-completed` events are carried across untouched, because downgrading `history_mode` makes
-    Codex silently drop the items from view while the model messages sit intact on disk: a chat that
-    looks empty and is not.
-  - **Every rail refuses BEFORE it connects.** An unfinished CLI turn, an unknown process state, a
-    changed login, a destination that is the same home, an archived or out-of-home transcript, and a
-    corrupt move history each stop the move at planning time. A failed import keeps the copy and
-    never archives the source; a failed archive retries the saved copy instead of copying again; an
-    edit during the import keeps both chats and refuses a stale retry.
-
-- **Codex usage is read per instance, through the same paths that read Claude's**
-  (`server/src/usage-service.ts`, `usage-refresh.ts`, `routes/usage.ts`, `core/codex-account.ts`,
-  `web/src/components/UsageBadge.vue`). `checkUsageForCodex` is shared by the manual refresh, the
-  fleet sweep and the instance routes, so a ChatGPT-authed Codex home reports its own remaining
-  quota instead of nothing at all. A home that is not ChatGPT-authed drops its cached reading rather
-  than serving a stale one, and a logout clears it.
-
-- **DeepSeek Harness homes are managed instances: launch, open, stop, and one home per account**
-  (`server/src/core/dsh-instances.ts` + its suite, `server/src/config.ts`, `server/src/routes/
-  instances.ts`, `server/src/core/instance-numbers.ts`, `server/src/transcript.ts`,
-  `web/src/components/DshInstancesSection.vue`, the API client and the locale). A "DeepSeek
-  instances" table now sits under the Codex one, listing every `DSH_HOME` on the machine - the
-  default `~/.dsh` first, then any created here - with whether a server is serving it, on which
-  port, and how many chats are in it. Launching starts `dsh web` HIDDEN and opens its chromeless
-  window; stopping kills the listener; the home, its chats and its credentials are untouched by
-  either.
-
-  - **⛔ THE SERVER'S URL NEVER LEAVES THE DAEMON.** `dsh web` prints a one-time `?token=` that IS
-    the session. So the daemon reads it out of the harness's own log, opens the window itself, and
-    answers with an outcome - no route returns it, the SPA never holds it, and "open" is an action
-    rather than a link. For the same reason there is no login verb and nothing here opens
-    `.credentials.yaml`: signing in is the user's own step.
-  - **It sees a server it did not start.** The harness's own desktop wrapper records its port in
-    `launcher.json` and its address in `.web-url`, so a harness the user launched from their own
-    shortcut shows as Serving, and "open" reuses it instead of starting a second one. Proven against
-    the live one on this machine: `#62 DeepSeek Harness · Serving port 3080 · 2 chats`.
-  - **Every home is indexed, not just the default** (`dshInstanceStores()`, the DSH twin of
-    `codexInstanceStores()`). A second account's conversations would otherwise be invisible to
-    listing, search and analytics - the exact hole config.ts's CODEX_HOME comment warns about, which
-    is why `deepseek-harness` joins BUILT_IN_TOOL_IDS: the indexer asks the registry, once.
-  - **The default home is listed but never managed.** It is the machine's own install: it can be
-    read, launched and stopped, and delete refuses unconditionally - no confirm string unlocks it.
-    Deleting a home AgentHydra did make needs the name typed back AND the path to be inside our own
-    instances directory, so a hand-edited registry cannot be turned into a delete of somewhere else.
-  - Numbers come from the one sequence desktop, CLI and Codex instances already share (`dsh` is its
-    fourth kind), so `#62` means the same thing in the table, the API and the MCP tools.
-
-- **DeepSeek Harness (`@deepseek-ai/dsh`) is a first-class session source** (`server/src/
-  dsh-sessions.ts` and its suite, plus `agent-catalog.ts`, `types.ts`, `transcript.ts`,
-  `sessions.ts`, `session-search.ts`, `session-export.ts`, `analytics.ts`, `pricing.ts`, `mcp.ts`
-  and the web's label/filter/chart maps). Its chats now list, search, tail, export and PRICE
-  alongside Claude, Codex, OpenCode and Hermes - read straight off `~/.dsh` (or `$DSH_HOME`, the
-  harness's own override precedence), with nothing to configure and nothing written back.
-
-  It is a sixth reader rather than a catalog row claiming someone else's format because the store is
-  a third shape: one file per session like Claude's, but the bytes are **multi-frame Zstandard**, so
-  every generic path that opens a transcript and reads lines would have got binary and silently
-  found nothing - `Bun.file().text()` on those bytes does not throw, it returns mojibake, and the
-  session would have listed with a garbage title and an empty transcript rather than erroring. Read
-  out of the harness's OWN shipped source (0.1.5-rc.1), not inferred from one transcript:
-
-  - **The listing is cheap because the harness already did the work.** `storages/session_projcache/`
-    is its own materialized view of each log - title, cwd, created-at, token totals, last prompt  - 
-    so listing N sessions costs N small JSON reads instead of N decompressions. It is treated as the
-    cache it is: every field re-derives from the log, and a session with no projection still lists
-    by decoding its header.
-  - **A torn tail does not hide a live session.** The log is appended as independent frames and the
-    backend documents crash recovery, so the last frame on disk can be half-written; a failed decode
-    falls back to the longest prefix that ends on a frame boundary, which costs nothing in the
-    normal case because the normal case succeeds first time.
-  - **Archived state is real**, read from the harness's own `workspace.json` - the thing the
-    `foreign` lane structurally cannot do, where every adapter hardcodes `archived: false`.
-  - **The transcript shows the conversation and not the bookkeeping.** Fifty-odd event types exist;
-    four carry who-said-what. The harness's injected runtime-context snapshots arrive as user
-    messages with `source.kind: 'plugin'` and are dropped - showing them would put "Current DSH file
-    policy: workspace-write…" on screen as though the user had typed it.
-  - **Spend is per TURN, a first for a non-Claude source.** OpenCode and Hermes hand back one
-    aggregate and land a whole session on one day; DSH timestamps every assistant message, so its
-    turns are apportioned to the days and hours they happened in. ⛔ Its counts are DISJOINT
-    (`inputTokens` is uncached input only, cache reads reported separately), which its own type
-    documents and which this reader relies on - folding cache reads back into input would
-    double-count most of a long session.
-  - **`deepseek-flash` and `deepseek-v4-pro` are priced** from DeepSeek's published rates (checked
-    2026-09-12), because the downloaded LiteLLM catalog has no `deepseek-flash` key at all and every
-    harness session would otherwise have read UNPRICED forever. Cache rates are absolute, not
-    derived: DeepSeek's cache hit is 2% of its input rate against Anthropic's 10%, so the derived
-    ratio would have overstated a cached token fivefold. The peak (list) rate is used and the
-    off-peak halving is deliberately not applied per turn - read the figure as an upper bound. This
-    also prices the OpenCode sessions that route to the same model, which were unpriced before.
-  - **Presence counting looks at `sessions/`, not the whole home** (a new `detectSubdir` on a
-    catalog row). A harness launched as a desktop app keeps a 216 MB Chromium profile under
-    `~/.dsh`, and a detection walk over the root reported the browser's files as the harness's.
-
-  Verified end to end against a real harness install: the chat lists with its title and workspace,
-  the transcript renders (reasoning included), body search hits it, and it appears in Tokens-by-tool
-  priced at published rates. One caveat, unfixed on purpose: "open the transcript file" hands an
-  editor a `.zstd`, because that IS the session file - the in-app transcript and the exporter are
-  the readable paths.
-
-- **`POST /api/daemon/restart` - the daemon relaunching itself, gracefully, on demand**
-  (`server/src/index.ts`). `relaunchDaemon()` has always existed and every auto-update exercises
-  it - the successor is spawned first, waits for the port, takes over the SAME port, and the
-  predecessor exits only once a replacement exists - but the only door to it was
-  `/api/update/apply`, gated on `IS_COMPILED`. A SOURCE build (what this fleet runs) therefore had
-  no graceful restart at all, so a change under `server/src/` sat inert until someone remembered
-  `misc/Restart-Daemon.ps1`. That script is NOT replaced and is not the same act: it is the
-  rebuild sledgehammer that kills the daemon AND the tray host from outside when you do not trust
-  the running process. This is the in-process one, and it refuses while dispatch runs are in
-  flight (`force: true` to override) for the same reason the auto-update loop already does.
-  Verified live: 53468 → 70080 on port 7787, hidden, healthy.
 ### Changed
 
-- **The unreachable headless-queue run path is deleted from `dispatchItem`** (`server/src/dispatch.ts`).
-  Everything after the `headlessRunsAllowed()` guard - the spec write, the detached-runner launch,
-  the log tail - could never execute, because that function is a hardcoded false and nothing overrides
-  it (owner, 2026-08-31: headless is never used). Behaviour is unchanged: every dispatch still ends in
-  the same refused `failed` row carrying the same `no-headless` event. The helpers and imports that
-  only that path used went with it - `buildArgv`, `launchDetachedRunner` and its
-  `AGENTHYDRA_RUNNER_LAUNCH` spawn methods.
+- **Moving archived chats needs an exact count.** A batch now states how many archived chats it holds, and they must
+  be the whole batch. The old yes/no option is gone, so an agent cannot decide on its own to move archived chats.
+  Moving one named archived chat is unchanged.
+- **Long names are cut to 18 characters in the Name column** with the full name on hover, so tables stay aligned.
+- **"Open the transcript file" is hidden** for sessions whose file is not readable text.
+- **The dispatched and rate-limited filters switch off for every non-Claude source**, not a hand-kept list.
+- **Dead code for background queue runs was removed.** Behaviour is the same: such runs were already always refused.
 
-  Two more files were only reachable through that deleted spawn and are now gone too:
-  `server/src/dispatch-runner.ts` (the detached per-run supervisor, launched only by
-  `launchDetachedRunner`) and `server/src/fake-claude.ts` (the `AGENTHYDRA_FAKE` stand-in
-  `buildArgv` built its argv for). Their `server/src/main.ts` subcommands (`__dispatch_runner`,
-  `__fake_claude`) went with them, and so did every doc mentioning `AGENTHYDRA_FAKE` or
-  `AGENTHYDRA_RUNNER_LAUNCH` (`README.md`, `docs/REFERENCE.md`, `.env.example`) - trying AgentHydra
-  no longer needs a fake-CLI flag, since headless dispatch never spends real quota either way now.
-  `server/src/detached-spawn.mjs` stays: other callers (`core/instances.ts`, `core/codex-desktop.ts`,
-  `index.ts`, and others) still use it for real detached spawns unrelated to dispatch. `specPathFor`,
-  `tailRun`, `reattachRuns` and `finalize` stay too - a `queue_items` row already marked `running`
-  from before this ban can still be reattached and finished from its on-disk log, so that machinery
-  still has a live caller. `server/tests/dispatch.test.ts` is trimmed to match: its header and a
-  handful of comments that described the deleted pipeline are rewritten, and the tests that remain
-  are the refusal law plus the reattach/finalize machinery, both still reachable.
-
-- **⛔ BREAKING: `move_chats` no longer accepts an `archived` boolean at all. It takes
-  `archived_count: number`, and there is no shim** (`server/src/mcp.ts`,
-  `orchestrator/scripts/migrate_batch.py`, `server/tests/move-chat-mcp.test.ts`). A caller still
-  passing the boolean fails the schema loudly, which is the intent: a silent fallback is what this
-  change exists to remove.
-
-  A boolean could not tell a human's instruction from an agent's own initiative. Asked to migrate
-  an account holding 3 unarchived and 22 archived chats, an agent set `archived: true` for itself
-  and queued all 25; the owner stopped it twice. `archived_count` must EQUAL the archived chats the
-  batch actually holds, and those chats must be the WHOLE batch, because archived chats riding
-  along with unarchived ones is exactly how 22 rode in behind 3. Counting them first is the point.
-  `all_unarchived` is unarchived by definition and drops the count rather than forwarding a
-  contradiction.
-
-  **`move_chat`, the singular, is UNCHANGED and still takes `archived: true`.** It goes through
-  `migrate_chat.py`, which has refused archived chats per chat with exit 7 since 2026-09-05, and it
-  remains the way to move one archived chat that a human named.
-
-  ⚠ **A daemon whose two halves are different ages refuses every archived batch**, and that is the
-  stopgap working rather than a fault: python is read from disk, so the gate that demands the count
-  goes live immediately, while a `move_chats` older than 2026-09-13 still emits a bare `--archived`
-  and the gate answers `REFUSED: --archived needs --archived-count to MATCH ... the count given was
-  not stated`. A source daemon restarted after this commit has both halves and is fine. On a
-  compiled install still on 0.41.0, the route for a named archived chat is `move_chat`, one at a
-  time, until it is rebuilt.
-
-- **"Open the transcript file" is no longer offered for a session whose file is not prose**
-  (`web/src/lib/session-labels.ts`, `web/src/components/SessionsView.vue`, `server/src/routes/
-  sessions.ts`). A DeepSeek Harness log is a real file worth copying and locating, and it is
-  Zstandard frames - so handing it to an editor produced a screen of binary that reads as a
-  corrupted session. The action is hidden for those sources and the route says why in its 409,
-  pointing at the readable exports that sit beside it. A second compiler-checked capability map
-  (`SOURCE_FILE_IS_TEXT`), because "has a file" and "that file is text" have different answers:
-  OpenCode and Hermes have no file at all, DSH has one that simply is not prose.
-
-- **The dispatched and rate-limited filters disable themselves off CLAUDE-ONLY, not off a list**
-  (`web/src/components/SessionsView.vue`). Both facts exist only for Claude sessions, and the
-  hand-written "codex or opencode" list had gone stale twice as sources were added - Hermes in
-  September, DeepSeek this week - leaving two filters enabled that could only ever return nothing.
-
-- **A long name no longer stretches the Name column - it is cut to 18 characters and the whole of
-  it is one hover away** (`web/src/lib/instance-appearance.ts`, `web/src/components/
-  InstancesView.vue`, `CliInstancesSection.vue`, `CodexInstancesSection.vue`,
-  `web/src/shell/IconTooltip.vue`, plus tests). The Name column started naming a row after the
-  ACCOUNT behind it earlier the same day, and an Anthropic profile name is a person's real name:
-  "LUIS FERNANDO LOPEZ ESPINOZA" on a column that is 176px wide. Table layout is auto, so `w-44` is
-  only a hint a long cell overruns - one such row widened Name and pushed the desktop, CLI and
-  Codex tables out of the alignment their fixed widths exist to guarantee. `shortDisplayName()`
-  does the cut for all three tables, counting CODE POINTS so it can never split a surrogate pair
-  and leave a replacement glyph on the row, and charging the ellipsis to the budget so the result
-  is never wider than asked for. ⛔ It is a DISPLAY cut only: sorting, filtering, the move submenu
-  and every dialog keep the full `displayName()`, because a truncated name is not an identifier.
-  The desktop table reveals the full name in the rich tooltip it already had (the name takes the
-  first line and pushes the folder and the focus hint down one each - hence `detail`, a third line
-  on IconTooltip); the CLI and Codex tables, which have no such tooltip, use a native `title` that
-  is undefined when nothing was cut, so a whole name never sprouts a hover repeating itself.
 ### Fixed
 
-- **A COMPILED BUILD RAN THE PREVIOUS BUILD'S SCRIPTS: the version is a label, not a content hash**
-  (`server/src/misc-assets.ts`, `server/tests/misc-assets.test.ts`). A single-file build writes the
-  `misc\` actuators it needs out of itself into `<data>\misc\<version>\`, and reused whatever was
-  already there. Every rebuild of the SAME version therefore kept running the copy the first build
-  had written: found 2026-09-15 while proving this release, when an actuator fix sat in the binary,
-  in the repo and in the changelog, and the compiled daemon went on refusing the very thing it
-  allowed - silently, and with a plausible-looking refusal from the stale script that sent the
-  reader hunting somewhere else entirely. The materialized copy is now compared BYTE FOR BYTE with
-  the embedded one and replaced when they differ (`reason: 'refreshed'`); an unreadable comparison
-  keeps the old copy rather than churning it.
-
-- **Duplicate rendered chat rows no longer block archive or rename.** The actuator checks the store itself and only refuses when two unarchived chats share the exact title.
-
-- **Release smoke test no longer fails on cleanup delays.** Scratch directory removal now retries briefly on Windows EBUSY errors.
-
-- **Chat title mismatches no longer block moves.** The move route now accepts either the session title or the desktop meta title, matching whichever the chat is currently known by. Batch moves can now specify titles per chat.
-
-- **Idempotency keys no longer keep failed operations stuck.** A failed or cancelled operation frees the key, so retry with the same key can start fresh. Running or succeeded operations stay protected against retries.
-
-- **Daemon crashes now write a single-line record** with reason, exit code, uptime and stack. Handlers for `uncaughtException`, `unhandledRejection`, `SIGBREAK`, `SIGHUP` and normal exits all log before exit.
-
-- **Fan-out now reports true status per member** (finished, planned, unassigned, refused, etc.) instead of false "ok" when some members are stuck. It auto-detaches past 120s and keeps spawning even if the client times out; status reads no longer block behind the lock. Revoked tokens drop their cached usage immediately. Accounts with hands-on keyboard activity inside 10 minutes are skipped from spawns.
-
-- **Landed chats are now named before anything tries to use their title.** The naming pass checks what the app is rendering, not just what the disk says, and re-runs per instance if needed.
-
-- **Bypass remedy now works on the exact chat it names.** `automation_chat` accepts `--title` to use the batch's verified title instead of re-reading a possibly-stale disk copy. Chat rename uses fuzzy matching to discover rendered rows when disk and app disagree.
-
-- **Landed chats no longer block resume indefinitely.** A freshly landed chat updates its `lastActivityAt`, so the 180s quiet-window gate was treating it as in-flight. Resume now uses a shorter window for recently imported chats. App-injected meta records (boot hooks, cross-session messages) are skipped when judging idle status. Usage walls are also checked via the daemon's `limit_stop` state. Duplicate resumes are deduped if already staged.
-
-- **Test isolation now stubs all daemon paths correctly** so suite tests don't accidentally read the real chat store or leave locks behind. Test cleanup clears route locks and operation records properly.
-
-- **Mid-turn deliveries defer instead of failing,** staying staged for retry. Courier now reports the actual state of each delivery (failed, deferred, expired, delivered, etc.) and never falsely claims "nothing staged".
-
-- **Refused moves stage their resume messages** so they're not lost. The refusal comes back as a structured object naming the operation ID and remedy, not a bare string.
-
-- **Chat enumeration now asks the account itself**, not the session list. Half-moved chats exist on two accounts; the per-store scan sees them both. Archive gate includes all archived chats in its census.
-
-- **Accounts read as "rate limited" when one of multiple OAuth grants was revoked.** Grants are now ordered (app session first, then by expiry) and tried in order. Readers fall through to the next grant when one is refused, and backoff is keyed by label AND token digest. The reported failure is from the preferred grant, not whichever was tried last.
-
-- **Usage checks no longer fall back to spawning CLI with an instance token,** preventing cross-contamination of account numbers. Config-dir tokens still can spawn, as that CLI owns its login.
-
-- **Compiled daemons can now archive, unarchive and rename chats.** Missing PowerShell scripts were returning success (exit 0) even when they never ran. Scripts now embed in the binary and are resolved through `resolveMiscAsset`, returning non-zero on missing paths.
-
-- **Long moves now timeout per phase with timeouts named on incomplete work.** Post-landing phases (settle, stamp, resume) have per-chat-scaled ceilings on worker threads. Moves auto-detach when they exceed the blocking timeout, keeping work alive even if the client gives up. Archived-chat gate now takes a count that must match the actual archived chats.
-
-- **CI failures on GitHub legs fixed.** Tray tests now declare their environment state. DeepSeek paths work cross-platform. Search index uses 30-second cooldown instead of permanent latch after transient failures.
-
-- **Stale `runtime.json` no longer triggers daemon duplication.** Clients now check the default port if the pointer is dead, announce stale pointers explicitly, and refuse to start a second daemon. Daemon rewrites the pointer once per minute if stale. Side-runs announce themselves and write to their own state dir, not the machine-wide pointer.
-
-- **All hook test suites now live under `tests/githooks/`** instead of `.githooks/tests/`. Test discovery is anchored by `tests/repo-root.ts` not hop count.
-
-
-- **Compiled installs can now deliver messages.** The build embeds all required `misc\` files or fails. `resolveMiscAsset` extracts them on first run beside the app state, so the single-file exe stays portable.
-
-- **Rate-limited accounts now respect their Retry-After windows.** The server's 429 Retry-After is recorded per label and honored at a single chokepoint, so all pollers back off together. The UI shows countdown and reuses cached readings rather than showing false 0%.
-
-- **Orphaned operation IDs now say whether the daemon restarted.** Polling an operation after daemon restart now returns `daemon-restarted` instead of "no such operation", letting callers check the ledger instead of re-firing.
-
-- **The compiled executable ships the tray icon and can manage itself.** The host, icon and config extract on first run. Process detection returns tri-state (running/absent/unknown) instead of guessing.
-
-- **Chat identity now answers for the caller, not the daemon.** `whoami` uses the loopback socket to get the caller's PID and walks its ancestry, per-request and uncached. `move_chat to: "here"` now works correctly.
-
-- **Chats cut off mid-turn no longer read as busy forever.** If the last record predates the engine, that engine has produced nothing since boot, so it can be moved without `--terminate-live`.
-
-- **Person-requested actions no longer skip if younger than the unattended window.** Interview now counts and reports failures when reaching a pane.
-
-- **Long `orchestrator_run` calls no longer lose their report.** Runs over 120s now auto-detach with an operation ID to poll.
-
-- **Non-ASCII chat titles now survive PowerShell pipes.** Scripts now force UTF-8 on their console output to prevent encoding mangling. Regression tests cover Spanish, em dash, CJK and Cyrillic.
-
-- **Landed chats are named before permission pickers or matching attempts.** Permission picker gets the rendered name from the daemon if the disk record has none. Sidebar matching uses fuzzy prefix comparison, normalizing accents and whitespace. Bypass remedy prints the correct path from the orchestrator directory.
-
-- **The courier now marks mid-turn chats `peer_only` and delivers them through the peer channel** instead of refusing them upfront. The mid-turn rail is enforced downstream where the channel is picked, so live chats get delivered via queue rather than rejected.
-
-- **Staged replies now expire after 48 hours** if not delivered. Replies to chats that moved accounts are expired since their premise is void. Transient refusals defer up to 12 times before expiring.
-
-- **Move reports now show which chats are dormant.** The headline shows the tally; dormant chats didn't receive resume messages yet.
-
-- **`rename_chat` can now rename freshly imported chats** by falling back to "Untitled" when the disk has no name. Write failures are caught and retried once; the script never guesses names.
+- **Moves no longer lose or mislabel chats.** Title mismatches between the list and the app no longer block a move,
+  half-moved chats on two accounts are counted from the account itself, landed chats are named before anything
+  tries to find them by name, and a duplicate sidebar row no longer blocks archive or rename.
+- **Resume after a move no longer hangs.** A freshly landed chat was wrongly read as mid-turn, a chat cut off
+  mid-turn read as working forever, and a refused move now keeps the resume message. Staged replies expire after
+  two days or when their chat changes accounts, and a delivery that only has to wait is retried, not failed.
+- **Move reports are honest.** A one-chat move that ran for fifteen minutes now stops each phase on time, moves run
+  in the background so a client timeout cannot cancel them, and the headline says how many chats are still dormant.
+- **A working account no longer reads as rate limited.** The usage check now tries the app's own sign-in first and
+  falls through when one login was revoked, and a refused usage request is obeyed instead of retried every
+  half minute.
+- **Usage no longer borrows another account's numbers.** A failed check can no longer fill in a different login's
+  percentages.
+- **Compiled builds work.** They now refresh their bundled scripts when rebuilt, can archive, unarchive, rename and
+  message chats, and ship their tray icon, and the "is the tray running" check no longer answers backwards.
+- **The daemon is easier to trust.** A crash or any exit now leaves a log line, a stale pointer file no longer makes a
+  second daemon, a scratch daemon no longer takes over the real one's pointer, and a missing operation id says
+  whether the daemon restarted.
+- **Fan-out is honest.** It no longer says "ok" while members are still unfinished, survives a client timeout, lets
+  status reads through, skips an account someone is actively using, and drops a revoked login's old usage.
+- **A failed run can be retried.** A failed or cancelled operation no longer blocks the same request from starting.
+- **Accented and non-Latin chat titles survive** the scripts that rename and archive chats.
+- **Long runs keep their report.** A run over two minutes now returns an id to check instead of timing out.
+- **Release and test fixes.** The release smoke test no longer fails on cleanup, and several tests that only failed on
+  build machines are fixed.
 
 ## [0.41.0] - 2026-09-08
 
-- **Self-updater now checks fast-forward viability before offering updates** instead of failing repeatedly on diverged or missing remote branches.
+**TL;DR**
 
-- **"Move chats to account" now moves all chats** and reports which were skipped with reasons. It reads the account store (not session list), verifies landing before archiving source, accepts either current title name, and reads both target and source stores to avoid losing chats to residency checks.
+- **"Move chats to account" now moves every chat on the account, and never leaves one archived but not landed**
+- **AgentHydra adds itself to Claude Code as an MCP server by default**
+- **A Chats item in each row's menu lists the chats on that account**
+- **"here" can no longer send chats to the wrong account because of a stale identity**
+- **A broken install can be repaired from Settings without waiting for a new version**
+- **Archive works in a non-English Claude Desktop**
 
-- **Dead host sessions no longer cause `to: "here"` to land chats on the wrong account.** Frozen daemon sessions now check for archived state and refuse "here" in favor of explicit instances.
-
-- **Archive is now instance-scoped** and refuses to hide chats in use with live engines. Uses `instance_ref` and `desktopChatCarriers` primitive.
-
-- **`manage_desktop_chat.ps1` now archives on non-English apps.** Menu items are matched by CSS class (non-localizing), not by localized text.
+**Everything in 0.41.0**
 
 ### Added
 
-- **Move confirmations now show name, tier, email and instance number**, built before the run is posted, so `dry_run` and real move read identically.
-
-- **AgentHydra auto-registers as an MCP server on every daemon start.** The HTTP endpoint writes one entry into Claude Code's config, preserving all other servers and keys. The entry carries the bound port so it never goes stale on a hop.
-
-- **Account rows show a "Chats" menu** listing every chat with last-active time and engine status. Reads `/api/chats` not the session list, so quiet chats show up.
+- **AgentHydra registers itself with Claude Code.** On every start it writes one HTTP entry into Claude Code's
+  settings, leaving every other server and key alone, and refuses to touch a settings file it cannot read. Turning
+  the switch off removes the entry, and the panel shows what the file really says.
+- **A Chats item in a row's menu.** It lists every chat on that account with its project, last activity and whether
+  an engine is running, plus an option to include archived ones.
+- **Move confirmations name the account.** A move now states the instance number, name, plan and email before
+  anything is imported, and a dry run reads the same as the real move.
 
 ### Changed
 
-- **Moved chats are tombstoned on disk**, renaming the source record with `movedTo`, so stale twins aren't re-discovered on later scans.
-
-- **"Move chats to account" menu lists only running accounts by default**, with a "Show not running" toggle. Closed accounts show they land in their store ready for next start.
-
-- **Menu label is now "Move chats to account"** (not "Move all chats..."), matching the new "Chats" item below it.
+- **The move submenu is shorter.** It lists running accounts only, with a "Show not running" switch, and the item is
+  now called "Move chats to account".
+- **A moved chat's old record is renamed out of the way** instead of only flagged, so later scans stop finding the
+  stale copy.
 
 ### Fixed
 
-- **`chatStoreLabel` now handles both path separators** so it works cross-platform on Linux CI legs.
-
-- **MCP registration race test now detects byte changes** by padding output instead of relying on filesystem clock ticks.
-
-- **Missing components can now be repaired** without upgrading the version. A "Repair install" button reinstalls the current release to fill gaps in `orchestrator/` or `misc/`.
-
-- **MCP docs now lead with auto-registration** and mention that moving chats needs the toolbox.
-
-- **Default Claude Desktop install now answers `/api/chats?instance=`** by mapping the literal `default` label correctly.
+- **Moving all chats really moves all of them.** The plan now reads the account's own chat list, a chat is archived
+  at the source only after it is confirmed at the destination, either of a chat's two names is accepted, and a
+  copy already at the destination is recognised. Chats that cannot be moved are left in place and the reason is
+  stated.
+- **A stale identity cannot send chats to the wrong account.** A daemon tied to an archived chat no longer claims to
+  know who is asking, and "here" is refused until you name the account.
+- **Archive is limited to one account** and refuses to hide a chat that has a running engine unless forced.
+- **Archive works in a non-English Claude Desktop**, found by the menu's danger styling rather than its text.
+- **An install missing a folder can be repaired.** A "Repair install" button in Settings reinstalls the current
+  release when a part is missing, and never downgrades.
+- **The regular Claude Desktop install answers chat lists** instead of "no instance matched".
+- **Update checks no longer offer an update they cannot apply** when your checkout has diverged from the remote.
+- **The MCP docs and a Linux path bug are fixed**, along with a flaky registration test.
 
 ## [0.40.0] - 2026-09-07
 
+**TL;DR**
+
+- **The Instances filter now also filters by open or closed status and by plan**
+- **The two 5-hour quota cells are grey so the weekly cells stand out**
+- **AgentHydra no longer runs git on its own**
+- **Bypass permissions can be set on minimized windows and through its confirmation popup**
+- **Moves report chats that landed but did not finish, and stale locks no longer block retries**
+
+**Everything in 0.40.0**
+
 ### Added
 
-- **Filter now asks three questions**: usage (5-hour and weekly windows), status (open/closed) and plan. Rows with unknown facts are never filtered out. Codex table joins the filter.
+- **A three-way Filter.** "Usage filter" is now "Filter" and asks about quota, open or closed status, and plan. A row
+  whose fact is unknown is never hidden, so rows stop blinking in and out, and the Codex table joins it.
 
 ### Changed
 
-- **5-hour quota cells are now grey;** colour is reserved for weekly windows which matter more.
+- **The 5-hour quota cells are grey.** Colour is kept for the weekly cells, because a spent week matters more than a
+  spent session.
 
 ### Removed
 
-- **Git calls removed from daemon's own initiative.** `fleet-git.ts` no longer polls repos on every request. Cross-repo state is Odin's job, and the five remaining git callers are all explicitly triggered.
+- **Automatic git checks.** AgentHydra no longer runs git on every fleet request, which was slow in large
+  repositories and fed nothing. Git only runs when you ask for it.
 
 ### Fixed
 
-- **Message delivery now resolves PowerShell from `APP_ROOT`** instead of `process.cwd()`, fixing compilation and respecting move staging.
-
-- **Tray-invariant poll no longer crashes daemon.** Tick handler is now a declared function the guardrail can verify.
-
-- **Permission picker now works on minimized windows.** Window is restored and activated before tree access. Different failures (never opened / opened but empty) are now distinguished.
-
-- **Chat in wrong permission mode can now move to bypass.** Composer button list updated to match app's actual modes.
-
-- **"Bypass all permissions?" modal is now clickable.** It's an in-page modal, not top-level. Scan includes all process windows, not just main. Position guards apply only in main window.
-
-- **Orchestrator crashes no longer block retry forever.** Entry carries deadline; expired locks are reaped. Release is identity-checked not name-checked.
-
-- **Permission hunt works in every app window**, with better diagnostics showing buttons outside main.
-
-- **Window actuators match by exact identity**, not substring or position. Instance name must match profile dir leaf exactly. Dialog confirm must be new since the action. Python callers pass full profile DIR.
-
-- **Batch moves report "LANDED but not finished"** instead of "NOT moved" when later phases fail. Per-chat timing no longer charges first chat with later ones.
-
-- **Naming door restates the daemon's actual title** via per-id route instead of guessing from index.
-
-- **Compiled builds find orchestrator at the right path** (one level up from `dist/`).
-
-- **Migrate stopwatch shows which phase is slow** (`settle-drive/confirm` and `stamp-doctrine/picker`).
-
-- **UI locks are reclaimed on proof of holder death**, not after 15 minutes. Owner record carries pid and OS creation time. Release is token-checked.
-
-- **Naming pass uses shared lock**, not a private one that excluded other actuators.
+- **Replies are delivered again.** A path mistake made every courier reply fail as "delivery actuator missing".
+- **The permission picker opens on minimized or background windows**, the confirmation popup is now found and
+  clicked, and chats set to Auto or Manual can move to Bypass. The old failure messages now say what really
+  went wrong.
+- **A move can no longer claim confirmation another account earned**, and a chat that landed a second ago is waited
+  for instead of reported missing.
+- **Automation aims by exact identity.** Windows are matched by exact instance name, a blank name is refused, a
+  sidebar row must match the title exactly, and keys are sent only to the proven target.
+- **A crashed run no longer blocks retries forever,** and a lock held by a live run is never taken over by age.
+- **Batch moves report a chat that landed but did not finish** as such, not as "not moved", and say which phase is
+  slow.
+- **The naming step uses the shared window lock** and restates the app's own title, so renamed chats are accepted.
+- **A compiled build run from the repository finds the toolbox**, and a tray check that could crash the daemon is
+  now guarded.
 
 ## [0.39.1] - 2026-09-06
 
