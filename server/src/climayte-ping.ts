@@ -372,6 +372,13 @@ export function pingMessage(
   lines.push(
     `Next: climayte_status {group:"${groups[0] ?? ''}", report:true}${also}, then climayte_verdict.`,
   )
+  // Every group here has ended: the chat that dispatched it carries the job on, as Claude Code's main
+  // chat does when its subagents finish (owner, 2026-10-06: a worker that says done may not be).
+  const live: ReadonlySet<CliMayteStatus> = new Set(['queued', 'waiting', 'running', 'checking'])
+  if (!workers.some((w) => groups.includes(w.group) && (live.has(w.status) || w.question)))
+    lines.push(
+      'Their work can be unfinished or broken: check each proof, fix or re-dispatch what is left, and tell the owner it is done only when the whole ask is.',
+    )
   return lines.join('\n')
 }
 

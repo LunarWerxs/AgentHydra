@@ -999,6 +999,11 @@ Group g-1f2e3d: 2 done, 0 failed, 0 running, 1 waiting.
 Next: climayte_status {group:"g-1f2e3d", report:true}, then climayte_verdict.
 ```
 
+When every group in the ping has ended (nothing queued, waiting, running, checking or asking), one
+more line tells the chat to carry the job on, as Claude Code's main chat does when its subagents
+finish: their work can be unfinished or broken, so it checks each proof, fixes or re-dispatches
+what is left, and tells the owner it is done only when the whole ask is.
+
 At most 15 bullets (`+N more` after that), one tally line per group.
 
 **Delivery, in order.** (0) A chat Hydra Desk 2 runs (its current or a past session): `POST

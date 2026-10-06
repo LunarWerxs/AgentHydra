@@ -467,6 +467,24 @@ describe('the message', () => {
     )
   })
 
+  test('a group with nothing live left tells the chat to carry the job on', () => {
+    const ping = (w4: Partial<PingWorker>) =>
+      pingMessage(
+        [{ seq: 1, at: T0, group: 'g', line: 'w-1 a.' }],
+        [
+          worker({ id: 'w-1', group: 'g', status: 'done' }),
+          worker({ id: 'w-4', group: 'g', ...w4 }),
+        ],
+      )
+    const carryOn =
+      /fix or re-dispatch what is left, and tell the owner it is done only when the whole ask is\.$/
+    expect(ping({ status: 'failed' })).toMatch(carryOn)
+    expect(ping({ status: 'running' })).not.toMatch(carryOn)
+    expect(ping({ status: 'done', question: { text: 'Which bucket?', at: T0 } })).not.toMatch(
+      carryOn,
+    )
+  })
+
   test('the bullets each kind writes', () => {
     const base = worker({ id: 'w-9c0d1e2f', title: 'Delete stale buckets' })
     const p = snapshotOf(base, null, T0)
