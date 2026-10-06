@@ -975,39 +975,50 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     rmSync(root, { recursive: true, force: true })
   })
 
+  /** Runs one task on the account to its end; its status and the MCP servers its CLI started with. */
+  const runOn = async (
+    id: string,
+    configDir: string,
+    task: { prompt: string; sealed?: unknown },
+  ) => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteOwnerDir(ownerDir)
+    setCliMayteAccountsProvider(() => [
+      { id, num: 1, name: id, configDir, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const run = climayteRun({
+      tasks: [{ cwd, title: id, ...task } as { prompt: string; cwd: string; title: string }],
+    })
+    groups.push(run.group)
+    const wid = run.workers[0]?.id as string
+    const deadline = Date.now() + 25_000
+    let w = climayteList({ id: wid })[0]
+    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+      await climayteWait({ id: wid }, Math.min(5_000, deadline - Date.now()))
+      w = climayteList({ id: wid })[0]
+    }
+    const init = readFileSync(workers.get(wid)?.attempts[0]?.log as string, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { subtype?: string; mcp_servers?: { name: string }[] })
+      .find((e) => e.subtype === 'init')
+    return { wid, status: w?.status, servers: init?.mcp_servers?.map((s) => s.name) }
+  }
+
   // What the --mcp-config file may carry is the filter's test below; fake-claude drops what the
   // settings deny (by name or URL) itself, as the real CLI does, so this one cannot tell whether
   // the file left them out.
   test('connections-local and hswarm on either account, and its files go when it is done', async () => {
-    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    setCliMayteOwnerDir(ownerDir)
     for (const [id, configDir] of [
       ['seeded', seededDir],
       ['bare', bareDir],
     ] as const) {
-      setCliMayteAccountsProvider(() => [
-        { id, num: 1, name: id, configDir, sessionPct: 0, weekPct: 0 },
-      ])
-      startCliMayte()
-      const run = climayteRun({ tasks: [{ prompt: 'call connections_execute', cwd, title: id }] })
-      groups.push(run.group)
-      const wid = run.workers[0]?.id as string
-      const deadline = Date.now() + 25_000
-      let w = climayteList({ id: wid })[0]
-      while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-        await climayteWait({ id: wid }, Math.min(5_000, deadline - Date.now()))
-        w = climayteList({ id: wid })[0]
-      }
-      expect(w?.status).toBe('done')
-      const events = readFileSync(workers.get(wid)?.attempts[0]?.log as string, 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((l) => JSON.parse(l) as { subtype?: string; mcp_servers?: { name: string }[] })
-      const init = events.find((e) => e.subtype === 'init')
-      expect([id, init?.mcp_servers?.map((s) => s.name)]).toEqual([
-        id,
-        ['climayte-worker', 'connections-local', 'hswarm'],
-      ])
+      const { wid, status, servers } = await runOn(id, configDir, {
+        prompt: 'call connections_execute',
+      })
+      expect(status).toBe('done')
+      expect([id, servers]).toEqual([id, ['climayte-worker', 'connections-local', 'hswarm']])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([
         existsSync(join(HOOKS, `${wid}.json`)),
@@ -1015,6 +1026,23 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
       ]).toEqual([false, false])
     }
   }, 60_000)
+
+  // Four sealed test chats of the Free tools named AgentHydra's server and got no tool at all: the
+  // ordinary worker's deny list reached them (2026-10-06).
+  test("a sealed task has exactly its config's servers, AgentHydra's own when it names it", async () => {
+    const prompt = join(root, 'sealed.md')
+    const mcp = join(root, 'sealed-mcp.json')
+    writeFileSync(prompt, 'You are a test chat.')
+    writeFileSync(mcp, JSON.stringify({ mcpServers: { agenthydra: local(7787, '/api/mcp') } }))
+    const sealed = {
+      systemPromptFile: prompt,
+      mcpConfig: mcp,
+      allowedTools: ['mcp__agenthydra__*'],
+    }
+    const { status, servers } = await runOn('seeded', seededDir, { prompt: 'list them', sealed })
+    expect(status).toBe('done')
+    expect(servers).toEqual(['agenthydra'])
+  }, 30_000)
 })
 
 describe("the owner's MCP servers a worker is given (ownerMcpServers)", () => {

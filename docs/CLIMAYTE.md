@@ -532,7 +532,7 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 | System prompt | the CLI's own, plus `WORKER_BRIEF` (`--append-system-prompt`) | `--system-prompt-file <systemPromptFile>`, in place of the CLI's own; no `WORKER_BRIEF`, no `CHAT_NOTE`, no ETA note |
 | Settings sources | the account folder's (the lean CLAUDE.md, skills, user settings) | `--setting-sources ""`: no CLAUDE.md, no hook, no skill, no user setting; `syncOwnerClaude` is not run for the launch |
 | Built-in tools | all | `--tools ""`: none |
-| MCP servers | the owner's and `climayte-worker`, written to `<hooks>/<id>.mcp.json` | `--strict-mcp-config --mcp-config <mcpConfig>`: only that file's; no `climayte-worker`, so no `climayte_ask` |
+| MCP servers | the owner's and `climayte-worker`, written to `<hooks>/<id>.mcp.json`, never AgentHydra's own or magnific (`deniedMcpServers` by name and AgentHydra's endpoint by URL) | `--strict-mcp-config --mcp-config <mcpConfig>`: exactly that file's, AgentHydra's own when it names it (no deny list); no `climayte-worker`, so no `climayte_ask` |
 | Permissions | `--dangerously-skip-permissions` | `--permission-mode default` and `--allowedTools` exactly as given |
 | Folder | the task's `cwd` | a fresh empty temp folder (`climayte-sealed-*`), made at dispatch and again at launch if it was cleaned away |
 | Usage stops | the wind-down ask at the stop line, then the ceiling | the ceiling only: it has no Write tool for a handoff note, so it is never asked for one (`climayte_handoff` refuses it); stopped at the ceiling, its session moves to another account and resumes from its transcript |
@@ -541,7 +541,10 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 Everything else is as for any worker: the account is picked by quota and placement, RAM gating,
 the scorecard's model pick unless one is named, usage accounting, pings, checks, verdicts and
 status. Its `--settings` file is still written and read (a `--settings` flag is not a settings
-source), without the edit-claims hook. Two sealed tasks never count as a repeat of each other,
+source), without the edit-claims hook and without the ordinary worker's `deniedMcpServers`: four
+sealed test chats of the Free tools named AgentHydra's server and started with no tool at all, the
+CLI's only sign a "blocked by enterprise policy" line in the err log (2026-10-06). `--allowedTools`
+is the gate on what it calls, so a task that names AgentHydra's server lists only the tools it needs. Two sealed tasks never count as a repeat of each other,
 since each has its own folder (`repeatOf` compares folders).
 
 `cliArgv` builds both launches; the sealed branch is in `briefArgs`, and `writeWorkerMcp` answers

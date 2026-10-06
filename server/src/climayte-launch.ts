@@ -459,7 +459,7 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   writeFileSync(
     hookFile,
     JSON.stringify({
-      ...(w.chat ? chatSettings(acct) : WORKER_ONLY_SETTINGS),
+      ...(w.chat ? chatSettings(acct) : w.sealed ? QUIET_SETTINGS : WORKER_ONLY_SETTINGS),
       // The signal hook is written in its shell form here; the worker's runner answers it over http
       // instead, before the CLI starts (climayte-signal.ts, RunnerSpec.signal).
       hooks: workerHooks({
@@ -472,17 +472,25 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   return hookFile
 }
 
-/** What only an ordinary worker's settings carry: no denied MCP servers, no claude.ai skills, no
- *  humanizer plugin (writeWorkerSettings). A chat has the owner's own (chatSettings). */
+/** No claude.ai skills and no humanizer plugin, for an ordinary worker and a sealed one alike
+ *  (writeWorkerSettings). A chat has the owner's own (chatSettings). */
+const QUIET_SETTINGS = {
+  syncClaudeAiSkills: false,
+  // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
+  // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
+  enabledPlugins: { 'humanizer@synced': false },
+}
+
+/** What only an ordinary worker's settings carry: QUIET_SETTINGS and no denied MCP server. Not a
+ *  sealed worker's: it has exactly its config's servers (--strict-mcp-config), AgentHydra's own when
+ *  the task names it, and its allowedTools are the gate. Denying them left four sealed test chats of
+ *  the Free tools with no tool at all (2026-10-06). */
 const WORKER_ONLY_SETTINGS = {
   deniedMcpServers: [
     ...WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
     { serverUrl: WORKER_DENIED_MCP_URL },
   ],
-  syncClaudeAiSkills: false,
-  // One account's claude.ai-synced humanizer plugin still listed `humanizer:humanizer` in every
-  // request after the line above (3 of 14 starts, 2026-10-02); no worker ever invoked it.
-  enabledPlugins: { 'humanizer@synced': false },
+  ...QUIET_SETTINGS,
 }
 
 /** A chat's settings: the account folder's CLAUDE.md left out. syncOwnerClaude fills that file with

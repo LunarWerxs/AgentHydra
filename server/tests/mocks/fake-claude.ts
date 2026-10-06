@@ -59,11 +59,13 @@ function urlMatches(url: string, pattern: string): boolean {
   return rest === '' || glob(rest, '.*').test(u.pathname + u.search)
 }
 // Like the real CLI, init lists the session's MCP servers: the account's user scope
-// (CLAUDE_CONFIG_DIR's .claude.json) and --mcp-config's, a name in both being one server, less any
-// the --settings file's deniedMcpServers deny by name or by URL.
+// (CLAUDE_CONFIG_DIR's .claude.json, none under --strict-mcp-config) and --mcp-config's, a name in
+// both being one server, less any the --settings file's deniedMcpServers deny by name or by URL.
 function mcpServers(): { name: string; status: string }[] {
   const servers: Record<string, { url?: string }> = {
-    ...((readJson(join(configDir, '.claude.json'))?.mcpServers as object) ?? {}),
+    ...(args.includes('--strict-mcp-config')
+      ? {}
+      : ((readJson(join(configDir, '.claude.json'))?.mcpServers as object) ?? {})),
     ...((readJson(flag('--mcp-config'))?.mcpServers as object) ?? {}),
   }
   const denied =
