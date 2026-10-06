@@ -229,6 +229,9 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     accounts: async () => sceneAccounts(scene),
     pickAccount: async () => scenePick(scene),
     externalItems: async () => scene.items(),
-    diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never
+    diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
+    agentHydra: async () => {
+      throw new Error('AgentHydra is not running')
+    }
   }
 }

@@ -605,9 +605,11 @@ const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode
  *   5h / Week: the 2.75rem usage chip, a 0.375rem gap and the 5rem reset bar
  *   usage: its 3.5rem skeleton (the chip is 2.75rem); plan: a "Max 20x" badge
  *   last active: "Last active" with its hint ("10/12/2025" fits under it)
- *   tokens: "Tokens · Week"; actions: Launch or Focus beside the menu button (Codex rows too)
- * Measured in the running table (2026-10-04): Last active, Tokens and Actions came out 104, 90 and
- * 118 px once the Codex rows were in, so theirs are those, rounded up.
+ *   tokens: "Tokens" and its sort arrow, the window note gone (owner, 2026-10-06)
+ *   actions: one 24px icon button, a 4px gap, the 24px menu button and the cell's 12px padding
+ *   (owner, 2026-10-06: icons instead of words)
+ * Measured in the running table (2026-10-04): Last active came out 104 px once the Codex rows were
+ * in, so its width is that, rounded up.
  */
 const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   pid: '3.5rem',
@@ -618,8 +620,8 @@ const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   usage: '4.25rem',
   plan: '4.75rem',
   lastActive: '6.5rem',
-  tokens: '5.75rem',
-  actions: '7.5rem',
+  tokens: '4.5rem',
+  actions: '4rem',
 }
 
 /** What the shared row draws for one Claude desktop instance. */
@@ -641,25 +643,20 @@ function rowModel(inst: CMInstance): InstanceRowModel {
           {
             full: piiDisplayName(inst),
             shown,
+            email: accountEmail(inst.account),
             folder: inst.dir,
-            hint: inst.isRunning ? t('instances.focusHint') : undefined,
+            copyHint: t('instances.nameCopyHint'),
           },
           clipped,
         ),
-      onClick: inst.isRunning ? () => void onFocus(inst) : undefined,
-      busy: isBusy(inst),
+      copy: accountEmail(inst.account),
     },
     badge: inst.isExternal ? { label: t('instances.external') } : undefined,
     // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
     // missing account is a moment, not a state you act on.
     account: accountName
-      ? {
-          email: inst.account?.email,
-          profile: inst.account?.name,
-          fallback: inst.account?.label,
-          variant: accountBadgeVariant(inst),
-        }
-      : { empty: t('instances.resolving') },
+      ? { stale: accountBadgeVariant(inst) === 'warning' }
+      : { note: t('instances.resolving') },
     pid: inst.pid,
     // A getter for the same reason as lastRunning's label: the cell that draws it ticks with the clock.
     get uptime() {
@@ -1586,27 +1583,41 @@ onUnmounted(() => {
               </span>
             </template>
             <template #primary>
-              <Button
-                v-if="!inst.isRunning"
-                variant="outline"
-                size="sm"
-                :disabled="isBusy(inst)"
-                @click="onOpen(inst)"
-              >
-                <Play /> {{ $t('instances.open') }}
-              </Button>
+              <!-- Icon-only actions (owner, 2026-10-06): the word is the tooltip and the aria-label. -->
+              <IconTooltip v-if="!inst.isRunning" :label="$t('instances.open')">
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  :aria-label="$t('instances.open')"
+                  :disabled="isBusy(inst)"
+                  @click="onOpen(inst)"
+                >
+                  <Play />
+                </Button>
+              </IconTooltip>
               <!-- running: the primary action is Focus (bring the window forward); Quit moves
                    under the kebab so the common action is one click and the destructive one is
                    deliberate. The pulsing green dot is the one the status dot carries. -->
-              <Button v-else variant="outline" size="sm" :disabled="isBusy(inst)" @click="onFocus(inst)">
-                <span class="relative inline-flex">
-                  <AppWindow />
-                  <span
-                    class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
-                  />
-                </span>
-                {{ $t('instances.focusShort') }}
-              </Button>
+              <IconTooltip
+                v-else
+                :label="$t('instances.focusShort')"
+                :description="$t('instances.focusHint')"
+              >
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  :aria-label="$t('instances.focusShort')"
+                  :disabled="isBusy(inst)"
+                  @click="onFocus(inst)"
+                >
+                  <span class="relative inline-flex">
+                    <AppWindow />
+                    <span
+                      class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
+                    />
+                  </span>
+                </Button>
+              </IconTooltip>
             </template>
             <template #menu>
 

@@ -28,6 +28,8 @@ import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type Vie
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel } from '@/lib/lazy-panel'
+import { requestedSection } from '@/components/panes/settings-request'
+import type { SettingsSection } from '@/components/panes/settings'
 import { actionError } from '@/lib/action-error'
 
 // The whole window: sidebar (288, resizable), the chrome bar over its top, and the pane with the
@@ -294,6 +296,11 @@ watch(
     toggleHydra(false)
   }
 )
+// The AgentHydra pane's gear: its settings are in Desk's dialog now (panes/agenthydra.ts).
+function openSettingsOn(section?: SettingsSection) {
+  requestedSection.value = section ?? null
+  src.openSettings()
+}
 function showSessions() {
   cloudForHydra = false
   cloud.on.value = true
@@ -606,6 +613,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             @close="toggleHydra(false)"
             @open-session="(id: string) => src.select({ kind: 'external', id })"
             @show-sessions="showSessions"
+            @open-settings="openSettingsOn"
           />
         </div>
       </div>

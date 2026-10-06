@@ -94,7 +94,10 @@ const fixtureApi: PaneApi = {
   ],
   pickAccount: async () => accountFixtures[1],
   externalItems: async () => [],
-  diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never
+  diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
+  agentHydra: async () => {
+    throw new Error('AgentHydra is not running')
+  }
 }
 
 provide(PANE_API, fixtureApi)

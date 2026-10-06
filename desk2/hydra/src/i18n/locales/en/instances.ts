@@ -49,6 +49,9 @@ export default {
   quit: 'Quit',
   focusHint: 'Bring this instance to the foreground',
   focusShort: 'Focus',
+  // The name cell: a click copies the account's full address, its hover says so (owner, 2026-10-06).
+  nameCopyHint: 'Click to copy the address',
+  toastEmailCopied: 'Copied {email}',
   delete: 'Delete',
   edit: 'Edit',
   moreActions: 'More actions',

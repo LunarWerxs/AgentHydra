@@ -11,7 +11,7 @@
 // ⛔ The SPA never sees a server's URL. `dsh web` prints a one-time `?token=` that is the whole of
 // its authentication, so "launch" and "open" are daemon actions that open the window on the machine
 // the daemon runs on and answer with an outcome. See server/src/core/dsh-instances.ts.
-import { Copy, Pencil, Play, Square, Trash2 } from '@lucide/vue'
+import { Copy, LoaderCircle, Pencil, Play, Square, Trash2 } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
@@ -33,6 +33,7 @@ import {
 } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
+import IconTooltip from '@/shell/IconTooltip.vue'
 
 // The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
 defineProps<{ columns: InstanceColumn[] }>()
@@ -217,22 +218,35 @@ defineExpose({ openCreate, refresh })
 <template>
   <InstanceRow v-for="inst in instances" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
     <template #primary>
-      <Button
-        size="sm"
-        variant="outline"
-        :disabled="busyIds.has(inst.id)"
-        :title="inst.running ? $t('dshInstances.openHint') : $t('dshInstances.launchHint')"
-        @click="act(inst.id, () => launchDshInstance(inst.id))"
-      >
-        <Play class="size-3.5" />
-        {{
+      <!-- Icon-only (owner, 2026-10-06): the word is the tooltip and the aria-label, and the
+           'Starting…' word becomes a spinning icon while a launch is in flight. -->
+      <IconTooltip
+        :label="
           busyIds.has(inst.id)
             ? $t('dshInstances.launching')
             : inst.running
               ? $t('dshInstances.open')
               : $t('dshInstances.launch')
-        }}
-      </Button>
+        "
+        :description="inst.running ? $t('dshInstances.openHint') : $t('dshInstances.launchHint')"
+      >
+        <Button
+          size="icon-sm"
+          variant="outline"
+          :aria-label="
+            busyIds.has(inst.id)
+              ? $t('dshInstances.launching')
+              : inst.running
+                ? $t('dshInstances.open')
+                : $t('dshInstances.launch')
+          "
+          :disabled="busyIds.has(inst.id)"
+          @click="act(inst.id, () => launchDshInstance(inst.id))"
+        >
+          <LoaderCircle v-if="busyIds.has(inst.id)" class="size-3.5 animate-spin" />
+          <Play v-else class="size-3.5" />
+        </Button>
+      </IconTooltip>
     </template>
     <template #menu>
       <DropdownMenuItem

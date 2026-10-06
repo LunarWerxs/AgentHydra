@@ -199,8 +199,8 @@ describe('settings dialog', () => {
   const settings = readFileSync(join(import.meta.dir, '../../src/components/panes/SettingsView.vue'), 'utf8')
   const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')
 
-  it('reuses the popup rows for its accounts row and reads the store only through the source', () => {
-    expect(settings).toContain('<AccountsList embedded />')
+  // No Accounts page since 2026-10-06 (owner): the account for new chats is the sidebar's account menu.
+  it('reads the store only through the source', () => {
     expect(settings).not.toContain('useDesk')
   })
 

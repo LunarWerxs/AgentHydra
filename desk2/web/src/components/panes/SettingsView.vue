@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
-import AccountsList from '@/components/accounts/AccountsList.vue'
 import PaneSwitch from './PaneSwitch.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import { ITEM, MENU } from '@/components/composer/menu'
@@ -11,21 +10,28 @@ import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { settingsIcons } from '@/lib/icons'
 import { usePaneApi } from './api'
+import { BUTTON } from './settings-styles'
 import { SETTINGS_SECTIONS, settingsGroups, stepSection, switchPatch, type SettingsSection } from './settings'
+import { requestedSection } from './settings-request'
+import { useAgentHydraSettings } from './agenthydra'
+import AgentHydraControl from './AgentHydraControl.vue'
 
 // The body of the Settings dialog, laid out like the real Settings (docs/reference/real/user/
 // real-settings-claude-code.webp) without its account, billing and connector pages: a darker nav with
 // Search and captioned section rows on the left; on the right bold group headings over rows of a label,
 // a wrapping muted description and the control, split by hairlines. Below 640px the nav is a pill row.
+// The `ah` rows are AgentHydra's own settings (agenthydra.ts, AgentHydraControl.vue).
 const api = usePaneApi()
 const src = useShellSource()
+const ah = useAgentHydraSettings(api)
 
 const section = ref<SettingsSection>('general')
 const query = ref('')
 const searching = computed(() => query.value.trim() !== '')
-const groups = computed(() => settingsGroups(section.value, query.value))
-// Every row but About's needs the saved settings.
-const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about')))
+const groups = computed(() => settingsGroups(section.value, query.value, ah.holds))
+const isAh = (id: string) => id.startsWith('ah')
+// Every Desk row but About's needs the saved settings.
+const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id))))
 
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
@@ -37,8 +43,6 @@ const SELECT_ITEM = ITEM + ' pr-8 text-text focus:text-text'
 const SEGMENTS = 'flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px'
 const SEGMENT =
   'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-[13px] leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
-const BUTTON =
-  'flex h-7 shrink-0 cursor-default items-center rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2.5 text-[13px] text-text transition-colors duration-[60ms] hover:bg-[var(--fill-secondary-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
 
 const local = ref<DeskSettings | null>(null)
 const models = ref<ModelChoice[]>([])
@@ -70,6 +74,12 @@ function setLocal(s: DeskSettings) {
 }
 
 let savedTimer: ReturnType<typeof setTimeout> | null = null
+function flashSaved() {
+  showSaved.value = true
+  if (savedTimer) clearTimeout(savedTimer)
+  savedTimer = setTimeout(() => (showSaved.value = false), 1600)
+}
+watch(ah.savedAt, flashSaved)
 async function save(patch: Partial<DeskSettings>) {
   if (!local.value) return
   const before = local.value as Record<string, unknown>
@@ -80,9 +90,7 @@ async function save(patch: Partial<DeskSettings>) {
   saveError.value = null
   try {
     setLocal(await api.putSettings(patch))
-    showSaved.value = true
-    if (savedTimer) clearTimeout(savedTimer)
-    savedTimer = setTimeout(() => (showSaved.value = false), 1600)
+    flashSaved()
   } catch (e) {
     // Only this save's keys, and only where they still hold its value: a later save or another window's change stays.
     if (local.value) {
@@ -158,6 +166,16 @@ function pick(id: SettingsSection) {
   section.value = id
   query.value = ''
 }
+// Another part of Desk asked for a section (the AgentHydra pane's gear asks for Updates).
+watch(
+  requestedSection,
+  (id) => {
+    if (!id) return
+    pick(id)
+    requestedSection.value = null
+  },
+  { immediate: true }
+)
 function focusSection(id: SettingsSection) {
   void nextTick(() => navEl.value?.querySelector<HTMLElement>(`[data-section="${id}"]`)?.focus())
 }
@@ -190,8 +208,26 @@ function onVisibility() {
   if (showsBridge.value && !document.hidden) void loadBridge()
 }
 document.addEventListener('visibilitychange', onVisibility)
+
+// AgentHydra's update check asks its Git remote, so it runs when its row is first on screen.
+const showsUpdate = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahVersion')))
+watch(
+  showsUpdate,
+  (on) => {
+    if (on && !ah.update.value && !ah.checking.value) void ah.checkUpdate()
+  },
+  { immediate: true }
+)
+// The Connections sign-in is a window of its own: coming back here reads the sync state again.
+function onFocus() {
+  if (!ah.sync.value?.connected) void ah.loadSync()
+}
+window.addEventListener('focus', onFocus)
 onMounted(async () => {
   syncBridgePoll()
+  void ah.load()
+  void ah.loadSync()
+  void ah.loadAutoUpdate()
   const tasks: Promise<unknown>[] = [
     api.models().then((m) => (models.value = m)).catch(() => {}),
     api
@@ -218,6 +254,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
+  window.removeEventListener('focus', onFocus)
   stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
   if (idleTimer) clearTimeout(idleTimer)
@@ -274,7 +311,7 @@ onBeforeUnmount(() => {
         <span class="flex items-center gap-1 text-text-muted transition-opacity duration-300" :class="showSaved ? 'opacity-100' : 'opacity-0'">
           <Check class="size-3.5 text-success-text" /> Saved
         </span>
-        <span v-if="saveError" class="text-danger-text">Not saved: {{ saveError }}</span>
+        <span v-if="saveError || ah.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value }}</span>
       </div>
 
       <div v-if="!local && needsSettings" class="text-[13px] leading-[19px]" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
@@ -289,21 +326,18 @@ onBeforeUnmount(() => {
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">
           <h3 class="text-[13px] font-semibold leading-5 text-text">{{ g.heading }}</h3>
           <div>
-            <div
-              v-for="r in g.rows"
-              :key="r.id"
-              class="flex flex-wrap gap-x-6 gap-y-2 border-b border-border py-3.5 last:border-b-0"
-              :class="r.id === 'account' ? 'flex-col' : 'items-center'"
-            >
+            <div v-for="r in g.rows" :key="r.id" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5 last:border-b-0">
               <div class="min-w-[200px] flex-1">
                 <div class="text-[13px] leading-5 text-text">{{ r.label }}</div>
                 <div class="mt-0.5 text-[13px] leading-[19px] text-text-muted">
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.description }}
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-[19px] text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
+                <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
               </div>
 
-              <span v-if="r.id === 'version'" class="font-mono text-[13px] leading-[19px] text-text-2">{{ version ? `v${version}` : '…' }}</span>
+              <AgentHydraControl v-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
+              <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-[19px] text-text-2">{{ version ? `v${version}` : '…' }}</span>
               <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-[19px] text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}
               </span>
@@ -372,10 +406,6 @@ onBeforeUnmount(() => {
                     @keydown.enter="commitIdle"
                   />
                   minutes
-                </div>
-
-                <div v-else-if="r.id === 'account'" class="rounded-[var(--radius-8)] bg-fill-5 p-1 shadow-[inset_0_0_0_1px_var(--border)]">
-                  <AccountsList embedded />
                 </div>
 
                 <PaneSwitch

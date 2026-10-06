@@ -2,10 +2,12 @@
 // The one instance row: every table's rows (Claude desktop, Claude CLI, Codex, DeepSeek) are this
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
-// `account-extra` (after the account login, on the name's line), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
+// `account-extra` (after the name and its stale-login mark), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
 import LazyOverlay from '@/components/ui/lazy/LazyOverlay.vue'
 import { EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { toast } from 'vue-sonner'
 import CopyResetDate from '@/components/CopyResetDate.vue'
 import InstanceGlyph from '@/components/InstanceGlyph.vue'
 import InstanceMenuHeader from '@/components/InstanceMenuHeader.vue'
@@ -21,9 +23,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { TableCell, TableRow } from '@/components/ui/table'
-import { pii, piiName } from '@/composables/usePrivacy'
+import { pii } from '@/composables/usePrivacy'
 import { useUsageMode } from '@/composables/useUsageMode'
-import { accountLine, type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
+import { type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import {
   resetLabel,
@@ -38,6 +40,7 @@ const props = defineProps<{ columns: InstanceColumn[]; row: InstanceRowModel }>(
 /** Whether the ⋯ menu is open: the table keeps it when it opens one menu at a time. */
 const menuOpen = defineModel<boolean>('menuOpen', { default: false })
 
+const { t } = useI18n()
 const { enabled: tooltipsEnabled } = useTooltipConfig()
 // The tab's shared clock (the table's owner keeps it running), so every countdown ticks together.
 const { now } = useUsageMode()
@@ -58,17 +61,17 @@ const nameTooltip = computed(() => {
     detail: tip.detail && pii(tip.detail),
   }
 })
-// The builders mask the name in privacy mode, so the "say it once" check compares masked forms too.
-const account = computed(() => {
-  const line = accountLine(props.row.account, props.row.name.shown)
-  if (!line) return null
-  const text = piiName(line.text)
-  if (text === props.row.name.shown.trim()) return null
-  return { text, title: line.title ? pii(line.title) : text }
-})
+// A click on the name copies the account's full address (owner, 2026-10-06; the row no longer prints
+// the handle). The clipboard gets the real address; only what is displayed is masked in privacy mode.
+function copyEmail(): void {
+  const email = props.row.name.copy
+  if (!email) return
+  navigator.clipboard?.writeText(email).catch(() => {})
+  toast.success(t('instances.toastEmailCopied', { email: pii(email) }))
+}
 // The live login check failed and the row shows the last known account (accounts.ts 'cache' and
-// 'offline'): yellow, with a mark that stays when the account text itself is not shown.
-const loginStale = computed(() => props.row.account.variant === 'warning')
+// 'offline'): a yellow mark after the name.
+const loginStale = computed(() => !!props.row.account.stale)
 
 // One number per window drives the bar's length; the WEEKLY one also drives its colour, and the
 // 5-hour bar is drawn `neutral` (see UsageBar's UsageBarVariant).
@@ -129,12 +132,11 @@ function onContextMenu(e: MouseEvent): void {
           />
           <IconTooltip v-bind="nameTooltip">
             <button
-              v-if="row.name.onClick"
+              v-if="row.name.copy"
               type="button"
               class="min-w-0 cursor-pointer truncate text-start hover:underline"
-              :disabled="row.name.busy"
               @pointerenter="noteClip"
-              @click="row.name.onClick"
+              @click="copyEmail"
             >
               {{ $pii(row.name.shown) }}
             </button>
@@ -146,14 +148,9 @@ function onContextMenu(e: MouseEvent): void {
             row.badge.label
           }}</Badge>
           <slot name="name-extra" />
-          <!-- The signed-in account, after the name on the same line (one-line rows, owner
-               2026-10-04). It gives way first: its shrink weight is far above the name's. -->
-          <span
-            v-if="account"
-            class="min-w-0 shrink-[8] truncate text-2xs font-normal"
-            :class="loginStale ? 'text-warning' : 'text-muted-foreground'"
-            :title="loginStale ? `${account.title}\n${$t('instances.loginUnconfirmed')}` : account.title"
-          >{{ account.text }}</span>
+          <span v-if="row.account.note" class="min-w-0 shrink-[8] truncate text-2xs font-normal text-muted-foreground">{{
+            row.account.note
+          }}</span>
           <span
             v-if="loginStale"
             role="img"

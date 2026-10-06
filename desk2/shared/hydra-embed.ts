@@ -110,6 +110,8 @@ export type AhMessage =
   | { type: 'ah:open-session'; session_id: string; source?: string }
   /** Desk shows its cloud list, every session of both PCs. */
   | { type: 'ah:show-sessions' }
+  /** Desk opens its Settings, which hold AgentHydra's: on Updates when one is waiting. */
+  | { type: 'ah:open-settings'; section?: 'updates' }
   /** The current tab's sidebar, or null for a tab without one. */
   | { type: 'ah:sidebar'; model: SidebarModel | null }
 

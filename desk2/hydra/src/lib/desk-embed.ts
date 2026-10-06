@@ -33,6 +33,12 @@ export function showSessionsInDesk(): void {
   tellDesk({ type: 'ah:show-sessions' })
 }
 
+/** Desk opens its Settings, which hold this window's settings now (owner, 2026-10-06): on Updates
+ *  when the gear's dot says one is waiting. */
+export function openSettingsInDesk(section?: 'updates'): void {
+  tellDesk({ type: 'ah:open-settings', section })
+}
+
 /** Desk's pane (HydraPane.vue) fires this on this window each time AgentHydra is shown, so a page that
  *  stayed built behind the pane can read again right then. The frame's own visibility never changes. */
 export const PANE_OPEN_EVENT = 'hydra:pane-open'

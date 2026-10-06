@@ -15,7 +15,7 @@ import { attachHydraFrame, hydraReady, setHydraSidebar, setHydraVisible } from '
 // closes it. Out of view the copy is told so (desk:visible) and its polls rest until it comes back.
 // The copy gets the room the chrome bar covers on the left as --desk-pad-left.
 const props = defineProps<{ open: boolean; /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number }>()
-const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': [] }>()
+const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': []; 'open-settings': [section?: 'updates'] }>()
 
 const SRC = '/ah/?embed=desk'
 const daemon = ref<string | null>(null)
@@ -70,6 +70,7 @@ function onMessage(e: MessageEvent) {
   if (m?.type === 'ah:ready') hydraReady(e.source as Window)
   else if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
+  else if (m?.type === 'ah:open-settings') emit('open-settings', m.section === 'updates' ? 'updates' : undefined)
   else if (m?.type === 'ah:sidebar') setHydraSidebar(m.model && Array.isArray(m.model.sections) ? m.model : null)
 }
 function onKey(e: KeyboardEvent) {

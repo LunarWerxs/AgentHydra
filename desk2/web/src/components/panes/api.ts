@@ -23,10 +23,12 @@ export interface PaneApi {
   externalItems(sessionId: string): Promise<TranscriptItem[]>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this. */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>): Promise<T>
+  /** AgentHydra's own API through Desk's /ah/api proxy (its settings in this dialog, agenthydra.ts). */
+  agentHydra<T>(path: string, init?: RequestInit): Promise<T>
 }
 
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch('/api' + path, init)
+async function json<T>(path: string, init?: RequestInit, base = '/api'): Promise<T> {
+  const res = await fetch(base + path, init)
   const text = await res.text()
   let body: unknown = null
   try {
@@ -62,7 +64,9 @@ export const httpPaneApi: PaneApi = {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))
     return json(`/diagnostics/${encodeURIComponent(name)}${q.size ? `?${q}` : ''}`)
-  }
+  },
+  agentHydra: (path, init) =>
+    json(path, init?.body ? { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } } : init, '/ah/api')
 }
 
 export const PANE_API: InjectionKey<PaneApi> = Symbol('paneApi')

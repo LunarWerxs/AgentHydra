@@ -7,6 +7,7 @@ import {
   AppWindow,
   ArrowRightLeft,
   Eraser,
+  Info,
   LogIn,
   LogOut,
   Pencil,
@@ -51,7 +52,7 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import { type CodexInstance, type CodexMovePlan, moveCodexChat, planCodexChatMove } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import type { InstanceFacts } from '@/lib/instance-filter'
-import type { InstanceColumn, InstanceRowModel } from '@/lib/instance-table'
+import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import { moveTargets } from '@/lib/move-chats'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -239,18 +240,29 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
     glyph: { dir: instance.codexHome, running: !!statusOn(instance) },
     name: {
       shown: shortDisplayName(pii(instance.name)),
-      tooltip: () => ({ label: instance.name, description: instance.codexHome }),
+      // The hover is the address and the folder; a click copies the address (owner, 2026-10-06).
+      tooltip: (clipped) =>
+        nameTooltipFor(
+          {
+            full: pii(instance.name),
+            shown: shortDisplayName(pii(instance.name)),
+            email,
+            folder: instance.codexHome,
+            copyHint: t('instances.nameCopyHint'),
+          },
+          clipped,
+        ),
+      copy: email,
     },
     badge: instance.isExternal ? { label: t('instances.external') } : undefined,
-    // The email comes straight off the list payload (the server resolves it from auth.json).
+    // The email comes straight off the list payload (the server resolves it from auth.json); without
+    // one the row says how it is signed in instead.
     account: {
-      email,
-      profile: instance.account?.name,
-      fallback:
-        instance.account?.authMode === 'apikey'
+      note: email
+        ? null
+        : instance.account?.authMode === 'apikey'
           ? t('codexInstances.authApiKey')
           : t('codexInstances.loggedOutShort'),
-      variant: email ? 'success' : 'outline',
     },
     pid: instance.desktopPid,
     usage: {
@@ -553,45 +565,61 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
     :row="rowModels.get(instance.id)!"
   >
     <template #primary>
-      <span v-if="instance.isExternal" class="whitespace-nowrap text-3xs text-muted-foreground">
-        {{ $t('codexInstances.externalHint') }}
-      </span>
+      <!-- Icon-only actions (owner, 2026-10-06): the word is the tooltip and the aria-label; the
+           external row's note is a muted Info icon whose tooltip is that text. -->
+      <IconTooltip v-if="instance.isExternal" :label="$t('codexInstances.externalHint')">
+        <span
+          class="inline-flex size-6 items-center justify-center text-muted-foreground"
+          role="img"
+          :aria-label="$t('codexInstances.externalHint')"
+        >
+          <Info class="size-3.5" aria-hidden="true" />
+        </span>
+      </IconTooltip>
       <template v-else>
-        <Button
+        <IconTooltip
           v-if="desktopEnabled && !instance.isDesktopRunning"
-          variant="outline"
-          size="sm"
-          :disabled="isBusy(instance)"
-          @click="onOpenDesktop(instance)"
+          :label="$t('codexInstances.openDesktop')"
         >
-          <Play /> {{ $t('codexInstances.openDesktop') }}
-        </Button>
-        <Button
-          v-else-if="desktopEnabled"
-          variant="outline"
-          size="sm"
-          :disabled="isBusy(instance)"
-          @click="onFocusDesktop(instance)"
-        >
-          <!-- Same running dot as the Claude rows' Focus button: this button only exists while the
-               desktop app is up, and the dot says so where the eye already is. -->
-          <span class="relative inline-flex">
-            <AppWindow />
-            <span
-              class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
-            />
-          </span>
-          {{ $t('codexInstances.focusDesktop') }}
-        </Button>
-        <Button
-          v-else-if="cliEnabled"
-          variant="outline"
-          size="sm"
-          :disabled="isBusy(instance)"
-          @click="onLaunchCli(instance)"
-        >
-          <Terminal /> {{ $t('codexInstances.launch') }}
-        </Button>
+          <Button
+            variant="outline"
+            size="icon-sm"
+            :aria-label="$t('codexInstances.openDesktop')"
+            :disabled="isBusy(instance)"
+            @click="onOpenDesktop(instance)"
+          >
+            <Play />
+          </Button>
+        </IconTooltip>
+        <IconTooltip v-else-if="desktopEnabled" :label="$t('codexInstances.focusDesktop')">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            :aria-label="$t('codexInstances.focusDesktop')"
+            :disabled="isBusy(instance)"
+            @click="onFocusDesktop(instance)"
+          >
+            <!-- Same running dot as the Claude rows' Focus button: this button only exists while the
+                 desktop app is up, and the dot says so where the eye already is. -->
+            <span class="relative inline-flex">
+              <AppWindow />
+              <span
+                class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
+              />
+            </span>
+          </Button>
+        </IconTooltip>
+        <IconTooltip v-else-if="cliEnabled" :label="$t('codexInstances.launch')">
+          <Button
+            variant="outline"
+            size="icon-sm"
+            :aria-label="$t('codexInstances.launch')"
+            :disabled="isBusy(instance)"
+            @click="onLaunchCli(instance)"
+          >
+            <Terminal />
+          </Button>
+        </IconTooltip>
       </template>
     </template>
     <template #menu>

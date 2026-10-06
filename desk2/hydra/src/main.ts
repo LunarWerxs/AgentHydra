@@ -3,7 +3,6 @@ import { installPrivacy } from './composables/usePrivacy'
 import { hydrateSharedPrefs } from './composables/useSharedPrefs'
 import { appModeForPath } from './lib/app-mode'
 import { installImeCompositionGuard } from './lib/ime-composition-guard'
-import { startSignInNudgeSession } from './lib/sign-in-nudge'
 import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import { migrateLegacyUsageFilterScope } from './lib/usage-filter'
 import './style.css'
@@ -57,10 +56,5 @@ async function mountApp(): Promise<void> {
   // with its own empty storage. See composables/useSharedPrefs.ts.
   void hydrateSharedPrefs()
 }
-
-// Counts one session for the Connections sign-in prompt. Here, not in SettingsView, because that
-// view is lazy: an owner who never opens Settings would never accrue a session and so could never
-// pass the prompt's gate. Counting only - nothing is shown from this call.
-startSignInNudgeSession({ appId: 'agenthydra', appName: 'AgentHydra' })
 
 void mountApp()

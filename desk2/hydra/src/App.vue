@@ -8,11 +8,8 @@ import {
   MessagesSquare,
   Minimize2,
   Monitor,
-  Moon,
-  Power,
   RotateCw,
   Settings2,
-  Sun,
   Terminal,
 } from '@lucide/vue'
 import {
@@ -35,8 +32,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/sonner'
@@ -50,7 +45,6 @@ import { SHELL_BASE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
-import { shutdownApp } from '@/lib/api'
 import { hswarmNodeAsk, INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
 import {
@@ -61,6 +55,7 @@ import {
   findInstanceRow,
   flashRow,
   openInDesk,
+  openSettingsInDesk,
   PANE_OPEN_EVENT,
   resendSidebar,
   setDeskView,
@@ -70,7 +65,7 @@ import { refreshForView } from '@/lib/warm-data'
 import { startWarmData } from '@/lib/warm-kinds'
 import { pendingSessionJump, takeSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
-import { type ThemeMode, useTheme } from '@/lib/theme'
+import { useTheme } from '@/lib/theme'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
 import DiscordMark from '@/shell/DiscordMark.vue'
 import Sidebar from '@/shell/Sidebar.vue'
@@ -83,7 +78,6 @@ const { requested: builderEverOpened, builderMounted } = useBuilder()
 const AutomationSettings = lazyView(() => import('@/components/AutomationSettings.vue'))
 const QueueBuilder = lazyView(() => import('@/components/QueueBuilder.vue'))
 const QueueView = lazyView(() => import('@/components/QueueView.vue'))
-const SettingsView = lazyView(() => import('@/components/SettingsView.vue'))
 const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
 const CliView = lazyView(() => import('@/components/CliView.vue'))
 const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
@@ -233,8 +227,9 @@ useShortcuts([
   },
 ])
 
-// settings + queue share the right edge; usePanels keeps them mutually exclusive
-const { settingsOpen, queueOpen, openSettingsTab, automationOpen } = usePanels()
+// The queue drawer docks on the right edge. Settings are Desk's (its Settings dialog holds this
+// window's settings since 2026-10-06), so the gear asks Desk to open them.
+const { queueOpen, automationOpen } = usePanels()
 // The passive "a newer version exists" signal — see the dot on the Settings button below.
 const {
   updateAvailable,
@@ -245,33 +240,17 @@ const {
 } = useUpdates()
 
 /**
- * Opening Settings from the header button.
- *
- * With an update waiting this is a DEEP LINK rather than a plain toggle: the dot is the only
- * thing telling you a new version exists and it says nothing about what or why, so the click it
- * invites should land on the answer. openSettingsTab scrolls to the updates card and pulses it
- * (SettingsView's flashSection), and the dot goes quiet for the rest of this run — it has been
- * seen. Next launch it comes back, because the update is still there.
- *
- * With nothing waiting it stays an ordinary open/close toggle: deep-linking every click would
- * yank a user who just wanted the top of the page down to a card they did not ask for.
+ * Opening Settings from the header button: Desk's Settings dialog. With an update waiting it opens on
+ * Updates, since the dot is the only thing saying a new version exists and the click it invites should
+ * land on the answer; the dot then goes quiet for the rest of this run. Next launch it comes back,
+ * because the update is still there.
  */
 function onSettingsButton() {
-  // Already open: this click means CLOSE, whatever the dot says. Deep-linking here would make the
-  // button stop closing the panel for as long as an update is pending, which is the button's
-  // primary job.
-  if (settingsOpen.value) {
-    settingsOpen.value = false
-    return
-  }
-  if (showUpdateDot.value) {
-    dismissUpdateDot()
-    openSettingsTab('updates')
-    return
-  }
-  settingsOpen.value = true
+  const update = showUpdateDot.value
+  if (update) dismissUpdateDot()
+  openSettingsInDesk(update ? 'updates' : undefined)
 }
-const anyPanelOpen = computed(() => settingsOpen.value || queueOpen.value)
+const anyPanelOpen = computed(() => queueOpen.value)
 const { fullWidth } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
 // rendered width below — one value so they can never disagree. shellMaxWidth makes the
@@ -285,33 +264,9 @@ const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
   shellMaxWidth: () => (fullWidth.value ? null : SHELL_BASE_MAX),
 })
 
-// --- settings-panel header controls: theme picker + shut down (moved out of the Appearance
-// section into icons beside the panel's ✕, owner request) ---------------------------------------
-const { mode: themeMode, isDark, setTheme } = useTheme()
-// Reflect the ACTIVE theme in the trigger glyph: sun/moon for an explicit light/dark, a monitor
-// for "follow the system".
-const themeIcon = computed(() =>
-  themeMode.value === 'system' ? Monitor : isDark.value ? Moon : Sun,
-)
-
-// Two-step so an errant click can't kill the app: first click arms (button turns red + tooltip
-// changes), second confirms. Loses the armed state on blur, matching the cloud-sync disconnect.
-const confirmShutdown = ref(false)
-async function onShutdown() {
-  if (!confirmShutdown.value) {
-    confirmShutdown.value = true
-    return
-  }
-  confirmShutdown.value = false
-  toast(t('settings.shutdownToast'))
-  try {
-    await shutdownApp()
-  } catch {
-    // The daemon answers { ok } BEFORE it exits, so a rejection here is a genuine failure (not just
-    // the socket dropping as it goes down).
-    toast.error(t('settings.shutdownToastFailed'))
-  }
-}
+// Applies the stored theme to this window. Desk has one theme, so there is no picker here and no
+// Shut down either: the daemon is Desk's engine.
+useTheme()
 
 // Top-level tabs. Instances opens the landing page; its account categories sit in a hover dropdown.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
@@ -410,10 +365,10 @@ provide(OPEN_VIEW, (v: AppView) => {
 })
 
 
-// The "Sync my settings with Connections" sign-in (SettingsView.vue) opens /oauth/login in a
-// NEW tab; that tab's SPA boots fresh here and lands back on ?connected=1 / ?connect=failed
-// after the daemon's /oauth/callback redirect. Surface the outcome, open Settings so the
-// result is visible, and strip the query param so a refresh doesn't re-trigger the toast.
+// The "Sync my settings with Connections" sign-in (Desk's Settings, Connections) opens /oauth/login in
+// a NEW tab; a tab that boots this window lands back on ?connected=1 / ?connect=failed after the
+// daemon's /oauth/callback redirect. Surface the outcome, open Settings so the result is visible, and
+// strip the query param so a refresh doesn't re-trigger the toast.
 function handleConnectRedirect() {
   const params = new URLSearchParams(window.location.search)
   const connected = params.get('connected')
@@ -423,7 +378,7 @@ function handleConnectRedirect() {
   params.delete('connect')
   const query = params.toString()
   window.history.replaceState(null, '', window.location.pathname + (query ? `?${query}` : ''))
-  settingsOpen.value = true
+  openSettingsInDesk()
   if (connected === '1') toast.success(t('settings.cloudSyncEnableToggle'))
   else if (failed === 'failed') toast.error(t('settings.cloudSyncConnectFailed'))
 }
@@ -652,7 +607,6 @@ onUnmounted(stopAvailabilityPolling)
           size="icon-sm"
           class="relative"
           :title="updateAvailable ? $t('app.settingsUpdateAvailable') : $t('app.settings')"
-          :aria-pressed="settingsOpen"
           @click="onSettingsButton"
         >
           <Settings2 />
@@ -691,48 +645,6 @@ onUnmounted(stopAvailabilityPolling)
       body-class="flex min-h-0 flex-1 flex-col"
     >
       <QueueView />
-    </Sidebar>
-
-    <!-- settings: the shared push-in panel. Custom header carries the theme picker + shut-down
-         icons beside the panel's ✕ (owner request). -->
-    <Sidebar v-model:open="settingsOpen" :side="side" :title="$t('app.settings')" :width-px="widthPx">
-      <template #header>
-        <span class="text-xs font-semibold">{{ $t('app.settings') }}</span>
-        <div class="ms-auto flex items-center gap-0.5">
-          <!-- theme picker (moved out of the Appearance section) -->
-          <DropdownMenu>
-            <DropdownMenuTrigger as-child>
-              <Button variant="ghost" size="icon-sm" :title="$t('settings.themeLabel')">
-                <component :is="themeIcon" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" class="max-w-44">
-              <DropdownMenuRadioGroup
-                :model-value="themeMode"
-                @update:model-value="(v) => setTheme(v as ThemeMode)"
-              >
-                <DropdownMenuRadioItem value="light"><Sun /> {{ $t('settings.themeLight') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="dark"><Moon /> {{ $t('settings.themeDark') }}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="system"><Monitor /> {{ $t('settings.themeSystem') }}</DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <!-- shut down: closes the whole app (window + daemon + tray). Two-step to prevent a
-               mis-click; see onShutdown. -->
-          <Button
-            :variant="confirmShutdown ? 'destructive' : 'ghost'"
-            size="icon-sm"
-            :title="confirmShutdown ? $t('settings.shutdownConfirmTooltip') : $t('settings.shutdownTooltip')"
-            @click="onShutdown"
-            @blur="confirmShutdown = false"
-          >
-            <Power />
-          </Button>
-        </div>
-      </template>
-      <!-- No Save button: every setting saves as it changes. The footer's button only flushed the
-           scheduler's numbers, which moved to the queue's automation settings and save on blur. -->
-      <SettingsView />
     </Sidebar>
 
     <!-- The queue's scheduler and auto-resume settings, opened from the queue drawer and the

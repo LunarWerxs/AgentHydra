@@ -1,40 +1,7 @@
-// SettingsView strings: scheduler controls and account credential management.
+// Settings strings of the pages that keep their own settings (the Instances gear, the queue's
+// automation dialog). The app-wide settings are Desk's Settings dialog since 2026-10-06
+// (desk2/web/src/components/panes/agenthydra.ts).
 export default {
-  // appearance section
-  appearance: 'Appearance',
-  themeLabel: 'Theme',
-  themeLight: 'Light',
-  themeDark: 'Dark',
-  themeSystem: 'System',
-  // header controls (theme + shut down now live as icons in the settings panel header; the theme
-  // trigger reuses `themeLabel` above)
-  shutdownTooltip: 'Shut down AgentHydra (closes the app and its tray icon)',
-  shutdownConfirmTooltip: 'Click again to shut down',
-  shutdownToast: 'Shutting down…',
-  shutdownToastFailed: 'Failed to shut down.',
-  showTooltipsLabel: 'Show tooltips',
-  showTooltipsHint: 'Hover help on buttons and controls. Info icons stay on.',
-  privacyModeLabel: 'Privacy mode',
-  privacyModeHint:
-    'For screenshots and screen-shares: account e-mail addresses, handles and profile names are masked wherever they are shown: instance lists, the home page, menus and dialogs, the session list and header, incidents and the open transcript. Copy still copies the real address.',
-  portableModeLabel: 'Portable window',
-  portableModeHint:
-    'Opens AgentHydra in its own window (no tabs or address bar) instead of a browser tab. The desktop launcher and tray icon follow this setting too.',
-  portableModeToastOpened: 'Opened in portable window - you can close this tab.',
-  portableModeToastNoBrowser: 'No Edge or Chrome install found to open a portable window.',
-  portableModeToastFailed: 'Failed to save portable window setting.',
-  instanceModeShortcutLabel: 'Quick Instances shortcut',
-  instanceModeShortcutHint:
-    'Adds a lightweight launcher to your Desktop that only loads the instance chooser.',
-  instanceModeShortcutCreate: 'Add to Desktop',
-  instanceModeShortcutCreating: 'Adding…',
-  instanceModeShortcutCreated: 'Quick Instances shortcut added to your Desktop.',
-  instanceModeShortcutFailed: 'Failed to create the Quick Instances shortcut.',
-  hideTrayIconLabel: 'Hide tray icon',
-  hideTrayIconHint:
-    'Removes the AgentHydra icon from the notification area. AgentHydra keeps running in the background - launch the shortcut again to reopen the UI, or come back here to turn the icon back on. Only applies when AgentHydra was started from its tray shortcut: the icon comes from that launcher, so if you ran the executable directly there is no icon for this to affect.',
-  hideTrayIconToastFailed: 'Failed to save hide tray icon setting.',
-
   // usage section
   usageAutoRefreshLabel: 'Auto-refresh usage',
   usageAutoRefreshHint:
@@ -96,50 +63,10 @@ export default {
     'Off by default. Some Claude accounts keep working past their limits on paid extra usage (usage credits) instead of stopping. With this off, nothing AgentHydra manages is allowed to bill it: CliMayte moves a task to an account with free quota before its account would bill, and any Claude session on an account that has extra usage switched on is stopped as that account nears its limit. The chat itself is kept and can carry on later or on another account. Turn it on only if you want work to spend those credits.',
   providerToastFailed: 'Failed to save provider setting.',
 
-  // updates section: the version number itself is the status + control now (see the tips below),
-  // so the old standalone "Check for updates" / "Update available" / "Update blocked" / "Up to
-  // date" strings are gone.
-  updates: 'Updates',
-  currentVersion: 'Current version',
-  noUpdateSourceHint:
-    'This install is not linked to a Git remote, so there is nowhere to pull new versions ' +
-    'from. Link one (git remote add origin <url>) or set AGENTHYDRA_UPDATE_REPO, and the ' +
-    'update check and auto-update come to life.',
-  restartGuidance: ' Restart AgentHydra from the tray icon to run the new code.',
-  // the version number itself is the status indicator now: green = up to date, amber = update
-  // available (click to apply), red = blocked / no source. Tooltip spells out the state + action.
-  versionUpToDateTip: 'Up to date. Click to check again.',
-  versionCheckingTip: 'Checking for updates…',
-  versionUpdateAvailableTip: 'Update available. Click to update and restart.',
-  versionUpdateBlockedTip: 'Update available but blocked. Click to re-check.',
-  versionNoSourceTip: "Updates can't be checked from this install.",
-
-  // auto-update section
-  autoUpdate: 'Auto-update',
-  autoUpdateDescription:
-    'On by default. AgentHydra periodically checks for a newer version and installs it, then restarts the daemon on its own - no prompt. It waits while work a restart would stop is running. A checkout with uncommitted local changes is never touched; updates only apply on a clean one.',
-  autoUpdateToastEnabled: 'Auto-update enabled.',
-  autoUpdateToastDisabled: 'Auto-update disabled.',
-  autoUpdateToastFailed: 'Failed to save auto-update settings.',
   toastSchedulerFailed: 'Failed to update scheduler settings.',
 
-  // cloud sync section ("Sync my settings with Connections")
-  cloudSyncTitle: 'Cloud sync',
-  cloudSyncConnectButton: 'Sync settings with Connections',
+  // the Connections sign-in's return (App.vue handleConnectRedirect)
   cloudSyncEnableToggle: 'Sync settings',
-  cloudSyncHint:
-    'Syncs scheduler preferences and appearance (theme) to your Connections account, so they follow you to AgentHydra on another machine. Optional; never syncs accounts, secrets, or queue data.',
-  cloudSyncSyncNow: 'Sync now',
-  cloudSyncSyncing: 'Syncing…',
-  cloudSyncSyncedToast: 'Settings synced.',
-  cloudSyncSyncedNow: 'Synced - just now',
-  cloudSyncSyncedAgo: 'Synced - {when}',
-  cloudSyncSecondsAgo: '{n}s ago',
-  cloudSyncMinutesAgo: '{n}m ago',
-  cloudSyncHoursAgo: '{n}h ago',
-  cloudSyncNeverSynced: 'Not synced yet',
-  cloudSyncDisconnect: 'Disconnect',
-  cloudSyncConfirmDisconnect: 'Click again to confirm',
   cloudSyncConnectFailed: "Couldn't connect to Connections. Try again.",
 
   // scheduler section
@@ -187,41 +114,4 @@ export default {
   monitorToastEnabled: 'Auto-resume monitor enabled.',
   monitorToastDisabled: 'Auto-resume monitor disabled.',
   monitorToastFailed: 'Failed to save auto-resume monitor settings.',
-
-  // The MCP server group. See server/src/mcp-register.ts for what the switch actually does and
-  // why it defaults to ON: before 2026-09-07 the only way to get these tools was a documented
-  // command that assumed a source checkout, so every downloaded install silently had none of them.
-  mcpTitle: 'MCP server',
-  mcpHint:
-    'AgentHydra’s whole API is available to AI agents over MCP: moving chats between accounts, the fleet, the queue, the quota reads. A client only sees the tools once it has been told where the server is.',
-  mcpRegisterLabel: 'Register with Claude Code',
-  mcpRegisterHint:
-    'Keeps an “agenthydra” entry in Claude Code’s user-scope config pointing at this daemon, refreshed on every start so it survives a port change. It writes that one key and nothing else, and turning this off removes it. A Claude Code session already open keeps the tool list it started with; start a new one.',
-  // The switch says what SHOULD be true; this line says what the config file actually says. They
-  // can disagree (a read-only file, a hand-written entry), and only the second one is the truth.
-  mcpRegisteredYes: 'Registered at {url}',
-  mcpRegisteredNo: 'Not registered yet.',
-  mcpRegisteredOff: 'Not registered, the switch is off.',
-  mcpConfigPath: 'Config: {path}',
-  mcpRegisterToastFailed: 'Failed to change the MCP registration.',
-  // The other half of "the MCP server works": the Python toolbox every chat-moving tool runs
-  // through. Named here rather than left to a tool error, because a caller only ever sees "no
-  // orch.py under <dir>" after asking for a move, which reads as the feature being broken.
-  mcpToolboxMissing:
-    'Moving chats between accounts will not work: this install is missing {names}. Everything else keeps working.',
-  // The same gap when it is NOT the toolbox, a missing misc/ costs the tray icon, not the chat
-  // moves, and saying "moving chats will not work" there would be a false alarm.
-  mcpComponentsMissing:
-    'This install is missing {names}, which the release ships beside the executable.',
-  mcpToolboxMissingWhy:
-    'Releases ship these folders beside the executable, and an update applied by a build older than 0.39.0 replaced only the executable. Re-applying the current version restores them.',
-  mcpRepair: 'Repair install',
-  mcpRepairing: 'Repairing…',
-  // Toasted at the button, because the update row's own message renders far down the page.
-  mcpRepairDone: 'Repaired. The missing files are installed.',
-  mcpRepairFailed: 'The missing files are still not installed.',
-
-  // The accounts section's strings are gone with the section itself: it only ever listed legacy
-  // pasted credentials, so in practice it rendered as an empty box telling you to go to the
-  // Instances tab. Accounts are added by signing an instance in there.
 }

@@ -11,8 +11,6 @@ import { ACCOUNTS_HINT, AUTO_ID, accountRows, chooseAccount, rowTip, type Accoun
 // Every account on one 28px row: Auto first with what it would pick now, Default login, then the
 // accounts by headroom (signed out last), each with its plan and two thin bars, 5-hour and weekly. The
 // reset times are in the row's tooltip. Choosing a row saves it as the default account for new chats.
-// `embedded` drops the header, the Settings row and the hint, for the Settings dialog's Accounts row.
-const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 const emit = defineEmits<{ chosen: [id: string]; settings: [] }>()
 
 const api = usePaneApi()
@@ -106,11 +104,8 @@ const ROW =
 </script>
 
 <template>
-  <div
-    class="flex flex-col text-[13px] leading-[19px] text-text"
-    :class="props.embedded ? 'w-full' : 'max-h-[70vh] w-[340px] p-1'"
-  >
-    <div v-if="!props.embedded" class="flex h-[23px] shrink-0 items-center px-2 text-[13px] font-medium text-text-muted">Account for new chats</div>
+  <div class="flex max-h-[70vh] w-[340px] flex-col p-1 text-[13px] leading-[19px] text-text">
+    <div class="flex h-[23px] shrink-0 items-center px-2 text-[13px] font-medium text-text-muted">Account for new chats</div>
 
     <div v-if="error" class="shrink-0 px-2 py-1 text-[12px] text-danger-text">{{ error }}</div>
     <div v-else-if="loaded && accounts.length === 0" class="shrink-0 px-2 py-1 text-[12px] text-text-muted">No accounts. Is AgentHydra running?</div>
@@ -149,7 +144,7 @@ const ROW =
           <span v-else class="flex shrink-0 items-center gap-2.5">
             <span v-for="w in windows(row.account)" :key="w.name" class="flex items-center gap-1">
               <span class="text-[10px] leading-4 text-text-muted">{{ w.name }}</span>
-              <span class="h-1 overflow-hidden rounded-full bg-[var(--fill-secondary)]" :class="props.embedded ? 'w-16' : 'w-7'">
+              <span class="h-1 w-7 overflow-hidden rounded-full bg-[var(--fill-secondary)]">
                 <span class="block h-full rounded-full" :style="{ width: `${Math.max(0, Math.min(100, w.pct ?? 0))}%`, background: barColor(w.pct) }" />
               </span>
               <span class="tnum w-[26px] text-right text-[11px] leading-4" :class="w.pct == null ? 'text-text-muted' : 'text-text-2'">{{ pctText(w.pct) }}</span>
@@ -159,17 +154,15 @@ const ROW =
       </Tip>
     </div>
 
-    <template v-if="!props.embedded">
-      <div class="mx-2 my-1 h-px shrink-0 bg-border" />
-      <button
-        type="button"
-        class="flex h-6 w-full shrink-0 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none"
-        @click="emit('settings')"
-      >
-        <component :is="shellIcons.settings" class="size-4 text-text-2" />
-        Settings
-      </button>
-      <p class="shrink-0 px-2 pb-1 pt-1 text-[12px] leading-4 text-text-muted">{{ ACCOUNTS_HINT }}</p>
-    </template>
+    <div class="mx-2 my-1 h-px shrink-0 bg-border" />
+    <button
+      type="button"
+      class="flex h-6 w-full shrink-0 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none"
+      @click="emit('settings')"
+    >
+      <component :is="shellIcons.settings" class="size-4 text-text-2" />
+      Settings
+    </button>
+    <p class="shrink-0 px-2 pb-1 pt-1 text-[12px] leading-4 text-text-muted">{{ ACCOUNTS_HINT }}</p>
   </div>
 </template>

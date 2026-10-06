@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The Tokens header's 5h / Week / Total choice, one per table (composables/useTokenWindow.ts). The
 // header text (the default slot: the sort button) keeps its click; hovering or focusing it opens a
-// flyout under it that lists the three windows, and a muted note beside it names the current one.
+// flyout under it that lists the three windows. No note beside the header names the current one: it
+// cost the column width (owner, 2026-10-06), and the flyout's checkmark says it.
 // Hover timing follows UsageBadge: a short open delay so sweeping across the header does not flash
 // the flyout, a close delay so travelling from the header into it does not dismiss it.
 import { Check } from '@lucide/vue'
@@ -86,9 +87,6 @@ function onAutoFocus(e: Event): void {
         @keydown.down.prevent="onArrowDown"
       >
         <slot />
-        <span class="text-[10px] font-normal text-muted-foreground">
-          · {{ $t(`cliInstances.${labelKey[model]}`) }}
-        </span>
       </span>
     </PopoverAnchor>
     <PopoverContent

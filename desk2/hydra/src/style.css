@@ -172,38 +172,6 @@
   border-color: var(--border);
 }
 
-/* Deep-link landing flash.
-   A deep link into Settings (the queue drawer's scheduler indicator, the header's scheduler chip,
-   the composer's tomorrow gear) scrolls a section into view — but on a long settings page a scroll
-   that lands mid-page leaves you asking which of the visible cards you were actually sent to. This
-   pulses a ring around the target for a beat, so arriving somewhere answers that question instead
-   of posing it. Twice, then it stops: it is a pointer, not an alarm.
-
-   App-local on purpose: kit-base.css is synced from the shared kit (bun run check:kit) and must not
-   grow app-specific rules. */
-@keyframes settings-flash {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-  25%,
-  75% {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
-  }
-}
-
-.settings-flash {
-  border-radius: var(--radius-xl);
-  animation: settings-flash 0.9s ease-in-out 2;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-flash {
-    animation: none;
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
-  }
-}
-
 /* Hydra Desk 2: the Instances row Desk's session header asked for (lib/desk-embed.ts flashRow): a ring
    inside the row and a tint that fade over two seconds, so the account you clicked is the one you see. */
 @keyframes desk-flash {

@@ -10,7 +10,6 @@ import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import TokenWindowFlyout from '@/components/TokenWindowFlyout.vue'
-import type { BadgeVariants } from '@/components/ui/badge'
 import type { CMInstance, UsageSnapshot } from '@/lib/api'
 
 export type InstanceTableKind = 'desktop' | 'cli' | 'free'
@@ -179,18 +178,6 @@ export function instanceColumns(
   ).map(({ kinds: _k, mode: _m, ...c }) => c)
 }
 
-/** The Name cell's second line: the signed-in account, as the email handle (the address is the hover). */
-export function accountLine(
-  account: InstanceRowModel['account'],
-  name: string,
-): { text: string; title?: string } | null {
-  const email = account.email?.trim() || null
-  const text = email?.split('@')[0]?.trim() || account.fallback?.trim() || account.empty || null
-  // A CLI row is named after its account: say it once.
-  if (!text || text === name.trim() || (email && email === name.trim())) return null
-  return { text, title: email ?? undefined }
-}
-
 /** A CLI login is named "<email> (<plan>)" by quick add; the plan has its own column. */
 export function withoutPlanSuffix(name: string, plan: string | null | undefined): string {
   const t = name.trim()
@@ -205,17 +192,28 @@ export interface InstanceNameTooltip {
 }
 
 /**
- * The name cell's hover. Three facts compete for two lines, so the cut decides the order: a name
- * that fits keeps the folder on top and the hint under it; a name that was cut leads with the full
- * name and pushes the other two down a line each.
+ * The name cell's hover (owner, 2026-10-06: the address and the folder, since the row no longer
+ * prints the account's handle). It leads with the address, or the full name when the row has none,
+ * then the folder. The third line is the full name when the name was cut, else the copy hint (the
+ * click copies the address, so a row without one has nothing to hint).
  */
 export function nameTooltipFor(
-  name: { full: string; shown: string; folder: string; hint?: string },
+  name: {
+    full: string
+    shown: string
+    email?: string | null
+    folder?: string
+    copyHint: string
+  },
   clipped: boolean,
 ): InstanceNameTooltip {
-  return name.shown === name.full && !clipped
-    ? { label: name.folder, description: name.hint }
-    : { label: name.full, description: name.folder, detail: name.hint }
+  const email = name.email?.trim() || null
+  const cut = name.shown !== name.full || clipped
+  return {
+    label: email ?? name.full,
+    description: name.folder || undefined,
+    detail: cut ? (email ? name.full : undefined) : email ? name.copyHint : undefined,
+  }
 }
 
 /** What one instance is, to the shared row. Each table builds one per instance it lists. */
@@ -231,20 +229,15 @@ export interface InstanceRowModel {
   name: {
     shown: string
     tooltip: (clipped: boolean) => InstanceNameTooltip
-    /** A running instance's name focuses its window. */
-    onClick?: () => void
-    busy?: boolean
+    /** The account's full address: a click on the name copies it. No address, no click. */
+    copy?: string | null
   }
   /** A small badge after the name (External, Default). */
   badge?: { label: string; title?: string }
-  account: {
-    email?: string | null
-    profile?: string | null
-    fallback?: string | null
-    variant?: BadgeVariants['variant']
-    /** Said when there is neither an address nor a fallback; a dash when omitted. */
-    empty?: string
-  }
+  /** The account beside the name. The address is not printed (the name copies it, its hover shows
+   *  it): `note` is a state said instead when there is no address ("Logged out", "API key"), and
+   *  `stale` marks a login the live check could not confirm. */
+  account: { note?: string | null; stale?: boolean }
   configDir?: string
   pid?: number | null
   uptime?: string | null

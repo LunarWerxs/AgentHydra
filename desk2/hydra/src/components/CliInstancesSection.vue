@@ -233,6 +233,13 @@ function rowModel(inst: CliInstance): InstanceRowModel {
   const plan = planFor(inst)
   // The plan has its own column, so it stays out of the name.
   const name = withoutPlanSuffix(inst.name, plan)
+  // The CLI login has no email field, but quick add names it after the address: that name, else the
+  // linked account's label when it is one, else none (owner, 2026-10-06).
+  const email = name.includes('@')
+    ? name
+    : inst.associatedAccountLabel?.includes('@')
+      ? inst.associatedAccountLabel
+      : null
   return {
     id: inst.id,
     num: inst.num,
@@ -245,12 +252,19 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       shown: shortDisplayName(pii(name), nameMax),
       tooltip: (clipped) =>
         nameTooltipFor(
-          { full: name, shown: shortDisplayName(pii(name), nameMax), folder: inst.configDir },
+          {
+            full: pii(name),
+            shown: shortDisplayName(pii(name), nameMax),
+            email,
+            folder: inst.configDir,
+            copyHint: t('instances.nameCopyHint'),
+          },
           clipped,
         ),
+      copy: email,
     },
-    // The name IS the account here; only a legacy pasted credential adds a second line.
-    account: { fallback: inst.associatedAccountLabel },
+    // The name IS the account here.
+    account: {},
     lastRunning: inst.lastActiveAt
       ? {
           label: lastActiveLabel(inst.lastActiveAt),

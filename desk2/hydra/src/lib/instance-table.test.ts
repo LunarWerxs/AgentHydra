@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { accountLine, instanceColumns, withoutPlanSuffix } from './instance-table'
+import { instanceColumns, nameTooltipFor, withoutPlanSuffix } from './instance-table'
 
 const keys = (kind: 'desktop' | 'cli', usageMode: boolean) =>
   instanceColumns(kind, { usageMode }).map((c) => c.key)
@@ -19,10 +19,20 @@ describe('instance table column model', () => {
     ])
   })
 
-  it('shows the account once under the name', () => {
-    expect(accountLine({ email: 'a@b.c' }, 'Work')).toEqual({ text: 'a', title: 'a@b.c' })
-    expect(accountLine({ email: 'a@b.c' }, 'a@b.c')).toBeNull()
-    expect(accountLine({}, 'a@b.c')).toBeNull()
+  it('leads the name hover with the address, then the folder', () => {
+    const name = { full: 'Work', shown: 'Work', email: 'a@example.com', folder: '/x', copyHint: 'Copy' }
+    expect(nameTooltipFor(name, false)).toEqual({
+      label: 'a@example.com',
+      description: '/x',
+      detail: 'Copy',
+    })
+    // A cut name puts the full name in the detail; a row with no address leads with the name.
+    expect(nameTooltipFor({ ...name, shown: 'Wo…' }, false).detail).toBe('Work')
+    expect(nameTooltipFor({ ...name, email: null }, false)).toEqual({
+      label: 'Work',
+      description: '/x',
+      detail: undefined,
+    })
   })
 
   it('keeps the plan out of a CLI name', () => {
