@@ -6,9 +6,12 @@
 // - each table's process columns: the pane's own localStorage keys, as tooltips and privacy mode are, also
 //   kept in AgentHydra's ui-prefs store, which the pane reads at start;
 // - Claude native control, per desktop account (the daemon's /api/claude-native/settings), moved here
-//   with its helpers from the pane (hydra/src/components/ClaudeNativeSettings.vue, retired).
+//   with its helpers from the pane (hydra/src/components/ClaudeNativeSettings.vue, retired);
+// - the Free table's Keep windows running and its weekly floor, Desk's own (/api/free/settings,
+//   server/src/free-instances).
 import { useStorage } from '@vueuse/core'
 import { computed, ref, watch, type Ref } from 'vue'
+import type { FreeSettings } from '@shared/free-instances'
 import type { PaneApi } from './api'
 import type { AgentHydraSettings } from './agenthydra'
 import type { SettingsRowId } from './settings'
@@ -28,6 +31,7 @@ const PROCESS_ROWS: Partial<Record<SettingsRowId, InstanceTable>> = {
   ahFreeProcess: 'free'
 }
 const NATIVE_ROWS: SettingsRowId[] = ['ahNativeAccount', 'ahNativeAuto', 'ahNativeReset']
+const FREE_ROWS: SettingsRowId[] = ['ahFreeKeepalive', 'ahFreeFloor']
 
 /** One account's native control (GET /api/claude-native/settings, keyed by normalized profile folder). */
 export interface NativeConfig {
@@ -173,8 +177,30 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
       })
   )
 
-  /** The muted lines under a native control row's description. */
+  // --- the Free table's keepalive ---
+  const free = ref<FreeSettings | null>(null)
+  const freeError = ref<string | null>(null)
+  async function loadFree() {
+    try {
+      free.value = await api.freeSettings()
+      freeError.value = null
+    } catch (e) {
+      freeError.value = message(e)
+    }
+  }
+  async function saveFree(patch: Partial<FreeSettings>) {
+    try {
+      free.value = await api.patchFreeSettings(patch)
+      freeError.value = null
+      ah.savedAt.value = Date.now()
+    } catch (e) {
+      freeError.value = message(e)
+    }
+  }
+
+  /** The muted lines under a native control or Free keepalive row's description. */
   function rowNotes(id: SettingsRowId): string[] {
+    if (id === 'ahFreeKeepalive') return freeError.value ? [freeError.value] : []
     if (id === 'ahNativeAccount') {
       if (nativeError.value) return [nativeError.value]
       if (nativeLoaded.value && !profiles.value.length) return ['No Windows Claude Desktop accounts found.']
@@ -189,7 +215,7 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   }
 
   return {
-    owns: (id: SettingsRowId) => !!PROCESS_ROWS[id] || NATIVE_ROWS.includes(id),
+    owns: (id: SettingsRowId) => !!PROCESS_ROWS[id] || NATIVE_ROWS.includes(id) || FREE_ROWS.includes(id),
     processTable,
     processColumns,
     setProcessColumns,
@@ -202,6 +228,9 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
     nativeConfig,
     loadNative,
     saveNative,
+    free,
+    loadFree,
+    saveFree,
     rowNotes
   }
 }

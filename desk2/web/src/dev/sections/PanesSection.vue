@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { provide } from 'vue'
 import type { GitStatus } from '@shared/protocol'
+import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import DiffPane from '@/components/panes/DiffPane.vue'
 import SettingsView from '@/components/panes/SettingsView.vue'
 import AccountsList from '@/components/accounts/AccountsList.vue'
@@ -97,7 +98,9 @@ const fixtureApi: PaneApi = {
   diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
   agentHydra: async () => {
     throw new Error('AgentHydra is not running')
-  }
+  },
+  freeSettings: async () => ({ ...FREE_SETTINGS_DEFAULTS }),
+  patchFreeSettings: async (p) => ({ ...FREE_SETTINGS_DEFAULTS, ...p })
 }
 
 provide(PANE_API, fixtureApi)

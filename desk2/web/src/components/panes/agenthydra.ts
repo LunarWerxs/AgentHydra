@@ -357,6 +357,7 @@ export function useAgentHydraSettings(api: PaneApi) {
       case 'keepalive':
         return !!s?.keepaliveEnabled
       case 'native':
+      case 'freeKeepalive':
         return false // the Instances settings decide (instances.ts); SettingsView asks them first
     }
   }

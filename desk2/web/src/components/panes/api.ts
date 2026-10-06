@@ -9,6 +9,7 @@ import type {
   ModelChoice,
   TranscriptItem
 } from '@shared/protocol'
+import type { FreeSettings } from '@shared/free-instances'
 
 export interface PaneApi {
   gitStatus(cwd: string): Promise<GitStatus>
@@ -25,6 +26,10 @@ export interface PaneApi {
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>): Promise<T>
   /** AgentHydra's own API through Desk's /ah/api proxy (its settings in this dialog, agenthydra.ts). */
   agentHydra<T>(path: string, init?: RequestInit): Promise<T>
+  /** GET /api/free/settings: the Free table's keepalive (Settings > Instances > Free, instances.ts). */
+  freeSettings(): Promise<FreeSettings>
+  /** PATCH /api/free/settings with what changed; answers the saved settings. */
+  patchFreeSettings(patch: Partial<FreeSettings>): Promise<FreeSettings>
 }
 
 async function json<T>(path: string, init?: RequestInit, base = '/api'): Promise<T> {
@@ -66,7 +71,10 @@ export const httpPaneApi: PaneApi = {
     return json(`/diagnostics/${encodeURIComponent(name)}${q.size ? `?${q}` : ''}`)
   },
   agentHydra: (path, init) =>
-    json(path, init?.body ? { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } } : init, '/ah/api')
+    json(path, init?.body ? { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } } : init, '/ah/api'),
+  freeSettings: () => json('/free/settings'),
+  patchFreeSettings: (patch) =>
+    json('/free/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
 }
 
 export const PANE_API: InjectionKey<PaneApi> = Symbol('paneApi')

@@ -2,14 +2,30 @@
 import { RefreshCw } from '@lucide/vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import PaneSwitch from './PaneSwitch.vue'
-import { BUTTON, SELECT_CONTENT, SELECT_ITEM, SELECT_TRIGGER } from './settings-styles'
+import { BUTTON, FIELD, SELECT_CONTENT, SELECT_ITEM, SELECT_TRIGGER } from './settings-styles'
 import type { InstanceSettings } from './instances'
 import type { SettingsRowId } from './settings'
 
 // The control of an Instances row that is not a plain AgentHydra setting (instances.ts): a table's
-// process columns, and Claude native control's account, switch and reset.
+// process columns, Claude native control's account, switch and reset, and the Free keepalive.
 const props = defineProps<{ id: SettingsRowId; label: string; inst: InstanceSettings }>()
 const table = props.inst.processTable(props.id)
+
+// The Free weekly floor: a whole 1 to 100 (the server refuses anything else); a box left empty or not a
+// number goes back to the saved value.
+function saveFloor(e: Event) {
+  const box = e.target as HTMLInputElement
+  const saved = props.inst.free.value?.weeklyFloorPct
+  if (saved === undefined) return
+  const n = Math.round(Number(box.value))
+  if (!Number.isFinite(n) || box.value.trim() === '') {
+    box.value = String(saved)
+    return
+  }
+  const v = Math.min(100, Math.max(1, n))
+  box.value = String(v)
+  if (v !== saved) void props.inst.saveFree({ weeklyFloorPct: v })
+}
 </script>
 
 <template>
@@ -48,4 +64,27 @@ const table = props.inst.processTable(props.id)
   />
 
   <button v-else-if="id === 'ahNativeReset'" type="button" :class="BUTTON" :disabled="inst.nativeBusy.value" @click="inst.saveNative(null)">Reset</button>
+
+  <PaneSwitch
+    v-else-if="id === 'ahFreeKeepalive'"
+    :label="label"
+    :disabled="!inst.free.value"
+    :model-value="!!inst.free.value?.keepWindows"
+    @update:model-value="(v: boolean) => inst.saveFree({ keepWindows: v })"
+  />
+
+  <div v-else-if="id === 'ahFreeFloor' && inst.free.value" class="flex shrink-0 items-center gap-2 text-[13px] leading-[19px] text-text-muted">
+    <input
+      :key="inst.free.value.weeklyFloorPct"
+      type="number"
+      min="1"
+      max="100"
+      :value="inst.free.value.weeklyFloorPct"
+      :aria-label="label"
+      :class="[FIELD, 'tnum w-20 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none']"
+      @change="saveFloor"
+      @keydown.enter="($event.target as HTMLInputElement).blur()"
+    />
+    %
+  </div>
 </template>

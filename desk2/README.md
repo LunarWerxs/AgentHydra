@@ -25,7 +25,8 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
   Instances has a page per table: CLI (the Claude CLI table shown, its process columns, Keep windows
   running and its weekly floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI,
-  DeepSeek; its process columns; paid extra usage; Claude native control) and Free (its process columns).
+  DeepSeek; its process columns; paid extra usage; Claude native control) and Free (its process columns, and
+  Keep windows running with its weekly floor for Claude logins, `/api/free/settings`).
   Each table's gear opens its page over the table (`ah:open-settings`; Settings, a pop-up, leaves the pane open); the pane's own popover, its "Instances settings"
   dialog and its toolbar column toggle are gone. "Show process columns" is each table's own now
   (`hydra/src/composables/useUsageMode.ts`, `USAGE_MODE_KEYS`; Desk writes the same keys,

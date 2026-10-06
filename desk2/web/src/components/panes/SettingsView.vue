@@ -32,7 +32,8 @@ const inst = useInstanceSettings(api, ah)
 const section = ref<SettingsSection>('general')
 const query = ref('')
 const searching = computed(() => query.value.trim() !== '')
-const holds = (c: SettingsCondition) => (c === 'native' ? !!inst.nativeConfig.value : ah.holds(c))
+const holds = (c: SettingsCondition) =>
+  c === 'native' ? !!inst.nativeConfig.value : c === 'freeKeepalive' ? !!inst.free.value?.keepWindows : ah.holds(c)
 const groups = computed(() => settingsGroups(section.value, query.value, holds))
 const isAh = (id: string) => id.startsWith('ah')
 // Every Desk row but About's needs the saved settings.
@@ -229,6 +230,15 @@ watch(
   showsNative,
   (on) => {
     if (on) void inst.loadNative()
+  },
+  { immediate: true }
+)
+// The Free keepalive reads Desk's own settings when its rows are first on screen.
+const showsFree = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahFreeKeepalive')))
+watch(
+  showsFree,
+  (on) => {
+    if (on) void inst.loadFree()
   },
   { immediate: true }
 )

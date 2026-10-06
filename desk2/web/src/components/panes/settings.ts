@@ -75,9 +75,11 @@ export type SettingsRowId =
   | 'ahNativeAuto'
   | 'ahNativeReset'
   | 'ahFreeProcess'
+  | 'ahFreeKeepalive'
+  | 'ahFreeFloor'
 
 /** An AgentHydra state a row only makes sense under; agenthydra.ts says which hold. */
-export type SettingsCondition = 'alerts' | 'persistent' | 'email' | 'missing' | 'connected' | 'syncing' | 'keepalive' | 'native'
+export type SettingsCondition = 'alerts' | 'persistent' | 'email' | 'missing' | 'connected' | 'syncing' | 'keepalive' | 'native' | 'freeKeepalive'
 
 export interface SettingsRow {
   id: SettingsRowId
@@ -366,6 +368,21 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Table',
     label: 'Show process columns',
     description: 'Usage in place of the quota bars.'
+  },
+  {
+    id: 'ahFreeKeepalive',
+    section: 'free',
+    group: 'Keepalive',
+    label: 'Keep windows running',
+    description: "Claude logins only: a one-word chat starts the next 5-hour window when the last one ends."
+  },
+  {
+    id: 'ahFreeFloor',
+    section: 'free',
+    group: 'Keepalive',
+    label: 'Skip above weekly',
+    description: 'Logins past this share of their weekly cap are left alone.',
+    when: ['freeKeepalive']
   }
 ]
 
