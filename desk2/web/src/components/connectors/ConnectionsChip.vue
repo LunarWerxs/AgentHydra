@@ -4,7 +4,7 @@
 // alone). Its menu lists the account's workspaces with a check on the current one, "No workspace", the choice between
 // this chat and every chat in the folder, and "Sign in to Connections" while this machine is signed out. Shown only
 // while the Connections connector is on and on this machine (GET /api/connectors); the server side is
-// server/src/plugins/58-connections.ts, the decisions are in connections-logic.ts.
+// server/src/plugins/56-connections.ts, the decisions are in connections-logic.ts.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ConnectionsCompany, ConnectionsWorkspace } from '@shared/connectors'
 import type { ChatSummary } from '@shared/protocol'

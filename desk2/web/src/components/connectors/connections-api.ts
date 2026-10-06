@@ -1,4 +1,4 @@
-// The Connections chip's calls to Desk 2's server (routes in shared/connectors.ts, server plugins/58-connections.ts),
+// The Connections chip's calls to Desk 2's server (routes in shared/connectors.ts, server plugins/56-connections.ts),
 // and its one shared read of GET /api/connectors (is the connector on and on this machine).
 import { ref } from 'vue'
 import {

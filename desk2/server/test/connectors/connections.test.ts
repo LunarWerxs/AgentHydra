@@ -1,4 +1,4 @@
-// plugins/58-connections.ts and connectors/connections-client.ts against a fake Connections loader that speaks MCP
+// plugins/56-connections.ts and connectors/connections-client.ts against a fake Connections loader that speaks MCP
 // over stdio: the workspace of a chat (its pin, else its folder's), the list, the switch per scope, the 409 before a
 // chat has a session, the environment the child was given, and sign-in.
 
@@ -11,7 +11,7 @@ import { CONNECTIONS_COMPANIES, CONNECTIONS_SIGNIN, CONNECTIONS_SWITCH, CONNECTI
 import { createServer, type DeskServer } from '../../src/index'
 import defFactory from '../../src/connectors/defs/connections'
 
-const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '58-connections.ts')
+const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '56-connections.ts')
 const temps: string[] = []
 const stops: (() => unknown)[] = []
 const saved = { home: process.env.HYDRA_DESK_HOME, cfg: process.env.HYDRA_DESK_MAIN_CLAUDE_JSON }
@@ -56,7 +56,7 @@ const tools = {
   connections_whoami: () => {
     const s = state()
     if (s.signedOut) return 'Sign in: https://studio.example.com/device?code=ABCD'
-    return JSON.stringify({ identity: { signedIn: true }, registration: { workspace: 'w' }, company: s.folder ?? null, ...(s.chatPin ? { chatPin: s.chatPin } : {}) })
+    return JSON.stringify({ identity: { signedIn: true }, registration: { workspace: 'w' }, company: s.folder ?? null, ...(s.chatPin ? { chatPin: s.chatPin } : {}) }) + (s.note ? '\\n\\n' + s.note : '')
   },
   connections_list_companies: () => JSON.stringify({ companies: COMPANIES }),
   connections_use_workspace: (p) => {
@@ -104,6 +104,7 @@ async function boot(): Promise<Rig> {
   CHATS = {
     withSession: { cwd: temp('desk-cx-proj-'), sessionId: 'sess-1' },
     noSession: { cwd: temp('desk-cx-other-'), sessionId: null },
+    fourth: { cwd: temp('desk-cx-fourth-'), sessionId: null },
     third: { cwd: temp('desk-cx-third-'), sessionId: 'sess-3' }
   }
   const dir = temp('desk-cx-')
@@ -111,7 +112,7 @@ async function boot(): Promise<Rig> {
   const cfg = join(dir, 'claude.json')
   writeFileSync(cfg, JSON.stringify({ mcpServers: { connections: { command: process.execPath, args: [join(dir, 'loader.mjs'), dir] } } }))
   const plugins = temp('desk-cx-plugins-')
-  writeFileSync(join(plugins, '58-connections.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
+  writeFileSync(join(plugins, '56-connections.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
   // Stands in for the engine's GET /api/chats/:id.
   writeFileSync(
     join(plugins, '20-chats.ts'),
@@ -158,6 +159,8 @@ test('a chatPin wins over the folder; no workspace at all is null; a signed-out 
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)).body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'chat' })
   r.state({})
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=noSession`)).body).toEqual({ signedIn: true, company: null, scope: null })
+  r.state({ folder: { companyId: 'c1', name: 'Acme Example' }, note: 'A note after the JSON.' })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=fourth`)).body.scope).toBe('folder')
   r.state({ signedOut: true })
   // (the earlier chats' answers are cached for 30 s, so a third chat reads it)
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=third`)).body).toEqual({ signedIn: false, company: null, scope: null })
@@ -205,7 +208,7 @@ test('no Connections server in the config: 503 for the routes and the connector 
   const cfg = join(dir, 'claude.json')
   writeFileSync(cfg, JSON.stringify({ mcpServers: {} }))
   const plugins = temp('desk-cx-plugins-')
-  writeFileSync(join(plugins, '58-connections.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
+  writeFileSync(join(plugins, '56-connections.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
   const home = temp('desk-cx-home-')
   const desk = await createServer({ port: 0, home, pluginsDir: plugins, deps: { mainClaudeJson: cfg } })
   stops.push(() => desk.stop())

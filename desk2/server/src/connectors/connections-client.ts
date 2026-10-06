@@ -1,5 +1,5 @@
 // A small MCP stdio client for the Connections server the person already has in their main Claude config
-// (`~/.claude.json` → mcpServers.connections, a node loader). The Connections chip (plugins/58-connections.ts) asks
+// (`~/.claude.json` → mcpServers.connections, a node loader). The Connections chip (plugins/56-connections.ts) asks
 // it who a chat acts as and moves that. The server is started the way Claude Code starts it for a chat: with
 // CLAUDECODE=1, CLAUDE_PROJECT_DIR=<the chat's folder> and, when the chat has one, CLAUDE_CODE_SESSION_ID, which is
 // what Connections keys a chat's own workspace pin on. One child per folder+session is kept for 60 s after its last
@@ -219,12 +219,16 @@ export class ConnectionsClient {
   }
 }
 
-/** A tool answer that is a JSON object, or null (an answer in words, such as a sign-in link, is not). */
+/** A tool answer that is a JSON object (it may carry a note after it), or null (an answer in words, such as a sign-in link, is not). */
 export function jsonAnswer(text: string): Record<string, unknown> | null {
-  try {
-    const v = JSON.parse(text)
-    return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
-  } catch {
-    return null
+  const open = text.indexOf('{')
+  for (const body of [text, open >= 0 ? text.slice(open, text.lastIndexOf('}') + 1) : '']) {
+    try {
+      const v = JSON.parse(body)
+      if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>
+    } catch {
+      // floor-ok: not JSON, tried the next shape
+    }
   }
+  return null
 }

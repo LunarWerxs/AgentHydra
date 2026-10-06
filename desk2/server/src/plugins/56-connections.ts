@@ -8,6 +8,8 @@
 // company (scope 'folder'), else null. Reads are cached 30 s per chat and dropped by a switch. Answers are never
 // logged; only the few fields the page needs leave this file. Desk's localOnly guard runs first on every route and
 // each route is for Desk 2's own page only (browser/guard.ts).
+// Numbered 56 so it registers before 57-connectors, whose POST /api/connectors/:id/:action would otherwise answer
+// these POST routes ("no action switch") first.
 // ctx.deps may carry `connections` (a ConnectionsClient over a fake loader) and `mainClaudeJson` (the config to read).
 
 import type { Hono } from 'hono'
