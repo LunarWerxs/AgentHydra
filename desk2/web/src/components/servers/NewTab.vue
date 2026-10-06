@@ -3,12 +3,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess, DevWebProject, LocalServers } from '@shared/devwebui'
-import { allKey, enterTarget, filterLocal, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
+import { allKey, enterTarget, filterLocal, filterProfiles, filterServers, isUp, looksLikeAddress, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
 import { chipHosts, splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // The New tab page: the servers DevWebUI found for this chat's folder, then the workspace's saved browsers, both
-// narrowed by the address bar's text. A click opens one in this tab; the row's buttons act without navigating.
+// narrowed by the address bar's text. A click opens one in this tab, and so does a stopped server's Start; Stop and
+// Restart act without navigating.
 const props = defineProps<{
   active: boolean
   cwd: string
@@ -81,7 +82,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
   <div class="flex min-h-0 flex-1 flex-col">
     <form class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2" @submit.prevent="enter">
       <Search class="ml-1 size-3.5 shrink-0 text-[var(--text-muted)]" aria-hidden="true" />
-      <input ref="input" v-model="query" type="text" spellcheck="false" autocomplete="off" aria-label="Search servers, or type an address or port" placeholder="Search servers, or type an address or port" :class="INPUT" />
+      <input ref="input" v-model="query" type="text" spellcheck="false" autocomplete="off" aria-label="Search servers, or type an address, a port, or a Google search" placeholder="Search servers, or type an address, a port, or a Google search" :class="INPUT" />
     </form>
 
     <div class="min-h-0 flex-1 overflow-y-auto" data-testid="new-tab">
@@ -136,8 +137,8 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <span v-if="p.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ p.port }}</span>
                   <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ pendingText(p) }}</span>
                 </button>
-                <Tip :label="isUp(p.status) ? 'Stop' : 'Start'">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start'} ${p.name}`" @click="emit('toggle', p)">
+                <Tip :label="isUp(p.status) ? 'Stop' : 'Start and open'">
+                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start and open'} ${p.name}`" @click="isUp(p.status) ? emit('toggle', p) : emit('server', p)">
                     <Square v-if="isUp(p.status)" class="size-3.5" />
                     <Play v-else class="size-3.5" />
                   </button>
@@ -212,7 +213,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
           </ul>
         </section>
 
-        <div v-if="nothingMatches" class="px-3 py-2 text-center text-[var(--text-muted)]" role="status">Nothing matches "{{ query.trim() }}". Press Enter to open it as an address.</div>
+        <div v-if="nothingMatches" class="px-3 py-2 text-center text-[var(--text-muted)]" role="status">Nothing matches "{{ query.trim() }}". Press Enter to {{ looksLikeAddress(query) ? 'open it as an address' : 'search Google for it' }}.</div>
         <div v-if="actionError" class="mx-1 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ actionError }}</div>
       </div>
     </div>

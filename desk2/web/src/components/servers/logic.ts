@@ -83,6 +83,12 @@ export const statusWord = (p: Pick<DevWebProcess, 'status' | 'exitCode'>): strin
 /** A server that is up or coming up is stopped by its button; one that is not is started by it. */
 export const isUp = (s: DevWebProcessStatus): boolean => s === 'running' || s === 'starting' || s === 'waiting'
 
+/** A server opened on a New tab (its row, or its Start): the address the tab goes to at once, null when it has none
+ *  until it answers, and whether it is started first. DevWebUI's port is the server's own, so it is known before it runs. */
+export function openPlan(p: Pick<DevWebProcess, 'status' | 'port' | 'url'>): { show: string | null; start: boolean } {
+  return { show: processAddress(p), start: p.status === 'stopped' || p.status === 'crashed' }
+}
+
 /** The last `n` non-empty lines, for a server that failed. */
 export function tailLines(lines: { line: string }[], n = 6): string[] {
   return lines
@@ -304,7 +310,14 @@ export function closeTab(s: TabsState, id: string, spare = nextTabId()): TabsSta
   return { tabs, active: s.active === id ? (tabs[Math.min(i, tabs.length - 1)] as PaneTab).id : s.active }
 }
 
-export const tabsKey = (cwd: string): string => `hydra-desk.servers.tabs:${cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()}`
+/** Each chat has tabs of its own, even beside another chat in the same folder; the saved browsers are the workspace's. */
+export const tabsKey = (chatId: string): string => `hydra-desk.servers.tabs.chat:${chatId}`
+
+/** The tab a Browser card's request shows: its saved browser, else its address. */
+export function requestTab(r: BrowserOpenRequest): TabSpec | null {
+  if (r.profile) return { kind: 'saved', target: r.profile, proc: null, ...(r.url ? { url: r.url } : {}) }
+  return r.url ? { kind: 'page', target: r.url, proc: null } : null
+}
 
 export function serializeTabs(s: TabsState): string {
   return JSON.stringify({ tabs: s.tabs.map((t) => ({ kind: t.kind, target: t.target, proc: t.proc, ...(t.url ? { url: t.url } : {}) })), active: Math.max(0, s.tabs.findIndex((t) => t.id === s.active)) })
@@ -334,11 +347,17 @@ export function restoreTabs(raw: string | null | undefined): TabsState {
   }
 }
 
-export const loadTabs = (cwd: string, storage: Pick<Storage, 'getItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): TabsState => (storage ? restoreTabs(storage.getItem(tabsKey(cwd))) : freshTabs())
+/** A chat's remembered tabs. One with none yet starts on the browser its AI last used (`aiBrowser`), else one New tab. */
+export function loadTabs(chatId: string, aiBrowser: BrowserOpenRequest | null = null, storage: Pick<Storage, 'getItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): TabsState {
+  const raw = storage?.getItem(tabsKey(chatId))
+  if (raw != null) return restoreTabs(raw)
+  const first = aiBrowser && requestTab(aiBrowser)
+  return first ? openTab({ tabs: [], active: '' }, first) : freshTabs()
+}
 
-export function saveTabs(cwd: string, s: TabsState, storage: Pick<Storage, 'setItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): void {
+export function saveTabs(chatId: string, s: TabsState, storage: Pick<Storage, 'setItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): void {
   try {
-    storage?.setItem(tabsKey(cwd), serializeTabs(s))
+    storage?.setItem(tabsKey(chatId), serializeTabs(s))
   } catch {
     // a full or blocked store: the tabs are just not remembered
   }
@@ -369,7 +388,17 @@ export function looksLikeAddress(text: string): boolean {
 
 export type EnterTarget = { kind: 'address'; url: string } | { kind: 'server'; id: string } | { kind: 'saved'; name: string }
 
-/** What Enter does in the New tab's address bar: an address or a port opens, otherwise the first match (servers first). */
+/** A Google search for the text. `igu=1` is Google's own page that lets itself be shown in a frame, as a tab is. */
+export const searchAddress = (text: string): string => `https://www.google.com/search?igu=1&q=${encodeURIComponent(text.trim())}`
+
+/** What an address bar's text opens: an address or a port, else a search for it; null when it is empty. */
+export function addressOrSearch(text: string): string | null {
+  if (!text.trim()) return null
+  return (looksLikeAddress(text) && parseAddress(text)) || searchAddress(text)
+}
+
+/** What Enter does in the New tab's address bar: an address or a port opens, otherwise the first match (servers first),
+ *  otherwise a search for the text. */
 export function enterTarget(text: string, servers: Pick<DevWebProcess, 'id'>[], saved: Pick<ProfileRow, 'name'>[]): EnterTarget | null {
   if (looksLikeAddress(text)) {
     const url = parseAddress(text)
@@ -377,7 +406,8 @@ export function enterTarget(text: string, servers: Pick<DevWebProcess, 'id'>[], 
   }
   if (servers[0]) return { kind: 'server', id: servers[0].id }
   if (saved[0]) return { kind: 'saved', name: saved[0].name }
-  return null
+  const url = addressOrSearch(text)
+  return url ? { kind: 'address', url } : null
 }
 
 /** A page tab's title: the server's name, else the address's host. */

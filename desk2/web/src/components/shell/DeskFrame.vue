@@ -6,7 +6,8 @@ import { accountFace, groupChoices, type RowMenuItem } from '@/components/sideba
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
-import { OPEN_BROWSER_EVENT } from '@shared/browser'
+import { OPEN_BROWSER_EVENT, type BrowserOpenRequest } from '@shared/browser'
+import { lastBrowserRequest } from '@/components/transcript/lib/tools'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
@@ -364,8 +365,28 @@ function toggleTasks() {
 
 const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
 
-// Right pane
-const pane = ref<RightPane | null>(null)
+// Right pane: which one is open, or none, is remembered per chat (and per outside session), so opening the browser in
+// one chat leaves the others as they were. Background tasks below is kept the same way.
+const viewKey = computed(() => {
+  const v = view.value
+  return v.kind === 'chat' || v.kind === 'external' ? `${v.kind}:${v.id}` : v.kind
+})
+const paneByView = ref(new Map<string, RightPane>())
+const pane = computed<RightPane | null>({
+  get: () => paneByView.value.get(viewKey.value) ?? null,
+  set: (p) => {
+    const next = new Map(paneByView.value)
+    if (p) next.set(viewKey.value, p)
+    else next.delete(viewKey.value)
+    paneByView.value = next
+  }
+})
+// The browser this chat's AI last used: a chat whose browser has no tabs yet starts on it. Read only while the servers
+// pane is open, and the same object while it is unchanged, so a streaming reply does not touch the pane.
+const aiBrowser = computed<BrowserOpenRequest | null>((old) => {
+  const r = pane.value === 'servers' && chat.value ? lastBrowserRequest(items.value) : null
+  return old && r && old.profile === r.profile && old.url === r.url ? old : r
+})
 // The servers pane is for the chat's folder, unless the Dev servers list asked for a server of another project: that
 // project's folder, until another chat is picked or the pane is closed. `serversFocus` is the request itself (the pane
 // shows that server once).
@@ -415,10 +436,6 @@ const onOpenBrowser = () => {
 // Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
 // Open or closed (and expanded) is remembered per chat: switching chats shows each one's own state.
 type TasksState = { focus: string | null; expanded: boolean }
-const viewKey = computed(() => {
-  const v = view.value
-  return v.kind === 'chat' || v.kind === 'external' ? `${v.kind}:${v.id}` : v.kind
-})
 const tasksByView = ref(new Map<string, TasksState>())
 const tasks = computed<TasksState | null>({
   get: () => tasksByView.value.get(viewKey.value) ?? null,
@@ -667,7 +684,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
-            <ServersPane v-else-if="pane === 'servers' && serversDir" :cwd="serversDir" :focus="serversFocus" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
+            <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" :width="serversWidth" @close="pane = null" @resize="resizeServers" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { allKey, clampPane, findServer, focusPlan, groupActions, groupServers, isUp, listView, loadPaneWidth, needsSetup, openable, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
+import { allKey, clampPane, findServer, focusPlan, groupActions, groupServers, isUp, listView, loadPaneWidth, needsSetup, openable, openPlan, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
 
 const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
@@ -86,6 +88,15 @@ describe('servers and the address bar', () => {
     expect(processAddress({ port: 3000, url: '/admin' })).toBe('http://localhost:3000/admin')
     expect(processAddress({ port: 3000, url: 'http://app.example.test/' })).toBe('http://app.example.test/')
     expect(processAddress({})).toBeNull()
+  })
+  it("a stopped server's Start goes to its page at once and starts it; one with no address waits until it answers", () => {
+    expect(openPlan({ status: 'stopped', port: 1213 })).toEqual({ show: 'http://localhost:1213', start: true })
+    expect(openPlan({ status: 'crashed', port: 1213, url: '/play' })).toEqual({ show: 'http://localhost:1213/play', start: true })
+    expect(openPlan({ status: 'starting', port: 1213 })).toEqual({ show: 'http://localhost:1213', start: false })
+    expect(openPlan({ status: 'running', port: 1213 })).toEqual({ show: 'http://localhost:1213', start: false })
+    expect(openPlan({ status: 'stopped' })).toEqual({ show: null, start: true })
+    const newTab = readFileSync(join(import.meta.dir, '../../src/components/servers/NewTab.vue'), 'utf8')
+    expect(newTab).toContain(`@click="isUp(p.status) ? emit('toggle', p) : emit('server', p)"`)
   })
   it('reads what is typed: an address, host:port, a bare port, and refuses other schemes', () => {
     expect(parseAddress('localhost:5173/x')).toBe('http://localhost:5173/x')

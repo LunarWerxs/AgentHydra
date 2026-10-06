@@ -3,7 +3,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, ExternalLink, Play, RotateCw } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess } from '@shared/devwebui'
-import { isUp, parseAddress, proxyAddress, statusWord } from './logic'
+import { addressOrSearch, isUp, proxyAddress, statusWord } from './logic'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A page tab: a dev server or an address in a frame, with back / forward / reload and the address bar on top.
@@ -38,7 +38,7 @@ function move(to: number) {
   if (current.value) emit('navigated', current.value)
 }
 function submit() {
-  const url = parseAddress(address.value)
+  const url = addressOrSearch(address.value)
   if (url && url !== current.value) go(url)
   else if (url) reloads.value++
 }
@@ -61,16 +61,17 @@ watch(
       <Tip label="Back"><button type="button" :class="ICON_BTN" aria-label="Back" :disabled="at <= 0" @click="move(at - 1)"><ArrowLeft class="size-4" /></button></Tip>
       <Tip label="Forward"><button type="button" :class="ICON_BTN" aria-label="Forward" :disabled="at >= history.length - 1" @click="move(at + 1)"><ArrowRight class="size-4" /></button></Tip>
       <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" @click="reloads++"><RotateCw class="size-4" /></button></Tip>
-      <input v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address, or a port" :class="INPUT" />
+      <input v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address, a port, or a search" :class="INPUT" />
       <Tip label="Open in the system browser">
         <a v-if="current" :href="current" target="_blank" rel="noopener noreferrer" :class="ICON_BTN" aria-label="Open in the system browser"><ExternalLink class="size-4" /></a>
       </Tip>
     </form>
     <div class="relative min-h-0 flex-1 bg-white bg-clip-padding">
-      <iframe v-if="frameSrc" :key="`${frameSrc}#${reloads}`" :src="frameSrc" :title="proc ? `${proc.name} preview` : 'Preview'" class="size-full border-0" referrerpolicy="no-referrer" />
-      <div v-if="proc && !isUp(proc.status)" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
-        <div class="text-[var(--text-muted)]">{{ proc.name }} is {{ statusWord(proc) }}.</div>
-        <button type="button" :class="TEXT_BTN" :disabled="busy" @click="emit('toggle', proc)"><Play class="size-3" />Start</button>
+      <!-- A server's page loads once it runs: a frame opened while it starts would sit on a refused-connection page. -->
+      <iframe v-if="frameSrc && (!proc || proc.status === 'running')" :key="`${frameSrc}#${reloads}`" :src="frameSrc" :title="proc ? `${proc.name} preview` : 'Preview'" class="size-full border-0" referrerpolicy="no-referrer" />
+      <div v-if="proc && proc.status !== 'running'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center" role="status">
+        <div class="text-[var(--text-muted)]">{{ proc.name }} is {{ statusWord(proc) }}{{ isUp(proc.status) ? ', opens when it answers' : '' }}.</div>
+        <button v-if="!isUp(proc.status)" type="button" :class="TEXT_BTN" :disabled="busy" @click="emit('toggle', proc)"><Play class="size-3" />Start</button>
       </div>
       <button
         v-else-if="frameSrc && proc && daemonUrl"

@@ -113,6 +113,17 @@ export function browserOpenRequest(info: { url: string; profile: string }): Brow
   return { profile: info.profile === DEFAULT_BROWSER ? undefined : info.profile, url: info.url || undefined }
 }
 
+/** The browser a chat's AI last used, as its Browser card would ask the pane for it; null when it used none. */
+export function lastBrowserRequest(items: TranscriptItem[]): BrowserOpenRequest | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind !== 'tool_use' || !isBrowserCall(it.name, it.input)) continue
+    const r = browserOpenRequest(parseBrowserCall(it.name, it.input, it.result?.text))
+    if (r.profile || r.url) return r
+  }
+  return null
+}
+
 /** mcp__server__tool -> { server, tool }; null for built-in tools. */
 export function parseMcpName(name: string): { server: string; tool: string } | null {
   const m = /^mcp__(.+?)__(.+)$/.exec(name)

@@ -5,7 +5,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
 import { processAddress, type DevWebProcess, type LocalServers } from '@shared/devwebui'
 import { browserClose, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
-import { activateTab, clampPane, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { activateTab, clampPane, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
@@ -14,15 +14,17 @@ import SavedBrowsers from './SavedBrowsers.vue'
 import { DOT, ICON_BTN } from './styles'
 
 // The right-hand pane (title bar's Browser button): a browser's tab strip over the active tab. A New tab lists this
-// chat's localhost servers from DevWebUI (Start / Stop / Restart, click one to open it in the tab) and the workspace's
+// chat's localhost servers from DevWebUI (Start / Stop / Restart; a click or Start opens one in the tab) and the workspace's
 // saved browsers, narrowed by its address bar; a page tab shows a server or an address in a frame; a saved tab is a
-// saved browser, live. Tabs are remembered per chat folder. A folder that is not a project yet is set up by itself
+// saved browser, live. Each chat has tabs of its own, remembered, starting on the browser its AI last used, else on a
+// New tab. A folder that is not a project yet is set up by itself
 // (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server stopped.
 // Opening the pane starts the server manager when it is not running; the status and the project list come from the
 // window's one DevWebUI client (store.ts), which the sidebar's Dev servers list reads too and which polls while either
 // is on screen and the window is. `focus` is that list's request: show this server (its folder is `cwd`). After them the New tab lists "Other localhost servers": what listens on this machine that
 // DevWebUI did not start (GET /dw/localhost), open-only, scanned at most every 8 s.
-const props = defineProps<{ cwd: string; width: number; focus?: ServerFocus | null }>()
+/** aiBrowser: the browser this chat's AI last used, which a chat with no tabs yet starts on. */
+const props = defineProps<{ chatId: string; cwd: string; width: number; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null }>()
 const emit = defineEmits<{ close: []; resize: [width: number] }>()
 
 const servers = useDevServers()
@@ -138,10 +140,18 @@ function setAllPorts(on: boolean) {
   void loadLocal(true)
 }
 
-// ---- the tabs, remembered per chat folder ----
-const state = ref<TabsState>(loadTabs(props.cwd))
+// ---- the tabs: each chat's own, remembered ----
+const state = ref<TabsState>(loadTabs(props.chatId, props.aiBrowser))
 const activeTab = computed(() => state.value.tabs.find((t) => t.id === state.value.active) ?? state.value.tabs[0]!)
-watch(state, (s) => saveTabs(props.cwd, s), { deep: true })
+watch(state, (s) => saveTabs(props.chatId, s), { deep: true })
+// Opened before the chat's transcript loaded, the pane learns its AI's browser late: still untouched, it goes there.
+const opened = props.aiBrowser ? null : state.value
+watch(
+  () => props.aiBrowser,
+  (r) => {
+    if (r && opened && state.value === opened) state.value = loadTabs(props.chatId, r)
+  }
+)
 /** Server id -> the New tab that clicked it while it was stopped: that tab opens it once it answers. */
 const pending = ref(new Map<string, string>())
 /** Tabs just pointed at a server that was starting: their frame looks again once. */
@@ -179,20 +189,25 @@ function openAddress(id: string, url: string) {
 function openSaved(id: string, name: string) {
   aim(id, { kind: 'saved', target: name, proc: null })
 }
-function openRunning(id: string, p: DevWebProcess, fresh = false) {
+function showServer(id: string, p: DevWebProcess, fresh = false) {
   const url = processAddress(p)
   if (!url) return
   if (fresh) justStarted.value = new Set(justStarted.value).add(id)
   aim(id, { kind: 'page', target: url, proc: p.id })
 }
-/** A server clicked on a New tab: it opens in that tab, starting it first when it is stopped. */
+/** A server clicked on a New tab, or its Start: the tab goes to it at once, and a stopped one is started; the page says
+ *  it is starting until it answers. A server with no address until it runs opens once it answers. */
 async function openServer(id: string, p: DevWebProcess) {
-  if (p.status === 'running' && processAddress(p)) return openRunning(id, p)
-  if (p.status === 'crashed' || p.status === 'stopped') {
-    pending.value = new Map(pending.value).set(p.id, id)
-    await servers.act(p, 'start')
-    if (actionError.value) dropPending(p.id)
-  } else pending.value = new Map(pending.value).set(p.id, id)
+  const plan = openPlan(p)
+  if (plan.show) showServer(id, p, p.status !== 'running')
+  else pending.value = new Map(pending.value).set(p.id, id)
+  if (!plan.start) return
+  await servers.act(p, 'start')
+  if (!actionError.value) return
+  dropPending(p.id)
+  // A start that failed puts the New tab back, where its error shows.
+  const t = state.value.tabs.find((x) => x.id === id)
+  if (t?.kind === 'page' && t.proc === p.id && t.target === plan.show) aim(id, NEW_TAB)
 }
 watch(
   () => [...pending.value.keys()].map((id) => `${id}:${findProc(id)?.status}|${processAddress(findProc(id) ?? ({} as DevWebProcess)) ?? ''}`).join(),
@@ -205,7 +220,7 @@ watch(
       const next = new Map(pending.value)
       next.delete(procId)
       pending.value = next
-      if (p.status === 'running' && state.value.tabs.find((t) => t.id === tabId)?.kind === 'new') openRunning(tabId, p, true)
+      if (p.status === 'running' && state.value.tabs.find((t) => t.id === tabId)?.kind === 'new') showServer(tabId, p, true)
     }
   }
 )
@@ -223,11 +238,11 @@ const titleOf = (t: PaneTab): string => (t.kind === 'new' ? 'New tab' : t.kind =
 // The transcript card's request: the tab for that browser comes forward, else it opens in a new one. A request that
 // fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
 function applyRequest(r: BrowserOpenRequest) {
-  if (r.profile) {
-    const have = state.value.tabs.find((t) => t.kind === 'saved' && t.target === r.profile)
-    if (have) return pick(have.id)
-    state.value = openTab(state.value, { kind: 'saved', target: r.profile, proc: null, ...(r.url ? { url: r.url } : {}) })
-  } else if (r.url) state.value = openTab(state.value, { kind: 'page', target: r.url, proc: null })
+  const spec = requestTab(r)
+  if (!spec) return
+  const have = state.value.tabs.find((t) => t.kind === spec.kind && t.target === spec.target)
+  if (have) return pick(have.id)
+  state.value = openTab(state.value, spec)
 }
 watch(
   browserRequest,
@@ -249,7 +264,6 @@ async function refreshAll() {
 watch(
   () => props.cwd,
   () => {
-    state.value = loadTabs(props.cwd)
     pending.value = new Map()
     profiles.value = null
     profilesError.value = null
@@ -260,8 +274,7 @@ watch(
 )
 
 // The sidebar's Dev servers list asked for a server: its tab comes forward, or it opens in a new one (started first when
-// it is stopped). After the folder watch above, so a tab opened for a folder this request just switched to is not
-// replaced by that folder's saved tabs. Each request is acted on once, when the project list holds its server.
+// it is stopped). Each request is acted on once, when the project list holds its server.
 let handledFocus = 0
 watch(
   () => [props.focus, projects.value] as const,

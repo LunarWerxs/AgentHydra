@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
-import { browserOpenRequest, isBrowserCall, newestBrowserCalls, parseBrowserCall, toolFamily } from '../../src/components/transcript/lib/tools'
+import { browserOpenRequest, isBrowserCall, lastBrowserRequest, newestBrowserCalls, parseBrowserCall, toolFamily } from '../../src/components/transcript/lib/tools'
 
 const call = (tool_name: string, params: Record<string, unknown> = {}, local = true) => ({ local, tool_name, params })
 const item = (id: string, name: string, input: Record<string, unknown>): ToolItem => ({
@@ -75,6 +75,19 @@ describe('parseBrowserCall', () => {
   test('a click asks for the saved profile and the address; the default browser has no profile', () => {
     expect(browserOpenRequest({ url: 'https://example.com', profile: 'example-shop' })).toEqual({ profile: 'example-shop', url: 'https://example.com' })
     expect(browserOpenRequest({ url: '', profile: 'default browser' })).toEqual({ profile: undefined, url: undefined })
+  })
+
+  test("a chat's AI last used the newest browser call that names a profile or an address; none, null", () => {
+    const items = [
+      item('1', A, call('browser_navigate', { profile: 'shop', url: 'https://shop.example.com/' })),
+      item('2', A, call('browser_navigate', { url: 'https://example.com/' })),
+      item('3', A, call('browser_profiles')),
+      item('4', A, call('memory_search')),
+    ]
+    expect(lastBrowserRequest(items)).toEqual({ profile: undefined, url: 'https://example.com/' })
+    expect(lastBrowserRequest(items.slice(0, 1))).toEqual({ profile: 'shop', url: 'https://shop.example.com/' })
+    expect(lastBrowserRequest(items.slice(2))).toBeNull()
+    expect(lastBrowserRequest([])).toBeNull()
   })
 
   test('the card fires OPEN_BROWSER_EVENT with that request; DeskFrame opens the servers pane for a chat and drops the listener', () => {

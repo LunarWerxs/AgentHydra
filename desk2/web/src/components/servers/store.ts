@@ -8,7 +8,7 @@ import { ref, shallowRef } from 'vue'
 import type { DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
 import { projectDir } from '@shared/devwebui'
 import { devwebStart, devwebStatus, listProjects, processAction, projectAction, RouteMissing } from './api'
-import { allKey } from './logic'
+import { allKey, isUp } from './logic'
 
 export interface ServerFocus {
   /** The folder the pane is shown for: the project's own (`projectDir`). */
@@ -161,7 +161,15 @@ function createDevServers() {
       busy.value = next
     }
   }
-  const act = (p: Pick<DevWebProcess, 'id'>, action: 'start' | 'stop' | 'restart') => run(p.id, () => processAction(p.id, action))
+  /** A server just asked to start reads as starting until DevWebUI's next answer, not as the stopped it still was. */
+  function markStarting(id: string) {
+    const list = projects.value
+    if (list) projects.value = list.map((pr) => ({ ...pr, processes: pr.processes.map((x) => (x.id === id && !isUp(x.status) ? { ...x, status: 'starting' as const } : x)) }))
+  }
+  function act(p: Pick<DevWebProcess, 'id'>, action: 'start' | 'stop' | 'restart'): Promise<void> {
+    if (action === 'start') markStarting(p.id)
+    return run(p.id, () => processAction(p.id, action))
+  }
   const actAll = (project: Pick<DevWebProject, 'id'>, action: 'start' | 'stop') => run(allKey(project), () => projectAction(project.id, action))
 
   /** The list's click: ask the pane to show this server. */
