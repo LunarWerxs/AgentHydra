@@ -69,59 +69,555 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [1.13.0] - 2026-10-06
 
-### Added
+**TL;DR**
 
-- **A chat that sent work to CliMayte is woken when that work ends, and carries the job on** (2026-10-06, owner: "when the subagents finish ... the main chat is procced saying, hey, all your subagents are finished, then it goes and checks"). A Hydra Desk 2 chat never heard its workers finish: the note went through the CLI's own message pipe, which in a Desk 2 chat does not start a turn (of about 20 notes sent to one chat, one reached it) and is gone once Desk closes an idle chat. Desk 2 now takes the note itself (`POST /api/sessions/:id/ping`): it reopens a closed chat and starts a turn, or queues the note behind a running one; other chats keep the old path. A finished worker no longer wakes the chat while others it sent still run: the finishes wait and go together when the group ends or nothing of the chat's is left running (a failure or a worker's question still goes at once, and a held finish goes after 30 minutes regardless), so five workers cost one wake, not five. When every group in a note has ended, the note says their work can be unfinished or broken: check each proof, fix or re-dispatch what is left, and tell the owner it is done only when the whole ask is.
+- **CliMayte workers wake the chat that dispatched them when their work finishes**
+- **Workers' time estimates are now calibrated by estimate size for better predictions**
+- **CliMayte tracks and reviews all worker time estimates to improve future accuracy**
 
-- **A CliMayte worker whose time estimate missed is asked why, and the answers are kept and sorted** (2026-10-06, owner: "actively tracking all estimations and the time it actually took to finish. And then asking the AI at the end, hey, why did you think it would take two hours and it only took 30 minutes?"). Every `ETA:` line a worker writes, word for word, and the working time it really took now go to a ledger, `corch/eta.jsonl`, that outlives the worker. When a worker is about to end its turn and its working time is outside 1.5x of its estimate either way, the daemon answers the worker's Stop hook and asks it once, in the same turn, for an `ETA-REVIEW:` line (why it missed, and what it would estimate next time) and a `CAUSE:` from a fixed list (human-pace, scope-smaller, scope-larger, slow-commands, waiting, rework, padding, unclear-ask, other). Those two lines never become the worker's report. `climayte_scorecard` shows the newest estimates and the causes counted, and once there are three reviews the calibration line every worker's brief ends with also names the most common cause.
-
-- **A CliMayte worker's time calibration is now by the size of its estimate, not one flat multiplier** (2026-10-06, owner: the estimates were badly off). Measured over 315 `ETA:` lines of the last 10 days: estimates under 10 min ran a median 1.01x of the real time (right), 10-19 min 0.58x, 20-39 min 0.60x, 40 min or more 0.22x (a 90-minute estimate typically took about 20), so a flat "multiply by 0.67" made the right small guesses too short and left the big ones 3-5x too long. The brief now says how each size band has run ("first guesses under 10 min have run 1.0x (keep them), 10-19 min 0.58x, 40 min or more 0.22x") for every band with at least 5 samples, over the newest 200 estimates; with none it keeps the flat sentence. `climayte_scorecard` shows the bands as `estimates.byBand`.
-
-- **The CliMayte time-estimate prompt is versioned and measured** (2026-10-06, owner: improve the estimating prompt now, and a loop that measures each version). Workers estimated at a human's pace and rounded to 10 (112 of 315 lines were exactly "ETA: 10 min"; the median real pace is 10.7 seconds per turn), so the brief now tells them to count tool calls at about 10 seconds each, add the real run time of slow commands, and write the sum unrounded (`ETA_INSTRUCTION`, version 2). Every estimate records its prompt version; calibration uses the current version's samples once there are 5; the review question gains an `ETA-PROMPT:` line (one change that would have made the estimate closer); and `climayte_scorecard` shows `estimates.byPrompt` (samples, median ratio, close share, top cause, newest ideas per version) and `estimates.rewriteDue` once the current version has 20 samples and under half were close. The procedure is in docs/CLIMAYTE.md "Prompt versions".
-
-## [1.12.0] - 2026-10-06
+**Everything in 1.13.0**
 
 ### Added
 
-- **Chats can send work into the Free accounts** (2026-10-06, owner: "orchestrate threads into free accounts ... Chatting to them, saving the information, new threads"). The CLI accounts had `climayte_run` and the desktop ones `fan_out`; the Free accounts (the claude.ai and chatgpt.com free web logins in Instances → Free) had no MCP tool at all. `free_chat {tasks:[{prompt}]}` now starts each task as a private thread on an idle signed-in account with room, the one used longest ago first so work spreads over every account and both providers, or with `chat_id` continues a thread on its own account, which remembers what was said in it; tasks queue for an idle account, since each runs one operation at a time. It answers within 45 s with a batch that `free_results` polls; `free_status`, `free_threads` and `free_read` show the accounts, the threads and a thread's messages. Checked live on all six Free logins: tasks ran at once on separate accounts, and each continued thread recalled what it was told. `list_instance_numbers` and `list_usage` point to `free_status`, since the Free accounts are not instances. Then four Claude chats, each given only a plain ask and what a new chat is shown (the server's instructions and the tool names), all did it on their first try: three questions at once on three accounts, project details kept across a follow-up and read back word for word, an older thread continued (it still knew its fruit) beside two new ChatGPT ones, and eight jobs over all six accounts in 19 s, every answer right. What they found unclear is fixed: ChatGPT's unlimited text counted as more room than a Claude window at 2%, so Claude accounts got nothing while it was idle; nothing said Free threads need no deleting (they are private); `free_threads` cut its list at 30 without saying so; and a batch gave no total time.
-
-### Fixed
-
-- **AgentHydra's window stops drawing while nobody looks** (2026-10-06): its GPU process averaged 0.34 of a core over 17 idle hours because running rows' spinners and pulses animated forever. All animation now pauses while the window is unfocused or hidden and resumes where it stopped (10 s idle with a running row: 600 frames drawn, 0 when blurred); reduced motion drops the pulses and slows the spinners.
-- **A Refresh comes back to the page it left** (2026-10-06, owner: "if I'm on a page and I right click and I choose refresh, it always takes me back to the homepage"). The window kept only the chat on screen; it now also keeps whether the AgentHydra pane was open (the pane already kept its own tab), the Settings page, and the view under Settings, for as long as the window lives.
-- **A sealed CliMayte task gets the MCP servers its config names, AgentHydra's own included** (2026-10-06). It was given the ordinary worker's settings, which deny AgentHydra's server by name and by address so a worker cannot start more work; four sealed test chats of the Free tools, whose config named only that server, started with no tool at all and said so, the CLI's only sign a "blocked by enterprise policy" line in their error logs. A sealed worker has exactly its config's servers already (`--strict-mcp-config`), and its `allowedTools` decide what it may call.
-- **A Free thread's "last used" stays when Desk re-reads the chat list** (2026-10-06). Every login check (on load and from "check login and usage") is followed by a read of the account's chat list, and that read stamped every private thread it listed as just used: 35 threads showed the same minute, so "the most recent thread" in the Free tab and in `free_threads` meant nothing. A listed chat is now recorded without counting as a use, and one seen first in a list takes the time it was made.
-- **Every Free account can chat again** (2026-10-06). A smoke test of all six Free logins found two that could not send at all: ChatGPT serves some accounts a newer page without the id the message preparation expected, which read as a setup fault; and claude.ai refuses a model a free account may not use right now (here the account's own default), which read as "sign in again" while the login was fine. The first now gets a fresh id; the second is its own error, and the send tries the usual model, then the cheapest, before giving up.
-- **A Desk chat no longer promises that a background job will wake it** (2026-10-06, owner: "you said a background poller would wake you: why can I not see it running?"). A Desk chat runs as one `claude -p` per message, so its process and every background command it started end with its turn, and nothing wakes the chat when one finishes; the Background tasks panel was right to list the poller as finished. CliMayte workers were already told this; a chat's own brief now says it too, so the chat waits inside its turn with a time-limited loop on the job's output.
-
-- **Hover pop-ups in Hydra Desk 2 close again** (2026-10-06, owner: "the hover pop-up boxes show up and then refuse to close sometimes"). A button whose menu or dialog just closed no longer pops its tooltip back up (focus handed back by a mouse action opens nothing; keyboard focus still does), and an open tooltip closes when the pointer leaves the page or the AgentHydra pane's frame, the window loses focus, its button goes away, or the pointer rests off it and its box for 150 ms, a dialog opening over it included. Desk's plain title tips also hide when the pointer leaves the window or the page is hidden.
-- **HSwarm's instructions reach every chat whole again** (2026-10-06): they had grown to 2,233 characters, past the 2,048 Claude Code keeps of a server's instructions, so every chat lost their end, the shared server's "give every task an ABSOLUTE cwd" note included. Shortened to 2,027 with every rule kept.
-- **A second Free Claude login no longer fails with "This session does not have access to the selected organization"** (2026-10-06, owner: "the login worked fine, so... we have another issue"). The harness treated the organization a previous login left in its config as a requirement; it is now only a default, used when the new login has it. A login that never chatted remembers no model, so its first chat used to stop asking for `--model`: it now takes the account's own default, else the newest Sonnet the account offers.
-- **HSwarm's stats keep each day apart again** (2026-10-06): the per-day query grouped by the new stored `day` column rather than the date it shows, so rows whose `day` the migration had not filled yet fell into one day.
+- **A chat that dispatched CliMayte work is notified when it finishes.** When a worker completes its task, the chat that sent it is woken and shown the results, rather than waiting until you check on it manually. Multiple workers finishing around the same time notify you once instead of interrupting repeatedly.
 
 ### Changed
 
-- **CliMayte hands a worker to a fresh session at 200k of conversation, not 150k** (2026-10-06, owner: "find where we are burning tokens ... and fix it"). Measured on the analytics meter over 3 days (1,070 tasks, 621 size handoffs): a handoff at 150k cost more than it saved (the old session's last calls and the fresh session's cold 47k start came to 0.51B units against 0.43B of reads saved; 258 of 621 paid back). Replaying every task under other lines, 200k was cheapest or near it in every case tried (0.02B to 0.19B less per 3 days than 150k, 0.11B over 7 days), with 40% fewer handoffs.
-- **Analytics' "What eats tokens" says where the weight goes** (2026-10-06). The deep-context row counted the WHOLE weight of every call past 150k (its reply, its thinking and its first 150k), so it read 61% of 7 days; it now counts only the prompt read past the line, 16% of the same 7 days. A new "Replies and thinking" row shows output, the largest kind on the meter (42%) and in no row before. Analytics rescans once (version 10) to measure the new row.
-- **CliMayte's Waves are their own row under CliMayte in HSwarm's tree** (2026-10-06, owner: "Move the waves section into a subsection called waves underneath CLI Mate, instead of having it be in the same window"). The row counts the live waves; its page lists them unfolded, and a wave's manager opens there with "Back to waves". The CliMayte page keeps the scorecard and the task list.
-- **CliMayte grades how bad a fail was, and scores by it** (2026-10-06, owner: "Did it really fail, or did something have to just do a slight bit of work to fix it? ... a catastrophic fail, or ... a whoopsie-daisy?"). A fail now carries a severity: 0 not the model's (the check could not run or timed out, or failed only on another session's uncommitted files in a shared checkout; not scored), 1 small fix, 2 rework, 3 failed. A rung's score credits a pass 1, a small fix 2/3, a rework 1/3 and a failed 0, and the trust and write-off bars use that score. A task's check grades its own fails (an uncommitted file is a small fix; a wave's commit outside the brief's paths too); `climayte_verdict` needs a severity with a fail, and the thumbs-down in a task's detail asks for one. A fail with none (older, or from the old window) still counts as a full fail. The 666 past fails were graded once (36 commits outside a wave's paths and 14 timeouts by rule, the rest by Sonnet 5.5 judges from each fail's note, the worker's reply and the later verdicts): 118 not the model's, 169 small fixes, 357 rework, 22 failed. Haiku goes from 57.7% to 70.0%, Sonnet from 73.5% to 87.3%, and Opus from 75.5% to 88.0%.
-- **The AgentHydra pane's background is Desk's #151515** (2026-10-06, owner: "the current bg for the right side, is #1A1A19, please make it #151515"), so the HSwarm, CliMayte and Instances pages match the chat beside them.
-- **Free accounts can be deleted, check themselves on load, and Claude ones can keep their 5-hour window running** (2026-10-06, owner: "there's no delete option in the actions for free accounts"; "They should probably check on load"; "we should have the Keep Windows Running option on the free as well"; "for the free instances, have a leave alone above percentage option"). Delete, in a row's actions, asks for the account's name, then removes the account, its chat handles and its saved login here and, through Login sync, on your other PCs; its chats stay at Claude or ChatGPT. Opening the Free table checks each account that was never checked, or whose reading is over 15 minutes old, once. A Claude account shows "No reading yet" instead of "Not checked yet" while Claude has no usage to report (it has none until the account sends a message). Keep windows running (off by default; `PATCH /api/free/settings` with `keepWindows` and `weeklyFloorPct`) sends a signed-in Claude account a one-word temporary chat on its cheapest model when its 5-hour window has ended, as AgentHydra does for CLI accounts, and leaves it alone at or above the weekly floor (85%) or while its reading is unknown; the nudge adds no chat to the list.
-- **CliMayte tasks fold into a badge in Hydra Desk 2's sidebar too, coloured by account** (2026-10-06, owner: "Can we have the same option where CLImate options get their own icon with accounts and colors that I can click"). A chat's CliMayte tasks now show as a badge on its row by default, as its HSwarm jobs do, with a dot per account they run on in that account's colour; a click lists them, each line with its account in the same colour. Blue stays HSwarm's alone. The Filter menu's Sub-items still turn either kind back into lines.
-- **Background tasks shows only "Finished N" while nothing runs** (2026-10-06, owner: "if nothing is running, hide the Running section and just show Finished 5"). In Hydra Desk 2 and Hydra Desk the Running heading and its "Nothing running" line hide when no task runs, and the All toggle moves beside the trash; with a task running the panel is unchanged.
-- **Hydra Desk 2 is AgentHydra, the only window** (2026-10-06, owner: "HydraDesk is no longer called HydraDesk. It is now called AgentHydra", and of http://127.0.0.1:7787: "Hydra Desk 2 should be the only existence"). The window, its shortcut (`desk2/launcher/install-shortcuts.ps1` writes **AgentHydra** and sends the old "Hydra Desk 2" shortcuts to the Recycle Bin), its launcher's messages and its Settings say AgentHydra; the folder, port 7798 and the data folders keep Desk 2's names. The daemon no longer shows the old window where Desk 2 is beside it (a checkout): a page asked of 7787, the Connections sign-in's return included, goes on to Desk 2, which opens Settings → Connections for that return. A release zip, which has no Desk 2 yet, still serves the old window.
-- **AgentHydra's table settings are in Settings → Instances** (2026-10-06, owner). A new Instances section below This computer has CLI, Desktop and Free pages: which tables show, Keep windows running and its weekly floor, paid extra usage, Claude native control, and "Show process columns", now each table's own; Free also has Keep windows running and its weekly floor for Claude logins. Each table's gear opens its page over the table (Settings no longer slides AgentHydra away, opening or closing); the CLI table's popover, the "Instances settings" dialog and the toolbar's column toggle are gone, and so is the pane's gear beside Discord: Desk's Settings gear, bottom left, carries the update dot.
-- **A cleaner sidebar** (2026-10-06, owner). The Back and Forward arrows left the title bar (Alt + Left / Right still work), and a Clean sidebar button in their place hides each row's account number, its last-active time and a working chat's elapsed time. A CLI account offered no limit reset shows no reset icon, and a 5-hour window AgentHydra's keepalive started is a dot on the row's 5-hour counter instead of a timer beside the name.
-- **Free accounts name themselves, and Claude sign-in waits for a real login** (2026-10-06, owner: "I don't want to have to set a name. It should automatically pull the name from the account"). Adding a Free account starts its sign-in at once with no name to type; after the login the row takes the account's name, or the start of its email address, until you rename it (generic names typed before, like "ChatGPT2", follow the account too). Claude sign-in no longer closes at once on a signed-out page: it now waits for the sign-in cookie and for claude.ai to list the account's organizations, where it used to accept any claude.ai cookie and a message box and then saved a signed-out login. ChatGPT Go, Plus and Pro accounts show Unlimited everyday text like a Free one, their plan named in the hover, instead of empty usage cells.
-- **Free sign-in runs on zendriver, like the CLI sign-in window** (2026-10-06, owner: "consolidate them both into using zendriver"). Signing in a Free Claude or ChatGPT account opens the installed Chrome or Edge on a throwaway profile instead of Camoufox, so Desk no longer installs Playwright or the Camoufox browser (about 5 GB); an existing Free runtime rebuilds itself once. The harness's optional browser chat worker, visible preparation and request recorder, which Desk never used, are gone; chats still go over HTTP with the saved login, unchanged.
+- **Worker time estimates are calibrated by their size, not one flat multiplier.** Estimates under 10 minutes ran accurately; 10-to-20-minute estimates actually took 60% of the time predicted; 40-minute and longer estimates took only 20-25% of the predicted time. The system now adjusts differently for each band based on actual performance.
 
-- **AgentHydra's tray icon opens Hydra Desk 2, and Hydra Desk 2 brings the icon up** (2026-10-06, owner: Hydra Desk 2 becomes AgentHydra 2.0; "make sure that the notification icon is in Hydra Desk 2"). The tray's Open (its menu, a double-click, the AgentHydra shortcut, its own start) runs Desk 2's launcher, which starts Desk 2's server when it is down and opens or focuses its window; the old AgentHydra window no longer opens from the tray. Desk 2's launcher starts the tray in the background whenever it is not running, so the icon, the daemon it keeps alive and Desk 2 come up together from either side. The shared tray host (kit `lunarwerx-tray`) gained the two pieces this needs: an optional `openCommand` an app's config can name instead of its URL, and `--background`, which starts the tray without opening anything. Where `desk2/` is not beside `misc/` (a release zip, until it ships Desk 2), Open keeps showing the old window: the command `requires` Desk 2's launcher, checked at each Open, instead of running a missing script that would fail without a word.
-- **Hydra Desk 2 catches up with the old AgentHydra window before it retires** (2026-10-06, owner: "prepare to remove the default Agent Hydra ... or migrate it into what is Hydra Desk 2"). The ten changes made to the old window since Desk 2 copied it were checked one by one; what Desk 2 lacked is in it now. Under a finished reply in a Claude Code chat from outside Desk, "Copy up to here into a new chat" makes a copy of the chat up to that reply, beside it, and opens it; the original is not touched. Auto-update's description says it is on by default. Buttons and badges no longer animate their size, and a few icons and controls in HSwarm's pages, CliMayte's panel and the outside-session list that could be squeezed no longer are (their class did nothing under Tailwind 4).
-- **Log in shows only on a logged-out row, and logs the same account back in** (2026-10-06, owner: "Login button should only really be visible if it's logged out"). A CLI row offers Log in only while logged out, as "Log in again" when it still knows its address; choosing it fills Quick add's email box with that address and the button reads "Log in", so one press starts the email sign-in. A Codex row offers Log in only while logged out. Table rows in the AgentHydra pane light up under the pointer (owner: "when I hover, it changes the color slightly"); the old tint was the card's own colour in the dark theme.
-- **Another PC's chat lands in its folder's group in Hydra Desk 2, not "No folder"** (2026-10-06, owner: "Do whatever you can do"; the folder's last name was the pick put to him). The shared CliMayte queue now carries the last name of each task's folder, and HSwarm's jobs list the last name of their caller's folder (`caller_ids.folder`), never a path. Desk 2's sidebar files such a chat under the one group here whose folder has that name (case aside, whatever the path before it), else under a group of that name; two groups with the name are a guess, so it gets its own. Only work with no name at all goes in "No folder". A PC shares the name once it runs this version.
-- **AgentHydra's settings are in Hydra Desk 2's Settings dialog** (2026-10-06, owner: "I'm gonna want the settings inside Agent Hydra, the sidebar, moved into the settings for Hydra Desk"). New pages: Usage alerts (reset notifications, reminders, email over your SMTP server, a test send), Connections (MCP registration and repair, cloud sync) and Updates (AgentHydra's version, which checks or installs when clicked, and auto-update); General gains the AgentHydra pages' tooltips and privacy mode, and About the tray icon. The pane's settings sidebar is gone and its gear opens this dialog, on Updates while an update waits. Portable mode, the quick-instances shortcut, the theme picker and Shut down belonged to the retired AgentHydra window and stayed with it. Settings has no Accounts page any more (owner: "the accounts tab in settings probably doesn't need to exist"): the account for new chats is picked in the sidebar's account menu.
-- **The Instances tables are a third shorter and say less twice** (2026-10-06, owner). Rows are 27 px instead of 41, and the header 28 instead of 40. Open, Focus, Launch and the other row actions are icons with their word as the tooltip. The Tokens header lost its "· Week" note (the flyout's checkmark says which span), so the column and Actions are narrower. A row no longer prints the account's handle beside the name: a click on the name copies the account's full address, and its hover shows the address and the folder. A Codex row without an address still says "Logged out" or "API key".
-- **AgentHydra's window has AgentHydra's own icon** (2026-10-06, owner: "We need to be using the OG Agent Hydra icon. It's using some sort of weird crown thing"). The window, its taskbar button, the shortcuts and the page's favicon all take `misc/AgentHydra.ico`, compiled into `HydraDesk2.exe`, in place of Hydra Desk's crown.
+- **Every worker time estimate is logged and reviewed.** The system tracks every estimate alongside how long work actually took, and when an estimate misses badly (over 50% off either way), it asks why and uses that feedback to improve future predictions.
+
+- **The time-estimate prompt helps workers be more accurate.** Instead of rounding estimates to the nearest 10 minutes, workers now count tool calls at 10 seconds each, add the real time for slow commands, and write the unrounded sum.
+
+
+## [1.12.0] - 2026-10-06
+
+**TL;DR**
+
+- **Send work to Free accounts (Claude.ai and ChatGPT free web logins)**
+- **Free accounts check themselves on load and can be deleted**
+- **Free accounts can keep their 5-hour window running between sessions**
+
+**Everything in 1.12.0**
+
+### Added
+
+- **Chats can send work into Free accounts.** You can now dispatch CliMayte work to your free Claude.ai or ChatGPT.com web accounts in addition to your CLI and desktop accounts. Work spreads across all idle free accounts and both providers, and threads in those accounts remember what you told them across messages.
+
+- **Free accounts self-check on open.** Each free account is checked when you open the Free table if it hasn't been checked in the last 15 minutes.
+
+- **Free accounts can be deleted.** A free account's login, chat list, and chat handles are removed from AgentHydra and synced off your other PCs. The account's chats remain on Claude or ChatGPT.
+
+- **Free Claude accounts can stay signed in.** When a free account's 5-hour window ends, a brief keepalive chat is sent to hold it open so it doesn't sign out. You can turn this on per account and set a threshold (like 85%) to stop sending keepalives if usage is already low.
+
+### Changed
+
+- **CliMayte hands work to a fresh session at 200k tokens instead of 150k.** Measured testing showed that 200k was the most efficient point to hand off conversation context, saving token cost without losing performance.
+
+- **Analytics shows where weight goes.** A new row breaks down replies and thinking separately from cached context reads, so you can see what is actually expensive.
+
+- **CliMayte's Waves are their own section.** Waves now appear in a dedicated subsection below CliMayte instead of on the same page.
+
+- **CliMayte grades how bad a failure was.** Failures are now scored as small fixes (slight rework), rework (substantial changes needed), or truly failed (doesn't work at all). Trust scores now reflect these grades instead of treating all failures the same.
+
+- **Free accounts name themselves.** After signing into a free account, its display name is pulled automatically from the account name or email instead of you having to type one.
+
+- **Free sign-in runs on your installed browser.** Free accounts now sign in through installed Chrome or Edge instead of downloading a separate browser, saving disk space.
+
+### Fixed
+
+- **Free threads' "last used" time is accurate.** The chat list no longer resets all thread timestamps whenever it loads.
+
+- **Every Free account can chat again.** Fixed issues where some ChatGPT accounts and free Claude accounts couldn't send messages properly.
+
+- **HSwarm instructions fit.** Instructions were too long and got cut off; they've been shortened while keeping all the important guidance.
+
+- **A second free Claude login no longer fails.** The login process now handles multiple free accounts correctly.
+
+- **HSwarm daily stats stay organized.** Per-day stats no longer group incorrectly.
+
+
+## [1.11.0] - 2026-10-05
+
+**TL;DR**
+
+- **CliMayte tasks are sealed: they run with only the servers they need**
+- **HSwarm jobs show in your sessions and folders alongside CliMayte tasks**
+- **Sub-items in the sidebar can be shown as a list or as a count badge**
+- **API keys and subscriptions can be compared for cost**
+- **Desktop chat sync is view-only from other PCs**
+- **CliMayte uses cheaper models for read-only work**
+
+**Everything in 1.11.0**
+
+### Added
+
+- **A sealed CliMayte task runs with only what it needs.** You can now lock a worker's system prompt, MCP servers, tools, and prompt, and it launches with nothing else. This cuts startup overhead and tokens spent on unnecessary servers.
+
+- **HSwarm jobs appear next to your sessions.** Jobs show in your sessions list and sidebar, grouped under their calling chat, so you see all your work in one place.
+
+- **Filter sidebar items by type or count.** CliMayte tasks and HSwarm jobs can each show as a list (one line per item) or a count badge, so you control how much space they take.
+
+- **Cost model compares API keys and subscriptions.** A new Routing page shows which provider is cheapest for your work: measured subscription cost versus your own API key rate, with a configurable split and discount when you have a bulk rate.
+
+- **HSwarm can run work on a Claude subscription when that's cheaper.** A tool-using task runs on your subscription if it costs less than your API key, and the result shows which provider was used.
+
+### Changed
+
+- **Desktop chat sync is now one-way and view-only.** Chats from another PC sync down so you can watch them, but can't continue them or send messages back. If you start a two-way sync and turn on view-only mode, existing chats are archived on that PC and moved to a viewer folder on yours.
+
+- **CliMayte reads cheaper models for read-only work.** Inspection, review, and similar read-only work now runs on a cheaper model pick instead of always using Opus, and the system learns which models work best for each kind of work.
+
+- **CliMayte uses measured plan sizes.** Max accounts are now sized at 4.75 and 19 Pro windows, not 5 and 20, based on real measurements.
+
+- **Running work shows inline in folders.** A running CliMayte task or HSwarm job now appears as a row in the folder where its chat lives instead of in a separate list.
+
+- **Running tasks pulse slowly in the sidebar.** Pulsing animation is slower and uses less power.
+
+### Fixed
+
+- **Hydra Desk 2's server tests no longer touch your real project folder.** Tests now use a temp folder so your chats aren't affected.
+
+- **A CliMayte wave that finished without reporting is reported anyway.** Waves that got stuck `running` are now forced to report their results.
+
+- **Sidebar rows no longer pop in and out by themselves.** HSwarm jobs no longer bounce in and out of the recent chats list as they run.
+
+- **Workers have the Connections MCP server again.** Workers now get the Connections server so they can use memory tools and boards like the owner's chat can.
+
+
+## [1.10.0] - 2026-10-05
+
+**TL;DR**
+
+- **Auto-update is on by default**
+- **Desktop chat sync is on by default for all PCs**
+- **Another PC's CliMayte tasks appear under their chat**
+
+**Everything in 1.10.0**
+
+### Changed
+
+- **AgentHydra auto-updates by default.** New installs now have auto-update enabled, so you stay current automatically instead of having to manually click Update.
+
+- **Desktop chat sync is on by default.** All PCs in a login sync now share their visible desktop chats by default, rather than requiring each PC to opt in.
+
+- **Another PC's CliMayte tasks appear under their chat.** When syncing CliMayte queues between PCs, tasks now show under the chat that dispatched them instead of in a separate list.
+
+### Fixed
+
+- **A restarted daemon keeps its own identity.** Restarts no longer lose the daemon's unique id.
+
+- **A daemon that dies at startup says why.** The log now records why the daemon exited instead of leaving no record.
+
+
+## [1.9.2] - 2026-10-04
+
+**TL;DR**
+
+- **CliMayte workers use 1 MB native runner instead of 175 MB Bun per worker**
+- **Daemon no longer re-reads transcripts every 12 seconds**
+- **Process scanning is in-process instead of spawning PowerShell**
+- **Hydra Desk reads fewer files and polls more intelligently**
+
+**Everything in 1.9.2**
+
+### Changed
+
+- **CliMayte workers use a lightweight native runner.** Each worker's CLI now runs under a 1 MB Rust program instead of a 175 MB Bun runtime, cutting memory per worker from 175-191 MB to under 1 MB.
+
+- **The daemon stops re-reading the same transcripts.** Session searches no longer re-read all 425 MB of old transcripts on every 12-second pass when looking for links.
+
+- **Process table reads are now in-process.** The daemon no longer spawns PowerShell to scan processes; it reads them natively in about 13 ms instead of multiple seconds.
+
+- **Hydra Desk works lighter while chats run.** The composer's git poll is now one command instead of six, and transcript reads start from where they left off instead of re-reading the last 8 MB every 3 seconds.
+
+### Fixed
+
+- **A moved chat continues its work mid-turn.** Moving a chat to another account while it's running now continues properly instead of stopping.
+
+- **Big sessions hand off cleanly.** Sessions over 150k tokens are now condensed to 16k for handoff instead of being copied in full.
+
+
+## [1.9.1] - 2026-10-04
+
+**TL;DR**
+
+- **Workers can ask their parent chat a question and wait for the answer**
+- **Workers get the owner's MCP servers and Connections again**
+
+**Everything in 1.9.1**
+
+### Added
+
+- **Auto-resume throttles back when it produces nothing.** After two empty resumes in a row, the next resume waits 2 minutes, doubling up to 30 minutes per further empty one; a real turn or typed message resets it.
+
+### Changed
+
+- **CliMayte chat workers** are now a first-class feature: a task with `chat: true` runs one of your own interactive chats headless, keeping your full skills and MCP servers, with your own system prompt instead of the lean worker one, and Opus xhigh effort unless you name something else.
+
+### Fixed
+
+- **CliMayte workers no longer see the wind-down signal inside sub-agents.** Wind-down signals now only fire in the worker itself, not inside sub-agent calls.
+
+- **Workers get the owner's MCP servers, including Connections.** Workers now receive stdio servers and the Connections MCP, fixing a 15-minute cache that was blocking them.
+
+## [1.9.0] - 2026-10-04
+
+**TL;DR**
+
+- **Send work to a worker or move it to another folder**
+- **CliMayte learns which model works for each task kind**
+- **Chats can run as CliMayte workers keeping their full skills**
+- **Workers wait for memory before starting**
+- **HSwarm ledger rotates monthly**
+
+**Everything in 1.9.0**
+
+### Added
+
+- **A worker can be moved to another folder.** Dispatch a task to a new folder and the worker's session moves there on its next launch, carrying its progress.
+
+- **A CliMayte worker can ask its origin a question.** Workers can call `climayte_ask` to post questions to the chat that dispatched them and wait for answers, instead of guessing.
+
+- **CliMayte chat workers.** A task with `chat: true` runs one of your own interactive chats headless, keeping your system prompt, all your skills and MCP servers, and high reasoning effort.
+
+- **CliMayte starts a worker only when the machine has memory.** Work waits to start if RAM falls below 8% or commit below 5%, with workers counted as 0.75 GB each. Linux reads MemAvailable; macOS is not gated.
+
+- **HSwarm's ledger rotates monthly.** Old months move to gzipped archives; stats read the archives they need, so totals stay the same.
+
+- **All of a PC's ZSwarm history moves into HSwarm.** A one-shot import copies stats tables, ledger, routing decisions, and job records; keys and secrets stay behind.
+
+- **HSwarm overview shows model results.** A new section shows pass/fail per model, cost per successful task, edit survival rate, and tasks per day.
+
+- **One CliMayte + HSwarm stats card.** CliMayte and HSwarm results appear together on one card so you see your total progress.
+
+- **Every signed-in CLI account shows whether it has a limit reset.** A daily background check runs `/limit-reset` on accounts not checked in 24 hours.
+
+### Changed
+
+- **A CliMayte worker starts far fewer processes.** The wind-down hook is now an http hook on the runner, cutting processes per call from 6.7 to none. The edit-claims hook runs as a direct Python call instead of through a shell.
+
+- **ZSwarm is retired; HSwarm replaces it.** All references to ZSwarm now point to HSwarm. The session source id stays `zswarm` for compatibility.
+
+- **The wide toggle is one setting for every page.**
+
+- **Waves stay closed until opened.**
+
+- **Sessions and CliMayte share one sidebar.**
+
+### Fixed
+
+- **A worker dispatched from a CLI instance is tied to that chat.** Caller lookup now searches every CLI instance's config dir.
+
+- **The nearest chat in the calling process chain is the caller.** The chain is now matched nearest process first across every home.
+
+- **Login sync no longer scans every process each pass.** Scans only run on first need, at most once per pass.
+
+- **A browser page cannot read a CliMayte worker's wind-down signal.** The runner's loopback server refuses browser Origins.
+
+- **A stalling daemon names the functions that stalled it.** Sampling profiler output is added to SATURATED lines.
+
+- **The switch-card watchers stay small.** Watchers no longer walk every UI element constantly; they now ask only for button names and garbage-collect past 400 MB.
+
+- **A switch-card watcher presses only a card's own Allow once.** The climb to find a card stops at containers with more than 8 buttons.
+
+- **CliMayte workers' shells start faster.** Workers start with `TERM=dumb` so Git Bash doesn't run expensive aliases.
+
+- **The daemon no longer freezes while killing processes.** `killProcessTrees` now runs async instead of blocking.
+
+- **HSwarm's fast transcript scanners are back.** Native scanners in Rust and Go are restored with A/B bench.
+
+## [1.8.0] - 2026-10-03
+
+**TL;DR**
+
+- **Dispatching chat is pinged when work settles**
+- **Login sync store uses 95% fewer reads on idle PCs**
+- **Shared desktop chats no longer fill the login-sync store**
+- **Two PCs can share visible desktop chats privately**
+
+**Everything in 1.8.0**
+
+### Added
+
+- **Chats are pinged when their work settles.** A chat that dispatches CliMayte work is notified when tasks finish, fail, get verdicts, or move accounts. Notifications batch in groups and retry for 2 hours, then reach the composer or a toast, with counts in the next status check.
+
+- **Login sync store reads plummet on idle PCs.** A new changes-since route means idle PCs read one row instead of three lists. The store increments a revision on every write, and PCs track the latest, so they only fetch what changed since last check. On a simulated idle hour with two PCs, reads went from 5,400 to 61.
+
+- **Desktop chats sync privately between two PCs.** A new chat-sync toggle sends this PC's visible chats encrypted through login sync. The other PC sees them with that PC's name, compressed and encrypted under the sync key.
+
+- **Archive old shared chats to free space.** Chats archived 3 days ago leave the login-sync store (both PCs keep their local copies). The store caps at 400 MB; when full, chats stop syncing with a "no more room" message.
+
+- **Clear usage stats from any account's menu.** A new action blanks the 5-hour and weekly numbers on a row (sign-out), with no deletion from history.
+
+- **Fixer functions that only tests call fail CI.** Functions like `sweep*`, `reassert*`, or `run*Once` that appear in no production code are caught by a new guardrail.
+
+### Changed
+
+- **CliMayte never waits more than 5 minutes for room or reset.** A limited task moves to another account unless its own resets within 5 minutes. Rooms or pace holds last only if a reset is within 5 minutes. When no account has the needed room, work starts on the one with the most space (if at least 10 Pro-points are left), then hands off at the stop line. Accounts run 4 workers per Pro window up to 8.
+
+- **Release tag push takes seconds, not 25 minutes.** The pre-push hook now checks for a successful CI run on the commit instead of running the full check suite again.
+
+### Fixed
+
+- **Chat titles are kept when moved.** A chat moved to a running target now has its title reasserted.
+
+- **Per-instance routes only act on known instances.** Routes like `/api/instances/:dir/open` now resolve against the instance list, not the daemon's working directory.
+
+- **Two daemons no longer run on one store.** A frozen daemon is no longer replaced; the MCP reads which daemon serves it.
+
+- **Dispatch is idempotent.** The same group sent twice within 10 minutes returns the existing workers.
+
+- **Workers have the Connections MCP.** CliMayte workers get the owner's MCP servers (minus AgentHydra's), so `connections_execute` works.
+
+- **Worker settings never carry credentials.** Secrets in URLs or header literals are filtered out, and the MCP files are cleaned up when the worker ends.
+
+## [1.7.0] - 2026-10-02
+
+**TL;DR**
+
+- **Two PCs can share their CliMayte queue with encryption**
+- **Reset notifications for CLI accounts are gone**
+- **CliMayte re-reads account usage before placing new work**
+- **CliMayte starts work on accounts with available capacity**
+- **Restart no longer waits for running work**
+
+**Everything in 1.7.0**
+
+### Added
+
+- **Two PCs can share their CliMayte queue.** Enable a new toggle to sync your work queue between PCs with encryption, so both machines see running tasks and don't duplicate work.
+
+### Changed
+
+- **CLI account reset notifications are turned off.** You no longer get notifications every time a CLI account's usage window resets, since CliMayte runs dozens of accounts around the clock.
+
+- **CliMayte re-reads usage before placing work.** Before sending a task to an account, the system checks its current usage to avoid overloading it mid-task, and an account with a fresh read takes only one worker until results come back.
+
+- **Work placement on full accounts is reported separately.** When a task starts on an account already past the usage ceiling, it now shows as "placed past ceiling" instead of as a failed stop.
+
+- **Restart no longer waits for running work.** CliMayte's checks now run detached, so restarting AgentHydra doesn't block on them; any running work continues in the background.
+
+- **The CliMayte list shows active time, not queue time.** Each task displays how long it's been actively running instead of how long it waited for an account.
+
+- **CliMayte balances work between 85% and 90% of usage.** At 85% an account takes no new work; at 90% running work is stopped to prevent overages.
+
+- **CliMayte starts work on accounts with room.** Instead of waiting on one account, the system tries each account in order and starts work as soon as one has capacity, so tasks don't sit idle while other accounts have space.
+
+### Fixed
+
+- **Every quota check shows available CliMayte capacity.** The usage API now returns how many accounts are idle and available, so agents can see the room before dispatching work.
+
+- **Cancel in a task's first second stops its CLI.** A task cancelled immediately after starting now properly kills the worker instead of letting it run.
+
+- **Detached checks are safe if the daemon crashes.** Check results are saved before execution starts, so work and results survive daemon restarts.
+
+- **CliMayte knows every account's reset times.** Accounts' weekly reset times are now tracked accurately so pacing decisions are correct.
+
+- **CliMayte refuses tasks that could never run.** Tasks with invalid account IDs or malformed lists are rejected upfront instead of waiting forever.
+
+- **The CLI tab keeps its usage current.** Usage numbers update on their own instead of waiting for a manual check.
+
+## [1.6.0] - 2026-10-02
+
+**TL;DR**
+
+- **CliMayte skips accounts someone else is actively using**
+- **Tokens are tracked by the account that did the work**
+- **One sign-in works for both desktop and CLI accounts**
+- **Desktop logins sync between two PCs**
+- **Finished work can be reviewed and judged in one go**
+
+**Everything in 1.6.0**
+
+### Added
+
+- **CliMayte avoids accounts in active use.** Before starting a task, the system checks if anyone is using an account's desktop app in the last ten minutes or running other chats there, and skips it in favor of idle accounts.
+
+- **Tokens belong to the account that earned them.** Usage is now credited to the account signed in when the work happened, so moving an account to sign in as someone else moves the token count with it.
+
+- **One sign-in for both desktop and CLI.** Signing in a desktop account on the CLI tab gives you a linked CLI instance straight away, with no separate login needed.
+
+- **Desktop logins sync between two PCs.** A Claude Desktop login on one PC automatically signs in on the other PC's matching profile, keeping both in sync without needing to sign in twice.
+
+- **Review and judge finished work in one view.** A report shows each finished worker in one row: its status, what it used, how it ran, its verdict and what it did, and you can give several workers the same verdict in one call.
+
+- **A demo of the app with invented data.** The built web app runs over made-up data so you can click around without a daemon, useful for testing.
+
+### Changed
+
+- **The CLI accounts table is as long as its rows.** Instead of scrolling inside a third of the window, the table grows to fit its content and the tab scrolls instead.
+
+- **The Login sync dialog is one switch.** Turn sync on or off for all logins at once, with a simple view of which are syncing and when they last synced.
+
+- **Descriptions are hidden behind info bubbles.** Long explanations moved into the (i) bubble beside headings instead of taking up page space.
+
+- **The CLI table header is icons.** Login sync, Keep windows running, and other controls are now icon buttons in the header with tooltips.
+
+- **Each page's settings live on that page.** Settings specific to Sessions, the CLI, or CliMayte are now on those pages instead of in the main Settings panel.
+
+### Fixed
+
+- **A failed desktop-to-CLI login feed no longer stops the daemon.**
+
+- **Dialogs are as wide as they ask to be.** Ten dialogs that set their own width now display correctly instead of being forced to 384 px.
+
+- **The create button on instance tables no longer flickers.** It's now an icon with a tooltip instead of a label that causes layout jumps.
+
+- **The Instances table no longer scrolls sideways.** Layout adjusted so the table fits at normal window width.
+
+- **Escape closes dialogs on the Sessions page.** The page no longer captures Escape when a dialog is open.
+
+## [1.5.0] - 2026-10-01
+
+**TL;DR**
+
+- **CliMayte learns which model works best for each task type**
+- **Restarting AgentHydra no longer stops CliMayte workers**
+- **One unified Instances table for all account types**
+- **Paid extra usage is blocked by default**
+- **Tasks split across accounts automatically**
+- **Quick sign-in by email without needing a terminal**
+- **Keep idle CLI accounts in their 5-hour window**
+- **Copy or move logins between PCs with encryption**
+- **Sync CLI logins between two PCs automatically**
+
+**Everything in 1.5.0**
+
+### Added
+
+- **CliMayte learns which model each task type needs.** Give work a thumbs up or down to teach the system which model works best for that kind of task. Tasks with "auto" model now run on the cheapest setting that keeps passing, with occasional tries at cheaper models, and "What works" shows pass rate and cost.
+
+- **Restarting AgentHydra no longer stops CliMayte workers.** Each worker's CLI runs under its own runner outside AgentHydra, so workers keep running through restarts and updates.
+
+- **One Instances table for all account types.** Claude Desktop, Codex, and DeepSeek accounts are now in one table with a Provider filter, and the new CLI tab holds Claude CLI instances alongside CliMayte.
+
+- **Paid extra usage is blocked by default.** Some Claude accounts have "extra usage" billing on. A new Settings switch "Allow paid extra usage" is off by default, and AgentHydra stops sessions before they can bill when it's off.
+
+- **CliMayte splits tasks across accounts automatically.** Tell CliMayte a task and it splits the work across your CLI accounts and checks the results, moving workers to another account when one hits its limit.
+
+- **Quick add: sign in by email with no terminal.** Type an email, confirm the sign-in in your browser, and you have a ready CLI instance. No typing into a terminal or running a login command.
+
+- **Keep idle CLI accounts in their 5-hour window.** Turn on "Keep windows running" to send a tiny keepalive message to idle accounts so their 5-hour usage window is already counting down when you need it.
+
+- **Copy or move CLI logins to another PC.** Save a login to an encrypted file with a passphrase, or move it (signing this PC out) so one login isn't refreshed on two machines.
+
+- **Sync CLI logins between two PCs automatically.** Connect both PCs to a small Cloudflare Worker, and when one PC refreshes a login, the other picks up the new one within a minute instead of signing out hours later.
+
+- **Each instance shows every account it's been signed into.** A history button lists accounts in order of last use, showing which instance each is signed into now and which ones it's passed through.
+
+### Changed
+
+- **A signed-out account keeps its last usage numbers.** Instead of blank, a signed-out row shows the last reading dimmed, so you remember how much of that account's window was used.
+
+- **CliMayte starts tasks where they can finish.** Before sending work, the system counts what's left on each account and what similar tasks usually cost, so tasks don't start mid-fill and move partway through.
+
+- **CliMayte sizes tasks before sending.** Tasks bigger than half a window are sent back with how many pieces to split into; smaller ones wait for room instead of starting and moving mid-work.
+
+- **The CLI tab fits the window.** On a wide screen, the accounts table folds away and CliMayte's task list fills the space, each scrolling inside itself.
+
+- **CliMayte tasks no longer leave programs running.** Developers servers and watchers that a worker started are stopped when the task ends.
+
+- **CliMayte's cost estimates learn from every finished task.** Instead of counting only tasks with a thumbs vote, the estimates blend in all finished work, pulling predictions closer to reality.
+
+- **CliMayte works each account between 85% and 90%.** At 85% an account takes no new work and running tasks are asked to hand off; at 90% they're stopped.
+
+- **CliMayte stops accounts at 85% and never runs into limits.** Tasks start only where they're expected to finish under 85%, avoiding overages.
+
+- **CliMayte shows what every run cost.** Each run of a task keeps its own cost, requests, and tokens, including stopped runs, so you see how much restarts cost.
+
+- **Token budget matches the plan meter.** Weights are now fitted to how the plan meter actually charges tokens, so budget estimates are more accurate.
+
+- **CliMayte workers use the 5-minute prompt cache.** Workers switched from the 1-hour cache to save on cache-write costs.
+
+- **CliMayte workers carry a short rule set.** Workers get a small system prompt and skill list (about 3 KB and 12 skills instead of 44 KB and 84), cutting tokens per step.
+
+- **Every account row looks the same.** Codex and DeepSeek rows now show the same layout as Claude rows, with consistent icons and labels.
+
+- **The orchestrator's remote dashboard moved to port 7793.** The old port conflicted with ZSwarm's MCP server, so it was moved and centralized.
+
+- **The chat journal no longer re-reads every chat every five minutes.** Only chat records are scanned and they're reused if unchanged, cutting CPU use from 3.7 seconds to 0.2 per pass.
+
+- **Accounts are remembered after moving instances.** Older entries in login history now show the account name straight away instead of "(unknown account)".
+
+- **The daemon stops re-reading whole chats.** Only new content is read when transcripts change, cutting CPU use per new turn from 93 ms to 0.8 ms.
+
+### Removed
+
+- **The "Startup cost per new chat" panel.** This panel added no value since nothing used its numbers.
+
+### Fixed
+
+- **The CLI tab no longer scrolls as a page.** Task row labels no longer extend the tab height to 4,777 px.
+
+- **CliMayte stops every worker on an account at the same moment.** Workers now see the newest usage reading for their account across all workers, not just their own.
+
+- **A new or silent account gets one task first.** An account with no usage reading takes only one worker until that worker's first request reads it.
+
+- **CliMayte's numbers for a night are that night's.** Totals now cover only runs since the requested time, not the whole record.
+
+- **Workers take part in shared edit warnings.** Each worker runs the edit-claims hook, so you're told if another task touched a file.
+
+- **CliMayte's token count is right and says what it counts.** Each run now records its own session so totals are accurate.
+
+- **CliMayte no longer bounces tasks between nearly-full accounts.** Handed-off tasks wait for real room instead of hopping between accounts that are about to run out.
+
+- **An account whose org turned Claude Code off is left alone.** The system stops retrying such accounts and stays out until they sign in with another login.
+
+- **Accounts at their limit read "Limit".** The UI now shows the right usage percentage for accounts at their ceiling.
+
+- **Usage numbers no longer lag behind busy CLI accounts.** Accounts with running CliMayte tasks show live readings instead of data from 30 minutes ago.
+
+- **Deleting a Codex instance no longer fails with "resource busy or locked".**
+
+- **Auto-resume picks sessions back up after weekly limit resets.**
+
+- **Auto-resume times desktop chats by their own account's window.**
+
+- **Sonnet 5 is costed at $2/$10 after September 1.** Pricing was corrected to match Anthropic's actual rates.
+
+- **README screenshots show the current app.** Capture script fixed so images show the latest UI and models.
+
+- **The session index costs a eighth of the CPU.** Only transcripts modified in the last hour are re-checked on refresh.
+
+- **The background daemon no longer spikes CPU every five minutes.** Chat-title scanning now remembers records instead of re-reading all of them.
+
+- **Claude Desktop updates again.** The version check now runs Claude's own updater so the app stays current.
+
+- **Claude from the Start menu is no longer stuck on an old build.** The shortcut is updated to point at the real install.
+
+- **`claude://` links and the browser extension find Claude after updates.**
+
+- **Archiving a chat inside running Claude Desktop works again.**
+
+- **`archive_desktop_chat` works on closed or signed-out accounts.**
+
+- **A move clears old copies of chats.** Chats left under a previous login are now archived by flag on disk.
+
+## [1.4.0] - 2026-09-28
+
+**TL;DR**
+
+- **See the number of active chats for each account**
+- **The judgment queue can use your own judgment rules**
+- **Search sessions with fuzzy matching like a code editor**
+- **Supervised chats can end on structured answer forms**
+
+**Everything in 1.4.0**
+
+### Added
+
+- **See active chat count in the account menu.** Right-click or click the menu button on an account to see how many chats are active there (not archived), so you know at a glance if there's anything to do.
+
+- **Use your own rules for the judgment queue.** A new policy knob names a command that answers the judgment queue instead of using generic doctrine, like a brain trained on your own judgment style. The system runs your command and applies it to every waiting chat.
+
+- **Fuzzy session search like a code editor.** Search your sessions by any part of the title or working directory. Matches at word starts and camelCase humps score higher, space-separated terms must all match, and the best match sorts first.
+
+- **Structured answer forms for supervised chats.** A chat can end on a structured form with numbered options instead of asking in prose, and the judgment queue shows and answers the form with one click per question.
+
+### Fixed
+
+- **Various UI improvements and bug fixes** to dialogs, tables, and layout behavior throughout the app.
 
 ## [1.11.0] - 2026-10-05
 
@@ -2036,397 +2532,69 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **Rate-limited accounts now respect their Retry-After windows.** The server's 429 Retry-After is recorded per label and honored at a single chokepoint, so all pollers back off together. The UI shows countdown and reuses cached readings rather than showing false 0%.
 
-- **An orchestrator operation id that is missing now says WHY it is missing**
-  (`server/src/orchestrator.ts`, `server/tests/orchestrator-operation-miss.test.ts`). A migration
-  batch was launched detached, the daemon restarted while it ran, and the batch's child survived the
-  restart and finished its work orphaned. Every poll of its id then answered a bare "no such
-  operation" with an empty recent list, and the tool descriptions promise an unconditional hour and
-  that nothing is gone, so the honest reading of that answer was that the run had never existed. An
-  hour went into reconstructing the per-chat verdicts from four other tools.
+- **Orphaned operation IDs now say whether the daemon restarted.** Polling an operation after daemon restart now returns `daemon-restarted` instead of "no such operation", letting callers check the ledger instead of re-firing.
 
-  Nothing is made durable in response, which would be the audit log this deliberately is not. A miss
-  is instead interpreted against the answering process's own start time: `daemon-restarted` when
-  this daemon is younger than the one hour TTL, since an id minted before it cannot be in this
-  process's map, and `unknown-id` when it is older. The count of records held rides along, so
-  "empty" is distinguishable from "pruned". A caller can now tell "never existed" from "did not
-  survive a restart" and is told to read the toolbox's own ledger rather than re-fire the act.
+- **The compiled executable ships the tray icon and can manage itself.** The host, icon and config extract on first run. Process detection returns tri-state (running/absent/unknown) instead of guessing.
 
-- **The single-file `.exe` ships its tray icon, and "is the tray running?" stops answering
-  backwards** (`server/src/tray-toolkit.ts`, `server/src/tray-host.ts`, `server/src/index.ts`,
-  `scripts/build.ts`, `server/src/tray-bootstrap.mjs` via the kit, plus their suites). Two faults,
-  one symptom - a fresh build with no icon anywhere:
-  - The compiled exe embedded every Vite asset and nothing from `misc\`, so
-    `misc\lunarwerx-tray.exe` could not exist beside it, `startTrayHostIfMissing` skipped with
-    `no-tray-toolkit` forever, the tray invariant exempted the build entirely, and the app fired a
-    notification telling the person to go download the ZIP instead. 340 KB of Win32 binary is not
-    a reason to ship an app with no icon, no Quit and no supervisor. The host, its config and its
-    icon now ride inside the binary and are written out to `<stateDir>/tray/<version>` on first
-    run, with the config's shipped `appRoot: ".."` (right only for the extracted zip) replaced by
-    the absolute directory of the RUNNING exe and `compiledExe` set to its real filename - so a
-    renamed or relocated download still gets a working watchdog.
-  - The probe said "running" PRECISELY when no tray existed. It read a non-zero exit from
-    `Get-Process -Name lunarwerx-tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id`
-    as "running", but `SilentlyContinue` suppresses the error TEXT, not the error RECORD: an
-    absent process exits 1 (measured: absent → 1, present → 0). So the one case the probe exists
-    for was the one it got backwards, and the 2026-09-03 "the daemon starts its own tray host"
-    fix could never once have fired - the boot log said `already-running` while no host existed
-    on the machine. It now counts without raising an error record and returns a TRI-STATE, because
-    the two callers need opposite defaults: an unknown STARTS the host (a named mutex makes a
-    double start harmless) while the invariant still reads an unknown as running, since that one
-    can shut the daemon down. The mechanism moved into the kit (`tray-bootstrap`), because
-    RepoYeti, DevWebUI and ReDesign shipped the same hole and had each written it into their
-    README as a limitation.
+- **Chat identity now answers for the caller, not the daemon.** `whoami` uses the loopback socket to get the caller's PID and walks its ancestry, per-request and uncached. `move_chat to: "here"` now works correctly.
 
-- **A Claude Desktop chat can identify itself again: `whoami` answers for the CALLER, not for the
-  daemon** (`server/src/mcp.ts`, `server/src/index.ts`, `server/src/core/process.ts`, plus tests).
-  `mcp-register` registers the HTTP transport for every client, so the identity tools ran inside
-  the daemon, walked the DAEMON's ancestry, and told an agent on instance #8 that it was "not
-  running under Claude Code at all" - taking `move_chat to: "here"` (refused unless the identity
-  is exact) and every quota attribution down with it. The caller opened a loopback socket, so the
-  OS can name its pid, and that pid IS the engine under its instance directory. Resolved per
-  request, unforgeable (the binding is a function; JSON cannot carry one), deliberately uncached
-  (a recycled port would name the wrong process, and that is how 13 chats once landed on the wrong
-  account), and null on any ambiguity so it falls back to the old refusal rather than guessing.
+- **Chats cut off mid-turn no longer read as busy forever.** If the last record predates the engine, that engine has produced nothing since boot, so it can be moved without `--terminate-live`.
 
-- **A chat cut off mid-turn stops reading as "working" forever** (`orchestrator/scripts/lib/
-  gatelib.py`, `orchestrator/scripts/lib/enginelib.py`). Its last record is a tool RESULT, which is
-  neither a completed turn nor an orphaned tool call nor a usage wall, so a freshly landed engine
-  that had written nothing at all still gated as busy - migrate refused to move it again and only
-  `--terminate-live` could, AgentHydra blocking its own follow-up move. The orphan rule's own
-  evidence settles the general case: if the LAST record of any kind predates the engine, that
-  engine has produced nothing since it booted.
+- **Person-requested actions no longer skip if younger than the unattended window.** Interview now counts and reports failures when reaching a pane.
 
-- **A press that cannot reach its pane is diagnosable, counted, and no longer skipped when a
-  person asked for it** (`orchestrator/scripts/unblock_prompts.py`, `orchestrator/scripts/
-  interview.py`, `orchestrator/scripts/lib/ledgerlib.py`). `interview --apply` answered a queued
-  escalation and the row selection was withheld because the row was younger than the 15-minute
-  window meant for unattended LANES, so the person's own decision died as a bare "could not reach
-  that chat's pane" - twice, with the actuator's own diagnosis dropped into a field nothing
-  printed and nothing counting the failures.
+- **Long `orchestrator_run` calls no longer lose their report.** Runs over 120s now auto-detach with an operation ID to poll.
 
-- **`orchestrator_run` stops losing a long run's report** (`server/src/mcp.ts`). A run declared
-  longer than 120s now detaches itself and answers with the `operationId` and how to poll it;
-  `sweep --all --yes` with `timeout_secs: 1200` used to return only "The operation timed out"
-  while the sweep ran to completion in the daemon, with no id to re-attach to.
+- **Non-ASCII chat titles now survive PowerShell pipes.** Scripts now force UTF-8 on their console output to prevent encoding mangling. Regression tests cover Spanish, em dash, CJK and Cyrillic.
 
-- **A non-ASCII chat title survives an actuator's stdout pipe** (`misc/Manage-DesktopChat.ps1`,
-  `misc/Deliver-DesktopChat.ps1`, `orchestrator/scripts/actuator/{manage_desktop_chat,
-  approve_prompt,deliver_desktop_chat,rename_first,chip}.ps1`,
-  `orchestrator/scripts/tests/test_actuator_utf8.py`). `chat_rename` refused with
-  `FAIL: 'Alcanc? mi l?mite de uso mientras trabajabas, pero ya se restableci?. …'` for a chat
-  whose real title carries Spanish accents - a message naming a chat that does not exist, which
-  reads as a missing chat rather than an encoding fault. PowerShell encodes a PIPED stream with
-  `[Console]::OutputEncoding`, which defaults to the machine's OEM code page, so the accents were
-  replaced with literal `?` bytes INSIDE PowerShell. A `?` is valid UTF-8, so nothing downstream
-  could detect or recover the loss: `clilib.decode_console` was already UTF-8-first with an OEM
-  fallback and still read question marks. Every script whose output a caller captures now pins
-  UTF-8 on the way out (best-effort - a console handle that refuses the assignment must not take
-  down a UIA act). Any non-Latin title degraded the same way, so the regression test probes
-  Spanish, an em dash, CJK and Cyrillic together, runs the prelude the scripts actually ship
-  rather than a retyped copy, and carries a control case proving the mangling is real without it.
-  Verified end to end through the MCP tool that found it.
+- **Landed chats are named before permission pickers or matching attempts.** Permission picker gets the rendered name from the daemon if the disk record has none. Sidebar matching uses fuzzy prefix comparison, normalizing accents and whitespace. Bypass remedy prints the correct path from the orchestrator directory.
 
-- **A landed chat is NAMED before anything tries to aim at its name, so the `disk-only` remedy
-  finally works on the population it exists for** (`orchestrator/scripts/migrate_batch.py`,
-  `orchestrator/scripts/automation_chat.py`, `orchestrator/scripts/migrate_chat.py`,
-  `orchestrator/scripts/actuator/approve_prompt.ps1`, plus their suites). An import lands with
-  `title: null` - `session-launch` already says `titleDurable: false` and means it: the title is
-  written to disk and the running app re-saves over it from memory, while the sidebar renders a
-  name derived from the transcript. Everything that aims BY NAME broke at once, and each break
-  disguised itself as something else:
-  - The permission picker was handed `-Title ""` and died inside PowerShell's
-    `ParameterArgumentValidationErrorEmptyStringNotAllowed`, which reads as an environment or
-    permissions fault and is neither. `title_for_row` now asks the daemon for the rendered name
-    when the disk record has none, and a chat nobody can name is refused **in words**, with the
-    actuator never spawned - never an empty argument.
-  - `migrate_batch` runs the naming pass over each target account between landing and stamping,
-    carrying every chat's intended title. It is the last place that still knows them, and the
-    app's own rename is the only durable channel (as `session-launch` has said all along).
-    Best-effort: a name is never worth failing a landing that already happened.
-  - The sidebar matcher compared the wanted title to the rendered row with full-string equality,
-    so a row TRUNCATED with an ellipsis - which is what a long title renders as - could never
-    match, and refused with "a MATCH failure, not a timing one" while the row sat on screen.
-    `Select-SidebarChat` keeps the exact pass first and falls back to a normalised prefix
-    comparison (trailing `…`/`...` stripped, NFD accents folded, case-folded, whitespace
-    collapsed) only when the exact pass finds nothing. More than one loose match is still a
-    refusal, exactly as before - it never guesses.
-  - `bypassRemedy` prints `python scripts/automation_chat.py …`, the path that actually runs
-    from the orchestrator directory every other printed command assumes.
+- **The courier now marks mid-turn chats `peer_only` and delivers them through the peer channel** instead of refusing them upfront. The mid-turn rail is enforced downstream where the channel is picked, so live chats get delivered via queue rather than rejected.
 
-  Verified end to end on a real migrated chat: nameless and unstampable → named → `APP-CONFIRMED
-  via its own picker`.
+- **Staged replies now expire after 48 hours** if not delivered. Replies to chats that moved accounts are expired since their premise is void. Transient refusals defer up to 12 times before expiring.
 
-- **The courier chooses the channel BEFORE it applies the mid-turn rail, so a live chat is no
-  longer deferred forever** (`orchestrator/scripts/courier.py`,
-  `server/src/routes/session-message.ts`, `orchestrator/scripts/tests/test_courier.py`,
-  `server/tests/session-message-peer-only.test.ts`). Rail 4 has always said a turn IN FLIGHT is
-  never interrupted _for the composer route_, because the peer channel enqueues natively and the
-  chat drains it after the current turn. The gate ran before the channel was known, so it
-  refused the exact population the peer channel serves: three chats in one drain took twenty
-  minutes of hand-retries and one never landed, and the same shape reproduced on 09-09 and
-  09-10. `gate_match` derives "running" from the dossier's own live block, so every refusal it
-  ever produced was for a session that had a pipe. The gate now marks a mid-turn chat
-  `peer_only` and lets it go; that flag rides with the delivery and forbids **every** composer
-  path downstream - the endpoint's dormant fallback, the peer dead-letter fallback, and the
-  old-daemon actuator route - so the rail is enforced where the channel is actually picked
-  rather than by refusing everything up front. A live plan-only run over the fleet now shows
-  zero IN FLIGHT refusals; the remaining skips are the usage band, the verify snippet and the
-  per-account share, all working as intended.
-- **A staged reply now has an end: a shelf life, a premise, and a deferral ceiling**
-  (`orchestrator/scripts/lib/deliverylib.py`, `orchestrator/scripts/courier.py`,
-  `orchestrator/scripts/stage_reply.py`,
-  `orchestrator/scripts/tests/test_deliverylib_expiry.py`). Measured 2026-09-10: 37 staged rows,
-  the oldest 5.9 days, several addressed to accounts that no longer go by that name - and three
-  of them migration notices reading exactly backwards after their chats had been migrated back.
-  Arming the tray icon would have delivered a batch of statements that were no longer true.
-  Beside them sat 42 `failed` rows, 41 with a single attempt, nearly all of them `HTTP 409
-  instance is not running` or `WinError 10054`: a closed target app or a dropped socket, which
-  are not deliveries that went wrong but deliveries that never happened. Three changes, one
-  rule - a decision nobody acted on is never silently deleted, but it does not live forever:
-  - A new terminal state `expired` (readable in `--list`, carrying its reason) for a row past
-    `STAGED_TTL_SECS` (48h). Expiry runs inside `pending()`, the one door every lane's
-    deliveries come through, so nothing stale can reach a sender.
-  - `defer()` for a transient refusal: the row stays **staged** and is retried next cycle, and
-    only `MAX_DEFERRALS` (12) turns it into an expiry. A genuine refusal - the wrong-chat guard,
-    say - still burns the row as before.
-  - The courier expires a reply whose chat has changed accounts since it was staged: its premise
-    is void and no sender can know whether the text survived the move.
+- **Move reports now show which chats are dormant.** The headline shows the tally; dormant chats didn't receive resume messages yet.
 
-  Swept live: 28 stale rows expired, nothing wrongly voided, 9 legitimate rows left staged.
-- **`move_chats`' headline no longer over-reports a migration nobody was told about**
-  (`orchestrator/scripts/migrate_batch.py`,
-  `orchestrator/scripts/tests/test_migrate_batch_resume.py`). A landed chat is DORMANT until
-  something types into it, so `3/3 landed` described a run in which zero chats had actually been
-  resumed. The per-chat `RESUME` lines were right the whole time and were scrolled past. When a
-  resume was asked for, the first line now carries the tally and says the rest are DORMANT.
-
-- **`rename_chat` can now rename a freshly imported chat, on both sides of the fix**
-  (`orchestrator/scripts/rename_chat.py`, `misc/Manage-DesktopChat.ps1`'s Rename write loop,
-  `orchestrator/scripts/tests/test_rename_null_title.py`, `server/tests/ui-archive.test.ts`). A
-  fresh import lands with `title: null` on disk; `rename_chat.py` forwarded that straight through
-  as an empty `-Title`, and the actuator's mandatory parameter refused it before ever looking for
-  a row - it now falls back to `Untitled`, the same name the app itself renders for a titleless
-  import. The MCP `chat_rename` route already found the row under that fallback, but the write
-  itself could still fail: the app can re-render the sidebar mid-edit, which invalidates the UIA
-  edit-box element and threw `ElementNotAvailableException` straight out of `SetValue` uncaught,
-  crashing the script with the chat left `Untitled` and nothing reported. That write is now
-  caught; on that one exception the edit box is re-acquired and the write is retried exactly
-  once before the script gives up and reports FAIL - never a guessed name, never an ok over a
-  write that did not happen.
+- **`rename_chat` can now rename freshly imported chats** by falling back to "Untitled" when the disk has no name. Write failures are caught and retried once; the script never guesses names.
 
 ## [0.41.0] - 2026-09-08
 
-### Fixed
+- **Self-updater now checks fast-forward viability before offering updates** instead of failing repeatedly on diverged or missing remote branches.
 
-- **The git-checkout self-updater no longer advertises an update it cannot apply**
-  (`server/src/updater-engine.mjs`, `server/src/updater-engine.d.mts`,
-  `server/tests/server-lib/updater-engine.test.ts`; kit-synced). A checkout that had DIVERGED
-  from the update remote (local commits the remote lacks, and remote commits it lacks) was told
-  an update existed and then failed to apply it with `pull --ff-only`, every cycle; a checkout on
-  a branch the remote does not have pulled the LOCAL branch name and failed with "couldn't find
-  remote ref", every cycle. The check now proves the fast-forward before advertising it (a
-  fetch of just that branch into `FETCH_HEAD` and `merge-base --is-ancestor`), reports
-  `diverged` and `remoteBranch`, and apply pulls the branch the check verified, by name. A
-  fetch that fails is its own reason rather than a guess either way.
-- **"Move chats to account" moves ALL of an account's chats, and a chat it cannot land is left
-  where it was instead of vanishing** (`web/src/components/InstancesView.vue`,
-  `web/src/lib/move-chats.ts`, `server/src/routes/desktop-sessions.ts`,
-  `server/src/session-launch.ts`, `server/src/chat-title.ts`, `server/src/chat-dossier.ts`).
-  Reported 2026-09-08 as "it's not moving all the chats", and it had four causes, each of which
-  lost chats in a different way:
-  - _The plan was built from the session list, not from the account._ That list is scoped by the
-    instance name a transcript's desktop record happens to carry (the default install's is
-    `default`, never its folder name, so the regular install always counted zero), keeps one
-    preferred record per session id across every profile (a chat that ever lived on two accounts
-    is attributed to whichever file is newer), and drops a transcript with no substantive turn.
-    Chats plainly sitting on the account were simply not in the plan. The move now reads the
-    account's own chat store, the same read the "Chats" dialog makes, and says up front how many
-    rows it leaves behind and why (no transcript to import, or already handed off). `ChatListRow`
-    gained `done` for that.
-  - _The route archived the source BEFORE the landing was known._ The app-side import answers ok
-    when its 20-second wait for the app to create the record runs out, so a target app still busy
-    with the previous chat of a bulk move, or an engine the source app respawned so the import was
-    refused as a live writer, left the chat archived on the old account, absent from the new one,
-    and counted as moved. The route now lands first, verifies by reading the record back from the
-    target's store (up to 45 seconds for a running app), and archives the source only then; an
-    unverified landing leaves the chat visible where it was and says so. The orchestrator's
-    `migrate_chat` always worked in this order; the route finally does too.
-  - _The naming door knew one of the chat's two names._ A chat's session-list title (from the
-    transcript) and the app's own record title (the sidebar's, the "Chats" list's) routinely
-    differ, and `confirm_title` was compared only against the first, so every move planned from
-    the name a person had actually read was refused with "does not match". Either current name
-    restated exactly is accepted now; the chat lands under the confirmed name when it is real,
-    under the other when only that one is, and never under a generic one.
-  - _Residency was read off the wrong store._ "Does the target already show this chat?" asked the
-    cross-profile index, which prefers the newest file, so a live copy already in the target was
-    invisible whenever the source's copy was newer, which is exactly the state a move starts in,
-    and a retry could create a second row for one chat, the row that makes it unreachable. Both
-    importers now read the target's own store. A move into an account that still holds an
-    archived copy of the chat also un-hides that record rather than completing with the chat
-    hidden on the account it just arrived at.
-- **A dead host session is no longer a confident identity, so `to: "here"` cannot land chats on the
-  wrong account** (`server/src/core/self-identity.ts`, `server/src/mcp.ts`,
-  `server/tests/self-identity.test.ts`). When the daemon is reached over HTTP it is ONE long-lived
-  process serving every instance, and its `CLAUDE_CODE_HOST_SESSION_ID` is frozen to whichever chat
-  started it. On 2026-09-08 that made `whoami` answer instance #12 at `confidence: 'exact'` while
-  the caller was a live chat on #5, and a `move_chats { to: "here" }` migrated 13 chats onto the
-  wrong account. The 2026-09-07 `storeConflict` guard could not catch it: the frozen id had no
-  lineage link to the real caller, so the chat store AGREED with the file. The new invariant is
-  that a process genuinely hosting a live caller cannot have an ARCHIVED host session, so that case
-  now reports `staleHostSession`, drops to `assumed`, and `resolveMoveTarget` refuses `"here"` and
-  demands an explicit instance. Not fully general - a still-open launcher chat would fool it - so
-  the docs now say plainly never to resolve "here" from `whoami` for a mutating action.
-- **`desktop-archive` is scoped to one instance, and refuses rather than hiding a chat in use**
-  (`server/src/routes/desktop-sessions.ts`, `server/src/session-launch.ts`, `server/src/mcp.ts`,
-  `server/tests/migrate-never-archives-the-target.test.ts`). The 2026-09-04 fix scoped
-  `POST /migrate`; the sibling door, `POST /:id/desktop-archive` and the `archive_desktop_chat` MCP
-  tool behind it, still flipped the flag in EVERY profile carrying that session id. After a
-  migration the source profile holds the leftover and the target holds the real chat, so an
-  unscoped call cannot tell "put the leftover away" apart from "hide the chat the owner is using" -
-  and on 2026-09-08 it archived two chats in the instance they had just been migrated to, one with
-  a running engine, whose app had already dropped them from its in-memory sidebar. The route now
-  takes `instance_ref`, returns 409 naming every carrier when several hold the session and none was
-  named, and refuses to archive a chat with a live engine unless `force`. New primitive:
-  `desktopChatCarriers`.
-- **`manage_desktop_chat.ps1` archives on a non-English app.** It matched menu items by display
-  text, so a Portuguese Claude Desktop (`Arquivar` / `Apagar`) refused every archive - correctly,
-  since it will not guess by position when Delete sits next to Archive. The app's CSS classes do
-  not localize and only Delete carries the danger palette (`menu-danger` / `text-danger`), so the
-  destructive item is now excluded POSITIVELY in any language and Archive is the last item left,
-  refusing unless exactly one danger item proves the menu shape. Adds `-Action DumpMenu`, which
-  prints every menu item's non-localized properties and invokes nothing.
+- **"Move chats to account" now moves all chats** and reports which were skipped with reasons. It reads the account store (not session list), verifies landing before archiving source, accepts either current title name, and reads both target and source stores to avoid losing chats to residency checks.
+
+- **Dead host sessions no longer cause `to: "here"` to land chats on the wrong account.** Frozen daemon sessions now check for archived state and refuse "here" in favor of explicit instances.
+
+- **Archive is now instance-scoped** and refuses to hide chats in use with live engines. Uses `instance_ref` and `desktopChatCarriers` primitive.
+
+- **`manage_desktop_chat.ps1` now archives on non-English apps.** Menu items are matched by CSS class (non-localizing), not by localized text.
 
 ### Added
 
-- **`move_chat` and `move_chats` confirm the resolved account by name AND email**
-  (`server/src/mcp.ts`, `server/tests/move-chat-mcp.test.ts`). `targetNote` used to carry a bare
-  name and nickname, read only after every chat had already imported, and a stale identity
-  signal landed three chats on the wrong account that way (2026-09-07). It now names the
-  instance number, the name, the tier and the account's email, is built from ONE resolve before the
-  orchestrator run is posted (one per batch, not per chat), reads identically for a `dry_run`
-  and the real move, and is reported on a refusal too. The tool descriptions point a caller at
-  `dry_run: true` + `targetNote` as the pre-flight check whenever `to`/"here" is not obviously
-  right.
-- **AgentHydra registers itself as an MCP server with Claude Code, on by default**
-  (`server/src/mcp-register.ts`, `server/tests/mcp-register.test.ts`, Settings → MCP server). On
-  every start the daemon writes one entry into Claude Code's user-scope config:
-  `{ "type": "http", "url": "<bound daemon>/api/mcp" }`. Until now the only documented route was
-  `claude mcp add --scope user agenthydra -- bun run --cwd <path-to-agenthydra> mcp`, which is
-  wrong for everyone who did not clone the repo: a downloaded release has no checkout to point
-  `--cwd` at and usually no Bun to run it with. So the people most likely to want the tools were
-  the least able to get them, and the failure is silent: a client with no entry simply has no
-  tools, and nothing anywhere says why. Measured on a release install 2026-09-07: three other MCP
-  servers registered by their own installers, and no `agenthydra` entry at all.
+- **Move confirmations now show name, tier, email and instance number**, built before the run is posted, so `dry_run` and real move read identically.
 
-  It registers the HTTP transport, never stdio: stdio is one server process per client, each one a
-  relay to this daemon over HTTP anyway. Re-registering on every boot is deliberate, because the
-  entry carries the port the daemon actually bound, so a hop off a busy 7787 cannot leave a stale
-  URL behind. **It writes that one key and nothing else**: every other server and every unrelated
-  key is preserved, the write is a temp file and a rename that keeps the target's permission bits
-  and follows a symlink to its target, and nothing is written when the entry is already correct.
-  A [`~/.claude.json`](docs/CLAUDE-CONFIG-LAYOUT.md) that does not parse is REPORTED rather than replaced, because that file holds
-  the user's logins and project history and a naive read-default-write would destroy all of it to
-  add a convenience. Claude Code writes the same file, so each write is bracketed by a size+mtime
-  check and abandoned rather than allowed to clobber a concurrent one. Turning the switch off
-  removes the entry; the panel shows what the config file actually says, not merely what the switch
-  says, because a read-only file or a hand-written entry can make the two disagree.
+- **AgentHydra auto-registers as an MCP server on every daemon start.** The HTTP endpoint writes one entry into Claude Code's config, preserving all other servers and keys. The entry carries the bound port so it never goes stale on a hop.
 
-- **A row's ⋮ menu lists the chats on that account** (`web/src/components/InstancesView.vue`,
-  `getInstanceChats` in `web/src/lib/api.ts`). "Chats" opens a dialog naming every chat the account
-  holds: title, project, when it was last active, and whether an engine is running in it right now,
-  with a count of active / archived / total and an "Include archived" toggle. Answers the question
-  you have to settle before any move on a fleet of near-identically named rows: which account is
-  holding the chat you are looking for. It reads `/api/chats`, the account's own store, and not the
-  session list: a session listing is scoped by period and by the instance name a transcript records,
-  so a chat nobody has touched this week is not in it, and an account with twenty chats would look
-  empty, which is the one wrong answer this panel must never give. A chat with a CLI transcript
-  opens in Sessions; one without has no button rather than a broken one.
+- **Account rows show a "Chats" menu** listing every chat with last-active time and engine status. Reads `/api/chats` not the session list, so quiet chats show up.
 
 ### Changed
 
-- **A moved chat's settled source record is tombstoned on disk, not merely flagged**
-  (`orchestrator/scripts/migrate_chat.py`, `orchestrator/scripts/tests/test_migrate_rename.py`).
-  Settling only flipped `isArchived`, so the source's `local_<id>.json` survived forever under its
-  original name and kept answering two filename-keyed lookups (the daemon's own host-session
-  identity check, and the toolbox's metadata glob), so every later scan re-discovered the same
-  stale twin and re-decided it was stale. After a verified settle the file is renamed to
-  `<name>.tombstone` with `tombstoned`, `tombstonedAt` and `movedTo` written into it: out of both
-  globs at the source, content kept for a human, idempotent on a retry, and a copy a running app
-  resurrects from memory is removed again without ever winning back its name. Best-effort: a
-  tombstone failure is a note on the report, never a failed move. `chat-dossier.ts` now reads the
-  store through `core/chat-store-scan.ts` (the pure file scan, extracted 2026-09-07) and re-exports
-  the same names, so no caller changed.
-- **`misc/Rebuild.bat` is `misc/rebuild_agenthydra.bat`**, without the `pause` that held a
-  console open on failure; the tray, the reference docs and the root ignore rule follow the rename.
-- **The "Move chats to account" submenu is one line per destination and lists running accounts
-  only, until asked** (`web/src/components/InstancesView.vue`,
-  `web/src/i18n/locales/en/instances.ts`). A green dot marks a running app, the same mark the
-  row's icon carries; the "Not running - lands in its store, ready when it starts" line under
-  every closed account is gone; and a "Show not running" switch at the top, off on every page
-  load, brings the closed ones back. On a fleet of twenty accounts the old list was a scroll.
-- **"Move all chats to another account" is now "Move chats to account"**
-  (`web/src/i18n/locales/en/instances.ts`). It was a sentence, and it sits one line below the new
-  "Chats" item. The long form made the two look unrelated when they are the two things you do with
-  an account's chats. The submenu names the destination, so the label does not have to.
+- **Moved chats are tombstoned on disk**, renaming the source record with `movedTo`, so stale twins aren't re-discovered on later scans.
+
+- **"Move chats to account" menu lists only running accounts by default**, with a "Show not running" toggle. Closed accounts show they land in their store ready for next start.
+
+- **Menu label is now "Move chats to account"** (not "Move all chats..."), matching the new "Chats" item below it.
 
 ### Fixed
 
-- **`chatStoreLabel` disagreed with itself off Windows, and the linux CI leg was red for it**
-  (`server/src/routes/sessions.ts`). It trimmed a trailing separator with a pattern accepting
-  BOTH slashes, then took the folder name with node's `basename`, which off Windows does not
-  treat a backslash as a separator at all - so an isolated instance handed back the entire
-  `C:/Users/me/.claude-instances/carlos` as its "folder name" instead of `carlos`. It splits on
-  either separator now, which is what the trim beside it already assumed. This is not academic:
-  the daemon ships linux and darwin binaries, and both legs of its own CI failed on it.
-- **The new MCP race test was a coin flip on disk timestamps, and it kept `main` red**
-  (`server/tests/mcp-register.test.ts`). Its stand-in for Claude Code sliced a string with a
-  bound that began at that string's own length, so the clamp swallowed every increment and
-  attempts 2 and 3 rewrote byte-identical content. A file whose bytes have not changed has not
-  changed, so no race guard of any kind could flag those attempts - the test only passed when
-  the filesystem clock happened to tick mid-rewrite (measured 4 pass / 4 fail locally; red on
-  windows-latest while ubuntu's finer mtimes went green). The hook pads with one more newline
-  each try instead, so every attempt changes the file's SIZE and is caught on any platform
-  regardless of timestamp resolution: 10 runs, 10 passes. The implementation is untouched and
-  every assertion stands, including `landed === 3`.
+- **`chatStoreLabel` now handles both path separators** so it works cross-platform on Linux CI legs.
 
-  Hardening `stamp()` to hash content instead was tried and rejected: built as a probe, it makes
-  this test fail 10 times out of 10, because a byte-identical write is identical to a hash too.
-  It would also be wrong - a byte-identical concurrent write loses nothing, so declining it is a
-  false positive that would turn a correct merge into a spurious boot-time failure.
-- **An install missing a release-owned folder can be repaired without waiting for a new version**
-  (`missingComponents` / `resolveUpdateToApply` in `server/src/github-updater.ts`, a **Repair
-  install** button in Settings → MCP server). The component-aware updater landed *in* v0.39.0, so
-  the update that installed 0.39.0 was performed by its predecessor and brought the executable
-  alone. The result, measured on a real install 2026-09-07: the newest version running with no
-  `orchestrator/` beside it, so `move_chat`, `move_chats` and every `orchestrator_*` tool answered
-  `no orch.py under <dir>` while every other tool worked perfectly. And because it IS the newest
-  version, the update check said "up to date" and no update could ever repair it. An updater that
-  can only fix a component while also bumping a version cannot fix the install its own predecessor
-  broke. Reinstalling the current release is now allowed when a component is missing.
+- **MCP registration race test now detects byte changes** by padding output instead of relying on filesystem clock ticks.
 
-  Three things it refuses, because a repair must never make an install worse. A complete install on
-  the current version is still "already up to date". A repair is offered only when the latest
-  release IS this version, never when the newest release is OLDER (a yanked tag), where
-  "reinstall the latest" would be a silent downgrade. And the expected component set is
-  per-platform: `misc/` ships only on Windows, so a healthy Linux or macOS install is complete
-  without it, where treating it as missing would have made every apply a reinstall-and-restart that
-  could never converge. On Windows alone, an install with NO components at all is left alone, being
-  the bare single-file `.exe` rather than a damaged bundle; Unix publishes only tarballs, which
-  always carry `orchestrator/`, so there a missing folder is unambiguously damage.
+- **Missing components can now be repaired** without upgrading the version. A "Repair install" button reinstalls the current release to fill gaps in `orchestrator/` or `misc/`.
 
-- **The MCP docs no longer hand a release user an instruction that cannot work**
-  (`docs/REFERENCE.md`). The section now leads with the automatic registration and the HTTP
-  transport, keeps the manual `claude mcp add` for anyone who turns the automatic one off, and says
-  out loud that moving chats needs the Python toolbox beside the executable, the dependency that
-  made a working MCP server look broken.
+- **MCP docs now lead with auto-registration** and mention that moving chats needs the toolbox.
 
-- **`/api/chats?instance=` answers for the regular Claude Desktop install** (`chatStoreLabel` in
-  `server/src/routes/sessions.ts`). The route mapped an instance to its chat-store label with
-  `basename()`, which is right for every isolated instance and wrong for the one everybody has:
-  the default install is filed under the literal `default`, while the basename of its user-data dir
-  is `Claude`. The route therefore answered 404 "no desktop instance matched" for the account most
-  people are using, which reads as "that account does not exist". Found by review before the new
-  Chats dialog shipped on top of it.
+- **Default Claude Desktop install now answers `/api/chats?instance=`** by mapping the literal `default` label correctly.
 
 ## [0.40.0] - 2026-09-07
 
