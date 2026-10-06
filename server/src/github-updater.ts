@@ -19,6 +19,11 @@
 //      be rolled back, then move the new exe into its place.
 //   4. On any failure mid-swap, restore from the renamed-aside originals.
 // Leftover `*.old-*` artifacts are swept on the next boot (cleanupStaleUpdateArtifacts).
+//
+// From 2.0.0 the archive also carries desk2/ (AgentHydra's window, with its own bun) and devwebui/.
+// Both are reconciled file by file (a running bun.exe is moved aside, not overwritten), Desk 2 is
+// stopped before its files are replaced and started again after, and a compiled daemon that finds
+// desk2/ missing installs it from its own version's archive once at boot (repairDesk2AtBoot).
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -33,9 +38,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import os from 'node:os'
-import { basename, join } from 'node:path'
-import { APP_ROOT, appEnv, SERVICE_NAME, VERSION } from './config'
+import { basename, dirname, join } from 'node:path'
+import { APP_ROOT, appEnv, IS_COMPILED, SERVICE_NAME, VERSION } from './config'
 import { getSetting, setSetting } from './db'
+import { desk2 } from './desk2'
+import { type Desk2InstallNotice, setDesk2InstallNotice } from './desk2-install'
 import { orchestratorBusy } from './orchestrator'
 import {
   beginUpdateProgress,
@@ -530,6 +537,10 @@ export interface ReleaseComponent {
    *  Only `missingComponents` reads this; the swap/reconcile machinery is unaffected, because it
    *  works from what a downloaded bundle contains rather than from what it ought to contain. */
   platforms?: NodeJS.Platform[]
+  /** True when a bare executable with none of the folders still counts this one as missing, because
+   *  the release's reason for being lives in it. `missingComponents` otherwise reads "none of them
+   *  are here" on Windows as a deliberate single-file install. */
+  repairBare?: boolean
 }
 
 export const RELEASE_COMPONENTS: readonly ReleaseComponent[] = [
@@ -540,6 +551,13 @@ export const RELEASE_COMPONENTS: readonly ReleaseComponent[] = [
   // POSIX install, which made "already up to date" unreachable there and turned each apply into
   // a full reinstall + daemon restart that could never converge (review, 2026-09-07).
   { name: 'misc', strategy: 'reconcile', preserve: [], platforms: ['win32'] },
+  // AgentHydra 2.0's window (Hydra Desk 2) and the dev-server tool its servers pane starts. Reconcile,
+  // never swap: Desk 2's chat hosts are detached processes running desk2/runtime/bun(.exe) that outlive
+  // its server on purpose, so renaming the whole folder fails on Windows. A busy file is moved aside the
+  // way the daemon's own exe is. Desk 2's data (~/.hydra-desk-2, %LOCALAPPDATA%\HydraDesk2) is outside
+  // the folder and never touched. Every platform ships both.
+  { name: 'desk2', strategy: 'reconcile', preserve: [], repairBare: true },
+  { name: 'devwebui', strategy: 'reconcile', preserve: [] },
 ]
 
 /** The components this platform's release archive is expected to carry. */
@@ -668,10 +686,24 @@ export function rollbackComponents(
   }
 }
 
+/** A file moved out of the way during an update: `<name>.old-<stamp>`, the exe's aside name too. */
+const ASIDE_RE = /\.old-\d+(\.exe)?$/
+
+export interface ReconcileDeps {
+  /** Injected copy (a test makes a running executable refuse to be overwritten). Defaults to cpSync. */
+  copy?: (from: string, to: string) => void
+  rename?: RenameFn
+  /** Digits that make the aside names (`bun.exe.old-<stamp>`); swept by cleanupStaleUpdateArtifacts. */
+  stamp?: string
+}
+
 /**
  * Bring one reconcile-strategy component to the bundle's exact content, file by file, without
  * ever renaming the folder: copy every shipped file over, delete every file the release no longer
  * ships (except preserved paths and the version stamp), report what could not be touched.
+ * A file that is in use (a running bun.exe cannot be overwritten, but it can be renamed) is moved
+ * aside to `<name>.old-<stamp>` and the new one copied in; the aside is swept at a later boot,
+ * once the process holding it has gone. Only a file that cannot even be moved is left, reported.
  * Never throws: a locked tray executable must not fail an otherwise-good update.
  */
 export function reconcileComponent(
@@ -680,34 +712,74 @@ export function reconcileComponent(
   comp: ReleaseComponent,
   version: string,
   output: string[],
-): { installed: boolean; removed: string[]; locked: string[] } {
+  deps: ReconcileDeps = {},
+): { installed: boolean; removed: string[]; locked: string[]; movedAside: string[] } {
   const src = join(bundleDir, comp.name)
-  if (!existsSync(src)) return { installed: false, removed: [], locked: [] }
+  if (!existsSync(src)) return { installed: false, removed: [], locked: [], movedAside: [] }
+  const copy = deps.copy ?? ((from: string, to: string) => cpSync(from, to, { force: true }))
+  const rename = deps.rename ?? renameSync
+  const stamp = deps.stamp ?? String(Date.now())
   const cur = join(installDir, comp.name)
   const wanted = new Set(listFilesRecursive(src))
   const locked: string[] = []
   const removed: string[] = []
+  const movedAside: string[] = []
   try {
     mkdirSync(cur, { recursive: true })
   } catch (e) {
     output.push(`could not create ${comp.name}/: ${e instanceof Error ? e.message : String(e)}`)
-    return { installed: false, removed, locked }
+    return { installed: false, removed, locked, movedAside }
+  }
+  /** Rename a file in use out of the way; its aside path, or null when even that is refused. */
+  const moveAside = (rel: string): string | null => {
+    const aside = `${join(cur, rel)}.old-${stamp}`
+    try {
+      rename(join(cur, rel), aside)
+      return aside
+    } catch {
+      return null
+    }
   }
   for (const rel of wanted) {
+    const dest = join(cur, rel)
     try {
-      mkdirSync(join(cur, rel, '..'), { recursive: true })
-      cpSync(join(src, rel), join(cur, rel), { force: true })
+      mkdirSync(dirname(dest), { recursive: true })
+      copy(join(src, rel), dest)
+      continue
     } catch {
+      /* in use, most likely: try to move it aside below */
+    }
+    const aside = moveAside(rel)
+    if (!aside) {
+      locked.push(rel)
+      continue
+    }
+    try {
+      copy(join(src, rel), dest)
+      movedAside.push(rel)
+    } catch {
+      // The new file did not land: put the old one back rather than leave a hole.
+      try {
+        rmSync(dest, { force: true })
+        rename(aside, dest)
+      } catch {
+        /* the aside stays under its .old- name */
+      }
       locked.push(rel)
     }
   }
   for (const rel of listFilesRecursive(cur)) {
-    if (wanted.has(rel) || rel === RELEASE_VERSION_FILE || underPreserved(rel, comp)) continue
+    // An aside from this or an earlier update is cleanup's to remove, not a retired release file.
+    if (wanted.has(rel) || rel === RELEASE_VERSION_FILE || ASIDE_RE.test(rel)) continue
+    if (underPreserved(rel, comp)) continue
     try {
       rmSync(join(cur, rel), { force: true })
       removed.push(rel)
     } catch {
-      locked.push(rel)
+      if (moveAside(rel)) {
+        removed.push(rel)
+        movedAside.push(rel)
+      } else locked.push(rel)
     }
   }
   try {
@@ -718,11 +790,14 @@ export function reconcileComponent(
   output.push(
     `reconciled ${comp.name}/ to v${version}` +
       (removed.length ? `; removed ${removed.length} retired file(s): ${removed.join(', ')}` : '') +
+      (movedAside.length
+        ? `; ${movedAside.length} file(s) in use moved aside until they are free: ${movedAside.join(', ')}`
+        : '') +
       (locked.length
         ? `; ${locked.length} file(s) in use and left for the next update: ${locked.join(', ')}`
         : ''),
   )
-  return { installed: true, removed, locked }
+  return { installed: true, removed, locked, movedAside }
 }
 
 /** The version stamp an installed component carries, or null (older install, never stamped). */
@@ -771,13 +846,18 @@ export function missingComponents(
   const expected = componentsForPlatform(platform)
   const missing = expected.filter((c) => !existsSync(join(installDir, c.name)))
   if (missing.length === 0) return []
+  // From 2.0.0 the window is desk2/, so a bare executable that lacks it IS missing something: it is
+  // how the lone AgentHydra-<v>-windows-x64.exe download (and an install its old updater left
+  // without desk2/) gets the window. Only the components that say so (`repairBare`) are named then;
+  // the rest of a bundle comes along with the reinstall.
+  const bareBail = platform === 'win32' && missing.length === expected.length
   // THE BARE-BINARY BAIL-OUT IS WINDOWS-ONLY, because the bare binary is. release.yml publishes a
   // standalone `.exe` for windows-x64 and NOTHING but tarballs for every Unix target, and those
   // tarballs always stage orchestrator/. So on Windows "none of them are here" is a legitimate
   // single-file install and not damage, while on Unix there is no download that could produce it -
   // a missing orchestrator/ there is damage, and reporting nothing would swallow the one case this
   // repair path exists for.
-  if (platform === 'win32' && missing.length === expected.length) return []
+  if (bareBail) return missing.filter((c) => c.repairBare).map((c) => c.name)
   return missing.map((c) => c.name)
 }
 
@@ -886,6 +966,69 @@ export interface ApplyUpdateDeps {
   /** Injected exe rename/move (tests make the swap fail). Defaults to renameSync / moveInto. */
   rename?: RenameFn
   move?: (from: string, to: string) => void
+  /** Desk 2, as the swap needs it (stop before desk2/ is replaced, start after). Defaults to the real
+   *  one for the running install and to an inert one for any other install dir, so a scratch install
+   *  in a test can never stop a real Desk 2. */
+  desk?: DeskSeam
+  /** Injected copy for reconcile (a test makes a running executable refuse to be overwritten). */
+  copy?: ReconcileDeps['copy']
+}
+
+/** Desk 2 as the updater drives it: the part of desk2.ts it needs, so a test can stand in for it. */
+export interface DeskSeam {
+  present: () => boolean
+  stop: () => Promise<{ ok: boolean; reason?: string }>
+  start: (opts?: { window?: boolean }) => Promise<{ ok: boolean; reason?: string }>
+  /** True when Desk 2's native window is open. Cheap, and false whenever that is not known. */
+  windowOpen?: () => Promise<boolean>
+}
+
+/** Is HydraDesk2.exe (Desk 2's native window host) running? Windows only; any doubt is "no", which
+ *  starts the server alone and leaves an open window to reconnect by itself. */
+function windowIsOpen(): Promise<boolean> {
+  if (process.platform !== 'win32') return Promise.resolve(false)
+  return new Promise((resolve) => {
+    let out = ''
+    try {
+      const child = spawn('tasklist', ['/FI', 'IMAGENAME eq HydraDesk2.exe', '/NH'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+        windowsHide: true,
+      })
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve(false)
+      }, 5000)
+      child.stdout?.on('data', (d) => {
+        out += String(d)
+      })
+      child.on('error', () => {
+        clearTimeout(timer)
+        resolve(false)
+      })
+      child.on('exit', () => {
+        clearTimeout(timer)
+        resolve(/HydraDesk2\.exe/i.test(out))
+      })
+    } catch {
+      resolve(false)
+    }
+  })
+}
+
+const INERT_DESK: DeskSeam = {
+  present: () => false,
+  stop: async () => ({ ok: true }),
+  start: async () => ({ ok: true }),
+}
+
+function defaultDesk(installDir: string): DeskSeam {
+  if (installDir !== APP_ROOT) return INERT_DESK
+  return {
+    present: () => desk2.present(),
+    stop: () => desk2.stop(),
+    start: (o) => desk2.start(o),
+    windowOpen: windowIsOpen,
+  }
 }
 
 /** What an update needs before anything on disk is touched: which version, and the two assets that
@@ -982,10 +1125,13 @@ async function swapInBundle(
     isOrchestratorBusy: () => boolean
     rename: RenameFn
     move: (from: string, to: string) => void
+    desk: DeskSeam
+    copy?: ReconcileDeps['copy']
   },
   output: string[],
   componentAsides: ComponentAside[],
   recordExeAside: (aside: string) => void,
+  deskRestart: DeskRestart,
 ): Promise<UpdateApplyResult> {
   const { remoteVersion, stamp } = resolved
   const { exePath, exeName, installDir, staging, rename, move } = ctx
@@ -999,6 +1145,25 @@ async function swapInBundle(
     return fail(
       'an orchestrator script is running through this daemon; the update would replace the code it is executing - retry when it finishes',
     )
+
+  // --- 0. Desk 2 down before its files are replaced. Its chat hosts are detached and keep running
+  //        (they are why desk2/ is reconciled, not renamed); the server and the window are what stop.
+  //        Recorded BEFORE the await, so the caller starts it again however this goes. ---
+  if (existsSync(join(bundleDir, 'desk2'))) {
+    deskRestart.wanted = true
+    if (ctx.desk.present()) {
+      deskRestart.window = (await ctx.desk.windowOpen?.().catch(() => false)) ?? false
+      const stopped = await ctx.desk.stop().catch((e) => ({
+        ok: false,
+        reason: e instanceof Error ? e.message : String(e),
+      }))
+      if (!stopped.ok)
+        return fail(
+          `Desk 2 would not stop (${stopped.reason ?? 'no reason given'}), so its files were not replaced under it - retry once it is closed`,
+        )
+      output.push('stopped Desk 2')
+    }
+  }
 
   // --- 1. swap-strategy components (orchestrator/), each rollbackable ---
   for (const comp of RELEASE_COMPONENTS) {
@@ -1025,7 +1190,11 @@ async function swapInBundle(
   //        the update, and everything above it is already consistent. ---
   for (const comp of RELEASE_COMPONENTS) {
     if (comp.strategy !== 'reconcile') continue
-    reconcileComponent(bundleDir, installDir, comp, remoteVersion, output)
+    reconcileComponent(bundleDir, installDir, comp, remoteVersion, output, {
+      stamp,
+      rename,
+      copy: ctx.copy,
+    })
   }
 
   // The previous component copies are only garbage once the whole update has landed.
@@ -1061,6 +1230,8 @@ async function installVerifiedUpdate(
     isOrchestratorBusy: () => boolean
     rename: RenameFn
     move: (from: string, to: string) => void
+    desk: DeskSeam
+    copy?: ReconcileDeps['copy']
   },
 ): Promise<UpdateApplyResult> {
   // stamp / move / exeName are the SWAP's business now (see swapInBundle); this function keeps only
@@ -1072,6 +1243,7 @@ async function installVerifiedUpdate(
   // Staged renames-aside, tracked so a mid-swap failure can roll them back.
   let exeMovedAside: string | null = null
   const componentAsides: ComponentAside[] = []
+  const deskRestart: DeskRestart = { wanted: false, window: false }
 
   try {
     const prepared = await ctx.doDownloadAndVerifyUpdate(
@@ -1084,9 +1256,17 @@ async function installVerifiedUpdate(
       output,
     )
     if (!('newExe' in prepared)) return prepared
-    return await swapInBundle(prepared, resolved, ctx, output, componentAsides, (aside) => {
-      exeMovedAside = aside
-    })
+    return await swapInBundle(
+      prepared,
+      resolved,
+      ctx,
+      output,
+      componentAsides,
+      (aside) => {
+        exeMovedAside = aside
+      },
+      deskRestart,
+    )
   } catch (e) {
     // Roll back anything we moved aside so the install is never left half-swapped: the
     // executable, then the components that were swapped before it (newest first).
@@ -1100,6 +1280,32 @@ async function installVerifiedUpdate(
     }
     rollbackComponents(installDir, componentAsides)
     return fail(`update failed: ${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    // Desk 2 comes back whether the swap landed, was refused or rolled back. Not awaited: its start
+    // waits for health (up to 30 s) and an update response should not. The window comes back only if
+    // one was open; a window that stayed open reconnects to the server by itself.
+    if (deskRestart.wanted) startDeskAgain(ctx.desk, deskRestart.window)
+  }
+}
+
+/** Whether Desk 2 was stopped (or is to be started) around a swap, and whether its window was open. */
+interface DeskRestart {
+  wanted: boolean
+  window: boolean
+}
+
+function startDeskAgain(desk: DeskSeam, window: boolean): void {
+  const failed = (why: string) =>
+    console.error(`[agenthydra] update: Desk 2 did not start again: ${why}`)
+  try {
+    void desk
+      .start({ window })
+      .then((r) => {
+        if (!r.ok) failed(r.reason ?? 'no reason given')
+      })
+      .catch((e) => failed(e instanceof Error ? e.message : String(e)))
+  } catch (e) {
+    failed(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -1127,19 +1333,53 @@ export async function applyUpdate(deps: ApplyUpdateDeps = {}): Promise<UpdateApp
     isOrchestratorBusy,
     rename,
     move,
+    desk: deps.desk ?? defaultDesk(installDir),
+    copy: deps.copy,
   })
 }
 
-/** Delete leftover `*.old-*` swap artifacts + a stale staging dir. Best-effort, run at boot. */
-export function cleanupStaleUpdateArtifacts(): void {
+/** Remove every `*.old-<stamp>` file or folder under `dir`, however deep. One that is still in use
+ *  (a bun.exe a chat host is running) is left, and the next boot tries again. */
+export function sweepAsides(dir: string): void {
+  let entries: import('node:fs').Dirent[]
   try {
-    const installDir = APP_ROOT
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const e of entries) {
+    const path = join(dir, e.name)
+    if (ASIDE_RE.test(e.name)) {
+      try {
+        rmSync(path, { recursive: true, force: true })
+      } catch {
+        /* still in use: the next boot */
+      }
+    } else if (e.isDirectory()) sweepAsides(path)
+  }
+}
+
+/** Delete leftover `*.old-*` swap artifacts + a stale staging dir, and the files a reconcile moved
+ *  aside inside desk2/, devwebui/ and misc/ once whatever held them has gone. Best-effort, at boot. */
+export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void {
+  try {
     rmSync(join(installDir, '.update-staging'), { recursive: true, force: true })
+  } catch {
+    /* best-effort */
+  }
+  try {
     for (const name of readdirSync(installDir)) {
-      if (/\.old-\d+(\.exe)?$/.test(name)) {
+      if (!ASIDE_RE.test(name)) continue
+      try {
         rmSync(join(installDir, name), { recursive: true, force: true })
+      } catch {
+        /* the old exe of a daemon still shutting down: the next boot */
       }
     }
+  } catch {
+    /* best-effort */
+  }
+  try {
     const webDir = join(installDir, 'web')
     if (existsSync(webDir)) {
       for (const name of readdirSync(webDir)) {
@@ -1149,5 +1389,91 @@ export function cleanupStaleUpdateArtifacts(): void {
     }
   } catch {
     /* best-effort */
+  }
+  for (const comp of RELEASE_COMPONENTS) {
+    if (comp.strategy === 'reconcile') sweepAsides(join(installDir, comp.name))
+  }
+}
+
+// ── boot-time repair of a missing desk2/ (2.0.0) ────────────────────────────────────────────────
+//
+// Two installs reach a 2.0 daemon with no window beside it: a 1.x install updated by its OLD updater
+// (which only knows orchestrator/ and misc/, so it brings the 2.0 exe alone), and a person who
+// downloaded the lone AgentHydra-<v>-windows-x64.exe. Neither has a newer version to update TO, so the
+// repair path above (applyUpdate reinstalls THIS version when a component is missing) is what fixes
+// them - and this runs it once at boot, without a click, instead of waiting for someone to find it.
+//
+// Compiled daemons only (a checkout builds desk2/ itself). Once per boot, never a loop: a failure is
+// logged and shown on the daemon's "Starting AgentHydra" page (desk2-install.ts), with what to do. With
+// the update-check opt-out set (AGENTHYDRA_NO_PING, see the README's "Update check") nothing is
+// downloaded on its own; the page says how to get the window instead.
+
+export interface Desk2RepairDeps {
+  compiled?: boolean
+  installDir?: string
+  platform?: NodeJS.Platform
+  /** The update-check opt-out. Defaults to pingOptedOut(). */
+  optedOut?: () => boolean
+  /** The install itself. Defaults to applyUpdate(). */
+  apply?: () => Promise<UpdateApplyResult>
+  /** Called when the install replaced this daemon's version with a newer one, which needs a restart. */
+  relaunch?: () => void
+  /** "Already tried this boot". Defaults to the process-wide one. */
+  guard?: { ran: boolean }
+  notify?: (notice: Desk2InstallNotice | null) => void
+  log?: (message: string) => void
+}
+
+const bootRepairGuard = { ran: false }
+
+export type Desk2RepairOutcome =
+  | 'not-needed'
+  | 'already-tried'
+  | 'opted-out'
+  | 'repaired'
+  | 'failed'
+
+export async function repairDesk2AtBoot(deps: Desk2RepairDeps = {}): Promise<Desk2RepairOutcome> {
+  if (!(deps.compiled ?? IS_COMPILED)) return 'not-needed'
+  const installDir = deps.installDir ?? APP_ROOT
+  const platform = deps.platform ?? process.platform
+  if (!missingComponents(installDir, platform).includes('desk2')) return 'not-needed'
+  const guard = deps.guard ?? bootRepairGuard
+  if (guard.ran) return 'already-tried'
+  guard.ran = true
+
+  const notify = deps.notify ?? setDesk2InstallNotice
+  const log = deps.log ?? ((m: string) => console.log(`[agenthydra] ${m}`))
+  const zip = `AgentHydra-${VERSION}-${currentTarget()}${platform === 'win32' ? '.zip' : '.tar.gz'}`
+  const byHand = `Download ${zip} from ${RELEASES_PAGE}, unpack it and run AgentHydra from the unpacked folder.`
+
+  if ((deps.optedOut ?? pingOptedOut)()) {
+    const message = `AgentHydra's window (desk2/) is not installed here, and nothing is downloaded on its own while the update check is off (AGENTHYDRA_NO_PING). ${byHand}`
+    log(`desk2/ is missing; ${message}`)
+    notify({ state: 'opted-out', message })
+    return 'opted-out'
+  }
+
+  log(`desk2/ is missing beside this daemon; installing it from the v${VERSION} release`)
+  notify({
+    state: 'installing',
+    message: `Installing AgentHydra's window from the v${VERSION} release. This happens once and can take a minute.`,
+  })
+  try {
+    const result = await (deps.apply ?? applyUpdate)()
+    if (!result.ok) throw new Error(result.message || 'the install did not finish')
+    notify(null)
+    log('desk2/ installed')
+    // A newer release than this build was installed (the check found one): that needs the restart.
+    if (result.restartRequired && result.status?.currentVersion !== VERSION) deps.relaunch?.()
+    return 'repaired'
+  } catch (e) {
+    const why = e instanceof Error ? e.message : String(e)
+    log(`could not install desk2/: ${why}`)
+    notify({
+      state: 'failed',
+      message: `AgentHydra's window could not be installed: ${why}. ${byHand}`,
+    })
+    return 'failed'
   }
 }

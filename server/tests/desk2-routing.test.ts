@@ -212,3 +212,32 @@ describe('stopping Desk 2 for an update', () => {
     expect(plans).toHaveLength(0)
   })
 })
+
+describe('while the updater installs desk2/, or could not', () => {
+  test('an install in progress answers the starting page and starts nothing, even with a half-copied desk2/', async () => {
+    const notice = {
+      state: 'installing' as const,
+      message: 'Installing the window from the v2.0.0 release.',
+    }
+    const { desk, plans } = rig({ installNotice: () => notice })
+    const res = await desk.page(new URL('http://127.0.0.1:7787/'))
+    expect(res?.status).toBe(200)
+    const html = (await res?.text()) ?? ''
+    expect(html).toContain('Installing the window from the v2.0.0 release.')
+    expect(plans).toHaveLength(0)
+    expect((await desk.status()).install).toEqual(notice)
+  })
+
+  test('with desk2/ absent a failure notice is the page, with what to do', async () => {
+    const message = 'The window could not be installed: HTTP 503. Download the zip.'
+    const { desk, plans } = rig({ installNotice: () => ({ state: 'failed', message }) }, [])
+    const res = await desk.page(new URL('http://127.0.0.1:7787/'))
+    expect(await res?.text()).toContain('Download the zip.')
+    expect(plans).toHaveLength(0)
+  })
+
+  test('with desk2/ absent and nothing installing it, the daemon answers nothing for it', async () => {
+    const { desk } = rig({}, [])
+    expect(await desk.page(new URL('http://127.0.0.1:7787/'))).toBeNull()
+  })
+})

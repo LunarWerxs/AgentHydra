@@ -77,7 +77,7 @@ import {
 } from './dispatch'
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
-import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
+import { cleanupStaleUpdateArtifacts, missingComponents, repairDesk2AtBoot } from './github-updater'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { app } from './http-app'
 import {
@@ -958,7 +958,11 @@ const serveEmbeddedWeb = async (c: { req: { url: string } }) => {
 }
 // The starting page polls this: it is the daemon's own answer, so it needs no cross-origin call to Desk 2.
 app.get('/api/desk2/status', async (c) => c.json(await desk2.status()))
-if (desk2.present()) {
+// A compiled daemon that finds desk2/ missing is installing it (repairDesk2AtBoot, below): its pages
+// are the starting page meanwhile, which says how that went, not the old window.
+const desk2Wanted =
+  desk2.present() || (IS_COMPILED && missingComponents(APP_ROOT).includes('desk2'))
+if (desk2Wanted) {
   // The quick-instances window (/instances) is not Desk 2's yet (Desk 2's copy of it only answers under
   // /ah/, where its entry reads the path as the full window), so where the old build is, the daemon still
   // serves that one page and its assets. Every other page goes to Desk 2.
@@ -974,7 +978,11 @@ if (desk2.present()) {
   app.get('/*', async (c) => {
     const url = new URL(c.req.url)
     if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)
-    return (await desk2.page(url)) ?? c.json({ error: 'not found' }, 404)
+    const answer = await desk2.page(url)
+    if (answer) return answer
+    // desk2/ is not here and nothing is installing it: the old window, as before 2.0.
+    if (!desk2.present() && embeddedWeb) return serveEmbeddedWeb(c)
+    return c.json({ error: 'not found' }, 404)
   })
 } else if (embeddedWeb) {
   app.get('/*', serveEmbeddedWeb)
@@ -1608,6 +1616,14 @@ const server = Bun.serve({
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
 desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
+// A compiled daemon whose install has no desk2/ installs it from its own version's release, once per boot
+// and with no click (a 1.x install its old updater left without it, or the lone .exe download). Never
+// throws; how it went is on the starting page. See github-updater.ts repairDesk2AtBoot.
+if (IS_COMPILED) {
+  void repairDesk2AtBoot({ relaunch: () => setTimeout(() => void relaunchDaemon(), 3000) }).catch(
+    (error) => console.error('[agenthydra] desk2 repair failed unexpectedly:', error),
+  )
+}
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,
 // analytics) is a deliberate background continuation, not boot proper - see the comments below on

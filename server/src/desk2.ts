@@ -19,6 +19,7 @@ import {
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { APP_ROOT, IS_COMPILED, PORT } from './config'
+import { type Desk2InstallNotice, desk2InstallNotice } from './desk2-install'
 import { openUi } from './open-ui'
 
 export interface StartPlan {
@@ -56,6 +57,8 @@ export interface Desk2Deps {
   startTimeoutMs: number
   /** How long a health answer is reused, so a burst of page loads costs one probe. */
   healthTtlMs: number
+  /** The updater's note while desk2/ is being installed, or could not be (desk2-install.ts). */
+  installNotice: () => Desk2InstallNotice | null
 }
 
 export interface Desk2StartResult {
@@ -73,6 +76,8 @@ export interface Desk2Status {
   log: string
   /** Why the last start failed, or null. */
   error: string | null
+  /** Set while desk2/ is being installed from the release, or when that could not be done. */
+  install: Desk2InstallNotice | null
 }
 
 export const DESK2_START_TIMEOUT_MS = 30_000
@@ -163,6 +168,7 @@ function defaultDeps(): Desk2Deps {
     sleep: sleepMs,
     startTimeoutMs: DESK2_START_TIMEOUT_MS,
     healthTtlMs: 2000,
+    installNotice: desk2InstallNotice,
   }
 }
 
@@ -173,6 +179,9 @@ export function startingPageHtml(
   target: string,
   logPath: string,
   giveUpMs = DESK2_START_TIMEOUT_MS,
+  /** Set while desk2/ is being installed (the page waits as long as that takes) or when it could not be
+   *  (the page says so at once, with what to do). */
+  notice: Desk2InstallNotice | null = null,
 ) {
   // JSON inside a <script>: `<` is escaped so no value can close the tag.
   const js = (v: unknown) => JSON.stringify(v).replace(/</g, '\\u003c')
@@ -202,9 +211,11 @@ export function startingPageHtml(
     <div class="spin"></div>
     <h1>Starting AgentHydra...</h1>
     <p>This page goes on by itself as soon as AgentHydra is ready.</p>
+    <p id="installing"${notice?.state === 'installing' ? '' : ' hidden'}>${esc(notice?.state === 'installing' ? notice.message : '')}</p>
   </section>
   <section id="fail" hidden>
     <h1>AgentHydra could not start</h1>
+    <p id="why"${notice && notice.state !== 'installing' ? '' : ' hidden'}>${esc(notice && notice.state !== 'installing' ? notice.message : '')}</p>
     <p>Its log is <code>${esc(logPath)}</code></p>
     <p><a href="">Try again</a></p>
   </section>
@@ -214,7 +225,12 @@ export function startingPageHtml(
   var target = ${js(target)};
   var started = Date.now();
   var giveUp = ${js(giveUpMs)};
-  function fail() {
+  function fail(install) {
+    if (install && install.message) {
+      var why = document.getElementById('why');
+      why.textContent = install.message;
+      why.hidden = false;
+    }
     document.getElementById('wait').hidden = true;
     document.getElementById('fail').hidden = false;
   }
@@ -223,6 +239,9 @@ export function startingPageHtml(
       .then(function (r) { return r.json(); })
       .then(function (s) {
         if (s && s.up) { location.replace(target); return; }
+        var install = s && s.install;
+        if (install && install.state === 'installing') { started = Date.now(); setTimeout(tick, 800); return; }
+        if (install) { fail(install); return; }
         if ((s && s.error && !s.starting) || Date.now() - started > giveUp) { fail(); return; }
         setTimeout(tick, 800);
       })
@@ -483,6 +502,7 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
       url: url(),
       log: logPath(),
       error: lastError,
+      install: d.installNotice(),
     }
   }
 
@@ -490,8 +510,19 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
    *  starts it (once) and answers the starting page. Null where Desk 2 is not beside this daemon: the
    *  caller serves what it served before. */
   async function page(pageUrl: URL): Promise<Response | null> {
-    if (!present()) return null
+    const notice = d.installNotice()
     const target = `${url()}/${pageUrl.search}`
+    const html = (body: string) =>
+      new Response(body, {
+        status: 200,
+        headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+      })
+    // desk2/ is being put in place by the updater (a half-copied folder is not started), or could not be:
+    // the page says which, and what to do.
+    if (notice?.state === 'installing' || (notice && !present())) {
+      return html(startingPageHtml(target, logPath(), d.startTimeoutMs, notice))
+    }
+    if (!present()) return null
     if (await healthy()) {
       return new Response(null, {
         status: 302,
@@ -499,10 +530,7 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
       })
     }
     start().catch(() => undefined)
-    return new Response(startingPageHtml(target, logPath(), d.startTimeoutMs), {
-      status: 200,
-      headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
-    })
+    return html(startingPageHtml(target, logPath(), d.startTimeoutMs))
   }
 
   return {
