@@ -24,7 +24,7 @@ const gitUpdater = createUpdater({
   appLabel: 'AgentHydra',
   updateRepoEnvVar: 'AGENTHYDRA_UPDATE_REPO',
   installCmd: ['bun', 'install'],
-  buildCmd: ['bun', 'run', '--cwd', 'web', 'build'],
+  buildCmd: ['bun', 'run', 'build:desk2'],
 })
 
 /** `fresh` bypasses the compiled path's 5-minute result cache, for a check a PERSON asked for.

@@ -33,7 +33,6 @@ import {
   DATA_DIR,
   DATA_DIR_NOTICE,
   DB_PATH,
-  DESK2_URL,
   HOST,
   IS_COMPILED,
   noAutoOpen,
@@ -67,6 +66,7 @@ import { createRunningCodeProbe, restartNeededMessage } from './core/running-cod
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
 import { getSetting, setSetting } from './db'
+import { desk2 } from './desk2'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import {
   activeCount,
@@ -924,43 +924,60 @@ app.post('/api/shutdown', (c) => {
 })
 
 // --- the window ---------------------------------------------------------------
-// AgentHydra 2.0 (owner, 2026-10-06): where Desk 2 is beside the daemon (config.ts DESK2_URL), the old
-// window is retired. A page asked of the daemon, the Connections sign-in's return included, goes on to
-// Desk 2 with its query; /api stays the daemon's. Elsewhere (a release zip until it ships Desk 2) the
-// daemon serves the old window, the built SPA below.
+// AgentHydra 2.0 (owner, 2026-10-06): where Desk 2 is beside the daemon (desk2.ts), the old window is
+// retired. A page asked of the daemon, the Connections sign-in's return included, goes on to Desk 2 with
+// its query once Desk 2 answers; while it does not, the daemon starts it and answers a small "Starting
+// AgentHydra..." page that goes on by itself. /api stays the daemon's. Elsewhere (no desk2/ beside the
+// daemon) it serves the old window, the built SPA below.
 const embeddedWeb = (
   globalThis as {
     __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
   }
 ).__AGENTHYDRA_EMBEDDED_WEB__
 const dist = WEB_DIST_CANDIDATES.find((p) => existsSync(p))
-if (DESK2_URL) {
-  app.get('/*', (c) => {
+const serveEmbeddedWeb = async (c: { req: { url: string } }) => {
+  let pathname = decodeURIComponent(new URL(c.req.url).pathname)
+  if (pathname === '/' || pathname === '') pathname = '/index.html'
+  const lastSeg = pathname.slice(pathname.lastIndexOf('/') + 1)
+  const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSeg)
+  const embeddedPath = embeddedWeb?.[pathname]
+  if (embeddedPath) {
+    return new Response(Bun.file(embeddedPath), {
+      headers: {
+        'cache-control': pathname.startsWith('/assets/')
+          ? 'public, max-age=31536000, immutable'
+          : 'no-cache',
+      },
+    })
+  }
+  if (isAsset)
+    return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } })
+  return new Response(Bun.file(embeddedWeb?.['/index.html'] ?? ''), {
+    headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
+  })
+}
+// The starting page polls this: it is the daemon's own answer, so it needs no cross-origin call to Desk 2.
+app.get('/api/desk2/status', async (c) => c.json(await desk2.status()))
+if (desk2.present()) {
+  // The quick-instances window (/instances) is not Desk 2's yet (Desk 2's copy of it only answers under
+  // /ah/, where its entry reads the path as the full window), so where the old build is, the daemon still
+  // serves that one page and its assets. Every other page goes to Desk 2.
+  if (embeddedWeb) {
+    app.get('/instances', serveEmbeddedWeb)
+    app.get('/assets/*', serveEmbeddedWeb)
+  } else if (dist) {
+    const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
+    app.use('/assets/*', serveStatic({ root }))
+    app.get('/assets/*', (c) => c.text('not found', 404, { 'cache-control': 'no-store' }))
+    app.get('/instances', serveStatic({ path: `${root}/index.html` }))
+  }
+  app.get('/*', async (c) => {
     const url = new URL(c.req.url)
     if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)
-    return c.redirect(`${DESK2_URL}/${url.search}`, 302)
+    return (await desk2.page(url)) ?? c.json({ error: 'not found' }, 404)
   })
 } else if (embeddedWeb) {
-  app.get('/*', async (c) => {
-    let pathname = decodeURIComponent(new URL(c.req.url).pathname)
-    if (pathname === '/' || pathname === '') pathname = '/index.html'
-    const lastSeg = pathname.slice(pathname.lastIndexOf('/') + 1)
-    const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSeg)
-    const embeddedPath = embeddedWeb[pathname]
-    if (embeddedPath) {
-      return new Response(Bun.file(embeddedPath), {
-        headers: {
-          'cache-control': pathname.startsWith('/assets/')
-            ? 'public, max-age=31536000, immutable'
-            : 'no-cache',
-        },
-      })
-    }
-    if (isAsset) return c.text('not found', 404, { 'cache-control': 'no-store' })
-    return new Response(Bun.file(embeddedWeb['/index.html']!), {
-      headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
-    })
-  })
+  app.get('/*', serveEmbeddedWeb)
 } else if (dist) {
   const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
   app.use('/assets/*', serveStatic({ root }))
@@ -971,6 +988,17 @@ if (DESK2_URL) {
   // (and the header logo, which uses the same asset) never loads.
   app.use('/*', serveStatic({ root }))
   app.get('/*', serveStatic({ path: `${root}/index.html` }))
+}
+
+/** Opens AgentHydra for a person: Desk 2 where it is beside the daemon (Windows: its launcher, which
+ *  starts the server and the native window; elsewhere its server and the default browser), else the old
+ *  window at the daemon's URL. */
+function openWindow(url: string): boolean {
+  if (desk2.present()) {
+    void desk2.open({ hydraUrl: url }).catch(() => undefined)
+    return true
+  }
+  return openUi(url)
 }
 
 /** True if something is already listening on `port` on `host` (non-intrusive TCP probe). Local to
@@ -1041,7 +1069,7 @@ if (!skipSingleInstanceGuard()) {
     console.log(
       `\n  AgentHydra is already running  →  ${live.url}${how}\n  Not starting a second instance.\n`,
     )
-    if (releaseDoubleClick && !noAutoOpen()) openUi(live.url)
+    if (releaseDoubleClick && !noAutoOpen()) openWindow(live.url)
     process.exit(0)
   }
   // Every probe timed out, but the pointer's daemon is still a live process holding its port: it is
@@ -1578,6 +1606,8 @@ const server = Bun.serve({
   fetch: app.fetch,
   idleTimeout: 255,
 })
+// Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
+desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,
 // analytics) is a deliberate background continuation, not boot proper - see the comments below on
@@ -1621,7 +1651,7 @@ warmSessionMetaIndex()
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`
-  if (!openUi(url))
+  if (!openWindow(url))
     console.error(`[agenthydra] Could not open a browser automatically. Open ${url} manually.`)
 }
 

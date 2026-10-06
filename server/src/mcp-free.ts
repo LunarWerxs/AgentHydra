@@ -6,7 +6,7 @@
 // batches it is sending. Each Free account runs one operation at a time, so a batch waits for an idle
 // account rather than ever being refused for a busy one.
 import { randomUUID } from 'node:crypto'
-import { DESK2_URL } from './config'
+import { desk2Present, desk2Url } from './desk2'
 import { MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -57,10 +57,10 @@ interface FreeThread {
   error: string | null
 }
 
-/** Desk 2's server, read at each call (HYDRA_DESK_PORT, as config.ts's DESK2_URL), or null where this
- *  install has no Desk 2. */
+/** Desk 2's server, read at each call (HYDRA_DESK_PORT, see desk2.ts), or null where this install has
+ *  no Desk 2. */
 function deskBase(): string | null {
-  return DESK2_URL ? `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}` : null
+  return desk2Present() ? desk2Url() : null
 }
 
 class DeskError extends Error {

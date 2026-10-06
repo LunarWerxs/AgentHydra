@@ -192,6 +192,7 @@ import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
 import { nativeCommandLines } from './core/win-process-table'
+import { desk2Url } from './desk2'
 import { POINTER_DIR } from './instance'
 import { parseResetTime } from './usage'
 
@@ -3944,11 +3945,11 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
 
 /** Desk 2's own route for a chat it runs (desk2 plugins/20-engine.ts POST /api/sessions/:id/ping): a
  *  real turn, with a closed chat resumed. 404 or no server there means the chat is not one of its.
- *  Asked on Desk 2's port whether or not Desk 2 sits beside this daemon (DESK2_URL): a release exe
+ *  Asked on Desk 2's port whether or not Desk 2 sits beside this daemon (desk2.ts): a release exe
  *  runs from its own folder while Desk 2 runs from a checkout, and its chats still need waking. */
 const desk: NonNullable<CliMaytePingDeps['desk']> = {
   async send(sessionId, text) {
-    const url = `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
+    const url = desk2Url()
     try {
       const res = await fetch(`${url}/api/sessions/${encodeURIComponent(sessionId)}/ping`, {
         method: 'POST',

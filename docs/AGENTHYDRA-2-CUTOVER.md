@@ -22,8 +22,11 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   writes **AgentHydra** and recycles the old "Hydra Desk 2" ones), the launcher's message boxes and Desk's Settings say
   AgentHydra. The internal names below are unchanged.
 - **The old window is gone where Desk 2 is.** A page asked of the daemon goes on to Desk 2 when `desk2/` is beside
-  it (`server/src/config.ts` `DESK2_URL`, the same file the tray's `requires` checks), the Connections sign-in's
-  return included; `/api` is untouched. Only a release zip, with no Desk 2, still serves `web/`.
+  it (`server/src/desk2.ts`, which owns presence, URL, health, start and stop of Desk 2), the Connections sign-in's
+  return included; `/api` is untouched. When Desk 2's server does not answer, the daemon starts it and shows a
+  "Starting AgentHydra..." page that goes on by itself, or names `~/.hydra-desk-2/logs/server.log` after 30 s: never a
+  redirect to a dead port. Only an install with no `desk2/` still serves `web/`, plus the quick-instances page
+  (`/instances`), which is not Desk 2's yet.
 - **The old window's table settings moved too.** Desk's Settings has an Instances section (CLI, Desktop, Free)
   holding what the tables' gears held; see `desk2/README.md`.
 - **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` stays
@@ -36,12 +39,12 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
 | Where | What it does | At cutover |
 | --- | --- | --- |
 | `server/src/config.ts:354` `WEB_DIST_CANDIDATES` | where the built old window is | drop |
-| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the compiled exe's embedded copy or from `web/dist`, only where `DESK2_URL` is null (a release zip) | drop the static serving; `/api/*` stays |
-| `server/src/index.ts:1031`, `:1611` `openUi` | a release exe's double-click, and boot, open the old window | open Desk 2 (run its launcher) |
+| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the compiled exe's embedded copy or from `web/dist`, only where `desk2/` is not beside the daemon, and the quick-instances page `/instances` with its assets | drop the static serving; `/api/*` stays |
+| `server/src/index.ts:1031`, `:1611` `openUi` | a release exe's double-click, and boot, open the old window | done: Desk 2 where it is beside the daemon (`desk2.ts open()`: Windows its `start.vbs`, elsewhere its server and the default browser) |
 | `server/src/index.ts:839` `/api/portable-window`, `:232-235` `portable_mode` | the chromeless "portable" window of the old UI | drop with the setting (Desk 2 left portable mode behind) |
-| `server/src/instance-mode-window.ts:7`, `server/src/instance-mode.ts:296` | the quick-instances window (`/instances`) and the light daemon that serves it | retarget to Desk 2's copy (`desk2/hydra/src/QuickInstancesApp.vue`) or retire |
+| `server/src/instance-mode-window.ts:7`, `server/src/instance-mode.ts:296` | the quick-instances window (`/instances`) and the light daemon that serves it | not retargeted yet: Desk 2's copy is built for base `/ah/` and its entry (`desk2/hydra/src/lib/app-mode.ts`) picks the quick app only for the exact path `/instances`, which Desk 2 does not route; it needs Desk 2 to serve `/ah/instances` as the quick app before the window can move |
 | `server/src/core/instance-mode-shortcut.ts:50`, `server/src/routes/instances.ts:173` | creates the quick-instances shortcut (`--instances`) | retire with the window, or retarget |
-| `server/src/updater.ts:27` `buildCmd` | a checkout's self-update rebuilds `web` | build `desk2` |
+| `server/src/updater.ts:27` `buildCmd` | a checkout's self-update rebuilds `web` | done: `bun run build:desk2` (`bun install` and `bun run build` in `desk2/`) |
 | `server/src/github-updater.ts:1143` | a release update replaces `<install>/web` | replace Desk 2's files instead |
 
 ### Build, packaging and release
