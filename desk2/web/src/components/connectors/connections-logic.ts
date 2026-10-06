@@ -33,11 +33,30 @@ export const isCurrent = (ws: ConnectionsWorkspace | null, c: ConnectionsCompany
 /** Picking a workspace pins this chat, which needs the chat's Claude session id (it exists once the chat has started). */
 export const chatScopeAllowed = (sessionId: string | null): boolean => sessionId !== null
 
-/** The menu's search: workspaces whose name contains what was typed, case-insensitive; blank shows all. */
+/** A name or query as the search compares it: lower case, accents dropped, every run of punctuation or spaces one space. */
+const fold = (s: string): string =>
+  s
+    .normalize('NFD')
+    .replace(/\p{M}+/gu, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+
+/**
+ * The menu's search: every word typed must appear in the name, in any order, ignoring case, accents and punctuation
+ * ("acme corp" finds "Acme-Corp" and "corp acme" finds "Acme Corp"); blank shows all. Names that start with the first
+ * word come first, then the rest in the account's own order.
+ */
 export const filterCompanies = (list: readonly ConnectionsCompany[], query: string): ConnectionsCompany[] => {
-  const q = query.trim().toLowerCase()
-  return q ? list.filter((c) => c.name.toLowerCase().includes(q)) : [...list]
+  const words = fold(query).split(' ').filter(Boolean)
+  if (!words.length) return [...list]
+  const hits = list.map((c, i) => ({ c, i, n: fold(c.name) })).filter(({ n }) => words.every((w) => n.includes(w)))
+  const rank = (n: string): number => (n.startsWith(words[0]!) ? 0 : n.includes(` ${words[0]}`) ? 1 : 2)
+  return hits.sort((a, b) => rank(a.n) - rank(b.n) || a.i - b.i).map(({ c }) => c)
 }
+
+/** What Enter in the search box picks: the top match, and nothing while the box is blank (Enter must never switch by accident). */
+export const enterPick = (list: readonly ConnectionsCompany[], query: string): ConnectionsCompany | null => (fold(query) ? (filterCompanies(list, query)[0] ?? null) : null)
 
 export const STAR_TITLE = 'Set as default for new chats in this folder'
 export const STAR_ON_TITLE = 'Default for new chats'

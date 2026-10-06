@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ConnectorView } from '../../../shared/connectors'
-import { bypassRow, chatScopeAllowed, chipText, connectionsServerInfo, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, signInLine, starState } from '../../src/components/connectors/connections-logic'
+import { bypassRow, chatScopeAllowed, chipText, connectionsServerInfo, enterPick, filterCompanies, isCurrent, pageShouldOpen, showConnectionsChip, signInLine, starState } from '../../src/components/connectors/connections-logic'
 
 const view = (over: Partial<ConnectorView>): ConnectorView => ({
   id: 'connections', name: 'Connections', blurb: '', homepage: 'https://example.com', installable: false, pane: false,
@@ -44,6 +44,28 @@ describe('picking and the search', () => {
     expect(filterCompanies(cs, 'ACME').map((c) => c.companyId)).toEqual(['c1', 'c3'])
     expect(filterCompanies(cs, '  ')).toEqual(cs)
     expect(filterCompanies(cs, 'zzz')).toEqual([])
+  })
+})
+
+describe('the search finds a workspace the way a person types its name', () => {
+  const cs = [
+    { companyId: 'c1', name: 'Beta Acme-Corp' },
+    { companyId: 'c2', name: 'Acme  Corp Labs' },
+    { companyId: 'c3', name: 'Café Studio' },
+    { companyId: 'c4', name: 'Other' }
+  ]
+  test('words in any order, punctuation and spacing ignored, accents folded; names starting with the typing first', () => {
+    expect(filterCompanies(cs, 'acme corp').map((c) => c.companyId)).toEqual(['c2', 'c1'])
+    expect(filterCompanies(cs, 'corp acme').map((c) => c.companyId)).toEqual(['c1', 'c2'].sort())
+    expect(filterCompanies(cs, 'cafe').map((c) => c.companyId)).toEqual(['c3'])
+    expect(filterCompanies(cs, 'acme-corp la').map((c) => c.companyId)).toEqual(['c2'])
+    expect(filterCompanies(cs, '--')).toEqual(cs)
+  })
+  test('Enter picks the top match, never anything while the box is blank', () => {
+    expect(enterPick(cs, 'acme corp')?.companyId).toBe('c2')
+    expect(enterPick(cs, '')).toBeNull()
+    expect(enterPick(cs, '  ')).toBeNull()
+    expect(enterPick(cs, 'zzz')).toBeNull()
   })
 })
 

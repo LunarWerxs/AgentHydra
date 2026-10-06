@@ -16,6 +16,8 @@ export function useConnectionsWorkspace(chat: () => { id: string; sessionId: str
   const query = ref('')
   const note = ref('')
   const busy = ref(false)
+  /** The list of workspaces has answered (or failed): before that, an empty list means "loading", not "nothing matches". */
+  const loaded = ref(false)
 
   const chatOk = computed(() => chatScopeAllowed(chat().sessionId))
   const matches = computed(() => filterCompanies(companies.value, query.value))
@@ -34,6 +36,8 @@ export function useConnectionsWorkspace(chat: () => { id: string; sessionId: str
       companies.value = await readCompanies(chat().id)
     } catch (e) {
       note.value = words(e)
+    } finally {
+      loaded.value = true
     }
   }
   async function pick(company: string | null) {
@@ -70,5 +74,5 @@ export function useConnectionsWorkspace(chat: () => { id: string; sessionId: str
       note.value = words(e)
     }
   }
-  return { ws, companies, query, note, busy, chatOk, matches, showNone, load, loadCompanies, pick, toggleDefault, signIn }
+  return { ws, companies, query, note, busy, loaded, chatOk, matches, showNone, load, loadCompanies, pick, toggleDefault, signIn }
 }

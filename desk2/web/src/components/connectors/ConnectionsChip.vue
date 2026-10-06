@@ -14,12 +14,13 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
 import { connectorList, refreshConnectorList } from './connections-api'
+import { SEARCH_BOX, SEARCH_INPUT } from './styles'
 import { NO_SESSION, useConnectionsWorkspace } from './connections-workspace'
-import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassRow, chipText, isCurrent, showConnectionsChip, starState } from './connections-logic'
+import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassRow, chipText, enterPick, isCurrent, showConnectionsChip, starState } from './connections-logic'
 
 const props = defineProps<{ chat: ChatSummary }>()
 
-const { ws, companies, query, note, busy, chatOk, matches, showNone, load, loadCompanies, pick, toggleDefault, signIn } = useConnectionsWorkspace(() => props.chat)
+const { ws, companies, query, note, busy, loaded, chatOk, matches, showNone, load, loadCompanies, pick, toggleDefault, signIn } = useConnectionsWorkspace(() => props.chat)
 const menuOpen = ref(false)
 const search = ref<HTMLInputElement | null>(null)
 const logoFailed = ref(false)
@@ -33,10 +34,11 @@ async function onOpen(open: boolean) {
   if (!open) return
   note.value = ''
   query.value = ''
+  loaded.value = false
   void load()
   await loadCompanies()
   await nextTick()
-  list.value?.querySelector('[data-current=true]')?.scrollIntoView({ block: 'center' })
+  list.value?.querySelector('[data-current=true]')?.scrollIntoView({ block: 'nearest' })
 }
 // The search box takes focus the moment the menu opens, so typing filters at once.
 function focusSearch(e: Event) {
@@ -52,11 +54,24 @@ function searchKey(e: KeyboardEvent) {
     list.value?.querySelector<HTMLElement>('[role^="menuitem"]:not([data-disabled])')?.focus()
   } else if (e.key === 'Enter') {
     e.preventDefault()
-    const top = matches.value[0]
+    const top = enterPick(companies.value, query.value)
     if (top) {
       void pick(top.companyId)
       menuOpen.value = false
     }
+  }
+}
+// From a row: typing (or Backspace) goes back to the search box instead of the menu's jump-to-letter, and Up from the first row returns to it.
+function contentKey(e: KeyboardEvent) {
+  if (e.target === search.value || e.ctrlKey || e.metaKey || e.altKey) return
+  const first = list.value?.querySelector('[role^="menuitem"]:not([data-disabled])')
+  if (e.key === 'ArrowUp' && e.target === first) {
+    e.preventDefault()
+    e.stopPropagation()
+    search.value?.focus()
+  } else if (e.key === 'Backspace' || (e.key.length === 1 && e.key !== ' ')) {
+    e.stopPropagation()
+    search.value?.focus()
   }
 }
 // Read-only: Desk never writes Bypass permissions; the row only opens Studio, where a person changes it.
@@ -89,7 +104,7 @@ watch(
     <DropdownMenuTrigger as-child>
       <button
         type="button"
-        class="ml-2 flex h-5 min-w-0 max-w-[200px] shrink cursor-default items-center gap-1 rounded-[var(--radius-6)] px-[5px] text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+        class="ml-1 flex h-5 min-w-0 max-w-[180px] shrink cursor-default items-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-[5px] text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         :class="text.muted ? 'text-text-muted' : 'text-text-2'"
         :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
       >
@@ -99,24 +114,27 @@ watch(
         <span v-if="text.pinned" class="shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] leading-[14px] text-text-muted">this chat</span>
       </button>
     </DropdownMenuTrigger>
-    <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex max-h-[var(--reka-dropdown-menu-content-available-height)] flex-col']" @open-auto-focus="focusSearch">
+    <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex w-64 max-h-[var(--reka-dropdown-menu-content-available-height)] flex-col']" @open-auto-focus="focusSearch" @keydown.capture="contentKey">
       <template v-if="ws && !ws.signedIn">
         <DropdownMenuItem :class="MENU_ITEM" @select="signIn">Sign in to Connections</DropdownMenuItem>
       </template>
       <template v-else>
-        <input
-          ref="search"
-          v-model="query"
-          type="text"
-          placeholder="Search workspaces"
-          aria-label="Search workspaces"
-          autocomplete="off"
-          spellcheck="false"
-          class="mb-1 h-6 w-full shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[13px] leading-[19px] text-text outline-none placeholder:text-text-muted"
-          @keydown="searchKey"
-        />
-        <div ref="list" class="min-h-0 max-h-[50vh] overflow-y-auto">
-          <DropdownMenuItem v-for="c in matches" :key="c.companyId" :class="[MENU_ITEM, 'group']" :data-current="isCurrent(ws, c)" :disabled="busy" :title="chatOk ? undefined : NO_SESSION" @select="pick(c.companyId)">
+        <label :class="[SEARCH_BOX, 'mb-1']">
+          <component :is="settingsIcons.search" class="size-4 shrink-0 text-text-muted" />
+          <input
+            ref="search"
+            v-model="query"
+            type="text"
+            placeholder="Search workspaces"
+            aria-label="Search workspaces"
+            autocomplete="off"
+            spellcheck="false"
+            :class="SEARCH_INPUT"
+            @keydown="searchKey"
+          />
+        </label>
+        <div ref="list" class="min-h-0 max-h-[min(50vh,264px)] overflow-y-auto">
+          <DropdownMenuItem v-for="c in matches" :key="c.companyId" :class="[MENU_ITEM, 'group data-[current=true]:font-medium']" :data-current="isCurrent(ws, c)" :disabled="busy" :title="chatOk ? undefined : NO_SESSION" @select="pick(c.companyId)">
             <span class="flex-1 truncate">{{ c.name }}</span>
             <button
               type="button"
@@ -136,7 +154,7 @@ watch(
             </button>
             <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
           </DropdownMenuItem>
-          <p v-if="!matches.length" class="px-2 py-1 text-[13px] leading-[19px] text-text-muted">No workspace matches</p>
+          <p v-if="!matches.length" class="flex h-6 items-center px-2 text-[13px] leading-[19px] text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>
         </div>
         <DropdownMenuItem v-if="showNone" :class="MENU_ITEM" :disabled="busy" @select="pick(null)">
           <span class="flex-1">No workspace</span>
