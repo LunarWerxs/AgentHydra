@@ -52,8 +52,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   already on screen, so no other tab's rows are left behind. CliMayte has no tab of its own (owner,
   2026-10-05: "move what is currently on the CliMayte tab into HSwarm"): its node shows a compact manager
   list inside the pane, one line per task (status, title, account, model, time, a cloud for another PC's
-  task), Running / All, the waves above it and the scorecard closed; a click opens the task with "Back to
-  tasks", and CliMayte's tasks never go into Desk's sidebar. Desk's links land on the node: a task row
+  task), Running / All, the scorecard closed above it; a click opens the task with "Back to tasks", and
+  CliMayte's tasks never go into Desk's sidebar. The manager waves are CliMayte's child row, Waves
+  (owner, 2026-10-06: "Move the waves section into a subsection called waves underneath CLI Mate"),
+  counting the live ones; a wave's manager opens there with "Back to waves". Desk's links land on the node: a task row
   opens CliMayte on that task, a job row Jobs on that job. The Routing node is one page: HSwarm's
   routing first (`hswarm/HSwarmRouting.vue`), then AgentHydra's cost routing between API keys and the
   Claude subscriptions (`hswarm/HSwarmCostRouting.vue`, alone while HSwarm is down): the on/off switch, the
@@ -400,7 +402,7 @@ a chat's Browser button, and only for that chat's folder; nothing shows every de
 
 ---
 
-<img src="launcher/hydra-desk.png" width="96" alt="Hydra Desk icon">
+<img src="../misc/AgentHydra-icon.png" width="96" alt="AgentHydra icon">
 
 Hydra Desk is Jacob's own Claude Code desktop: a replacement for the Code tab of Claude Desktop. It
 runs Claude Code chats itself, through the Claude Agent SDK, and shows at a glance which chats are
@@ -455,8 +457,11 @@ cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FA
 `GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
 any change to a tooltip, menu, popover, sidebar row or lazy overlay.
 
-To regenerate the icon: `python launcher\make-icon.py` (needs Pillow), then re-run
-`install-shortcuts.ps1` so Windows picks it up.
+The icon is AgentHydra's own (owner, 2026-10-06), never one of Desk's: `misc/AgentHydra.ico`, compiled into
+`launcher/HydraDesk2.exe` by `launcher/host/build.rs`, where the window, the taskbar and both shortcuts take it
+from; the page's `web/public/favicon.svg` and `favicon.ico` are copies. To change it, follow `misc/Make-Icon.ps1`,
+rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe into `launcher/`) and re-run
+`install-shortcuts.ps1`.
 
 ## Ports
 

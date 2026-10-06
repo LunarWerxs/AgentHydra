@@ -11,6 +11,9 @@
 #     magick -background none misc\brand\icon.svg -resize 1024x1024 -depth 8 PNG32:misc\AgentHydra-icon.png
 #     powershell -File misc\Make-Icon.ps1
 #     copy misc\AgentHydra.ico web\public\favicon.ico
+#     copy misc\brand\icon.svg and misc\AgentHydra.ico to desk2\web\public and desk2\hydra\public as
+#       favicon.svg and favicon.ico, then rebuild desk2\launcher\host (its build.rs compiles
+#       AgentHydra.ico into HydraDesk2.exe) and re-run desk2\launcher\install-shortcuts.ps1
 #     bun run og-image
 # After regenerating, re-run Create-Shortcut.ps1 (Windows caches icons; refreshing the shortcut
 # picks up the new one).

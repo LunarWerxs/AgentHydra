@@ -894,7 +894,7 @@ are always 0 (a free port).
 health, then open Microsoft Edge as an app window (`--app=http://127.0.0.1:7798
 --user-data-dir=%LOCALAPPDATA%\HydraDesk2\window`) so it is its own window with its own taskbar entry.
 `launcher/install-shortcuts.ps1` makes Desktop and Start Menu shortcuts named "Hydra Desk" with an icon
-(`launcher/hydra-desk.ico`). Never a visible console window.
+(AgentHydra's icon since 2026-10-06, compiled into `launcher/HydraDesk2.exe`). Never a visible console window.
 
 **Updates without losing the chats.** `launcher/stop.ps1` asks `POST /api/server/shutdown`, waits 15 s,
 then ends what is left of the server by the pids in `~/.hydra-desk-2/server.pid` (`taskkill /T`; chat

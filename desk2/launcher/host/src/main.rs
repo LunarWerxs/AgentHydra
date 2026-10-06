@@ -235,6 +235,7 @@ mod win {
             flags: u32,
         ) -> isize;
         fn SendMessageW(h: Hwnd, msg: u32, w: usize, l: isize) -> isize;
+        fn GetSystemMetrics(index: i32) -> i32;
         fn SetProcessDpiAwarenessContext(v: isize) -> i32;
     }
     #[link(name = "dwmapi")]
@@ -245,6 +246,7 @@ mod win {
     extern "system" {
         fn CreateMutexW(attrs: *const c_void, owner: i32, name: *const u16) -> isize;
         fn GetLastError() -> u32;
+        fn GetModuleHandleW(name: *const u16) -> isize;
     }
     #[link(name = "shell32")]
     extern "system" {
@@ -362,12 +364,22 @@ mod win {
         }
     }
 
-    pub fn set_icon(h: isize, path: &std::path::Path) {
-        let p = wide(&path.to_string_lossy());
+    /// AgentHydra's icon, compiled into this exe as icon 1 (build.rs), at the sizes Windows draws: the
+    /// big one (SM_CXICON) for the taskbar and Alt+Tab, the small one (SM_CXSMICON) for the title bar.
+    pub fn set_icon(h: isize) {
         unsafe {
-            // IMAGE_ICON, LR_LOADFROMFILE
-            for (kind, size) in [(1usize, 32), (0usize, 16)] {
-                let ic = LoadImageW(0, p.as_ptr(), 1, size, size, 0x10);
+            let exe = GetModuleHandleW(std::ptr::null());
+            // ICON_BIG / ICON_SMALL; IMAGE_ICON, MAKEINTRESOURCE(1)
+            for (kind, metric) in [(1usize, 11), (0usize, 49)] {
+                let size = GetSystemMetrics(metric);
+                let ic = LoadImageW(
+                    exe,
+                    std::ptr::without_provenance::<u16>(1),
+                    1,
+                    size,
+                    size,
+                    0,
+                );
                 if ic != 0 {
                     SendMessageW(h, 0x0080, kind, ic);
                 }
@@ -526,11 +538,7 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
     let hwnd = window.hwnd();
     win::set_outer_rect(hwnd, &rect);
     win::title_bar(hwnd, BG, TEXT);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            win::set_icon(hwnd, &dir.join("hydra-desk.ico"));
-        }
-    }
+    win::set_icon(hwnd);
     if maximized {
         window.set_maximized(true);
     }

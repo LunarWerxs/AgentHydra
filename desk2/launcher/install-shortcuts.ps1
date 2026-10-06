@@ -1,7 +1,7 @@
 # Creates (or refreshes) the "AgentHydra" shortcuts on the Desktop and in the Start Menu. They run
 # launcher/start.vbs through wscript.exe, which starts start.ps1 hidden: no console flash. Icon:
-# launcher/hydra-desk.ico (regenerate with `python launcher/make-icon.py`). Re-run after moving
-# the desk folder.
+# AgentHydra's own, compiled into launcher/HydraDesk2.exe (host/build.rs, from misc/AgentHydra.ico).
+# Re-run after moving the desk folder.
 #
 # This window was called Hydra Desk 2 until 2026-10-06, when it became AgentHydra 2.0 (owner): the
 # "Hydra Desk 2" shortcuts this script made before go to the Recycle Bin, and only those that run this
@@ -13,7 +13,7 @@ param([switch]$DryRun)
 $ErrorActionPreference = 'Stop'
 $DeskRoot = Split-Path -Parent $PSScriptRoot
 $Vbs = Join-Path $PSScriptRoot 'start.vbs'
-$Icon = Join-Path $PSScriptRoot 'hydra-desk.ico'
+$Icon = Join-Path $PSScriptRoot 'HydraDesk2.exe'
 $Wscript = Join-Path $env:SystemRoot 'System32\wscript.exe'
 
 foreach ($f in $Vbs, $Icon) {
