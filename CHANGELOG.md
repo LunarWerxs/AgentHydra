@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-10-06
+
 ### Added
 
 - **A chat that sent work to CliMayte is woken when that work ends, and carries the job on** (2026-10-06, owner: "when the subagents finish ... the main chat is procced saying, hey, all your subagents are finished, then it goes and checks"). A Hydra Desk 2 chat never heard its workers finish: the note went through the CLI's own message pipe, which in a Desk 2 chat does not start a turn (of about 20 notes sent to one chat, one reached it) and is gone once Desk closes an idle chat. Desk 2 now takes the note itself (`POST /api/sessions/:id/ping`): it reopens a closed chat and starts a turn, or queues the note behind a running one; other chats keep the old path. A finished worker no longer wakes the chat while others it sent still run: the finishes wait and go together when the group ends or nothing of the chat's is left running (a failure or a worker's question still goes at once, and a held finish goes after 30 minutes regardless), so five workers cost one wake, not five. When every group in a note has ended, the note says their work can be unfinished or broken: check each proof, fix or re-dispatch what is left, and tell the owner it is done only when the whole ask is.
