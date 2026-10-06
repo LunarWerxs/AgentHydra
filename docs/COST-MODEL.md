@@ -66,6 +66,17 @@ The answer carries the route, a one-sentence reason, both dollar figures and whe
 The owner's bulk API rate goes into `routing_discounts`: list prices overstate what the owner pays, so enter the
 percent off per provider and the API side of every comparison drops by it.
 
+How to choose it: a free-tier key is 100% off, and its allowance comes back, so spending it costs nothing later.
+Credit that runs out and is never refilled is not free in the same way: every dollar spent now is one the pool no
+longer has when the subscriptions are full. Leave such a provider at 0, so a tool task goes to a subscription (whose
+weekly quota is lost if it is not used) and falls back to the key only when no account can start it in time.
+
+The owner's setting since 2026-10-06: `other` 100 and `openrouter` 100 (the free-tier pools: Gemini, NVIDIA,
+Mistral, Zhipu, Cohere, Hugging Face, Cerebras; every paid OpenRouter key is spent, so only `:free` models run
+there), `anthropic` 0 and `deepseek` 0 (given credit that is never topped up: 34 of 45 Anthropic keys had run out of
+credit that day, and the DeepSeek balance was below zero). A free-tier tool task now stays on its free key; a task
+whose API leg is a Claude model goes to a subscription, about 50 times cheaper than list.
+
 ## Endpoints
 
 - `GET /api/routing/cost-model`: measured numbers with sample sizes and fallback flags, the plan table, a model
