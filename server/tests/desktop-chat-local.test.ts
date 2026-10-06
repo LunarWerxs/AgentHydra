@@ -99,13 +99,18 @@ describe('retire', () => {
     return { archives, local }
   }
 
-  test('archives the copy in the chat list and moves its transcript into the viewer', async () => {
+  test('archives the copy in the chat list and moves every copy of its transcript into the viewer', async () => {
     landed('{"n":1}\n')
+    // An older copy, left under the folder the chat sat in before it was moved on its own PC.
+    mkdirSync(join(projects, 'C--Users-other-earlier'), { recursive: true })
+    writeFileSync(join(projects, 'C--Users-other-earlier', `${SESSION}.jsonl`), '{"n":')
     const f = faked()
     expect(await f.local.retire(SESSION, 8)).toEqual({ ok: true, kept: false })
     expect(f.archives).toEqual([SESSION])
     expect(f.local.viewSize('C--Users-other-work', SESSION)).toBe(8)
+    expect(f.local.viewSize('C--Users-other-earlier', SESSION)).toBe(5)
     expect(existsSync(join(projects, 'C--Users-other-work'))).toBe(false)
+    expect(existsSync(join(projects, 'C--Users-other-earlier'))).toBe(false)
   })
 
   test('a transcript someone here went on in is kept where it is, unarchived', async () => {

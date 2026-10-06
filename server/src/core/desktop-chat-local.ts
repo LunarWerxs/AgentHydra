@@ -223,10 +223,24 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     return true
   }
 
+  /** Every project folder holding this session's transcript. An earlier version could leave two: a
+   *  chat moved to another folder on its own PC was written again under the new one. */
+  function projectsHolding(sessionId: string): string[] {
+    try {
+      return readdirSync(projectsDir, { withFileTypes: true })
+        .filter(
+          (e) => e.isDirectory() && existsSync(join(projectsDir, e.name, `${sessionId}.jsonl`)),
+        )
+        .map((e) => e.name)
+    } catch {
+      return []
+    }
+  }
+
   async function retire(sessionId: string, bytes: number): Promise<RetireOutcome> {
     if (!isUuid(sessionId)) return { ok: false, reason: 'not a session id', retry: false }
-    const project = findProject(sessionId, null)
-    if (project && size(project, sessionId) > bytes) return { ok: true, kept: true }
+    const held = projectsHolding(sessionId)
+    if (held.some((p) => size(p, sessionId) > bytes)) return { ok: true, kept: true }
     for (const dir of roots()) {
       const shown = collectChats([{ dir, label: dir }]).some(
         (c) => !c.staleLogin && !c.archived && c.cliSessionId === sessionId,
@@ -235,22 +249,23 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
       const r = await archiveChat(dir, sessionId)
       if (!r.ok) return retry(r.reason ?? 'the archive was not confirmed')
     }
-    if (!project) return { ok: true, kept: false }
-    const from = transcript(project, sessionId) as string
-    const to = viewFile(project, sessionId) as string
-    try {
-      mkdirSync(join(viewDir, project), { recursive: true })
-      copyFileSync(from, to)
-      unlinkSync(from)
-    } catch (err) {
-      return retry(`its transcript could not be moved yet (${(err as Error).message})`)
-    }
-    projectOf.delete(sessionId)
-    try {
-      // The folder an earlier version made for it goes with its last transcript.
-      rmdirSync(join(projectsDir, project))
-    } catch {
-      /* other transcripts still live there */
+    for (const project of held) {
+      const from = transcript(project, sessionId) as string
+      const to = viewFile(project, sessionId) as string
+      try {
+        mkdirSync(join(viewDir, project), { recursive: true })
+        copyFileSync(from, to)
+        unlinkSync(from)
+      } catch (err) {
+        return retry(`its transcript could not be moved yet (${(err as Error).message})`)
+      }
+      projectOf.delete(sessionId)
+      try {
+        // The folder an earlier version made for it goes with its last transcript.
+        rmdirSync(join(projectsDir, project))
+      } catch {
+        /* other transcripts still live there */
+      }
     }
     return { ok: true, kept: false }
   }
