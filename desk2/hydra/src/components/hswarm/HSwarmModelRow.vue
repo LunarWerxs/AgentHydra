@@ -30,7 +30,7 @@ const props = defineProps<{
           v-if="row.auto || row.priority"
           variant="ghost"
           size="sm"
-          class="h-7 px-2 text-xs font-semibold"
+          class="h-6 px-2 text-xs font-semibold"
           @click="row.onToggleStar?.()"
         >
           <Star :class="{ 'fill-current': row.priority }" class="h-3 w-3" />
@@ -43,30 +43,30 @@ const props = defineProps<{
         {{ row.label || row.name }}
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'modelProvider'" class="text-sm">
+      <TableCell v-else-if="col.key === 'modelProvider'" class="text-xs text-muted-foreground">
         {{ row.provider }}
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'modelKind'" class="text-sm">
+      <TableCell v-else-if="col.key === 'modelKind'">
         <span
           v-if="row.custom"
-          class="inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100"
+          class="inline-block rounded bg-blue-100 px-1.5 py-0 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100"
         >
           {{ $t('hswarm.v.models.badgeCustom') }}
         </span>
         <span
           v-if="row.vision"
-          class="inline-block rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-900 dark:bg-purple-900 dark:text-purple-100"
+          class="inline-block rounded bg-purple-100 px-1.5 py-0 text-xs text-purple-900 dark:bg-purple-900 dark:text-purple-100"
         >
           {{ $t('hswarm.v.models.badgeVision') }}
         </span>
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'modelPrice'" class="text-right font-mono text-sm">
+      <TableCell v-else-if="col.key === 'modelPrice'" class="text-right text-xs tabular-nums text-muted-foreground">
         {{ row.usd_per_1m ? `$${Number(row.usd_per_1m).toFixed(4)}` : '–' }}
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'modelContext'" class="text-right text-sm">
+      <TableCell v-else-if="col.key === 'modelContext'" class="text-right text-xs tabular-nums text-muted-foreground">
         {{ row.ctx ? `${row.ctx}k` : '–' }}
       </TableCell>
     </template>

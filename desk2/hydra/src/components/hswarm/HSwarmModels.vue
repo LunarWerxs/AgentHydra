@@ -522,7 +522,7 @@ onMounted(() => {
     </div>
 
     <!-- Models table -->
-    <InstanceCard>
+    <InstanceCard class="!m-0">
       <InstanceTable
         :columns="hswarmModelColumns"
         :indicator-for="() => null"
@@ -557,7 +557,7 @@ onMounted(() => {
     </InstanceCard>
 
     <!-- Typed models section -->
-    <InstanceCard v-if="typedModels.length > 0">
+    <InstanceCard v-if="typedModels.length > 0" class="!m-0">
       <div class="p-3 space-y-2">
         <h3 class="text-sm font-semibold">{{ t('hswarm.v.models.helpersTitle') }}</h3>
         <p class="text-sm text-muted-foreground">{{ t('hswarm.v.models.helpersDesc') }}</p>

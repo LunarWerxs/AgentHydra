@@ -39,7 +39,8 @@ const stateVariant = computed(() => {
           v-if="multipleKeys"
           type="number"
           :value="row.priority ?? ''"
-          class="w-16 text-xs"
+          class="h-6 w-16 px-1.5 py-0 text-xs md:text-xs"
+          :placeholder="$t('hswarm.v.providers.noPriority')"
           @change="
             (e: Event) => {
               const v = (e.target as HTMLInputElement).value
@@ -59,29 +60,32 @@ const stateVariant = computed(() => {
       <TableCell v-else-if="col.key === 'actions'" class="text-right">
         <div class="flex justify-end gap-1">
           <Button
-            size="sm"
+            size="icon-sm"
             variant="ghost"
             @click="row.onEnabledChange?.(!row.disabled)"
             :title="row.disabled ? 'Enable' : 'Disable'"
+            :aria-label="row.disabled ? 'Enable' : 'Disable'"
           >
-            <component :is="row.disabled ? Eye : EyeOff" class="size-4" />
+            <component :is="row.disabled ? Eye : EyeOff" class="size-3.5" />
           </Button>
           <Button
-            size="sm"
+            size="icon-sm"
             variant="ghost"
             @click="row.onCheck?.()"
             :title="$t('hswarm.v.providers.checkKeyTitle')"
+            :aria-label="$t('hswarm.v.providers.checkKeyTitle')"
           >
-            <CheckCircle2 class="size-4" />
+            <CheckCircle2 class="size-3.5" />
           </Button>
           <Button
             v-if="row.editable"
-            size="sm"
+            size="icon-sm"
             variant="ghost"
             @click="row.onRemove?.()"
             :title="$t('hswarm.v.providers.removeKeyTitle')"
+            :aria-label="$t('hswarm.v.providers.removeKeyTitle')"
           >
-            <Trash2 class="size-4" />
+            <Trash2 class="size-3.5" />
           </Button>
         </div>
       </TableCell>

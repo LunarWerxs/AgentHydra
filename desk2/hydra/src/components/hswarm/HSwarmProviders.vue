@@ -17,6 +17,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Collapsible } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 import { TableBody } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
 import type { SortDirection } from '@/composables/useSortable'
@@ -555,7 +556,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         </div>
 
         <!-- Keys section -->
-        <InstanceCard>
+        <InstanceCard class="!m-0">
           <InstanceSectionHeader
             :title="t('hswarm.v.providers.keys')"
             :count="selectedProviderKeys.length"
@@ -563,7 +564,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
             :refresh-label="t('hswarm.v.providers.probeBalance')"
             @refresh="() => probeBalance(selectedProviderData.name)"
           />
-          <div class="p-3 space-y-2">
+          <div class="px-3 pb-3">
             <!-- Add key input -->
             <div class="flex gap-2">
               <Input
@@ -580,7 +581,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
                 {{ t('hswarm.v.providers.add') }}
               </Button>
             </div>
-
+          </div>
             <!-- Keys table -->
             <InstanceTable
               v-if="selectedProviderKeys.length > 0"
@@ -599,23 +600,19 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               </TableBody>
             </InstanceTable>
 
-            <div v-else class="text-sm text-muted-foreground py-4 text-center">
+            <div v-else class="px-3 pb-3 text-sm text-muted-foreground text-center">
               {{ t('hswarm.v.providers.noKeysYet') }}
             </div>
 
-            <Button
-              v-if="selectedProviderKeys.length > FOLD"
-              size="sm"
-              variant="outline"
-              @click="showAllKeys = !showAllKeys"
-            >
+          <div v-if="selectedProviderKeys.length > FOLD" class="p-3">
+            <Button size="sm" variant="outline" @click="showAllKeys = !showAllKeys">
               {{ showAllKeys ? t('hswarm.v.providers.showFewer') : t('hswarm.v.providers.showAllKeys', { n: selectedProviderKeys.length }) }}
             </Button>
           </div>
         </InstanceCard>
 
         <!-- Models section -->
-        <InstanceCard v-if="modelsForSelectedProvider.length > 0">
+        <InstanceCard v-if="modelsForSelectedProvider.length > 0" class="!m-0">
           <InstanceSectionHeader
             :title="t('hswarm.v.providers.models')"
             :count="modelsForSelectedProvider.length"
