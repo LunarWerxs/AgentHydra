@@ -101,11 +101,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const windowOf = (i: FreeInstance, id: string) =>
   i.usage?.windows.find((w) => w.id === id)?.used_percent ?? null
 
-/** The 5-hour window used, as a sort key: ChatGPT's unlimited everyday text is all room; no reading
- *  (Claude reports usage only once an account has chatted) sorts in the middle. */
-function fiveHourUsed(i: FreeInstance): number {
+/** Room in the 5-hour window, in bands so a few points never decide (a test chat, 2026-10-06: ChatGPT's
+ *  unlimited text took every task while three idle Claude accounts at 2% got none). ChatGPT's
+ *  unlimited everyday text and a window under half used are plenty (0); no reading (Claude reports
+ *  usage only once an account has chatted) is 1; half used is 2, four fifths 3. */
+function roomBand(i: FreeInstance): number {
   if (i.usage?.unlimited_text) return 0
-  return windowOf(i, 'five_hour') ?? 50
+  const used = windowOf(i, 'five_hour')
+  return used == null ? 1 : used < 50 ? 0 : used < 80 ? 2 : 3
 }
 
 export function accountLabel(i: Pick<FreeInstance, 'num' | 'provider' | 'name'>): string {
@@ -126,8 +129,9 @@ export function eligibleAccounts(
   )
 }
 
-/** The idle account with the most room in its 5-hour window, Claude before ChatGPT on a tie, then the
- *  lowest number; null while every eligible account is busy. */
+/** The idle account with the most room (roomBand), the one used longest ago first so work spreads over
+ *  every account and both providers, then Claude before ChatGPT, then the lowest number; null while
+ *  every eligible account is busy. */
 export function pickFreeAccount(
   instances: FreeInstance[],
   busy: ReadonlySet<string>,
@@ -136,7 +140,8 @@ export function pickFreeAccount(
   const free = eligibleAccounts(instances, want).filter((i) => !busy.has(i.id))
   free.sort(
     (a, b) =>
-      fiveHourUsed(a) - fiveHourUsed(b) ||
+      roomBand(a) - roomBand(b) ||
+      (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0) ||
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
       a.num - b.num,
   )
@@ -330,6 +335,7 @@ function snapshot(b: Batch) {
     batch: b.id,
     finished,
     done: `${done} of ${b.items.length}`,
+    elapsed_s: Math.round((Date.now() - b.createdAt) / 1000),
     tasks: b.items.map((it) => it.s),
     ...(finished
       ? {}
@@ -400,7 +406,7 @@ export const FREE_TOOLS: McpEngineTool[] = [
   {
     name: 'free_chat',
     description:
-      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to the idle signed-in account with the most room in its 5-hour window, skipping accounts at 90% of their week. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, and the reply. A failed send that names a chat_id may still have reached the provider: free_read it before sending again.",
+      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
     inputSchema: S(
       {
         tasks: {
@@ -491,7 +497,7 @@ export const FREE_TOOLS: McpEngineTool[] = [
   {
     name: 'free_threads',
     description:
-      'The Free threads AgentHydra knows, newest first: chat_id, account, name, status (running, done, failed) and when each was last used. Continue one with free_chat { tasks: [{ chat_id, prompt }] }; read one with free_read. The messages stay at the provider; a provider may expire a private thread.',
+      'The Free threads AgentHydra knows, most recently used first: `total`, and up to `limit` of them, each with chat_id, account, name, status (running, done, failed) and when it was last used; `more` says how many were left out. Continue one with free_chat { tasks: [{ chat_id, prompt }] }; read one with free_read. The messages stay at the provider; a provider may expire a private thread.',
     inputSchema: S({
       account: { type: 'number', description: 'Only this account number.' },
       limit: { type: 'number', description: 'At most this many (default 30).' },
@@ -503,21 +509,29 @@ export const FREE_TOOLS: McpEngineTool[] = [
       ])
       const byId = new Map(status.instances.map((i) => [i.id, i]))
       const limit = Math.max(1, Math.min(Number(a.limit) || 30, 500))
-      return threads
+      const mine = threads
         .filter((t) => a.account == null || byId.get(t.instanceId)?.num === Number(a.account))
         .sort((x, y) => y.updatedAt - x.updatedAt)
-        .slice(0, limit)
-        .map((t) => {
-          const i = byId.get(t.instanceId)
-          return {
-            chat_id: t.chatId,
-            account: i ? accountLabel(i) : `${t.provider} (account removed)`,
-            name: t.title,
-            status: t.status,
-            ...(t.error ? { error: t.error } : {}),
-            updated: new Date(t.updatedAt).toISOString(),
-          }
-        })
+      const shown = mine.slice(0, limit).map((t) => {
+        const i = byId.get(t.instanceId)
+        return {
+          chat_id: t.chatId,
+          account: i ? accountLabel(i) : `${t.provider} (account removed)`,
+          name: t.title,
+          status: t.status,
+          ...(t.error ? { error: t.error } : {}),
+          updated: new Date(t.updatedAt).toISOString(),
+        }
+      })
+      return {
+        total: mine.length,
+        threads: shown,
+        ...(mine.length > shown.length
+          ? {
+              more: `${mine.length - shown.length} older: raise limit (at most 500) or pass account`,
+            }
+          : {}),
+      }
     },
   },
   {

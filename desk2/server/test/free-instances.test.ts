@@ -252,6 +252,16 @@ describe('Free jobs and routes', () => {
     expect(read.result?.chat_name).toBe('A friendly chat name!')
     expect(service.threads()[0]?.title).toBe('A friendly chat name!')
   })
+  test('a chat-list refresh (after every login check) leaves when each thread was last used', async () => {
+    const { service, op } = fixture(async (_c, r) => output(r.command === 'chats'
+      ? { ok: true, chats: [{ chat_id: CHAT, is_temporary: true, name: 'Example chat' }] }
+      : { ok: true, chat_id: CHAT, is_temporary: true, response: 'Example reply' }))
+    service.start(op({ command: 'chat', prompt: 'Example prompt' })); await tick()
+    const used = service.threads()[0]!.updatedAt
+    await Bun.sleep(5)
+    service.start(op({ command: 'chats' })); await tick()
+    expect(service.threads()[0]!.updatedAt).toBe(used)
+  })
   test('cancel interrupts an owned operation and never retries it', async () => {
     let calls = 0
     const { service, op } = fixture(async (_c, _r, signal) => {

@@ -203,15 +203,17 @@ export class FreeInstances {
     void this.execute(job, r, controller)
     return job
   }
-  private markThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number): void {
+  /** `used` false for a chat-list refresh: it records the chat but is not a use, so "last used" stays. */
+  private markThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true): void {
     if (!chatId || !UUID.test(chatId)) return
     const id = `${r.instanceId}/${chatId}`
     let thread = this.store.data.threads.find(t => t.id === id)
     if (!thread) {
-      thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: createdAt || Date.now(), updatedAt: Date.now(), error }
+      const created = createdAt || Date.now()
+      thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: created, updatedAt: used ? Date.now() : created, error }
       this.store.data.threads.push(thread)
     }
-    Object.assign(thread, { status, error, updatedAt: Date.now() }, serverId ? { serverId } : {}, title ? { title } : {})
+    Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     this.store.save()
   }
   private async execute(job: FreeJob, r: FreeRequest, controller: AbortController): Promise<void> {
@@ -258,7 +260,7 @@ export class FreeInstances {
     if (result.chats) for (const chat of result.chats) {
       if (chat.is_temporary === true) {
         const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chat.chat_id)
-        this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined)
+        this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false)
       }
     }
     if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {

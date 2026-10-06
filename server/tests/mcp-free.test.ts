@@ -30,8 +30,13 @@ const INSTANCES: FreeInstance[] = [
 const THREAD = '11111111-1111-4111-8111-111111111111'
 
 describe('pickFreeAccount', () => {
-  test('the idle account with the most room; never one signed out, and one at 90% of its week only by number', () => {
-    expect(pickFreeAccount(INSTANCES, new Set(), {})?.num).toBe(2)
+  test('an idle account with room, used longest ago first; never one signed out, and one at 90% of its week only by number', () => {
+    // ChatGPT's unlimited text and a Claude window under half used are the same room: Claude first on a tie.
+    expect(pickFreeAccount(INSTANCES, new Set(), {})?.num).toBe(1)
+    const justUsed = INSTANCES.map((i) => (i.id === 'a' ? { ...i, lastActiveAt: Date.now() } : i))
+    expect(pickFreeAccount(justUsed, new Set(), {})?.num).toBe(2)
+    const halfUsed = INSTANCES.map((i) => (i.id === 'a' ? { ...i, usage: usage(60, 10) } : i))
+    expect(pickFreeAccount(halfUsed, new Set(), {})?.num).toBe(2)
     expect(pickFreeAccount(INSTANCES, new Set(['b']), {})?.num).toBe(1)
     expect(pickFreeAccount(INSTANCES, new Set(['a', 'b']), {})).toBeNull()
     expect(pickFreeAccount(INSTANCES, new Set(), { provider: 'claude' })?.num).toBe(1)
