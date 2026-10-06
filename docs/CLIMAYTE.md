@@ -532,9 +532,21 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   that is neither trusted nor written off, Haiku first. The first version took the cheapest rung at
   80%, and code's Sonnet medium sat at 78% (93 of 119) at a quarter of the quota of Opus high, so
   every code task went to Opus high. The pick and its reason go in the `dispatched` journal line.
-- **A named model or effort holds only with `modelWhy`** (`runSetting`; `climayte_run` top level or
-  per task): without a reason the task goes to auto, and its reason says what was named. Callers had
-  named `opus` on everything, which no scorecard can lower.
+- **Leave `model` out.** Owner, 2026-10-05, seeing every task on Opus 5.5: the point was to offload
+  work to moderate models, and Sonnet "had given very reasonable results", "but not a single one is
+  using any other model besides Opus 5.5". The scorecard's own picks were mostly Sonnet (383 of 416
+  in 24 h on this PC), but senders pinned Opus by naming it with any `modelWhy` (286 tasks in 72 h).
+  So a named model or effort (`runSetting`; `climayte_run` top level or per task) is held only when
+  (a) the task or its run gives `ownerWords`, the owner's own words in the sending chat asking for
+  it, quoted (at most 2000 characters, refused if longer; its reason reads `named by the owner:
+  "<first 120 characters>"`), or (b) it gives a `modelWhy` AND the setting sits on a CHEAPER rung
+  than the kind's pick (`bestRung`). A setting at or above the pick without `ownerWords` goes to
+  auto, and its reason says so. A named setting is ranked with `ladderIndex`: Haiku is rung 0
+  whatever the effort; a model alone counts as that model at `high` (the CLI's default effort); an
+  effort alone counts as Opus at that effort (the CLI's default model). Chat tasks are unchanged.
+- **While a kind's pick is an Opus rung, every 2nd auto pick** (`EXPLORE_EVERY_ON_OPUS`) tries the
+  cheaper rung still learning, not every 4th: review sat on Opus high because Sonnet had 2 review
+  verdicts and a try came too rarely to earn the third.
 - **Haiku** is back on the ladder on the owner's word of 2026-10-02 ("don't forget Haiku exists"),
   which supersedes the 2026-09-06 "never Haiku" for CliMayte work: the scorecard writes it off for a
   kind after two fails, so a kind it cannot do costs two small tries, not a habit.

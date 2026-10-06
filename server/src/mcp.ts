@@ -780,17 +780,22 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 4.5 up to Opus 5.5 max; every 4th pick tries a cheaper one still learning). Name haiku, sonnet or opus only with `modelWhy`; a model or effort named without one is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
+                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 4.5 up to Opus 5.5 max; every 4th pick tries a cheaper one still learning, every 2nd while the kind's pick is Opus). Leave `model` out. A `modelWhy` holds only a setting CHEAPER than the kind's pick; a setting at or above it is held only with `ownerWords`, otherwise it is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
               },
               effort: {
                 type: 'string',
                 description:
-                  'Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Held only with `modelWhy`, like `model`.',
+                  "Thinking level: low, medium, high, xhigh or max (how hard the model thinks on every turn). Leave it out; held like `model`: only a setting cheaper than the kind's pick with `modelWhy`, or any with `ownerWords`.",
               },
               modelWhy: {
                 type: 'string',
                 description:
-                  'Why this task needs the `model`/`effort` you named instead of the scorecard pick, in a few words (e.g. "failed twice on Sonnet medium", "cross-repo architecture call"). Without it the named setting is ignored.',
+                  'Why this task needs a `model`/`effort` CHEAPER than the scorecard pick for its kind, in a few words (e.g. "a one-line rename, Haiku is enough"). It cannot hold a setting at or above the pick: that needs `ownerWords`, else the named setting is ignored and the scorecard picks.',
+              },
+              ownerWords: {
+                type: 'string',
+                description:
+                  "The owner's OWN words, in the chat you serve, asking for this model or effort, quoted (at most 2000 characters; refused if longer). Holds the named setting whatever its rung. Never your own reasoning or a paraphrase: without the owner's request, leave it out.",
               },
               kind: {
                 type: 'string',
@@ -837,17 +842,22 @@ export const TOOLS: McpEngineTool[] = [
         model: {
           type: 'string',
           description:
-            'Default model for every task without its own: leave it out (auto, the scorecard picks), or haiku, sonnet or opus with `modelWhy`.',
+            "Default model for every task without its own: leave it out (auto, the scorecard picks). A named one is held only when cheaper than the kind's pick with `modelWhy`, or with `ownerWords`.",
         },
         effort: {
           type: 'string',
           description:
-            'Default thinking level for every task without its own: low, medium, high, xhigh or max. Held only with `modelWhy`.',
+            'Default thinking level for every task without its own: low, medium, high, xhigh or max. Leave it out; held like `model` (see the task `modelWhy` and `ownerWords`).',
         },
         modelWhy: {
           type: 'string',
           description:
-            'Why every task without its own needs the `model`/`effort` named here (see the task `modelWhy`).',
+            "Why every task without its own needs the `model`/`effort` named here: holds only a setting cheaper than the kind's pick (see the task `modelWhy`).",
+        },
+        ownerWords: {
+          type: 'string',
+          description:
+            "The owner's own words asking for the `model`/`effort` named here, for every task that names no model or effort of its own (see the task `ownerWords`).",
         },
         kind: {
           type: 'string',
@@ -905,6 +915,7 @@ export const TOOLS: McpEngineTool[] = [
           model: a.model != null ? str(a.model) : undefined,
           effort: a.effort != null ? str(a.effort) : undefined,
           modelWhy: a.modelWhy != null ? str(a.modelWhy) : undefined,
+          ownerWords: a.ownerWords != null ? str(a.ownerWords) : undefined,
           kind: a.kind != null ? str(a.kind) : undefined,
           priority: a.priority != null ? Number(a.priority) : undefined,
           size: a.size != null ? str(a.size) : undefined,

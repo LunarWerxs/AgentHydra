@@ -143,6 +143,30 @@ def test_an_eligible_task_routed_to_the_subscription_returns_the_workers_report(
     assert row["provider"] == "climayte" and row["climayte_worker"] == "w1" and row["route_why"] == "cheaper on the plan"
 
 
+@pytest.mark.parametrize("extra,tools,kind", [
+    ({}, "edit", "code"),
+    ({}, "all", "code"),
+    ({"role": "review"}, "read", "review"),
+    ({"role": "judge"}, "read", "review"),
+    ({"role": "refute"}, "read", "review"),
+    ({}, "read", "sweep"),
+    ({"role": "summarize"}, "read", "sweep"),
+])
+def test_the_workers_kind_follows_the_task_so_read_only_work_stays_off_opus(fake, tmp_path, extra, tools, kind):
+    f = fake()
+    api = _Api()
+    spec = {"id": "t0", "prompt": "look at it", "cwd": str(tmp_path), "tools": tools, "model": "deepseek-flash", "timeout_s": 30, **extra}
+    asyncio.run(JobManager(client=api).run_batch([Task.from_dict(spec, {}, 0)], concurrency=1))
+    assert f.dispatched[0]["tasks"][0]["kind"] == kind
+
+
+# Only an AUTO task keeps its profile (a pinned model, as the routed tests use, drops it), so the profile half of
+# worker_kind is checked on the task as AUTO leaves it.
+@pytest.mark.parametrize("profile,kind", [("critical", "review"), ("decision", "review"), ("research", "sweep"), ("code", "sweep")])
+def test_an_auto_tasks_judging_profile_asks_for_review(profile, kind):
+    assert climayte_route.worker_kind(Task(prompt="look at it", tools="read", profile=profile)) == kind
+
+
 def test_a_schema_task_gets_the_workers_report_parsed(fake, tmp_path):
     fake(worker={"status": "done", "result": 'Done:\n```json\n{"n": 3}\n```', "reportedModel": "claude-sonnet-5-5"})
     _, res, api = _run(tmp_path, schema={"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]})

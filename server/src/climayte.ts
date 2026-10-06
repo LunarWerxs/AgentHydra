@@ -155,6 +155,7 @@ import {
   ladderIndex,
   ladderModel,
   nextRung,
+  OPUS,
   pickConfig,
   rereadUnits,
   scoreRows,
@@ -1925,15 +1926,29 @@ const isAutoSetting = (v: unknown): boolean =>
 type RunTask = Parameters<typeof climayteRun>[0]['tasks'][number]
 
 /** A run's defaults: what a task takes when it names none of its own. */
-interface RunDefaults {
+export interface RunDefaults {
   /** The run's model is `auto`: the scorecard picks for every task that names no model. */
   auto: boolean
   model: string | null
   effort: string | null
   /** Why the run names its model or effort (runSetting); null: it gave no reason. */
   why: string | null
+  /** The owner's own words asking for the run's model or effort (runSetting); null: none. */
+  ownerWords: string | null
   kind: CliMayteKind | null
   priority: number
+}
+
+const OWNER_WORDS_MAX = 2000
+
+/** `ownerWords` trimmed, or null when blank. Throws past OWNER_WORDS_MAX characters. */
+function ownerWordsOf(v: unknown): string | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'string') throw new Error('ownerWords must be a string')
+  const s = v.trim()
+  if (s.length > OWNER_WORDS_MAX)
+    throw new Error(`ownerWords is ${s.length} characters: at most ${OWNER_WORDS_MAX}`)
+  return s || null
 }
 
 /** One task's setting, and for an `auto` task why the scorecard picked it. */
@@ -1974,13 +1989,19 @@ function assertRunnable(t: RunTask, i: number): void {
     throw new Error(`task ${i + 1}: chat must be true or false`)
 }
 
-/** One task's model, effort, kind and priority. Auto unless the task (or its run) names a model or
- *  effort AND says why (`modelWhy`): the scorecard's pick for its kind, and `autoSoFar` counts it.
+/** One task's model, effort, kind and priority. A named model or effort is held only when the task
+ *  (or its run) gives `ownerWords`, or gives a `modelWhy` AND the named setting sits on a cheaper
+ *  rung than the kind's best; otherwise the task is auto: the scorecard's pick for its kind, and
+ *  `autoSoFar` counts it.
  *  Owner, 2026-10-02: tasks are to go to "the cheapest/fastest model capable of reliably completing"
  *  them, yet in a day 194 of about 440 arrived pinned to Opus high or above by the chats that sent
- *  them, and a task naming nothing ran on the CLI's default, Opus high. A named setting with no
- *  reason is validated, then left to the scorecard. Throws on a value that is not one. */
-function runSetting(
+ *  them, and a task naming nothing ran on the CLI's default, Opus high.
+ *  Owner, 2026-10-05: the point was to offload work to moderate models, yet 'not a single one is
+ *  using any other model besides Opus 5.5': senders pinned Opus by naming it with any `modelWhy`
+ *  (286 tasks in 72 h here), so a reason no longer holds a setting at or above the pick; only the
+ *  owner's own words do. A named setting not held is validated, then left to the scorecard. Throws
+ *  on a value that is not one. */
+export function runSetting(
   t: RunTask,
   defaults: RunDefaults,
   rows: ReturnType<typeof scoreRows>,
@@ -1988,6 +2009,8 @@ function runSetting(
 ): RunSetting {
   const kind = climayteKind(t.kind) ?? defaults.kind
   const priority = climaytePriority(t.priority) ?? defaults.priority
+  // Validated for every task, a chat's included, though a chat's setting never needs it.
+  const ownWords = ownerWordsOf(t.ownerWords)
   if (t.chat === true) return chatSetting(t, defaults, kind, priority)
   const autoAsked = isAutoSetting(t.model) || (isBlank(t.model) && defaults.auto)
   const model = autoAsked ? null : (climayteModel(t.model) ?? defaults.model)
@@ -1997,15 +2020,36 @@ function runSetting(
       ? null
       : ((isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort)
   const why = (typeof t.modelWhy === 'string' && t.modelWhy.trim()) || defaults.why
-  if ((model || effort) && why)
-    return { model, effort, kind, auto: false, reason: `named by the sender: ${why}`, priority }
+  // The run's ownerWords asked for the run's setting: a task naming its own needs its own words.
+  const namesOwn =
+    (!isBlank(t.model) && !isAutoSetting(t.model)) ||
+    (!isBlank(t.effort) && !isAutoSetting(t.effort))
+  const words = ownWords ?? (namesOwn ? null : defaults.ownerWords)
   const k = kind ?? 'code'
+  if ((model || effort) && words)
+    return {
+      model,
+      effort,
+      kind,
+      auto: false,
+      reason: `named by the owner: "${words.slice(0, 120)}"`,
+      priority,
+    }
+  if ((model || effort) && why) {
+    // The CLI's defaults: a model alone runs at high, an effort alone on Opus.
+    const named = ladderIndex({
+      model: model ?? OPUS,
+      effort: model === HAIKU ? null : (effort ?? 'high'),
+    })
+    if (named !== -1 && named < bestRung(k, rows))
+      return { model, effort, kind, auto: false, reason: `named by the sender: ${why}`, priority }
+  }
   const n = autoSoFar.get(k) ?? 0
   autoSoFar.set(k, n + 1)
   const pick = pickConfig(k, rows, n)
   const unexplained =
     model || effort
-      ? ` (${[model, effort].filter(Boolean).join(' ')} was named without a modelWhy)`
+      ? ` (${[model, effort].filter(Boolean).join(' ')} was named but not held: that takes the owner's words, or a modelWhy for a setting cheaper than the pick)`
       : ''
   return { ...pick.config, kind: k, auto: true, reason: pick.reason + unexplained, priority }
 }
@@ -2178,7 +2222,8 @@ function assertKnownAccounts(accounts: string[] | undefined): void {
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  The scorecard chooses model AND effort for the task's kind (default `code`): of the settings that
  *  pass it reliably the one whose passed task costs least, or a cheaper one still learning on every
- *  4th pick (pickConfig). A named model or effort holds only with a `modelWhy` (runSetting).
+ *  4th pick, every 2nd while the kind's pick is Opus (pickConfig). A named model or effort holds
+ *  only with `ownerWords`, or a `modelWhy` on a rung cheaper than the pick (runSetting).
  *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
  *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
 export function climayteRun(input: {
@@ -2189,6 +2234,8 @@ export function climayteRun(input: {
     model?: string
     effort?: string
     modelWhy?: string
+    /** The owner's own words asking for this model or effort, quoted (runSetting); at most 2000 characters. */
+    ownerWords?: string
     kind?: string
     check?: string
     priority?: number
@@ -2204,6 +2251,8 @@ export function climayteRun(input: {
   model?: string
   effort?: string
   modelWhy?: string
+  /** Run-level ownerWords: every task that names no model or effort of its own (runSetting). */
+  ownerWords?: string
   kind?: string
   priority?: number
   size?: string
@@ -2221,6 +2270,7 @@ export function climayteRun(input: {
   const defaults: RunDefaults = {
     auto: groupAuto,
     why: (typeof input.modelWhy === 'string' && input.modelWhy.trim()) || null,
+    ownerWords: ownerWordsOf(input.ownerWords),
     model: groupAuto ? null : climayteModel(input.model),
     effort: groupAuto || isAutoSetting(input.effort) ? null : climayteEffort(input.effort),
     kind: climayteKind(input.kind),

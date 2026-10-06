@@ -188,10 +188,26 @@ async def _cancel(wid: str) -> None:
         pass  # AgentHydra gone: nothing is left to cancel
 
 
+JUDGING_ROLES = ("review", "judge", "refute", "doubt", "grader")
+
+
+def worker_kind(task: Task) -> str:
+    """The CliMayte kind for the task. Owner, 2026-10-05: CliMayte work is meant to run on moderate models, and
+    CliMayte's pick for `review` is Opus high, so only a task that judges (profile critical or decision, or one of
+    the JUDGING_ROLES) asks for it; the read-only reading, summarising and checking HSwarm exists to keep cheap is a
+    `sweep` (Haiku or Sonnet). A task that writes files is `code`. A pinned model drops the task's profile
+    (spec.py `_resolve_backend`), so such a task is judged by its role alone."""
+    if task.tools in ("edit", "all"):
+        return "code"
+    if task.profile in ("critical", "decision") or (task.role or "").strip().lower() in JUDGING_ROLES:
+        return "review"
+    return "sweep"
+
+
 async def run_worker(job_id: str, task: Task, note: dict) -> Result | None:
     """Run the task as a CliMayte worker; the Result, or None when the API route should take it instead."""
     title = (task.prompt.strip().splitlines() or ["hswarm task"])[0][:80]
-    spec = {"prompt": brief(task), "cwd": task.cwd, "title": title, "kind": "code" if task.tools in ("edit", "all") else "review"}
+    spec = {"prompt": brief(task), "cwd": task.cwd, "title": title, "kind": worker_kind(task)}
     try:
         status, doc = await _call("POST", "/api/corch/workers", {"tasks": [spec], "group": f"hswarm-{job_id}-{task.id}"})
     except (OSError, ValueError) as e:

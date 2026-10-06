@@ -423,7 +423,7 @@ describe('a task waits for memory, and starts on the first tick with room', () =
     const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
-      modelWhy: 'the memory gate under test',
+      ownerWords: 'the memory gate under test',
       tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
     })
     group = run.group
@@ -499,7 +499,7 @@ describe('a reading over 10 minutes old is read again before a task starts there
     const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
-      modelWhy: 'the placement under test',
+      ownerWords: 'the placement under test',
       tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
     })
     group = run.group

@@ -1,5 +1,6 @@
 // CliMayte's scorecard: which model and thinking level each kind of task gets (climayte-scorecard.ts).
 import { describe, expect, test } from 'bun:test'
+import { type RunDefaults, runSetting } from '../src/climayte'
 import {
   type CliMayteVerdict,
   HAIKU,
@@ -58,6 +59,96 @@ describe('pickConfig', () => {
       ...times(3, () => task('code', v('pass', OPUS, 'high', 400_000))),
     ])
     expect(pickConfig('code', rows, 0).config).toEqual({ model: SONNET, effort: 'medium' })
+  })
+})
+
+describe('pickConfig on an Opus pick', () => {
+  test("while the kind's best rung is Opus, every 2nd auto pick explores; on Sonnet every 4th", () => {
+    // Owner, 2026-10-05: review sat on Opus high though Sonnet only had 2 verdicts.
+    const rows = scoreRows([
+      ...times(3, () => task('review', v('pass', OPUS, 'high'))),
+      ...times(2, () => task('review', v('pass', SONNET, 'medium'))),
+    ])
+    const picks = [0, 1, 2, 3].map((i) => pickConfig('review', rows, i).config)
+    expect(picks).toEqual([
+      { model: OPUS, effort: 'high' },
+      { model: HAIKU, effort: null },
+      { model: OPUS, effort: 'high' },
+      { model: HAIKU, effort: null },
+    ])
+    const sonnet = scoreRows(times(3, () => task('code', v('pass', SONNET, 'medium'))))
+    expect([0, 1, 2, 3].map((i) => pickConfig('code', sonnet, i).config.model)).toEqual([
+      SONNET,
+      SONNET,
+      SONNET,
+      HAIKU,
+    ])
+  })
+})
+
+describe('runSetting: what a named model holds', () => {
+  const defaults: RunDefaults = {
+    auto: false,
+    model: null,
+    effort: null,
+    why: null,
+    ownerWords: null,
+    kind: null,
+    priority: 0,
+  }
+  // code's pick is Sonnet medium.
+  const rows = scoreRows(times(3, () => task('code', v('pass', SONNET, 'medium'))))
+  const set = (t: Record<string, unknown>) =>
+    runSetting({ prompt: 'x', cwd: '.', kind: 'code', ...t }, defaults, rows, new Map())
+
+  test('a modelWhy holds only a setting cheaper than the pick; ownerWords holds any', () => {
+    const opus = set({ model: 'opus', modelWhy: 'a hard one' })
+    expect(opus).toMatchObject({ auto: true, model: SONNET, effort: 'medium' })
+    expect(opus.reason).toContain('claude-opus-5-5 was named but not held')
+
+    const owner = set({ model: 'opus', ownerWords: 'use Opus for this' })
+    expect(owner).toMatchObject({ auto: false, model: OPUS, effort: null })
+    expect(owner.reason).toBe('named by the owner: "use Opus for this"')
+
+    expect(set({ model: 'haiku', modelWhy: 'a rename' })).toMatchObject({
+      auto: false,
+      model: HAIKU,
+    })
+    // The pick itself is not cheaper than the pick.
+    expect(set({ model: 'sonnet', effort: 'medium', modelWhy: 'same' }).auto).toBe(true)
+  })
+
+  test('an effort named alone ranks as Opus at that effort', () => {
+    // review's pick is Opus high: Opus medium is cheaper, Opus xhigh is not.
+    const opusRows = scoreRows(times(3, () => task('review', v('pass', OPUS, 'high'))))
+    const review = (t: Record<string, unknown>) =>
+      runSetting({ prompt: 'x', cwd: '.', kind: 'review', ...t }, defaults, opusRows, new Map())
+    expect(review({ effort: 'medium', modelWhy: 'a light read' })).toMatchObject({
+      auto: false,
+      model: null,
+      effort: 'medium',
+    })
+    expect(review({ effort: 'xhigh', modelWhy: 'a hard one' }).auto).toBe(true)
+  })
+
+  test("the run's ownerWords hold the run's setting, not one a task names itself", () => {
+    const run: RunDefaults = { ...defaults, model: OPUS, ownerWords: 'Opus for this batch' }
+    const held = runSetting({ prompt: 'x', cwd: '.', kind: 'code' }, run, rows, new Map())
+    expect(held).toMatchObject({ auto: false, model: OPUS })
+    const own = runSetting(
+      { prompt: 'x', cwd: '.', kind: 'code', effort: 'max' },
+      run,
+      rows,
+      new Map(),
+    )
+    expect(own).toMatchObject({ auto: true, model: SONNET, effort: 'medium' })
+  })
+
+  test('ownerWords is trimmed, quoted to 120 characters and refused past 2000, on a chat too', () => {
+    const long = set({ model: 'opus', ownerWords: `  ${'w'.repeat(500)}  ` })
+    expect(long.reason).toBe(`named by the owner: "${'w'.repeat(120)}"`)
+    expect(() => set({ model: 'opus', ownerWords: 'w'.repeat(2001) })).toThrow('ownerWords')
+    expect(() => set({ chat: true, ownerWords: 'w'.repeat(2001) })).toThrow('ownerWords')
   })
 })
 

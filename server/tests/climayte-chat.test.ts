@@ -75,7 +75,7 @@ describe('chat workers', () => {
   })
 
   test("an ordinary worker's argv is what it was: the worker brief, no chat flags", () => {
-    const w = dispatch({ title: 'a task', model: 'sonnet', effort: 'medium', modelWhy: 'fixed' })
+    const w = dispatch({ title: 'a task', model: 'sonnet', effort: 'medium', ownerWords: 'fixed' })
     expect(w.chat).toBeUndefined()
     const argv = cliArgv(w, 'sid', false, 'hooks.json', 'mcp.json')
     expect(argv).toEqual([

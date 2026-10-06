@@ -198,7 +198,7 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
           kind: 'code',
           model: 'sonnet',
           effort: 'medium',
-          modelWhy: 'one known setting',
+          ownerWords: 'one known setting',
         },
       ],
     })

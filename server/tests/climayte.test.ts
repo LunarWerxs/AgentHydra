@@ -809,7 +809,7 @@ describe('integration: a quota wall hands the session to the next account', () =
           title: 'fake',
           model: 'sonnet',
           effort: 'medium',
-          modelWhy: 'the journal line below names one known setting',
+          ownerWords: 'the journal line below names one known setting',
         },
       ],
     })
@@ -1817,7 +1817,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
           title,
           model: 'sonnet',
           effort: 'medium',
-          modelWhy: 'steering starts from one known setting',
+          ownerWords: 'steering starts from one known setting',
         },
       ],
     })
@@ -1899,11 +1899,18 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
-      modelWhy: 'the setting under test',
+      ownerWords: 'the setting under test',
       tasks: [
         { prompt: 'by default', cwd },
-        { prompt: 'its own', cwd, model: 'Opus', effort: 'xhigh' },
-        { prompt: 'haiku', cwd, model: 'haiku' },
+        // A task naming its own setting needs its own words; the run's cover the run's setting only.
+        {
+          prompt: 'its own',
+          cwd,
+          model: 'Opus',
+          effort: 'xhigh',
+          ownerWords: 'the setting under test',
+        },
+        { prompt: 'haiku', cwd, model: 'haiku', ownerWords: 'the setting under test' },
       ],
     })
     climayteCancel({ group: run.group })
@@ -2036,7 +2043,7 @@ describe('integration: a task with a check is judged by it', () => {
           kind: 'code',
           model: 'sonnet',
           effort: 'high',
-          modelWhy: 'the rung this test climbs from',
+          ownerWords: 'the rung this test climbs from',
           check,
         },
       ],
@@ -2213,7 +2220,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
           kind,
           model: 'sonnet',
           effort,
-          modelWhy: 'the record under test',
+          ownerWords: 'the record under test',
         },
       ],
       group: `size-history-${kind}`,
@@ -2248,7 +2255,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
       kind: 'debug',
       model: 'sonnet',
       effort: 'low',
-      modelWhy: 'sized on its own record',
+      ownerWords: 'sized on its own record',
     }
     const before = climayteList().length
     let refused: unknown = null
@@ -2307,7 +2314,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
       kind: 'debug',
       model: 'sonnet',
       effort: 'low',
-      modelWhy: 'sized',
+      ownerWords: 'sized',
     }
     expect(() => climayteRun({ tasks: [big], group: 'size-not-manage' })).toThrow('split needed')
 
@@ -2444,7 +2451,7 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
           kind: 'docs',
           model: 'sonnet',
           effort: 'high',
-          modelWhy: 'the scorecard row under test',
+          ownerWords: 'the scorecard row under test',
         },
       ],
       size: 'whole',

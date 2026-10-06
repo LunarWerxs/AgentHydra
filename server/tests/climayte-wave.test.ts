@@ -903,7 +903,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     kind: 'code',
     model: 'opus',
     effort: 'high',
-    modelWhy: 'the rung this test judges',
+    ownerWords: 'the rung this test judges',
   })
 
   test('commits are checked, a pass stays provisional and out of the scorecard, a later verdict replaces it', async () => {
@@ -1096,7 +1096,7 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
           kind: 'code',
           model: 'opus',
           effort: 'high',
-          modelWhy: 'the rung this test judges',
+          ownerWords: 'the rung this test judges',
           check: 'echo proved',
         },
       ],
@@ -1337,7 +1337,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
           kind: 'code',
           model: 'opus',
           effort: 'high',
-          modelWhy: 'the rung this test judges',
+          ownerWords: 'the rung this test judges',
         },
       ],
       group: `entry-tasks-${r.wave}`,

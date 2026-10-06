@@ -82,6 +82,11 @@ export const PASS_BAR = 0.7
 const BAD_BAR = 0.5
 /** One auto pick in this many tries a cheaper rung, to keep learning. */
 export const EXPLORE_EVERY = 4
+/** While the kind's best rung is an Opus one, every 2nd auto pick explores instead. Owner,
+ *  2026-10-05: the point was to offload work to moderate models, yet 'not a single one is using any
+ *  other model besides Opus 5.5'; review sat on Opus high because Sonnet had 2 verdicts and every
+ *  4th pick was too slow to earn the third. */
+export const EXPLORE_EVERY_ON_OPUS = 2
 
 /** Weighted units (usage-tokens.ts weights, Opus x2) per 1% of a Pro account's 5-hour window,
  *  fitted on run 1 (77 intervals over 7 Pro accounts, R^2 0.48). Display only: "this kind of task
@@ -275,7 +280,8 @@ function exploreRung(kind: CliMayteKind, rows: ScoreRow[], best: number): number
   return null
 }
 
-/** The setting for an auto task: the best rung, or on every EXPLORE_EVERY-th auto pick of the kind
+/** The setting for an auto task: the best rung, or on every EXPLORE_EVERY-th (EXPLORE_EVERY_ON_OPUS
+ *  while the best rung is an Opus one) auto pick of the kind
  *  (`autoIndex` counts them from 0) a cheaper one still learning (exploreRung). */
 export function pickConfig(
   kind: CliMayteKind,
@@ -283,8 +289,8 @@ export function pickConfig(
   autoIndex: number,
 ): { config: CliMayteConfig; reason: string } {
   const best = bestRung(kind, rows)
-  const explore =
-    autoIndex % EXPLORE_EVERY === EXPLORE_EVERY - 1 ? exploreRung(kind, rows, best) : null
+  const every = CLIMAYTE_LADDER[best]!.model === OPUS ? EXPLORE_EVERY_ON_OPUS : EXPLORE_EVERY
+  const explore = autoIndex % every === every - 1 ? exploreRung(kind, rows, best) : null
   if (explore !== null)
     return {
       config: CLIMAYTE_LADDER[explore]!,
