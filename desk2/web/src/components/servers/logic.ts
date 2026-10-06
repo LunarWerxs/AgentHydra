@@ -145,13 +145,13 @@ export interface Box {
   height: number
 }
 
-/** The frame as drawn in a canvas of `w` by `h`: scaled to fit, centred, aspect kept. */
+/** The frame as drawn in a canvas of `w` by `h`: scaled to fit, centred across and flush with the top, aspect kept. */
 export function fitFrame(w: number, h: number, frame: { width: number; height: number }): { x: number; y: number; width: number; height: number; scale: number } {
   if (frame.width <= 0 || frame.height <= 0 || w <= 0 || h <= 0) return { x: 0, y: 0, width: 0, height: 0, scale: 0 }
   const scale = Math.min(w / frame.width, h / frame.height)
   const width = frame.width * scale
   const height = frame.height * scale
-  return { x: (w - width) / 2, y: (h - height) / 2, width, height, scale }
+  return { x: (w - width) / 2, y: 0, width, height, scale }
 }
 
 /**

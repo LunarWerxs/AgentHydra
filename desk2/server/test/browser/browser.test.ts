@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, setDefaultTimeout, t
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserLiveOut, BrowserOpened, BrowserProfiles, BrowserTab } from '@shared/browser'
-import { findChrome } from '../../src/browser/cdp'
+import { findChrome, parseLiveIn } from '../../src/browser/cdp'
 import { createServer, type DeskServer } from '../../src/index'
 import { cleanTemps, commitAll, git, initRepo, tempDir } from '../git/helpers'
 
@@ -430,3 +430,17 @@ function killTree(pid: number): void {
   if (process.platform === 'win32') Bun.spawnSync(['taskkill', '/PID', String(pid), '/T', '/F'], { stdout: 'ignore', stderr: 'ignore' })
   else process.kill(pid, 'SIGKILL')
 }
+
+describe('parseLiveIn viewport', () => {
+  test('a size is rounded and kept', () => {
+    expect(parseLiveIn('{"type":"viewport","width":520.4,"height":700.6}')).toEqual({ type: 'viewport', width: 520, height: 701 })
+  })
+  test('a size is clamped to 200..4000', () => {
+    expect(parseLiveIn('{"type":"viewport","width":10,"height":99999}')).toEqual({ type: 'viewport', width: 200, height: 4000 })
+  })
+  test('a non-number is rejected', () => {
+    expect(parseLiveIn('{"type":"viewport","width":"500","height":400}')).toBeNull()
+    expect(parseLiveIn('{"type":"viewport","width":500}')).toBeNull()
+    expect(parseLiveIn('{"type":"viewport","width":null,"height":400}')).toBeNull()
+  })
+})

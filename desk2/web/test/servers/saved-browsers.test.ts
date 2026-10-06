@@ -87,12 +87,12 @@ describe('canvas to page coordinates', () => {
   it('maps with no letterbox when the aspect matches', () => {
     expect(mapPoint({ left: 10, top: 20, width: 500, height: 250 }, frame, 260, 145)).toEqual({ x: 500, y: 250 })
   })
-  it('undoes the bars of a taller canvas (frame centred vertically)', () => {
-    const box = { left: 0, top: 0, width: 500, height: 500 } // frame drawn 500x250 at y 125
-    expect(fitFrame(500, 500, frame)).toEqual({ x: 0, y: 125, width: 500, height: 250, scale: 0.5 })
-    expect(mapPoint(box, frame, 250, 250)).toEqual({ x: 500, y: 250 })
-    expect(mapPoint(box, frame, 0, 125)).toEqual({ x: 0, y: 0 })
-    expect(mapPoint(box, frame, 250, 100)).toBeNull()
+  it('keeps a shorter frame flush with the top of a taller canvas', () => {
+    const box = { left: 0, top: 0, width: 500, height: 500 } // frame drawn 500x250 at y 0
+    expect(fitFrame(500, 500, frame)).toEqual({ x: 0, y: 0, width: 500, height: 250, scale: 0.5 })
+    expect(mapPoint(box, frame, 250, 125)).toEqual({ x: 500, y: 250 })
+    expect(mapPoint(box, frame, 0, 0)).toEqual({ x: 0, y: 0 })
+    expect(mapPoint(box, frame, 250, 300)).toBeNull()
   })
   it('undoes the bars of a wider canvas, and clamps a drag that left the page', () => {
     const box = { left: 100, top: 0, width: 1000, height: 250 } // drawn 500x250 at x 250

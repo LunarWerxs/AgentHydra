@@ -65,6 +65,26 @@ function sizeCanvas() {
   c.width = Math.max(1, Math.round(s.clientWidth * dpr))
   c.height = Math.max(1, Math.round(s.clientHeight * dpr))
   draw()
+  queueViewport()
+}
+// The page is laid out at the canvas box's size, so it fills the pane instead of being letterboxed.
+let sentSize: { width: number; height: number } | null = null
+let viewportTimer: ReturnType<typeof setTimeout> | null = null
+function queueViewport(now = false) {
+  if (viewportTimer) clearTimeout(viewportTimer)
+  const go = () => {
+    viewportTimer = null
+    const s = stage.value
+    if (!s || socket?.readyState !== WebSocket.OPEN) return
+    const width = Math.round(s.clientWidth)
+    const height = Math.round(s.clientHeight)
+    if (width < 1 || height < 1) return
+    if (sentSize && Math.abs(sentSize.width - width) < 2 && Math.abs(sentSize.height - height) < 2) return
+    sentSize = { width, height }
+    send({ type: 'viewport', width, height })
+  }
+  if (now) go()
+  else viewportTimer = setTimeout(go, 150)
 }
 function showFrame(m: Extract<BrowserLiveOut, { type: 'frame' }>) {
   const token = ++decoding
@@ -93,6 +113,8 @@ function connect(name: string, tabId?: string) {
   closedWhy.value = ''
   const ws = new WebSocket(liveSocketUrl(window.location, props.cwd, name, tabId))
   socket = ws
+  sentSize = null
+  ws.onopen = () => queueViewport(true)
   ws.onmessage = (ev) => {
     if (socket !== ws) return
     let m: BrowserLiveOut
@@ -248,6 +270,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('mouseup', onWindowUp)
   if (moveFrame) cancelAnimationFrame(moveFrame)
   resizer?.disconnect()
+  if (viewportTimer) clearTimeout(viewportTimer)
   disconnect()
 })
 defineExpose({ refresh })

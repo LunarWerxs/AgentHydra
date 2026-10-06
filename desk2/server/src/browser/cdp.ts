@@ -229,6 +229,8 @@ export class LiveSession {
   private epoch = 0
   /** The newest screencast frame (base64 JPEG), kept for liveFrame(). */
   frame: { at: number; data: string } | null = null
+  /** The page size the viewer asked for, re-applied on every attach. */
+  private size: { width: number; height: number } | null = null
 
   constructor(
     private readonly port: number,
@@ -269,8 +271,13 @@ export class LiveSession {
       if (epoch === this.epoch) void this.watch()
     }
     await this.call('Page.enable')
+    if (this.size) await this.applySize(this.size)
     await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
     await this.sendPage()
+  }
+
+  private async applySize(size: { width: number; height: number }): Promise<void> {
+    await this.call('Emulation.setDeviceMetricsOverride', { width: size.width, height: size.height, deviceScaleFactor: 0, mobile: false })
   }
 
   private detach(): void {
@@ -384,6 +391,25 @@ export class LiveSession {
     if (this.poll) clearInterval(this.poll)
     this.poll = null
     this.epoch++
+    // Give the page its own size back before the socket goes (best effort, sent raw: call() needs the session alive).
+    if (this.size && this.cdp?.readyState === WebSocket.OPEN) {
+      try {
+        this.cdp.send(JSON.stringify({ id: this.nextId++, method: 'Emulation.clearDeviceMetricsOverride', params: {} }))
+      } catch {
+        // floor-ok: the socket is already going
+      }
+      const ws = this.cdp
+      this.cdp = null
+      setTimeout(() => {
+        ws.onmessage = null
+        ws.onclose = null
+        try {
+          ws.close()
+        } catch {
+          // floor-ok: already closed
+        }
+      }, 100)
+    }
     this.detach()
     this.frame = null
     const mine = liveSessions.get(this.port)
@@ -393,7 +419,10 @@ export class LiveSession {
 
   /** One message from the page. Anything malformed is dropped. */
   async input(msg: BrowserLiveIn): Promise<void> {
-    if (this.ended || !this.cdp) return
+    if (this.ended) return
+    // Remembered even while attaching, so the first size is not lost to a page that is not connected yet.
+    if (msg.type === 'viewport') this.size = { width: msg.width, height: msg.height }
+    if (!this.cdp) return
     switch (msg.type) {
       case 'mouse':
         await this.call('Input.dispatchMouseEvent', {
@@ -442,6 +471,12 @@ export class LiveSession {
         const h = (await this.call('Page.getNavigationHistory')) as { currentIndex: number; entries: { id: number }[] }
         const to = h.entries[h.currentIndex + (msg.go === 'back' ? -1 : 1)]
         if (to) await this.call('Page.navigateToHistoryEntry', { entryId: to.id })
+        return
+      }
+      case 'viewport': {
+        await this.applySize(this.size!)
+        await this.call('Page.stopScreencast')
+        await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
         return
       }
       case 'tab': {
@@ -495,6 +530,10 @@ export function parseLiveIn(raw: string): BrowserLiveIn | null {
       return m.go === 'back' || m.go === 'forward' || m.go === 'reload' ? { type: 'history', go: m.go } : null
     case 'tab':
       return typeof m.id === 'string' ? { type: 'tab', id: m.id } : null
+    case 'viewport':
+      return isNum(m.width) && isNum(m.height)
+        ? { type: 'viewport', width: Math.min(4000, Math.max(200, Math.round(m.width))), height: Math.min(4000, Math.max(200, Math.round(m.height))) }
+        : null
     default:
       return null
   }
