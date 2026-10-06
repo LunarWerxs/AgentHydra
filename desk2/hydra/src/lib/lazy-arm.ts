@@ -92,9 +92,11 @@ export function createLazyArming(opts: {
   let hoverTimer: ReturnType<typeof setTimeout> | undefined
   let pressing = false
   let stopPress: (() => void) | null = null
+  /** Set by dispose: a press that ends after the overlay unmounted arms nothing. */
+  let disposed = false
 
   function fire(event: Event | null, as?: "click"): void {
-    if (opts.isArmed() || holdsOpen(standIn)) return
+    if (disposed || opts.isArmed() || holdsOpen(standIn)) return
     const hadFocus = !!standIn && standIn.contains(document.activeElement)
     opts.arm(event, hadFocus, as)
   }
@@ -159,6 +161,7 @@ export function createLazyArming(opts: {
       fire(event)
     },
     dispose() {
+      disposed = true
       clearHover()
       stopPress?.()
     },
