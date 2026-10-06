@@ -37,6 +37,7 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
 import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
+import { chatViewOf } from '@/components/shell/logic'
 import { loadDraft, saveDraft } from '@/components/composer/logic'
 import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from '@/components/composer/draft-images'
 import { putBackDraft } from '@/components/composer/change-project'
@@ -706,7 +707,7 @@ export function useDesk() {
         | { kind: 'elsewhere' }
         | { kind: 'settings' }
     ) {
-      store.selected = view
+      store.selected = chatViewOf(view, store.chats)
     },
 
     openSettings() {

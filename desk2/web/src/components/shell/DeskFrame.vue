@@ -24,7 +24,7 @@ import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { NavHistory, SidebarPeek, matchShortcut, viewUnder, type View } from './logic'
+import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type View } from './logic'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -49,7 +49,7 @@ watch(
     if (v.kind !== 'settings') under.value = v
   }
 )
-const view = computed<View>(() => viewUnder(src.selected.value, under.value))
+const view = computed<View>(() => chatViewOf(viewUnder(src.selected.value, under.value), src.chats.value))
 // Opening a new session (the plus button, a folder's +, Ctrl+N, the menu) puts the caret in its box and
 // keeps it there while a closing menu hands focus back to its trigger (lib/hold-focus.ts).
 const composer = ref<{ focus: () => void } | null>(null)

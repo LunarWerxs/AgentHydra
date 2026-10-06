@@ -108,6 +108,11 @@ const selected = computed(() => src.selected.value)
 const selectedChatId = computed(() => (selected.value.kind === 'chat' ? selected.value.id : null))
 
 const selectedExternalId = computed(() => (selected.value.kind === 'external' ? selected.value.id : null))
+// The cloud list's rows are sessions: an open chat of Desk's own is the row of its session.
+const selectedCloudId = computed(() => {
+  const s = selected.value
+  return s.kind === 'chat' ? (src.chats.value.find((c) => c.id === s.id)?.sessionId ?? null) : selectedExternalId.value
+})
 const accountsOpen = ref(props.accountsOpen)
 
 const storage = typeof localStorage === 'undefined' ? null : localStorage
@@ -680,7 +685,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <HydraSidebar v-if="hydraModel" :model="hydraModel" />
 
-        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedExternalId" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
+        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>

@@ -12,6 +12,16 @@ export function sameView(a: View, b: View): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
 
+/**
+ * An outside-session view of one of Desk's own chats' sessions IS that chat (AgentHydra lists a Desk chat's session
+ * as a CliMayte worker, which has no composer): every way of opening it lands on the chat's own view.
+ */
+export function chatViewOf(view: View, chats: readonly Pick<ChatSummary, 'id' | 'sessionId'>[]): View {
+  if (view.kind !== 'external') return view
+  const chat = chats.find((c) => c.sessionId === view.id)
+  return chat ? { kind: 'chat', id: chat.id } : view
+}
+
 /** Settings is a dialog over the window: the view under it (and the one closing it returns to) is the last other view. */
 export function viewUnder(selected: View, last: View): View {
   return selected.kind === 'settings' ? last : selected

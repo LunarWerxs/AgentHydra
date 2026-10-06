@@ -4,7 +4,7 @@ import { ref } from 'vue'
 import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, HomeStats, HomeStatsRange, SearchHit, TranscriptItem } from '@shared/protocol'
 import { cliMayteWorkerFixtures, settingsFixtures, transcriptFixtures } from '@/dev/fixtures'
 import type { ShellSource } from './source'
-import type { View } from './logic'
+import { chatViewOf, type View } from './logic'
 import type { ComposerApi } from '@/components/composer/api'
 
 const MIN = 60_000
@@ -231,8 +231,8 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
     settings,
     selected,
     select: (v) => {
-      selected.value = v
-      if (v.kind === 'chat') patch(v.id, { unread: false })
+      selected.value = chatViewOf(v, chats.value)
+      if (selected.value.kind === 'chat') patch(selected.value.id, { unread: false })
     },
     openSettings: () => (selected.value = { kind: 'settings' }),
     updateChat: async (id, p) => patch(id, p as Partial<ChatSummary>),

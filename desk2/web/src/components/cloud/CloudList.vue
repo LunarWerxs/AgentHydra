@@ -47,7 +47,7 @@ const props = defineProps<{
   /** A row's right-click menu: its desk row's, or the cloud-only one (Sidebar.vue cloudMenu). */
   menuFor?: (row: CloudSession) => RowMenuEntry[]
 }>()
-const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
+const emit = defineEmits<{ 'new-session': [cwd: string]; open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
 
 const cloud = useCloud()
 // A row nobody touched draws its content only; its context menu mounts on the first hover or focus and stays (lib/first-interest.ts).
@@ -148,6 +148,7 @@ async function copyIds() {
   setTimeout(() => (copied.value = false), 1500)
 }
 
+const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text'
 const ROW =
   'group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none'
 </script>
@@ -212,6 +213,11 @@ const ROW =
           </button>
         </Tip>
         <span class="flex-1" />
+        <Tip v-if="g.cwd && g.key !== RESULTS_KEY" :label="`New session in ${g.label}`">
+          <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', g.cwd)">
+            <component :is="shellGlyphs.groupNew" class="size-4" />
+          </button>
+        </Tip>
         <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />
       </header>
