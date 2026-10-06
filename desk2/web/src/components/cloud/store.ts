@@ -124,6 +124,9 @@ ${rows}`
     timer = null
   }
   watch(on, (v) => (v ? startPolling() : stopPolling()), { immediate: true })
+  // This PC's name comes with an answer, and the desk list's Computer filter needs it with the cloud off too
+  // (Sidebar.vue deskOnPcs): a window with no answer kept asks once.
+  if (!on.value && !fresh) void refresh()
   watch(
     () => JSON.stringify(scopes.value),
     () => on.value && void refresh()

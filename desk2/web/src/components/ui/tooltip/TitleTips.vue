@@ -75,13 +75,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div
-    v-if="open"
-    ref="tip"
-    role="tooltip"
-    class="pointer-events-none fixed z-50 max-w-80 whitespace-pre-line rounded-[var(--radius-6)] bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
-    :style="{ left: `${pos.x}px`, top: `${pos.y}px` }"
-  >
-    {{ text }}
-  </div>
+  <!-- Over every menu and dialog (z 50, added to body when they open): a title in a menu showed behind it (owner, 2026-10-05). -->
+  <Teleport to="body">
+    <div
+      v-if="open"
+      ref="tip"
+      role="tooltip"
+      class="pointer-events-none fixed z-[100] max-w-80 whitespace-pre-line rounded-[var(--radius-6)] bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
+      :style="{ left: `${pos.x}px`, top: `${pos.y}px` }"
+    >
+      {{ text }}
+    </div>
+  </Teleport>
 </template>

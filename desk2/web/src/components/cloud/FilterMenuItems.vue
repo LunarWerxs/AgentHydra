@@ -41,7 +41,8 @@ import { useCloud } from './store'
 // The sidebar's Filter menu in Hydra Desk 2: the desk list's Show choice, then everything AgentHydra's
 // Sessions ⋯ menu offers for the cloud list, plus Computer (which PC). Changing a cloud filter shows the
 // cloud list, so what it did is on screen. Toggles keep the menu open so several go in one visit. Show
-// hidden groups, between the two, is both lists': the groups a header's right-click hid (sidebar/hidden.ts).
+// hidden groups, between the two, is both lists': the groups a header's right-click hid (sidebar/hidden.ts);
+// so are Show only local and Computer, which leave the list shown as it is.
 // Every item says what it does on hover (owner, 2026-10-05).
 const props = defineProps<{ filter: SidebarFilter }>()
 const emit = defineEmits<{ 'update:filter': [filter: SidebarFilter] }>()
@@ -61,6 +62,10 @@ function set(patch: Partial<CloudScopes>) {
   cloud.scopes.value = { ...cloud.scopes.value, ...patch }
   cloud.on.value = true
 }
+/** The Computer filter narrows both lists (Sidebar.vue deskOnPcs), so it leaves the list shown as it is. */
+function setPcs(pcs: string[] | null) {
+  cloud.scopes.value = { ...cloud.scopes.value, pcs }
+}
 
 const instanceUniverse = computed(() => [INSTANCE_DEFAULT, ...cloud.instances.value.map((i) => i.name), INSTANCE_OTHER])
 const instanceTicked = computed(() => s.value.instance ?? instanceUniverse.value)
@@ -73,7 +78,7 @@ function toggleInstance(v: string) {
 const pcTicked = computed(() => s.value.pcs ?? cloud.pcs.value)
 function togglePc(pc: string) {
   const next = toggle(pcTicked.value, cloud.pcs.value, pc)
-  set({ pcs: next.length === cloud.pcs.value.length ? null : next })
+  setPcs(next.length === cloud.pcs.value.length ? null : next)
 }
 
 const sub = [
@@ -189,6 +194,19 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     <span class="flex-1">Show hidden groups</span>
     <component :is="icons.check" v-if="showHidden" class="ml-3" />
   </DropdownMenuItem>
+  <!-- Both lists'; off until an answer names this PC, so it never ticks a placeholder name. -->
+  <DropdownMenuItem
+    role="menuitemcheckbox"
+    :aria-checked="local"
+    :disabled="!cloud.loaded.value"
+    :title="`Only the sessions on this PC (${cloud.thisPc.value}), in both lists; none synced from another PC`"
+    :class="ITEM"
+    @select.prevent="setPcs(local ? null : [cloud.thisPc.value])"
+  >
+    <component :is="icons.local" />
+    <span class="flex-1">Show only local</span>
+    <component :is="icons.check" v-if="local" class="ml-3" />
+  </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Sub-items</DropdownMenuLabel>
@@ -214,23 +232,10 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   </DropdownMenuSub>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-  <DropdownMenuLabel class="flex h-[23px] items-center gap-1 px-2 py-0 text-[13px] font-medium text-text-muted">
-    Cloud list<span class="font-normal">· {{ local ? 'this PC' : 'both PCs' }}</span>
-  </DropdownMenuLabel>
+  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Cloud list</DropdownMenuLabel>
   <DropdownMenuItem :class="ITEM" title="Load the cloud list again from AgentHydra" @select.prevent="(cloud.on.value = true), cloud.refresh()">
     <RefreshCw :class="cloud.loading.value ? 'animate-spin' : ''" />
     <span class="flex-1">Refresh</span>
-  </DropdownMenuItem>
-  <DropdownMenuItem
-    role="menuitemcheckbox"
-    :aria-checked="local"
-    :title="`Only the sessions on this PC (${cloud.thisPc.value}), none synced from the other one`"
-    :class="ITEM"
-    @select.prevent="set({ pcs: local ? null : [cloud.thisPc.value] })"
-  >
-    <component :is="icons.local" />
-    <span class="flex-1">Show only local</span>
-    <component :is="icons.check" v-if="local" class="ml-3" />
   </DropdownMenuItem>
   <DropdownMenuItem
     role="menuitemcheckbox"
@@ -310,13 +315,13 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   </template>
 
   <DropdownMenuSub>
-    <DropdownMenuSubTrigger :class="ITEM" title="Which PC the sessions ran on">
+    <DropdownMenuSubTrigger :class="ITEM" title="Which PC the sessions ran on, in both lists">
       <Monitor />
       <span class="flex-1">Computer</span>
       <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(pcTicked, cloud.pcs.value, (v) => v) }}</span>
     </DropdownMenuSubTrigger>
     <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-64`">
-      <DropdownMenuItem :class="MENU_ITEM" @select.prevent="set({ pcs: null })">Both</DropdownMenuItem>
+      <DropdownMenuItem :class="MENU_ITEM" @select.prevent="setPcs(null)">Both</DropdownMenuItem>
       <DropdownMenuSeparator :class="MENU_SEPARATOR" />
       <DropdownMenuItem
         v-for="pc in cloud.pcs.value"

@@ -9,6 +9,7 @@ import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 import { useCloud } from '@/components/cloud/store'
+import { deskOnPcs } from '@/components/cloud/logic'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -181,11 +182,15 @@ const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
 // Groups hidden with their header's right-click (hidden.ts), out of the list unless the Filter menu's Show hidden.
 const hiddenGroups = useHiddenGroups()
 
+// Show only local (the Filter menu's Computer filter) narrows this list as it does the cloud list, once the cloud
+// store knows this PC's name (it asks with the cloud off too): another PC's synced chats leave it.
+const deskPcs = computed(() => (cloud.loaded.value ? cloud.scopes.value.pcs : null))
+const onPcs = computed(() => deskOnPcs(src.chats.value, src.external.value, deskPcs.value, cloud.thisPc.value))
 const groups = computed(() =>
-  groupChats(src.chats.value, {
+  groupChats(onPcs.value.chats, {
     query: query.value,
     filter: filter.value,
-    external: src.external.value,
+    external: onPcs.value.external,
     order: order.value,
     hidden: hiddenGroups.hidden.value,
     showHidden: hiddenGroups.showHidden.value
@@ -221,11 +226,11 @@ const ownGroups = computed<ChatGroup[]>(() => {
   const g = groups.value
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
-const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active')
+const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active' || deskPcs.value !== null)
 // Rows drag to another place in their own group (rowDrag.ts); not while a search or a filter narrows the list.
 const rowDrag = useRowDrag()
 const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
-const rowLeave = leaveUnlessFiltered([query, filter])
+const rowLeave = leaveUnlessFiltered([query, filter, deskPcs])
 const emptyText = computed(() =>
   query.value.trim()
     ? 'No matching sessions'
@@ -793,6 +798,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <button type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
           </template>
           <button v-if="groups.hiddenOut" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
+          <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
         </div>
 
         <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">

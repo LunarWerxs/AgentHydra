@@ -227,6 +227,24 @@ export function pcsIn(rows: Pick<CloudSession, 'fromPc'>[], thisPc: string): str
 /** The Filter menu's Show only local: Computer narrowed to this PC alone, the other PC's sessions out. */
 export const localOnly = (s: Pick<CloudScopes, 'pcs'>, thisPc: string): boolean => s.pcs?.length === 1 && s.pcs[0] === thisPc
 
+/** The Computer filter keeps a row: its PC is ticked; null ticks every PC. */
+export const pcKept = (r: Pick<CloudSession, 'fromPc'>, pcs: readonly string[] | null, thisPc: string): boolean =>
+  pcs === null || pcs.includes(pcOf(r, thisPc))
+
+/**
+ * The desk list under the Computer filter, as the cloud list is (owner, 2026-10-05: "show only local, which
+ * should mean this PC"): a Desk chat is this PC's, an outside session the chat sync brought is its PC's.
+ */
+export function deskOnPcs<C, E extends Pick<CloudSession, 'fromPc'>>(
+  chats: C[],
+  external: E[],
+  pcs: readonly string[] | null,
+  thisPc: string
+): { chats: C[]; external: E[] } {
+  if (pcs === null) return { chats, external }
+  return { chats: pcs.includes(thisPc) ? chats : [], external: external.filter((s) => pcKept(s, pcs, thisPc)) }
+}
+
 export interface CloudGroup {
   key: string
   label: string
@@ -322,7 +340,7 @@ function keepsDeskRow(r: CloudSession, s: CloudScopes, thisPc: string): boolean 
   const named = (SOURCE_VALUES as readonly string[]).includes(r.source)
   const sourceOk = named ? s.apps.includes(r.source as CloudSource) : allOf(s.apps, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
   if (!sourceOk || !s.archived.includes(r.archived ? 'archived' : 'active')) return false
-  if (s.pcs !== null && !s.pcs.includes(pcOf(r, thisPc))) return false
+  if (!pcKept(r, s.pcs, thisPc)) return false
   if (!allOf(s.shape, SHAPE_VALUES)) return false
   const claudeNarrowed = s.instance !== null || !allOf(s.dispatched, DISPATCHED_VALUES) || !allOf(s.rateLimit, RATE_LIMIT_VALUES)
   return !(r.source === 'claude' && claudeNarrowed)
@@ -358,7 +376,7 @@ export interface GroupCloudOptions {
  */
 export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string, opts: GroupCloudOptions = {}): CloudGroup[] {
   const desk = opts.desk ?? new Map<string, DeskPlace>()
-  const shown = rows.filter((r) => s.shape.includes(sessionShape(r)) && (s.pcs === null || s.pcs.includes(pcOf(r, thisPc))))
+  const shown = rows.filter((r) => s.shape.includes(sessionShape(r)) && pcKept(r, s.pcs, thisPc))
   if (opts.ranked) return shown.length ? [{ key: RESULTS_KEY, label: RESULTS_LABEL, cwd: null, orderKey: RESULTS_KEY, rows: shown }] : []
   const answered = new Set(rows.map((r) => r.id))
   for (const [id, place] of desk) if (!answered.has(id) && keepsDeskRow(place.row, s, thisPc)) shown.push(place.row)

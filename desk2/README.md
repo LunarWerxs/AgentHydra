@@ -103,10 +103,16 @@ sidebar on the left stays put, and only the pane on the right changes.
   Unhide. Both lists hide the same groups; a search still finds their rows, and opening a chat that sits
   in a hidden group turns Show hidden on. Pinned and Archived cannot be hidden. The browser remembers
   both (`web/src/components/sidebar/hidden.ts`).
-- **Show only local, and a word on hover.** The Filter menu's Show only local (in the cloud list part)
-  keeps just this PC's sessions, the ones synced from the other PC out; the Cloud list heading then reads
-  "this PC". It is Computer with only this PC ticked, so either one undoes it. Every Filter menu item
-  says what it does when the pointer rests on it (owner, 2026-10-05).
+- **Show only local, and a word on hover.** The Filter menu's Show only local, beside Show hidden groups,
+  keeps just this PC's sessions in both lists: the desk list drops the chats the chat sync brought from
+  another PC (Desk's own chats are this PC's), the cloud list the other PC's rows. It leaves the list shown
+  as it is and the menu open, and stays off until an answer from AgentHydra has named this PC (the cloud
+  store asks once with the cloud off for that). It is Computer with only this PC ticked, and Computer
+  narrows both lists too, so either one undoes it; rows do not drag while it narrows the list. The Filter
+  menu stays open when a filter takes away the first group, whose header holds its button (the next
+  header's button keeps it open), and a desk list a filter empties still shows the button. Every
+  Filter menu item says what it does when the pointer rests on it, and that word draws over the menu
+  (`ui/tooltip/TitleTips.vue` sits on the page body above every menu) (owner, 2026-10-05).
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
