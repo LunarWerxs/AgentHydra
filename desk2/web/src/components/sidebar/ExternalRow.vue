@@ -7,23 +7,42 @@ import { fromPcLabel } from '@/components/cloud/logic'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
-import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuItem } from './logic'
+import { createReusableTemplate } from '@vueuse/core'
+import { useFirstInterest } from '@/lib/first-interest'
+import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuEntry, type RowMenuItem } from './logic'
 import RowMenuList from './RowMenuList.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // A session running outside Hydra Desk, in the same list as our chats: the same 26px row, dot, title
 // and menu as the real app (without Delete: its files are not ours). Opening it shows its transcript,
-// with the composer that carries it on when it is an idle Claude Code session.
-const props = withDefaults(defineProps<{ session: ExternalSession; selected?: boolean; /** Move to group's names. */ groups?: string[] }>(), {
-  selected: false,
-  groups: () => []
-})
+// with the composer that carries it on when it is an idle Claude Code session. A row the sidebar adds for
+// running work no row lists (tasks.ts addedEntry) is drawn the same, with its own short menu (`entries`)
+// and no Rename: Hydra Desk keeps no marks on it.
+const props = withDefaults(
+  defineProps<{
+    session: ExternalSession
+    selected?: boolean
+    /** Move to group's names. */
+    groups?: string[]
+    /** The menu in place of an outside session's; without Rename, the row cannot be renamed. */
+    entries?: RowMenuEntry[]
+  }>(),
+  {
+    selected: false,
+    groups: () => []
+  }
+)
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
 
 const glyph = computed(() => externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
-const menu = computed(() => rowMenu(externalRow(props.session), props.groups))
+const menu = computed(() => props.entries ?? rowMenu(externalRow(props.session), props.groups))
+const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))
 const menuOpen = ref(false)
+// A row nobody touched draws its content and its trigger buttons only; its context menu and dropdown menu mount on the
+// first hover or focus and stay (lib/first-interest.ts). Both menus share one row body, so it is written once.
+const { seen, listeners } = useFirstInterest()
+const [DefineBody, ReuseBody] = createReusableTemplate()
 // A Desktop chat AgentHydra's chat sync took from another PC: a cloud beside the status dot, as the cloud list draws it.
 const fromPc = computed(() => (props.session.fromPc ? fromPcLabel(props.session.fromPc) : null))
 const tooltip = computed(() =>
@@ -39,6 +58,7 @@ const renaming = ref(false)
 const draft = ref('')
 const input = ref<HTMLInputElement | null>(null)
 function startRename() {
+  if (!canRename.value) return
   draft.value = props.session.title
   renaming.value = true
   nextTick(() => {
@@ -65,24 +85,8 @@ function run(item: RowMenuItem) {
 <template>
   <!-- The Tip wraps the whole context menu from outside: a Tip between the menu root and its trigger leaves the menu's popper unplaced (it opens off-screen). -->
   <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
-    <span class="block">
-      <ContextMenu>
-        <ContextMenuTrigger as-child>
-        <div
-          role="button"
-          tabindex="0"
-          :aria-current="selected ? 'page' : undefined"
-          :aria-description="`Runs in ${source}`"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
-          :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
-          ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
-          @keydown.f2.self="startRename"
-        >
+    <span class="block" v-on="listeners">
+      <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
             <span class="flex size-[14px] items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
@@ -106,6 +110,25 @@ function run(item: RowMenuItem) {
           <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts; they make room for the three dots on hover. -->
           <span v-if="!renaming && $slots.default" class="ml-1 flex shrink-0 items-center pr-1 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }"><slot /></span>
 
+      </DefineBody>
+      <ContextMenu v-if="seen">
+        <ContextMenuTrigger as-child>
+        <div
+          role="button"
+          tabindex="0"
+          :aria-current="selected ? 'page' : undefined"
+          :aria-description="`Runs in ${source}`"
+          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          :class="[
+            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !selected ? 'bg-fill-hover' : '',
+            glyph.dim && !selected ? 'text-text-muted' : ''
+          ]"
+          @click="!renaming && emit('select')"
+          @keydown.enter.self="emit('select')"
+          @keydown.f2.self="startRename"
+        >
+          <ReuseBody />
           <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
             <DropdownMenuTrigger as-child>
               <button
@@ -126,7 +149,40 @@ function run(item: RowMenuItem) {
     <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
       <RowMenuList :entries="menu" kind="context" @run="run" />
     </ContextMenuContent>
-  </ContextMenu>
+      </ContextMenu>
+        <div
+          v-else
+          data-slot="context-menu-trigger"
+          data-state="closed"
+          role="button"
+          tabindex="0"
+          :aria-current="selected ? 'page' : undefined"
+          :aria-description="`Runs in ${source}`"
+          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          :class="[
+            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !selected ? 'bg-fill-hover' : '',
+            glyph.dim && !selected ? 'text-text-muted' : ''
+          ]"
+          @click="!renaming && emit('select')"
+          @keydown.enter.self="emit('select')"
+          @keydown.f2.self="startRename"
+        >
+          <ReuseBody />
+          <button
+            v-else-if="!renaming"
+            type="button"
+            data-slot="dropdown-menu-trigger"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            data-state="closed"
+            :aria-label="`More options for ${session.title}`"
+            class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+            @click.stop
+          >
+            <component :is="shellGlyphs.rowMore" class="size-4" />
+          </button>
+        </div>
     </span>
   </Tip>
 </template>

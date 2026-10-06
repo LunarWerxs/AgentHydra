@@ -7,6 +7,8 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/component
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem } from './logic'
 import { Tip } from '@/components/ui/tooltip'
+import { createReusableTemplate } from '@vueuse/core'
+import { useFirstInterest } from '@/lib/first-interest'
 import RowMenuList from './RowMenuList.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
@@ -26,6 +28,10 @@ const clock = useClock()
 const timed = computed(() => props.chat.status === 'working' || props.chat.status === 'starting' || props.chat.status === 'limited')
 const tooltip = computed(() => rowTooltip(props.chat, timed.value ? clock.value : Date.now()))
 const menuOpen = ref(false)
+// A row nobody touched draws its content and its trigger buttons only; its context menu and dropdown menu mount on the
+// first hover or focus and stay (lib/first-interest.ts). Both menus share one row body, so it is written once.
+const { seen, listeners } = useFirstInterest()
+const [DefineBody, ReuseBody] = createReusableTemplate()
 
 const dotClass = computed(() => glyphDotClass(glyph.value))
 
@@ -66,23 +72,8 @@ defineExpose({ startRename })
 <template>
   <!-- The Tip wraps the whole context menu from outside: a Tip between the menu root and its trigger leaves the menu's popper unplaced (it opens off-screen). -->
   <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
-    <span class="block">
-      <ContextMenu>
-        <ContextMenuTrigger as-child>
-        <div
-          role="button"
-          tabindex="0"
-          :aria-current="selected ? 'page' : undefined"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
-          :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
-          ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
-          @keydown.f2.self="startRename"
-        >
+    <span class="block" v-on="listeners">
+      <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
             <span class="flex size-[14px] items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
@@ -116,6 +107,24 @@ defineExpose({ startRename })
             >{{ chat.climayteActive }}</span>
           </span>
 
+      </DefineBody>
+      <ContextMenu v-if="seen">
+        <ContextMenuTrigger as-child>
+        <div
+          role="button"
+          tabindex="0"
+          :aria-current="selected ? 'page' : undefined"
+          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          :class="[
+            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !selected ? 'bg-fill-hover' : '',
+            glyph.dim && !selected ? 'text-text-muted' : ''
+          ]"
+          @click="!renaming && emit('select')"
+          @keydown.enter.self="emit('select')"
+          @keydown.f2.self="startRename"
+        >
+          <ReuseBody />
           <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
             <DropdownMenuTrigger as-child>
               <button
@@ -136,7 +145,39 @@ defineExpose({ startRename })
     <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
       <RowMenuList :entries="menu" kind="context" @run="run" />
     </ContextMenuContent>
-  </ContextMenu>
+      </ContextMenu>
+        <div
+          v-else
+          data-slot="context-menu-trigger"
+          data-state="closed"
+          role="button"
+          tabindex="0"
+          :aria-current="selected ? 'page' : undefined"
+          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          :class="[
+            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !selected ? 'bg-fill-hover' : '',
+            glyph.dim && !selected ? 'text-text-muted' : ''
+          ]"
+          @click="!renaming && emit('select')"
+          @keydown.enter.self="emit('select')"
+          @keydown.f2.self="startRename"
+        >
+          <ReuseBody />
+          <button
+            v-else-if="!renaming"
+            type="button"
+            data-slot="dropdown-menu-trigger"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            data-state="closed"
+            :aria-label="`More options for ${chat.title}`"
+            class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+            @click.stop
+          >
+            <component :is="shellGlyphs.rowMore" class="size-4" />
+          </button>
+        </div>
     </span>
   </Tip>
 </template>

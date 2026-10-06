@@ -4,10 +4,12 @@ import { Cloud, EyeOff } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession, SwarmJob } from '@shared/protocol'
 import { shellGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
+import { createReusableTemplate } from '@vueuse/core'
+import { useFirstInterestSet } from '@/lib/first-interest'
 import RowAge from '@/lib/RowAge.vue'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
-import { runningIn, type TaskNode } from '@/components/sidebar/tasks'
+import { isAddedRow, runningIn, type TaskNode } from '@/components/sidebar/tasks'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
@@ -15,7 +17,7 @@ import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
-import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, RESULTS_KEY, scopesNarrowed, sessionShape, SHAPE_LABELS } from './logic'
+import { cloudOnlyLabel, fromPcLabel, modelName, originLabel, RESULTS_KEY, scopesNarrowed, sessionShape, SHAPE_LABELS, type CloudGroup } from './logic'
 import { useCloud } from './store'
 
 // Hydra Desk 2's cloud list, in the sidebar in place of the desk list: every session AgentHydra knows,
@@ -28,6 +30,8 @@ import { useCloud } from './store'
 // 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the first folder's
 // header, as on the desk list, or alone in a header while there is no folder to show.
 const props = defineProps<{
+  /** The groups to draw: the store's with the rows Sidebar adds for running work no row lists (sidebar/tasks.ts addToCloudGroups); else the store's. */
+  groups?: CloudGroup[]
   selectedId: string | null
   /** With the chrome bar's CliMayte button on: the tasks a row handed out, listed under it (sidebar/tasks.ts). */
   tasksOf?: (id: string) => TaskNode[] | null
@@ -46,6 +50,10 @@ const props = defineProps<{
 const emit = defineEmits<{ open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
 
 const cloud = useCloud()
+// A row nobody touched draws its content only; its context menu mounts on the first hover or focus and stays (lib/first-interest.ts).
+const rowMenus = useFirstInterestSet()
+const [DefineRowBody, ReuseRowBody] = createReusableTemplate<{ r: CloudGroup['rows'][number] }>()
+const shownGroups = computed(() => props.groups ?? cloud.groups.value)
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
 const hiddenGroups = useHiddenGroups()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
@@ -65,7 +73,7 @@ const runningInGroup = (rows: readonly CloudSession[]) => (props.tasksOf ? runni
 const chatsRunningIn = (rows: readonly CloudSession[]) => (props.running ? rows.filter((r) => props.running!(r.id)).length : 0)
 const foldedRunning = computed(() => {
   const out = new Map<string, { tasks: number; chats: number }>()
-  for (const g of cloud.groups.value) {
+  for (const g of shownGroups.value) {
     if (!collapsed.value.has(g.key)) continue
     const tasks = runningInGroup(g.rows)
     const chats = chatsRunningIn(g.rows)
@@ -79,6 +87,10 @@ const thisPc = computed(() => cloud.thisPc.value)
 const otherPc = (r: CloudSession) => (r.fromPc && r.fromPc !== thisPc.value ? r.fromPc : null)
 function tooltip(r: CloudSession): string {
   const pc = otherPc(r)
+  // A row added for running work no row lists (sidebar/tasks.ts addedCloudRow): where it runs, the PC named.
+  if (isAddedRow(r.id)) {
+    return [r.title, originLabel(r, thisPc.value), [modelName(r.model), r.effort].filter(Boolean).join(' · '), r.cwd].filter(Boolean).join('\n')
+  }
   // A row made of the desk's facts (AgentHydra's answer left it out) has no count or shape to tell.
   const size = cloud.fromDesk(r.id) ? 'Listed because the desk list shows it' : `${SHAPE_LABELS[sessionShape(r)]} · ${r.messageCount} messages`
   return [
@@ -93,6 +105,17 @@ function tooltip(r: CloudSession): string {
     .filter(Boolean)
     .join('\n')
 }
+/**
+ * The words of a row's leading cloud, null for a row that leads with its dot: a row only this list has, and
+ * another PC's chat; a row added for running work (sidebar/tasks.ts) is drawn as the desk list draws it, its dot
+ * or, another PC's, a cloud naming that PC (owner, 2026-10-05: "besides them having a Cloud icon").
+ */
+function cloudMark(r: CloudSession): string | null {
+  const pc = otherPc(r)
+  if (isAddedRow(r.id)) return pc && `On ${pc}`
+  if (!cloud.onDesk(r.id)) return cloudOnlyLabel(r, thisPc.value)
+  return pc && fromPcLabel(pc)
+}
 /** A row the desk list shows keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
 function dotClass(r: CloudSession): string {
   if (r.archived) return 'border border-text-muted'
@@ -102,7 +125,7 @@ function dotClass(r: CloudSession): string {
 // Each row's tooltip, built when the rows change and not on every redraw (the 30 s clock redraws them).
 const tips = computed(() => {
   const out = new Map<string, string>()
-  for (const g of cloud.groups.value) for (const r of g.rows) out.set(r.id, tooltip(r))
+  for (const g of shownGroups.value) for (const r of g.rows) out.set(r.id, tooltip(r))
   return out
 })
 function onRow(r: CloudSession) {
@@ -123,7 +146,26 @@ const ROW =
 
 <template>
   <div class="flex flex-col" role="region" aria-label="Cloud list">
-    <header v-if="cloud.groups.value.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
+    <DefineRowBody v-slot="{ r }">
+            <!-- A row only this list has leads with a cloud (owner, 2026-10-04: "none display a cloud icon"), and so does another PC's chat, as AgentHydra's Sessions tab draws it (owner, 2026-10-04: "the cloud chats don't have a cloud icon"); a row the desk list shows keeps its dot. -->
+            <span class="flex size-6 shrink-0 items-center justify-center">
+              <span
+                v-if="cloud.selectMode.value"
+                class="flex size-3.5 items-center justify-center rounded-[3px] border"
+                :class="cloud.selected.value.has(r.id) ? 'border-accent bg-accent text-white' : 'border-text-muted'"
+              >
+                <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
+              </span>
+              <Cloud v-else-if="cloudMark(r)" role="img" :aria-label="cloudMark(r)!" class="size-3.5 text-text-muted" />
+              <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
+            </span>
+            <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
+            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
+            <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
+            <slot name="sub-badges" :id="r.id" />
+            <RowAge :at="r.lastActivityAt" />
+    </DefineRowBody>
+    <header v-if="shownGroups.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
       <span class="flex-1" />
       <slot name="tools" />
@@ -133,17 +175,17 @@ const ROW =
       {{ cloud.error.value }}
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.refresh()">Retry</button>
     </p>
-    <p v-else-if="cloud.loaded.value && cloud.groups.value.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+    <p v-else-if="cloud.loaded.value && shownGroups.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
       Every group here is hidden.
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
     </p>
-    <p v-else-if="cloud.loaded.value && cloud.groups.value.length === 0" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+    <p v-else-if="cloud.loaded.value && shownGroups.length === 0" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
       No sessions match.
       <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
     </p>
 
     <TransitionGroup :css="false" @leave="rowLeave">
-    <section v-for="(g, gi) in cloud.groups.value" :key="g.key" :aria-label="g.label">
+    <section v-for="(g, gi) in shownGroups" :key="g.key" :aria-label="g.label">
       <ContextMenu>
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
       <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
@@ -183,8 +225,8 @@ const ROW =
           @dragend="rowDrag.end"
         >
         <Tip :label="tips.get(r.id) ?? ''" side="right" align="start">
-          <span class="block">
-          <ContextMenu>
+          <span class="block" v-on="rowMenus.listeners(r.id)">
+          <ContextMenu v-if="rowMenus.seen(r.id)">
           <ContextMenuTrigger as-child>
           <div
             role="button"
@@ -195,30 +237,27 @@ const ROW =
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
-            <!-- A row only this list has leads with a cloud (owner, 2026-10-04: "none display a cloud icon"), and so does another PC's chat, as AgentHydra's Sessions tab draws it (owner, 2026-10-04: "the cloud chats don't have a cloud icon"); a row the desk list shows keeps its dot. -->
-            <span class="flex size-6 shrink-0 items-center justify-center">
-              <span
-                v-if="cloud.selectMode.value"
-                class="flex size-3.5 items-center justify-center rounded-[3px] border"
-                :class="cloud.selected.value.has(r.id) ? 'border-accent bg-accent text-white' : 'border-text-muted'"
-              >
-                <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
-              </span>
-              <Cloud v-else-if="!cloud.onDesk(r.id)" role="img" :aria-label="cloudOnlyLabel(r, thisPc)" class="size-3.5 text-text-muted" />
-              <Cloud v-else-if="otherPc(r)" role="img" :aria-label="fromPcLabel(otherPc(r)!)" class="size-3.5 text-text-muted" />
-              <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
-            </span>
-            <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
-            <span v-if="otherPc(r)" class="max-w-24 shrink-0 truncate rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-accent-text">{{ r.fromPc }}</span>
-            <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
-            <slot name="sub-badges" :id="r.id" />
-            <RowAge :at="r.lastActivityAt" />
+            <ReuseRowBody :r="r" />
           </div>
           </ContextMenuTrigger>
           <ContextMenuContent v-if="props.menuFor" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, props.menuFor!(r))">
             <RowMenuList :entries="props.menuFor(r)" kind="context" @run="(item: RowMenuItem) => emit('action', r, item)" />
           </ContextMenuContent>
           </ContextMenu>
+          <div
+            v-else
+            data-slot="context-menu-trigger"
+            data-state="closed"
+            role="button"
+            tabindex="0"
+            :aria-current="props.selectedId === r.id ? 'page' : undefined"
+            :aria-pressed="cloud.selectMode.value ? cloud.selected.value.has(r.id) : undefined"
+            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : '']"
+            @click="onRow(r)"
+            @keydown.enter.self="onRow(r)"
+          >
+            <ReuseRowBody :r="r" />
+          </div>
           </span>
         </Tip>
         <TaskRows v-if="(props.shownOf ?? props.tasksOf)?.(r.id)?.length || (props.shownJobsOf ?? props.jobsOf)?.(r.id)?.length" :nodes="(props.shownOf ?? props.tasksOf)?.(r.id) ?? []" :jobs="(props.shownJobsOf ?? props.jobsOf)?.(r.id) ?? []" :selected-id="props.selectedId" @open="(w: CliMayteWorker) => emit('open-task', w)" @open-job="(j: SwarmJob) => emit('open-job', j)" />
