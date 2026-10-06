@@ -3,13 +3,17 @@
 // (docs/reference/real/composer-strip-above-box.png). Left: project and branch (or, for a new
 // session, the slot: folder and account pickers). Right: +N -N (opens the diff), Create PR split
 // button, Dismiss.
+import { computed } from 'vue'
 import { icons } from '@/lib/icons'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import type { ConnectorView } from '@shared/connectors'
 import { formatCount } from './logic'
-import { ITEM, MENU, STRIP_BUTTON } from './menu'
+import RepoYetiActions from './RepoYetiActions.vue'
+import { installItem, yetiRuns, type BarGit } from './repoyeti-bar'
+import { ITEM, MENU, SEPARATOR, STRIP_BUTTON } from './menu'
 import { Tip } from '@/components/ui/tooltip'
 
-defineProps<{
+const props = defineProps<{
   project: string | null
   projectPath?: string | null
   branch: string | null
@@ -17,8 +21,23 @@ defineProps<{
   removed: number
   /** Create PR is offered when there is a chat to ask and a branch to open it from. */
   canCreatePr: boolean
+  /** RepoYeti's connector entry: while it runs, its git actions replace Create PR. */
+  yeti?: ConnectorView | null
+  cwd?: string | null
+  chatId?: string | null
+  git?: BarGit
 }>()
-const emit = defineEmits<{ 'open-diff': []; 'create-pr': [draft: boolean]; dismiss: [] }>()
+const emit = defineEmits<{
+  'open-diff': []
+  'create-pr': [draft: boolean]
+  dismiss: []
+  'yeti-install': [action: 'install' | 'start']
+  'open-yeti': []
+  notice: [text: string]
+  changed: []
+}>()
+
+const install = computed(() => installItem(props.yeti ?? null))
 
 const X = icons.dismiss
 const Chevron = icons.morePrOptions
@@ -56,7 +75,17 @@ const Chevron = icons.morePrOptions
       </button>
     </Tip>
 
-    <div v-if="canCreatePr" role="group" aria-label="Create PR" class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)]">
+    <RepoYetiActions
+      v-if="yetiRuns(yeti ?? null) && cwd && git"
+      :cwd="cwd"
+      :chat-id="chatId ?? null"
+      :git="git"
+      @notice="emit('notice', $event)"
+      @open-yeti="emit('open-yeti')"
+      @changed="emit('changed')"
+    />
+
+    <div v-else-if="canCreatePr" role="group" aria-label="Create PR" class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)]">
       <Tip label="Ask Claude to commit and open a pull request" side="top">
         <button
           type="button"
@@ -81,6 +110,10 @@ const Chevron = icons.morePrOptions
           <DropdownMenuItem :class="ITEM" @select="emit('create-pr', false)">Create PR</DropdownMenuItem>
           <DropdownMenuItem :class="ITEM" @select="emit('create-pr', true)">Create draft PR</DropdownMenuItem>
           <DropdownMenuItem :class="ITEM" @select="emit('open-diff')">Review changes</DropdownMenuItem>
+          <template v-if="install">
+            <DropdownMenuSeparator :class="SEPARATOR" />
+            <DropdownMenuItem :class="ITEM" :disabled="!install.enabled" @select="install.action && emit('yeti-install', install.action)">{{ install.label }}</DropdownMenuItem>
+          </template>
         </DropdownMenuContent>
       </DropdownMenu>
     </div>

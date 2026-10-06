@@ -85,6 +85,9 @@ export const OPEN_DIFF_EVENT = 'hydra-desk:open-diff'
 /** Window event the composer fires to open the CliMayte pane (detail: { originSessionId }). */
 export const OPEN_CLIMAYTE_EVENT = 'hydra-desk:open-climayte'
 
+/** Window event the composer fires to open the RepoYeti pane. */
+export const OPEN_REPOYETI_EVENT = 'hydra-desk:open-repoyeti'
+
 /** Window event the composer fires to bring the chat's pending request into view (detail: { chatId }). */
 export const SHOW_PENDING_EVENT = 'hydra-desk:show-pending'
 

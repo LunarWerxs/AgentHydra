@@ -222,11 +222,6 @@ const PANE_BTN =
           <span v-if="tasksRunning" class="tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-[3px] text-[10px] font-medium leading-none text-white">{{ tasksRunning }}</span>
         </button>
       </Tip>
-      <Tip label="Terminal (not in Hydra Desk)">
-        <button type="button" :class="PANE_BTN" aria-label="Terminal" aria-disabled="true">
-          <component :is="shellGlyphs.terminal" class="size-4" />
-        </button>
-      </Tip>
       <Tip label="Changes">
         <button type="button" :class="PANE_BTN" aria-label="Changes" :aria-pressed="pane === 'diff'" @click="emit('toggle-pane', 'diff')">
           <component :is="shellGlyphs.changes" class="size-4" />

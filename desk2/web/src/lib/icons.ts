@@ -46,7 +46,6 @@ import {
   SlidersHorizontal,
   Square,
   SquareSlash,
-  SquareTerminal,
   Undo2,
   Volume2,
   X,
@@ -81,7 +80,6 @@ export const icons = {
   routines: Clock,
   sendFeedback: MessageSquareWarning,
   // Title bar, right side
-  terminal: SquareTerminal,
   changes: GitCompare,
   browser: Globe,
   viewOptions: PanelRight,

@@ -5,7 +5,7 @@ import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import Composer from '@/components/composer/Composer.vue'
-import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT } from '@/components/composer/api'
+import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
 import { OPEN_BROWSER_EVENT } from '@shared/browser'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 const DiffPane = lazyPanel(() => import('@/components/panes/DiffPane.vue'))
@@ -364,6 +364,7 @@ function resizeServers(w: number) {
 }
 const onOpenDiff = () => (pane.value = 'diff')
 const onOpenCliMayte = () => (pane.value = 'climayte')
+const onOpenRepoYeti = () => (pane.value = 'repoyeti')
 // A Browser card in the transcript: the servers pane shows that browser (it reads the same event itself).
 const onOpenBrowser = () => {
   if (chat.value) pane.value = 'servers'
@@ -473,6 +474,7 @@ onMounted(() => {
   window.addEventListener('keydown', onKey)
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.addEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
+  window.addEventListener(OPEN_REPOYETI_EVENT, onOpenRepoYeti)
   window.addEventListener(OPEN_BROWSER_EVENT, onOpenBrowser)
   window.addEventListener(OPEN_TASKS_EVENT, onOpenTasks)
   window.addEventListener(OPEN_HYDRA_EVENT, onOpenHydra)
@@ -489,6 +491,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey)
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
+  window.removeEventListener(OPEN_REPOYETI_EVENT, onOpenRepoYeti)
   window.removeEventListener(OPEN_BROWSER_EVENT, onOpenBrowser)
   window.removeEventListener(OPEN_TASKS_EVENT, onOpenTasks)
   window.removeEventListener(OPEN_HYDRA_EVENT, onOpenHydra)

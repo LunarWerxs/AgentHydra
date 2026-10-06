@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
 import WorkerDock from '@/components/climayte/WorkerDock.vue'
-import { CHAT_SENT_EVENT, COMPOSER_API, httpComposerApi, OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, SHOW_PENDING_EVENT, type ChatSentDetail } from './api'
+import { CHAT_SENT_EVENT, COMPOSER_API, httpComposerApi, OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT, SHOW_PENDING_EVENT, type ChatSentDetail } from './api'
 import {
   appendDictation,
   applyMention,
@@ -67,6 +67,7 @@ import NewSessionBar from './NewSessionBar.vue'
 import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
 import RepoStrip from './RepoStrip.vue'
+import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors/repoyeti-state'
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
@@ -327,6 +328,17 @@ function createPr(draft: boolean) {
   if (!props.chat) return
   desk.send(props.chat.id, { text: prAsk(draft) }).catch((e) => showNotice(`Not sent: ${errText(e)}`))
 }
+
+function openRepoYeti() {
+  window.dispatchEvent(new Event(OPEN_REPOYETI_EVENT))
+}
+function installRepoYeti(action: 'install' | 'start') {
+  repoYetiAction(action).catch((e) => showNotice(`RepoYeti: ${errText(e)}`))
+}
+// RepoYeti's connector entry decides which git actions the bar offers.
+let stopWatching: (() => void) | null = null
+onMounted(() => (stopWatching = watchRepoYeti()))
+onBeforeUnmount(() => stopWatching?.())
 
 function openCliMayte() {
   window.dispatchEvent(new CustomEvent(OPEN_CLIMAYTE_EVENT, { detail: { originSessionId: props.chat?.sessionId ?? null } }))
@@ -1028,7 +1040,15 @@ onBeforeUnmount(() => {
         :removed="git?.isRepo ? git.removed : 0"
         :can-create-pr="!!chat && !!git?.isRepo && !!git.branch"
         @open-diff="openDiff"
+        :yeti="repoYeti"
+        :cwd="cwd"
+        :chat-id="chat.id"
+        :git="{ branch: git?.branch ?? null, ahead: git?.ahead ?? 0, behind: git?.behind ?? 0, changed: git?.files.length ?? 0 }"
         @create-pr="createPr"
+        @yeti-install="installRepoYeti"
+        @open-yeti="openRepoYeti"
+        @notice="showNotice($event, true)"
+        @changed="refreshGit"
         @dismiss="dismissedFor = cwd"
       />
 

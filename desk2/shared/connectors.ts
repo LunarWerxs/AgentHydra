@@ -130,3 +130,88 @@ export interface RepoYetiRegisterResult {
   added: boolean
   repoId?: string
 }
+
+// The bar above the message box when RepoYeti runs: commit, push, pull, branches, undo and Create PR go through
+// RepoYeti's REST API, called by Desk's server (RepoYeti's loopback guard refuses a browser's cross-site request).
+// Own page only, and only while the repoyeti connector runs. Errors answer { error } with a short readable line.
+
+/** GET ?cwd=: RepoYetiGitState. POST <base>/draft { cwd }: RepoYetiDraft. POST <base>/<RepoYetiGitAction> RepoYetiGitRequest: RepoYetiGitResult. */
+export const REPOYETI_GIT = '/api/repoyeti/git'
+
+export type RepoYetiGitAction = 'commit' | 'push' | 'pull' | 'checkout' | 'branch' | 'undo' | 'redo' | 'create-pr'
+export const REPOYETI_GIT_ACTIONS: readonly RepoYetiGitAction[] = ['commit', 'push', 'pull', 'checkout', 'branch', 'undo', 'redo', 'create-pr']
+
+export interface RepoYetiRemote {
+  owner: string
+  repo: string
+}
+
+export interface RepoYetiGitState {
+  repoId: string
+  branch: string | null
+  /** origin's default branch (origin/HEAD, else main or master when it exists); null when unknown. */
+  defaultBranch: string | null
+  /** Local branches, the current one first. */
+  branches: string[]
+  /** The GitHub owner/repo of origin; null when origin is missing or not on GitHub. */
+  remote: RepoYetiRemote | null
+  /** What an undo of the last git action would do, in RepoYeti's words; null when it would refuse (see undoWhy). */
+  undo: string | null
+  undoWhy?: string
+  redo: string | null
+}
+
+export interface RepoYetiDraft {
+  /** RepoYeti's AI-drafted commit message; null when it has no AI provider or nothing changed. */
+  message: string | null
+}
+
+export interface RepoYetiGitRequest {
+  cwd: string
+  /** commit, create-pr: the commit message. */
+  message?: string
+  /** commit: amend the last commit. */
+  amend?: boolean
+  /** checkout: the branch to switch to. branch: the new branch's name (switched to at once). */
+  branch?: string
+}
+
+export interface RepoYetiGitResult {
+  ok: true
+  /** One line of what happened. */
+  message: string
+  /** create-pr: GitHub's compare page for the pushed branch. */
+  compareUrl?: string
+}
+
+// "Undo this chat's changes": every file the chat changed goes back to how it was before the chat touched it.
+
+/** GET: ChatUndoPlan (nothing changes). POST ChatUndoRequest: ChatUndoResult. */
+export const chatFileUndo = (chatId: string): string => `/api/chats/${encodeURIComponent(chatId)}/file-undo`
+
+export interface ChatUndoFile {
+  /** Relative to the chat's folder, forward slashes. */
+  path: string
+  /** Lines the chat added and removed in this file, net (before the chat -> now). */
+  added: number
+  removed: number
+  /** restore: write the old content back. delete: the chat created it. */
+  kind: 'restore' | 'delete'
+  /** ready: untouched since the chat last wrote it. changed: someone else changed it since. unknown: the transcript cannot prove its old content. */
+  state: 'ready' | 'changed' | 'unknown'
+  reason?: string
+}
+
+export interface ChatUndoPlan {
+  files: ChatUndoFile[]
+}
+
+export interface ChatUndoRequest {
+  /** The ready files to undo (paths of the plan); any other path is ignored. */
+  paths: string[]
+}
+
+export interface ChatUndoResult {
+  done: string[]
+  skipped: { path: string; reason: string }[]
+}
