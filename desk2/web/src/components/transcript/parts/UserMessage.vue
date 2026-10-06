@@ -65,16 +65,28 @@ const fresh = Date.now() - props.ts < 2000
 
 const ctx = useTranscript()
 const desk = useDesk()
-const canSendNow = computed(() => !ctx.readOnly.value && !!ctx.chatId.value)
+const chat = computed(() => desk.chats.value.find((c) => c.id === ctx.chatId.value) ?? null)
+// A CliMayte chat whose worker waits for an account (or a launch) runs no turn: Send now has nothing to stop, and the
+// message already goes first when it starts (2026-10-06: Send now flipped back to itself for half an hour).
+const noTurnYet = computed(() => !!chat.value?.workerId && chat.value.status === 'starting')
+const canSendNow = computed(() => !ctx.readOnly.value && !!ctx.chatId.value && !noTurnYet.value)
 const sendNowState = ref<'idle' | 'sending' | 'failed'>('idle')
 const sendNowError = ref('')
+// Why Send now stopped nothing (it already went, or no turn runs yet), shown in place of the queued line for a while.
+const sendNowNote = ref('')
+let noteTimer: ReturnType<typeof setTimeout> | undefined
 
 async function sendNow() {
   if (sendNowState.value === 'sending') return
   sendNowState.value = 'sending'
   try {
-    await desk.sendNow(ctx.chatId.value, props.id)
+    const r = await desk.sendNow(ctx.chatId.value, props.id)
     sendNowState.value = 'idle'
+    if (!r.stopped && r.message) {
+      sendNowNote.value = r.message
+      clearTimeout(noteTimer)
+      noteTimer = setTimeout(() => (sendNowNote.value = ''), 10_000)
+    }
   } catch (err) {
     sendNowError.value = err instanceof Error ? err.message : String(err)
     sendNowState.value = 'failed'
@@ -129,7 +141,10 @@ onMounted(() => {
   const parent = row.value?.parentElement
   if (typeof ResizeObserver !== 'undefined' && parent) unwatch = watchColumn(parent, fitter)
 })
-onBeforeUnmount(() => unwatch?.())
+onBeforeUnmount(() => {
+  unwatch?.()
+  clearTimeout(noteTimer)
+})
 watch(() => props.text, () => nextTick(fit))
 </script>
 
@@ -146,10 +161,11 @@ watch(() => props.text, () => nextTick(fit))
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
     </div>
-    <div v-if="queued" class="flex h-6 items-center gap-1.5 text-[13px] text-text-muted">
+    <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-right text-[13px] text-text-muted">
       <span v-if="sendNowState === 'failed'" class="text-danger-text">Send now failed{{ sendNowError ? `: ${sendNowError}` : '' }}</span>
+      <span v-else-if="sendNowNote">{{ sendNowNote }}</span>
       <template v-else>
-        <span>Queued, sends when this turn ends</span>
+        <span>{{ noTurnYet ? 'Queued, goes first when CliMayte starts this chat' : 'Queued, sends when this turn ends' }}</span>
         <template v-if="canSendNow">
           <span aria-hidden="true">·</span>
           <button

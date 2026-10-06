@@ -574,8 +574,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     return true
   }
 
-  /** Send now on a message the worker holds: true when its running turn was stopped for it. */
-  async function sendToWorkerNow(id: string, text?: string): Promise<boolean> {
+  /** Send now on a message the worker holds: `stopped` when its running turn was stopped for it, else AgentHydra's why. */
+  async function sendToWorkerNow(id: string, text?: string): Promise<{ stopped: boolean; message: string }> {
     let r: Awaited<ReturnType<typeof client.deliverNow>>
     try {
       r = await client.deliverNow(id, text)
@@ -593,7 +593,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused to send ${id}'s message now`, /no such worker/i.test(r.message) ? 404 : 400)
     workersChanged()
-    return r.stopped === true
+    return { stopped: r.stopped === true, message: r.message ?? '' }
   }
 
   return {

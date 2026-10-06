@@ -13,7 +13,8 @@ const clock = useClock()
 const needsYou = computed(() => props.chat.status === 'needs_you')
 const text = computed(() => {
   if (needsYou.value) return 'Waiting for you'
-  if (props.chat.status === 'starting') return 'Starting…'
+  // A CliMayte chat waiting for an account says so, and why (its activity), not "Starting…" for half an hour.
+  if (props.chat.status === 'starting') return props.chat.activity?.startsWith('Waiting') ? props.chat.activity : 'Starting…'
   return props.chat.activity || 'Working…'
 })
 const elapsed = computed(() =>
@@ -28,7 +29,7 @@ const GLYPHS = ['·', '✢', '✳', '✶', '✻']
     <span v-else class="tx-spinner" aria-hidden="true">
       <span class="tx-spinner-strip"><span v-for="g in GLYPHS" :key="g">{{ g }}</span></span>
     </span>
-    <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'">{{ text }}</span>
+    <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'" :title="text">{{ text }}</span>
     <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>
     <span v-if="chat.queuedCount" class="shrink-0 text-[13px] text-text-muted">· {{ chat.queuedCount }} queued</span>
   </div>

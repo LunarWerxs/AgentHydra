@@ -167,7 +167,7 @@ describe('bridge', () => {
     f.state.deliverNow = true
     expect(await b.canDeliverNow()).toBe(true)
     expect(probes()).toBe(3)
-    expect(await b.sendToWorkerNow('w-00000001', 'stop and fix the build')).toBe(true)
+    expect(await b.sendToWorkerNow('w-00000001', 'stop and fix the build')).toMatchObject({ stopped: true })
   })
 })
 

@@ -527,10 +527,12 @@ export interface SendNowRequest {
   itemId?: string
 }
 
-/** Its answer: `stopped` is false when nothing waited any more (the turn had ended and the message gone on). */
+/** Its answer: `stopped` is false when no running turn was stopped for it; `message` then says why, in the words
+ *  the bubble shows (it already went, or no turn runs yet: a CliMayte chat waiting for an account). */
 export interface SendNowResult {
   ok: true
   stopped: boolean
+  message?: string
 }
 
 export interface SlashCommandInfo {

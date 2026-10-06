@@ -260,7 +260,7 @@ describe('chat routes', () => {
     const t = await boot()
     const { events } = await listen(t.desk)
     const { chat, fake } = await working(t, temp('desk-cwd-'))
-    expect((await call(t.desk, 'POST', `/api/chats/${chat.id}/send-now`)).body).toEqual({ ok: true, stopped: false })
+    expect((await call(t.desk, 'POST', `/api/chats/${chat.id}/send-now`)).body).toEqual({ ok: true, stopped: false, message: 'Nothing was stopped: the message had already gone on.' })
     expect(fake.calls.interrupt).toBe(0)
 
     await call(t.desk, 'POST', `/api/chats/${chat.id}/messages`, { text: 'and then this' })

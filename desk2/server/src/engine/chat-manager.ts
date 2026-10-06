@@ -707,7 +707,7 @@ export class ChatManager {
       }
     } else if (queued && opts.now && chat.workerId) {
       try {
-        if (await this.deliverHeldNow(e, standIn, text)) queued = false
+        if ((await this.deliverHeldNow(e, standIn, text)).stopped) queued = false
       } catch (err) {
         const why = err instanceof Error ? err.message : String(err)
         this.systemLine(chat.id, 'send-now', 'warn', `Your message waits for the current task to end: CliMayte could not send it now (${why}). Its Send now tries again.`)
@@ -730,22 +730,29 @@ export class ChatManager {
    * Send now on a message waiting behind a running turn (its bubble says "Queued"): the turn stops and the message
    * goes at once. An SDK chat's CLI keeps its queued sends through a plain interrupt and starts the next one straight
    * away; a CliMayte chat's worker is stopped by AgentHydra, which continues the same session with that held message
-   * first (`itemId`, the bubble's stand-in, names it). Nothing waiting any more stops nothing.
+   * first (`itemId`, the bubble's stand-in, names it). Nothing waiting any more stops nothing, and says why: a worker
+   * waiting for an account runs no turn to stop (2026-10-06: Send now flipped back to itself for half an hour while
+   * every account was at its limit, saying nothing).
    */
   async sendNow(id: string, itemId?: string): Promise<SendNowResult> {
     const e = this.entry(id)
     if (e.chat.workerId) {
       const standIn = e.sent?.find((s) => s.id === itemId && s.queued)
-      let stopped: boolean
+      let r: { stopped: boolean; message: string }
       try {
-        stopped = await this.deliverHeldNow(e, standIn, standIn?.text.trim() ? standIn.text : undefined)
+        r = await this.deliverHeldNow(e, standIn, standIn?.text.trim() ? standIn.text : undefined)
       } catch (err) {
         throw new ChatError(502, `CliMayte did not send it now: ${err instanceof Error ? err.message : String(err)}`)
       }
       await this.syncWorkers(id)
-      return { ok: true, stopped }
+      if (r.stopped) return { ok: true, stopped: true }
+      const waiting = e.chat.status === 'starting'
+      const message = waiting
+        ? `No turn is running to stop: ${e.chat.activity ?? 'CliMayte has not started this chat yet'}. This message goes first when it starts.`
+        : r.message || 'Nothing was stopped: the message had already gone on.'
+      return { ok: true, stopped: false, message }
     }
-    if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false }
+    if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false, message: 'Nothing was stopped: the message had already gone on.' }
     await e.runtime.interrupt()
     return { ok: true, stopped: true }
   }
@@ -753,12 +760,13 @@ export class ChatManager {
   /**
    * AgentHydra's deliver-now for the message the worker holds (`text` names it): its running turn stops and the same
    * session continues with that message first. When it stopped, the stand-in is no longer queued: it is the turn
-   * starting now, and the worker's own copy replaces it once its CLI runs. True when the turn was stopped.
+   * starting now, and the worker's own copy replaces it once its CLI runs. `stopped` when the turn was stopped, else
+   * AgentHydra's why.
    */
-  private async deliverHeldNow(e: Entry, standIn: UserItem | undefined, text: string | undefined): Promise<boolean> {
-    const stopped = await this.bridge.sendToWorkerNow(e.chat.workerId as string, text)
-    if (stopped) this.unqueue(e, standIn)
-    return stopped
+  private async deliverHeldNow(e: Entry, standIn: UserItem | undefined, text: string | undefined): Promise<{ stopped: boolean; message: string }> {
+    const r = await this.bridge.sendToWorkerNow(e.chat.workerId as string, text)
+    if (r.stopped) this.unqueue(e, standIn)
+    return r
   }
 
   /** A held message's stand-in once its turn was stopped for it: no longer queued, it is the turn starting now. */
@@ -1804,13 +1812,15 @@ function workerAccount(w: AhWorker): AccountRef {
   return { id: w.accountId as string, label, configDir: null, ...(num ? { number: Number(num[1]) } : {}) }
 }
 
-/** A CliMayte worker's status as a chat's: queued and waiting are starting, running and checking are working. */
-export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity'>): { status: ChatSummary['status']; activity: string | null } {
+/** A CliMayte worker's status as a chat's: queued and waiting are starting, running and checking are working. A waiting
+ *  worker's activity is CliMayte's reason ("Every eligible account is at its usage limit ...; the first frees up at
+ *  ..."), so the chat says what it waits for instead of "Starting…" for half an hour. */
+export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity'> & { error?: string | null }): { status: ChatSummary['status']; activity: string | null } {
   switch (w.status) {
     case 'queued':
       return { status: 'starting', activity: 'Queued' }
     case 'waiting':
-      return { status: 'starting', activity: 'Waiting for an account' }
+      return { status: 'starting', activity: !w.error ? 'Waiting for an account' : /^waiting\b/i.test(w.error) ? w.error : `Waiting for an account: ${w.error}` }
     case 'running':
       return { status: 'working', activity: w.lastActivity }
     case 'checking':

@@ -172,7 +172,7 @@ test('Send now on a queued message has CliMayte deliver that one now, and its bu
   // Nothing held any more (it went meanwhile): nothing stops and the bubble stays as it is.
   b.state.nowStops = false
   const first = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'first, check the build')!
-  expect(await m.sendNow(chat.id, first.id)).toEqual({ ok: true, stopped: false })
+  expect(await m.sendNow(chat.id, first.id)).toEqual({ ok: true, stopped: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' })
   expect(queued()).toEqual(['first, check the build'])
   // A bubble that is not a held stand-in names no message: CliMayte takes its oldest.
   await m.sendNow(chat.id, 'u-unknown')
@@ -183,6 +183,39 @@ test('Send now on a queued message has CliMayte deliver that one now, and its bu
     throw new Error('this AgentHydra cannot send a held message now yet: it needs its update')
   }
   expect(m.sendNow(chat.id, first.id)).rejects.toThrow(/CliMayte did not send it now: .*needs its update/)
+})
+
+// 2026-10-06: a worker that handed off waited 36 minutes for an account; its held message's Send now went
+// "Sending…" and back to "Send now" each click, saying nothing, under a "Starting…" that never said why.
+test('Send now while the worker waits for an account says no turn runs and why; the chat shows the wait, not Starting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'and add the totals row')).toEqual({ queued: true })
+  const held = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'and add the totals row')!
+
+  const why = 'Every eligible account is at its usage limit, past the 85% stop line, or signed out; the first frees up at 11:19.'
+  Object.assign(b.state.rows[0]!, { status: 'waiting', error: why })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'starting', activity: `Waiting for an account: ${why}` })
+
+  const r = await m.sendNow(chat.id, held.id)
+  expect(r).toMatchObject({ ok: true, stopped: false })
+  expect(r.message).toBe(`No turn is running to stop: Waiting for an account: ${why}. This message goes first when it starts.`)
+  // Still held: it leads the worker's next turn.
+  expect(m.listItems(chat.id).find((i) => i.id === held.id)).toMatchObject({ queued: true })
+  expect(b.state.cancelled).toEqual([])
+
+  // CliMayte's own "Waiting for ..." reason is shown as it is, not prefixed twice.
+  Object.assign(b.state.rows[0]!, { error: 'Waiting for an account nobody else is using: #35 (other sessions running).' })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).activity).toBe('Waiting for an account nobody else is using: #35 (other sessions running).')
 })
 
 test("a person's plain send to a running worker goes now; the queue's own dispatch and a failed deliver-now stay held", async () => {

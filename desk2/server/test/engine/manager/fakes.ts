@@ -173,7 +173,11 @@ export function fakeBridge(
     canDeliverNow: async () => state.deliverNow,
     sendToWorkerNow: async (id, text) => {
       state.sentNow.push({ id, ...(text ? { text } : {}) })
+      const running = state.rows.find((r) => r.id === id)?.status === 'running'
+      if (!running) return { stopped: false, message: 'Not running: what it holds goes as its next turn.' }
       return state.nowStops
+        ? { stopped: true, message: 'Stopped its running work; the same session continues now with this message.' }
+        : { stopped: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' }
     },
     cancelWorker: async (id) => {
       state.cancelled.push(id)
