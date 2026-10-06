@@ -518,7 +518,13 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   goes back to the same session one rung up with the end of the output; three failed rounds stop the
   task as `failed` for the orchestrator. The check runs under the daemon, so a restart ends it and
   the next tick runs it again. An orchestrator that must remember to judge every result forgets
-  some, and a worker's own "the tests pass" is a claim; a command is neither.
+  some, and a worker's own "the tests pass" is a claim; a command is neither. An exit 0 is a pass
+  only when the files the worker's sessions changed (their Edit, Write, MultiEdit and NotebookEdit
+  calls) are committed in the folder's repository (`climayte-unsaved.ts`); otherwise it is a fail
+  that names them, on the same three rounds. A file changed more than 30 s after the session last
+  wrote it is a peer's and not counted, and a task whose prompt says not to commit is not held to it
+  (2026-10-05: a check passed with 15 files never committed, and the task sat done 2h26m while the
+  tasks after it waited on work that was not in git).
 - **The ladder**, cheapest first: Haiku 4.5 (run with no `--effort`), Sonnet 5.5 low, medium, high,
   then Opus 5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high.
 - **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Before a

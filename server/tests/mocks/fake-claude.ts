@@ -333,9 +333,28 @@ const billed = spend
       usage: { input_tokens: 0, output_tokens: spend, cache_read_input_tokens: 0, cache_creation_input_tokens: reread },
     }
   : null
+// `FAKE-EDIT:<name>` in the prompt: the session writes <cwd>/<name> with the Write tool, as its
+// transcript records it, and does not commit it.
+const edited = /FAKE-EDIT:(\S+)/.exec(prompt)?.[1]
+let editLine = ''
+if (edited) {
+  const file = join(process.cwd(), edited)
+  writeFileSync(file, 'drafted\n')
+  editLine = line({
+    type: 'assistant',
+    sessionId,
+    timestamp: new Date().toISOString(),
+    message: {
+      role: 'assistant',
+      model: 'fake-model',
+      content: [{ type: 'tool_use', id: `toolu-${sessionId}`, name: 'Write', input: { file_path: file, content: 'drafted\n' } }],
+    },
+  })
+}
 appendFileSync(
   transcript,
   line({ type: 'user', sessionId, message: { role: 'user', content: prompt } }) +
+    editLine +
     line({
       type: 'assistant',
       sessionId,

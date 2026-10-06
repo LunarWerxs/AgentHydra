@@ -5,6 +5,7 @@
 // accounts are fakes pointing at temp config dirs, and the CLI is tests/mocks/fake-claude.ts run by
 // the same bun that runs this suite.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import {
   existsSync,
   lstatSync,
@@ -2119,6 +2120,48 @@ describe('integration: a task with a check is judged by it', () => {
     expect(climayteRunningCount()).toBe(0)
     const w = await until((w) => w?.status === 'done' && (w.verdicts?.length ?? 0) >= 1)
     expect(w?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([['pass', 'check']])
+  }, 30_000)
+
+  test("a passing check with the worker's files uncommitted sends it back; a task told not to commit passes", async () => {
+    // 2026-10-05: a worker's check passed with 15 of its files never committed, and the task sat
+    // 'done' 2h26m while the two tasks after it waited on work that was not in git.
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    setCliMayteAccountsProvider(() => [
+      { id: 'check-1', num: 1, name: 'check', configDir: acct, sessionPct: 0, weekPct: 0 },
+    ])
+    startCliMayte()
+    const repo = join(root, 'repo')
+    mkdirSync(repo, { recursive: true })
+    spawnSync('git', ['init', '-q'], { cwd: repo })
+    const task = (prompt: string, title: string) => ({
+      prompt,
+      cwd: repo,
+      title,
+      kind: 'code',
+      model: 'opus',
+      effort: 'high',
+      check: 'echo proved',
+    })
+    const run = climayteRun({
+      tasks: [
+        task('draft the page FAKE-EDIT:draft-a.txt', 'left unsaved'),
+        task('draft the page, do not commit it FAKE-EDIT:draft-b.txt', 'draft only'),
+      ],
+    })
+    groups.push(run.group)
+    const [a, b] = run.workers.map((w) => w.id as string)
+    const judged = (id: string) => (climayteList({ id })[0]?.verdicts?.length ?? 0) >= 1
+    const deadline = Date.now() + 25_000
+    while (!(judged(a as string) && judged(b as string)) && Date.now() < deadline)
+      await climayteWait({ group: run.group }, Math.min(2_000, deadline - Date.now()))
+
+    const first = climayteList({ id: a })[0]?.verdicts?.[0]
+    expect([first?.verdict, first?.by]).toEqual(['fail', 'check'])
+    expect(first?.note).toContain('not committed: draft-a.txt')
+    expect(climayteList({ id: b })[0]?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([
+      ['pass', 'check'],
+    ])
+    climayteCancel({ id: a })
   }, 30_000)
 
   test('a check whose runner dies runs again, even past the timeout, and a stop under way is never removed', async () => {

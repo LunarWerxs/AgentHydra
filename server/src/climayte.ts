@@ -161,6 +161,7 @@ import {
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
+import { unsavedEdits } from './climayte-unsaved'
 import {
   judgeWaveTask,
   readWave,
@@ -659,12 +660,26 @@ function relaunchCheck(w: CliMayteWorker, r: CheckRunner, how: string): void {
   startCheck(w, relaunches)
 }
 
+/** The worker's changed files git still shows uncommitted (climayte-unsaved.ts); [] when the
+ *  accounts or git cannot be read, so a read failure never fails a passing check. */
+function unsavedOf(w: CliMayteWorker): string[] {
+  try {
+    return unsavedEdits(w, accountsProvider())
+  } catch (err) {
+    console.error(`[climayte] ${w.id}: its uncommitted files could not be read:`, err)
+    return []
+  }
+}
+
 function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
   w.status = 'done'
   const cmd = firstLine(w.check, 200)
-  if (code === 0) {
-    // A task of a wave is judged by the daemon on the check and the commits together (piece 5).
-    if (judgeInWave(w, true)) return
+  // A task of a wave is judged by the daemon on the check and the commits together (piece 5).
+  if (code === 0 && judgeInWave(w, true)) return
+  // A pass with the worker's own files still uncommitted is not done: on 2026-10-05 one passed with
+  // 15 files never committed and sat 'done' 2h26m while the tasks after it waited on that work.
+  const unsaved = code === 0 ? unsavedOf(w) : []
+  if (code === 0 && !unsaved.length) {
     climayteVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
     return
   }
@@ -687,11 +702,16 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   const fails =
     (w.verdicts ?? []).filter((v) => v.by === 'check' && v.verdict === 'fail').length + 1
   const retry = fails < MAX_CHECK_FAILS
-  const note = `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
+  const files = `${unsaved.slice(0, 15).join(', ')}${unsaved.length > 15 ? ` and ${unsaved.length - 15} more` : ''}`
+  const note = unsaved.length
+    ? `The check \`${cmd}\` passed, but files you changed are not committed: ${files}. Commit them by pathspec (and push if the task pushes), then report again.`
+    : `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
 ${code === null ? '' : output.trim()}`
   if (!retry) {
     w.status = 'failed'
-    w.error = `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
+    w.error = unsaved.length
+      ? `Its changed files were still not committed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator: ${files}`
+      : `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
     journal(w, 'failed', { error: firstLine(w.error) })
   }
   climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
