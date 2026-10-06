@@ -2140,6 +2140,8 @@ describe('integration: a task with a check is judged by it', () => {
       kind: 'code',
       model: 'opus',
       effort: 'high',
+      // Opus: a Sonnet task finished here would feed the Sonnet estimate the sizing tests below pin.
+      ownerWords: 'the setting under test',
       check: 'echo proved',
     })
     const run = climayteRun({
