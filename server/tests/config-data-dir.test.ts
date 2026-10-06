@@ -41,8 +41,8 @@ test('a fresh install resolves straight to the per-user data dir', () => {
   expect(resolveDataDir(configDir(), checkout())).toEqual({ dir: canonical(), notice: null })
 })
 
-test('a compiled build never migrates anything, even with a checkout beside it', () => {
-  // IS_COMPILED passes null: a release has always kept state under CONFIG_DIR, and a `server/data`
+test('a release never migrates anything, even with a checkout beside it', () => {
+  // IS_RELEASE passes null: a release has always kept state under CONFIG_DIR, and a `server/data`
   // sitting next to the exe would belong to some unrelated checkout, not to this install.
   seedData(checkout(), 'checkout')
   expect(resolveDataDir(configDir(), null)).toEqual({ dir: canonical(), notice: null })

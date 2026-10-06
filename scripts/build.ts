@@ -1,15 +1,19 @@
 #!/usr/bin/env bun
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 /**
- * Build one self-contained AgentHydra executable. The generated compile-only entrypoint embeds
- * every Vite output, then loads server/src/main.ts. No web/ or misc/ sidecars are required.
+ * Build the AgentHydra daemon as a bun bundle: `<outdir>/app/` holds server.js (`bun build --target=bun`
+ * of the daemon's entry), the assets it reads at run time (the built web UI, the misc files it hands out
+ * and the tray toolkit, all beside server.js), release.json (what marks a release) and bun-version (the
+ * bun the launcher downloads to run it). The launcher (AgentHydra.exe / agenthydra) starts it.
  *
- * Options used by release.yml:
+ * Options:
+ *   --bundle                  required: the only mode there is
+ *   --outdir <dir>            where app/ goes (default dist/; a default dist/ is emptied first)
+ *   --bun-version x.y.z       the bun this build pins (default: the running Bun.version)
  *   --skip-web
- *   --target windows-x64 | linux-x64 | linux-arm64 | darwin-x64 | darwin-arm64
- *   --outfile <path>
+ *   --target windows-x64 | ... only decides whether the Windows tray toolkit is included
  */
 import { $ } from 'bun'
 import pkg from '../package.json'
@@ -20,25 +24,6 @@ import { TRAY_TOOLKIT_FILES } from '../server/src/tray-toolkit.ts'
 
 const ROOT = join(import.meta.dir, '..')
 const TMP = join(ROOT, 'tmp', 'release-build')
-
-function setWindowsGuiSubsystem(path: string): void {
-  const image = readFileSync(path)
-  if (image.length < 256 || image[0] !== 0x4d || image[1] !== 0x5a) {
-    throw new Error('compiled Windows executable has no valid MZ header')
-  }
-  const pe = image.readInt32LE(0x3c)
-  if (pe < 0 || pe + 94 >= image.length || image.readUInt32LE(pe) !== 0x0000_4550) {
-    throw new Error('compiled Windows executable has no valid PE header')
-  }
-  // --windows-hide-console still leaves Bun 1.3.14 output marked as a console application.
-  // The loader-level GUI subsystem prevents a terminal from appearing on double-click.
-  image.writeUInt16LE(2, pe + 92)
-  image.writeUInt32LE(0, pe + 88)
-  writeFileSync(path, image)
-  if (readFileSync(path).readUInt16LE(pe + 92) !== 2) {
-    throw new Error('failed to stamp Windows GUI subsystem')
-  }
-}
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name)
@@ -133,63 +118,61 @@ function runtimeMiscPaths(): string[] {
   })
 }
 
-function writeReleaseEntrypoint(embedTray: boolean): string {
+/**
+ * The generated entry: it tells the daemon where the assets beside server.js are, then loads
+ * server/src/main.ts. The lookups the daemon already has (web, tray, misc) are filled with real paths
+ * under `import.meta.dir`, which in a bundle is the folder server.js sits in.
+ */
+function writeReleaseEntrypoint(
+  outApp: string,
+  embedTray: boolean,
+  stamp: { version: string; commit?: string; builtAt?: string },
+): string {
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
   const entry = join(TMP, 'entry.ts')
   const webRoot = join(ROOT, 'web', 'dist')
-  const files = filesUnder(webRoot)
-  const imports = files.map(
-    (file, index) =>
-      `import asset${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
-  )
-  const routes = files.map((file, index) => [
-    `/${relative(webRoot, file).replaceAll('\\', '/')}`,
-    `asset${index}`,
-  ])
-  const trayFiles = trayToolkitPaths(embedTray)
-  const miscFiles = runtimeMiscPaths()
-  const trayImports = trayFiles.map(
-    (file, index) =>
-      `import tray${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
-  )
-  const trayBlock =
-    trayFiles.length === 0
-      ? ''
-      : `
-(globalThis as { __AGENTHYDRA_EMBEDDED_TRAY__?: Readonly<Record<string, string>> })
-  .__AGENTHYDRA_EMBEDDED_TRAY__ = Object.freeze({
-${trayFiles.map((file, index) => `  ${JSON.stringify(basename(file))}: tray${index},`).join('\n')}
-});
-`
-  const miscImports = miscFiles.map(
-    (file, index) =>
-      `import misc${index} from ${JSON.stringify(importPath(entry, file))} with { type: "file" };`,
-  )
-  const miscBlock =
-    miscFiles.length === 0
-      ? ''
-      : `
-(globalThis as { __AGENTHYDRA_EMBEDDED_MISC__?: Readonly<Record<string, string>> })
-  .__AGENTHYDRA_EMBEDDED_MISC__ = Object.freeze({
-${miscFiles.map((file, index) => `  ${JSON.stringify(basename(file))}: misc${index},`).join('\n')}
-});
-`
+  const webRoutes = filesUnder(webRoot).map((file) => {
+    const rel = relative(webRoot, file).replaceAll('\\', '/')
+    mkdirSync(dirname(join(outApp, 'web', rel)), { recursive: true })
+    copyFileSync(file, join(outApp, 'web', rel))
+    return rel
+  })
+  const miscNames = [...trayToolkitPaths(embedTray), ...runtimeMiscPaths()].map((file) => {
+    mkdirSync(join(outApp, 'misc'), { recursive: true })
+    copyFileSync(file, join(outApp, 'misc', basename(file)))
+    return basename(file)
+  })
+  const trayNames = new Set(trayToolkitPaths(embedTray).map((file) => basename(file)))
+  const names = (keep: (name: string) => boolean) => miscNames.filter(keep)
+  const table = (dir: string, list: string[]) =>
+    `Object.freeze({
+${list.map((name) => `  ${JSON.stringify(name)}: join(here, ${JSON.stringify(dir)}, ${JSON.stringify(name)}),`).join('\n')}
+})`
   writeFileSync(
     entry,
-    `${[...imports, ...trayImports, ...miscImports].join('\n')}
-
-(globalThis as { __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>> })
-  .__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
-${routes.map(([route, asset]) => `  ${JSON.stringify(route)}: ${asset},`).join('\n')}
+    `import { join } from "node:path";
+const here = import.meta.dir;
+const g = globalThis as Record<string, unknown>;
+g.__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
+${webRoutes.map((rel) => `  ${JSON.stringify(`/${rel}`)}: join(here, "web", ${JSON.stringify(rel)}),`).join('\n')}
 });
-${trayBlock}${miscBlock}
-(globalThis as { __AGENTHYDRA_RELEASE_BUILD__?: boolean }).__AGENTHYDRA_RELEASE_BUILD__ = true;
-// Stamped here because a compiled binary can be copied anywhere: asking git at runtime would
-// describe whatever checkout the exe was dropped into, not the build. Read by
-// server/src/build-info.ts for \`--version --json\`.
-(globalThis as { __AGENTHYDRA_BUILD__?: { commit?: string; builtAt?: string } })
-  .__AGENTHYDRA_BUILD__ = ${JSON.stringify(buildStamp())};
+${
+  trayNames.size === 0
+    ? ''
+    : `g.__AGENTHYDRA_EMBEDDED_TRAY__ = ${table(
+        'misc',
+        names((n) => trayNames.has(n)),
+      )};
+`
+}g.__AGENTHYDRA_EMBEDDED_MISC__ = ${table(
+      'misc',
+      names((n) => !trayNames.has(n)),
+    )};
+g.__AGENTHYDRA_RELEASE_BUILD__ = true;
+// Stamped here because the bundle can be copied anywhere: asking git at runtime would describe
+// whatever checkout it was dropped into, not the build. Read by server/src/build-info.ts.
+g.__AGENTHYDRA_BUILD__ = ${JSON.stringify({ commit: stamp.commit, builtAt: stamp.builtAt })};
 await import(${JSON.stringify(importPath(entry, join(ROOT, 'server', 'src', 'main.ts')))});
 `,
   )
@@ -231,7 +214,7 @@ function clearDistDir(dir: string): void {
           `Quit it (or: taskkill /PID ${holders[0]?.pid} /F), then build again.\n`
         : 'Something still has a file in it open. Quit any AgentHydra started from this folder, then build again.\n') +
       `Or build somewhere else and leave the running app alone:\n` +
-      `  bun run dist -- --outfile=<path>`,
+      `  bun run dist -- --outdir=<path>`,
   )
 }
 
@@ -264,40 +247,46 @@ function describeLockHolders(dir: string): Array<{ pid: number; path: string }> 
   }
 }
 
+if (!process.argv.includes('--bundle')) {
+  throw new Error(
+    'usage: bun scripts/build.ts --bundle [--outdir <dir>] [--bun-version x.y.z] [--skip-web]',
+  )
+}
 const target = option('--target')
-const targetFlag = target ? `bun-${target}` : undefined
 const windowsTarget = target ? target.startsWith('windows-') : process.platform === 'win32'
-const defaultName = windowsTarget ? 'AgentHydra.exe' : 'agenthydra'
-const requestedOutfile = option('--outfile')
-const outBin = resolve(requestedOutfile ?? join(ROOT, 'dist', defaultName))
-if (!requestedOutfile) clearDistDir(join(ROOT, 'dist'))
-mkdirSync(dirname(outBin), { recursive: true })
+const requestedOutdir = option('--outdir')
+const outDir = resolve(requestedOutdir ?? join(ROOT, 'dist'))
+const outApp = join(outDir, 'app')
+if (!requestedOutdir) clearDistDir(outDir)
+// A bundle from an earlier build must not leave files behind that this one no longer ships.
+rmSync(outApp, { recursive: true, force: true })
+mkdirSync(outApp, { recursive: true })
 
 if (!process.argv.includes('--skip-web')) {
   console.log('→ build web')
   await $`bun run --cwd ${join(ROOT, 'web')} build`
 }
 
-console.log('→ compile daemon + embedded web app')
-const entry = writeReleaseEntrypoint(windowsTarget)
+console.log('→ bundle daemon')
+const stamp = buildStamp()
+const entry = writeReleaseEntrypoint(outApp, windowsTarget, { version: pkg.version, ...stamp })
 try {
-  if (windowsTarget) {
-    if (targetFlag) {
-      await $`bun build --compile --sourcemap=none --target=${targetFlag} --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'AgentHydra.ico')} --windows-title=${'AgentHydra'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
-    } else {
-      await $`bun build --compile --sourcemap=none --windows-hide-console --windows-icon=${join(ROOT, 'misc', 'AgentHydra.ico')} --windows-title=${'AgentHydra'} --windows-publisher=LunarWerx --windows-version=${`${pkg.version}.0`} --windows-description=${'Local AI coding-session manager'} ${entry} --outfile=${outBin}`
-    }
-  } else if (targetFlag) {
-    await $`bun build --compile --minify --sourcemap=none --target=${targetFlag} ${entry} --outfile=${outBin}`
-  } else {
-    await $`bun build --compile --minify --sourcemap=none ${entry} --outfile=${outBin}`
-  }
+  await $`bun build --target=bun --sourcemap=none ${entry} --outfile=${join(outApp, 'server.js')}`
 } finally {
   rmSync(TMP, { recursive: true, force: true })
 }
-if (windowsTarget) setWindowsGuiSubsystem(outBin)
-// Bun 1.3.14 can leave this compile-time map beside an unminified Windows executable even when
-// --sourcemap=none is set. It is not used at runtime and must never become release debris.
-rmSync(join(dirname(outBin), 'entry.js.map'), { force: true })
+writeFileSync(
+  join(outApp, 'release.json'),
+  `${JSON.stringify({ version: pkg.version, commit: stamp.commit ?? null, builtAt: stamp.builtAt })}
+`,
+)
+const bunVersion = (option('--bun-version') ?? Bun.version).trim()
+if (!/^\d+\.\d+\.\d+$/.test(bunVersion))
+  throw new Error(`--bun-version must be x.y.z, got ${bunVersion}`)
+writeFileSync(
+  join(outApp, 'bun-version'),
+  `${bunVersion}
+`,
+)
 
-console.log(`✓ Built ${outBin}`)
+console.log(`✓ Built ${outApp} (runs on bun ${bunVersion})`)

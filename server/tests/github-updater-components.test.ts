@@ -70,7 +70,6 @@ function fixture(): { root: string; bundle: string; install: string } {
   put(bundle, 'misc/new-component.txt', 'new')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
-  put(bundle, 'devwebui/server.js', 'new devwebui')
   // The install has an OLD toolbox with live state, and a retired sidecar in misc/.
   put(install, 'AgentHydra.exe', 'old exe')
   put(install, 'orchestrator/orch.py', 'old driver')
@@ -235,13 +234,11 @@ function applyFixture(): { root: string; bundle: string; install: string } {
   put(bundle, 'misc/lunarwerx-tray.exe', 'new tray')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
-  put(bundle, 'devwebui/server.js', 'new devwebui')
   put(install, 'AgentHydra.exe', 'old exe')
   put(install, 'orchestrator/orch.py', 'old driver')
   put(install, 'misc/lunarwerx-tray.exe', 'old tray')
   put(install, 'desk2/server/src/index.ts', 'old desk')
   put(install, 'desk2/runtime/bun.exe', 'old bun')
-  put(install, 'devwebui/server.js', 'old devwebui')
   return { root, bundle, install }
 }
 
@@ -355,7 +352,6 @@ test('missingComponents names a component that is absent from a bundle install',
     put(root, 'AgentHydra.exe', 'exe')
     put(root, 'misc/lunarwerx-tray.exe', 'tray')
     put(root, 'desk2/server/src/index.ts', 'desk')
-    put(root, 'devwebui/server.js', 'dev')
     expect(missingComponents(root)).toEqual(['orchestrator'])
     put(root, 'orchestrator/orch.py', 'driver')
     expect(missingComponents(root)).toEqual([])
@@ -388,7 +384,6 @@ test('a healthy POSIX install is complete without misc/', () => {
     put(root, 'agenthydra', 'exe')
     put(root, 'orchestrator/orch.py', 'driver')
     put(root, 'desk2/server/src/index.ts', 'desk')
-    put(root, 'devwebui/server.js', 'dev')
     expect(missingComponents(root, 'linux')).toEqual([])
     expect(missingComponents(root, 'darwin')).toEqual([])
     // The same tree on Windows IS missing something, and says so.
@@ -406,7 +401,6 @@ test('a POSIX install missing orchestrator/ is damage, not a bare binary', () =>
   try {
     put(root, 'agenthydra', 'exe')
     put(root, 'desk2/server/src/index.ts', 'desk')
-    put(root, 'devwebui/server.js', 'dev')
     expect(missingComponents(root, 'linux')).toEqual(['orchestrator'])
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -498,10 +492,9 @@ test('install.ps1 and the self-updater agree on the release components', () => {
   const names = [...block.slice(0, block.indexOf(')')).matchAll(/Name = '([A-Za-z0-9]+)'/g)].map(
     (m) => m[1],
   )
-  // desk2/ and devwebui/ (2.0.0) are not in install.ps1 yet: the manual installer is the packaging
-  // task's file. Named here so the gap is visible, and so this fails once install.ps1 lists them and
-  // this set has to be emptied.
-  const notYetInInstallPs1 = new Set(['desk2', 'devwebui'])
+  // desk2/ (2.0.0) is not in install.ps1 yet: the manual installer is the packaging task's file.
+  // Named here so the gap is visible, and so this fails once install.ps1 lists it and this set has to be emptied.
+  const notYetInInstallPs1 = new Set(['desk2'])
   expect(new Set(names)).toEqual(
     new Set([
       'exe',
@@ -510,7 +503,7 @@ test('install.ps1 and the self-updater agree on the release components', () => {
   )
 })
 
-// ── desk2/ and devwebui/ as release components (2.0.0) ───────────────────────────────────────────
+// ── desk2/ as a release component (2.0.0) ────────────────────────────────────────────────────────
 //
 // AgentHydra 2.0's window is desk2/ (its own bun, its own server) and it ships in the archive. The
 // updater has to replace it while its chat hosts - detached processes running desk2/runtime/bun.exe -
@@ -569,7 +562,6 @@ test('a bundle with desk2/ is installed with Desk 2 stopped before and started a
   const { root, bundle, install } = applyFixture()
   try {
     put(install, 'desk2/retired.txt', 'a file the release no longer ships')
-    put(install, 'devwebui/retired.txt', 'retired too')
     const { desk, events } = fakeDesk(install)
     const result = await applyUpdate(applyDeps(install, bundle, { desk }))
     expect(result.ok).toBe(true)
@@ -577,10 +569,7 @@ test('a bundle with desk2/ is installed with Desk 2 stopped before and started a
     expect(events).toEqual(['stop:old desk', 'start:new desk:window=false'])
     expect(readFileSync(join(install, 'desk2/runtime/bun.exe'), 'utf8')).toBe('new bun')
     expect(existsSync(join(install, 'desk2/retired.txt'))).toBe(false)
-    expect(readFileSync(join(install, 'devwebui/server.js'), 'utf8')).toBe('new devwebui')
-    expect(existsSync(join(install, 'devwebui/retired.txt'))).toBe(false)
     expect(installedComponentVersion(install, 'desk2')).toBe('9.9.9')
-    expect(installedComponentVersion(install, 'devwebui')).toBe('9.9.9')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

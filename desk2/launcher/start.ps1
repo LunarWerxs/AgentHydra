@@ -112,13 +112,39 @@ function Close-OldWindow {
   }
 }
 
-# The bun that cmd.exe can run: prefer $DeskRoot\runtime\bun.exe (bundled in release), then PATH.
-# An npm-installed bun puts bun.ps1 first on PATH, and `Get-Command bun` returned it; cmd /c cannot
-# run a .ps1, so the server never started (2026-10-04: AppData\Roaming\npm\bun.ps1 ahead of bun.cmd
-# on the second PC).
+# The bun that cmd.exe can run. In a release (..\app\release.json beside this desk folder) it is the bun the
+# AgentHydra launcher keeps in its runtime folder: `..\AgentHydra.exe --ensure-bun` downloads it when it is
+# missing or out of date and prints its path. In a checkout it is bun on PATH. An npm-installed bun puts
+# bun.ps1 first on PATH, and `Get-Command bun` returned it; cmd /c cannot run a .ps1, so the server never
+# started (2026-10-04: AppData\Roaming\npm\bun.ps1 ahead of bun.cmd on the second PC).
+$AppRoot = Split-Path -Parent $DeskRoot
+$Launcher = Join-Path $AppRoot 'AgentHydra.exe'
+$IsRelease = Test-Path -LiteralPath (Join-Path $AppRoot 'app\release.json')
+
 function Find-Bun {
-  $bundled = Join-Path $DeskRoot 'runtime\bun.exe'
-  if (Test-Path $bundled) { return @{ Source = $bundled; Extension = '.exe' } }
+  if ($IsRelease) {
+    # Never in a dry run: --ensure-bun may download.
+    if ($DryRun) { return @{ Source = "(the path `"$Launcher --ensure-bun`" prints)"; Extension = '.exe' } }
+    if (-not (Test-Path -LiteralPath $Launcher)) { Fail "AgentHydra could not start: $Launcher is missing." }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Launcher
+    $psi.Arguments = '--ensure-bun'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $env:AGENTHYDRA_HEADLESS = '1'
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $errTask = $proc.StandardError.ReadToEndAsync()
+    $out = $proc.StandardOutput.ReadToEnd()
+    $proc.WaitForExit()
+    $err = $errTask.Result.Trim()
+    $path = ($out.Trim() -split "`r?`n" | Select-Object -Last 1)
+    if ($proc.ExitCode -ne 0 -or -not $path -or -not (Test-Path -LiteralPath $path)) {
+      Fail "AgentHydra could not start: its bun could not be made ready (exit code $($proc.ExitCode)).`n`n$err"
+    }
+    return @{ Source = $path; Extension = '.exe' }
+  }
   $exe = Get-Command bun.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
   if ($exe) { return $exe }
   return Get-Command bun -CommandType Application -ErrorAction SilentlyContinue |
@@ -128,12 +154,7 @@ function Find-Bun {
 function Start-Server {
   $bun = Find-Bun
   if (-not $bun) {
-    $bundled = Join-Path $DeskRoot 'runtime\bun.exe'
-    if (Test-Path $bundled) {
-      Fail "AgentHydra could not start: bundled bun at $bundled is not accessible."
-    } else {
-      Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again."
-    }
+    Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again."
   }
   $entry = Join-Path $DeskRoot 'server\src\index.ts'
   if (-not (Test-Path $entry)) { Fail "AgentHydra could not start: $entry is missing." }

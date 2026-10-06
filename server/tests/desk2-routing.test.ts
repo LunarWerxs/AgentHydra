@@ -152,9 +152,9 @@ describe('how Desk 2 is started', () => {
     expect(norm(plan?.logPath ?? '')).toBe('C:/example/desk-home/logs/server.log')
   })
 
-  test('uses the bun a bundle ships when there is one', () => {
-    const { desk } = rig({}, ['desk2/server/src/index.ts', 'desk2/runtime/bun'])
-    expect(norm(desk.bun() ?? '')).toBe('C:/example/AgentHydra/desk2/runtime/bun')
+  test('in a checkout with no bun on PATH it runs on the running bun', () => {
+    const { desk } = rig({ which: () => null })
+    expect(desk.bun()).toBe(process.execPath)
   })
 
   test('on Windows: the launcher, hidden and without a window, or start.vbs when a window is wanted', () => {

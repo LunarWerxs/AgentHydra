@@ -95,12 +95,11 @@ export function resolveDbPath(dataDir: string): string {
 export const VERSION: string = rootPkg.version
 
 /**
- * True when running inside a `bun build --compile` binary. In that mode `import.meta.dir` is a
- * VIRTUAL embedded-filesystem path (`$bunfs` on POSIX, `B:\~BUN` on Windows) — not a real, writable
- * disk location — so "does my own source file exist on real disk?" is the mode probe. Deliberately
- * NOT a match on Bun's placeholder path string: the string is Bun-internal, the disk probe is not.
+ * True when this is a release: `bun build --target=bun` wrote this file into `<root>/app/server.js` and
+ * `release.json` sits beside it. A checkout (or a test run) has no such file next to config.ts, so
+ * "is release.json beside the running code?" is the mode probe; it is the same file the build stamps.
  */
-export const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
+export const IS_RELEASE = existsSync(join(import.meta.dir, 'release.json'))
 
 // Backstop for the test suite: bun test sets NODE_ENV=test, but only reads the bunfig.toml of its
 // CWD, so a run started anywhere without a preload-carrying bunfig (server/tests, a future
@@ -114,7 +113,7 @@ export const IS_COMPILED = !existsSync(join(import.meta.dir, 'config.ts'))
 // tests/setup.ts remains the primary isolation (it also fixes PATH for child-process fixtures);
 // when it ran first, these are already set and this block is inert.
 if (
-  !IS_COMPILED &&
+  !IS_RELEASE &&
   process.env.NODE_ENV === 'test' &&
   !appEnv('HOME')?.trim() &&
   appEnv('DB') === undefined &&
@@ -184,10 +183,18 @@ export const OPENCODE_DB_PATH =
 /** Per-user config dir; the running-instance pointer (runtime.json) lives here. */
 export const CONFIG_DIR = resolveConfigDir()
 
-/** App root: the repo checkout (source mode — parent of server/ and web/) or the directory the
- *  compiled binary sits in (release layout: exe + web/dist side by side). The self-updater and
- *  web-dist resolution key off this. */
-export const APP_ROOT = IS_COMPILED ? dirname(process.execPath) : join(import.meta.dir, '..', '..')
+/** App root: the repo checkout (source mode — parent of server/ and web/) or, in a release, the folder
+ *  that holds the launcher and `app/` (the parent of the directory server.js sits in). The self-updater
+ *  and web-dist resolution key off this. */
+export const APP_ROOT = IS_RELEASE ? join(import.meta.dir, '..') : join(import.meta.dir, '..', '..')
+
+/** What starts AgentHydra again in a release: the launcher beside `app/`. It keeps this name and path so
+ *  a shortcut, an MCP registration or the tray can point at it. In a checkout there is none; callers use
+ *  `bun <repo>/server/src/main.ts` there. */
+export const LAUNCHER_PATH = join(
+  APP_ROOT,
+  process.platform === 'win32' ? 'AgentHydra.exe' : 'agenthydra',
+)
 
 export interface DataDirResolution {
   /** The directory state is read from and written to. */
@@ -275,7 +282,7 @@ export function resolveDataDir(
 const DATA_DIR_OVERRIDE = appEnv('DATA_DIR')?.trim()
 const DATA_DIR_RESOLUTION: DataDirResolution = DATA_DIR_OVERRIDE
   ? { dir: DATA_DIR_OVERRIDE, notice: null }
-  : resolveDataDir(CONFIG_DIR, IS_COMPILED ? null : join(import.meta.dir, '..', 'data'))
+  : resolveDataDir(CONFIG_DIR, IS_RELEASE ? null : join(import.meta.dir, '..', 'data'))
 
 /** Where our own state lives (sqlite db + per-run logs + caches): the per-user CONFIG_DIR, in both
  *  source and compiled mode. Overridable for the same reason RUN_LOG_DIR is, so a test touching

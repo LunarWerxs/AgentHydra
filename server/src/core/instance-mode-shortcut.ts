@@ -1,14 +1,14 @@
 // Creates a one-click desktop shortcut for the lightweight Instances launcher.
 //
 // Source checkout: wscript.exe -> misc/Instance-Launch.vbs
-// Packaged release: compiled agenthydra executable -> --instances
+// Packaged release: the AgentHydra launcher -> --instances
 //
 // Dynamic values are passed to PowerShell through the environment so paths containing quotes or
 // other shell-significant characters never get interpolated into the script.
 
 import { existsSync } from 'node:fs'
 import { win32 } from 'node:path'
-import { APP_ROOT, IS_COMPILED } from '../config'
+import { APP_ROOT, IS_RELEASE, LAUNCHER_PATH } from '../config'
 import { capturePipedProc } from './process.ts'
 import type { CMActionResult } from './shared'
 
@@ -41,8 +41,8 @@ export function instanceModeShortcutSpec(
   options: InstanceModeShortcutSpecOptions = {},
 ): InstanceModeShortcutSpec {
   const appRoot = options.appRoot ?? APP_ROOT
-  const compiled = options.compiled ?? IS_COMPILED
-  const execPath = options.execPath ?? process.execPath
+  const compiled = options.compiled ?? IS_RELEASE
+  const execPath = options.execPath ?? LAUNCHER_PATH
 
   if (compiled) {
     return {
@@ -112,7 +112,7 @@ export async function createInstanceModeShortcut(
       data: {},
     }
   }
-  if (!(options.compiled ?? IS_COMPILED)) {
+  if (!(options.compiled ?? IS_RELEASE)) {
     const launcher = win32.join(options.appRoot ?? APP_ROOT, 'misc', 'Instance-Launch.vbs')
     if (!existsSync(launcher)) {
       return {

@@ -23,7 +23,7 @@
 // only work beyond reading a bundled constant is one `git rev-parse`, and only when running from
 // source AND only when --json is asked for.
 
-import { IS_COMPILED, VERSION } from './config'
+import { IS_RELEASE, VERSION } from './config'
 
 /** Bumped only for an incompatible change to the shape below, so a script can branch on it rather
  *  than sniffing for fields. Adding a field is not incompatible. */
@@ -73,8 +73,8 @@ export function buildInfo(): BuildInfo {
   return {
     schema: BUILD_INFO_SCHEMA,
     version: VERSION,
-    commit: stamped?.commit ?? (IS_COMPILED ? null : gitHead()),
+    commit: stamped?.commit ?? (IS_RELEASE ? null : gitHead()),
     builtAt: stamped?.builtAt ?? null,
-    release: IS_COMPILED,
+    release: IS_RELEASE,
   }
 }

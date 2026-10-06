@@ -20,8 +20,8 @@
 //   4. On any failure mid-swap, restore from the renamed-aside originals.
 // Leftover `*.old-*` artifacts are swept on the next boot (cleanupStaleUpdateArtifacts).
 //
-// From 2.0.0 the archive also carries desk2/ (AgentHydra's window, with its own bun) and devwebui/.
-// Both are reconciled file by file (a running bun.exe is moved aside, not overwritten), Desk 2 is
+// From 2.0.0 the archive also carries desk2/ (AgentHydra's window, with its own bun) and its dev-servers
+// service. Desk 2 is reconciled file by file (a running bun.exe is moved aside, not overwritten),
 // stopped before its files are replaced and started again after, and a compiled daemon that finds
 // desk2/ missing installs it from its own version's archive once at boot (repairDesk2AtBoot).
 
@@ -39,7 +39,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { APP_ROOT, appEnv, IS_COMPILED, SERVICE_NAME, VERSION } from './config'
+import { APP_ROOT, appEnv, IS_RELEASE, SERVICE_NAME, VERSION } from './config'
 import { getSetting, setSetting } from './db'
 import { type Desk2InstallNotice, desk2, setDesk2InstallNotice } from './desk2'
 import { orchestratorBusy } from './orchestrator'
@@ -556,7 +556,6 @@ export const RELEASE_COMPONENTS: readonly ReleaseComponent[] = [
   // way the daemon's own exe is. Desk 2's data (~/.hydra-desk-2, %LOCALAPPDATA%\HydraDesk2) is outside
   // the folder and never touched. Every platform ships both.
   { name: 'desk2', strategy: 'reconcile', preserve: [], repairBare: true },
-  { name: 'devwebui', strategy: 'reconcile', preserve: [] },
 ]
 
 /** The components this platform's release archive is expected to carry. */
@@ -1359,7 +1358,7 @@ export function sweepAsides(dir: string): void {
 }
 
 /** Delete leftover `*.old-*` swap artifacts + a stale staging dir, and the files a reconcile moved
- *  aside inside desk2/, devwebui/ and misc/ once whatever held them has gone. Best-effort, at boot. */
+ *  aside inside desk2/ and misc/ once whatever held them has gone. Best-effort, at boot. */
 export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void {
   try {
     rmSync(join(installDir, '.update-staging'), { recursive: true, force: true })
@@ -1433,7 +1432,7 @@ export type Desk2RepairOutcome =
   | 'failed'
 
 export async function repairDesk2AtBoot(deps: Desk2RepairDeps = {}): Promise<Desk2RepairOutcome> {
-  if (!(deps.compiled ?? IS_COMPILED)) return 'not-needed'
+  if (!(deps.compiled ?? IS_RELEASE)) return 'not-needed'
   const installDir = deps.installDir ?? APP_ROOT
   const platform = deps.platform ?? process.platform
   if (!missingComponents(installDir, platform).includes('desk2')) return 'not-needed'

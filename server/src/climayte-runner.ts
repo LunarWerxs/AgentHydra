@@ -47,7 +47,7 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from './climayte-core'
-import { APP_ROOT, IS_COMPILED } from './config'
+import { APP_ROOT, IS_RELEASE } from './config'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { CLIMAYTE_RUNNER_FILE, embeddedMiscFiles } from './misc-assets'
 
@@ -111,7 +111,7 @@ function nativeRunnerSource(): string {
   const embedded = embeddedMiscFiles()?.[CLIMAYTE_RUNNER_FILE]
   if (embedded) return embedded
   throw new Error(
-    IS_COMPILED
+    IS_RELEASE
       ? `${onDisk} is missing and this build embeds no copy of it: a build defect (scripts/build.ts embeds RUNTIME_MISC_FILES)`
       : `${onDisk} is missing from this checkout: build it with misc/climayte-runner-native/build.ps1`,
   )
@@ -166,11 +166,11 @@ export function nativeRunner(): string {
 }
 
 /** How a runner is started for `specPath`: the native runner on Windows; elsewhere this program in
- *  runner mode (the compiled exe takes the flag directly, a source run goes through main.ts). */
+ *  runner mode (a release runs its bundle on the downloaded bun, a source run goes through main.ts). */
 export function runnerArgv(specPath: string): string[] {
   if (process.platform === 'win32') return [nativeRunner(), specPath]
-  return IS_COMPILED
-    ? [process.execPath, '--climayte-runner', specPath]
+  return IS_RELEASE
+    ? [process.execPath, join(import.meta.dir, 'server.js'), '--climayte-runner', specPath]
     : [process.execPath, join(import.meta.dir, 'main.ts'), '--climayte-runner', specPath]
 }
 

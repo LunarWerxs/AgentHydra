@@ -18,7 +18,7 @@ import {
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { APP_ROOT, IS_COMPILED, PORT } from './config'
+import { APP_ROOT, IS_RELEASE, PORT } from './config'
 import { openUi } from './open-ui'
 
 export interface StartPlan {
@@ -303,11 +303,11 @@ export function createDesk2(overrides: Partial<Desk2Deps> = {}) {
     return `http://127.0.0.1:${port()}`
   }
 
-  /** desk2/runtime/bun(.exe) when the bundle carries one, else bun on PATH (a checkout), else null. */
+  /** The bun Desk 2 runs on: this daemon's own in a release (the one the launcher downloaded), bun on PATH
+   *  in a checkout, else the running one. */
   function bun(): string | null {
-    const shipped = join(deskDir(), 'runtime', d.platform === 'win32' ? 'bun.exe' : 'bun')
-    if (d.exists(shipped)) return shipped
-    return d.which('bun') ?? (IS_COMPILED ? null : process.execPath)
+    if (IS_RELEASE) return process.execPath
+    return d.which('bun') ?? process.execPath
   }
 
   function home(): string {

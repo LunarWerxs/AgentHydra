@@ -5,7 +5,7 @@
 //     release's platform bundle and swap the self-contained executable in place.
 // Both expose the identical UpdateStatus / UpdateApplyResult shape, so the /api/update routes, the
 // auto-update loop, and the web UI drive whichever is active without knowing which it is.
-import { APP_ROOT, IS_COMPILED, SERVICE_NAME } from './config'
+import { APP_ROOT, IS_RELEASE, SERVICE_NAME } from './config'
 import { applyUpdate as ghApplyUpdate, checkForUpdate as ghCheckForUpdate } from './github-updater'
 import { beginUpdateProgress, finishUpdateProgress, setUpdatePhase } from './update-progress'
 import { createUpdater, type UpdateApplyResult, type UpdateStatus } from './updater-engine.mjs'
@@ -38,12 +38,12 @@ const gitUpdater = createUpdater({
  *  cache, so it is already as fresh as it can be and the flag is silently irrelevant rather than
  *  ignored. The shared kit engine's signature is untouched either way. */
 export function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<UpdateStatus> {
-  return IS_COMPILED ? ghCheckForUpdate(opts) : gitUpdater.checkForUpdate()
+  return IS_RELEASE ? ghCheckForUpdate(opts) : gitUpdater.checkForUpdate()
 }
 
 export async function applyUpdate(): Promise<UpdateApplyResult> {
   // The compiled path publishes its own fine-grained progress (it owns the download loop).
-  if (IS_COMPILED) return ghApplyUpdate()
+  if (IS_RELEASE) return ghApplyUpdate()
 
   // The source path cannot: git pull / `bun install` / the web build all run inside the shared kit
   // engine, which is synced and not ours to instrument. So report the phase honestly and say why it

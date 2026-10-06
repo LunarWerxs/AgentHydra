@@ -25,7 +25,7 @@
 
 import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
-import { APP_ROOT, DATA_DIR, IS_COMPILED, VERSION } from './config'
+import { APP_ROOT, DATA_DIR, IS_RELEASE, VERSION } from './config'
 
 /** The delivery actuator: the PowerShell that drives a desktop chat's own composer. */
 export const DELIVERY_ACTUATOR_FILE = 'Deliver-DesktopChat.ps1'
@@ -47,7 +47,7 @@ export const CLIMAYTE_RUNNER_FILE = 'climayte-runner.exe'
  * contract the tray toolkit has, for the same reason.
  *
  * ⛔ misc\Instance-Launch.vbs is deliberately NOT here: instance-mode-shortcut.ts reads it only on
- * the `!IS_COMPILED` branch, so a compiled build never wants it. Embedding it would be weight with
+ * the `!IS_RELEASE` branch, so a release never wants it. Embedding it would be weight with
  * no reader. If that guard ever goes, this list is where it belongs.
  */
 export const RUNTIME_MISC_FILES = [
@@ -129,7 +129,7 @@ export async function resolveMiscAsset(
   // makes an edit to the script take effect without a rebuild.
   if (exists(onDisk)) return { path: onDisk, reason: 'on-disk' }
 
-  const compiled = deps.compiled ?? IS_COMPILED
+  const compiled = deps.compiled ?? IS_RELEASE
   if (!compiled)
     return {
       path: null,

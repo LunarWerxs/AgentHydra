@@ -4,7 +4,7 @@
 // every tool proxies through, the side-run notice, the small JSON-schema and query helpers the
 // tool tables share, and resolving an `instance` argument to one real instance. mcp.ts and its
 // tool modules (mcp-session-tools.ts, mcp-fan-out.ts) all build on this; it imports none of them.
-import { appEnv, IS_COMPILED, PORT, SERVICE_NAME } from './config'
+import { appEnv, IS_RELEASE, PORT, SERVICE_NAME } from './config'
 import { instanceFilePath, readInstanceInfo } from './instance'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { PEER_HEADER } from './side-run'
@@ -43,9 +43,9 @@ export function daemonBase(): string {
  *  in-process against different code. */
 class DaemonUnreachable extends Error {}
 
-/** How to START the daemon, phrased for THIS distribution: a packaged build has no Bun, so telling
- *  its user to `bun run start` is a dead end — point them at the executable / tray instead. */
-const startHint = IS_COMPILED
+/** How to START the daemon, phrased for THIS distribution: a release has no checkout,
+ *  so telling its user to `bun run start` is a dead end — point them at the launcher / tray instead. */
+const startHint = IS_RELEASE
   ? 'Start it by running the AgentHydra executable (or its tray shortcut).'
   : 'Start it with `bun run start`.'
 

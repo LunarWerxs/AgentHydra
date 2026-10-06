@@ -16,7 +16,7 @@ import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import {
   HOST,
   INSTANCE_MODE_PORT,
-  IS_COMPILED,
+  IS_RELEASE,
   noAutoOpen,
   VERSION,
   WEB_DIST_CANDIDATES,
@@ -159,7 +159,7 @@ app.get('/api/health', (c) => {
     service: INSTANCE_MODE_SERVICE_NAME,
     mode: 'instances',
     version: VERSION,
-    distribution: IS_COMPILED ? 'compiled' : 'source',
+    distribution: IS_RELEASE ? 'release' : 'source',
     ts: Date.now(),
   })
 })

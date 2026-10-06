@@ -16,7 +16,7 @@
     "dev:web": "bun run --cwd web dev",
     "build": "bun run --cwd web build",
     "compile": "bun build --compile --outfile=tmp/agenthydra server/src/main.ts",
-    "dist": "bun run scripts/build.ts",
+    "dist": "bun run scripts/build.ts --bundle",
     "start": "bun run --cwd server start",
     "instances": "bun server/src/main.ts --instances",
     "mcp": "bun server/src/mcp.ts",

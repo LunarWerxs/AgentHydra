@@ -34,7 +34,8 @@ import {
   DATA_DIR_NOTICE,
   DB_PATH,
   HOST,
-  IS_COMPILED,
+  IS_RELEASE,
+  LAUNCHER_PATH,
   noAutoOpen,
   PORT,
   PORTABLE_WINDOW_SIZE,
@@ -277,7 +278,7 @@ let daemonSelfUrl = `http://127.0.0.1:${PORT}`
 /** The commit this daemon booted on, against the one its checkout names now (core/running-code.ts).
  *  Created at module load, which IS boot, so "the code I am running" is recorded before anything
  *  can change it. */
-const runningCode = createRunningCodeProbe({ root: APP_ROOT, compiled: IS_COMPILED })
+const runningCode = createRunningCodeProbe({ root: APP_ROOT, compiled: IS_RELEASE })
 
 /** Every MCP tool result says so when this daemon is older than its checkout: an agent whose new
  *  tool or route "does not exist" is otherwise told nothing about why. */
@@ -336,7 +337,7 @@ app.get('/api/health', (c) =>
     ok: true,
     service: SERVICE_NAME,
     version: VERSION,
-    distribution: IS_COMPILED ? 'compiled' : 'source',
+    distribution: IS_RELEASE ? 'release' : 'source',
     dataDir: DATA_DIR,
     dbPath: DB_PATH,
     dataDirNotice: DATA_DIR_NOTICE,
@@ -451,7 +452,7 @@ app.get('/api/update', async (c) => {
     ...status,
     // Informational: which mechanism is live. Both compiled + source support check/apply now, so
     // the UI drives the same controls for either; this just lets a caller distinguish them.
-    distribution: IS_COMPILED ? 'compiled' : 'source',
+    distribution: IS_RELEASE ? 'release' : 'source',
     autoUpdate: { enabled: autoUpdateEnabled(), intervalSecs: getAutoUpdateIntervalSecs() },
   })
 })
@@ -501,7 +502,7 @@ app.post('/api/update/apply', async (c) => {
   // far more time than a loopback response needs to flush. The client also recovers on its own now
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
-  if (IS_COMPILED && result.ok && result.restartRequired) {
+  if (IS_RELEASE && result.ok && result.restartRequired) {
     setTimeout(() => void relaunchDaemon(), 3000)
   }
   return c.json(result)
@@ -521,7 +522,7 @@ app.post('/api/update/apply', async (c) => {
 //     the replacement has REPORTED IN (relaunch-handoff.ts), so there is never a window with no
 //     daemon, and a successor that never starts leaves this one serving.
 // The gap it closes: relaunchDaemon() was reachable only through /api/update/apply, gated on
-// IS_COMPILED, so a SOURCE build (what this fleet runs) had no graceful path at all - a change in
+// IS_RELEASE, so a SOURCE build (what this fleet runs) had no graceful path at all - a change in
 // server/src/ sat inert until someone remembered the .ps1. Restarting and updating are different
 // acts, and only one of them had a door.
 app.post('/api/daemon/restart', async (c) => {
@@ -604,7 +605,7 @@ const appSettings = () => ({
   // Cheap on purpose: a path probe, not orchestratorStatus(), which spawns python. This is read
   // on every settings load and only has to answer "is the folder there".
   mcpToolboxPresent: existsSync(join(orchestratorDir(), 'orch.py')),
-  mcpMissingComponents: IS_COMPILED ? missingComponents(APP_ROOT) : [],
+  mcpMissingComponents: IS_RELEASE ? missingComponents(APP_ROOT) : [],
 })
 // Cross-window UI preferences (see core/ui-prefs.ts). Deliberately NOT folded into /api/settings:
 // these are a mirror of the browser's own localStorage, written on every toggle, and they must be
@@ -960,8 +961,7 @@ const serveEmbeddedWeb = async (c: { req: { url: string } }) => {
 app.get('/api/desk2/status', async (c) => c.json(await desk2.status()))
 // A compiled daemon that finds desk2/ missing is installing it (repairDesk2AtBoot, below): its pages
 // are the starting page meanwhile, which says how that went, not the old window.
-const desk2Wanted =
-  desk2.present() || (IS_COMPILED && missingComponents(APP_ROOT).includes('desk2'))
+const desk2Wanted = desk2.present() || (IS_RELEASE && missingComponents(APP_ROOT).includes('desk2'))
 if (desk2Wanted) {
   // The quick-instances window (/instances) is not Desk 2's yet (Desk 2's copy of it only answers under
   // /ah/, where its entry reads the path as the full window), so where the old build is, the daemon still
@@ -1217,10 +1217,12 @@ allowedApiOrigins = computeAllowedApiOrigins(boundPort)
 // icon and to go fetch a different artifact - a toast instead of a feature.
 const trayToolkit = await materializeTrayToolkit({
   appRoot: APP_ROOT,
-  compiled: IS_COMPILED,
+  compiled: IS_RELEASE,
   stateDir: DATA_DIR,
   version: VERSION,
-  exePath: process.execPath,
+  // The tray and its supervisor start AgentHydra again through this: the launcher in a release (the
+  // daemon itself is the downloaded bun there), the running bun in a checkout.
+  exePath: IS_RELEASE ? LAUNCHER_PATH : process.execPath,
 })
 if (trayToolkit.wrote.length > 0)
   console.log(
@@ -1229,7 +1231,7 @@ if (trayToolkit.wrote.length > 0)
 // The ONLY honest toast left: a compiled build that could not place it. The binary is
 // --windows-hide-console, so a console.log reaches nobody; gated on the settings flag so a person
 // who cannot fix it is told once, not every boot.
-if (IS_COMPILED && !isRelaunchSuccessor() && trayToolkit.dir === null) {
+if (IS_RELEASE && !isRelaunchSuccessor() && trayToolkit.dir === null) {
   console.error(
     `[agenthydra] no tray host available: ${trayToolkit.reason}`,
     trayToolkit.error ?? '',
@@ -1251,7 +1253,7 @@ if (IS_COMPILED && !isRelaunchSuccessor() && trayToolkit.dir === null) {
 // there; see tray-host.ts for the decision and why a probe failure can only ever mean "skip".
 void startTrayHostIfMissing({
   appRoot: APP_ROOT,
-  compiled: IS_COMPILED,
+  compiled: IS_RELEASE,
   hideTray: hideTrayIconEnabled,
   toolkitDir: trayToolkit.dir,
 })
@@ -1274,7 +1276,7 @@ void startTrayHostIfMissing({
 // the daemon down: an invisible daemon that still acts is worse than no daemon at all. Every
 // ambiguity resolves towards staying alive - see tray-invariant.ts.
 startTrayInvariant({
-  compiled: IS_COMPILED,
+  compiled: IS_RELEASE,
   // A single-file build now HAS a toolkit (materialized above), so this invariant covers it too -
   // which is the point: before, `existsSync(APP_ROOT/misc)` was false for every compiled exe, so
   // the one build most people run was exempt from "never run without an icon".
@@ -1284,7 +1286,7 @@ startTrayInvariant({
   restartTray: async () => {
     await startTrayHostIfMissing({
       appRoot: APP_ROOT,
-      compiled: IS_COMPILED,
+      compiled: IS_RELEASE,
       hideTray: hideTrayIconEnabled,
       toolkitDir: trayToolkit.dir,
     })
@@ -1382,8 +1384,8 @@ function spawnRelaunchSuccessor(): void {
   // successor must open the side-run's store, not the machine's (relaunch-identity.ts).
   const relaunchArgv = planRelaunchSuccessor({
     argv: process.argv,
-    execPath: process.execPath,
-    isCompiled: IS_COMPILED,
+    execPath: IS_RELEASE ? LAUNCHER_PATH : process.execPath,
+    isCompiled: IS_RELEASE,
     boundPort,
   })
   // Through buildDetachedSpawn, not a plain spawn. `detached: true` is NOT a process-tree escape
@@ -1433,7 +1435,7 @@ setAutoUpdateHooks({
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any
 // such leftovers from a previous update now (best-effort, compiled-only). See github-updater.ts.
-if (IS_COMPILED) cleanupStaleUpdateArtifacts()
+if (IS_RELEASE) cleanupStaleUpdateArtifacts()
 
 // --- reattach in-flight dispatch runs (they OUTLIVE the daemon; see dispatch.ts) --------------
 // A tray Quit / auto-update relaunch / crash leaves detached `claude` runs still executing. Recover
@@ -1619,7 +1621,7 @@ desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
 // A compiled daemon whose install has no desk2/ installs it from its own version's release, once per boot
 // and with no click (a 1.x install its old updater left without it, or the lone .exe download). Never
 // throws; how it went is on the starting page. See github-updater.ts repairDesk2AtBoot.
-if (IS_COMPILED) {
+if (IS_RELEASE) {
   void repairDesk2AtBoot({ relaunch: () => setTimeout(() => void relaunchDaemon(), 3000) }).catch(
     (error) => console.error('[agenthydra] desk2 repair failed unexpectedly:', error),
   )
