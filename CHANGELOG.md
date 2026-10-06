@@ -13,6 +13,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **AgentHydra's window stops drawing while nobody looks** (2026-10-06): its GPU process averaged 0.34 of a core over 17 idle hours because running rows' spinners and pulses animated forever. All animation now pauses while the window is unfocused or hidden and resumes where it stopped (10 s idle with a running row: 600 frames drawn, 0 when blurred); reduced motion drops the pulses and slows the spinners.
 - **A Refresh comes back to the page it left** (2026-10-06, owner: "if I'm on a page and I right click and I choose refresh, it always takes me back to the homepage"). The window kept only the chat on screen; it now also keeps whether the AgentHydra pane was open (the pane already kept its own tab), the Settings page, and the view under Settings, for as long as the window lives.
 - **Every Free account can chat again** (2026-10-06). A smoke test of all six Free logins found two that could not send at all: ChatGPT serves some accounts a newer page without the id the message preparation expected, which read as a setup fault; and claude.ai refuses a model a free account may not use right now (here the account's own default), which read as "sign in again" while the login was fine. The first now gets a fresh id; the second is its own error, and the send tries the usual model, then the cheapest, before giving up.
 

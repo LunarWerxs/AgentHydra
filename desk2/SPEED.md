@@ -28,3 +28,31 @@ the machine was loaded, and the timing rows need a measured band before any chan
 - The desktop Instances table re-sorts once about 4.2 s after it shows, when the warm data App.vue starts at idle
   arrives: its first row moves (rows are keyed by folder, so it is a move, not a remount), and a row that moves
   loses its focus and its open tooltip. One move in a 40 s watch; warm data refreshes about every 2 minutes.
+
+## 2026-10-06, idle GPU: animations ran while nobody looked
+
+The window's WebView2 GPU process averaged 0.34 of a core over 17 idle hours (1.09 cores in a 5 s sample). Cause:
+infinite CSS animations (`animate-spin` / `animate-pulse` on running rows, the dot blink, the transcript's
+spinners) kept the compositor drawing 60 frames a second whether or not the window was focused. Now
+`src/lib/pause-motion.ts` puts `motion-paused` on `<html>` while the page is unfocused or hidden and
+`style.css` pauses every animation under it (they resume where they stopped); `prefers-reduced-motion` drops
+the pulses and slows the spinners.
+
+Measured in headless chrome-headless-shell against an isolated server (port 7911, temp data folder), one
+spinner, one pulsing dot and one `.run-pulse` dot on screen, 10 s idle, compositor frames counted by a CDP
+trace (`DrawFrame`) and by `Page.startScreencast`:
+
+| page | frames drawn in 10 s |
+| --- | --- |
+| before, focused | 599 |
+| before, blurred (the old code never paused) | 600 |
+| after, focused | 600 |
+| after, blurred | 0 (screencast saw the 1 initial frame) |
+
+Blur was simulated (`document.hasFocus` false plus a `blur` event). Not touched: `useClock`'s 1 s tick for a
+working chat's elapsed time (a text update, not a compositor loop) and the AgentHydra pane's iframe (`hydra/`),
+which has its own animations and no pause yet.
+
+The launcher (`launcher/host/src/main.rs`) already sets the WebView hidden (`set_visible(false)`, plus low
+memory usage) when the window is minimized and visible again on restore, so a minimized window needed no change;
+only the unfocused-but-showing window drew frames, which the class above now stops.

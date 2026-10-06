@@ -280,3 +280,23 @@
 :root {
   --send-suggested: #737371;
 }
+
+/*
+ * Nothing moves while the window is unfocused, hidden or minimized (src/lib/pause-motion.ts sets the class):
+ * a running row's pulse or spinner would keep the compositor and WebView2's GPU process drawing 60 frames
+ * a second for nobody. It resumes where it stopped. With reduced motion asked for, pulses hold still and
+ * spinners slow down (they are what says a row is running).
+ */
+html.motion-paused *,
+html.motion-paused *::before,
+html.motion-paused *::after {
+  animation-play-state: paused !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse {
+    animation: none;
+  }
+  .animate-spin {
+    animation-duration: 3s;
+  }
+}
