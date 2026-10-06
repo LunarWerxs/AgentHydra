@@ -237,6 +237,22 @@ mod win {
         fn SendMessageW(h: Hwnd, msg: u32, w: usize, l: isize) -> isize;
         fn GetSystemMetrics(index: i32) -> i32;
         fn SetProcessDpiAwarenessContext(v: isize) -> i32;
+        #[allow(clippy::too_many_arguments)]
+        fn CreateWindowExW(
+            ex: u32,
+            class: *const u16,
+            title: *const u16,
+            style: u32,
+            x: i32,
+            y: i32,
+            w: i32,
+            h: i32,
+            parent: Hwnd,
+            menu: isize,
+            inst: isize,
+            param: *const c_void,
+        ) -> Hwnd;
+        fn DestroyWindow(h: Hwnd) -> i32;
     }
     #[link(name = "dwmapi")]
     extern "system" {
@@ -413,6 +429,46 @@ mod win {
         }
     }
 
+    /// A plain child window of the main one that holds one page tab's browser view, hidden until placed. The view is
+    /// a child of this, not of the main window: wry's drop of a child view unhooks its parent's resize subclass, which
+    /// on the main window is the one that keeps the window's own page sized to it.
+    pub fn page_host(parent: Hwnd) -> Hwnd {
+        let class = wide("STATIC");
+        // WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | SS_NOTIFY (a static is click-through without it)
+        unsafe {
+            CreateWindowExW(
+                0,
+                class.as_ptr(),
+                std::ptr::null(),
+                0x4000_0000 | 0x0200_0000 | 0x0400_0000 | 0x0100,
+                0,
+                0,
+                1,
+                1,
+                parent,
+                0,
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        }
+    }
+
+    /// Shows the holder at `r` (client pixels of the main window) above the window's page, or hides it.
+    pub fn place_page_host(h: Hwnd, r: Option<&Rect>) {
+        unsafe {
+            match r {
+                // HWND_TOP; SWP_NOACTIVATE | SWP_SHOWWINDOW
+                Some(r) => SetWindowPos(h, 0, r.left, r.top, r.w(), r.h(), 0x0010 | 0x0040),
+                // SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_HIDEWINDOW
+                None => SetWindowPos(h, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0080),
+            }
+        };
+    }
+
+    pub fn destroy(h: Hwnd) {
+        unsafe { DestroyWindow(h) };
+    }
+
     pub fn open_external(url: &str) {
         let (op, u) = (wide("open"), wide(url));
         unsafe {
@@ -437,6 +493,106 @@ fn origin_of(url: &str) -> String {
     let rest = url.split("://").nth(1).unwrap_or(url);
     let host = rest.split(['/', '?', '#']).next().unwrap_or("");
     format!("{}://{}", url.split("://").next().unwrap_or("http"), host)
+}
+
+// ---- the browser pane's page tabs: desk2/web/src/components/servers/native-browser.ts is the other end ----
+// An iframe cannot show a site that sends X-Frame-Options or CSP frame-ancestors (most sites with a sign-in), so a
+// page tab asks this window for a browser view of its own, placed over the tab. The window's page says where (client
+// pixels) and what to show through window.ipc; each view reports its address and title back as an
+// `agenthydra:browser` window event.
+
+/// The most page views at once; an Open past it is refused (the page tab keeps its own placeholder).
+const MAX_PAGES: usize = 24;
+
+/// What the window's page asks of a page tab's browser view (HostBrowserIn in native-browser.ts).
+#[derive(Debug, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum BrowserCmd {
+    /// Show `url` in view `id`, made on first use; no `rect` keeps it hidden.
+    Open {
+        id: String,
+        url: String,
+        rect: Option<Rect>,
+    },
+    /// Move view `id` to `rect`, or hide it.
+    Place {
+        id: String,
+        rect: Option<Rect>,
+    },
+    Back {
+        id: String,
+    },
+    Forward {
+        id: String,
+    },
+    Reload {
+        id: String,
+    },
+    Close {
+        id: String,
+    },
+}
+
+impl BrowserCmd {
+    fn id(&self) -> &str {
+        match self {
+            BrowserCmd::Open { id, .. }
+            | BrowserCmd::Place { id, .. }
+            | BrowserCmd::Back { id }
+            | BrowserCmd::Forward { id }
+            | BrowserCmd::Reload { id }
+            | BrowserCmd::Close { id } => id,
+        }
+    }
+}
+
+/// A browser message from the window's page, or None for anything else. A rect with no area means hidden.
+fn parse_browser_cmd(text: &str) -> Option<BrowserCmd> {
+    #[derive(Deserialize)]
+    struct Kind {
+        kind: String,
+    }
+    if serde_json::from_str::<Kind>(text).ok()?.kind != "browser" {
+        return None;
+    }
+    let mut cmd: BrowserCmd = serde_json::from_str(text).ok()?;
+    if cmd.id().is_empty() || cmd.id().len() > 64 {
+        return None;
+    }
+    if let BrowserCmd::Open { rect, .. } | BrowserCmd::Place { rect, .. } = &mut cmd {
+        *rect = rect.filter(|r| r.w() > 0 && r.h() > 0 && r.w() <= 32_000 && r.h() <= 32_000);
+    }
+    Some(cmd)
+}
+
+/// Where a page tab's view may go: http and https except AgentHydra's own window, and about: and blob: pages.
+fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
+    let u = url.to_ascii_lowercase();
+    if u.starts_with("about:") || u.starts_with("blob:") {
+        return true;
+    }
+    (u.starts_with("http://") || u.starts_with("https://"))
+        && origin_of(&u) != desk_origin.to_ascii_lowercase()
+}
+
+/// What a page tab's view tells the window's page (HostBrowserOut in native-browser.ts).
+#[derive(Debug, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+enum PageOut {
+    Url { url: String, loading: bool },
+    Title { title: String, url: String },
+}
+
+/// The script that hands `out` to the window's page as an `agenthydra:browser` event. JSON is a JavaScript literal.
+fn page_event_script(id: &str, out: &PageOut) -> String {
+    #[derive(Serialize)]
+    struct Detail<'a> {
+        id: &'a str,
+        #[serde(flatten)]
+        out: &'a PageOut,
+    }
+    let json = serde_json::to_string(&Detail { id, out }).unwrap_or_else(|_| "null".into());
+    format!("window.dispatchEvent(new CustomEvent('agenthydra:browser',{{detail:{json}}}))")
 }
 
 fn save_atomic(file: &Path, s: &Saved) {
@@ -467,6 +623,9 @@ fn main() {
     }
     let dry = flag("--dry-run");
     let smoke = flag("--smoke");
+    // A second window beside the person's own, for trying a build: its own throwaway WebView2 folder, no
+    // single-instance hand-off, no saved placement. It stays open until closed, as a smoke run does not.
+    let side = flag("--side-run");
 
     win::dpi_aware();
     let (monitors, primary) = win::monitors();
@@ -475,7 +634,7 @@ fn main() {
         .ok()
         .and_then(|t| parse_saved(&t));
     let (rect, maximized, why) = choose_placement(saved, &monitors, &primary);
-    let udf = if smoke {
+    let udf = if smoke || side {
         std::env::temp_dir().join(format!("HydraDesk2-smoke-{}", std::process::id()))
     } else {
         local_app_data().join("webview")
@@ -499,22 +658,204 @@ fn main() {
         return;
     }
 
-    if !smoke && !win::single_instance(TITLE) {
+    if !smoke && !side && !win::single_instance(TITLE) {
         return;
     }
-    if smoke {
+    if smoke || side {
         sweep_smoke_dirs(&udf);
     } else {
         migrate_local_storage(&udf);
     }
-    run(url, udf, state_file, rect, maximized, smoke);
+    run(url, udf, state_file, rect, maximized, smoke, side);
 }
 
 enum Ev {
     Loaded,
+    /// The window's own page began loading a document: the page views it placed go with the page that made them.
+    Reloading,
+    Browser(BrowserCmd),
+    /// A page view's address or title changed.
+    Page(String, PageOut),
+    /// A page view asked for a new window: the address opens in that view instead.
+    OpenHere(String, String),
 }
 
-fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bool, smoke: bool) {
+/// One page tab's browser view and the child window that holds it (win::page_host).
+struct PageView {
+    view: Option<wry::WebView>,
+    holder: isize,
+    shown: bool,
+}
+
+impl PageView {
+    fn view(&self) -> &wry::WebView {
+        self.view.as_ref().expect("a page view lives until dropped")
+    }
+
+    fn place(&mut self, rect: Option<Rect>) {
+        use wry::dpi::{PhysicalPosition, PhysicalSize};
+        win::place_page_host(self.holder, rect.as_ref());
+        if let Some(r) = rect {
+            let _ = self.view().set_bounds(wry::Rect {
+                position: PhysicalPosition::new(0, 0).into(),
+                size: PhysicalSize::new(r.w() as u32, r.h() as u32).into(),
+            });
+        }
+        if rect.is_some() != self.shown {
+            self.shown = rect.is_some();
+            let _ = self.view().set_visible(self.shown);
+        }
+    }
+}
+
+impl Drop for PageView {
+    fn drop(&mut self) {
+        drop(self.view.take());
+        win::destroy(self.holder);
+    }
+}
+
+/// The child window's handle, for wry to build a view inside.
+struct Holder(isize);
+
+impl wry::raw_window_handle::HasWindowHandle for Holder {
+    fn window_handle(
+        &self,
+    ) -> Result<wry::raw_window_handle::WindowHandle<'_>, wry::raw_window_handle::HandleError> {
+        use wry::raw_window_handle::{
+            HandleError, RawWindowHandle, Win32WindowHandle, WindowHandle,
+        };
+        let h = std::num::NonZeroIsize::new(self.0).ok_or(HandleError::Unavailable)?;
+        Ok(unsafe { WindowHandle::borrow_raw(RawWindowHandle::Win32(Win32WindowHandle::new(h))) })
+    }
+}
+
+fn build_page(
+    ctx: &mut wry::WebContext,
+    parent: isize,
+    id: &str,
+    url: &str,
+    proxy: &tao::event_loop::EventLoopProxy<Ev>,
+    desk_origin: &str,
+) -> Option<PageView> {
+    use wry::{NewWindowResponse, PageLoadEvent, WebViewBuilder};
+    let holder = win::page_host(parent);
+    if holder == 0 {
+        return None;
+    }
+    let (nav_origin, win_origin) = (desk_origin.to_string(), desk_origin.to_string());
+    let (load_proxy, title_proxy, win_proxy) = (proxy.clone(), proxy.clone(), proxy.clone());
+    let (load_id, title_id, win_id) = (id.to_string(), id.to_string(), id.to_string());
+    let built = WebViewBuilder::new_with_web_context(ctx)
+        .with_url(url)
+        .with_visible(false)
+        .with_focused(false)
+        .with_devtools(true)
+        .with_navigation_handler(move |u| {
+            if page_url_allowed(&u, &nav_origin) {
+                return true;
+            }
+            if u.to_ascii_lowercase().starts_with("mailto:") {
+                win::open_external(&u);
+            }
+            false
+        })
+        // Called off the UI thread on Windows: the view is reached through the event loop.
+        .with_new_window_req_handler(move |u, _| {
+            if page_url_allowed(&u, &win_origin) {
+                let _ = win_proxy.send_event(Ev::OpenHere(win_id.clone(), u));
+            } else if u.to_ascii_lowercase().starts_with("mailto:") {
+                win::open_external(&u);
+            }
+            NewWindowResponse::Deny
+        })
+        .with_on_page_load_handler(move |ev, u| {
+            let loading = matches!(ev, PageLoadEvent::Started);
+            let _ =
+                load_proxy.send_event(Ev::Page(load_id.clone(), PageOut::Url { url: u, loading }));
+        })
+        .with_document_title_changed_handler(move |title| {
+            let out = PageOut::Title {
+                title,
+                url: String::new(),
+            };
+            let _ = title_proxy.send_event(Ev::Page(title_id.clone(), out));
+        })
+        .build_as_child(&Holder(holder));
+    match built {
+        Ok(view) => Some(PageView {
+            view: Some(view),
+            holder,
+            shown: false,
+        }),
+        Err(_) => {
+            win::destroy(holder);
+            None
+        }
+    }
+}
+
+fn browser_cmd(
+    cmd: BrowserCmd,
+    pages: &mut std::collections::HashMap<String, PageView>,
+    ctx: &mut wry::WebContext,
+    parent: isize,
+    proxy: &tao::event_loop::EventLoopProxy<Ev>,
+    desk_origin: &str,
+) {
+    match cmd {
+        BrowserCmd::Open { id, url, rect } => {
+            if !page_url_allowed(&url, desk_origin) {
+                return;
+            }
+            if let Some(p) = pages.get_mut(&id) {
+                let _ = p.view().load_url(&url);
+                p.place(rect);
+                return;
+            }
+            if pages.len() >= MAX_PAGES {
+                return;
+            }
+            if let Some(mut p) = build_page(ctx, parent, &id, &url, proxy, desk_origin) {
+                p.place(rect);
+                pages.insert(id, p);
+            }
+        }
+        BrowserCmd::Place { id, rect } => {
+            if let Some(p) = pages.get_mut(&id) {
+                p.place(rect);
+            }
+        }
+        BrowserCmd::Back { id } => {
+            if let Some(p) = pages.get(&id) {
+                let _ = p.view().evaluate_script("history.back()");
+            }
+        }
+        BrowserCmd::Forward { id } => {
+            if let Some(p) = pages.get(&id) {
+                let _ = p.view().evaluate_script("history.forward()");
+            }
+        }
+        BrowserCmd::Reload { id } => {
+            if let Some(p) = pages.get(&id) {
+                let _ = p.view().reload();
+            }
+        }
+        BrowserCmd::Close { id } => {
+            pages.remove(&id);
+        }
+    }
+}
+
+fn run(
+    url: String,
+    udf: PathBuf,
+    state_file: PathBuf,
+    rect: Rect,
+    maximized: bool,
+    smoke: bool,
+    side: bool,
+) {
     use tao::{
         dpi::{PhysicalPosition, PhysicalSize},
         event::{Event, WindowEvent},
@@ -546,12 +887,24 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
     let origin = origin_of(&url);
     let nav_origin = origin.clone();
     let win_origin = origin.clone();
+    let ipc_origin = origin.clone();
     let mut ctx = WebContext::new(Some(udf.clone()));
     let load_proxy = proxy.clone();
+    let ipc_proxy = proxy.clone();
     let webview = WebViewBuilder::new_with_web_context(&mut ctx)
         .with_url(&url)
         .with_background_color((BG.0, BG.1, BG.2, 255))
         .with_devtools(true)
+        // The page's page tabs show their addresses in views of this window's own (native-browser.ts).
+        .with_initialization_script("window.agentHydraHost=Object.freeze({browser:1});")
+        .with_ipc_handler(move |req| {
+            if origin_of(&req.uri().to_string()) != ipc_origin {
+                return;
+            }
+            if let Some(cmd) = parse_browser_cmd(req.body()) {
+                let _ = ipc_proxy.send_event(Ev::Browser(cmd));
+            }
+        })
         .with_navigation_handler(move |u| {
             if origin_of(&u) == nav_origin
                 || u.starts_with("about:")
@@ -573,9 +926,10 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
             }
         })
         .with_on_page_load_handler(move |ev, _| {
-            if matches!(ev, wry::PageLoadEvent::Finished) {
-                let _ = load_proxy.send_event(Ev::Loaded);
-            }
+            let _ = load_proxy.send_event(match ev {
+                wry::PageLoadEvent::Started => Ev::Reloading,
+                wry::PageLoadEvent::Finished => Ev::Loaded,
+            });
         })
         .build(&window)
         .expect("webview");
@@ -610,7 +964,7 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
         }
     };
     let mut minimized = false;
-    let _keep = (&webview, &ctx);
+    let mut pages: std::collections::HashMap<String, PageView> = std::collections::HashMap::new();
     event_loop.run(move |event, _, flow| {
         *flow = match dirty {
             Some(t) => ControlFlow::WaitUntil(t),
@@ -623,11 +977,29 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
                     std::process::exit(0);
                 }
             }
+            Event::UserEvent(Ev::Reloading) => pages.clear(),
+            Event::UserEvent(Ev::Browser(cmd)) => {
+                browser_cmd(cmd, &mut pages, &mut ctx, hwnd, &proxy, &origin)
+            }
+            Event::UserEvent(Ev::Page(id, mut out)) => {
+                let Some(p) = pages.get(&id) else { return };
+                if let PageOut::Title { url, .. } = &mut out {
+                    *url = p.view().url().unwrap_or_default();
+                }
+                let _ = webview.evaluate_script(&page_event_script(&id, &out));
+            }
+            Event::UserEvent(Ev::OpenHere(id, url)) => {
+                if let Some(p) = pages.get(&id) {
+                    let _ = p.view().load_url(&url);
+                }
+            }
             Event::WindowEvent {
                 event: WindowEvent::Moved(_) | WindowEvent::Resized(_),
                 ..
             } if !smoke => {
-                dirty = Some(Instant::now() + Duration::from_millis(400));
+                if !side {
+                    dirty = Some(Instant::now() + Duration::from_millis(400));
+                }
                 // wry skips SIZE_MINIMIZED, so the page would stay 'visible' while minimized.
                 let min = window.is_minimized();
                 if min != minimized {
@@ -639,13 +1011,16 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
                         let _ = webview.set_visible(true);
                         let _ = webview.set_memory_usage_level(MemoryUsageLevel::Normal);
                     }
+                    for p in pages.values().filter(|p| p.shown) {
+                        let _ = p.view().set_visible(!min);
+                    }
                 }
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                if !smoke {
+                if !smoke && !side {
                     save_now(&window);
                 }
                 *flow = ControlFlow::Exit;
@@ -785,6 +1160,108 @@ mod tests {
         let (r, max, _) = choose_placement(Some(ok), &[MON], &MON);
         assert_eq!(r, ok.window);
         assert!(max);
+    }
+
+    #[test]
+    fn browser_messages_parse_and_bad_ones_are_dropped() {
+        let open = r#"{"kind":"browser","op":"open","id":"page-1","url":"https://example.com/","rect":{"left":10,"top":20,"right":810,"bottom":620}}"#;
+        assert_eq!(
+            parse_browser_cmd(open),
+            Some(BrowserCmd::Open {
+                id: "page-1".into(),
+                url: "https://example.com/".into(),
+                rect: Some(Rect {
+                    left: 10,
+                    top: 20,
+                    right: 810,
+                    bottom: 620
+                }),
+            })
+        );
+        // A rect with no area is a hidden view; a missing one too.
+        let flat = r#"{"kind":"browser","op":"place","id":"p","rect":{"left":10,"top":20,"right":10,"bottom":620}}"#;
+        assert_eq!(
+            parse_browser_cmd(flat),
+            Some(BrowserCmd::Place {
+                id: "p".into(),
+                rect: None
+            })
+        );
+        let hidden = r#"{"kind":"browser","op":"place","id":"p","rect":null}"#;
+        assert_eq!(
+            parse_browser_cmd(hidden),
+            Some(BrowserCmd::Place {
+                id: "p".into(),
+                rect: None
+            })
+        );
+        assert_eq!(
+            parse_browser_cmd(r#"{"kind":"browser","op":"back","id":"p"}"#),
+            Some(BrowserCmd::Back { id: "p".into() })
+        );
+        // Not a browser message, an unknown op, no id, an id too long: nothing.
+        assert_eq!(
+            parse_browser_cmd(r#"{"kind":"other","op":"close","id":"p"}"#),
+            None
+        );
+        assert_eq!(
+            parse_browser_cmd(r#"{"kind":"browser","op":"explode","id":"p"}"#),
+            None
+        );
+        assert_eq!(
+            parse_browser_cmd(r#"{"kind":"browser","op":"close","id":""}"#),
+            None
+        );
+        let long = format!(
+            r#"{{"kind":"browser","op":"close","id":"{}"}}"#,
+            "x".repeat(65)
+        );
+        assert_eq!(parse_browser_cmd(&long), None);
+        assert_eq!(parse_browser_cmd("not json"), None);
+    }
+
+    #[test]
+    fn page_views_go_to_web_pages_only_never_the_window_itself() {
+        let desk = "http://127.0.0.1:7798";
+        assert!(page_url_allowed(
+            "https://events.example.com/kiosk/x?eid=1",
+            desk
+        ));
+        assert!(page_url_allowed("http://localhost:5173/", desk));
+        assert!(page_url_allowed("HTTPS://Example.COM/", desk));
+        assert!(page_url_allowed("about:blank", desk));
+        assert!(page_url_allowed("blob:https://example.com/0b6c", desk));
+        assert!(!page_url_allowed("http://127.0.0.1:7798/ah/", desk));
+        assert!(!page_url_allowed("HTTP://127.0.0.1:7798", desk));
+        assert!(!page_url_allowed("file:///C:/Windows/win.ini", desk));
+        assert!(!page_url_allowed("javascript:alert(1)", desk));
+        assert!(!page_url_allowed("ms-settings:privacy", desk));
+        assert!(!page_url_allowed("mailto:owner@example.com", desk));
+    }
+
+    #[test]
+    fn page_events_reach_the_page_as_a_window_event() {
+        let s = page_event_script(
+            "page-1",
+            &PageOut::Url {
+                url: "https://example.com/a?b='c'</script>".into(),
+                loading: true,
+            },
+        );
+        assert_eq!(
+            s,
+            r#"window.dispatchEvent(new CustomEvent('agenthydra:browser',{detail:{"id":"page-1","type":"url","url":"https://example.com/a?b='c'</script>","loading":true}}))"#
+        );
+        let t = page_event_script(
+            "p",
+            &PageOut::Title {
+                title: "A \"quoted\" title".into(),
+                url: "https://example.com/".into(),
+            },
+        );
+        assert!(t.contains(
+            r#"{"id":"p","type":"title","title":"A \"quoted\" title","url":"https://example.com/"}"#
+        ));
     }
 
     #[test]
