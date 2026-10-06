@@ -22,6 +22,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
@@ -119,13 +120,84 @@ function stageTracked(dir: string, stage: string, skip: RegExp[] = []): void {
   }
 }
 
-function installProduction(dir: string, target: string, hostTarget: string): void {
-  const args = ['install', '--production', '--frozen-lockfile', '--linker', 'hoisted']
+function installArgs(target: string, hostTarget: string, frozen: boolean): string[] {
+  const args = ['install', '--production', '--linker', 'hoisted']
+  if (frozen) args.push('--frozen-lockfile')
   if (target !== hostTarget) {
     const [os, cpu] = target.split('-')
     args.push('--os', NODE_OS[os], '--cpu', cpu)
   }
-  run(process.execPath, args, dir)
+  return args
+}
+
+type Json = Record<string, unknown>
+
+/** The exact version bun.lock resolved for a package name ("hono": ["hono@4.13.12", ...]). */
+function lockedVersion(lock: string, dep: string): string | undefined {
+  const esc = dep.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return lock.match(new RegExp(`"${esc}": \\["${esc}@([^"]+)"`))?.[1]
+}
+
+function pinDeps(deps: unknown, lock: string): unknown {
+  if (!deps) return deps
+  return Object.fromEntries(
+    Object.entries(deps as Record<string, string>).map(([k, v]) => [
+      k,
+      lockedVersion(lock, k) ?? v,
+    ]),
+  )
+}
+
+/**
+ * Install only what runs: the staged tree keeps the `server` workspace and drops the others (web,
+ * hydra: their dists ship prebuilt) and every devDependency. Tries the frozen lockfile first; bun
+ * refuses it when the workspaces differ from the lock, so then it pins each server dependency to the
+ * version bun.lock resolved, drops the lock and installs.
+ */
+function installServerOnly(dir: string, target: string, hostTarget: string): void {
+  for (const w of ['web', 'hydra']) rmSync(join(dir, w, 'package.json'), { force: true })
+  const pkgPath = join(dir, 'package.json')
+  const serverPath = join(dir, 'server/package.json')
+  const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as Json
+  pkg.workspaces = ['server']
+  delete pkg.devDependencies
+  delete pkg.scripts
+  writeFileSync(
+    pkgPath,
+    `${JSON.stringify(pkg, null, 2)}
+`,
+  )
+  const server = JSON.parse(readFileSync(serverPath, 'utf8')) as Json
+  delete server.devDependencies
+  writeFileSync(
+    serverPath,
+    `${JSON.stringify(server, null, 2)}
+`,
+  )
+
+  const frozen = spawnSync(process.execPath, installArgs(target, hostTarget, true), {
+    cwd: dir,
+    stdio: 'inherit',
+  })
+  if (frozen.status === 0) return
+  console.log(`frozen install of ${dir} refused; pinning server dependencies from bun.lock`)
+  const lockPath = join(dir, 'bun.lock')
+  const lock = readFileSync(lockPath, 'utf8')
+  for (const [file, json] of [
+    [pkgPath, pkg],
+    [serverPath, server],
+  ] as const) {
+    for (const key of ['dependencies', 'optionalDependencies'])
+      if (json[key]) json[key] = pinDeps(json[key], lock)
+    writeFileSync(
+      file,
+      `${JSON.stringify(json, null, 2)}
+`,
+    )
+  }
+  rmSync(lockPath, { force: true })
+  rmSync(join(dir, 'node_modules'), { recursive: true, force: true })
+  run(process.execPath, installArgs(target, hostTarget, false), dir)
 }
 
 async function fetchBun(target: string, dest: string, work: string): Promise<void> {
@@ -209,7 +281,7 @@ stageTracked('desk2', stage, DESK2_SKIP)
 for (const dist of ['web/dist', 'hydra/dist']) {
   cpSync(join(ROOT, 'desk2', dist), join(desk2, dist), { recursive: true })
 }
-installProduction(desk2, target, hostTarget)
+installServerOnly(desk2, target, hostTarget)
 
 const runtime = join(desk2, 'runtime')
 mkdirSync(runtime)
@@ -234,8 +306,21 @@ if (isWindows) {
 
 // devwebui sits beside desk2/ (Desk 2's servers pane starts it from ../devwebui).
 const devwebui = join(stage, 'devwebui')
-stageTracked('devwebui', stage, [/\.test\.tsx?$/, /^devwebui\/(tests?|e2e|tmp)\//])
-installProduction(devwebui, target, hostTarget)
+// Its server serves web/dist, so the Vue sources never ship: the dist is built here from the checkout's
+// devwebui install (CI's "Build devwebui" step, or `bun install` in devwebui/ on a PC).
+stageTracked('devwebui', stage, [
+  /\.test\.tsx?$/,
+  /^devwebui\/(tests?|e2e|tmp|docs|scripts)\//,
+  /^devwebui\/web\//,
+])
+run(
+  process.execPath,
+  ['run', 'vite', 'build', '--outDir', join(devwebui, 'web/dist'), '--emptyOutDir'],
+  join(ROOT, 'devwebui/web'),
+)
+if (!existsSync(join(devwebui, 'web/dist/index.html')))
+  fail('devwebui web build wrote no index.html')
+installServerOnly(devwebui, target, hostTarget)
 
 if (isWindows) {
   mkdirSync(join(stage, 'misc'))
@@ -277,6 +362,7 @@ const sizes = {
   'desk2 runtime': dirSize(runtime),
   'desk2 node_modules': dirSize(join(desk2, 'node_modules')),
   dists: dirSize(join(desk2, 'web/dist')) + dirSize(join(desk2, 'hydra/dist')),
+  'devwebui node_modules': dirSize(join(devwebui, 'node_modules')),
   devwebui: dirSize(devwebui),
 }
 console.log(`\nBundle size (${name}):`)
