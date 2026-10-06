@@ -408,9 +408,9 @@ const onOpenRepoYeti = () => {
 }
 // A Browser card in the transcript: the servers pane shows that browser (it reads the same event itself).
 const onOpenBrowser = () => {
-  if (!chat.value) return
-  serversCwd.value = null
-  pane.value = 'servers'
+  if (chat.value) pane.value = 'servers'
+  // The card's browser is the chat's: the pane leaves a project the Dev servers list showed.
+  if (chat.value) serversCwd.value = null
 }
 // Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
 // Open or closed (and expanded) is remembered per chat: switching chats shows each one's own state.
