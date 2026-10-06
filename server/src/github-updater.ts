@@ -41,7 +41,7 @@ import os from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { APP_ROOT, appEnv, IS_RELEASE, SERVICE_NAME, VERSION } from './config'
 import { getSetting, setSetting } from './db'
-import { type Desk2InstallNotice, desk2, setDesk2InstallNotice } from './desk2'
+import { desk2 } from './desk2'
 import { orchestratorBusy } from './orchestrator'
 import {
   beginUpdateProgress,
@@ -543,6 +543,10 @@ export interface ReleaseComponent {
 }
 
 export const RELEASE_COMPONENTS: readonly ReleaseComponent[] = [
+  // The bundled daemon (server.js, release.json, bun-version, web assets). Swap strategy: atomically
+  // replace the folder so retired web assets and outdated version metadata are gone by construction.
+  // Required even for a bare launcher: the daemon cannot start without it.
+  { name: 'app', strategy: 'swap', preserve: [], repairBare: true },
   { name: 'orchestrator', strategy: 'swap', preserve: ['state'] },
   // WINDOWS-ONLY, and saying so is load-bearing: release.yml stages misc/ inside
   // `if [ "$target" = "windows-x64" ]`, so a perfectly healthy linux or macOS install has no
@@ -1390,88 +1394,5 @@ export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void
   }
   for (const comp of RELEASE_COMPONENTS) {
     if (comp.strategy === 'reconcile') sweepAsides(join(installDir, comp.name))
-  }
-}
-
-// ── boot-time repair of a missing desk2/ (2.0.0) ────────────────────────────────────────────────
-//
-// Two installs reach a 2.0 daemon with no window beside it: a 1.x install updated by its OLD updater
-// (which only knows orchestrator/ and misc/, so it brings the 2.0 exe alone), and a person who
-// downloaded the lone AgentHydra-<v>-windows-x64.exe. Neither has a newer version to update TO, so the
-// repair path above (applyUpdate reinstalls THIS version when a component is missing) is what fixes
-// them - and this runs it once at boot, without a click, instead of waiting for someone to find it.
-//
-// Compiled daemons only (a checkout builds desk2/ itself). Once per boot, never a loop: a failure is
-// logged and shown on the daemon's "Starting AgentHydra" page (desk2.ts setDesk2InstallNotice), with what to do. With
-// the update-check opt-out set (AGENTHYDRA_NO_PING, see the README's "Update check") nothing is
-// downloaded on its own; the page says how to get the window instead.
-
-export interface Desk2RepairDeps {
-  compiled?: boolean
-  installDir?: string
-  platform?: NodeJS.Platform
-  /** The update-check opt-out. Defaults to pingOptedOut(). */
-  optedOut?: () => boolean
-  /** The install itself. Defaults to applyUpdate(). */
-  apply?: () => Promise<UpdateApplyResult>
-  /** Called when the install replaced this daemon's version with a newer one, which needs a restart. */
-  relaunch?: () => void
-  /** "Already tried this boot". Defaults to the process-wide one. */
-  guard?: { ran: boolean }
-  notify?: (notice: Desk2InstallNotice | null) => void
-  log?: (message: string) => void
-}
-
-const bootRepairGuard = { ran: false }
-
-export type Desk2RepairOutcome =
-  | 'not-needed'
-  | 'already-tried'
-  | 'opted-out'
-  | 'repaired'
-  | 'failed'
-
-export async function repairDesk2AtBoot(deps: Desk2RepairDeps = {}): Promise<Desk2RepairOutcome> {
-  if (!(deps.compiled ?? IS_RELEASE)) return 'not-needed'
-  const installDir = deps.installDir ?? APP_ROOT
-  const platform = deps.platform ?? process.platform
-  if (!missingComponents(installDir, platform).includes('desk2')) return 'not-needed'
-  const guard = deps.guard ?? bootRepairGuard
-  if (guard.ran) return 'already-tried'
-  guard.ran = true
-
-  const notify = deps.notify ?? setDesk2InstallNotice
-  const log = deps.log ?? ((m: string) => console.log(`[agenthydra] ${m}`))
-  const zip = `AgentHydra-${VERSION}-${currentTarget()}${platform === 'win32' ? '.zip' : '.tar.gz'}`
-  const byHand = `Download ${zip} from ${RELEASES_PAGE}, unpack it and run AgentHydra from the unpacked folder.`
-
-  if ((deps.optedOut ?? pingOptedOut)()) {
-    const message = `AgentHydra's window (desk2/) is not installed here, and nothing is downloaded on its own while the update check is off (AGENTHYDRA_NO_PING). ${byHand}`
-    log(`desk2/ is missing; ${message}`)
-    notify({ state: 'opted-out', message })
-    return 'opted-out'
-  }
-
-  log(`desk2/ is missing beside this daemon; installing it from the v${VERSION} release`)
-  notify({
-    state: 'installing',
-    message: `Installing AgentHydra's window from the v${VERSION} release. This happens once and can take a minute.`,
-  })
-  try {
-    const result = await (deps.apply ?? applyUpdate)()
-    if (!result.ok) throw new Error(result.message || 'the install did not finish')
-    notify(null)
-    log('desk2/ installed')
-    // A newer release than this build was installed (the check found one): that needs the restart.
-    if (result.restartRequired && result.status?.currentVersion !== VERSION) deps.relaunch?.()
-    return 'repaired'
-  } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
-    log(`could not install desk2/: ${why}`)
-    notify({
-      state: 'failed',
-      message: `AgentHydra's window could not be installed: ${why}. ${byHand}`,
-    })
-    return 'failed'
   }
 }
