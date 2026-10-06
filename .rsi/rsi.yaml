@@ -9,7 +9,6 @@ metrics:
     measure: "bun desk2/e2e/stream-frames.e2e.ts"
     file: desk2/tmp/stream-frames.json
     pick: 'json:$.framesOverBudget'
-    heavy: true
   - id: desk2.stream.style_recalcs_per_chunk
     kind: count
     better: lower
@@ -17,7 +16,6 @@ metrics:
     measure: "bun desk2/e2e/stream-frames.e2e.ts"
     file: desk2/tmp/stream-frames.json
     pick: 'json:$.styleRecalcsPerChunk'
-    heavy: true
     gate: exact
   - id: desk2.stream.layouts_per_chunk
     kind: count
@@ -26,5 +24,4 @@ metrics:
     measure: "bun desk2/e2e/stream-frames.e2e.ts"
     file: desk2/tmp/stream-frames.json
     pick: 'json:$.layoutsPerChunk'
-    heavy: true
     gate: exact
