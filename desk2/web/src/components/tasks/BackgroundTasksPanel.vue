@@ -2,7 +2,8 @@
 // The real app's Background tasks panel (real-background-tasks-panel.png, measured at 1x), listing
 // CliMayte as its workflows: one card per running unit (a CliMayte group, a lone worker, or one of
 // this chat's background tasks), its phases with progress squares and the agent table, then the
-// finished ones behind 'Finished N'. A worker's own estimate (its `ETA:` line) shows after its time,
+// finished ones behind 'Finished N' (with nothing running, the panel is that row alone and All sits
+// beside its trash). A worker's own estimate (its `ETA:` line) shows after its time,
 // '1m 20s / ~5m', and a running unit says about how long is left by its latest one. Stop cancels the
 // unit's active workers through AgentHydra, or stops a Desk chat's background task through the chat
 // (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
@@ -155,6 +156,7 @@ const SQUARE: Record<AgentState, string> = {
 }
 const ICON_BTN =
   'flex size-6 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] outline-none transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)]'
+const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'
 </script>
 
 <template>
@@ -174,29 +176,12 @@ const ICON_BTN =
     </header>
 
     <div ref="body" class="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-1.5">
-      <div class="mb-[5px] flex h-5 items-center text-[var(--text-muted)]">
+      <div v-if="lists.running.length" class="mb-[5px] flex h-5 items-center text-[var(--text-muted)]">
         <span class="flex-1">Running</span>
-        <button
-          v-if="stoppableNow.length"
-          type="button"
-          class="rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
-          @click="stopping = 'all'"
-        >
-          Stop all
-        </button>
-        <button
-          v-if="sessionId"
-          type="button"
-          class="rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
-          :class="all ? 'text-[var(--text)]' : ''"
-          :aria-pressed="all"
-          @click="toggleAll"
-        >
-          All
-        </button>
+        <button v-if="stoppableNow.length" type="button" :class="ROW_BTN" @click="stopping = 'all'">Stop all</button>
+        <button v-if="sessionId" type="button" :class="[ROW_BTN, all ? 'text-[var(--text)]' : '']" :aria-pressed="all" @click="toggleAll">All</button>
       </div>
 
-      <p v-if="!lists.running.length" class="mb-2 text-[var(--text-muted)]">Nothing running{{ all ? '' : ' from this chat' }}.</p>
       <p v-if="stopError" class="mb-2 text-[var(--danger-text)]" role="alert">{{ stopError }}</p>
 
       <div class="flex flex-col gap-2">
@@ -310,7 +295,7 @@ const ICON_BTN =
         </article>
       </div>
 
-      <div class="mt-4 flex h-5 items-center">
+      <div class="flex h-5 items-center" :class="lists.running.length ? 'mt-4' : ''">
         <button
           type="button"
           class="flex items-center gap-1 text-[var(--text-muted)] transition-colors duration-[60ms] hover:text-[var(--text)]"
@@ -320,10 +305,12 @@ const ICON_BTN =
           Finished {{ lists.finished.length }}
           <ChevronRight class="size-3 transition-transform duration-150" :class="finishedOpen ? 'rotate-90' : ''" :stroke-width="1.5" />
         </button>
+        <span class="flex-1" />
+        <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-[var(--text)]' : 'text-[var(--text-muted)]']" :aria-pressed="all" @click="toggleAll">All</button>
         <Tip v-if="lists.finished.length" label="Clear finished" side="left">
           <button
             type="button"
-            class="ml-auto flex size-6 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
+            class="flex size-6 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
             aria-label="Clear finished"
             @click="clearFinished(lists.finished.flatMap((u) => u.keys))"
           >
