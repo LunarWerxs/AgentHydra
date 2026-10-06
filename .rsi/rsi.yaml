@@ -1,14 +1,15 @@
 schema: hydra-rsi/1
 metrics:
+  # Frames over budget come from main-thread timings: it moved 81..88 of 110 between runs on one
+  # machine, so it is a time (judged against a measured band), not a count.
   - id: desk2.stream.frames_over_budget
-    kind: count
+    kind: time
     better: lower
     unit: frames
     measure: "bun desk2/e2e/stream-frames.e2e.ts"
     file: desk2/tmp/stream-frames.json
     pick: 'json:$.framesOverBudget'
     heavy: true
-    gate: exact
   - id: desk2.stream.style_recalcs_per_chunk
     kind: count
     better: lower

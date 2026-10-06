@@ -14,5 +14,8 @@
     "test": "bun test ./server/test ./web/test",
     "e2e:engine": "bun e2e/engine.e2e.ts",
     "e2e:hosts": "bun e2e/hosts.e2e.ts"
+  },
+  "devDependencies": {
+    "puppeteer": "^25.12.0"
   }
 }

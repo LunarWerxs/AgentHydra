@@ -90,27 +90,35 @@ try {
   for (let i = 0; i < 3; i++) await frame()
 
   const chunks: { chunk: number; recalcs: number; layouts: number; mutations: number; mainThreadMs: number; overBudget: boolean }[] = []
+  // Windows are contiguous (each chunk starts where the last one ended, nothing between two chunks goes
+  // uncounted) and a chunk is closed only after the page has run its pending timers (40 ms of real time),
+  // so a late style recalc lands in the chunk that caused it on every run.
+  const settle = () => page.evaluate(() => new Promise<void>((r) => setTimeout(r, 40)))
+  let before = await metrics()
+  let mutBefore = await mutations()
   for (let n = 0; ; n++) {
-    const before = await metrics()
-    const mutBefore = await mutations()
     const more = await page.evaluate(() => (window as unknown as Bench).__streamBench.push())
     if (!more) break
     await frame()
+    await settle()
     const after = await metrics()
+    const mutAfter = await mutations()
     const mainThreadMs = ((after.TaskDuration ?? 0) - (before.TaskDuration ?? 0)) * 1000
     chunks.push({
       chunk: n,
       recalcs: (after.RecalcStyleCount ?? 0) - (before.RecalcStyleCount ?? 0),
       layouts: (after.LayoutCount ?? 0) - (before.LayoutCount ?? 0),
-      mutations: (await mutations()) - mutBefore,
+      mutations: mutAfter - mutBefore,
       mainThreadMs: Math.round(mainThreadMs * 100) / 100,
       overBudget: mainThreadMs > BUDGET_MS,
     })
+    before = after
+    mutBefore = mutAfter
   }
 
   const emDashRendered = await page.evaluate(() => document.body.innerText.includes('—'))
-  const perChunk = (k: 'recalcs' | 'layouts' | 'mutations') =>
-    Math.ceil(chunks.reduce((a, c) => a + c[k], 0) / Math.max(1, chunks.length))
+  const sum = (k: 'recalcs' | 'layouts' | 'mutations') => chunks.reduce((a, c) => a + c[k], 0)
+  const perChunk = (k: 'recalcs' | 'layouts' | 'mutations') => Math.ceil(sum(k) / Math.max(1, chunks.length))
   const result = {
     schema: 'desk2-stream-frames/1',
     budgetMs: BUDGET_MS,
@@ -119,6 +127,7 @@ try {
     styleRecalcsPerChunk: perChunk('recalcs'),
     layoutsPerChunk: perChunk('layouts'),
     mutationsPerChunk: perChunk('mutations'),
+    totals: { recalcs: sum('recalcs'), layouts: sum('layouts'), mutations: sum('mutations') },
     emDashRendered,
     perChunk: chunks,
   }
