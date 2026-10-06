@@ -7,6 +7,15 @@ export type SwitchScope = 'chat' | 'folder'
 /** The Connections mark, loaded at run time (never copied into this repo); the chip falls back to an icon when it fails. */
 export const CONNECTIONS_LOGO_URL = 'https://studio.connections.icu/favicon-32x32.png'
 
+/** Connections Studio, where a person changes Bypass permissions (Desk only shows it). */
+export const CONNECTIONS_STUDIO_URL = 'https://studio.connections.icu'
+
+export const BYPASS_TIP = 'On: chats may switch workspace and act across your workspaces without asking. Change it in Connections Studio.'
+
+/** The menu's read-only Bypass permissions row; null (row hidden) while Connections does not say. */
+export const bypassText = (ws: ConnectionsWorkspace | null): string | null =>
+  ws?.signedIn && typeof ws.bypassPermissions === 'boolean' ? `Bypass permissions: ${ws.bypassPermissions ? 'On' : 'Off'}` : null
+
 /** The chip shows on a chat's title bar when the Connections connector is enabled and on this machine. */
 export const showConnectionsChip = (list: readonly ConnectorView[] | null): boolean => {
   const c = list?.find((x) => x.id === 'connections')

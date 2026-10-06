@@ -55,3 +55,14 @@ describe('sign-in', () => {
     expect(pageShouldOpen({ url: null, opened: false })).toBeNull()
   })
 })
+
+test('the Bypass permissions row reads On/Off from Connections and is hidden when it does not say', async () => {
+  const { bypassText } = await import('@/components/connectors/connections-logic')
+  const ws = (bypassPermissions?: boolean | null, signedIn = true) => ({ signedIn, company: null, scope: null, bypassPermissions }) as const
+  expect(bypassText(ws(true))).toBe('Bypass permissions: On')
+  expect(bypassText(ws(false))).toBe('Bypass permissions: Off')
+  expect(bypassText(ws(null))).toBeNull()
+  expect(bypassText(ws(undefined))).toBeNull()
+  expect(bypassText(ws(true, false))).toBeNull()
+  expect(bypassText(null)).toBeNull()
+})

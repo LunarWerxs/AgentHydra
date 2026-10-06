@@ -80,6 +80,8 @@ export interface ConnectionsWorkspace {
   company: ConnectionsCompany | null
   /** chat: pinned for this chat alone. folder: the workspace of the chat's folder. null: none. */
   scope: 'chat' | 'folder' | null
+  /** Connections' Bypass permissions, read from whoami; null when it does not say. Desk never writes it: only Studio changes it. */
+  bypassPermissions?: boolean | null
 }
 
 export interface ConnectionsSwitch {

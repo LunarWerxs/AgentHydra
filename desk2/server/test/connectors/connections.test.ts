@@ -56,12 +56,13 @@ const tools = {
   connections_whoami: () => {
     const s = state()
     if (s.signedOut) return 'Sign in: https://studio.example.com/device?code=ABCD'
-    return JSON.stringify({ identity: { signedIn: true }, registration: { workspace: 'w' }, company: s.folder ?? null, ...(s.chatPin ? { chatPin: s.chatPin } : {}) }) + (s.note ? '\\n\\n' + s.note : '')
+    return JSON.stringify({ identity: { signedIn: true }, registration: { workspace: 'w' }, company: s.folder ?? null, ...((s.pins?.[process.env.CLAUDE_CODE_SESSION_ID] ?? s.chatPin) ? { chatPin: s.pins?.[process.env.CLAUDE_CODE_SESSION_ID] ?? s.chatPin } : {}), ...('bypassPermissions' in s ? { bypassPermissions: s.bypassPermissions } : {}) }) + (s.note ? '\\n\\n' + s.note : '')
   },
   connections_list_companies: () => JSON.stringify({ companies: COMPANIES }),
   connections_use_workspace: (p) => {
     const s = state()
-    s.chatPin = p.clear ? undefined : COMPANIES.find((c) => c.companyId === p.company)
+    // pins are kept per Claude session id, as Connections keeps them
+    s.pins = { ...s.pins, [process.env.CLAUDE_CODE_SESSION_ID]: p.clear ? undefined : COMPANIES.find((c) => c.companyId === p.company) }
     save(s)
     return 'ok'
   },
@@ -107,6 +108,10 @@ async function boot(): Promise<Rig> {
     fourth: { cwd: temp('desk-cx-fourth-'), sessionId: null },
     third: { cwd: temp('desk-cx-third-'), sessionId: 'sess-3' }
   }
+  // two chats in one folder, each with its own Claude session
+  const shared = temp('desk-cx-shared-')
+  CHATS.chatA = { cwd: shared, sessionId: 'sess-A' }
+  CHATS.chatB = { cwd: shared, sessionId: 'sess-B' }
   const dir = temp('desk-cx-')
   writeFileSync(join(dir, 'loader.mjs'), LOADER)
   const cfg = join(dir, 'claude.json')
@@ -145,7 +150,7 @@ test("a chat with no pin acts as its folder's workspace, and the child got the c
   const r = await boot()
   r.state({ folder: { companyId: 'c1', projectId: 'p1', name: 'Acme Example' } })
   const w = await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)
-  expect(w.body).toEqual({ signedIn: true, company: { companyId: 'c1', projectId: 'p1', name: 'Acme Example' }, scope: 'folder' })
+  expect(w.body).toEqual({ signedIn: true, company: { companyId: 'c1', projectId: 'p1', name: 'Acme Example' }, scope: 'folder', bypassPermissions: null })
   const [call] = r.calls()
   expect(call).toMatchObject({ tool: 'connections_whoami', local: true, env: { CLAUDECODE: '1', dir: CHATS.withSession.cwd, session: 'sess-1' } })
   // a second read inside 30 s is the cache's
@@ -156,14 +161,14 @@ test("a chat with no pin acts as its folder's workspace, and the child got the c
 test('a chatPin wins over the folder; no workspace at all is null; a signed-out machine is signedIn false', async () => {
   const r = await boot()
   r.state({ folder: { companyId: 'c1', name: 'Acme Example' }, chatPin: { companyId: 'c2', name: 'Globex Example' } })
-  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)).body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'chat' })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)).body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'chat', bypassPermissions: null })
   r.state({})
-  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=noSession`)).body).toEqual({ signedIn: true, company: null, scope: null })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=noSession`)).body).toEqual({ signedIn: true, company: null, scope: null, bypassPermissions: null })
   r.state({ folder: { companyId: 'c1', name: 'Acme Example' }, note: 'A note after the JSON.' })
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=fourth`)).body.scope).toBe('folder')
   r.state({ signedOut: true })
   // (the earlier chats' answers are cached for 30 s, so a third chat reads it)
-  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=third`)).body).toEqual({ signedIn: false, company: null, scope: null })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=third`)).body).toEqual({ signedIn: false, company: null, scope: null, bypassPermissions: null })
   expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=nope`)).status).toBe(404)
 })
 
@@ -177,7 +182,7 @@ test('switching this chat pins it and clears the pin; switching the folder uses 
   const r = await boot()
   r.state({ folder: { companyId: 'c1', name: 'Acme Example' } })
   const pinned = await post(r, CONNECTIONS_SWITCH, { chat: 'withSession', company: 'c2', scope: 'chat' })
-  expect(pinned.body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'chat' })
+  expect(pinned.body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'chat', bypassPermissions: null })
   expect(r.calls().find((c) => c.tool === 'connections_use_workspace')?.params).toEqual({ company: 'c2' })
 
   const cleared = await post(r, CONNECTIONS_SWITCH, { chat: 'withSession', company: null, scope: 'chat' })
@@ -185,7 +190,7 @@ test('switching this chat pins it and clears the pin; switching the folder uses 
   expect(r.calls().filter((c) => c.tool === 'connections_use_workspace').at(-1)?.params).toEqual({ clear: true })
 
   const folder = await post(r, CONNECTIONS_SWITCH, { chat: 'noSession', company: 'c2', scope: 'folder' })
-  expect(folder.body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'folder' })
+  expect(folder.body).toEqual({ signedIn: true, company: { companyId: 'c2', name: 'Globex Example' }, scope: 'folder', bypassPermissions: null })
   expect(r.calls().find((c) => c.tool === 'connections_switch_workspace')?.params).toEqual({ company: 'c2', remember: false })
   expect((await post(r, CONNECTIONS_SWITCH, { chat: 'noSession', company: null, scope: 'folder' })).status).toBe(400)
 })
@@ -215,4 +220,29 @@ test('no Connections server in the config: 503 for the routes and the connector 
   expect((await fetch(`${desk.url}${CONNECTIONS_WORKSPACE}?chat=x`)).status).toBe(503)
   process.env.HYDRA_DESK_MAIN_CLAUDE_JSON = cfg
   expect((await defFactory({ home }).detect()).state).toBe('absent')
+})
+
+test('Bypass permissions is carried from whoami as a boolean; a missing or non-boolean field is null', async () => {
+  const r = await boot()
+  r.state({ bypassPermissions: true })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=withSession`)).body.bypassPermissions).toBe(true)
+  r.state({ bypassPermissions: false })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=noSession`)).body.bypassPermissions).toBe(false)
+  r.state({ bypassPermissions: 'yes' })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=fourth`)).body.bypassPermissions).toBeNull()
+  r.state({})
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=third`)).body.bypassPermissions).toBeNull()
+})
+
+test("'This chat' pins by the chat's own session id: chat A's pin leaves chat B in the same folder on the folder's workspace", async () => {
+  const r = await boot()
+  r.state({ folder: { companyId: 'c1', projectId: 'p1', name: 'Acme Example' } })
+  const pinned = await post(r, CONNECTIONS_SWITCH, { chat: 'chatA', company: 'c2', scope: 'chat' })
+  expect(pinned.body).toMatchObject({ company: { companyId: 'c2' }, scope: 'chat' })
+  // the pin went out under A's session id, not B's
+  const use = r.calls().find((c) => c.tool === 'connections_use_workspace')
+  expect(use).toMatchObject({ params: { company: 'c2' }, env: { session: 'sess-A' } })
+  // A reads its pin back; B, same folder, still reads the folder's workspace
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=chatA`)).body).toMatchObject({ company: { companyId: 'c2' }, scope: 'chat' })
+  expect((await get(r, `${CONNECTIONS_WORKSPACE}?chat=chatB`)).body).toMatchObject({ company: { companyId: 'c1' }, scope: 'folder' })
 })

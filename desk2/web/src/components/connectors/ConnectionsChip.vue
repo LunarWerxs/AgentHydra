@@ -2,7 +2,7 @@
 // The Connections chip in a chat's title bar (after the CliMayte chip): the Connections mark and the workspace this
 // chat's Connections tools act as ("No workspace" muted when none, a small "this chat" marker when pinned to the chat
 // alone). Its menu lists the account's workspaces with a check on the current one, "No workspace", the choice between
-// this chat and every chat in the folder, and "Sign in to Connections" while this machine is signed out. Shown only
+// this chat and every chat in the folder, a read-only "Bypass permissions: On/Off" row that opens Studio (hidden when unknown), and "Sign in to Connections" while this machine is signed out. Shown only
 // while the Connections connector is on and on this machine (GET /api/connectors); the server side is
 // server/src/plugins/56-connections.ts, the decisions are in connections-logic.ts.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { connectorList, readCompanies, readWorkspace, refreshConnectorList, startSignin, switchWorkspace } from './connections-api'
-import { CONNECTIONS_LOGO_URL, canClear, chatScopeAllowed, chipText, effectiveScope, isCurrent, pageShouldOpen, showConnectionsChip, type SwitchScope } from './connections-logic'
+import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassText, canClear, chatScopeAllowed, chipText, effectiveScope, isCurrent, pageShouldOpen, showConnectionsChip, type SwitchScope } from './connections-logic'
 
 const props = defineProps<{ chat: ChatSummary }>()
 
@@ -28,6 +28,7 @@ const list = ref<HTMLElement | null>(null)
 const shown = computed(() => showConnectionsChip(connectorList.value))
 const text = computed(() => chipText(ws.value))
 const scope = computed(() => effectiveScope(picked.value, props.chat.sessionId))
+const bypass = computed(() => bypassText(ws.value))
 const chatOk = computed(() => chatScopeAllowed(props.chat.sessionId))
 
 async function load() {
@@ -72,6 +73,11 @@ async function signIn() {
   }
 }
 
+// Read-only: Desk never writes Bypass permissions; the row only opens Studio, where a person changes it.
+function openStudio() {
+  window.open(CONNECTIONS_STUDIO_URL, '_blank', 'noopener')
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 onMounted(() => {
   void refreshConnectorList()
@@ -90,22 +96,23 @@ watch(
 </script>
 
 <template>
-  <DropdownMenu v-if="shown" @update:open="onOpen">
-    <Tip label="Connections workspace">
-      <DropdownMenuTrigger as-child>
-        <button
-          type="button"
-          class="ml-2 flex h-5 min-w-0 max-w-[200px] shrink cursor-default items-center gap-1 rounded-[var(--radius-6)] px-[5px] text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
-          :class="text.muted ? 'text-text-muted' : 'text-text-2'"
-          :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
-        >
-          <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
-          <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
-          <span class="truncate">{{ text.text }}</span>
-          <span v-if="text.pinned" class="shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] leading-[14px] text-text-muted">this chat</span>
-        </button>
-      </DropdownMenuTrigger>
-    </Tip>
+  <!-- Tip wraps the WHOLE menu: it swaps its subtree on the first hover, and a trigger remounted under a DropdownMenu leaves the menu anchored to a detached button (top-left of the window). -->
+  <Tip v-if="shown" label="Connections workspace">
+    <span class="inline-flex min-w-0 shrink">
+  <DropdownMenu @update:open="onOpen">
+    <DropdownMenuTrigger as-child>
+      <button
+        type="button"
+        class="ml-2 flex h-5 min-w-0 max-w-[200px] shrink cursor-default items-center gap-1 rounded-[var(--radius-6)] px-[5px] text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+        :class="text.muted ? 'text-text-muted' : 'text-text-2'"
+        :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
+      >
+        <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
+        <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
+        <span class="truncate">{{ text.text }}</span>
+        <span v-if="text.pinned" class="shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] leading-[14px] text-text-muted">this chat</span>
+      </button>
+    </DropdownMenuTrigger>
     <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex max-h-[var(--reka-dropdown-menu-content-available-height)] flex-col']" @open-auto-focus="focusFirstItem">
       <template v-if="ws && !ws.signedIn">
         <DropdownMenuItem :class="MENU_ITEM" @select="signIn">Sign in to Connections</DropdownMenuItem>
@@ -145,7 +152,15 @@ watch(
           <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="scope === 'folder'" /></span>
         </DropdownMenuItem>
       </template>
+      <template v-if="bypass !== null">
+        <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+        <DropdownMenuItem :class="MENU_ITEM" :title="BYPASS_TIP" @select="openStudio">
+          <span class="flex-1">{{ bypass }}</span>
+        </DropdownMenuItem>
+      </template>
       <p v-if="note" role="status" class="max-w-72 px-2 py-1 text-[12px] leading-4 text-text-muted">{{ note }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
+    </span>
+  </Tip>
 </template>

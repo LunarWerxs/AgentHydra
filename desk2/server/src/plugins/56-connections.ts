@@ -56,11 +56,12 @@ export function companyOf(v: unknown): ConnectionsCompany | null {
 export function workspaceOf(answer: string): ConnectionsWorkspace {
   const j = jsonAnswer(answer)
   const identity = j?.identity as { signedIn?: unknown } | undefined
-  if (!j || identity?.signedIn !== true) return { signedIn: false, company: null, scope: null }
+  if (!j || identity?.signedIn !== true) return { signedIn: false, company: null, scope: null, bypassPermissions: null }
+  const bypassPermissions = typeof j.bypassPermissions === 'boolean' ? j.bypassPermissions : null
   const pin = companyOf(j.chatPin ?? j.pinnedForThisChat)
-  if (pin) return { signedIn: true, company: pin, scope: 'chat' }
+  if (pin) return { signedIn: true, company: pin, scope: 'chat', bypassPermissions }
   const folder = companyOf(j.company)
-  return { signedIn: true, company: folder, scope: folder ? 'folder' : null }
+  return { signedIn: true, company: folder, scope: folder ? 'folder' : null, bypassPermissions }
 }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
