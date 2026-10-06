@@ -16,6 +16,7 @@ import type {
   AccountRef,
   ChatPatch,
   ChatSummary,
+  ChatWait,
   CliMayteWorker,
   CreateChatRequest,
   DeskSettings,
@@ -1261,6 +1262,7 @@ export class ChatManager {
     const next = workerChatStatus(w)
     chat.status = next.status
     chat.activity = next.activity
+    chat.waiting = next.waiting
     chat.lastError = next.status === 'error' ? (w.error ?? 'The worker failed.') : null
     if (chat.lastError && (was !== 'error' || chat.lastError !== e.workerErrorSeen)) this.fail(e, { message: chat.lastError, fallback: 'worker_failed' })
     e.workerErrorSeen = chat.lastError
@@ -1815,23 +1817,42 @@ function workerAccount(w: AhWorker): AccountRef {
 /** A CliMayte worker's status as a chat's: queued and waiting are starting, running and checking are working. A waiting
  *  worker's activity is CliMayte's reason ("Every eligible account is at its usage limit ...; the first frees up at
  *  ..."), so the chat says what it waits for instead of "Starting…" for half an hour. */
-export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity'> & { error?: string | null }): { status: ChatSummary['status']; activity: string | null } {
+export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity' | 'waitUntil' | 'notBefore'> & { error?: string | null }): {
+  status: ChatSummary['status']
+  activity: string | null
+  waiting: ChatWait | null
+} {
   switch (w.status) {
-    case 'queued':
-      return { status: 'starting', activity: 'Queued' }
-    case 'waiting':
-      return { status: 'starting', activity: !w.error ? 'Waiting for an account' : /^waiting\b/i.test(w.error) ? w.error : `Waiting for an account: ${w.error}` }
+    case 'queued': {
+      // In line, no account picked yet: the chat is waiting, not booting. A hold time, when AgentHydra gives one, is when.
+      const until = typeof w.notBefore === 'number' && w.notBefore > 0 ? w.notBefore : null
+      return { status: 'starting', activity: 'Queued', waiting: { reason: 'In line for an account.', until } }
+    }
+    case 'waiting': {
+      const reason = plainReason(w.error) || 'Waiting for an account.'
+      const until = w.waitUntil ? Date.parse(w.waitUntil) : Number.NaN
+      return {
+        status: 'starting',
+        activity: !w.error ? 'Waiting for an account' : /^waiting\b/i.test(w.error) ? w.error : `Waiting for an account: ${w.error}`,
+        waiting: { reason, until: Number.isFinite(until) ? until : null },
+      }
+    }
     case 'running':
-      return { status: 'working', activity: w.lastActivity }
+      return { status: 'working', activity: w.lastActivity, waiting: null }
     case 'checking':
-      return { status: 'working', activity: 'Running its check' }
+      return { status: 'working', activity: 'Running its check', waiting: null }
     case 'failed':
-      return { status: 'error', activity: null }
+      return { status: 'error', activity: null, waiting: null }
     case 'cancelled':
-      return { status: 'stopped', activity: null }
+      return { status: 'stopped', activity: null, waiting: null }
     default:
-      return { status: 'idle', activity: null }
+      return { status: 'idle', activity: null, waiting: null }
   }
+}
+
+/** CliMayte's reason for a wait as the window shows it: one line, no account addresses. */
+function plainReason(error: string | null | undefined): string {
+  return (error ?? '').replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, 'an account').replace(/\s+/g, ' ').trim()
 }
 
 const forkTitle = (title: string): string => `${title} (fork)`

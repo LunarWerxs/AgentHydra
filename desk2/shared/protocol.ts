@@ -26,6 +26,12 @@ export interface AccountRef {
   number?: number // AgentHydra's permanent instance number
 }
 
+/** A CliMayte worker that waits for an account to start on: `reason` in plain words (no addresses), `until` the epoch ms it is expected to start, when known. */
+export interface ChatWait {
+  reason: string
+  until: number | null
+}
+
 export interface ChatSummary {
   id: string // Hydra Desk chat id (uuid), stable for the chat's life
   sessionId: string | null // the Claude Code session id, known once system/init arrives
@@ -44,6 +50,8 @@ export interface ChatSummary {
   turnStartedAt: number | null // epoch ms the running turn started; null when not working
   lastError: string | null
   limitResetsAt: number | null // epoch ms, when status is 'limited' and the reset is known
+  /** A CliMayte chat (status 'starting') whose worker is waiting for an account, not booting: why, and when it is expected to start. */
+  waiting?: ChatWait | null
   unread: boolean // finished or needs you since the user last looked at it
   pinned: boolean
   archived: boolean

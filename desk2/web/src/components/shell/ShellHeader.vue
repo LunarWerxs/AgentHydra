@@ -65,6 +65,7 @@ const cue = computed(() => {
   const g = statusGlyph(c)
   switch (c.status) {
     case 'starting':
+      if (c.waiting) return { text: 'Waiting', tone: 'text-text-muted', dot: 'bg-[var(--status-working)] animate-dot-blink' }
       return { text: 'Starting', tone: 'text-text-muted', dot: 'bg-[var(--status-working)] animate-dot-blink' }
     case 'working': {
       const t = elapsedLabel(c.turnStartedAt, clock.value)

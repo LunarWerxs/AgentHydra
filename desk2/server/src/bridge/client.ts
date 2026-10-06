@@ -157,6 +157,10 @@ export interface AhWorker {
   result: string | null
   error: string | null
   lastActivity: string | null
+  /** ISO time a `waiting` worker is expected to start (AgentHydra's waitUntil); absent otherwise. */
+  waitUntil?: string | null
+  /** Epoch ms a retrying or queued worker is held until; null or absent when it is not. */
+  notBefore?: number | null
   createdAt: number
   updatedAt: number
   /** Summed over its ended attempts (AgentHydra charges an attempt when it ends); absent before 2026-09-30. */

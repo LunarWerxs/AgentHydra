@@ -6,6 +6,7 @@ import { computed } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import { formatElapsed } from '../lib/tools'
 import { useClock } from '@/lib/clock'
+import { waitingLine } from '@/components/sidebar/logic'
 
 const props = defineProps<{ chat: ChatSummary }>()
 
@@ -13,10 +14,11 @@ const clock = useClock()
 const needsYou = computed(() => props.chat.status === 'needs_you')
 const text = computed(() => {
   if (needsYou.value) return 'Waiting for you'
-  // A CliMayte chat waiting for an account says so, and why (its activity), not "Starting…" for half an hour.
-  if (props.chat.status === 'starting') return props.chat.activity?.startsWith('Waiting') ? props.chat.activity : 'Starting…'
+  // A CliMayte chat waiting for an account says so and when it starts, the reason in the tooltip, not "Starting…" for half an hour.
+  if (props.chat.status === 'starting') return props.chat.waiting ? waitingLine(props.chat.waiting, clock.value) : 'Starting…'
   return props.chat.activity || 'Working…'
 })
+const why = computed(() => (props.chat.status === 'starting' && props.chat.waiting ? `${props.chat.waiting.reason}` : text.value))
 const elapsed = computed(() =>
   props.chat.turnStartedAt ? formatElapsed(Math.max(0, clock.value - props.chat.turnStartedAt)).replace(/^\d+ms$/, '0s') : '',
 )
@@ -29,7 +31,7 @@ const GLYPHS = ['·', '✢', '✳', '✶', '✻']
     <span v-else class="tx-spinner" aria-hidden="true">
       <span class="tx-spinner-strip"><span v-for="g in GLYPHS" :key="g">{{ g }}</span></span>
     </span>
-    <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'" :title="text">{{ text }}</span>
+    <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'" :title="why">{{ text }}</span>
     <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>
     <span v-if="chat.queuedCount" class="shrink-0 text-[13px] text-text-muted">· {{ chat.queuedCount }} queued</span>
   </div>

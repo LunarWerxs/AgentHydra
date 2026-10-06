@@ -218,6 +218,36 @@ test('Send now while the worker waits for an account says no turn runs and why; 
   expect(m.get(chat.id).activity).toBe('Waiting for an account nobody else is using: #35 (other sessions running).')
 })
 
+test('a waiting or queued worker gives the chat a plain wait: the reason, no addresses, and when it starts', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+
+  const until = Date.UTC(2026, 9, 6, 11, 40)
+  Object.assign(b.state.rows[0]!, {
+    status: 'waiting',
+    error: 'Waiting for an account nobody else is using: #35 (other sessions running); owner@example.com is at its limit.',
+    waitUntil: new Date(until).toISOString(),
+  })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({
+    status: 'starting',
+    waiting: { reason: 'Waiting for an account nobody else is using: #35 (other sessions running); an account is at its limit.', until },
+  })
+
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: null, waitUntil: null })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'starting', waiting: { reason: 'In line for an account.', until: null } })
+
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'working', waiting: null })
+})
+
 test("a person's plain send to a running worker goes now; the queue's own dispatch and a failed deliver-now stay held", async () => {
   const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
   temps.push(home)

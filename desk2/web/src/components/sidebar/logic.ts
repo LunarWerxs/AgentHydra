@@ -399,9 +399,18 @@ export interface StatusGlyph {
   label: string // aria-label of the dot, in words
 }
 
-export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { climayteActive?: number; backgroundActive?: number }): StatusGlyph {
+/** A CliMayte chat whose worker waits for an account: it is not launching, whatever its status says. */
+export const isWaitingForAccount = (chat: Pick<ChatSummary, 'status'> & { waiting?: ChatSummary['waiting'] }): boolean => chat.status === 'starting' && !!chat.waiting
+
+/** 'Waiting for an account, starts about 12:00': the time only when AgentHydra gave one still ahead. */
+export function waitingLine(wait: NonNullable<ChatSummary['waiting']>, now: number = Date.now()): string {
+  return wait.until !== null && wait.until > now ? `Waiting for an account, starts about ${resetClock(wait.until, now)}` : 'Waiting for an account'
+}
+
+export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { waiting?: ChatSummary['waiting']; climayteActive?: number; backgroundActive?: number }): StatusGlyph {
   switch (chat.status) {
     case 'starting':
+      if (chat.waiting) return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Waiting' }
       return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Starting' }
     case 'working':
       return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Running' }
