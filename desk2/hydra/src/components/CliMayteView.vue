@@ -136,9 +136,15 @@ watch(
 /** The open task's row key; null while the list is on screen. */
 const selectedId = ref<string | null>(null)
 const detail = ref<(CliMayteWorkerView & { events: string[] }) | null>(null)
-/** The last few details read ahead of an opening (hover, focus, press), by task id. */
+/** The last few details read ahead of an opening (hover, focus, press), by task id, with when they were read.
+ *  One older than DETAIL_FRESH_MS is read again rather than painted: a task moves on. */
 const DETAIL_KEEP = 6
-const detailCache = new Map<string, CliMayteWorkerView & { events: string[] }>()
+const DETAIL_FRESH_MS = 30_000
+const detailCache = new Map<string, { d: CliMayteWorkerView & { events: string[] }; at: number }>()
+function freshDetail(id: string): (CliMayteWorkerView & { events: string[] }) | null {
+  const hit = detailCache.get(id)
+  return hit && Date.now() - hit.at < DETAIL_FRESH_MS ? hit.d : null
+}
 const detailReading = new Set<string>()
 /** A just-opened task whose detail is not here yet: its Result, notice and reports are held a short beat
  *  rather than drawn absent and popped in. */
@@ -247,9 +253,9 @@ async function loadDetail() {
 }
 
 function remember(id: string, d: CliMayteWorkerView & { events: string[] }) {
-  const old = detailCache.get(id)
+  const old = detailCache.get(id)?.d
   detailCache.delete(id)
-  detailCache.set(id, old && sameData(old, d) ? old : d)
+  detailCache.set(id, { d: old && sameData(old, d) ? old : d, at: Date.now() })
   for (const k of detailCache.keys()) {
     if (detailCache.size <= DETAIL_KEEP) break
     detailCache.delete(k)
@@ -260,7 +266,7 @@ function remember(id: string, d: CliMayteWorkerView & { events: string[] }) {
 function prefetch(w: ListRow) {
   if (w.remote) return
   const id = rowKey(w)
-  if (detailReading.has(id) || detailCache.has(id)) return
+  if (detailReading.has(id) || freshDetail(id)) return
   detailReading.add(id)
   getCliMayteWorker(id)
     .then((d) => d && remember(id, d))
@@ -333,7 +339,7 @@ function select(w: ListRow) {
     detail.value = null
     return
   }
-  detail.value = detailCache.get(key) ?? null
+  detail.value = freshDetail(key)
   if (!detail.value) {
     holding.value = true
     holdTimer = setTimeout(endHold, HOLD_MS)
