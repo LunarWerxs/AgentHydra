@@ -120,11 +120,13 @@
      invented an oklch palette at hue ~70-85 / chroma ~0.007, which is a brown tint on every
      surface; that was the bug. Keep chroma at essentially zero.
 
-       chrome  #181817   header + session list (darkest)
-       ground  #1a1a19   the working area
+       chrome  #181817   header + session list
+       ground  #151515   the working area: Desk's page colour, so the pane matches the chat beside it
+                         (owner, 2026-10-06: "the current bg for the right side, is #1A1A19, please make
+                         it #151515"; Claude's own was #1a1a19)
        raised  #232321   cards, popovers, table headers, hover
        accent  #d06c74   dusty rose */
-  --background: #1a1a19;
+  --background: #151515;
   --foreground: #ededeb;
   --card: #232321;
   --card-foreground: #ededeb;
