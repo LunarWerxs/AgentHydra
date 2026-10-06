@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { AccountInfo, ChatSummary } from '@shared/protocol'
-import { CHAT_DEFAULT, CHAT_KEY, CHAT_MIN, NavHistory, SIDE_MIN, computeStats, loadChatWidth, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
+import { CHAT_MIN, NavHistory, SIDE_MIN, computeStats, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AUTO_LABEL, accountRows, chooseAccount, headroom, rowTip } from '@/components/accounts/rows'
@@ -260,13 +260,10 @@ describe('the split beside a wide pane', () => {
   it('gives the grid the same rule, so the window resizes the pane before anything is measured', () => {
     expect(splitColumns(712.4)).toBe(`max(${CHAT_MIN}px, min(712px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`)
   })
-  it('remembers the width last dragged to, a default when nothing usable is saved', () => {
-    expect(loadChatWidth({ getItem: (k) => (k === CHAT_KEY ? '1800' : null) })).toBe(1800)
-    expect(loadChatWidth({ getItem: () => null })).toBe(CHAT_DEFAULT)
-    expect(loadChatWidth({ getItem: () => '' })).toBe(CHAT_DEFAULT)
-    expect(loadChatWidth({ getItem: () => '40' })).toBe(CHAT_DEFAULT)
-    expect(loadChatWidth({ getItem: () => 'wide' })).toBe(CHAT_DEFAULT)
-    expect(loadChatWidth(null)).toBe(CHAT_DEFAULT)
+  it('keeps each chat its own width, the default for a chat never dragged', () => {
+    const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')
+    expect(frame).toContain('chatWidthByView.value.get(viewKey.value) ?? CHAT_DEFAULT')
+    expect(frame).toContain('next.set(viewKey.value, splitChat(want, stageWidth.value))')
   })
   it('the frame lays the split out with that rule and owns the divider; the servers pane has no width of its own', () => {
     const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')

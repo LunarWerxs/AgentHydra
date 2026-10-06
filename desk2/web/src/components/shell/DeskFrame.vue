@@ -31,7 +31,7 @@ import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { CHAT_KEY, CHAT_MIN, NavHistory, SidebarPeek, chatViewOf, loadChatWidth, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
+import { CHAT_DEFAULT, CHAT_MIN, NavHistory, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
@@ -416,17 +416,20 @@ function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
 const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
-// A wide pane splits the stage: the chat keeps the width it was dragged to (remembered) and the pane takes the rest, so
-// resizing the window resizes the pane and leaves the chat as it is. The divider on the pane's left edge drags the
-// split, or arrow keys move it; each side keeps only enough room to stay usable.
+// A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
+// window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
+// chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
+// each side keeps only enough room to stay usable.
 const split = computed(() => wide.value && asideOpen.value)
 const splitEl = ref<HTMLElement | null>(null)
 const { width: stageWidth } = useElementSize(splitEl)
-const chatWidth = ref(loadChatWidth())
+const chatWidthByView = ref(new Map<string, number>())
+const chatWidth = computed(() => chatWidthByView.value.get(viewKey.value) ?? CHAT_DEFAULT)
 const chatAt = computed(() => splitChat(chatWidth.value, stageWidth.value))
 function setChatWidth(want: number) {
-  chatWidth.value = splitChat(want, stageWidth.value)
-  storage?.setItem(CHAT_KEY, String(chatWidth.value))
+  const next = new Map(chatWidthByView.value)
+  next.set(viewKey.value, splitChat(want, stageWidth.value))
+  chatWidthByView.value = next
 }
 function onSplitDown(e: PointerEvent) {
   const el = e.currentTarget as HTMLElement

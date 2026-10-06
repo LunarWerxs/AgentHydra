@@ -237,16 +237,9 @@ export function computeStats(chats: ChatSummary[], range: StatsRange, now: numbe
 export const CHAT_MIN = 300
 export const SIDE_MIN = 300
 export const CHAT_DEFAULT = 560
-export const CHAT_KEY = 'hydra-desk.split.chat-width'
 
 /** The chat's width in a stage `stage` px wide, for `want`: whatever leaves the pane its minimum, the chat its own first. */
 export const splitChat = (want: number, stage: number): number => Math.round(Math.max(CHAT_MIN, Math.min(want, stage - SIDE_MIN)))
 
 /** splitChat as the stage's grid columns, so the split is right before anything is measured and as the window resizes. */
 export const splitColumns = (want: number): string => `max(${CHAT_MIN}px, min(${Math.round(want)}px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`
-
-/** The chat width last dragged to; a wide window's saved width is only narrowed for a narrower one, never forgotten. */
-export function loadChatWidth(storage: Pick<Storage, 'getItem'> | null = typeof localStorage === 'undefined' ? null : localStorage): number {
-  const n = Number(storage?.getItem(CHAT_KEY) ?? Number.NaN)
-  return Number.isFinite(n) && n >= CHAT_MIN ? n : CHAT_DEFAULT
-}
