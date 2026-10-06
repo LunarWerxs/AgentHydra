@@ -1,5 +1,6 @@
 // Cost routing routes: input validation (docs/COST-MODEL.md), and one plan size for both models.
 import { afterAll, expect, test } from 'bun:test'
+import { Hono } from 'hono'
 import { planFactor } from '../src/climayte-placement'
 import { getSetting, setSetting } from '../src/db'
 import { app } from '../src/http-app'
@@ -9,8 +10,14 @@ import '../src/routes/routing'
 const saved = getSetting('routing_api_preference_pct')
 afterAll(() => setSetting('routing_api_preference_pct', saved))
 
+// A private copy, never the shared app (queue-patch-guard.test.ts has the why): a request on `app`
+// builds its router, and every routes/*.ts a later file imports then dies at import with "Can not
+// add a route since the matcher is already built". On Windows' file order this file ran before
+// session-message-peer-only.test.ts and did exactly that (CI, 2026-10-06).
+const http = new Hono().route('/', app)
+
 const send = (method: string, path: string, body: unknown) =>
-  app.request(path, {
+  http.request(path, {
     method,
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
