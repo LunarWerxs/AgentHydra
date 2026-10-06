@@ -212,7 +212,13 @@ export type TranscriptItem =
       durationMs?: number
       outputFile?: string
     })
-  | (ItemBase & { kind: 'system'; level: 'info' | 'warn' | 'error'; text: string })
+  | (ItemBase & {
+      kind: 'system'
+      level: 'info' | 'warn' | 'error'
+      text: string
+      /** The row has a Retry: the chat's Claude Code download failed and this starts it again. */
+      retry?: boolean
+    })
   | (ItemBase & {
       kind: 'result' // end of a turn
       ok: boolean

@@ -33,7 +33,13 @@ export function cleanTitle(raw: string): string | null {
  * One Sonnet query on the chat's own account, low effort, no tools, one turn (never Haiku). Chosen over
  * HydraSwarm because it needs no extra service, rides the login the chat already has, and is one call.
  */
-export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, string | undefined> | undefined, timeoutMs = TITLE_TIMEOUT_MS): TitleGenerator {
+export function sdkTitleGenerator(
+  queryImpl: QueryImpl,
+  env: Record<string, string | undefined> | undefined,
+  timeoutMs = TITLE_TIMEOUT_MS,
+  /** Claude Code's binary when Desk has resolved one: a release has no platform package for the SDK to find. */
+  binaryPath: () => string | null = () => null,
+): TitleGenerator {
   return async (req, failed) => {
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), timeoutMs)
@@ -41,6 +47,7 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
       const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
       if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
       else delete childEnv.CLAUDE_CONFIG_DIR
+      const binary = binaryPath()
       const q = queryImpl({
         prompt:
           'Title this chat in 3-6 words, sentence case, no quotes, no trailing period. Answer with the title only.\n\nFirst message:\n' +
@@ -55,6 +62,7 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
           settingSources: [],
           persistSession: false,
           abortController: abort,
+          ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
         },
       })
       let text = ''

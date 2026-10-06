@@ -880,6 +880,11 @@ export function useDesk() {
       return chat
     },
 
+    /** Retry under "Could not get Claude Code": the download starts again and the chat goes on with what was sent. */
+    async retryClaudeCode(chatId: string): Promise<void> {
+      await fetchJson<{ retried: boolean }>(`/chats/${chatId}/claude-code/retry`, { method: 'POST' })
+    },
+
     /** Hydra Desk's marks on an outside session; shown at once, the poller's next list carries them too. */
     async updateSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<SessionMeta> {
       const meta = await fetchJson<SessionMeta>(`/external/sessions/${encodeURIComponent(sessionId)}/meta`, {

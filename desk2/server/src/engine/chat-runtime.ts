@@ -20,7 +20,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import { resolveClaudeCodeBinary, tryResolveClaudeCodeBinary } from './claude-code-binary'
+import { claudeCodeBinaryFor, describeProgress, type ClaudeCodeBinary } from './claude-code-binary'
 import type {
   AccountRef,
   AskQuestion,
@@ -58,6 +58,8 @@ export interface ChatRuntimeDeps {
   emit(event: ServerEvent): void
   /** Defaults to the SDK's query(); tests feed recorded fixtures through a fake. */
   queryImpl?: QueryImpl
+  /** Where Claude Code's binary comes from (default: the one for this Desk home); tests give one served from a local registry. */
+  claudeCode?: ClaudeCodeBinary
   /** The base environment (default process.env); CLAUDE_CONFIG_DIR is set from chat.account. */
   env?: Record<string, string | undefined>
   settings: DeskSettings | (() => DeskSettings)
@@ -288,15 +290,18 @@ export class ChatRuntime {
   private replayed: Map<string, TranscriptItem> | null = null
   /** Set while adopt() re-opens the host's open requests: their cards keep their time; `shown` ones were notified before. */
   private reopened: { stored: Map<string, TranscriptItem>; shown: Set<string> } | null = null
-  /** Resolved Claude Code binary path, cached after first resolution. */
-  private resolvedBinaryPath: string | null = null
-  private resolveBinaryPromise: Promise<string | null> | null = null
+  private readonly claudeCode: ClaudeCodeBinary
+  /** The Claude Code binary this runtime starts with; null until start() has resolved it. */
+  private binaryPath: string | null = null
+  /** Set while the process cannot start: its binary is being downloaded ('waiting', the sends held in the input), or the download failed ('failed', waiting for Retry or the next send). */
+  private binary: { phase: 'waiting' | 'failed' } | null = null
 
   constructor(deps: ChatRuntimeDeps) {
     this.chat = deps.chat
     this.store = deps.store
     this.emitEvent = deps.emit
     this.queryImpl = deps.queryImpl ?? (sdkQuery as QueryImpl)
+    this.claudeCode = deps.claudeCode ?? claudeCodeBinaryFor(deps.store.home)
     this.baseEnv = deps.env ?? process.env
     const s = deps.settings
     this.settingsOf = typeof s === 'function' ? s : () => s
@@ -329,25 +334,6 @@ export class ChatRuntime {
     return join(this.store.home, 'logs', `${this.chat.id}.log`)
   }
 
-  /** Resolve Claude Code binary path; cached after first resolution. */
-  private resolveBinary(): void {
-    if (this.resolvedBinaryPath !== null || this.resolveBinaryPromise) {
-      return
-    }
-    const home = join(this.store.home, '..')
-    this.resolveBinaryPromise = resolveClaudeCodeBinary(home).then(
-      (path) => {
-        this.resolvedBinaryPath = path
-        return path
-      },
-      (err) => {
-        console.warn(`Failed to resolve Claude Code binary: ${err instanceof Error ? err.message : err}`)
-        this.resolvedBinaryPath = ''
-        return null
-      }
-    )
-  }
-
   /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
   buildOptions(): Options {
     const chat = this.chat
@@ -368,17 +354,9 @@ export class ChatRuntime {
       onElicitation: this.onElicitation,
       stderr: (data: string) => this.onStderr(data),
     }
-    // Try synchronous resolution first; async resolution happens in background
-    const home = join(this.store.home, '..')
-    if (!this.resolvedBinaryPath) {
-      const sync = tryResolveClaudeCodeBinary(home)
-      if (sync) {
-        this.resolvedBinaryPath = sync
-      }
-    }
-    if (this.resolvedBinaryPath) {
-      options.pathToClaudeCodeExecutable = this.resolvedBinaryPath
-    }
+    // Always the binary Desk resolved: the SDK would look for its own platform package, which a release does not ship.
+    const binary = this.binaryPath ?? this.claudeCode.path()
+    if (binary) options.pathToClaudeCodeExecutable = binary
     // A Bypass chat in plan mode goes back to Bypass when the plan is approved, and the CLI refuses Bypass
     // to a process not launched for it (a process restarted mid-plan included).
     if (chat.permissionMode === 'bypassPermissions' || this.beforePlan === 'bypassPermissions') options.allowDangerouslySkipPermissions = true
@@ -416,7 +394,11 @@ ${swap.real}` }
    * chat host that kept the chat running through a server restart, which this runtime takes over (adopt).
    */
   start(attach?: HostConnection): void {
-    if (this.q) return
+    if (this.q || this.binary?.phase === 'waiting') return
+    if (this.binary?.phase === 'failed') {
+      this.retryBinary()
+      return
+    }
     this.closing = false
     this.closeOnIdle = false
     this.ranAs = attach ? { ...attach.hello.account } : { ...this.chat.account }
@@ -446,12 +428,80 @@ ${swap.real}` }
     this.input = new InputQueue()
     this.dispatch({ type: 'runtimeStarting' })
     if (!attach) this.publishChat()
-    // Resolve binary asynchronously in background; buildOptions() uses sync check first
-    this.resolveBinary()
-    const q = this.queryImpl({ prompt: this.input, options: this.buildOptions(), chatId: this.chat.id, account: this.ranAs, attach, carry: this.carry(null) })
+    // A host that kept the chat running already has its process: nothing to fetch.
+    if (attach) this.launch(attach, carry)
+    else this.obtainBinary()
+  }
+
+  private launch(attach?: HostConnection, carry: Carry | null = null): void {
+    const q = this.queryImpl({ prompt: this.input!, options: this.buildOptions(), chatId: this.chat.id, account: this.ranAs, attach, carry: this.carry(null) })
     this.q = q
     if (attach) this.adopt(q, attach, carry)
     this.loop = this.consume(q)
+  }
+
+  /**
+   * The process starts once Claude Code's binary is on disk. Normally it is (the installed package or the cache) and
+   * this starts it at once; else the chat stays 'starting', its sends held in the input, and shows the download until
+   * the process can start. query() is never called without the path: the SDK would throw "Native CLI binary not found".
+   */
+  private obtainBinary(): void {
+    const have = this.claudeCode.path()
+    if (have) {
+      this.binary = null
+      this.binaryPath = have
+      this.launch()
+      return
+    }
+    const wait: { phase: 'waiting' | 'failed' } = { phase: 'waiting' }
+    this.binary = wait
+    const stop = this.claudeCode.onProgress(() => this.showDownload())
+    this.showDownload()
+    this.claudeCode.resolve().then(
+      (path) => {
+        stop()
+        if (this.binary !== wait) return
+        this.binary = null
+        this.binaryPath = path
+        this.launch()
+      },
+      (err: unknown) => {
+        stop()
+        if (this.binary === wait) this.downloadFailed(err)
+      },
+    )
+  }
+
+  /** The download's progress is the chat's activity, which the starting row reads ("Getting Claude Code 2.1.288 (104 MB): 37%"). */
+  private showDownload(): void {
+    const status = this.claudeCode.status()
+    const text = describeProgress(this.claudeCode.version, status.progress ?? null)
+    if (this.chat.activity === text) return
+    this.dispatch({ type: 'activity', activity: text })
+    this.publishChat()
+  }
+
+  /** The download failed: the chat says why, with a Retry that goes on with what was sent (the input still holds it). */
+  private downloadFailed(err: unknown): void {
+    const now = this.now()
+    const reason = err instanceof Error ? err.message : String(err)
+    const message = `Could not get Claude Code ${this.claudeCode.version}: ${reason}`
+    this.binary = { phase: 'failed' }
+    this.dispatch({ type: 'turnError', message })
+    this.unqueueAll()
+    this.upsert({ kind: 'system', id: `claude-code:${now}`, ts: now, level: 'error', text: message, retry: true })
+    this.notify('error', message)
+    this.publishChat()
+  }
+
+  /** Retry after a failed download (the button, or the next send): the download starts again and the held sends go with the process. */
+  retryBinary(): boolean {
+    if (this.binary?.phase !== 'failed') return false
+    this.dispatch({ type: 'runtimeStarting' })
+    if (this.unanswered.length) this.dispatch({ type: 'userSent', now: this.now() })
+    this.publishChat()
+    this.obtainBinary()
+    return true
   }
 
   /**
@@ -460,7 +510,7 @@ ${swap.real}` }
    * that follows is a turn of a running chat, not one queued behind a start. True when it started one.
    */
   warm(): boolean {
-    if (this.q) return false
+    if (this.q || this.binary) return false
     this.start()
     this.dispatch({ type: 'init', now: this.now() })
     this.publishChat()
@@ -872,11 +922,25 @@ ${swap.real}` }
     this.publishChat()
   }
 
+  /** The chat is closed while its binary downloads or after the download failed: no process was started, nothing is sent. */
+  private cancelBinary(): void {
+    this.binary = null
+    this.input?.close()
+    this.expirePending(false)
+    this.dispatch({ type: 'closed' })
+    this.unqueueAll()
+    this.publishChat()
+    this.onClosed?.()
+  }
+
   /** Ends the runtime: the chat goes 'closed' and the next send resumes it. */
   async close(): Promise<void> {
     this.clearIdleTimer()
     const q = this.q
-    if (!q) return
+    if (!q) {
+      if (this.binary) this.cancelBinary()
+      return
+    }
     this.closing = true
     this.expirePending(false)
     this.input?.close()

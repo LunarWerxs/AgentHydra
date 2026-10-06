@@ -48,6 +48,7 @@ import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '..
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
 import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
+import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
@@ -305,7 +306,7 @@ export class ChatManager {
     this.liveListTimeoutMs = o.liveListTimeoutMs ?? 5000
     this.newChats = o.newChats ?? 'climayte'
     // A test that fakes the query gets no title queries unless it fakes the generator too.
-    this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env)) : o.titleGenerator
+    this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env, undefined, () => claudeCodeBinaryFor(o.home).path())) : o.titleGenerator
     for (const stored of this.store.loadChats()) {
       const e = entryOf(stored as StoredRecord)
       this.chats.set(e.chat.id, e)
@@ -651,6 +652,12 @@ export class ChatManager {
     const started = this.runtimeOf(e).warm()
     if (started) this.timings.sdkWarmed(id)
     return { started }
+  }
+
+  /** Retry on a failed Claude Code download: it starts again and the messages held for the chat go with the process. */
+  retryClaudeCode(id: string): { retried: boolean } {
+    const e = this.entry(id)
+    return { retried: e.runtime?.retryBinary() === true }
   }
 
   /**

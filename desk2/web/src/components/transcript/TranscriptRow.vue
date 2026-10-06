@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { CircleAlert, Info, TriangleAlert } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { formatElapsed, isSendFileTool, toolFamily } from './lib/tools'
@@ -25,12 +25,28 @@ import PlanCard from './parts/PlanCard.vue'
 import ElicitationCard from './parts/ElicitationCard.vue'
 import MessageActions from './parts/MessageActions.vue'
 import { useTranscript } from './context'
+import { useDesk } from '@/stores/desk'
 
 // overlayActions: settled tasks follow the reply ("18 background commands completed" sits 15px under its last
 // line in real-markdown-and-file-card.png), so the hover toolbar floats over that gap instead of opening one.
 const props = defineProps<{ item: TranscriptItem; nested?: boolean; endOfTurn?: boolean; overlayActions?: boolean; prompt?: TurnPrompt | null }>()
 
 const ctx = useTranscript()
+const desk = useDesk()
+
+// "Could not get Claude Code ...": Retry starts the download again; the chat's own status line then shows it.
+const retrying = ref(false)
+async function retryDownload() {
+  if (retrying.value) return
+  retrying.value = true
+  try {
+    await desk.retryClaudeCode(ctx.chatId.value)
+  } catch {
+    // the chat's status line and this row say what happened; the button is there again for another try
+  } finally {
+    retrying.value = false
+  }
+}
 const family = computed(() => (props.item.kind === 'tool_use' ? toolFamily(props.item.name, props.item.input) : null))
 // A message the ReDesign card sent shows as a small chip, not as a raw text bubble.
 const chip = computed(() => (props.item.kind === 'user' && !props.item.queued ? parseReplyChip(props.item.text) : null))
@@ -107,6 +123,15 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
     <TriangleAlert v-else-if="item.level === 'warn'" class="mt-0.5 size-4 shrink-0" />
     <Info v-else class="mt-0.5 size-4 shrink-0" />
     <span class="whitespace-pre-wrap break-words">{{ item.text }}</span>
+    <button
+      v-if="item.retry && !ctx.readOnly.value"
+      type="button"
+      class="ml-1 shrink-0 rounded px-1.5 text-text underline hover:bg-fill-hover disabled:opacity-50"
+      :disabled="retrying"
+      @click="retryDownload"
+    >
+      Retry
+    </button>
   </div>
 
   <div

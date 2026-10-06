@@ -15,7 +15,8 @@ const needsYou = computed(() => props.chat.status === 'needs_you')
 const text = computed(() => {
   if (needsYou.value) return 'Waiting for you'
   // A CliMayte chat waiting for an account says so and when it starts, the reason in the tooltip, not "Starting…" for half an hour.
-  if (props.chat.status === 'starting') return props.chat.waiting ? waitingLine(props.chat.waiting, clock.value) : 'Starting…'
+  // A first start that downloads Claude Code says how far it is ("Getting Claude Code 2.1.288 (104 MB): 37%").
+  if (props.chat.status === 'starting') return props.chat.waiting ? waitingLine(props.chat.waiting, clock.value) : props.chat.activity || 'Starting…'
   return props.chat.activity || 'Working…'
 })
 const why = computed(() => (props.chat.status === 'starting' && props.chat.waiting ? `${props.chat.waiting.reason}` : text.value))

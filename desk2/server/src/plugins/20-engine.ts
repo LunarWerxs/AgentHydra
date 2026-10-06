@@ -13,6 +13,7 @@ import type { ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { bridge } from '../bridge'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
+import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { listMcpServers } from '../engine/mcp-servers'
 import { parseQueueAdd, parseQueuePatch, parseQueueReorder, parseQueueSettings, QueueManager } from '../engine/queue'
 import {
@@ -176,6 +177,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   )
   // The warm start (SPEC "Speed (timings)"): the window asks when the owner begins typing in a closed chat.
   app.post('/api/chats/:id/warm', (c) => answer(c, () => manager.warm(c.req.param('id'))))
+  // Retry under "Could not get Claude Code": the download starts again.
+  app.post('/api/chats/:id/claude-code/retry', (c) => answer(c, () => manager.retryClaudeCode(c.req.param('id'))))
   // The chat's whole record, oldest first, for other programs: JSON items, or one per line with ?format=jsonl.
   app.get('/api/chats/:id/transcript', async (c) => {
     const id = c.req.param('id')
@@ -328,17 +331,9 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
   )
 
-  // Claude Code binary status: package > cache > download-needed (for smoke tests, release validation).
-  app.get('/api/claude-code', async (c) => {
-    try {
-      const { getClaudeCodeBinaryStatus } = await import('../engine/claude-code-binary')
-      const status = getClaudeCodeBinaryStatus(join(ctx.home, '..'))
-      return c.json(status)
-    } catch (err) {
-      console.error('[claude-code] status check failed:', err)
-      return c.json({ error: 'could not check Claude Code binary status' }, 500)
-    }
-  })
+  // Where Claude Code's binary is from (the installed package, the cache, a download running or still needed): a
+  // release has no package, so this is how a smoke test or a person sees whether the first chat will wait.
+  app.get('/api/claude-code', (c) => answer(c, () => claudeCodeBinaryFor(ctx.home).status()))
 
   // The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
   // on in their hosts for the next server; `chats: true` ends them first.
