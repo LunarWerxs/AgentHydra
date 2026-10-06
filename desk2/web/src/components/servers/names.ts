@@ -72,6 +72,9 @@ export function shortName(p: Pick<BrowserProfile, 'name' | 'title' | 'note' | 's
   return (host ? siteBrand(host) : null) ?? noteWords(p.note) ?? shortId(p.name)
 }
 
+/** The login hosts worth a chip on a row shown as `label`: those whose site brand is not the label itself. */
+export const chipHosts = (label: string, hosts: string[]): string[] => hosts.filter((h) => siteBrand(h)?.toLowerCase() !== label.trim().toLowerCase())
+
 /** The chips to draw and those folded into '+N' (whose hover lists them). */
 export function splitChips(hosts: string[], max = CHIPS_SHOWN): { shown: string[]; more: string[] } {
   return hosts.length > max ? { shown: hosts.slice(0, max), more: hosts.slice(max) } : { shown: hosts, more: [] }

@@ -4,7 +4,7 @@ import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess, DevWebProject } from '@shared/devwebui'
 import { enterTarget, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
-import { splitChips } from './names'
+import { chipHosts, splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // The New tab page: the servers DevWebUI found for this chat's folder, then the workspace's saved browsers, both
@@ -51,6 +51,8 @@ const saved = computed(() => filterProfiles(props.profiles ?? [], query.value))
 // The saved browsers are a different kind of thing from the servers above them: a rule and a wider gap set them apart.
 const apart = computed(() => props.view.kind !== 'loading' && props.view.kind !== 'starting')
 const moreTitle = (hosts: string[]) => splitChips(hosts).more.join(String.fromCharCode(10))
+// A login chip that only repeats the row's shown name is left out.
+const chipsOf = (r: ProfileRow) => chipHosts(r.label ?? r.name, r.hosts)
 const nothingMatches = computed(() => query.value.trim() !== '' && !own.value.length && !other.value.length && !saved.value.length)
 
 function enter() {
@@ -173,10 +175,9 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ r.open ? 'open · ' : '' }}{{ r.lastUsed }}</span>
                 </span>
                 <span class="truncate text-[12px]" :class="r.note ? 'text-[var(--text-2)]' : 'text-[var(--text-muted)]'" :title="r.note ?? undefined">{{ r.note ?? 'no note' }}</span>
-                <span class="flex flex-wrap gap-1">
-                  <span v-for="h in splitChips(r.hosts).shown" :key="h" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]">{{ h }}</span>
-                  <span v-if="splitChips(r.hosts).more.length" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]" :title="moreTitle(r.hosts)">+{{ splitChips(r.hosts).more.length }}</span>
-                  <span v-if="!r.hosts.length" class="text-[11px] text-[var(--text-muted)]">not signed in anywhere</span>
+                <span v-if="chipsOf(r).length" class="flex flex-wrap gap-1">
+                  <span v-for="h in splitChips(chipsOf(r)).shown" :key="h" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]">{{ h }}</span>
+                  <span v-if="splitChips(chipsOf(r)).more.length" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]" :title="moreTitle(chipsOf(r))">+{{ splitChips(chipsOf(r)).more.length }}</span>
                 </span>
               </button>
             </li>

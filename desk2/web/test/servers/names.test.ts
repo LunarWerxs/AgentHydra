@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { noteWords, shortId, shortName, siteBrand, splitChips } from '../../src/components/servers/names'
+import { chipHosts, noteWords, shortId, shortName, siteBrand, splitChips } from '../../src/components/servers/names'
 
 const base = { name: 'scratch', title: undefined, note: null, sessionHosts: [] as string[], sites: [] as { host: string; state: 'reached'; at: string }[] }
 
@@ -42,5 +42,21 @@ describe('splitChips', () => {
     const { shown, more } = splitChips(hosts)
     expect(shown).toEqual(hosts.slice(0, 5))
     expect(more).toEqual(hosts.slice(5))
+  })
+})
+
+describe('chipHosts', () => {
+  it('leaves out a chip whose brand is the row name, case-insensitively', () => {
+    expect(chipHosts('GitHub', ['github.com'])).toEqual([])
+    expect(chipHosts('github', ['github.com'])).toEqual([])
+  })
+  it('keeps the other hosts, and the +N fold counts only those', () => {
+    expect(chipHosts('GitHub', ['github.com', 'example.com'])).toEqual(['example.com'])
+    const many = ['github.com', ...Array.from({ length: 6 }, (_, i) => `h${i}.example.com`)]
+    expect(splitChips(chipHosts('GitHub', many)).more).toEqual(['h5.example.com'])
+  })
+  it('keeps every host when the name is not a brand, and none when there are none', () => {
+    expect(chipHosts('Shop admin', ['github.com'])).toEqual(['github.com'])
+    expect(chipHosts('Shop admin', [])).toEqual([])
   })
 })
