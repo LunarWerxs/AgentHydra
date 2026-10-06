@@ -24,7 +24,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { buildLauncher } from './build-launcher'
 import { writePosixLauncher } from './launcher-posix'
 
@@ -198,22 +198,32 @@ function installServerOnly(dir: string, target: string, hostTarget: string): voi
 }
 
 // What a runtime never loads from node_modules: type declarations, source maps, human docs and the
-// folders packages keep their own tests and samples in. License files stay.
+// folders packages keep their own tests and samples in, at the package's root only (a dist/examples
+// or lib/test deeper down can be code a package imports), and test files by name at any depth.
+// License files stay.
 const PRUNE_DIRS = new Set(['test', 'tests', '__tests__', 'docs', 'example', 'examples'])
-const PRUNE_FILE = /(\.map|\.d\.[cm]?ts)$|^(readme|changelog)(\.[^.]*)?\.md$/i
+const PRUNE_FILE =
+  /(\.map|\.d\.[cm]?ts|\.(test|spec)\.[cm]?[jt]sx?)$|^(readme|changelog)(\.[^.]*)?\.md$/i
+
+/** True when `name` inside `parent` is a package's root: node_modules/<pkg> or node_modules/@scope/<pkg>. */
+function isPackageRoot(parent: string, name: string): boolean {
+  const base = basename(parent)
+  if (base === 'node_modules') return !name.startsWith('@') && !name.startsWith('.')
+  return base.startsWith('@') && basename(dirname(parent)) === 'node_modules'
+}
 
 /**
  * Trims a production node_modules in place. Every Claude Code platform package of the Agent SDK goes:
  * each carries a 200 MB binary, and Desk 2 resolves or downloads Claude Code itself.
  */
-function pruneNodeModules(dir: string): void {
+function pruneNodeModules(dir: string, packageRoot = false): void {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
     const p = join(dir, e.name)
     if (e.isDirectory()) {
-      if (PRUNE_DIRS.has(e.name) || /^claude-agent-sdk-/.test(e.name)) {
+      if ((packageRoot && PRUNE_DIRS.has(e.name)) || /^claude-agent-sdk-/.test(e.name)) {
         rmSync(p, { recursive: true, force: true })
       } else {
-        pruneNodeModules(p)
+        pruneNodeModules(p, isPackageRoot(dir, e.name))
       }
     } else if (PRUNE_FILE.test(e.name)) {
       rmSync(p, { force: true })
