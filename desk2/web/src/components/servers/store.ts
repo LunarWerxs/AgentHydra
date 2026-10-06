@@ -1,14 +1,16 @@
-// The one DevWebUI client of the window's two views of it: the sidebar's Dev servers list and the right-hand servers
-// pane. Both read the daemon's status and its project list from here, and each says it is on screen with `use()`:
-// the polling loop runs while at least one is, and the window is visible, so they never disagree and never ask twice.
-// Turning the first one on starts the server manager when none answers (once; `tryAgain` starts it again), as the pane
-// always did. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's).
+// The one dev-servers client of the window's views of it: the sidebar's Dev servers list, the right-hand servers pane
+// and Settings -> Connectors' row. All read the service's status (and the lists, their project list) from here, and each
+// says it is on screen with `use()`: the polling loop runs while at least one is, and the window is visible, so they never
+// disagree and never ask twice. There is no daemon to start: Desk starts the service for the first request that needs it,
+// so the first list read of a list view is that request (shown as 'starting' while it is in flight). It is made once per
+// page load: a service stopped from Settings stays stopped until a request or `tryAgain` starts it. A Settings-only view
+// (`use({ quiet: true })`) reads the status and asks for nothing. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's).
 // `focus` is the list's request to the pane: show this server of this project, whatever chat is open (DeskFrame).
 import { ref, shallowRef } from 'vue'
 import type { DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
 import { projectDir } from '@shared/devwebui'
-import { devwebStart, devwebStatus, listProjects, processAction, projectAction, RouteMissing } from './api'
-import { allKey, isUp } from './logic'
+import { devwebService, devwebStatus, listProjects, processAction, projectAction, RouteMissing } from './api'
+import { allKey, isUp, startReused } from './logic'
 
 export interface ServerFocus {
   /** The folder the pane is shown for: the project's own (`projectDir`). */
@@ -35,6 +37,8 @@ function createDevServers() {
   /** Counts up with each finished refresh: a view that keeps more data of its own (the pane) reloads it on a change. */
   const answered = ref(0)
   const focus = ref<ServerFocus | null>(null)
+  /** Counts up with each Start that found the server already up: the pane shows its small notice. */
+  const reused = ref(0)
 
   const setOn = (v: boolean) => {
     on.value = v
@@ -45,7 +49,8 @@ function createDevServers() {
     }
   }
 
-  let started = false
+  // The first status read of a list view ends the automatic request, whatever it said: a service stopped later is not restarted behind the person's back.
+  let asked = false
   async function once(): Promise<void> {
     let s: DevWebStatus
     try {
@@ -55,16 +60,31 @@ function createDevServers() {
       if (err instanceof RouteMissing) statusMissing.value = true
       return
     }
-    if (s.state === 'stopped' && !started) {
-      // Show 'starting' while the automatic start runs, so the stopped card only appears once a start has failed.
-      started = true
-      status.value = { state: 'starting', url: null }
-      status.value = await devwebStart().catch((err) => ({ state: 'failed', url: null, reason: err instanceof Error ? err.message : String(err) }) as DevWebStatus)
-    } else status.value = s
-    if (status.value.state !== 'running') {
-      projects.value = null
+    const loud = lists > 0
+    let loaded = false
+    if (loud && !asked) {
+      asked = true
+      if (s.state === 'stopped') {
+        // The list read is the request that starts the service; 'starting' shows while it is in flight, so the stopped view only appears after a stop.
+        status.value = { state: 'starting', pid: null }
+        let failure: string | null = null
+        try {
+          projects.value = await listProjects()
+          projectsError.value = null
+          loaded = true
+        } catch (err) {
+          failure = err instanceof Error ? err.message : String(err)
+        }
+        s = await devwebStatus().catch(() => s)
+        if (failure && s.state !== 'running') s = { state: 'failed', pid: null, reason: failure }
+      }
+    }
+    status.value = s
+    if (s.state !== 'running' || !loud) {
+      if (s.state !== 'running') projects.value = null
       return
     }
+    if (loaded) return
     try {
       projects.value = await listProjects()
       projectsError.value = null
@@ -94,6 +114,8 @@ function createDevServers() {
 
   // ---- polling: only while a view is on screen, and the window is ----
   let viewers = 0
+  /** The views that show the project list (the sidebar's list and the pane); Settings' row only needs the status. */
+  let lists = 0
   let timer: ReturnType<typeof setTimeout> | null = null
   // One loop at a time: stopTimer moves `gen` on, so a refresh that was running when the window was hidden does not
   // schedule a second loop behind the new one.
@@ -120,32 +142,34 @@ function createDevServers() {
   }
 
   /** A view is on screen: polling runs until the returned function is called. A view that joins one already polling gets its answer, fresh enough, at once. */
-  function use(): () => void {
+  function use(opts: { quiet?: boolean } = {}): () => void {
     viewers++
+    if (!opts.quiet) lists++
     if (viewers === 1) {
       document.addEventListener('visibilitychange', onVisibility)
       if (!document.hidden) begin()
-    } else if (Date.now() - lastAt > POLL_MS - 500) void refresh()
+    } else if (Date.now() - lastAt > POLL_MS - 500 || (!opts.quiet && lists === 1)) void refresh()
     let done = false
     return () => {
       if (done) return
       done = true
       viewers--
+      if (!opts.quiet) lists--
       if (viewers) return
       stopTimer()
       document.removeEventListener('visibilitychange', onVisibility)
     }
   }
 
-  /** The server manager did not start or stopped: start it again. */
-  async function tryAgain(): Promise<void> {
-    started = false
-    const pending: DevWebStatus = { state: 'starting', url: null }
-    status.value = pending
+  /** The service did not start or was stopped: start it (Settings' Restart and Stop go through here too). */
+  async function service(action: 'start' | 'stop' | 'restart'): Promise<void> {
+    asked = true
+    if (action !== 'stop') status.value = { state: 'starting', pid: null }
+    status.value = await devwebService(action).catch((err) => ({ state: 'failed', pid: null, reason: err instanceof Error ? err.message : String(err) }) as DevWebStatus)
+    if (status.value.state !== 'running') projects.value = null
     await refresh()
-    // A status error that refresh returned on leaves the view as on first open (loading, polling goes on), not starting for good.
-    if (status.value === pending) status.value = null
   }
+  const tryAgain = (): Promise<void> => service('start')
 
   async function run(key: string, fn: () => Promise<unknown>): Promise<void> {
     actionError.value = null
@@ -161,14 +185,17 @@ function createDevServers() {
       busy.value = next
     }
   }
-  /** A server just asked to start reads as starting until DevWebUI's next answer, not as the stopped it still was. */
+  /** A server just asked to start reads as starting until the service's next answer, not as the stopped it still was. */
   function markStarting(id: string) {
     const list = projects.value
     if (list) projects.value = list.map((pr) => ({ ...pr, processes: pr.processes.map((x) => (x.id === id && !isUp(x.status) ? { ...x, status: 'starting' as const } : x)) }))
   }
   function act(p: Pick<DevWebProcess, 'id'>, action: 'start' | 'stop' | 'restart'): Promise<void> {
     if (action === 'start') markStarting(p.id)
-    return run(p.id, () => processAction(p.id, action))
+    return run(p.id, async () => {
+      const answer = await processAction(p.id, action)
+      if (action === 'start' && startReused(answer)) reused.value++
+    })
   }
   const actAll = (project: Pick<DevWebProject, 'id'>, action: 'start' | 'stop') => run(allKey(project), () => projectAction(project.id, action))
 
@@ -178,12 +205,12 @@ function createDevServers() {
     focus.value = { cwd: projectDir(project), procId: proc.id, seq: ++seq }
   }
 
-  return { on, setOn, status, statusMissing, projects, projectsError, busy, actionError, answered, focus, refresh, use, tryAgain, run, act, actAll, show }
+  return { on, setOn, status, statusMissing, projects, projectsError, busy, actionError, answered, focus, reused, refresh, use, tryAgain, service, run, act, actAll, show }
 }
 
 let servers: ReturnType<typeof createDevServers> | null = null
 
-/** The window's one DevWebUI client state. */
+/** The window's one dev-servers client state. */
 export function useDevServers(): ReturnType<typeof createDevServers> {
   if (!servers) servers = createDevServers()
   return servers

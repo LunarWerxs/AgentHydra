@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ConnectorAction, ConnectorView } from '@shared/connectors'
 import PaneSwitch from '@/components/panes/PaneSwitch.vue'
+import { Tip } from '@/components/ui/tooltip'
+import { serviceLine } from '@/components/servers/logic'
+import { useDevServers } from '@/components/servers/store'
 import { BUTTON } from '@/components/panes/settings-styles'
 import { listConnectors, runConnectorAction } from './api'
 import { note, pollDelay, rowButtons, stateLabel, stateTone, versionLabel } from './settings-logic'
@@ -38,12 +41,35 @@ async function act(v: ConnectorView, action: ConnectorAction) {
   if (!gone) timer = setTimeout(load, pollDelay(views.value))
 }
 
+// The dev-servers row also shows the service itself (GET /dw/status, through the shared client that polls only while
+// this section is on screen): its state, and Restart / Stop. It asks for nothing: the service is not started from here.
+const dev = useDevServers()
+const devLine = computed(() => serviceLine(dev.status.value))
+const devBusy = ref(false)
+const devError = ref<string | null>(null)
+let releaseDev: (() => void) | null = null
+async function devService(action: 'restart' | 'stop') {
+  devBusy.value = true
+  devError.value = null
+  try {
+    await dev.service(action)
+  } catch (e) {
+    devError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    devBusy.value = false
+  }
+}
+
 const open = (v: ConnectorView) => v.url && window.open(v.url, '_blank', 'noopener')
 const dot = { ok: 'var(--success)', busy: 'var(--warning, var(--text-muted))', bad: 'var(--danger)', idle: 'var(--text-muted)' }
 
-onMounted(load)
+onMounted(() => {
+  releaseDev = dev.use({ quiet: true })
+  void load()
+})
 onBeforeUnmount(() => {
   gone = true
+  releaseDev?.()
   if (timer) clearTimeout(timer)
 })
 </script>
@@ -68,11 +94,24 @@ onBeforeUnmount(() => {
           {{ stateLabel(v) }}
         </div>
         <div v-if="note(v)" class="mt-0.5 break-words text-[12px] leading-[18px] text-text-muted">{{ note(v) }}</div>
+        <template v-if="v.id === 'devwebui'">
+          <div class="mt-0.5 flex items-center gap-2 break-words text-[13px] leading-[19px] text-text-2" role="status" aria-label="Dev servers service">
+            <span class="inline-block size-2 shrink-0 rounded-full" :style="{ background: dot[devLine.tone] }" />
+            {{ devLine.text }}
+          </div>
+          <div v-if="devError" class="mt-0.5 break-words text-[12px] leading-[18px] text-danger-text">{{ devError }}</div>
+        </template>
       </div>
       <div class="flex shrink-0 flex-wrap items-center gap-3">
         <button v-if="rowButtons(v).install" type="button" :class="BUTTON" @click="act(v, 'install')">Install</button>
         <button v-if="rowButtons(v).start" type="button" :class="BUTTON" @click="act(v, 'start')">Start</button>
         <button v-if="rowButtons(v).open" type="button" :class="BUTTON" @click="open(v)">Open</button>
+        <template v-if="v.id === 'devwebui'">
+          <button type="button" :class="BUTTON" :disabled="devBusy" @click="devService('restart')">Restart</button>
+          <Tip label="Stops the dev servers AgentHydra started">
+            <button type="button" :class="BUTTON" :disabled="devBusy || dev.status.value?.state === 'stopped'" @click="devService('stop')">Stop</button>
+          </Tip>
+        </template>
         <a :href="v.homepage" target="_blank" rel="noopener noreferrer" class="text-[13px] leading-[19px] text-text-2 underline hover:text-text">Homepage</a>
         <span class="text-[13px] leading-[19px] text-text-muted">Give chats its tools</span>
         <PaneSwitch :label="`Give chats ${v.name}'s tools`" :model-value="v.enabled" @update:model-value="(on: boolean) => act(v, on ? 'enable' : 'disable')" />

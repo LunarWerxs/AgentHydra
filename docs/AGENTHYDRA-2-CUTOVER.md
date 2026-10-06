@@ -24,19 +24,20 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   AgentHydra. The internal names below are unchanged.
 - **Desk 2 ships in the release (Order step 1, 2026-10-06).** Every bundle (Windows, Linux, macOS) carries `desk2/`
   with its own bun (`desk2/runtime/`), its server source and production `node_modules`, its built `web/dist` and
-  `hydra/dist`, and on Windows `launcher/` with `HydraDesk2.exe`; `devwebui/` sits beside it the same way.
+  `hydra/dist`, and on Windows `launcher/` with `HydraDesk2.exe`. Desk 2's dev-servers service (for managing dev
+  servers) runs as a hidden service started by Desk 2 itself, with no separate shipping.
   `scripts/package-release.ts` stages it and `scripts/smoke-release.ts` boots it, the same in `release.yml` and on a
   PC (see [RELEASING.md](RELEASING.md)); a tag build whose Windows zip has no `desk2/` does not publish. CI runs
-  Desk 2's own suite (the `desk2` job in `ci.yml`). The updater treats `desk2/` and `devwebui/` as release
-  components (stops Desk 2 before the swap, starts it after), and a compiled install with no `desk2/` (one updated
-  by a 1.x updater, or the lone `.exe`) installs it from its own version's archive at boot.
+  Desk 2's own suite (the `desk2` job in `ci.yml`). The updater treats `desk2/` as a release component (stops Desk 2
+  before the swap, starts it after), and a compiled install with no `desk2/` (one updated by a 1.x updater, or the
+  lone `.exe`) installs it from its own version's archive at boot.
 - **The daemon's openers lead to Desk 2 (Order step 2, 2026-10-06).** `server/src/desk2.ts` is the one place that
   knows Desk 2: present, URL, health, which bun, start, stop, open. A page asked of the daemon, the Connections
   sign-in's return included, goes on to Desk 2 when it answers; when it does not, the daemon starts it and shows a
   "Starting AgentHydra" page that moves on by itself or names the log, never a dead port. A release exe's
   double-click and boot open Desk 2 (Windows: its `start.vbs`; elsewhere its server and the default browser), and
-  a checkout's self-update builds `desk2`. DevWebUI starts on the bun that runs Desk 2's server. `/api` is
-  untouched. Only an install with no `desk2/` still serves `web/`, plus the quick-instances page (below).
+  a checkout's self-update builds `desk2`. `/api` is untouched. Only an install with no `desk2/` still serves `web/`,
+  plus the quick-instances page (below).
 - **The old window's table settings moved too.** Desk's Settings has an Instances section (CLI, Desktop, Free)
   holding what the tables' gears held; see `desk2/README.md`.
 - **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` stays
@@ -92,8 +93,8 @@ the queue, Free instances, notifications and the shortcut sheet.
 
 ## Order
 
-1. **Ship Desk 2 in the release.** Done 2026-10-06 (above): every bundle carries `desk2/` and `devwebui/` on a
-   shipped bun, the updater installs and repairs them, and a 2.0 tag does not publish without them.
+1. **Ship Desk 2 in the release.** Done 2026-10-06 (above): every bundle carries `desk2/` on a shipped bun,
+   the updater installs and repairs it, and a 2.0 tag does not publish without it.
 2. **Point the daemon's openers at Desk 2.** Done 2026-10-06 (above) for every page, the boot and double-click
    openers and a checkout's self-update. Still open: the quick-instances window and its shortcut (table above).
 3. **Rename Hydra Desk 2 to AgentHydra.** User-facing: done 2026-10-06 (above). Internal, each needing a

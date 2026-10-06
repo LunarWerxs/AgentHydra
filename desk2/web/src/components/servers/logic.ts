@@ -1,8 +1,8 @@
 // The servers pane's decisions, pure so the tests and the component share them: what the pane shows for the
-// daemon's status and the project list, when it sets the chat's folder up, a server's dot, the address bar's
+// dev-servers service's status and the project list, when it sets the chat's folder up, a server's dot, the address bar's
 // input, and the pane's width.
 import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
-import { type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
+import { DW_PROXY, type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
 import { shortName } from './names'
 
 /** What the pane draws. */
@@ -12,8 +12,9 @@ export type PaneView =
   | { kind: 'restart-desk' }
   | { kind: 'starting' }
   | { kind: 'failed'; reason: string }
+  /** Stopped on purpose (Settings): it starts again on the next request, and this view offers one. */
   | { kind: 'stopped' }
-  /** The daemon runs but its project list could not be read. */
+  /** The service runs but its project list could not be read. */
   | { kind: 'unreachable'; reason: string }
   /** The folder is not a project yet and POST /dw/folder is setting it up (or is about to). */
   | { kind: 'looking' }
@@ -111,9 +112,34 @@ export function parseAddress(text: string): string | null {
   }
 }
 
-/** DevWebUI's own address for a server, for when the page refuses to be framed straight. */
-export function proxyAddress(daemonUrl: string, proc: Pick<DevWebProcess, 'id'>): string {
-  return `${daemonUrl.replace(/\/+$/, '')}/proxy/${proc.id}/`
+/** Desk's own (same-origin) address for a server, for when the page refuses to be framed straight. */
+export const proxyAddress = (proc: Pick<DevWebProcess, 'id'>): string => `${DW_PROXY}/${encodeURIComponent(proc.id)}/`
+
+/** A quiet note under a server that someone else runs: AgentHydra uses that copy and never starts a second. */
+export const OUTSIDE_NOTE = 'started outside AgentHydra'
+export const OUTSIDE_TIP = 'Already running from a terminal, another chat or another tool. AgentHydra uses it rather than starting a second copy.'
+
+/** The note a server's row wears, or null: only a server that is up and was started outside. */
+export const outsideNote = (p: Pick<DevWebProcess, 'owner'>): string | null => (p.owner === 'outside' ? OUTSIDE_NOTE : null)
+
+/** Why a server's Start is off (its port is held by a program that is not a dev server), or null. A server that is up has no conflict to show. */
+export const startBlock = (p: Pick<DevWebProcess, 'conflict' | 'status'>): string | null => (p.conflict && !isUp(p.status) ? p.conflict : null)
+
+/** The small notice after a Start that found the server already up. */
+export const REUSED_NOTE = 'Already running: opened the running copy'
+export const startReused = (answer: unknown): boolean => !!answer && typeof answer === 'object' && (answer as { reused?: unknown }).reused === true
+
+export type ServiceTone = 'ok' | 'busy' | 'bad' | 'idle'
+
+/** The dev-servers service as Settings -> Connectors words it. */
+export function serviceLine(s: DevWebStatus | null): { text: string; tone: ServiceTone } {
+  if (!s) return { text: 'Checking…', tone: 'idle' }
+  if (s.state === 'starting') return { text: 'Starting…', tone: 'busy' }
+  if (s.state === 'failed') return { text: s.reason || 'It did not start', tone: 'bad' }
+  if (s.state === 'stopped') return { text: 'Not running (starts when a chat or the servers pane needs it)', tone: 'idle' }
+  if (s.stale) return { text: 'Restart to load new code', tone: 'busy' }
+  const n = s.running
+  return { text: n === undefined ? 'Running' : n === 0 ? 'Running, no servers' : `Running, ${n} ${n === 1 ? 'server' : 'servers'}`, tone: 'ok' }
 }
 
 
@@ -256,7 +282,7 @@ export interface PaneTab {
   kind: TabKind
   /** page: the address; saved: the profile name; new: null. */
   target: string | null
-  /** page: the DevWebUI server it shows, when it was opened from one. */
+  /** page: the dev server it shows, when it was opened from one. */
   proc: string | null
   /** saved: the address a transcript card asked to see, used when the browser is opened from here. */
   url?: string
@@ -410,9 +436,9 @@ export function pageTitle(url: string | null, proc: Pick<DevWebProcess, 'name'> 
   }
 }
 
-// ---- the sidebar's Dev servers view: every DevWebUI project with its servers under it ----
+// ---- the sidebar's Dev servers view: every project with its servers under it ----
 
-/** What the sidebar draws for the daemon's status and the project list (the pane's states, without a folder). */
+/** What the sidebar draws for the service's status and the project list (the pane's states, without a folder). */
 export type ListView =
   | { kind: 'loading' }
   | { kind: 'restart-desk' }
@@ -420,7 +446,7 @@ export type ListView =
   | { kind: 'failed'; reason: string }
   | { kind: 'stopped' }
   | { kind: 'unreachable'; reason: string }
-  /** The daemon runs and has no project yet. */
+  /** The service runs and has no project yet. */
   | { kind: 'empty' }
   | { kind: 'list'; groups: ServerGroup[] }
 
@@ -469,6 +495,9 @@ export function serverActions(status: DevWebProcessStatus): ServerAction[] {
   if (isUp(status)) return ['stop', 'restart']
   return status === 'crashed' ? ['start', 'restart'] : ['start']
 }
+
+/** Whether an action's button is off for a server: a start (or restart) its port conflict refuses, or one already in flight. */
+export const actionDisabled = (p: Pick<DevWebProcess, 'conflict' | 'status'>, action: ServerAction, busy: boolean): boolean => busy || (action !== 'stop' && startBlock(p) !== null)
 
 /** A project header's Start all / Stop all, as the pane offers them: only for a project with more than one server, each only while some server it would act on is there. */
 export function groupActions(servers: readonly Pick<DevWebProcess, 'status'>[]): { start: boolean; stop: boolean } {

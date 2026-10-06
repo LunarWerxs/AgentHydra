@@ -6,9 +6,9 @@ import type { DevWebProcess } from '@shared/devwebui'
 import { addressOrSearch, isUp, proxyAddress, statusWord } from './logic'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
-// A page tab: a dev server or an address in a frame, with back / forward / reload and the address bar on top.
+// A page tab: a dev server or an address in a frame (the 'through AgentHydra' view is Desk's own same-origin /dw/proxy), with back / forward / reload and the address bar on top.
 // Every page tab stays mounted while another is shown, so switching tabs does not reload a page.
-const props = defineProps<{ url: string; proc: DevWebProcess | null; daemonUrl: string | null; busy: boolean; justStarted: boolean }>()
+const props = defineProps<{ url: string; proc: DevWebProcess | null; busy: boolean; justStarted: boolean }>()
 const emit = defineEmits<{ navigated: [url: string]; toggle: [proc: DevWebProcess] }>()
 
 const history = ref<string[]>([props.url])
@@ -20,7 +20,7 @@ const current = computed(() => history.value[at.value] ?? null)
 const frameSrc = computed(() => {
   const cur = current.value
   if (!cur) return null
-  if (viaManager.value && props.proc && props.daemonUrl) return proxyAddress(props.daemonUrl, props.proc)
+  if (viaManager.value && props.proc) return proxyAddress(props.proc)
   return cur
 })
 
@@ -74,7 +74,7 @@ watch(
         <button v-if="!isUp(proc.status)" type="button" :class="TEXT_BTN" :disabled="busy" @click="emit('toggle', proc)"><Play class="size-3" />Start</button>
       </div>
       <button
-        v-else-if="frameSrc && proc && daemonUrl"
+        v-else-if="frameSrc && proc"
         type="button"
         class="absolute bottom-2 right-2 flex h-6 items-center rounded-[var(--radius-6)] bg-[var(--bg-popover)] px-2 text-[12px] text-[var(--text)] opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-[60ms] hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
         :aria-pressed="viaManager"

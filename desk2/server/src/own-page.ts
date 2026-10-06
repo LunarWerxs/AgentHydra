@@ -1,5 +1,5 @@
-// The own-page rule shared by plugins whose API is only for Desk 2's own window (like /ah/ and /dw/): a browser
-// request must come from Desk 2's own page. Desk's localOnly guard (index.ts) runs first on every route.
+// The own-page rule shared by plugins whose API is only for Desk 2's own window (like /ah/ and /dw/, the dev-servers
+// service's): a browser request must come from Desk 2's own page. Desk's localOnly guard (index.ts) runs first on every route.
 
 /** Why a request is not from Desk 2's own page, or null. `what` names the API in the refusal. */
 export function notOwnPage(headers: Headers, what = "the server manager's API"): string | null {

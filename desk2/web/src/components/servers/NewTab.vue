@@ -3,13 +3,13 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess, DevWebProject, LocalServers } from '@shared/devwebui'
-import { allKey, enterTarget, filterLocal, filterProfiles, filterServers, isUp, looksLikeAddress, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
+import { allKey, enterTarget, filterLocal, filterProfiles, filterServers, isUp, looksLikeAddress, OUTSIDE_TIP, outsideNote, type PaneView, type ProfileRow, startBlock, statusDot, statusWord } from './logic'
 import { chipHosts, splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
-// The New tab page: the servers DevWebUI found for this chat's folder, then the workspace's saved browsers, both
-// narrowed by the address bar's text. A click opens one in this tab, and so does a stopped server's Start; Stop and
-// Restart act without navigating.
+// The New tab page: the servers of this chat's folder, then the workspace's saved browsers, both narrowed by the
+// address bar's text. A click opens one in this tab, and so does a stopped server's Start; Stop and Restart act
+// without navigating. A server whose port a program that is not a dev server holds cannot be started: its Start says why.
 const props = defineProps<{
   active: boolean
   cwd: string
@@ -22,7 +22,7 @@ const props = defineProps<{
   profiles: ProfileRow[] | null
   profilesError: string | null
   actionError: string | null
-  /** Servers listening on this machine that DevWebUI did not start; null until the first answer. */
+  /** Servers listening on this machine that no project lists; null until the first answer. */
   local: LocalServers | null
   localError: string | null
   allPorts: boolean
@@ -102,8 +102,8 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
         </div>
 
         <div v-else-if="view.kind === 'stopped'" class="mx-1 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2 text-center">
-          <div>The server manager stopped.</div>
-          <button type="button" :class="TEXT_BTN" class="self-center" @click="emit('tryAgain')">Start it</button>
+          <div>The server manager is not running. It starts by itself when a chat or a server needs it.</div>
+          <button type="button" :class="TEXT_BTN" class="self-center" @click="emit('tryAgain')">Start it now</button>
         </div>
 
         <div v-else-if="view.kind === 'unreachable'" class="mx-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-center text-[var(--danger-text)]" role="alert">The server manager is running but did not answer: {{ view.reason }}</div>
@@ -136,17 +136,19 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <span class="truncate font-medium">{{ p.name }}</span>
                   <span v-if="p.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ p.port }}</span>
                   <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ pendingText(p) }}</span>
+                  <span v-if="outsideNote(p)" class="truncate text-[12px] text-[var(--text-muted)]" :title="OUTSIDE_TIP">{{ outsideNote(p) }}</span>
                 </button>
-                <Tip :label="isUp(p.status) ? 'Stop' : 'Start and open'">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start and open'} ${p.name}`" @click="isUp(p.status) ? emit('toggle', p) : emit('server', p)">
+                <Tip :label="isUp(p.status) ? 'Stop' : (startBlock(p) ?? 'Start and open')">
+                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id) || !!startBlock(p)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start and open'} ${p.name}`" @click="isUp(p.status) ? emit('toggle', p) : emit('server', p)">
                     <Square v-if="isUp(p.status)" class="size-3.5" />
                     <Play v-else class="size-3.5" />
                   </button>
                 </Tip>
                 <Tip label="Restart">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`Restart ${p.name}`" @click="emit('restart', p)"><RotateCw class="size-3.5" /></button>
+                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id) || !!startBlock(p)" :aria-label="`Restart ${p.name}`" @click="emit('restart', p)"><RotateCw class="size-3.5" /></button>
                 </Tip>
               </div>
+              <div v-if="startBlock(p)" class="mx-1 mb-1 break-words text-[12px] text-[var(--warning-text)]" :aria-label="`${p.name} cannot start`">{{ startBlock(p) }}</div>
               <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 py-1 font-mono text-[11px] leading-4 text-[var(--text-2)]" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
             </li>
           </ul>
@@ -161,6 +163,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                 <span class="truncate font-medium">{{ r.proc.name }}</span>
                 <span class="truncate text-[12px] text-[var(--text-muted)]">{{ r.project.name }}</span>
                 <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ r.proc.port }}</span>
+                <span v-if="outsideNote(r.proc)" class="truncate text-[12px] text-[var(--text-muted)]" :title="OUTSIDE_TIP">{{ outsideNote(r.proc) }}</span>
               </button>
               <Tip label="Stop">
                 <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="emit('toggle', r.proc)"><Square class="size-3.5" /></button>
@@ -177,7 +180,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
           </div>
           <div v-if="localError" class="rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ localError }}</div>
           <div v-else-if="!local?.servers.length" class="px-1 py-2 text-center text-[var(--text-muted)]" role="status">No other localhost servers.</div>
-          <ul v-else-if="localRows.length" class="flex flex-col gap-0.5" aria-label="Servers on this machine that DevWebUI did not start">
+          <ul v-else-if="localRows.length" class="flex flex-col gap-0.5" aria-label="Servers on this machine that no project lists">
             <li v-for="s in localRows" :key="s.port" class="flex min-h-[28px] items-center gap-1.5 rounded-[var(--radius-6)] px-1 hover:bg-[var(--fill-hover)]">
               <button type="button" class="flex min-h-[28px] min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-6)] text-left focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" :aria-label="`Open localhost:${s.port}`" @click="emit('address', s.url)">
                 <span class="size-2 shrink-0 rounded-full" :class="DOT.run" aria-hidden="true" />

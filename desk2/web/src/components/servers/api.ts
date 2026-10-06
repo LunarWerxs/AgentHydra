@@ -1,6 +1,6 @@
-// The calls the servers pane makes: Desk 2's /dw/status, /dw/start and /dw/folder, and DevWebUI's own API behind /dw/api.
+// The calls the servers pane makes: Desk 2's /dw/status, /dw/service and /dw/folder, and the dev-servers service's API behind /dw/api.
 import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
-import { DW_API, DW_BASE, DW_FOLDER, DW_LOCALHOST, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStatus, type LocalServers } from '@shared/devwebui'
+import { DW_API, DW_FOLDER, DW_LOCALHOST, DW_SERVICE, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStartAnswer, type DevWebStatus, type LocalServers } from '@shared/devwebui'
 
 /** Thrown when /dw/status is not there: a Desk 2 server started before the route existed. */
 export class RouteMissing extends Error {}
@@ -31,10 +31,14 @@ export async function devwebStatus(): Promise<DevWebStatus> {
   return (await res.json()) as DevWebStatus
 }
 
-export const devwebStart = (): Promise<DevWebStatus> => call(`${DW_BASE}/start`, post())
+/** The service itself (Settings, and Try again): Stop ends the servers it started. */
+export const devwebService = (action: 'start' | 'stop' | 'restart'): Promise<DevWebStatus> => call(DW_SERVICE, post({ action }))
 
 export const listProjects = (): Promise<DevWebProject[]> => call(`${DW_API}/projects`)
 
+/** A start answers `reused` when the server was already up (Desk's or one run outside) and nothing was started. */
+export function processAction(id: string, action: 'start'): Promise<DevWebStartAnswer>
+export function processAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<unknown>
 export function processAction(id: string, action: 'start' | 'stop' | 'restart'): Promise<unknown> {
   return call(`${DW_API}/processes/${encodeURIComponent(id)}/${action}`, post())
 }
@@ -47,10 +51,10 @@ export async function processLogs(id: string): Promise<DevWebLogLine[]> {
   return (await call<{ lines: DevWebLogLine[] }>(`${DW_API}/processes/${encodeURIComponent(id)}/logs`)).lines
 }
 
-/** The chat folder's project, set up in the server manager when it is not yet (no Add step). */
+/** The chat folder's project, set up in the dev-servers service when it is not yet (no Add step). */
 export const setUpFolder = (cwd: string): Promise<DevWebFolder> => call(DW_FOLDER, post({ cwd }))
 
-/** The localhost servers DevWebUI did not start (Desk 2's own /dw/localhost); `all` adds the ports the dev-server filter hides. */
+/** The localhost servers no project lists (Desk 2's own /dw/localhost); `all` adds the ports the dev-server filter hides. */
 export const localhostServers = (all = false): Promise<LocalServers> => call(all ? `${DW_LOCALHOST}?all=1` : DW_LOCALHOST)
 
 // ---- saved browsers (shared/browser.ts) ----

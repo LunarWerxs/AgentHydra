@@ -1,11 +1,11 @@
-// The servers pane's "Other localhost servers": what listens on this machine that DevWebUI did not start, e.g. a
-// dev server run from a terminal. Read only. DevWebUI's own daemon, the servers it lists and anything they started
-// are left out (the pane already shows those with Start and Stop), and so is this window.
+// The servers pane's "Other localhost servers": what listens on this machine that no project's server entry accounts
+// for, e.g. a dev server run from a terminal. Read only. The dev-servers service itself, the servers it lists as up
+// and anything they started are left out (the pane already shows those with Start and Stop), and so is this window.
 
 import type { LocalServer, LocalServers } from '@shared/devwebui'
 import { classify, type ClassifyContext, isDescendant, type Listener, probeHttp, type ProcInfo, type Scan, scanPorts } from './ports'
 
-/** What DevWebUI owns right now: its daemon's port and the pid and port of every server it lists. */
+/** What the dev-servers service accounts for right now: the port and pid of every server it lists as up (and its own). */
 export interface DevWebOwned {
   ports: number[]
   pids: number[]
@@ -14,7 +14,7 @@ export interface DevWebOwned {
 export interface LocalhostDeps {
   scan?: () => Promise<Scan>
   probe?: typeof probeHttp
-  /** DevWebUI's ports and pids; null when its daemon does not answer. */
+  /** The service's ports and pids; null when the service does not run (nothing is left out then). */
   owned?: () => Promise<DevWebOwned | null>
   deskPid?: number
   deskPort?: number
@@ -45,15 +45,15 @@ export class Localhost {
   async list(all = false): Promise<LocalServers> {
     const [scan, owned] = await Promise.all([this.scanOnce(), this.owned()])
     const ports = new Set(owned?.ports ?? [])
-    // The daemon's own pid is whoever holds its port; what it runs hangs below that process or the listed ones.
+    // A listed server's pid is whoever holds its port; what it runs hangs below that process or the listed ones.
     const roots = new Set(owned?.pids ?? [])
     for (const l of scan.listeners) if (ports.has(l.port)) roots.add(l.pid)
-    const isDevWebUIs = (l: Listener) => ports.has(l.port) || [...roots].some((r) => r > 4 && isDescendant(l.pid, r, scan.procs))
+    const isOwned = (l: Listener) => ports.has(l.port) || [...roots].some((r) => r > 4 && isDescendant(l.pid, r, scan.procs))
 
     // One row per port: a wildcard and a loopback bind of the same port are one server.
     const byPort = new Map<number, Listener>()
     for (const l of scan.listeners) {
-      if (isDevWebUIs(l)) continue
+      if (isOwned(l)) continue
       const had = byPort.get(l.port)
       if (!had || (had.address !== '127.0.0.1' && l.address === '127.0.0.1')) byPort.set(l.port, l)
     }

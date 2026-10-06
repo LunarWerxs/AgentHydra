@@ -2,9 +2,9 @@ import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { allKey, findServer, focusPlan, groupActions, groupServers, isUp, listView, needsSetup, openable, openPlan, otherRunning, paneView, parseAddress, type PaneTab, serverActions, serverPort, sortServers, statusDot, tailLines } from '../../src/components/servers/logic'
+import { actionDisabled, allKey, findServer, focusPlan, groupActions, groupServers, isUp, listView, needsSetup, openable, openPlan, OUTSIDE_NOTE, otherRunning, outsideNote, paneView, parseAddress, type PaneTab, proxyAddress, serverActions, serverPort, serviceLine, sortServers, startBlock, startReused, statusDot, tailLines } from '../../src/components/servers/logic'
 
-const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
+const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, enabled: true, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
 
 describe('which project a chat folder belongs to', () => {
@@ -28,13 +28,13 @@ describe('the pane for each state', () => {
   it('says restart when /dw/status is missing', () => {
     expect(paneView({ ...base, statusMissing: true })).toEqual({ kind: 'restart-desk' })
   })
-  it('loads, then follows the daemon: starting, failed with its reason, stopped', () => {
+  it('loads, then follows the service: starting, failed with its reason, stopped', () => {
     expect(paneView(base)).toEqual({ kind: 'loading' })
-    expect(paneView({ ...base, status: { state: 'starting', url: null } })).toEqual({ kind: 'starting' })
-    expect(paneView({ ...base, status: { state: 'failed', url: null, reason: 'bun install failed' } })).toEqual({ kind: 'failed', reason: 'bun install failed' })
-    expect(paneView({ ...base, status: { state: 'stopped', url: null } })).toEqual({ kind: 'stopped' })
+    expect(paneView({ ...base, status: { state: 'starting', pid: null } })).toEqual({ kind: 'starting' })
+    expect(paneView({ ...base, status: { state: 'failed', pid: null, reason: 'bun install failed' } })).toEqual({ kind: 'failed', reason: 'bun install failed' })
+    expect(paneView({ ...base, status: { state: 'stopped', pid: null } })).toEqual({ kind: 'stopped' })
   })
-  const running = { state: 'running' as const, url: 'http://127.0.0.1:4000' }
+  const running = { state: 'running' as const, pid: 4242 }
   it('with the daemon up: the list loading, unreadable, the folder being set up, or the chat project', () => {
     expect(paneView({ ...base, status: running })).toEqual({ kind: 'loading' })
     expect(paneView({ ...base, status: running, projectsError: 'boom' })).toEqual({ kind: 'unreachable', reason: 'boom' })
@@ -51,13 +51,13 @@ describe('the pane for each state', () => {
     expect(needsSetup({ ...listed, setup: { cwd: 'C:/Users/me/Code/Other', nothing: 'Nothing to run here' } })).toBe(true)
     expect(needsSetup({ ...base, status: running, projects })).toBe(false)
     expect(needsSetup({ ...base, status: running })).toBe(false)
-    expect(needsSetup({ ...base, status: { state: 'starting', url: null }, projects: [] })).toBe(false)
+    expect(needsSetup({ ...base, status: { state: 'starting', pid: null }, projects: [] })).toBe(false)
   })
 })
 
 describe('servers running elsewhere', () => {
   it("lists other projects' servers that answer, by name, and not this folder's own", () => {
-    const proc = (id: string, status: 'running' | 'stopped', port?: number) => ({ id, name: id, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+    const proc = (id: string, status: DevWebProcess['status'], port?: number): DevWebProcess => ({ id, localId: id, name: id, command: 'npm run dev', cwd: '', enabled: true, port, status, owner: null, pid: null, startedAt: null, restarts: 0, exitCode: null, conflict: null, projectId: '', projectName: '' })
     const here = { ...project('here', 'C:/Users/me/Code/Here/.devwebui'), processes: [proc('mine', 'running', 3000)] }
     const there = { ...project('there', 'C:/Users/me/Code/There/.devwebui'), processes: [proc('web', 'running', 5173), proc('off', 'stopped', 4000), proc('worker', 'running'), proc('api', 'running', 8080)] }
     expect(otherRunning([here, there], here).map((r) => `${r.project.id}/${r.proc.id}`)).toEqual(['there/api', 'there/web'])
@@ -65,7 +65,7 @@ describe('servers running elsewhere', () => {
     expect(otherRunning(null, null)).toEqual([])
   })
   it("offers the browser's empty page this folder's answering servers first, then the others'", () => {
-    const proc = (id: string, status: 'running' | 'stopped' | 'starting', port?: number) => ({ id, name: id, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+    const proc = (id: string, status: DevWebProcess['status'], port?: number): DevWebProcess => ({ id, localId: id, name: id, command: 'npm run dev', cwd: '', enabled: true, port, status, owner: null, pid: null, startedAt: null, restarts: 0, exitCode: null, conflict: null, projectId: '', projectName: '' })
     const here = { ...project('here', 'C:/Users/me/Code/Here/.devwebui'), processes: [proc('off', 'stopped', 3001), proc('mine', 'running', 3000), proc('coming', 'starting', 3002), proc('worker', 'running')] }
     const there = { ...project('there', 'C:/Users/me/Code/There/.devwebui'), processes: [proc('web', 'running', 5173)] }
     expect(openable([here, there], here).map((p) => p.id)).toEqual(['mine', 'web'])
@@ -112,17 +112,17 @@ describe('servers and the address bar', () => {
 
 // The sidebar's Dev servers list and its click, on the same logic as the pane.
 describe('the Dev servers list', () => {
-  const proc = (id: string, status: DevWebProcess['status'], port?: number, name = id): DevWebProcess => ({ id, name, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+  const proc = (id: string, status: DevWebProcess['status'], port?: number, name = id, extra: Partial<DevWebProcess> = {}): DevWebProcess => ({ id, localId: id, name, command: 'npm run dev', cwd: '', enabled: true, port, status, owner: null, pid: null, startedAt: null, restarts: 0, exitCode: null, conflict: null, projectId: '', projectName: '', ...extra })
   const withProcs = (id: string, processes: DevWebProcess[], name = id): DevWebProject => ({ ...project(id, `C:/Users/me/Code/${id}/.devwebui`), name, processes })
-  const running = { state: 'running' as const, url: 'http://127.0.0.1:4000' }
+  const running = { state: 'running' as const, pid: 4242 }
   const base = { status: null, statusMissing: false, projects: null, projectsError: null }
 
-  it('shows each daemon state the pane does, and a list only once the projects are read', () => {
+  it('shows each service state the pane does, and a list only once the projects are read', () => {
     expect(listView({ ...base, statusMissing: true })).toEqual({ kind: 'restart-desk' })
     expect(listView(base)).toEqual({ kind: 'loading' })
-    expect(listView({ ...base, status: { state: 'starting', url: null } })).toEqual({ kind: 'starting' })
-    expect(listView({ ...base, status: { state: 'failed', url: null } })).toEqual({ kind: 'failed', reason: 'it did not start' })
-    expect(listView({ ...base, status: { state: 'stopped', url: null } })).toEqual({ kind: 'stopped' })
+    expect(listView({ ...base, status: { state: 'starting', pid: null } })).toEqual({ kind: 'starting' })
+    expect(listView({ ...base, status: { state: 'failed', pid: null } })).toEqual({ kind: 'failed', reason: 'it did not start' })
+    expect(listView({ ...base, status: { state: 'stopped', pid: null } })).toEqual({ kind: 'stopped' })
     expect(listView({ ...base, status: running })).toEqual({ kind: 'loading' })
     expect(listView({ ...base, status: running, projectsError: 'boom' })).toEqual({ kind: 'unreachable', reason: 'boom' })
     expect(listView({ ...base, status: running, projects: [] })).toEqual({ kind: 'empty' })
@@ -181,5 +181,53 @@ describe('the Dev servers list', () => {
     expect(focusPlan(proc('api', 'stopped', 8080), tabs)).toEqual({ kind: 'start' })
     expect(focusPlan(proc('api', 'starting', 8080), tabs)).toEqual({ kind: 'start' })
     expect(focusPlan(proc('worker', 'running'), tabs)).toEqual({ kind: 'start' })
+  })
+})
+
+// Dev servers inside AgentHydra: one copy per server, Desk's own proxy, and the service's state in Settings.
+describe('servers someone else runs, and ones that cannot start', () => {
+  const proc = (status: DevWebProcess['status'], extra: Partial<DevWebProcess> = {}): DevWebProcess => ({ id: 'p1.web', localId: 'web', name: 'web', command: 'npm run dev', cwd: '', enabled: true, port: 4173, status, owner: null, pid: null, startedAt: null, restarts: 0, exitCode: null, conflict: null, projectId: 'p1', projectName: 'example', ...extra })
+
+  it('notes only a server that was started outside AgentHydra', () => {
+    expect(outsideNote(proc('running', { owner: 'outside', pid: 99 }))).toBe(OUTSIDE_NOTE)
+    expect(outsideNote(proc('running', { owner: 'desk' }))).toBeNull()
+    expect(outsideNote(proc('stopped'))).toBeNull()
+  })
+
+  it('refuses a start the port conflict forbids: the reason is the tooltip, and start and restart are off, stop is not', () => {
+    const blocked = proc('stopped', { conflict: 'port 4173 is in use by postgres (pid 12)' })
+    expect(startBlock(blocked)).toBe('port 4173 is in use by postgres (pid 12)')
+    expect(actionDisabled(blocked, 'start', false)).toBe(true)
+    expect(actionDisabled(blocked, 'restart', false)).toBe(true)
+    expect(actionDisabled(proc('stopped'), 'start', false)).toBe(false)
+    expect(actionDisabled(proc('stopped'), 'start', true)).toBe(true)
+    // A server that is up has no conflict to show, so its Stop works.
+    const up = proc('running', { conflict: 'stale text' })
+    expect(startBlock(up)).toBeNull()
+    expect(actionDisabled(up, 'stop', false)).toBe(false)
+  })
+
+  it('knows a start that reused a running copy', () => {
+    expect(startReused({ ok: true, reused: true })).toBe(true)
+    expect(startReused({ ok: true, reused: false })).toBe(false)
+    expect(startReused(null)).toBe(false)
+  })
+
+  it('shows a server through Desk itself (same origin), the id escaped', () => {
+    expect(proxyAddress({ id: 'p1.web' })).toBe('/dw/proxy/p1.web/')
+    expect(proxyAddress({ id: 'p1.a b' })).toBe('/dw/proxy/p1.a%20b/')
+  })
+})
+
+describe('the service line in Settings', () => {
+  it('words each state, the running count, stale code and a failure', () => {
+    expect(serviceLine(null).tone).toBe('idle')
+    expect(serviceLine({ state: 'running', pid: 1, running: 3 })).toEqual({ text: 'Running, 3 servers', tone: 'ok' })
+    expect(serviceLine({ state: 'running', pid: 1, running: 1 }).text).toBe('Running, 1 server')
+    expect(serviceLine({ state: 'running', pid: 1, running: 0 }).text).toBe('Running, no servers')
+    expect(serviceLine({ state: 'running', pid: 1, running: 2, stale: true })).toEqual({ text: 'Restart to load new code', tone: 'busy' })
+    expect(serviceLine({ state: 'stopped', pid: null }).text).toBe('Not running (starts when a chat or the servers pane needs it)')
+    expect(serviceLine({ state: 'failed', pid: null, reason: 'port in use' })).toEqual({ text: 'port in use', tone: 'bad' })
+    expect(serviceLine({ state: 'starting', pid: null }).tone).toBe('busy')
   })
 })

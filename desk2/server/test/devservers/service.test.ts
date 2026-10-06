@@ -1,0 +1,172 @@
+// devservers/service.ts with a fake DevServers (no manager, no dev server, no real process): every request needs the
+// token, the manager's errors keep their status, the localhost list leaves out the service's own port, and a shutdown
+// stops what it started, records a restart's servers in resume.json, removes service.json and exits.
+
+import { afterEach, expect, test } from 'bun:test'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { type DevServers, DevServerError } from '../../src/devservers/contract'
+import { readServiceFile, resumeFilePath, serviceAlreadyRunning, serviceFilePath, startService, type RunningService } from '../../src/devservers/service'
+import type { ProcInfo } from '../../src/localhost/ports'
+
+const temps: string[] = []
+const running: RunningService[] = []
+afterEach(async () => {
+  for (const s of running.splice(0)) await s.shutdown(false)
+  for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+
+const home = (): string => {
+  const d = mkdtempSync(join(tmpdir(), 'desk-service-'))
+  temps.push(d)
+  return d
+}
+
+const project = { id: 'p1', name: 'Site', path: 'C:/Users/me/site/.devwebui', enabled: true, processes: [] }
+
+function fakeDevServers(over: Partial<DevServers> = {}): DevServers & { stopped: number } {
+  const dev = {
+    ready: Promise.resolve(),
+    stopped: 0,
+    listProjects: async () => [project],
+    process: async () => null,
+    start: async () => {
+      throw new DevServerError('port 4173 is in use by example-app (pid 7)', 409)
+    },
+    stop: async () => ({ ok: true as const, process: {} as never, coStopped: [] }),
+    restart: async () => ({ ok: true as const, process: {} as never }),
+    startProject: async () => ({ ok: true as const }),
+    stopProject: async () => ({ ok: true as const }),
+    logs: async () => [],
+    load: async () => ({ ok: true as const, project, firstLoad: false }),
+    scaffold: async () => ({ ok: true as const, project, firstLoad: true, created: 'x' }),
+    folder: async () => ({ project }),
+    ensure: async () => ({ ok: false as const, error: 'unused' }),
+    owned: async () => ({ ports: [4173], pids: [] }),
+    runningIds: () => ['p1.web', 'p1.api'],
+    async stopAll() {
+      dev.stopped++
+    },
+    killAllSync() {},
+    ...over
+  }
+  return dev as DevServers & { stopped: number }
+}
+
+interface Booted {
+  home: string
+  svc: RunningService
+  exits: number[]
+  call: (path: string, init?: RequestInit, token?: string) => Promise<Response>
+}
+
+async function boot(dev: DevServers, localhost: Parameters<typeof startService>[0]['localhost'] = { scan: async () => ({ listeners: [], procs: new Map(), error: null }), probe: async () => null }): Promise<Booted> {
+  const h = home()
+  const exits: number[] = []
+  const svc = await startService({ home: h, devServers: dev, stamp: 'stamp-1', localhost, exit: (code) => void exits.push(code) })
+  running.push(svc)
+  const file = readServiceFile(h)!
+  const call = (path: string, init?: RequestInit, token = file.token) =>
+    fetch(`http://127.0.0.1:${file.port}${path}`, { ...init, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), 'content-type': 'application/json', ...(init?.headers as Record<string, string> | undefined) } })
+  return { home: h, svc, exits, call }
+}
+
+test('service.json says where it listens and how to ask, and every request needs the token', async () => {
+  const b = await boot(fakeDevServers())
+  const file = readServiceFile(b.home)!
+  expect(file).toMatchObject({ pid: process.pid, stamp: 'stamp-1' })
+  expect(file.port).toBeGreaterThan(0)
+
+  for (const path of ['/health', '/api/projects', '/api/owned']) {
+    expect((await b.call(path, undefined, '')).status).toBe(401)
+    expect((await b.call(path, undefined, 'wrong')).status).toBe(401)
+    expect((await b.call(path)).status).toBe(200)
+  }
+  expect((await b.call('/api/shutdown', { method: 'POST', body: '{}' }, 'wrong')).status).toBe(401)
+  expect(b.exits).toEqual([])
+  expect(await (await b.call('/health')).json()).toEqual({ ok: true, pid: process.pid, stamp: 'stamp-1', running: 2 })
+})
+
+test("a manager error answers with its own status and message, an unknown server is a 404", async () => {
+  const b = await boot(fakeDevServers())
+  const refused = await b.call('/api/processes/p1.web/start', { method: 'POST', body: '{}' })
+  expect(refused.status).toBe(409)
+  expect(await refused.json()).toEqual({ error: 'port 4173 is in use by example-app (pid 7)' })
+  const unknown = await b.call('/api/processes/p1.nope')
+  expect(unknown.status).toBe(404)
+  expect(((await unknown.json()) as { error: string }).error).toContain('p1.nope')
+  expect((await b.call('/api/projects/load', { method: 'POST', body: '{}' })).status).toBe(400)
+  expect((await b.call('/api/ensure', { method: 'POST', body: '{"server":"web"}' })).status).toBe(400)
+})
+
+test('/api/servers lists the folder\'s project and the dev servers no project lists, never the service itself', async () => {
+  const procs = new Map<number, ProcInfo>([
+    // Names as the scan gives them (ports.ts drops `.exe`): all three are dev runtimes, so only the rules keep two out.
+    [100, { pid: 100, ppid: 1, name: 'node', command: 'node vite.js', created: null }],
+    [101, { pid: 101, ppid: 1, name: 'node', command: 'node preview.js', created: null }],
+    [999, { pid: 999, ppid: 1, name: 'bun', command: 'bun service.ts', created: null }]
+  ])
+  let servicePort = 0
+  const b = await boot(fakeDevServers(), {
+    scan: async () => ({
+      listeners: [
+        { address: '127.0.0.1', port: 5173, pid: 100 }, // a dev server a terminal started
+        { address: '127.0.0.1', port: 4173, pid: 101 }, // one the manager lists as up
+        { address: '127.0.0.1', port: servicePort, pid: 999 } // the service's own listener
+      ],
+      procs,
+      error: null
+    }),
+    probe: async () => ({ status: 200, title: 'Example' }),
+    deskPid: 1,
+    deskPort: 7798
+  })
+  servicePort = readServiceFile(b.home)!.port
+  const found = (await (await b.call(`/api/servers?cwd=${encodeURIComponent('C:/Users/me/site/src')}`)).json()) as { project: { id: string } | null; projects: { id: string }[]; others: { port: number }[] }
+  expect(found.project?.id).toBe('p1')
+  expect(found.projects.map((p) => p.id)).toEqual(['p1'])
+  expect(found.others.map((s) => s.port)).toEqual([5173])
+
+  const elsewhere = (await (await b.call(`/api/servers?cwd=${encodeURIComponent('C:/Users/me/other')}`)).json()) as { project: unknown; projects: unknown[] }
+  expect(elsewhere.project).toBeNull()
+  expect(elsewhere.projects).toEqual([])
+  const every = (await (await b.call(`/api/servers?cwd=${encodeURIComponent('C:/Users/me/other')}&all=1`)).json()) as { projects: { id: string }[] }
+  expect(every.projects.map((p) => p.id)).toEqual(['p1'])
+})
+
+test('a shutdown with restart records the running servers in resume.json, stops them, removes service.json and exits', async () => {
+  const dev = fakeDevServers()
+  const b = await boot(dev)
+  const res = await b.call('/api/shutdown', { method: 'POST', body: '{"restart":true}' })
+  expect(await res.json()).toEqual({ ok: true })
+  await b.svc.done
+  expect(JSON.parse(readFileSync(resumeFilePath(b.home), 'utf8'))).toEqual({ ids: ['p1.web', 'p1.api'] })
+  expect(dev.stopped).toBe(1)
+  expect(existsSync(serviceFilePath(b.home))).toBe(false)
+  expect(b.exits).toEqual([0])
+})
+
+test('a plain shutdown stops the servers and leaves nothing to resume', async () => {
+  const dev = fakeDevServers()
+  const b = await boot(dev)
+  mkdirSync(join(b.home, 'devservers'), { recursive: true })
+  writeFileSync(resumeFilePath(b.home), JSON.stringify({ ids: ['p1.old'] }))
+  await b.call('/api/shutdown', { method: 'POST', body: '{}' })
+  await b.svc.done
+  expect(existsSync(resumeFilePath(b.home))).toBe(false)
+  expect(dev.stopped).toBe(1)
+  expect(existsSync(serviceFilePath(b.home))).toBe(false)
+  expect(b.exits).toEqual([0])
+})
+
+test('a live service is told apart from a file a dead one left behind', async () => {
+  const b = await boot(fakeDevServers())
+  expect(await serviceAlreadyRunning(b.home)).toBe(true)
+  const file = readServiceFile(b.home)!
+  // Same file, but its token is not the live one's: the health check fails, so it is not "already running".
+  writeFileSync(serviceFilePath(b.home), JSON.stringify({ ...file, token: 'not-the-token' }))
+  expect(await serviceAlreadyRunning(b.home)).toBe(false)
+  rmSync(serviceFilePath(b.home))
+  expect(await serviceAlreadyRunning(b.home)).toBe(false)
+})

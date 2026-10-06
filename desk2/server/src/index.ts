@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
 import type { ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
-import { type HelloProvider, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
+import { type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
 import { createSettingsStore, SettingsError } from './settings'
 import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
@@ -117,6 +117,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const stopHooks: (() => void | Promise<void>)[] = []
   const connectHooks: ((send: (event: ServerEvent) => void) => void)[] = []
   const wsRoutes = new Map<string, WsRoute>()
+  const hostRoutes: HostRoute[] = []
   const routeOf = (ws: WsClient) => (ws.data as { route: WsRoute; data: unknown } | undefined) ?? null
   let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, chats: [], settings: settings.get() })
 
@@ -131,6 +132,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     wsClientCount: hub.clientCount,
     onConnect: (fn) => void connectHooks.push(fn),
     wsRoute: (path, route) => void wsRoutes.set(path, route as WsRoute),
+    hostRoute: (route) => void hostRoutes.push(route),
     onStop: (fn) => void stopHooks.push(fn),
     deps: opts.deps ?? {},
   }
@@ -173,13 +175,23 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     port: opts.port,
     hostname: opts.hostname ?? '127.0.0.1',
     async fetch(req, srv) {
+      // A `<label>.localhost` host (the dev-server proxy) is the route's own to judge: the guard below would refuse it.
+      const host = req.headers.get('host')
+      const byHost = host === null || hostRoutes.length === 0 ? undefined : hostRoutes.find((r) => r.match(host))
+      if (byHost) {
+        if (req.headers.get('upgrade')?.toLowerCase() !== 'websocket') return byHost.fetch(req)
+        const accepted = await byHost.ws.accept(req)
+        if (accepted instanceof Response) return accepted
+        if (srv.upgrade(req, { data: { route: byHost.ws, data: accepted.data }, headers: accepted.headers })) return undefined
+        return new Response('expected a websocket upgrade', { status: 426 })
+      }
       const route = wsRoutes.get(new URL(req.url).pathname)
       if (route) {
         const why = foreignRequest(req.headers)
         if (why) return Response.json({ error: why }, { status: 403 })
         const accepted = await route.accept(req)
         if (accepted instanceof Response) return accepted
-        if (srv.upgrade(req, { data: { route, data: accepted.data } })) return undefined
+        if (srv.upgrade(req, { data: { route, data: accepted.data }, headers: accepted.headers })) return undefined
         return new Response('expected a websocket upgrade', { status: 426 })
       }
       if (new URL(req.url).pathname === '/ws') {

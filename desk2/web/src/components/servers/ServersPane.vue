@@ -5,7 +5,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
 import { processAddress, type DevWebProcess, type LocalServers } from '@shared/devwebui'
 import { browserClose, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
-import { activateTab, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { activateTab, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, REUSED_NOTE, saveTabs, startBlock, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
@@ -14,15 +14,17 @@ import SavedBrowsers from './SavedBrowsers.vue'
 import { DOT, ICON_BTN } from './styles'
 
 // The right-hand pane (title bar's Browser button): a browser's tab strip over the active tab. A New tab lists this
-// chat's localhost servers from DevWebUI (Start / Stop / Restart; a click or Start opens one in the tab) and the workspace's
+// chat's localhost servers (Start / Stop / Restart; a click or Start opens one in the tab) and the workspace's
 // saved browsers, narrowed by its address bar; a page tab shows a server or an address in a frame; a saved tab is a
 // saved browser, live. Each chat has tabs of its own, remembered, starting on the browser its AI last used, else on a
 // New tab. A folder that is not a project yet is set up by itself
 // (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server stopped.
-// Opening the pane starts the server manager when it is not running; the status and the project list come from the
-// window's one DevWebUI client (store.ts), which the sidebar's Dev servers list reads too and which polls while either
-// is on screen and the window is. `focus` is that list's request: show this server (its folder is `cwd`). After them the New tab lists "Other localhost servers": what listens on this machine that
-// DevWebUI did not start (GET /dw/localhost), open-only, scanned at most every 8 s.
+// Nothing is started by hand: Desk starts the dev-servers service for the first request that needs it (the pane shows
+// 'starting' meanwhile), and the status and the project list come from the window's one client (store.ts), which the
+// sidebar's Dev servers list reads too and which polls while either is on screen and the window is. `focus` is that list's
+// request: show this server (its folder is `cwd`). A Start that finds the server already up (Desk's, or one run outside)
+// opens the running copy and says so in a small notice. After them the New tab lists "Other localhost servers": what
+// listens on this machine that no project lists (GET /dw/localhost), open-only, scanned at most every 8 s.
 /** aiBrowser: the browser this chat's AI last used, which a chat with no tabs yet starts on. */
 const props = defineProps<{ chatId: string; cwd: string; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null }>()
 const emit = defineEmits<{ close: [] }>()
@@ -36,7 +38,6 @@ const input = computed(() => ({ status: status.value, statusMissing: statusMissi
 const view = computed(() => paneView(input.value))
 const project = computed(() => (view.value.kind === 'project' ? view.value.project : null))
 const elsewhere = computed(() => otherRunning(projects.value, project.value))
-const daemonUrl = computed(() => status.value?.url ?? null)
 const findProc = (id: string | null): DevWebProcess | null => (id ? ((projects.value ?? []).flatMap((p) => p.processes).find((p) => p.id === id) ?? null) : null)
 
 // ---- polling: the store's loop runs while this pane is mounted; what only the pane keeps is loaded on each answer ----
@@ -88,10 +89,22 @@ watch(
 )
 const logOf = (p: DevWebProcess): string[] => (p.status === 'crashed' ? (logs.value.get(`${p.id}:${p.exitCode}`) ?? []) : [])
 
+// ---- a small notice for what an action did, gone after a few seconds ----
+const notice = ref<string | null>(null)
+let noticeTimer: ReturnType<typeof setTimeout> | null = null
+function say(text: string) {
+  notice.value = text
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => (notice.value = null), 3500)
+}
+watch(servers.reused, () => say(REUSED_NOTE))
+onBeforeUnmount(() => noticeTimer && clearTimeout(noticeTimer))
+
 // ---- actions ----
 async function toggle(p: DevWebProcess) {
   const up = isUp(p.status)
   if (up) dropPending(p.id)
+  else if (startBlock(p)) return
   await servers.act(p, up ? 'stop' : 'start')
 }
 const restart = (p: DevWebProcess) => servers.act(p, 'restart')
@@ -199,6 +212,12 @@ function showServer(id: string, p: DevWebProcess, fresh = false) {
  *  it is starting until it answers. A server with no address until it runs opens once it answers. */
 async function openServer(id: string, p: DevWebProcess) {
   const plan = openPlan(p)
+  // A port held by a program that is not a dev server: nothing is started, and the New tab says why.
+  const blocked = plan.start ? startBlock(p) : null
+  if (blocked) {
+    actionError.value = blocked
+    return
+  }
   if (plan.show) showServer(id, p, p.status !== 'running')
   else pending.value = new Map(pending.value).set(p.id, id)
   if (!plan.start) return
@@ -377,13 +396,13 @@ watch(
         v-show="t.id === activeTab.id"
         :url="t.target"
         :proc="procOf(t)"
-        :daemon-url="daemonUrl"
         :busy="!!procOf(t) && busy.has(procOf(t)!.id)"
         :just-started="justStarted.has(t.id)"
         @navigated="navigated(t.id, $event)"
         @toggle="toggle"
       />
     </template>
+    <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-[30] max-w-[90%] -translate-x-1/2 rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text)] shadow-(--shadow-menu-ringed)">{{ notice }}</div>
     <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}`" :cwd="cwd" :profile="activeTab.target" :url="activeTab.url" />
   </section>
 </template>

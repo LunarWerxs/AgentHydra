@@ -11,7 +11,7 @@ import type { UpdateOffer } from '@/lib/server-update'
 // are gone too (owner, 2026-10-06); Alt + Left / Right still go back and forward (DeskFrame).
 // AgentHydra 2.0 adds five: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the sidebar lists
 // every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
-// sidebar/tasks.ts), Dev servers (the sidebar lists DevWebUI's projects and their servers, servers/DevServersList.vue)
+// sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue)
 // and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
 // Each shows when it is on: AgentHydra pressed, the other four blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
@@ -84,7 +84,7 @@ const BTN = `${BTN_SHAPE} text-text`
         <component :is="shellIcons.climayte" class="size-4" />
       </button>
     </Tip>
-    <Tip :label="devOn ? 'Back to the desk list' : 'Dev servers: the projects and servers DevWebUI runs'">
+    <Tip :label="devOn ? 'Back to the desk list' : 'Dev servers: the projects and servers AgentHydra runs'">
       <button type="button" :class="[BTN_SHAPE, devOn ? 'text-accent-text' : 'text-text']" aria-label="Dev servers" :aria-pressed="!!devOn" @click="emit('dev')">
         <Server class="size-4" />
       </button>

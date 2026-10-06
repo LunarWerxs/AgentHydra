@@ -24,17 +24,16 @@ between server/ and web/.
   the tab's AppView, and only the tab on screen (App.vue's `setDeskView`) is sent; Desk draws it (`web/src/components/hydra/HydraSidebar.vue`); every message both ways is typed in
   `shared/hydra-embed.ts`. A new copy tab with a list beside its content does the same, not a second
   sidebar.
-- `../devwebui/` is a whole copy of Michael's DevWebUI (LunarWerxs/DevWebUI at 69c766dc, copied 2026-10-05),
-  kept as its own project beside AgentHydra and Desk: its only job here is the servers and browser pane a
-  chat opens (start/stop the project's localhost servers, show one). It keeps its own package.json, tests
-  and tooling; the root suite and biome skip it, as they skip desk/ and desk2/.
-  Desk 2 uses it only through `server/src/plugins/50-devwebui.ts` (+ `server/src/devwebui/daemon.ts`) and the web pane
-  `web/src/components/servers`: the plugin finds the daemon (`DEVWEBUI_URL`, else `runtime.json` in `DEVWEBUI_HOME` or
-  `~/.devwebui`), starts `bun server/src/index.ts` there hidden when the pane asks, and forwards `/dw/api/*` with the
-  daemon's `.cookie` credential. Contract: `shared/devwebui.ts`. Tests set `DEVWEBUI_HOME` to a temp folder. Change
-  `../devwebui` only when the pane truly needs it, upstream-shaped, and name it in the commit message.
-- The title bar's Dev servers button lists DevWebUI's projects and servers in the sidebar (README, "What Desk 2 adds",
-  owner 2026-10-06): `web/src/components/servers/DevServersList.vue`. It and `ServersPane` read the one DevWebUI client
+- Dev servers are AgentHydra's own (owner 2026-10-06: DevWebUI "isn't supposed to be separate", yet a "separate
+  instance ... I wanna be able to kill it without killing Agent Hydra"): `server/src/devservers/` (contract
+  `contract.ts`) runs as one hidden process, the dev-servers service (`service.ts`), which Desk starts outside its
+  own tree on demand (`client.ts`) and never stops; the dev servers are its children. One copy per server: a server
+  already up (whoever started it) is used, never doubled, and nothing is killed to free a port. Desk forwards
+  `/dw/api/*` to it (`plugins/50-devwebui.ts`); chats get its `devservers` MCP tools (`mcp.ts`, through the built-in
+  `devwebui` connector). Projects stay `.devwebui` files; data in `~/.hydra-desk-2/devservers/`. Page contract:
+  `shared/devwebui.ts`. There is no separate DevWebUI copy or daemon any more: never bring one back.
+- The title bar's Dev servers button lists the projects and servers in the sidebar (README, "What Desk 2 adds",
+  owner 2026-10-06): `web/src/components/servers/DevServersList.vue`. It and `ServersPane` read the one client
   state, `servers/store.ts` (on `api.ts` and `logic.ts`; one polling loop, only while one is on screen), never a second
   client; a click on a server hands the pane the project's folder and the server (`store.show`, DeskFrame's `serversCwd`).
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then

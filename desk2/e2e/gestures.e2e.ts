@@ -77,9 +77,9 @@ const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t)
 const DEV = 'button[aria-label="Dev servers"]'
 const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="Open api"]')])`
 const SERVERS_PANE = `!!document.querySelector('aside[aria-label="Servers"]')`
-// What DevWebUI answers to the window here (shared/devwebui.ts): one invented project with a running and a stopped server.
+// What Desk answers to the window here for the dev servers (shared/devwebui.ts): one invented project with a running and a stopped server.
 const DW_FIXTURE: Record<string, unknown> = {
-  '/dw/status': { state: 'running', url: 'http://127.0.0.1:9' },
+  '/dw/status': { state: 'running', pid: 1, running: 1 },
   '/dw/api/projects': [{ id: 'p1', name: 'example-app', path: 'C:/Users/me/code/example-app/.devwebui', processes: [
     { id: 'p1-web', name: 'web', command: 'npm run dev', cwd: '', port: 5173, status: 'running', exitCode: null, projectId: 'p1' },
     { id: 'p1-api', name: 'api', command: 'npm run api', cwd: '', port: 8787, status: 'stopped', exitCode: null, projectId: 'p1' },
