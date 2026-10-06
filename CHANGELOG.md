@@ -3740,711 +3740,241 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [0.19.3] - 2026-08-11
 
-**TL;DR**
-
-- **Tooltips are reachable on a phone.**
-
-**Everything in 0.19.3**
-
 ### Fixed
 
-- **Tooltips are reachable on a phone.** Reka UI ignores touch pointers on hover, so on a touch-only
-  device every tooltip here was dead, including the toolbar labels `IconTooltip` puts on icon-only
-  controls and, worst of all, the info icons: a setting's description lives behind that icon and
-  nowhere else, so on mobile the text simply did not exist. Info icons now disclose on a single tap
-  and close on a tap outside, a second tap, or a scroll. Every other tooltip opens on a
-  press-and-hold, so a plain tap still runs the control's action exactly as before, and the click
-  ending a hold is swallowed so nothing fires behind the tooltip. Sliding a finger abandons the
-  hold, leaving scrolling alone. Mouse and pen behaviour is untouched: the gestures key off the
-  event's own pointer type, not a device media query, so a touchscreen laptop keeps hover and merely
-  gains them. From the shared UI kit; reported against RepoYeti as
-  [#16](https://github.com/LunarWerxs/RepoYeti/issues/16).
+- **Tooltips work on a phone.** On touch-only devices tooltips used to be dead, including the info icons that hold a setting's description. Info icons now open on a tap, and other tooltips open on a press-and-hold, so a plain tap still runs the control. Mouse and pen behavior is unchanged.
 
 ## [0.19.2] - 2026-08-10
 
-**TL;DR**
-
-- **The periodic update check now doubles as an anonymous install ping.**
-
-**Everything in 0.19.2**
-
 ### Changed
 
-- **The periodic update check now doubles as an anonymous install ping.** The compiled distribution
-  already hit `api.github.com/repos/LunarWerxs/AgentHydra/releases/latest` on a timer to look for a
-  newer release. That call now goes to Studio's app-ping proxy instead, which relays the same GitHub
-  JSON back verbatim (so every reader of the response is unchanged) and logs one row per hit: a
-  random per-install id, the app version, and a coarse OS tag. Update-checking itself adds zero
-  extra network traffic to get fleet-wide install/version telemetry out of it, the same wiring
-  QuickDictate and AnatomyOf already run in prod. From that request the server also derives and
-  stores a coarse location (country, region, city, timezone), the network's ASN, locale, and a
-  truncated user agent, never an IP address, hostname, username, file path, account, or email.
-  `AGENTHYDRA_NO_PING=1` (also the default for dev/test/CI runs) opts out; the update check then
-  falls back to asking GitHub directly, carrying no install id and no telemetry params, so
-  update-checking never depends on the ping being allowed. README's old "no telemetry" claim is
-  replaced with this disclosure.
+- **The update check now doubles as an anonymous install ping.** The periodic check for a newer release goes through a relay that returns the same release data and records a random install id, the app version, an OS tag and a coarse location. It never records an IP address, username, file path, account or email. Setting the no-ping option turns it off and the check then asks GitHub directly. The README's old "no telemetry" claim now describes this.
 
 ## [0.19.1] - 2026-08-10
 
 **TL;DR**
 
-- **The system-tray icon is back in the Windows download.**
-- **The tray icon survives an Explorer restart.**
-- **A tray icon that fails to appear at startup now retries instead of giving up.**
-- **A packaged build no longer tries to run `bun install` on itself.**
+- **The system-tray icon is back in the Windows download**
+- **The tray icon survives a Windows Explorer restart**
+- **A tray icon that fails to appear at startup now retries**
+- **A packaged build no longer tries to run a dependency install on itself**
 
 **Everything in 0.19.1**
 
 ### Fixed
 
-- **The system-tray icon is back in the Windows download.** Packaged builds have shipped without it
-  since 0.12.0: the 0.11.2 release prep trimmed "sidecars" from the bundle and took the `misc\` tray
-  toolkit with them. The daemon contains no tray code at all, so with those files gone there was
-  nothing left to draw an icon, and no combination of settings could bring one back. The ZIP carries
-  the toolkit again, the release smoke test now fails if it ever goes missing, and both READMEs say
-  plainly that the icon comes from the shortcut rather than from `AgentHydra.exe`.
-- **The tray icon survives an Explorer restart.** When the Windows shell restarts it destroys every
-  tray icon and expects each app to add its own back. The native launcher never listened for that
-  broadcast, so the icon disappeared for the rest of the session while AgentHydra kept running
-  normally, and relaunching the shortcut only re-opened the UI. It listens now, and re-adds the icon.
-- **A tray icon that fails to appear at startup now retries instead of giving up.** The launcher
-  assumed its first attempt had worked. If it had not (most often because the taskbar did not exist
-  yet, on a launcher started at logon), the five-second health tick believed the icon was already
-  showing and never tried again. It records the real result and retries.
-- **A packaged build no longer tries to run `bun install` on itself.** The launcher's first-run
-  bootstrap is meant for a source checkout; in a release bundle none of the files it looks for exist,
-  so every step fired, on the one layout guaranteed to have no Bun.
+- **The system-tray icon is back in the Windows download.** Packaged builds had shipped without the tray toolkit since 0.12.0, so nothing could draw the icon. The download carries it again, and the READMEs now say the icon comes from the shortcut, not from the executable.
+- **The tray icon survives an Explorer restart.** The launcher now re-adds its icon when the Windows shell restarts, instead of leaving it gone for the rest of the session.
+- **A tray icon that fails to appear at startup now retries.** If the taskbar was not ready at logon, the launcher used to assume the icon was showing and never tried again.
+- **A packaged build no longer tries to install dependencies on itself.** The first-run setup is meant for a source checkout and no longer runs in a release bundle.
 
 ## [0.19.0] - 2026-08-10
 
 **TL;DR**
 
-- **Every remembered layout choice now survives a port change, not just the usage filter.**
-- **The usage filter stops forgetting whether it was on.**
+- **Every remembered layout choice now survives a port change**
+- **The usage filter stops forgetting whether it was on**
 
 **Everything in 0.19.0**
 
 ### Changed
 
-- **Every remembered layout choice now survives a port change, not just the usage filter.** The tab
-  you were on, the three Instances tables' collapse states, the sessions period / provider /
-  archived filters, transcript verbosity, body-search case sensitivity and the sidebar width all
-  lived in browser storage only, so they reset on any launch where the daemon had to hop to another
-  port. They go through the same daemon-side store as the usage filter now. Values still paint from
-  the browser cache first, and a key the store has never seen is seeded from whatever this browser
-  already had, so nothing anyone has already set is lost on the way in.
-  - The mirror carries short strings as well as switches and numbers, and a string preference
-    declares its own value set. The store is a plain file, and an unrecognised value reaching a tab
-    strip or a filter dropdown would render a control with nothing selected.
-  - These preferences moved out of the components that read them and into one module
-    (`composables/useUiPrefs.ts`). A mirrored ref has to outlive its component: registration is
-    keyed, so only the first mount's ref is the mirrored one, and views behind a tab unmount every
-    time you switch away.
-  - Not included, deliberately: the theme (owned by the shared kit under its own un-namespaced key,
-    which this store does not accept) and the locale (English is the only catalog that ships).
+- **Every remembered layout choice now survives a port change.** The tab you were on, the collapsed state of the Instances tables, the sessions filters, transcript verbosity, search case sensitivity and the sidebar width used to reset whenever the app had to start on a different port. They are now saved through the app itself, and anything already set in your browser is carried over. The theme and language are not included.
 
 ### Fixed
 
-- **The usage filter stops forgetting whether it was on.** The cross-window store added in 0.18.0 is
-  the only memory the app has on a hopped port (the daemon moves to 7788/7789/… whenever its
-  preferred one is busy, and a new port is a new browser origin with an empty `localStorage`), so
-  every way of losing a write to it shows up as "my filter is off again". Three were open, and each
-  one is silent by nature: nothing throws, nothing logs, the switch is just back where it started.
-  - **A choice made while the first read was still in flight was dropped, then overwritten.** The
-    window paints from `localStorage` (defaults, on a port it has never seen), so the filter reads as
-    off; clicking it on in those first moments hit a watcher that deliberately pushes nothing before
-    the store has been read, and then hydrate applied the stored value on top. The click undid itself
-    a beat after it was made. Such a change is now recorded the instant it happens, hydrate leaves it
-    alone, and it is sent as soon as the read lands. The rule it was protecting is untouched: a
-    window still never pushes before it has read the store.
-  - **A read that failed once failed forever.** A window opened by a daemon that is still starting
-    can ask before the socket answers, and there was no retry and no second hydrate, so that window
-    ran on its local cache for the rest of its life, which on a fresh origin means defaults.
-    It now retries three times over ~750 ms, which nothing waits on.
-  - **A push cancelled by the closing window was silently reverted.** Toggling something and closing
-    the window straight after killed the request along with the document, and since the store is
-    authoritative the next launch handed the old value back. Unconfirmed changes are now queued
-    rather than assumed sent: the next change carries them, and `pagehide` hands whatever is left to
-    `sendBeacon`, which outlives the page.
-  - A preference registered *after* the store is read (a lazily-loaded view) now receives it too.
-    Nothing is loaded that late today, but hydrate runs once per window, so the failure mode was one
-    import away and would have looked exactly like the bugs above.
+- **The usage filter stops forgetting whether it was on.** Three ways of losing the setting are closed: a click made while the saved value was still loading no longer undoes itself, a failed first read is retried instead of failing for good, and a change made just before closing the window is no longer lost.
 
 ## [0.18.1] - 2026-08-09
 
-**TL;DR**
-
-- **A detached launch no longer breaks on a path containing `&`, `|`, `^`, or a space.**
-- **The console-window guardrail no longer reads prose as code.**
-
-**Everything in 0.18.1**
-
 ### Fixed
 
-- **A detached launch no longer breaks on a path containing `&`, `|`, `^`, or a space.** Windows
-  launches that must outlive the daemon (a desktop shortcut, the relaunch an auto-update performs on
-  itself) go through the shared kit's detached-spawn helper. It prefers WMI, and when WMI refuses it
-  fell back to handing an already-quoted command line to `cmd.exe /c start ""`. That put a *second*
-  parser in the path, and cmd re-parses `&`, `|` and `^`, all of which are perfectly legal in an
-  NTFS path. A repo or profile directory containing one was re-split on its way to `CreateProcess`,
-  so the fallback that exists to keep a launch working was the thing that broke it. The fallback is
-  now `Start-Process -FilePath … -ArgumentList @(…)`, which never involves cmd.
-  - **Each argument is pre-quoted, because `Start-Process` does not do it for you.** Windows
-    PowerShell space-*joins* `-ArgumentList` without quoting elements that contain spaces, so a
-    plain `C:\Program Files\…` element reached the child as three separate arguments, corrupting
-    the successor daemon's own arguments, which is precisely the failure this fallback is for.
-  - Nothing here changes the WMI path, which is what almost every launch actually takes; this only
-    repairs the branch taken when WMI is unavailable or blocked.
-
-### Internal
-
-- **The console-window guardrail no longer reads prose as code.** `scripts/checks/spawn-console-window.mjs`
-  is a text scan, and it had no notion of comments, so a *sentence* naming a spawn counted as one.
-  The fix above ships a header explaining which shell `spawn("powershell")` resolves to, and that
-  alone turned CI red against a file containing no spawn call at all. Comments are now blanked
-  before the scan, index-for-index so reported line numbers still line up. Regex literals are
-  tracked too, and that half is not optional: a `"` inside a character class (`!/[ \t\n\v"]/`, in
-  the very file being scanned) opened a string that never closed, which inverts code and string for
-  the rest of the file and produces false positives rather than misses.
+- **A detached launch no longer breaks on a folder name containing `&`, `|`, `^` or a space.** The fallback used when Windows launches that must outlive the app (a desktop shortcut, the relaunch after an update) could re-split such paths and fail. It now passes each argument safely. The usual launch route is unchanged.
 
 ## [0.18.0] - 2026-08-07
 
 **TL;DR**
 
-- **Quick Instances gets the quota columns and the usage filter, and remembers how you left them in
-  the full manager.**
-- **The app checks for updates on its own, and says so where you can see it.**
-- **The update tells you what it is doing.**
-- **Clicking update on a downloaded release no longer spins forever after the update has already
-  succeeded.**
-- **Toasts have a close button.**
-- **Opening the app no longer resolves every instance over the network.**
-- **The Instances tab no longer probes every account's quota at once on open.**
-- **A crashed daemon no longer costs half a second on the next boot.**
+- **Quick Instances gets the quota columns and the usage filter, and remembers how you left them**
+- **The app checks for updates on its own and shows a dot on Settings**
+- **Updating shows real progress**
+- **Updating no longer spins forever after it already succeeded**
+- **Toasts have a close button**
+- **Opening the app is faster: fewer network lookups and quota checks**
 
 **Everything in 0.18.0**
 
 ### Added
 
-- **Quick Instances gets the quota columns and the usage filter, and remembers how you left them in
-  the full manager.** The compact window showed a single weekly badge and no way to act on it. It
-  now carries both readings (5h and week) behind the same usage-mode toggle the Instances tab uses,
-  and the same "set aside the accounts I've used up" filter, with dim/hide and per-window
-  thresholds. It is the same state, not a copy: both surfaces read one shared singleton, and the
-  filter rule itself has only ever had one implementation.
-  - **The state is mirrored through the daemon**, which is what makes "remembers" true. Quick
-    Instances normally opens on the running daemon's port, but with no daemon it starts its own
-    server on a *different* port, and a browser scopes `localStorage` per origin, port included. So
-    the window that ran standalone landed on a blank slate every time. A small store
-    (`~/.agenthydra/ui-prefs.json`, served by both daemons) now holds the handful of keys; the
-    server wins on load and `localStorage` stays as the instant-paint cache. A first run seeds the
-    store from whatever the browser already had, so existing settings carry over rather than
-    trickling in as controls are touched.
-- **The app checks for updates on its own, and says so where you can see it.** Auto-*apply* is off
-  by default because it restarts the daemon, but that flag also gated the *check*, and the only
-  other code that ever asked was the Settings screen's own mount. Run an older build and never open
-  Settings, and nothing ever told you. Checking and applying are now separate: the loop always
-  checks, applying stays opt-in and unchanged, and a newer version puts a dot on the Settings
-  button. A manual check feeds the same signal, so the hint is never staler than what you have
-  already been shown.
-- **The update tells you what it is doing.** Clicking the version to update bound a spinner to one
-  request that legitimately covers minutes on a source checkout (a pull, then a dependency reinstall,
-  then a web build), and reported nothing until it finished, so a healthy slow update and a hung one
-  looked identical. The compiled path now streams its download and reports real progress
-  (`Downloading v0.17.0… 62% (22/36 MB)`), then extraction, verification and install; the source
-  path reports its phase and says why it takes a few minutes. The apply request is also bounded at
-  20 minutes, so the spinner always ends: a daemon that restarts itself mid-apply (which a compiled
-  apply does on purpose) used to leave it turning until the user reloaded the page.
+- **Quick Instances gets the quota columns and the usage filter.** The compact window now shows both the 5-hour and weekly readings behind the same usage toggle and the same "set aside accounts I've used up" filter as the full Instances tab. Both windows share one state, and it is saved through the app so it is remembered even when the compact window runs on its own.
+- **The app checks for updates on its own.** Checking and applying are now separate: it always checks, applying stays opt-in, and a newer version puts a dot on the Settings button.
+- **Updating shows what it is doing.** A downloaded release reports real download progress, then extraction, verification and install. A source install names its current step. The update request now ends after at most 20 minutes, so the spinner never turns forever.
 
 ### Fixed
 
-- **Clicking update on a downloaded release no longer spins forever after the update has already
-  succeeded.** This was the actual cause, and it is not slowness: a compiled apply is only a few
-  seconds of work (measured on the real v0.17.0 asset: 2.3 s to download, 0.5 s to extract). But the
-  daemon deliberately restarts itself afterwards, and it began that restart 250 ms after writing the
-  response, exiting about a second later. A browser that had not finished reading by then lost the
-  socket, the request failed, and the spinner turned on an update that had in fact completed. The
-  restart now waits three seconds, and the page independently recovers by polling the daemon's
-  health and reporting the version that comes back, so the outcome is reported either way.
-
-- **Toasts have a close button.** `<Toaster>` was mounted without `close-button`, and vue-sonner
-  defaults it off, so no toast in the app could be dismissed except by waiting. It showed worst on
-  the plain ones ("Auto-updates enabled"), which carry no action button either and so had no
-  controls at all. The kit's wrapper already shipped the glyph and pinned it top-right; it was
-  simply never switched on.
-- **Opening the app no longer resolves every instance over the network.** The sessions list, the
-  queue drawer and the composer all pull the shared instance singleton just to put a name on a chip,
-  and each one triggered a full identity resolve of every instance. Measured on a 15-instance
-  install: 15 profile calls, 4-wide, ~1.4 seconds of continuous requests, to label chips the on-disk
-  cache answers in about 25 ms. Those callers now read the cache; only the Instances tab, the
-  screen that is *about* accounts, resolves for real, and a login that provably changed is still
-  corrected immediately. Now 1 network resolve, done in under 0.6 s.
-- **The Instances tab no longer probes every account's quota at once on open.** It fired one forced
-  probe per instance from a single unbounded `Promise.all` the moment the lists arrived. Measured
-  at 14 simultaneous requests, the slowest taking 8.8 seconds, on every open. The server already
-  keeps a usage cache that survives restarts and re-sweeps on its own timer, so the table has
-  numbers immediately; only readings that have aged out are re-checked now, two at a time with a
-  stagger. Now 2 probes instead of 14.
-- **A crashed daemon no longer costs half a second on the next boot.** The single-instance guard
-  re-probes three times before concluding nothing is running, which is right when a daemon might be
-  alive but busy, and pointless when `runtime.json` names a process that no longer exists. The
-  tombstone case is now detected directly. Boot after a hard kill: ~1,420 ms → ~920 ms.
-- The full manager's toast stylesheet loaded on its own round trip after the app and i18n chunks,
-  rather than alongside them.
+- **Clicking update no longer spins forever after the update has succeeded.** The app restarted itself too quickly for the page to read the answer. It now waits a little, and the page also checks the app's health and reports the new version either way.
+- **Toasts have a close button.** Until now a toast could only be dismissed by waiting.
+- **Opening the app no longer looks up every instance over the network.** Chips that label instances now read saved identities, and only the Instances tab checks for real.
+- **The Instances tab no longer checks every account's quota at once on open.** It uses the saved readings and re-checks only the stale ones, two at a time.
+- **A crashed app starts faster next time.** It now recognizes a leftover record of a process that no longer exists instead of probing three times.
 
 ## [0.17.0] - 2026-08-07
 
 **TL;DR**
 
-- **Every instance now has a permanent number, and you can talk to the MCP server in numbers.**
-- **The usage filter can now set aside an account for its 5-hour window as well, on its own
-  threshold.**
-- **The usage flyout is laid out as labelled sections over cards**
+- **Every instance now has a permanent number you can use in the MCP server**
+- **The usage filter can set aside an account for its 5-hour window on its own threshold**
+- **The usage flyout is laid out as labelled cards**
 
 **Everything in 0.17.0**
 
 ### Added
 
-- **Every instance now has a permanent number, and you can talk to the MCP server in numbers.**
-  Until now nothing an instance carried was usable as a spoken or written handle: a Claude Desktop
-  instance is identified by its folder path, a Claude CLI or Codex instance by a random uuid. Worse,
-  the folder name is not even reliable: sign a profile into a different account than the one it was
-  named after and it keeps showing the old name (this machine has exactly that, the folder
-  `3claude` is signed into the account labelled `4claude`, and vice versa). So "check instance 7's
-  usage" was a sentence with nothing behind it. Now `#7` is a real identifier.
-  - **One sequence across all three families** (Desktop, CLI, Codex), so a bare `7` never needs a
-    kind beside it. Assigned on first sight and **never reused**: a number retired by a deleted
-    instance stays retired, because the whole value of the handle is that a note saying "instance 7"
-    still means the same account next month. A cold start numbers the fleet in sorted-ref order, so
-    the same set of instances numbers identically on any machine.
-  - **Visible where you read it**: a `#N` chip on every row of all three instance tables, and a
-    header on every row's ⋯ menu naming which instance the menu belongs to. Both copy on click.
-  - **Accepted where you act**: every MCP tool that addresses an instance takes `instance`, which
-    accepts the number (`7`, `#7`), the dir/id, a `desktop:<dir>`/`cli:<id>` ref, or an unambiguous
-    name. The legacy `dir` / `id` parameters are unchanged, so nothing that already worked broke.
-  - **Three new MCP tools**: `list_instance_numbers` (the whole fleet, one flat numbered list with
-    each account's email and plan), `resolve_instance` (confirm which account a reference means
-    before spending its quota; its errors distinguish an unknown number from a retired one),
-    and `whoami` (which numbered instance THIS process is, matched from its own
-    `CLAUDE_CONFIG_DIR`/`CODEX_HOME`).
-  - `check_my_usage` now reports `instance` alongside the numbers, so an agent can say "instance #7
-    is at 84% weekly" instead of an unattributed percentage. `list_usage` rows carry `num` too.
-  - `usage_budget` gained the `instance` form, which incidentally **fixes a gap**: it previously
-    only accepted a desktop dir or a dispatch account, so a CLI or Codex login could not get a
-    budget at all. A CLI instance's token spend is now measured against its own config dir rather
-    than defaulting to the [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login, which belongs to a different account.
-  - A queue item's `instance_ref` accepts a number too; it is expanded to a real ref before the item
-    is stored, so a pinned run can never fail to resolve later, at dispatch time, with nobody
-    watching.
-  - New REST routes: `GET /api/instance-numbers`, `/api/instance-numbers/resolve?ref=`,
-    `/api/instance-numbers/whoami?configDir=`, plus `instance=` on `/api/usage` and
-    `/api/usage/budget`.
-- **The usage filter can now set aside an account for its 5-hour window as well, on its own
-  threshold.** A spent 5-hour session means you cannot use an account *right now*; a spent weekly
-  cap means you cannot use it *at all*. Those are different questions, and the filter could only ask
-  one of them at a time: the old "Measure against Weekly / 5h / Either" tri-toggle shared a single
-  number across both windows, so "set it aside at 80% of the week, but already at 50% of this
-  session" was not expressible (owner-reported).
-  - Each window is now its own switch with its own threshold, and a row is set aside when **either**
-    line is crossed. **Weekly** stays on by default; **Also 5-hour usage** is opt-in, because that
-    window refills the same day and filtering on it by default had rows leaving the table and coming
-    back over an afternoon.
-  - A stored `Weekly` / `5h` / `Either` choice carries over to the pair of switches that behaves
-    identically, so nobody's filter silently re-points at a different window on upgrade. An
-    unreadable or missing threshold lands on the default rather than on 0, which as a threshold
-    would have meant "set aside every account that has any reading at all".
-  - The toolbar button says the whole rule (`80% · 5h 65%`), so a dimmed table explains itself
-    without opening the flyout.
-  - **Fixed**: the "every instance is filtered" empty state told you to *lower* the threshold, which
-    hides more rows, not fewer.
+- **Every instance now has a permanent number.** One sequence covers Desktop, CLI and Codex instances, and a number is never reused, so "instance 7" keeps meaning the same account. A `#N` chip shows on every row and in each row's menu, and it copies on click.
+- **MCP tools accept instance numbers.** Every tool that addresses an instance takes a number, a folder or id, a reference or an unambiguous name. Three new tools list the numbered fleet, confirm which account a reference means, and tell a process which numbered instance it is. Usage results now name the instance, and the usage budget works for CLI and Codex logins too. A queued run pinned to a number is resolved when it is queued, so it cannot fail later.
+- **The usage filter can set aside an account for its 5-hour window as well.** Weekly and 5-hour usage are now separate switches with their own thresholds, and a row is set aside when either is crossed. Weekly stays on by default and 5-hour is opt-in. Older choices carry over unchanged, and the toolbar button states the whole rule.
 
 ### Changed
 
-- **The usage flyout is laid out as labelled sections over cards** rather than one run of
-  hairline-divided rows. With two windows, each carrying a switch and a threshold, an
-  undifferentiated list left no way to see which threshold belonged to which switch. Each window is
-  now a card that visibly contains its own controls, its threshold reads as a value display, and a
-  slider sits beside the presets for setting a figure that isn't one of the four.
+- **The usage flyout is laid out as labelled cards.** Each window has its own card with its switch, a readable threshold and a slider for values beyond the presets.
+
+### Fixed
+
+- **The "every instance is filtered" message no longer tells you to lower the threshold,** which would hide more rows, not fewer.
 
 ## [0.16.2] - 2026-08-06
 
 **TL;DR**
 
-- **A Codex Desktop you didn't create through this app is now listed.**
-- **Codex / ChatGPT instances now have a real identity, a plan, and a quota reading.**
-- **A 5-hour reset no longer notifies for an account you have filtered out.**
-- **A free account no longer shows as "Max 20×".**
-- **The account one-liner no longer leaks a raw tier string.**
-- **A usage reading whose window has already reset no longer poses as current.**
+- **A Codex Desktop you did not create through the app is now listed**
+- **Codex instances show account, plan and quota**
+- **A 5-hour reset no longer notifies for an account you have filtered out**
+- **A free account no longer shows as "Max 20×"**
+- **A usage reading whose window already reset no longer looks current**
 
 **Everything in 0.16.2**
 
 ### Added
 
-- **A Codex Desktop you didn't create through this app is now listed.** The table only ever showed
-  instances created here, so someone running a perfectly normal Codex Desktop saw "No Codex
-  instances found" (owner-reported). The default install is now always listed, running or not,
-  because its identity lives in CODEX_HOME on disk and is readable either way; a Codex Desktop found
-  running from any other unrecognized profile is listed too. Both are flagged external and offer no
-  actions, mirroring `isExternal` on the Claude side, since they have no store row to act on.
-  - The default install could never have matched before: its profile is the shipped app's own
-    Electron path (`%APPDATA%\Codex\web\Codex` on Windows), not the `<CODEX_HOME>/desktop` layout
-    this app imposes on instances it creates. A running instance is matched on the path its own
-    process announces, so no platform guessing is involved when it counts.
-- **Codex / ChatGPT instances now have a real identity, a plan, and a quota reading.** Until now a
-  Codex row carried exactly one identity signal, `loggedIn`, which was literally "does auth.json
-  exist", so every row looked alike no matter which account or plan was behind it. The table now
-  has **Account**, **Usage** and **Plan** columns, matching the Claude tables.
-  - Identity comes from `<CODEX_HOME>/auth.json`, which is plain JSON rather than a safeStorage
-    blob, so there is no decrypt step: the email, name, plan, account id, org and subscription end
-    date are read straight from the id_token's claims. That read is cheap enough to attach to every
-    row on every list, so the Account column fills in on first paint with no per-row request.
-  - Quota comes from the endpoint the Codex CLI's own status screen uses
-    (`GET /backend-api/codex/usage`), which answers identity AND rate limits in one call. The
-    windows are mapped onto the SAME `UsageSnapshot` the Claude rows use, so Codex inherits the
-    whole existing quota surface: the chip, the countdowns, the usage filter, the superseded-window
-    rule below. Windows are filed by their reported LENGTH, never by primary/secondary: a Plus
-    account reports its single 7-day window as `primary_window`, so position would have mislabelled
-    an entire plan tier as a 5-hour session.
-  - The live `plan_type` wins over the token's `chatgpt_plan_type` claim, which is a mint-time
-    snapshot. This is the same evidence rule the Claude-side fix below arrives at, applied from the
-    start rather than after a regression.
-  - An `OPENAI_API_KEY` login is labelled "API key" rather than rendered as a broken ChatGPT login:
-    it is a valid Codex auth with no subscription and therefore no plan or quota to report.
+- **A Codex Desktop you did not create through the app is now listed.** The default Codex install is always shown, running or not, and a Codex Desktop running from any other profile is shown too. Both are marked external and offer no actions.
+- **Codex instances now show account, plan and quota.** The Codex table gets Account, Usage and Plan columns like the Claude tables, and Codex quota feeds the same chips, countdowns and usage filter. An API-key login is labelled "API key" instead of looking like a broken login.
 
 ### Changed
 
-- **A 5-hour reset no longer notifies for an account you have filtered out.** The weekly cap is what
-  actually blocks an account, so a session window coming back while weekly is still spent announces
-  a change you cannot act on. Reset notifications now skip a 5-hour rollover when that account's
-  weekly usage is at or above a threshold, defaulting to 80, the same line the Instances usage
-  filter uses to set a row aside. Weekly resets are never skipped, an unknown weekly figure never
-  silences anything, and the threshold is its own control in Settings › Notifications.
+- **A 5-hour reset no longer notifies for an account you have filtered out.** Reset notifications skip a 5-hour rollover when that account's weekly usage is at or above a threshold (80% by default), since weekly is what actually blocks it. Weekly resets are never skipped, and the threshold has its own control in Settings > Notifications.
 
 ### Fixed
 
-- **A free account no longer shows as "Max 20×".** Owner-reported: an account that is
-  `organization_type: "claude_free"`, `billing_type: "none"`, `has_claude_max: false` was labelled
-  Max 20×. The cause was the previous release's own fix, which promoted the OAuth grant to top
-  evidence on the premise that Anthropic re-mints it on every token refresh. It does not. Measured
-  by decrypting all eleven local token caches and diffing each against its live profile, the grant
-  is a snapshot from whenever it was minted and is stale in **both** directions: the free account
-  carried three unexpired grants all still claiming `subscriptionType: "max"` /
-  `rateLimitTier: "default_claude_max_20x"`, while two genuinely-paid accounts carried a `max_5x`
-  grant tier against an org reporting `max_20x`.
-  - The plan now comes from `organization.organization_type`, which the profile API recomputes on
-    every call. It settles the plan family outright; the rate-limit tier only refines a `claude_max`
-    family into 5× or 20×, and the grant is demoted to an offline fallback.
-  - Both prior findings still hold and are still respected: a paid Pro account really does report
-    the generic `default_claude_ai` tier (0.16.1), and `has_claude_max` / `has_claude_pro` really do
-    stay true after an account lapses (2026-07-22). Neither can decide the label any more, so
-    neither can be wrong about it.
-  - `organization_type` is cached alongside the rest of the identity, so the offline/no-network path
-    reaches the same answer instead of falling back to the stale grant.
-- **The account one-liner no longer leaks a raw tier string.** The Quick view showed
-  `Michael <someone@example.com> · default_claude_ai` for any account whose tier is the generic
-  value. It now shows the same reconciled label the Plan column does.
-- **A usage reading whose window has already reset no longer poses as current.** The same instance
-  sat at "100% · resets now" from an eleven-day-old cached snapshot: the countdown said *now*
-  (formally true, the instant had passed) and the percentage kept asserting a window that had rolled
-  over days earlier. A limit whose reset is more than a couple of minutes past is now treated as
-  superseded: the chip reads as no-data, the countdown blanks rather than saying "now", and the usage
-  filter counts it as unknown so a fully-reset account can never stay hidden behind a number that no
-  longer applies. This is distinct from the existing 30-minute "stale" dimming, which still shows
-  the last known reading because it is still a reading of the current window.
+- **A free account no longer shows as "Max 20×".** The plan now comes from the account's live organization type instead of a stale sign-in grant, with the grant used only as an offline fallback. The same answer is cached so it holds offline.
+- **The account one-liner no longer shows a raw tier name.** The Quick view now shows the same plan label as the Plan column.
+- **A usage reading whose window already reset no longer looks current.** A limit that reset more than a couple of minutes ago shows as no data, its countdown goes blank instead of saying "now", and the usage filter treats it as unknown so the account is not hidden.
 
 ## [0.16.1] - 2026-08-06
 
-**TL;DR**
-
-- **A paid account no longer shows as "Free".**
-
-**Everything in 0.16.1**
-
 ### Fixed
 
-- **A paid account no longer shows as "Free".** Two independent faults in the same evidence chain,
-  both owner-reported and both verified against real accounts:
-  - The rate-limit tier was read from the profile's ORGANIZATION (`organization.rate_limit_tier`),
-    which for a personal org is routinely the generic `default_claude_ai` even on a paid plan. That
-    generic value was preferred unconditionally over the OAuth grant's own tier, so a Max 20x
-    account whose grant plainly said `default_claude_max_20x` had its only specific answer thrown
-    away and rendered as Free. A specific tier now wins wherever it comes from, and the generic
-    value is only settled for when nothing better exists.
-  - A generic tier was itself treated as proof of a free account. It is not: an actively-paid Pro
-    account reports `default_claude_ai` on its grant too (confirmed by decrypting the token cache:
-    subscriptionType `pro`, unexpired). A generic tier now means "this signal knows nothing" and
-    falls through to the grant's subscription type; it only resolves to Free when there is no
-    subscription evidence behind it at all, which is the genuine free-account shape.
-  - The 2026-07-22 finding that motivated the old behaviour still stands, because it was about a
-    different field: the profile's `has_claude_max` / `has_claude_pro` booleans stay true for an
-    account that lapsed back to free. Those are entitlement history rather than current state, and
-    they can no longer overwrite a grant that says otherwise; they are consulted only when there is
-    no grant to ask.
+- **A paid account no longer shows as "Free".** Two faults are fixed: a specific plan tier now wins over the generic one wherever it comes from, and a generic tier is no longer taken as proof of a free account. An account only shows as Free when nothing indicates a subscription.
 
 ## [0.16.0] - 2026-08-06
 
 **TL;DR**
 
-- **Usage filter.**
-- **Expanding and collapsing a section animates.**
-- **Reset toasts fixed and batched.**
-- **Instances tab performance improved.**
-- **The Instances tab opens on the quota columns by default.**
-- **Inter is served by the app, not fetched from Google.**
-- **Settings that belong to a screen now live on that screen.**
-- **Account column fills at page load.**
+- **A usage filter dims or hides accounts above a percentage you set**
+- **Expanding and collapsing a section is animated**
+- **Reset toasts no longer jump around, and a backlog becomes one toast**
+- **The Instances tab no longer starts a background shell every few seconds**
+- **The Account column fills at page load**
+- **The Instances tab opens on the quota columns**
+- **The app serves its own font and works offline**
+- **Settings that belong to a screen now live on that screen**
 
 **Everything in 0.16.0**
 
 ### Added
 
-- **Usage filter.** With the quota columns on, a funnel button appears in the Instances toolbar:
-  set a percentage and the instances at or above it are dimmed, so the accounts you can still work
-  on are the ones that read clearly. A **Hide instead of dim** switch drops them from the table
-  outright; both tables then say "4 of 11 · 7 hidden" in their heading, because an instance that
-  silently stopped being listed reads as a bug rather than as the filter working.
-  - **Measure against** picks the window the threshold applies to. It defaults to *Weekly*, the
-    Usage column: that is the cap that decides whether an account is worth starting on. *5h* reads
-    the shorter session window and *Either* takes whichever of the two is closest to its cap, both
-    of which are opt-in, since a 5-hour reading comes back the same day and would otherwise have
-    rows dropping out and back in over an afternoon.
-  - An instance that has never been checked is never filtered. An unknown reading is not a full one,
-    and treating it as one would quietly remove a perfectly usable account from the table.
-  - The filter lives and dies with usage mode: switching back to the process columns restores a
-    plain table, so a dimmed row always has the control that explains it visible in the same toolbar.
-- **Expanding and collapsing a section animates.** The two instance tables, the Codex table and the
-  queue card's run viewer used to appear and vanish between frames, with a rotating chevron as the
-  only sign anything had happened. They now open and close over 0.22s, matching the speed the kit's
-  collapsibles already used elsewhere in the app, and honour `prefers-reduced-motion`.
-  - This needed a component of its own rather than the kit's `ExpandTransition`, which keeps
-    `overflow: hidden` on its wrapper permanently. An element with a non-visible overflow becomes
-    the scrollport that `position: sticky` resolves against, so wrapping a table in it silently
-    stops the header sticking, which is exactly why these tables had no animation to begin with.
-    The local one clips only while the transition is actually running, i.e. the one moment nothing
-    is being scrolled. Popovers and focus rings inside an expanded block stop being cut off at its
-    edge as a side effect.
-
-### Fixed
-
-- **Reset toasts no longer deal themselves into the wrong slots, or jitter under the pointer.**
-  vue-sonner (2.0.9, the current release) positions its stack from a heights array it keeps beside
-  the rendered toasts, and each toast measures itself in an effect that awaits a tick. Raise two in
-  the same tick and those measurements come back in the reverse of the raise order while the array
-  blindly prepends each one, so every card's offset is attributed to a different card. Measured
-  here with three at once: the front toast got the middle card's offset and the middle one got zero.
-  With a backlog of ten it threw the front toast ~817px up, past the top of the window and out from
-  under the pointer, which collapses the stack, puts the toast back under the pointer and re-expands
-  it: the up-down-up-down jitter, at hover speed. Toasts are now raised one macrotask apart, which
-  is enough for each measurement to land before the next card mounts.
-- **A backlog of resets is one toast, not ten.** Above three at once (the window was closed while
-  several accounts rolled over) they collapse into a single "N quota windows reset" card whose
-  action acknowledges the batch. Ten 20-second cards timed out before they could be read, and the
-  stack's expanded height is the sum of all of them, so a hover unfurled something taller than the
-  window. Every event is still in the list the header badge counts.
-- **The Instances tab stopped starting a PowerShell process every few seconds.** Listing instances
-  needs each Claude process's command line, which on Windows means
-  `powershell -NoProfile -Command "Get-CimInstance Win32_Process ..."`: measured here at ~490ms, of
-  which ~130ms is the shell starting and ~260ms is the WMI query. That ran per request, and the tab
-  polls every 4 seconds, with the Codex table running a near-identical second query on its own 5s
-  timer. So for as long as the app was open it was starting shells, forever, and every one of those
-  half-seconds sat on the request path, first paint included. `GET /api/instances` went from ~490ms
-  to ~5ms on the same machine and the same data.
-  - The scan is now one shared snapshot. Concurrent callers join a single in-flight query instead of
-    each starting a shell; a result under 3s old is reused outright; an older one is returned
-    immediately while a refresh runs behind it, so the tick that pays for the scan is never the tick
-    that waits for it. Nothing here holds a timer, so closing the UI stops the scanning dead.
-  - Everything that ACTS on the answer still enumerates for real: launching, quitting, focusing, and
-    the guard that refuses to delete a running instance. Launching and quitting also drop the
-    snapshot, so the row you just clicked updates on the next poll rather than when a TTL expires.
-- **The account column fills at page load instead of a second and a half later.** Every instance's
-  identity was resolved over the network, one strictly after another, and on a fresh load nothing is
-  resolved yet, so eleven accounts meant eleven serial round trips. The locally cached identity is
-  now painted first (25ms for all eleven, against ~1.5s for the same eleven over the network) and
-  the live resolve follows behind it, a few at a time, correcting anything that has changed.
+- **Usage filter.** With the quota columns on, a funnel button in the Instances toolbar dims instances at or above a percentage you set, and a switch hides them instead. Headings then read like "4 of 11 · 7 hidden" so a missing row is never a mystery. You pick whether it measures weekly, 5-hour or whichever is closer to its cap (weekly by default), and an instance that was never checked is never filtered.
+- **Expanding and collapsing a section is animated.** The instance tables, the Codex table and the queue run viewer now open and close smoothly, respect the reduced-motion setting, and keep their sticky headers.
 
 ### Changed
 
-- **The Instances tab opens on the quota columns.** "How much have I got left" is the question the
-  table gets opened for; PID, uptime and memory answer "is the process healthy", which is the rarer
-  follow-up. The toolbar toggle still swaps back in one click. This is a genuine default change
-  rather than a flipped flag: `useStorage` writes its default on first read, so every install that
-  had ever rendered the tab already carried an explicit `false` on disk and changing the default
-  alone would have reached nobody. The mode moved to a new key, leaving the old one as a dead
-  entry, on the same reasoning as the usage filter's `scope2`.
-- **Inter is served by the app, not fetched from Google.** The shared kit's base stylesheet opens
-  with an `@import` of `fonts.googleapis.com`, and a remote `@import` at the head of a
-  render-blocking stylesheet blocks first paint on a round trip to the internet. Free on a warm HTTP
-  cache, which is why it went unnoticed, but dead time on a first run or after a cache eviction and
-  an outright stall with no network, on a local desktop app that otherwise never needs to be online.
-  The two Latin subsets of Inter's variable woff2 now ship under `web/public/fonts/`. Same typeface,
-  no flash of fallback text, and the app renders offline.
-  - The kit copy is left byte-identical (its sync tool compares and rewrites synced files as text,
-    so it cannot carry font binaries without being reworked first); the remote import is stripped
-    from this app's CSS at build time instead. Any sibling app can adopt the same two files and
-    stylesheet block, and if they all do, that is the point to teach the kit about binaries.
+- **The Instances tab opens on the quota columns.** The question the table is opened for is how much is left. The toolbar toggle still switches back in one click.
+- **The app serves its own font instead of fetching it from Google.** The first screen no longer waits on the internet, and the app renders correctly offline.
+- **Settings that belong to a screen now live on that screen.** Usage auto-refresh moved into the usage flyout, and the provider switches moved into a Sections flyout. They are the same settings shown in both places.
 
-- **Settings that belong to a screen now live on that screen.** Usage auto-refresh (and its
-  interval) moved into the new usage flyout, and the provider switches that decide which instance
-  tables are drawn moved into a **Sections** flyout beside them. Both are still in Settings; these
-  are the same components rendered twice over the same state, not copies, so flipping either surface
-  moves the other. A setting nobody can find is a setting nobody knows exists.
+### Fixed
+
+- **Reset toasts no longer jump around.** Several toasts raised together are now placed correctly and no longer jitter under the pointer.
+- **A backlog of resets is one toast, not ten.** More than three at once collapse into a single "N quota windows reset" toast, and every event is still in the list the header badge counts.
+- **The Instances tab no longer starts a background shell every few seconds.** Process lookups are shared and reused, which makes the list far faster. Actions such as launching, quitting and deleting still check for real.
+- **The Account column fills at page load.** Saved identities show immediately and live results follow a few at a time.
 
 ## [0.15.0] - 2026-08-05
 
 **TL;DR**
 
-- **Reset notifications.**
-- **Usage mode**
-- **A CLI instance carried across the CC Manager UI rename lost its login.**
+- **Notifications tell you the moment a quota window resets**
+- **Usage mode swaps process columns for quota bars**
+- **A CLI instance no longer loses its login after the app rename**
 
 **Everything in 0.15.0**
 
 ### Added
 
-- **Reset notifications.** The app already kept every instance's quota percentage warm; it now
-  tells you the moment a window rolls over. The detection does not poll for a percentage that
-  dropped: the usage endpoint reports the reset instant *in advance*, so a rollover is a wall-clock
-  comparison against a timestamp already on record, and a timer is armed for that exact instant
-  rather than waiting on the next 15-minute sweep. Percentages are integers and can sit still for
-  an hour, which is why a delta-based detector would be both late and ambiguous here.
-  - Native OS notifications (a Windows toast under AgentHydra's own registered app identity, so it
-    appears in Windows' Notifications settings like any other app; `osascript` on macOS,
-    `notify-send` on Linux). These fire from the daemon, so they reach you with the app in the tray.
-  - **Keep reminding me** re-raises an unacknowledged reset on an interval and makes the toast
-    sticky instead of letting it fade after a few seconds. Bounded by a repeat cap and a hard
-    expiry, so a forgotten toggle cannot outlive its usefulness.
-  - Optional **email**, through your own SMTP server (implicit TLS or STARTTLS, AUTH LOGIN/PLAIN).
-    The password is DPAPI-sealed at rest and is never returned by the settings API.
-  - Pending resets survive a restart. The one notification most worth having is the one that fires
-    at 3am, which is exactly when an auto-update restart is most likely to have cycled the process.
-  - Settings → Notifications, with a **Send a test notification** button so the plumbing can be
-    proven now rather than five hours from now.
-
-- **Usage mode** in the Instances tab. One toolbar toggle swaps the process columns (PID, uptime,
-  memory) for the quota ones across every table on the tab. Each window renders as a bar of the
-  WAIT: its length is how much of the window is still to run, its colour bands that same fraction
-  (green, amber, red), and the time remaining is written inside it. Length and colour are one number
-  rendered twice, so a short green bar reads as "nearly back" without being decoded. The bands are
-  proportional rather than absolute: on the weekly window they land where the intuitive day
-  boundaries are (under a day green, one to two days amber, beyond that red), and the 5-hour session
-  window gets the same scale instead of reading green throughout and carrying no signal. The burn
-  percentage keeps its own column and rides under each bar as a caption. The per-model weekly
-  sub-limit is not given a column of its own (it shares the weekly reset instant, so its bar would
-  be a copy of the weekly one); it is still in the usage badge's breakdown.
+- **Reset notifications.** The app now tells you at the exact moment a quota window rolls over, even while it sits in the tray. Notifications are native on Windows, macOS and Linux, can repeat until you acknowledge them, and can optionally be sent by email through your own mail server (the password is stored encrypted). Pending resets survive a restart, and Settings > Notifications has a button to send a test.
+- **Usage mode.** One toolbar toggle swaps the process columns for quota bars across the Instances tab. Each bar's length and color both show how much of the window is still to run, with the time remaining written inside, and the burn percentage sits under it.
 
 ### Changed
 
-- The usage badge now opens its breakdown on **hover** as well as on click, and the breakdown
-  carries live "resets in" countdowns alongside the raw reset times. Hovering never steals focus.
-- Usage chips in the instances tables read `92%` rather than `92% wk`: the column heading already
-  names the window, so the suffix was repeating it once per row. The quick-instances window keeps
-  its suffix, having no headings to carry it.
-- An instance's folder moved out of a permanent second line under its name and into the row's
-  tooltip, halving the height of every row. The tooltip is now on every row rather than only
-  running ones, since the folder is what it is mostly for.
-- The Instances/Sessions tab you were last on is remembered across reloads.
+- **The usage badge opens on hover.** Its breakdown also shows live "resets in" countdowns.
+- **Usage chips read `92%` instead of `92% wk`.** The column heading already names the window.
+- **An instance's folder moved into the row tooltip.** Rows are about half as tall.
+- **The last tab you used is remembered across reloads.**
 
 ### Fixed
 
-- **A CLI instance carried across the CC Manager UI rename lost its login.** Each record stored its
-  `CLAUDE_CONFIG_DIR` as an absolute path written once at creation. The rename moved the folder but
-  nothing rewrote that string, so the record pointed at a directory that no longer existed: it read
-  as permanently signed out, and a re-login would have written fresh credentials back under the dead
-  `~/.ccmanagerui` folder. The path is now re-derived on read, persisted once at startup, and any
-  credentials still sitting at the old location are carried across.
-- The CLI instances heading showed a bare `(0)` when every CLI instance was linked to a desktop
-  instance and therefore rendered on that account's row instead. It now reads `(0 of 1)`, so the
-  shortfall explains itself even while the section is collapsed.
+- **A CLI instance carried across the rename no longer loses its login.** Its saved folder is now found at the new location and any credentials left at the old one are moved across.
+- **The CLI instances heading no longer shows a bare `(0)`.** It reads "(0 of 1)" when every CLI instance is linked to a desktop instance.
 
 ## [0.14.0] - 2026-08-04
 
 **TL;DR**
 
-- **CC Manager UI is now AgentHydra.**
-- **New logo.**
+- **CC Manager UI is now AgentHydra, with a new logo**
+- **Deleting an account cleans up everything kept under its name**
+- **An instance signed into a different account shows the new account**
+- **Codex and OpenCode sessions explain why they have no reply box**
 
 **Everything in 0.14.0**
 
 ### Changed
 
-- **CC Manager UI is now AgentHydra.** The old name described a Claude Code manager, and the app
-  has read Codex and OpenCode sessions for several releases. The upgrade is designed to be
-  uneventful:
-  - `~/.ccmanagerui` is moved to `~/.agenthydra` the first time the new build starts, carrying the
-    run queue, settings, instance labels and the accounts cache. The move only runs when the new
-    directory does not exist yet, and any failure (a pre-rename daemon still holding the pointer
-    file, a permission problem) falls back to reading the old directory where it stands rather than
-    starting from empty state.
-  - `server/data/ccmanagerui.db` is renamed to `agenthydra.db` in place, with its `-wal`/`-shm`
-    sidecars, and falls back to the old filename if the file is locked.
-  - Every `CCMANAGERUI_*` environment variable is still accepted as a fallback for its
-    `AGENTHYDRA_*` replacement. This is load-bearing for exactly one upgrade: the last CC Manager UI
-    release spawns its successor with `CCMANAGERUI_RELAUNCH=1`, and without the fallback that
-    auto-update would land in the zero-daemons race the relaunch flag exists to prevent.
-  - Saved UI preferences (`ccmanagerui.*` in localStorage) are copied to the `agenthydra.*`
-    namespace before the app mounts, so sidebar width, provider scope, collapse state and locale
-    all survive.
-  - The Windows executable, tray script and icon are renamed to `AgentHydra.*`. Release archives
-    keep their existing wrapper-directory layout so the updater in older builds still recognises
-    them. Desktop shortcuts pointing at the old exe need re-creating once.
-- **New logo.** A three-headed hydra replaces the figure mark, on a tile split between the existing
-  orange and a new sage green. The app's accent colour and the rest of the theme are unchanged.
+- **CC Manager UI is now AgentHydra.** The upgrade is designed to be uneventful: your settings, run queue, instance labels, accounts cache, database and saved interface preferences are carried over, and older update paths keep working. The Windows executable, tray script and icon are renamed, so desktop shortcuts to the old executable need re-creating once.
+- **New logo.** A three-headed hydra replaces the old mark. The accent color and theme are unchanged.
 
 ### Fixed
 
-- Deleting a dispatch account no longer leaves CLI instances pointing at it. The association is a
-  copy of the account's id and label kept in the CLI instances file rather than a database link, so
-  removing the account left both behind: the instance kept showing a badge naming an account that
-  was gone, and its usage check quietly failed because the id no longer resolved to anything. The
-  account is now detached from every CLI instance that used it when it is deleted, and any instance
-  already pointing at a missing account is shown as unassociated the next time the list loads.
-- Deleting a dispatch account now also clears the rest of what was kept under its name: its last
-  usage reading, its stored usage history, and its per-account auto-resume setting. Only the queue's
-  reference to an account was ever cleaned up automatically, so the others accumulated with every
-  account removed and could be re-applied to a new account that happened to reuse the same id.
-- An instance signed into a different account kept showing the previous account's email, name and
-  plan. Resolved identities were cached per instance folder and treated as final: nothing compared
-  them against the account the profile was actually signed into, and nothing re-checked them once
-  resolved, so the old identity survived every offline read and every poll until someone pressed
-  Refresh. Identity is now checked against the instance's current login, a cached identity that
-  belongs to another account is discarded rather than displayed, and a sign-in change is picked up
-  on its own within seconds. A resolved identity is also re-checked periodically, so an email, name
-  or plan changed at claude.ai catches up without a restart.
-- An open Codex or OpenCode session showed no reply box and no reason for it. Only the `claude` CLI
-  can be handed a prompt, so the composer is deliberately dropped for the other two sources, but
-  nothing stood in its place and the gap read as a failed render rather than a boundary. Those
-  sessions now say they are read-only here and name the tool to carry the conversation on in.
+- **Deleting an account no longer leaves CLI instances pointing at it.** Instances that used it are detached and show as unassociated instead of failing their usage check. Its last usage reading, usage history and auto-resume setting are also removed.
+- **An instance signed into a different account no longer shows the old account.** Identity is checked against the current login, stale identities are discarded, a sign-in change is picked up within seconds, and email, name and plan changes catch up without a restart.
+- **Codex and OpenCode sessions now say they are read-only here.** They name the tool to continue in, instead of leaving a gap where the reply box would be.
 
 ## [0.13.0] - 2026-07-30
 
 **TL;DR**
 
-- **Quick instance mode**
+- **Quick instance mode opens a compact launcher without the heavy background services**
+- **The Sessions list no longer stalls on first load**
+- **Sessions list speed no longer depends on transcript folder size**
 
 **Everything in 0.13.0**
 
 ### Added
 
-- **Quick instance mode** opens a compact Claude/Codex instance launcher without starting the
-  session scanner, database, queue, scheduler, monitor, usage refresh, settings sync, or updater.
-  Launch it with `CCManagerUI.exe --instances`, `bun run instances`, the generated
-  **CCManagerUI Instances** shortcut, or the shortcut action in Settings.
+- **Quick instance mode.** A compact Claude and Codex instance launcher opens without starting the session scanner, queue, scheduler, usage refresh, settings sync or updater. Start it from the Instances shortcut or the shortcut action in Settings.
 
 ### Fixed
 
-- The Sessions list no longer stalls the app on first load. Every transcript it showed was being
-  read and parsed from scratch on each daemon start, all of them at once. On a store of ~1,100
-  transcripts that meant a 4.6-second wait for the first list and a jump from 101 MB to 3.1 GB of
-  memory. Parsed transcript metadata is now cached on disk, so a restart is warm; the list reads at
-  most a dozen transcripts at a time instead of two hundred; and the daemon warms the newest ones in
-  the background at startup. Same store, same list: 0.35 seconds and a bounded footprint.
-- Sessions list latency no longer grows with the size of your transcript folder. Building the file
-  index globs the whole store and stats every file, and that ran inside requests, so each refresh
-  paid a folder-sized tax (145 ms for 1,255 transcripts, and rising). The index is now served from
-  the last snapshot and re-swept in the background, which takes routine refreshes from ~150 ms to
-  ~3 ms. Looking up a session that is genuinely missing still re-sweeps, at most once every two
-  seconds, so a newly created transcript is still found straight away.
+- **The Sessions list no longer stalls the app on first load.** Parsed transcript details are cached on disk, so a restart is warm and memory stays bounded.
+- **Sessions list speed no longer depends on the size of your transcript folder.** The file index is served from a snapshot and refreshed in the background, while a newly created transcript is still found straight away.
 
 ## [0.12.2] - 2026-07-28
 
@@ -4458,1029 +3988,399 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
-- **Resuming a chat now uses the desktop instance that owns it.** When you resume a Claude Desktop conversation, it automatically uses the desktop instance associated with that chat instead of an ambient CLI login. The composer shows this default and lets you choose other instances or saved credentials.
-- **Archived conversations shown by default.** Archived sessions are now visible in the Sessions view by default, and session source badges are easier to distinguish. The composer makes scheduling the primary Queue action.
+- **Resuming a chat uses the desktop instance that owns it.** A Claude Desktop conversation no longer falls back to an unrelated CLI login. The composer shows this default and lets you pick another instance, the ambient login or a saved account.
+- **Archived conversations are shown by default.** Session source badges are easier to tell apart, and scheduling is now the main Queue action in the composer, with immediate queueing one click away.
 
 ### Fixed
 
-- **Weekly quota walls recognized as rate limits.** Weekly Claude quota walls are now recognized from rate-limit events and human notice, so affected runs are marked as rate-limited and can be resumed after reset.
-- **Option menus no longer show empty entries.** Composer and queue-builder option menus no longer render empty model, effort, or permission entries.
+- **Weekly quota walls are recognized as rate limits.** Affected runs are parked as rate-limited and can be resumed after the reset instead of being reported as failures.
+- **Option menus no longer show empty entries.** The composer and queue builder no longer list blank model, effort or permission choices.
 
 ## [0.12.1] - 2026-07-26
 
 **TL;DR**
 
-- **Codex Desktop instances can now run side by side.**
-- **Provider settings and manual ChatGPT handoff.**
+- **Codex Desktop instances can run side by side**
+- **Provider settings and a manual ChatGPT handoff**
+- **Codex sessions match the chats Codex Desktop shows**
+- **Windows gets a single-file executable with an icon**
 
 **Everything in 0.12.1**
 
 ### Added
 
-- **Codex Desktop instances can now run side by side.** Each managed Codex instance launches the
-  desktop app with its own `CODEX_HOME` and `CODEX_ELECTRON_USER_DATA_PATH`, so work, personal, and
-  client OpenAI logins have independent windows and local state. The Instances view reports which
-  desktops are running and can open, focus, or quit each one; CLI launch/login remains available on
-  the same row.
-- **Provider settings and manual ChatGPT handoff.** Claude Desktop, Claude CLI, Codex Desktop, and
-  Codex CLI surfaces can be shown independently. An opt-in composer action creates a bounded,
-  secret-screened repository context attachment, copies the task prompt, and opens ChatGPT without
-  automating the user's account or submission.
+- **Codex Desktop instances can run side by side.** Each managed Codex instance has its own login and local state, so work, personal and client accounts get independent windows. The Instances view shows which are running and can open, focus or quit each one.
+- **Provider settings and a manual ChatGPT handoff.** Claude Desktop, Claude CLI, Codex Desktop and Codex CLI can each be shown or hidden. An opt-in composer action builds a size-limited, secret-screened repository summary, copies the task prompt and opens ChatGPT, without automating your account.
 
 ### Changed
 
-- Version tags now publish their tested platform bundles automatically using the matching
-  versioned changelog section. Release retries update the existing release in place instead of
-  deleting it or leaving another unpublished draft.
-- Windows releases now expose an icon-bearing, single-file GUI executable while retaining a
-  compact ZIP for automatic updates. The web UI is embedded, so no loose `web` or `node_modules`
-  folders are needed beside the executable.
-- Connections settings sync now uses the multi-device-safe 1.2 engine, with atomic first-account
-  seeding, conflict-safe nested patches, token-isolated caching, and a five-second final flush that
-  cancels a stuck token or network request instead of delaying shutdown indefinitely.
+- **Windows releases include an icon-bearing single-file executable.** A compact ZIP is kept for automatic updates, and the web interface is built in.
+- **Settings sync is safer across several devices.** First-account setup is atomic, nested changes no longer conflict, and a stuck network request can no longer delay shutdown.
 
 ### Fixed
 
-- Codex sessions now match the chats shown by Codex Desktop: canonical sidebar titles come from
-  `session_index.jsonl`, while subagent rollout files no longer appear as separate sessions with
-  duplicated titles and forked chat history. Child-agent rollouts remain implementation details of
-  their parent chat.
-- Release builds now honor both spaced and `--option=value` arguments, so every platform compiler
-  writes into the versioned one-executable bundle that the smoke and publication jobs validate.
+- **Codex sessions match the chats Codex Desktop shows.** Titles come from Codex's own sidebar, and subagent files no longer appear as separate duplicate sessions.
 
 ## [0.11.1] - 2026-07-23
 
-### Changed
-
-- Completed session-sharing research and the obsolete CLI/monitor handoff were consolidated into
-  the live reference and source safety comments; their standalone Markdown notes were removed.
-
 ### Fixed
 
-- The Windows shortcut integration test now allows cold PowerShell/COM startup the same bounded
-  time as the equivalent launcher test, preventing a correct run from failing at the five-second
-  default by a few milliseconds.
+- **Session-sharing notes were folded into the main reference.** The standalone notes were removed, and one slow-startup case on Windows no longer fails a correct run.
 
 ## [0.11.0] - 2026-07-23
 
 **TL;DR**
 
-- **Claude, Codex, and OpenCode conversations now share one Sessions view.**
-- **Codex CLI instances can be managed alongside Claude instances.**
-- **Provider browsing cannot leak into Claude execution.**
-- **OpenCode full-body search now filters and extracts text inside SQLite.**
-- **Development now uses Bun's native parallel workspace runner.**
-- **Manually added dispatch credentials remain portable SQLite values.**
+- **Claude, Codex and OpenCode conversations share one Sessions view**
+- **Codex CLI instances can be managed alongside Claude instances**
+- **Codex and OpenCode stay read-only, so they cannot affect Claude runs**
+- **OpenCode search is far lighter on memory**
+- **Security hardening: loopback-only access, bounded inputs, safer searches**
+- **A failed account lookup now fails the run instead of using another login**
 
 **Everything in 0.11.0**
 
 ### Added
 
-- **Claude, Codex, and OpenCode conversations now share one Sessions view.** Every row is
-  source-tagged and the list, full-body search, transcript tail, done marks, REST API, and MCP
-  session tools all understand provider identity. Codex reads active and archived rollout JSONL;
-  OpenCode CLI and Desktop are both covered through the SQLite store they share. Injected Codex
-  runtime blocks and provider reasoning records stay out of the human transcript.
-- **Codex CLI instances can be managed alongside Claude instances.** Create an isolated
-  `CODEX_HOME`, open `codex login` for the user, launch it in a terminal, rename it, or delete it
-  with exact-name confirmation. The REST API and MCP expose the same lifecycle.
+- **Claude, Codex and OpenCode conversations share one Sessions view.** Every row shows its source, and search, transcript view, done marks and the MCP session tools all understand it. Codex active and archived chats and OpenCode CLI and Desktop chats are covered, and injected runtime blocks stay out of the transcript.
+- **Codex CLI instances can be managed alongside Claude instances.** Create an isolated Codex home, open its login, launch it in a terminal, rename it, or delete it with an exact-name confirmation.
 
 ### Changed
 
-- **Provider browsing cannot leak into Claude execution.** Queue/session composers, rate-limit
-  discovery, and Desktop-instance filtering remain explicitly Claude-only, while Codex and
-  OpenCode are read-only conversation sources. OpenCode's database is never offered as a raw
-  transcript download.
-- **OpenCode full-body search now filters and extracts text inside SQLite.** Large tool payloads
-  are no longer loaded and parsed in JavaScript; against the 260 MB local store this reduced the
-  measured search allocation from roughly 49 MiB to 5 MiB.
-- **Development now uses Bun's native parallel workspace runner.** Removing `concurrently`
-  eliminates a redundant dependency and its shell-command dependency chain. Biome, Hono, Vue,
-  Tailwind, Lucide, and other compatible dependencies move to their current non-breaking releases.
-- **Manually added dispatch credentials remain portable SQLite values.** The app briefly sealed
-  this one column with Windows DPAPI during the pre-release hardening pass, but that added
-  machine/user coupling without changing the local database threat model enough to justify it.
-  A compatibility migration converts any such rows back when the same Windows user can decrypt
-  them; the per-user state directory and database still receive restrictive filesystem modes.
-- The completed Codex/ChatGPT/OpenCode research note and the original merge plan were removed after
-  their work was implemented and verified.
+- **Codex and OpenCode are read-only conversation sources.** Queue and session composers, rate-limit discovery and instance filtering stay Claude-only, and OpenCode's database is never offered as a download.
+- **OpenCode full-text search uses far less memory.** Large tool output is no longer loaded just to search it.
+- **Manually added account credentials stay portable.** A short-lived encryption step that tied them to one machine and user was reverted, and any affected entries convert back.
 
 ### Fixed
 
-- Session metadata caching now replaces an active transcript's previous parse instead of retaining
-  one cache entry for every appended turn.
-- Scheduler and monitor numeric settings are finite and bounded, and changing the scheduler poll
-  interval now updates the live timer immediately rather than waiting for a restart.
-- Filesystem containment uses resolved path components instead of string prefixes, preventing a
-  sibling such as `instances-elsewhere` from being treated as a child of `instances`.
-- Queue writes reject malformed statuses, booleans, positions, account references, and launch
-  options before they can create invalid persisted state or reach a terminal command.
-- A selected dispatch account that cannot be read now fails the run instead of silently falling
-  back to the ambient login.
-- Child-process tests use the exact Bun executable running the suite, avoiding Windows `bun.cmd`
-  quote loss in updater fixtures.
+- **Session details are cached once per transcript.** An active transcript no longer keeps one cache entry per new turn.
+- **Scheduler and monitor numbers are bounded.** Changing the scheduler poll interval takes effect immediately instead of after a restart.
+- **Folder checks are stricter.** A sibling folder with a similar name is no longer treated as inside the instances folder.
+- **Queue writes reject malformed values.** Bad statuses, positions, account references and launch options can no longer create invalid saved state.
+- **A selected account that cannot be read now fails the run.** It no longer silently falls back to the ambient login.
 
 ### Security
 
-- The passwordless daemon now refuses every non-loopback bind host, and OAuth callback origins are
-  restricted to the same loopback set. API bodies are capped at 2 MiB.
-- User-supplied session-search regular expressions are length-bounded and structurally checked
-  before execution, preventing synchronous catastrophic backtracking from bypassing the search
-  deadline.
-- Terminal launch model and effort values are allowlisted before crossing the shell boundary.
-- GitHub Actions defaults to read-only repository contents; only the release job receives write
-  access.
+- **The passwordless app now refuses any non-loopback address.** Sign-in callbacks are limited to the same addresses, and request bodies are capped.
+- **Session-search patterns are checked before they run.** Overly long or dangerous regular expressions can no longer stall the search.
+- **Terminal launch model and effort values are validated.**
 
 ## [0.10.0] - 2026-07-23
 
 **TL;DR**
 
-- **A session's file location can be copied as text.**
-- **Settings can shut down the complete app.**
-- **Codex, ChatGPT and OpenCode support has a scoping document.**
-- **README images now auto-regenerate and match the interface.**
-- **The shared tray launcher can forward dropped files and folders.**
-- **Settings puts everyday controls up front.**
-- **Version number shows update status and control.**
-- **Generic Anthropic tiers are treated as Free.**
+- **Copy a session's file location as text**
+- **Shut down the whole app from Settings**
+- **Settings puts everyday controls up front**
+- **The version number shows update status and applies updates**
+- **Generic Anthropic tiers are shown as Free**
+- **README screenshots regenerate and match the interface**
 
 **Everything in 0.10.0**
 
 ### Added
 
-- **A session's original file location can be copied as text.** The transcript header and the
-  session row's right-click menu now include **Copy the session file location to the clipboard**.
-  It resolves the original file server-side, so the copied value is the exact absolute `.jsonl`
-  path rather than a path reconstructed from the session id.
-- **Settings can shut down the complete app.** A two-click power control beside the Settings close
-  button exits the daemon and signals the tray host to quit too. Previously, stopping the daemon
-  from the web UI left the tray watchdog running, so it could immediately start the daemon again.
-- **Codex, ChatGPT and OpenCode support has a concrete scoping document.** The new research note
-  records the session-store formats found on this machine, the Claude-specific seams in the current
-  architecture, the feasibility of Codex transcript support, and the remaining OpenCode storage
-  blocker so future implementation can start from verified evidence.
-- **`bun run screenshots` regenerates the README images.** They used to be taken by hand against a
-  throwaway daemon, which is why they sat two releases out of date showing a theme the app no longer
-  had. The command starts its own web server on a private port, drives headless Chrome, and writes
-  one PNG per view at a viewport sized to that view's shell. Since the images are public, it does
-  not point a daemon at a synthetic home directory; it replaces `fetch` before the SPA boots so every
-  `/api/` response is invented and no daemon runs at all. A request that finds no fixture is
-  recorded and **fails the run**, so a fixture gap cannot quietly put live data into a committed
-  image, and each shot carries a predicate that must hold before the shutter fires, so a stale
-  fixture fails loudly instead of producing a screenshot of empty loading skeletons.
-- **The shared tray launcher can forward dropped files and folders.** Paths dropped onto a shortcut
-  are passed to adapters through an opt-in environment variable, without changing ordinary launches
-  or breaking apps whose adapters do not consume drops.
+- **Copy a session's original file location.** The transcript header and the session row's right-click menu now offer to copy the exact location of the session's file to the clipboard.
+- **Shut down the whole app from Settings.** A two-click power control beside the Settings close button exits the app and tells the tray to quit too. Before, stopping it from the web UI left the tray free to start it again straight away.
+- **Scoping notes for Codex, ChatGPT and OpenCode support.** A research note records what was found about their session storage and what a future implementation would need.
+- **README screenshots regenerate on demand.** They are rebuilt from invented data, so no real chats or accounts appear in a public image, and a missing fixture fails the run instead of leaking live data.
+- **The tray launcher can forward dropped files and folders.** Apps that want dropped paths can opt in; ordinary launches are unchanged.
 
 ### Changed
 
-- **Settings puts the everyday controls up front.** Theme selection moves into the panel header,
-  beside the new shutdown control. Tooltip visibility and the transcript-editor override move under
-  an Appearance **Advanced** disclosure, leaving portable mode, tray visibility and instance-table
-  visibility as the immediately visible choices.
-- **The version number is now the update status and control.** It is green when current, amber when
-  an update can be applied, and red when checking is blocked or no update source exists. Hovering
-  explains the state; clicking checks again or applies an available update. This replaces the
-  separate status rows and update buttons.
-- **Generic Anthropic tiers are treated as Free.** `default_claude_ai` is the active free/default
-  tier even when historical `has_claude_max` or `has_claude_pro` flags remain true after a paid plan
-  expires. The Instances Plan column now trusts a specific live tier first, treats a generic tier as
-  Free, and uses the historical plan flags only when no tier is available.
-- **The README screenshots now match the current interface.** Sessions, Instances and Queue were
-  recaptured against synthetic data on the Claude-aligned theme; their captions now include the
-  Plan column and the finished-run state actually shown.
+- **Settings puts the everyday controls up front.** Theme selection moves to the panel header, and tooltip and transcript-editor options sit under an Advanced section in Appearance.
+- **The version number is the update status and control.** It is green when current, amber when an update can be applied, and red when checking is blocked. Hover to see why; click to check again or apply the update.
+- **Generic Anthropic tiers are shown as Free.** An expired paid plan no longer keeps showing as Pro or Max in the Plan column.
+- **README screenshots match the current interface.** Sessions, Instances and Queue were recaptured on the current theme.
 
 ## [0.9.0] - 2026-07-21
 
 **TL;DR**
 
-- **The interface follows Claude's own surfaces.**
-- **The accent is no longer used as a background wash.**
-- **Text fields paint their own surface.**
+- **The interface follows Claude's own surfaces, with three distinct grounds**
+- **The accent is no longer used as a background wash**
+- **Text fields paint a real surface and outline**
 
 **Everything in 0.9.0**
 
 ### Changed
 
-- **The interface follows Claude's own surfaces.** The window used to be a single near-black sheet:
-  every region painted the same token and leaned on hairline borders for structure, so there was
-  effectively one shade on screen. There are now three grounds, using Claude's values directly: the
-  top bar and session list as the darkest chrome, the working area a step above it, and cards,
-  popovers and table headers raised above that. The accent moves from magenta to Claude's dusty rose.
-  The greys are deliberately neutral; an earlier revision of this work derived them and landed a
-  visible brown cast on every surface instead.
-- **The accent is no longer used as a background wash.** The selected session row and your own chat
-  bubbles were tinted with the accent at 10–15%, which composites over a dark ground into a muddy
-  maroon rather than reading as a highlight. Both are the neutral raised grey now, and the accent is
-  kept for things that are actually accents (Send, Queue, checked states).
-- **Text fields paint their own surface.** The kit draws them at 30% alpha, so the token never
-  reached its real value: the search and composer boxes came out darker than intended and had no
-  visible edge, and the composer additionally drew a filled field inside its own filled box. Text
-  fields now paint the surface outright and carry a real outline, while outline buttons and badges
-  keep the translucent fill that suits them.
-
-### Fixed
-
-- The release workflow no longer trips GitHub's Node 20 deprecation warning: `upload-artifact`,
-  `download-artifact` and `setup-qemu-action` move to their current majors.
+- **The interface follows Claude's own surfaces.** The window was one near-black sheet. It now has three grounds: darkest chrome for the top bar and session list, a lighter working area, and raised cards, popovers and table headers. The accent moves from magenta to a dusty rose, and the greys are neutral with no brown cast.
+- **The accent is no longer a background wash.** The selected session row and your own chat bubbles were tinted with the accent, which looked like muddy maroon. They are now a neutral raised grey, and the accent stays for Send, Queue and checked states.
+- **Text fields paint a real surface and outline.** Search and composer boxes had come out too dark with no visible edge. They now have a solid surface and a clear outline.
 
 ## [0.8.0] - 2026-07-21
 
 **TL;DR**
 
-- **The Instances table has a Plan column.**
-- **Usage refreshes on load.**
-- **The account cell shows a name, not an address.**
-- **The README now shows the app.**
-- **0.5.0 has its own section again.**
+- **The Instances table has a sortable Plan column**
+- **Usage refreshes as soon as you open Instances**
+- **The account cell shows a short name, not an email**
+- **The README now shows the app**
 
 **Everything in 0.8.0**
 
 ### Added
 
-- **The Instances table has a Plan column.** The account type (Free, Pro, Max, Max 20×, …) now has
-  its own sortable column to the right of Usage, instead of being tucked on the end of the account
-  cell. The value is worked out server-side from two signals, because neither is reliable alone: an
-  account's rate-limit tier is sometimes a generic passthrough even for a paid plan (a real Max
-  account can arrive labelled `default_claude_ai`), so the normalized plan is used as the fallback
-  and a raw internal string is never shown; the column reads as a bare dash only when the plan
-  genuinely can't be determined.
+- **A Plan column in the Instances table.** The account type (Free, Pro, Max, Max 20×) has its own sortable column next to Usage. When the plan cannot be determined it shows a dash rather than an internal label.
 
 ### Changed
 
-- **Usage refreshes on load.** Opening the Instances view now re-checks every desktop and CLI
-  instance's usage right away, instead of showing the last cached numbers until you pressed "Refresh
-  all usage". Reading quota does not consume any, so this costs nothing.
-- **The account cell shows a name, not an address.** It used to print the full email (and the tier);
-  it now shows the account's short name, reveals the email on hover, and hands the tier to the new
-  Plan column.
-- **The README now shows the app.** It had no screenshots at all, so the only way to find out what
-  the thing looked like was to install it. There are now three, one per view, captured from a
-  throwaway daemon pointed at a synthetic home directory so no real session titles, account
-  addresses or filesystem paths ship in a public image. The surrounding copy is organised around
-  those views rather than around the architecture.
-- Biome no longer walks `.claude/`, which holds generated local artifacts, the same exclusion
-  `.arkitect/reports` already had. A stale codemap stamp file could fail `bun run lint` locally
-  while CI, which checks out fresh, stayed green.
-- **0.5.0 has its own section again.** Its entries had been written into 0.6.0's, so the changelog
-  described two releases as one and no `[0.5.0]` heading existed. Each entry is now filed under the
-  tag that actually shipped it, checked against the commit that introduced the code rather than
-  against where the prose sat. Wording is unchanged; two changes that had never been recorded at all
-  (the scheduler status chip becoming a link, and the vendored-library export-drift guard) are now
-  listed.
+- **Usage refreshes on load.** Opening Instances re-checks every desktop and CLI instance right away instead of showing old numbers until you press refresh. Reading quota costs none.
+- **The account cell shows a name, not an address.** It shows the account's short name, reveals the email on hover, and leaves the plan to the new column.
+- **The README now shows the app.** It gained three screenshots, one per view, made from invented data so nothing private is in a public image, and its text is organised around those views.
+- **Version history is filed under the right releases.** Entries for 0.5.0 had been written into 0.6.0; each now sits under the release that shipped it, and two changes that had never been recorded are listed.
 
 ## [0.7.0] - 2026-07-18
 
 **TL;DR**
 
-- **Session list now filters by time window (last 24h, 7d, 30d, all).**
-- **Finished runs can be cleared from the queue.**
-- **Scheduler indicators are now clickable and accessible.**
-- **Instances and CLI sections are collapsible.**
-- **Queue scheduling uses the same date picker as the composer.**
-- **Session list shows actual conversations, not quota checks and warnings.**
-- **Auto-resume monitor and UI layout fixed.**
-- **Editor settings now hide complexity until needed.**
+- **The session list has a time window (24 hours by default)**
+- **Finished runs can be cleared from the queue**
+- **Scheduler indicators are clickable and lead to the scheduler settings**
+- **Instances and CLI sections are collapsible**
+- **Queue scheduling uses the same date picker as the composer**
+- **The session list shows real conversations, not quota checks and warnings**
+- **The auto-resume monitor only lists work that still needs attention**
+- **The instance editor applies as you type**
 
 **Everything in 0.7.0**
 
 ### Added
 
-- **The session list now has a time window, set to the last 24 hours.** This list answers "what am
-  I working on", and a transcript store that has been filling up for months answers that question
-  worse the further back it reaches. The `...` menu gains a **Time period** filter (24 hours, 7
-  days, 30 days, all time). Like the instance and archived filters, it is applied before the
-  newest-N cap rather than after, so widening the window genuinely reaches further back instead of
-  reshuffling the same rows. If the list comes up empty because of the window, it says so and
-  offers a one-click switch to all time, rather than looking broken.
-- **Finished runs can be cleared out of the queue.** The queue accumulated every completed,
-  failed and cancelled run forever, and the only way to get rid of them was to delete each card by
-  hand. The finished-runs disclosure now carries a Clear button, with a two-click confirm (the
-  same pattern Settings uses for Disconnect) since it is a bulk delete.
-- **The scheduler indicators are now the way to reach the scheduler.** The on/off indicator in the
-  queue drawer was the one place you would notice the scheduler was off, and it was not clickable.
-  Both it and the header chip now open Settings at the scheduler section, and the section pulses
-  briefly on arrival, because a scroll that lands mid-page on a column of near-identical cards
-  otherwise leaves you guessing which one you were sent to.
-- **Instances and CLI instances are collapsible.** Plenty of people use only the desktop app or
-  only the CLI, and had to keep scrolling past the other table. Each heading is now a toggle, and
-  the choice is remembered.
-- **Queueing a run for later uses the same picker as the chat composer.** "Run at" in the queue
-  builder was a bare date-and-time box, so saying "in a few hours" meant working out and typing a
-  full wall-clock date. It now opens the composer's picker (in 5 hours, tomorrow at your configured
-  time, hour and 10-minute steppers, or an exact date), and the two surfaces share one component
-  instead of two copies of the same idea. It has also moved out of Advanced options and up beside
-  Account, for the same reason Account sits there: when a run happens is a decision people make up
-  front, not a tuning knob.
+- **A time window on the session list.** It defaults to the last 24 hours, and the list menu offers 7 days, 30 days and all time. The window applies before the newest-sessions cap, so widening it really reaches further back. If the window leaves the list empty, it offers a one-click switch to all time.
+- **Clear finished runs from the queue.** The finished-runs section has a Clear button with a two-click confirm, so you no longer delete completed, failed and cancelled runs one by one.
+- **Scheduler indicators lead somewhere.** The on/off indicator in the queue drawer and the header chip both open Settings at the scheduler section, which pulses briefly so you can see where you landed.
+- **Collapsible Instances and CLI instances.** Each heading is now a toggle and the choice is remembered.
+- **Queueing a run for later uses the composer's picker.** It offers in 5 hours, tomorrow at your configured time, hour and 10-minute steps, or an exact date, and has moved up beside Account.
 
 ### Changed
 
-- **The instance editor applies as you type.** It used to show a miniature preview of the row
-  inside the dialog, which is a worse answer to "what will this look like" than the real row
-  sitting right behind the dialog. Name, icon and colour now persist as you change them and the
-  table updates live; the preview and its explanatory paragraph are gone, and the button says Done
-  rather than Save, because there is nothing left for it to save.
-- **The transcript editor setting hides its input until you want it.** Auto-detect already picks
-  the right editor for anyone with VS Code, Cursor, Notepad++ or Sublime installed, so the setting
-  showed an empty box asking for an absolute path to solve a problem most people did not have. The
-  row now states which editor will actually open a transcript; the path field, a Custom badge and a
-  "back to auto-detect" action appear only if you go looking.
-- **The two create buttons are icons until you hover them.** "Create instance" in both tables now
-  shows a plus and expands to its label on hover or focus, matching the queue drawer's New run
-  button, so one long label no longer sets the width of a toolbar of icons.
-- **Settings no longer has an Accounts section.** It only ever listed leftover manually pasted
-  credentials, which is nobody's normal path since accounts arrived by signing an instance in, so
-  in practice it rendered as an empty box telling you to go to the Instances tab. A section whose
-  content is a redirect is not a setting. Accounts are still managed on the Instances tab, and the
-  per-account auto-resume overrides still list them where they mean something.
+- **The instance editor applies as you type.** Name, icon and colour update the table live; the preview is gone and the button says Done.
+- **The transcript editor setting stays out of the way.** The row says which editor will open a transcript, and the path field appears only if you want to override it.
+- **The create buttons are icons until you hover.** They show a plus and expand to their label on hover or focus.
+- **Settings no longer has an Accounts section.** It only redirected to the Instances tab; accounts are still managed there, and per-account auto-resume overrides still list them.
 
 ### Fixed
 
-- **Most sessions were named after a warning notice instead of their contents.** The list showed
-  the same string over and over: "&lt;local-command-caveat&gt;Caveat: The messages below were
-  generated by the user while running local commands. DO NOT respond...". On this machine that was
-  103 of the newest 200 sessions. A session's title falls back to its first user message, and
-  nothing checked whether that message was the CLI talking to itself. Claude Code writes that
-  caveat as an ordinary user turn flagged `isMeta`, and the code that knows how to drop such turns
-  was already there, applied to the transcript preview but not to the title. The title now goes
-  through the same filter. A session whose real prompt arrives wrapped in a tag, such as a
-  scheduled task, is unwrapped to its name rather than dropped.
-- **The list was full of sessions that were never conversations.** Checking your remaining quota
-  sometimes has to launch the real `claude` binary to ask, and that launch opens a session and
-  writes a transcript: roughly 3 KB holding a caveat, a `/usage` command line and nothing else. On
-  this machine 127 of the newest 300 sessions were these. Three fixes, because one was not enough:
-  transcripts with no substantive turn are no longer listed at all; the quota probe now runs in a
-  directory of its own so its transcripts never land among real work; and it deletes them after
-  itself. Sessions with real content are unaffected, whatever their size.
-- **The auto-resume monitor listed work that was long finished.** Rows were written when a resume
-  was scheduled and then never revisited, so a resume that had completed, been cancelled, or whose
-  queue entry had since been deleted still reported "Scheduled, resumes ~09:14" indefinitely, and
-  the Done state the interface could display was one the daemon had no way to reach. Rows are now
-  reconciled against what actually happened to the resume, and the list shows only what still needs
-  something to happen. A failed resume is kept and asks for attention, rather than being quietly
-  filed away. Sessions you have archived are also excluded, and auto-resume no longer picks them
-  up at all: archiving is you saying you are finished with it.
-- **Advanced options in the queue builder was quietly broken.** Each of the Model, Effort and
-  Permission dropdowns offered a "Default" entry with an empty value, which throws in the
-  underlying component, and the failure took out everything rendered after it in that section. It
-  went unnoticed because the visible casualties were the very dropdowns causing it, so the section
-  looked sparse rather than broken. The account picker beside them had hit this same trap earlier
-  and been fixed; the other three had been missed.
-- **Settings had one seam with no gap, and one list with no separators.** The auto-resume monitor
-  sat flush against the scheduler card above it, because a wrapper element added to support a deep
-  link broke the page's spacing chain. The per-account rows inside the monitor lost their dividing
-  lines for a closely related reason. Both are fixed, and the rest of the app was swept for the
-  same pattern.
-- **A single instance could occupy several rows in the usage cache.** The cache keyed each entry
-  by the instance's directory as spelled by the caller, and on Windows one folder can be spelled
-  several ways, so `C:\Users\...`, `c:\users\...` and `C:/Users/...` each opened their own entry. A
-  reading stored under one spelling was invisible to a lookup using another, so a warm cache still
-  missed and re-ran the check. Keys are normalized now.
+- **Sessions were named after a warning notice.** Many sessions showed the CLI's own caveat text as their title. Titles now skip it, and a session whose prompt arrives wrapped in a tag, such as a scheduled task, shows that task's name.
+- **The list was full of sessions that were never conversations.** Quota checks created empty throwaway sessions. Such sessions are no longer listed, quota checks run in their own folder, and they clean up after themselves.
+- **The auto-resume monitor listed finished work.** Finished, cancelled or deleted resumes kept showing as scheduled. The list now reflects what actually happened, keeps failed resumes visible, and ignores archived sessions.
+- **Advanced options in the queue builder were broken.** The Model, Effort and Permission dropdowns failed on their Default entry and took the rest of the section down with them.
+- **Settings spacing.** The auto-resume monitor sat flush against the scheduler card and lost its row dividers; both are fixed.
+- **One instance could occupy several usage cache rows.** On Windows, different spellings of the same folder missed the cache and re-ran the check. They are now treated as one.
 
 ## [0.6.0] - 2026-07-17
 
 **TL;DR**
 
-- **"Filter by instance" opened nothing and froze the whole app.**
-- **"Open the session file" asked which app to use instead of just opening.**
-- **Right-click a session.**
-- **Mark a session as done.**
-- **Archived sessions are recognised, and hidden by default.**
-- **One list-options menu.**
-- **A CI guard against vendored-library export drift**
+- **"Filter by instance" no longer opens off-screen and freezes the app**
+- **"Open the session file" opens an editor instead of asking which app to use**
+- **Right-click menu on sessions**
+- **Mark a session as done**
+- **Archived sessions are recognised and hidden by default**
+- **One list-options menu replaces the toolbar icon row**
 
 **Everything in 0.6.0**
 
-### Fixed
-
-- **"Filter by instance" opened nothing and froze the whole app.** Clicking it appeared to do
-  nothing, and then no other control responded until you pressed Escape. Both halves were the same
-  bug. reka positions a popup by walking the Vue component tree for the nearest popper root, and the
-  menu was wrapped AROUND its own tooltip, so the tooltip claimed the anchor and the menu's popper
-  never got one. The menu really did open; it just rendered at floating-ui's unpositioned
-  `translate(0, -200%)`, which is off-screen above the window. Being a modal menu, it also set
-  `pointer-events: none` on the page while it was "open", which is what made everything else stop
-  responding. The popper root now lives inside the tooltip, so each anchors to its own element. The
-  advanced-search popover next to it was broken in exactly the same way and had simply been failing
-  in silence, because a popover is not modal and so froze nothing; it is fixed too. A repo guardrail
-  now fails the build on that nesting, and it is tested against both the broken and the fixed shape,
-  because the previous guard for this encoded the wrong cause and crashed on import without ever
-  running.
-- **"Open the session file" asked which app to use instead of just opening.** `.jsonl` has no file
-  association on a stock Windows machine, so handing the path to the OS default handler made Windows
-  pop its "How do you want to open this file?" picker. The app now names an editor itself: it uses
-  the first one it finds (VS Code, Cursor, Notepad++, Sublime) and falls back to Notepad, which
-  always exists, so the picker can never appear. macOS opens the default text editor. A new
-  **Transcript editor** setting overrides the choice, and a path that points at nothing falls back to
-  auto-detect rather than leaving the button silently dead.
-
 ### Added
 
-- **Right-click a session.** The sidebar list now has its own context menu: mark as done, open the
-  transcript, open or copy the session file, and copy the title, folder or id. Right-clicking acts
-  on the row under the pointer without selecting it, so it never loads a transcript you did not ask
-  for.
-- **Mark a session as done.** A way to say "I have dealt with this" without losing it: the row keeps
-  its place in the list and just stops competing for attention (a check, a struck-through title, and
-  dimmed). Marks are stored by the app itself rather than in the browser, so they survive a cleared
-  browser store. Deliberately not a filter. "Clear all done marks" appears in the list menu once
-  anything is marked.
-- **Archived sessions are recognised, and hidden by default.** The app now reads Claude's own archive
-  flag. Archived is the large majority of a real transcript store, so including them buries the live
-  work; that same ratio is why the control is three-way (Hidden, Shown, Only archived) rather than a
-  checkbox, since finding one archived session in a mixed list is hopeless. The scope is applied
-  before the newest-N cap, so hiding archived returns a full list of live sessions instead of the
-  handful that survived the cap.
-- **One list-options menu.** The sessions toolbar had grown a row of icon buttons, and each new
-  toggle squeezed the search field. Refresh, multi-select, the instance filter and the archive scope
-  now live in a single "⋯" menu, which lights up whenever something is narrowing the list, so a
-  filter set once and forgotten can no longer read as an empty list with no visible cause.
-- **A CI guard against vendored-library export drift**, so the break this release had to
-  fix cannot recur silently.
+- **Right-click a session.** The list has a context menu to mark as done, open the transcript, open or copy the session file, and copy the title, folder or id. It acts on the row under the pointer without selecting it.
+- **Mark a session as done.** The row keeps its place but is dimmed with a check and a struck-through title. Marks are stored by the app, not the browser, and a menu item clears them all.
+- **Archived sessions are recognised.** The app reads Claude's own archive flag and hides archived sessions by default. A three-way control (Hidden, Shown, Only archived) lets you find them, and hiding still returns a full list of live sessions.
+- **One list-options menu.** Refresh, multi-select, the instance filter and the archive scope now live in one menu that lights up whenever something is narrowing the list.
+
+### Fixed
+
+- **"Filter by instance" opened nothing and froze the app.** The menu rendered off-screen and blocked clicks on the page until you pressed Escape. The advanced-search popover next to it had the same fault and is fixed too.
+- **"Open the session file" asked which app to use.** The app now picks an editor itself (VS Code, Cursor, Notepad++, Sublime, else Notepad), so Windows' picker never appears. A new Transcript editor setting overrides it, and a bad path falls back to auto-detect.
 
 ## [0.5.0] - 2026-07-16
 
 **TL;DR**
 
-- **Console windows no longer flash during ordinary operations.**
-- **Runs no longer get stuck after crashes or kill unrelated programs.**
-- **Transient server overloads are now retried instead of failing.**
-- **Composer no longer falsely claims session is busy.**
-- **Auto-resume now finds quota walls in existing transcripts.**
-- **Transcripts download with session titles, not UUIDs.**
-- **Session file can be copied to clipboard as a real file.**
-- **Scheduler UI improved with time steppers and link controls.**
+- **Console windows no longer flash during ordinary operations**
+- **Runs no longer get stuck after crashes, and Cancel can't kill unrelated programs**
+- **Temporary server overloads are retried instead of failing the run**
+- **The composer no longer falsely claims the session is busy**
+- **Auto-resume finds quota stops in sessions you started yourself**
+- **Downloaded transcripts are named after the session title**
+- **Copy the session file to the clipboard as a real file**
+- **A 10-minute stepper in "queue for later"**
 
 **Everything in 0.5.0**
 
-### Fixed
-
-- **Stray console windows could flash on an ordinary click.** Spawning a console program on Windows
-  allocates a console unless the spawn says otherwise, and nothing here said otherwise. It stayed
-  invisible only because the tray happens to launch the daemon with a window-less console that child
-  processes inherit; started any other way (from a terminal, from Explorer, as the portable exe) the
-  same clicks flashed a real window. Every such spawn now states the intent explicitly, so the
-  outcome no longer depends on how the app was started. The worst of them was the periodic usage
-  check: it runs `claude` on a timer, and where the packaged `claude.exe` is missing that resolves to
-  a `.cmd` batch file, which runs through `cmd.exe`. On those machines it was a CMD window blinking
-  on a schedule with no click to blame it on. A guardrail now enforces both directions of the rule,
-  since hiding a *graphical* program instead hides the window it was supposed to open.
-- **A run could be stuck "running" forever after a crash, and cancelling it could kill an unrelated
-  program.** When CC Manager UI restarts, it re-adopts runs that outlived it, and it is careful not
-  to trust a dead runner's recorded process id (Windows recycles those numbers, so it may now belong
-  to something else entirely). That care never actually happened: the liveness probe searched running
-  processes for the run's spec file *by command line*, and the search itself carried that text in its
-  own command line, so it always found itself and always answered "still alive". Every Windows
-  reattach therefore trusted a stale id. If that id had been recycled by a live program, the run
-  waited on it forever (a session stuck "busy" with nothing running), and pressing Cancel would have
-  killed that innocent program. The probe now excludes itself, and the tail loop no longer re-adopts
-  the id the reattach deliberately refused; it fails the run cleanly instead, with the work it did
-  manage still on disk.
-- **A 529 overload was treated as your rate limit, so the run died instead of retrying.** `529
-  Overloaded` means Anthropic's servers are saturated and it clears in seconds; a session limit
-  means your own 5-hour allowance is spent and only time fixes it. Both wear the word "limit", and
-  `dispatch.ts` matched them with ONE pattern list, so a run killed by a few-second server hiccup
-  was filed `rate_limited` and parked against a reset that had nothing to do with it, while the same
-  message sent from the desktop app (which just retries) went straight through. They are now told
-  apart (`rate-limit-signal.ts`), and a transient overload is **retried automatically**: three
-  tries over ~35s, backing off, before it gives up as its own new `overloaded` status, which is
-  neither `failed` (nothing is wrong with the run) nor `rate_limited` (your quota is fine). The
-  retry only fires when the run produced no output first, so it can never silently re-do work you
-  already paid for; it is DB-backed, so a daemon restart mid-backoff resumes rather than forgets;
-  and it is deliberately not behind the scheduler or monitor switches, which are off by default and
-  govern hours-scale autonomy, this just finishes the run you started ten seconds ago.
-  Ambiguous text still classifies as a quota wall, the conservative default. A migration relabels
-  rows already mis-filed by the old detector. The auto-resume monitor now only ever sees a genuine
-  quota stop, so it can no longer park a 529 against a five-hour reset that was never coming.
-- **The composer claimed "this session is busy" the moment you hit send, with nothing running.**
-  `submit()` awaits a queue refresh, and the server doesn't answer until the run is already marked
-  `running`, so sending a message flipped the banner on within the very same click, and it then
-  announced that the message "will queue and start on its own" about one that had just started
-  running immediately. The hint now only shows while there is actually a draft it could apply to,
-  which is the only time it says anything useful.
-- **The auto-resume monitor was blind to every session it hadn't launched itself.** It only ever
-  looked at `queue_items` rows with status `rate_limited`, and the only thing that can set that
-  status is a run the daemon spawned and tailed, so a session you started yourself (a bare `claude`
-  in a terminal, or the desktop app) that died on a 5-hour limit had a transcript on disk, no queue
-  row, and no path to the resume list at all. The list said "Nothing to resume right now" while real
-  sessions sat at the wall, and hand-queueing them was the only recourse. The monitor now also
-  *finds* stops on disk (`rate-limit-discovery.ts`): it checks transcripts touched in the last 12
-  hours for the CLI's own limit notice sitting at the tail with nothing after it, which is exactly
-  what "still stopped" looks like. Found stops go through the same rails as any other, the weekly
-  usage gate, the per-session attempt cap, the resume buffer, the idempotency check, and carry a
-  **Found** badge so a session the app went looking for never reads as one you queued. Detection
-  reuses `dispatch.ts`'s existing `isApiErrorEvent` gate unchanged, so the 2026-07-15 false-positive
-  class (a run that merely *mentions* "quota" or "529") cannot come back at machine scale. Still
-  behind the monitor's off-by-default switch.
-- **A downloaded transcript was named after the session's UUID, not the session.** `Save a copy` now
-  writes `<session title>.jsonl`, falling back to the id only when a title has nothing
-  filesystem-safe left in it. One shared `safeTranscriptFilename` (new
-  `@ccmanagerui/server/filenames` export) backs both the download link and the server's
-  `Content-Disposition`, because the browser honours the link's name only same-origin and the header
-  only cross-origin, so fixing one alone would have left the other broken. It strips the characters
-  Windows rejects, refuses the reserved device names (`CON`, `COM1`…), trims the trailing dots
-  Windows drops silently, and sends the header as RFC 5987 `filename*` so an emoji or non-Latin
-  title names the file properly instead of throwing on an invalid header value.
-
 ### Added
 
-- **CI actually typechecks now, and it covers the tests too.** The job had been named
-  "lint · typecheck · build · test" since day one while never running a typecheck, and something
-  had already slipped through: the portable-window exports (`appWindowPlacementKey`,
-  `hasRememberedBounds`, `quoteWinArg`) went undeclared for two commits, which nothing noticed
-  because nothing looked. `tests/` was outside every tsconfig for the same reason, so a test could
-  only fail at runtime; wiring it in immediately caught a real error in a new fixture. All 34 test
-  files across the three test directories are covered now.
-- **Copy the session file to the clipboard.** A new button beside "save a copy" puts the `.jsonl`
-  FILE on the clipboard, not its text, so Ctrl+V into a folder, a chat or an email pastes the
-  actual file, named after the session rather than its uuid. A web page cannot do this at all (no
-  clipboard type maps to a native file-drop, by design), so the daemon does it; Windows and macOS
-  only, since Linux has no cross-desktop convention for it.
-- **A 10-minute stepper in the composer's "queue for later".** The hours stepper now sits next to a
-  minutes one that steps in 10s, and a single button queues the combined delay ("In 1h 30m"). With
-  both, the fixed **In 15 min** and **In 1 hour** presets were redundant, 1h is the stepper's
-  default and anything shorter is a couple of taps, so they are gone; **In 5 hours** and
-  **Tomorrow** remain.
-- **The scheduler status chip in the header is now a link** to the setting it reports on.
+- **Copy the session file to the clipboard.** A button beside "save a copy" puts the actual file on the clipboard, named after the session, so you can paste it into a folder, chat or email. Windows and macOS only.
+- **A 10-minute stepper for "queue for later".** It sits beside the hours stepper, and one button queues the combined delay. The fixed 15-minute and 1-hour presets are gone; In 5 hours and Tomorrow remain.
+- **The scheduler chip in the header is a link** to the setting it reports on.
 
 ### Changed
 
-- **Pink means "you can click this now".** In the composer's "queue for later" popover, **Queue
-  for then** was pink even before a date was picked, when it did nothing. It is now grey until
-  you pick one. The hours/minutes button beside it had the same flaw at 0h 0m and follows the
-  same rule.
+- **Pink means "you can click this now".** Queue for then, and the hours/minutes button, stay grey until they can do something.
+
+### Fixed
+
+- **Stray console windows flashed on ordinary clicks.** Background programs now start without a visible window however the app was launched, including the periodic usage check that could blink a window on a schedule.
+- **A run could be stuck "running" forever after a crash.** After a restart the app trusted a stale process number that could belong to another program, so a session showed busy with nothing running and Cancel could have killed that program. Such runs now fail cleanly with the work already done kept on disk.
+- **A temporary server overload was treated as your rate limit.** The run died and was parked against a reset that did not apply. Overloads are now told apart from quota limits and retried automatically, three tries over about 35 seconds, only when the run had produced no output. If it still fails it gets its own Overloaded status, and runs wrongly filed before are corrected.
+- **The composer claimed the session was busy right after you hit send.** The hint now appears only while there is a draft it could apply to.
+- **Auto-resume was blind to sessions it had not launched.** It now also finds sessions that stopped at a 5-hour limit in the last 12 hours, including ones you started in a terminal or the desktop app. They go through the same safety checks and carry a Found badge. It is still off by default.
+- **A downloaded transcript was named after the session id.** It is now named after the session title, with unsafe or reserved characters removed and non-Latin titles supported.
 
 ## [0.4.0] - 2026-07-16
 
 **TL;DR**
 
-- **The portable window opens at a usable size instead of filling the screen.**
-- **A launch onto an already-running portable profile now sizes correctly too.**
-- **The loopback guard is now one shared, audited implementation.**
-- **The release build was broken while the typecheck passed.**
+- **The portable window opens at a usable size instead of filling the screen**
+- **Launching onto an already-running portable window sizes it correctly too**
+- **The local-only request guard is one shared, audited implementation**
 
 **Everything in 0.4.0**
 
 ### Added
 
-- **The portable window opens at a usable size instead of filling the screen.** A window the
-  dedicated Chromium profile had never seen opened at roughly the whole work area, about
-  1905x2092 on a 4K display. Both open paths, the daemon and the tray, now ask for 1060x800 on a
-  first run and yield to the profile's saved placement ever after, so a size you picked yourself
-  always wins. The width is measured rather than guessed: the binding constraint is not the
-  1000px shell but the sessions sidebar, which rail-collapses below a 1024px viewport, so
-  1024 plus about 16px of window frame is the floor and 1060 clears it with slack.
-- **A launch onto an already-running portable profile now sizes correctly too.** Chromium ignores
-  both `--window-size` and the saved placement when an instance is already running on that
-  profile: the forwarded `--app` window simply inherits the running window's geometry. The daemon
-  cannot fix that from outside, so it now tags the window's URL with the size it should have
-  (`POST /api/portable-window`) and the page corrects itself once at startup, before first paint.
-  Gated to real `--app` windows and a no-op on an un-hinted URL, so an ordinary browser tab is
-  untouched. A maximized window deliberately sends no hint.
+- **The portable window opens at a usable size.** A first run used to open at roughly the whole screen. It now opens at a comfortable size and then follows the placement you saved, so a size you chose yourself always wins.
+- **A launch onto an already-running portable window sizes correctly.** The new window used to inherit the running window's geometry. The page now corrects itself once at startup, and only inside a real app window; a maximized window is left alone.
 
 ### Changed
 
-- **The loopback guard is now one shared, audited implementation.** The guard that stops a
-  malicious web page from driving the local API was the app's own copy. It now consumes the same
-  primitive as the other LunarWerx daemons, so a security-critical decision lives in one reviewed
-  place instead of four drifting ones. Behaviour is unchanged for real clients. The shared version
-  additionally allows a request carrying no `Host` header, which a browser always sends, so this
-  only affects non-browser tools.
+- **The local-only guard is shared with the other LunarWerx apps.** The protection that stops a malicious web page from driving the local app now lives in one reviewed place. Browsers behave as before; tools that send no host header are now also allowed.
 
 ### Fixed
 
-- **The release build was broken while the typecheck passed.** The vendored copy of the
-  portable-window helper was a stale snapshot missing an export that the code importing it already
-  declared, so `tsc` was satisfied and `bun build --compile` failed with "No matching export". The
-  vendored file is back in sync, and the window-size applier now has behavioural test coverage
-  rather than type-only coverage.
+- **A release build could fail while checks passed.** An out-of-date copy of a shared helper broke the packaged build; it is back in sync.
 
 ## [0.3.0] - 2026-07-16
 
 **TL;DR**
 
-- **Quota percentages quantified into actionable forecasts.**
-- **Usage checks work offline, 25-50x faster, with advice verdicts.**
-- **CLI instances managed, linked to desktop, and fully integrated.**
-- **Background usage auto-refresh keeps numbers current by default.**
-- **Auto-resume monitor catches rate limits from any session source.**
-- **Run builder focuses on essentials; settings and queue redesigned.**
-- **Console windows, message handling, and exit codes fixed.**
-- **Rate limit detection improved to avoid false positives.**
+- **Quota percentages become forecasts you can plan with**
+- **Usage checks work with the app closed and are 25-50x faster**
+- **Every usage check carries an advice verdict**
+- **CLI instances are managed, linked to desktop instances, and usable for usage checks**
+- **Usage refreshes in the background by default**
+- **The auto-resume monitor (opt-in) catches rate limits and resumes after the reset**
+- **The run builder leads with essentials; Settings is one page; finished runs fold away**
+- **Fixes for false rate-limit detection, stray console windows and quitting your real Claude Desktop**
 
 **Everything in 0.3.0**
 
 ### Added
 
-- **A quota percentage is now quantified into something you can plan with.** "98% used" is not a
-  decision: 98% with a reset in 20 minutes is fine, while 98% with a reset in four days at 1%/hour
-  means being cut off mid-task in about two hours. Same number, opposite action. Anthropic publishes
-  no quota size (`limit_dollars` / `used_dollars` / `remaining_dollars` are all null on a
-  subscription, and there are no token counts anywhere in the response), so the numbers are derived
-  instead. `server/src/usage-history.ts` keeps the readings the background sweep already takes and
-  differentiates them into a burn rate, an hours-of-headroom figure, and `exhaustsBeforeReset`, the
-  one field that actually decides anything. `server/src/usage-tokens.ts` counts what was really spent
-  from the Claude Code transcripts (which do carry exact per-turn token counts and the model), and
-  `server/src/usage-budget.ts` divides one by the other to MEASURE the size of one percent in tokens,
-  reported as "~N more assistant turns" because an agent can reason about turns but cannot predict its
-  own raw token totals. New `usage_budget` MCP tool and `GET /api/usage/budget`.
-- **The usage MCP tools now work with the app closed.** `check_my_usage`, `list_usage` and
-  `usage_budget` need nothing the daemon uniquely owns (the OAuth tokens are files on disk, the quota
-  endpoint is a plain HTTPS GET, the transcripts are local JSONL), so when the daemon is not running
-  they execute in-process instead of failing. The queue and dispatch tools deliberately do not get
-  this: they mutate shared sqlite state and supervise real processes, where a second uncoordinated
-  executor would be a correctness bug, so they still fail loudly and say why.
-- **Usage checks now hit the quota endpoint directly instead of spawning `claude`.** The CLI's own
-  `/usage` screen is just a GET against `https://api.anthropic.com/api/oauth/usage`, Bearer-authenticated
-  with an OAuth access token; calling it ourselves (`server/src/usage-api.ts`) skips booting the
-  ~250 MB Bun-compiled `claude` binary entirely. Measured on one machine: the old spawn path took
-  9,353 / 9,262 / 9,218ms per check, the direct GET took 372 / 424 / 169ms, roughly 25 to 50x faster.
-  It is also richer than the text screen: `resets_at` is a real ISO-8601 timestamp (the text screen
-  prints a yearless human string like "Jul 19, 3:59am"), `severity` (normal/warning/critical) is
-  computed server-side instead of guessed from a threshold, and a per-model weekly sub-limit carries
-  its own name via `scope.model.display_name`. Reading usage costs no quota: it is a read, not an
-  inference call. The `claude -p "/usage"` spawn remains as a fallback for the cases the direct path
-  can't serve: no OAuth token in hand, an account configured with an API key instead (the endpoint is
-  OAuth-only), or the server rejecting the token with 401 (expired); the daemon deliberately does not
-  refresh the token itself, since rotating the user's refresh token could break their real login, so an
-  expired token falls back to the CLI's own refresh instead.
-- **CLI instances can be linked to a desktop instance.** `CliInstance.associatedDesktopDir` records
-  that a CLI instance and a desktop instance are the same Anthropic account under two independent
-  logins, so each can serve as the other's usage-check fallback when one token is expired or missing:
-  a desktop instance's chain is its own token, then a linked CLI instance's login, then a dispatch
-  account matching the email; a CLI instance's chain is its own login, then an associated dispatch
-  account, then a linked desktop instance's token. New `link_cli_instance_to_desktop` MCP tool.
-- **Background auto-refresh of usage, on by default.** A staggered sweep keeps every instance's usage
-  number warm without a manual refresh, skipping any instance with no usable credential up front. Each
-  check costs about 300ms and no quota, so polling on a loop is no longer the liability it was when it
-  meant spawning `claude`. Toggle and interval live in Settings → General, alongside separate toggles to
-  show or hide the desktop and CLI instances tables.
-- **Usage responses carry an `advice` verdict.** Every usage check (`check_usage`, `check_my_usage`,
-  `list_usage`, the UI's usage cell) now includes `{ severity, bindingPct, shouldOffload, safeToFanOut,
-  advice }` alongside the raw percentages, so a caller does not have to re-derive "is this bad" from
-  thresholds itself. `shouldOffload: true` means the caller is close to being cut off mid-task.
-- **`check_my_usage` now works from a normal Claude Code session, not only a CLI instance.** It falls
-  back to the default [`~/.claude`](docs/CLAUDE-CONFIG-LAYOUT.md) login when `CLAUDE_CODE_CONFIG_DIR` / `CLAUDE_CONFIG_DIR` is unset,
-  which previously made the self-check error out for the everyday case of the session the user is
-  actually talking to. New `list_usage` MCP tool surveys every managed instance (desktop and CLI) at
-  once, each with its own `advice` verdict, for picking an account with headroom before routing heavy
-  work.
-- **A CLI login is now a usable usage-check source in its own right.** `<CLAUDE_CONFIG_DIR>/.credentials.json`
-  is plain JSON (`claudeAiOauth.accessToken` plus `.scopes`, no DPAPI/safeStorage layer), so a CLI
-  instance that has run `/login` gives a usage-capable token directly, independent of any desktop
-  instance.
-- **CLI instances.** A CLI instance is a `CLAUDE_CONFIG_DIR` associated with an account and logged in
-  once, the command-line counterpart to a desktop instance (which isolates via `--user-data-dir`).
-  The Instances view now manages them alongside desktop instances: create one (the app makes its
-  config dir), open a terminal to use it, a one-click "Log in" helper that opens a terminal for you to
-  run `/login` (the app never performs the login itself), associate it with a dispatch account, rename,
-  and a guarded delete. Persisted as plain JSON under `~/.ccmanagerui`, never a token.
-- **Usage-check subsystem.** Read an account's remaining Claude subscription quota (session 5-hour %,
-  weekly all-models %, and per-model weekly %) by running `claude -p "/usage"` with the account's auth
-  injected. A DESKTOP instance is polled using its OWN decrypted OAuth token (never persisted), so it
-  works with no dispatch account and no CLI login; a registered dispatch account or a logged-in CLI
-  instance also work. The desktop token cache holds two grants (a full CLI grant and a profile-only
-  grant); the usage path deliberately selects the `user:inference`-scoped grant, since the profile
-  grant runs `/usage` but returns no numbers. The probe also sets `CLAUDE_CODE_OAUTH_SCOPES` from
-  that grant: without it `claude` quietly stops treating `/usage` as a command and prints a cost
-  summary with no percentages, which only shows up when the daemon runs outside a Claude Code
-  session (for example the tray, launched from Explorer). Surfaced three ways: a per-row usage cell in the
-  Instances table (the binding weekly % color-coded, with a hover breakdown), a `check_usage` MCP
-  tool, and a `check_my_usage` self-check any agent can call. Checks are on demand (each spawns a real
-  `claude`) and cached with an age; a no-data result shows ", " with a reason rather than silently.
-- **AI self-check guidance.** `docs/AI_USAGE_SELFCHECK.md` plus a README note teach agents that they
-  can read their own quota and that the weekly all-models % is the binding cap to pace by.
-- **Auto-resume monitor (opt-in, off by default).** A session killed mid-work by a 5-hour rate limit
-  can auto-resume once the window clears, gated on the weekly cap not being maxed. Detection reuses the
-  existing structured `rate_limited` run status; a resume is a normal queued `--resume` run scheduled
-  for just after the reset. Safety rails: a per-session resume cap, idempotent scheduling, a global
-  switch plus per-account overrides, and a status chip ("resumes ~HH:MM" / "blocked: weekly maxed" /
-  "needs human"). Settings and `get_monitor` / `set_monitor` MCP tools expose it.
-
-### Fixed
-
-- **Quitting could kill your real Claude Desktop chat.** The External row (the regular,
-  non-isolated Claude Desktop) can no longer be quit with one click: the server refuses the
-  default profile dir without an explicit confirmation (`confirmExternal`, the quit-side analog
-  of Delete's existing guard), and the UI routes it through a warning dialog. The "Browser
-  Dance" copy now names ISOLATED instances and says outright that your regular Claude Desktop
-  should stay open, the old "quit every other running instance" wording steered a user into
-  closing a real conversation.
-- **The MSIX warning banner could be flat wrong.** `manageable` now also accepts a LIVE running
-  Claude process (carrying `--user-data-dir`) as proof of a working classic install, the
-  authoritative `Get-AppxPackage` probe runs (and overrides) when filesystem leftovers from an
-  uninstalled MSIX would otherwise pin the verdict forever, the classic binary resolves via the
-  stable Squirrel stub first (versioned `app-<ver>` dirs are replaced on every update), and the
-  banner re-verifies fresh after any successful open/create and every 60s while visible, so
-  "install the classic build" actually clears it once you do.
-- **A run pinned to a specific account could silently run as the wrong one.** A queued run pinned to
-  an instance whose sign-in had expired, been deleted, or whose reference was malformed used to fall
-  back to the ambient login without a word; auto-resuming such a run dropped the pin entirely. Both
-  now fail loudly (or carry the pin forward) instead of quietly using different credentials.
-- **A queued run's account wasn't shown on its card**, and editing a run whose pinned account had been
-  deleted silently reverted it to ambient on save. The card now shows the instance it will run as (or
-  "deleted instance"), and the editor shows a clear disabled "deleted instance" option instead of
-  quietly changing the run.
-- **Deleting a desktop instance could orphan its linked CLI login** into an invisible, unmanageable
-  state; a failed "Sign in CLI" left a stray CLI instance behind. Both are cleaned up now.
-- **A run recovered after a restart could briefly be double-dispatched**: the scheduler and
-  auto-resume monitor could fire before the daemon finished re-adopting runs that survived the
-  restart. They now wait for that to complete.
-
-- **A run that merely TALKED about rate limits was marked rate-limited.** The detector matched its
-  patterns against every event of a run, tool inputs and tool results included, so an agent that
-  grepped for "session limit", or read a file whose line 529 scrolled past, finished as
-  `rate_limited` despite exiting 0 with the job done. (Both such rows in the shipped database were
-  this; `\b529\b` had matched a line number.) Only the CLI's own report counts now: a synthetic
-  API-error message, an errored terminal `result`, or stderr, never model prose, tool inputs, or
-  tool results. Runs already mislabeled this way are repaired on startup, along with the auto-resume
-  bookkeeping that existed only to babysit them.
-- **The auto-resume monitor did nothing at all unless you had added an account.** A run with no
-  dispatch account, the default, since the accounts table is empty until you paste a token in, was
-  parked at "needs you, no dispatch account on the run" on sight, on the grounds that its usage
-  couldn't be gated and its auth couldn't be injected. Neither was true: an ambient run uses the
-  login `claude` already has, which needs no injection to resume and whose quota reads straight from
-  its config dir (the same read `check_my_usage` already did). Ambient runs now go through the usage
-  gate like any other, so the monitor actually resumes them.
-- **Sending a message opened a console window that stayed on screen for the whole run.** The detached
-  runner is created through WMI, which applies default startup info, so `bun` (a console app) got a
-  real, visible window; the daemon's own `windowsHide` only ever covered the short-lived PowerShell.
-  Beyond the eyesore, closing that stray window killed the runner and `claude` mid-turn, and the run
-  then finalized as a bare "failed, exit -1". It is created hidden now.
-- **The session view showed conversation the CLI was having with itself.** Resuming a session whose
-  last turn died on an API error makes `claude` append a canned "Continue from where you left off." /
-  "No response requested." pair, same millisecond, no model call. Rendered as real turns they read
-  as though a prompt had been sent and refused. They're filtered; the rate-limit notice, the one
-  synthetic message that explains anything, still shows.
-- **"exit -1" now says what it means.** It is our own code for "the process vanished before it
-  finished", never something `claude` reported, and the paths that produce it recorded nothing to
-  say so. They now explain themselves, and the badge reads "interrupted" instead of a number nobody
-  can look up. Transcribing an event can also no longer throw and take the tail loop down with it.
+- **Quota forecasts.** "98% used" is not enough to plan with, so the app turns saved readings into a burn rate, hours of headroom, and whether you will run out before the reset. It also estimates the size of one percent as a number of assistant turns. A new usage budget tool exposes this.
+- **Usage tools work with the app closed.** Checking your own usage, listing usage and the budget run on their own when the app is not running. Queue tools still require the app, so two programs never manage runs at once.
+- **Much faster usage checks.** Usage is now read straight from Anthropic instead of launching the Claude program, about 25 to 50 times faster. It also gives exact reset times, a severity level and per-model weekly limits. The old method remains as a fallback when there is no usable sign-in, and the app never refreshes your login itself.
+- **Link a CLI instance to a desktop instance.** When both are the same account, each can stand in for the other when a usage check cannot use its own sign-in.
+- **Background usage refresh, on by default.** A staggered sweep keeps every instance's usage current without a manual refresh. The toggle and interval are in Settings, beside toggles to show or hide the desktop and CLI tables.
+- **An advice verdict on every usage check.** Results include severity, the binding percentage, whether to offload work, and whether it is safe to fan out.
+- **Self-check works from a normal Claude Code session.** It falls back to your default login, and a new list tool surveys every managed instance so you can pick an account with headroom.
+- **A CLI login is a usage-check source on its own.** A CLI instance that has logged in provides what is needed without any desktop instance.
+- **CLI instances.** The Instances view now manages command-line instances next to desktop ones: create, open a terminal, a one-click Log in helper, link to an account, rename, and a guarded delete. No tokens are stored.
+- **Usage checks per instance.** Check an account's session, weekly and per-model quota. It works for a desktop instance on its own sign-in, a registered account, or a logged-in CLI instance. Results appear as a colour-coded cell in the Instances table with a hover breakdown, and agents can use a self-check tool.
+- **Guidance for AI agents.** A short guide and README note explain how agents can read their own quota and that the weekly all-models percentage is the cap to pace by.
+- **Auto-resume monitor (off by default).** A session killed by a 5-hour rate limit can resume after the window clears, unless the weekly cap is maxed. It has a per-session attempt cap, a global switch with per-account overrides, and a status chip.
 
 ### Changed
 
-- **Finished runs fold away in the queue.** Completed, failed, canceled, and rate-limited items move
-  behind a "Show N finished" disclosure instead of crowding the list, and the header counts what is
-  still pending rather than the all-time total. The per-item card moved to `QueueItemCard.vue`.
-- **The composer's busy warning says what will happen to your message.** It stated a rule ("a session
-  with a run in progress gets its message queued instead of sent") and left you to guess whether the
-  message was about to run or stuck. It now says which, start on its own when the current run
-  finishes, or wait for you to press Run when the scheduler is off, and why two runs can't share a
-  session.
-- **Queuing a run resumes a session from a searchable list instead of a pasted UUID.** The run
-  builder's "session to resume" field is now a searchable picker over the same session list the
-  sidebar shows (sorted most-recently-active first), each row carrying the friendly title, its
-  folder/branch/last-activity, and the opaque id tucked to the side (click it to copy). It supports
-  multi-select: pick several sessions and one queued run is created per session, sharing the same
-  prompt and options. A new `SessionPicker.vue` backs it.
-- **The run builder leads with three fields, not thirteen.** Model, effort, permission, account,
-  run-at, fork, and the resume title/folder overrides now live behind an "Advanced options"
-  disclosure; the common path is just the session (or new-chat title + folder) and the prompt. The
-  "New chat from scratch" toggle is hidden when editing an existing item (editing never converts a
-  run's kind). Long prompts no longer push the dialog off-screen, the prompt box caps its height and
-  every dialog now scrolls instead of overflowing the viewport.
-- **Settings is one scrolling page.** The General / Scheduler / Accounts tabs were merged: Accounts
-  is now a section rather than a tab, and Scheduler folds in with everything else. "Show desktop /
-  CLI instances" moved from Usage to Appearance (it's a display choice). The auto-resume monitor's
-  tuning numbers (max attempts, resume buffer) moved behind an Advanced disclosure and, along with
-  the monitored-runs list and per-account overrides, collapse away entirely when the monitor is off.
-  The monitor's empty state now explains that a run only appears there after it stops on a rate limit
-  (an empty list doesn't mean monitoring is off). A deep link (the composer's "tomorrow" gear) now
-  scrolls to the Scheduler section instead of switching a tab.
-- **The queue toolbar's scheduler indicator is an icon with a hover, not a text pill**, and shows
-  both on and off states at a glance. The redundant "Queue resume" button was removed, "New run"
-  already opens the builder in resume mode.
+- **Finished runs fold away in the queue.** They sit behind a "Show N finished" section, and the header counts only pending work.
+- **The busy warning says what will happen to your message.** It now says whether the message will start on its own or wait for you to press Run.
+- **Resume a session from a searchable list.** The run builder replaces the pasted id with a picker showing title, folder, branch and last activity, and several sessions can be picked at once to queue one run each.
+- **The run builder leads with three fields.** Model, effort, permission, account and other options sit under Advanced options. Long prompts no longer push the dialog off-screen.
+- **Settings is one scrolling page.** The tabs are merged, the table toggles moved to Appearance, monitor tuning sits under Advanced, and the monitor's empty state explains itself.
+- **The queue's scheduler indicator is an icon with a hover.** It shows on and off at a glance, and the redundant Queue resume button is gone.
+
+### Fixed
+
+- **Quitting could kill your real Claude Desktop chat.** The regular, non-isolated Claude Desktop row now needs an explicit confirmation to quit, and the wording tells you to keep it open.
+- **The MSIX warning banner could be wrong.** It now recognises a working classic install, re-checks after opening or creating an instance, and clears once you install the classic build.
+- **A run pinned to an account could silently run as another.** Expired, deleted or malformed pins now fail loudly, and auto-resume keeps the pin.
+- **A queued run's account was not shown.** The card shows the instance it will run as, and editing a run whose account was deleted no longer quietly changes it.
+- **Deleting a desktop instance could orphan its CLI login.** Both that and a failed CLI sign-in leaving a stray instance are cleaned up.
+- **A recovered run could be dispatched twice after a restart.** The scheduler and monitor now wait until surviving runs are re-adopted.
+- **A run that merely talked about rate limits was marked rate-limited.** Only the CLI's own error reports count now, and past mislabelled runs are repaired on startup.
+- **Auto-resume did nothing unless you had added an account.** Runs that use your existing login are now resumed like any other.
+- **Sending a message opened a console window for the whole run.** Closing it killed the run. The window is now hidden.
+- **The session view showed the CLI talking to itself.** Canned "Continue from where you left off" turns are filtered out; the rate-limit notice still shows.
+- **"exit -1" now explains itself.** The badge reads "interrupted", and a failure while recording an event no longer takes down the run.
 
 ## [0.2.0] - 2026-07-13
 
 **TL;DR**
 
-- **Instance icons, colors, and names now reflect the account, not the folder.**
-- **Accounts auto-resolve without manual buttons.**
-- **Quota numbers update live while you watch the table.**
-- **Renaming instances is instant and works while running.**
-- **Focus button leads running instance rows.**
-- **Burn rate forecasting fixed to avoid false "safe" signals.**
-- **Daemon rebuilds no longer serve stale code.**
-- **API error handling improved.**
+- **Instances show a customizable icon and colour**
+- **Instances are named after the account, not the folder**
+- **Accounts resolve on their own; the Resolve button is gone**
+- **Quota numbers stay current while you watch the table**
+- **Renaming is instant and works while the instance is running**
+- **Running rows lead with Focus**
+- **The burn-rate forecast no longer gives a false "safe" signal**
+- **Rebuilds no longer leave a stale app running**
 
 **Everything in 0.2.0**
 
 ### Added
 
-- **Per-instance icon and color.** Every row in the Instances table now shows a customizable glyph
-  in place of the old green status dot. An "Edit" action (in the row's ⋮ menu) lets you pick an icon
-  from a curated set and a color from a fixed palette, with a live preview; a running instance keeps
-  a small pulsing badge on the icon's top-right corner, and a stopped one dims. Instances you have
-  not customized get a stable, distinct default derived from their folder, so the table reads at a
-  glance.
+- **Per-instance icon and colour.** Each row shows a customizable glyph instead of the green dot, chosen from the row's menu with a live preview. A running instance gets a pulsing badge and a stopped one dims. Uncustomized instances get a stable default of their own.
 
 ### Changed
 
-- **An instance is named after the account it is signed into, not the folder it lives in.** The
-  folder name was only ever a guess at the identity, and it stops being true the moment a profile is
-  signed into an account other than the one it was named after, nothing prevents that drift and
-  nothing corrects it. On the machine this was built against, the folder called `claude` was signed
-  into the `6claude` account and had been reading as "claude" the whole time, while two other
-  instances had been hand-relabelled to their accounts precisely to paper over the same problem. So
-  the resolved account's name (its profile name, else the local part of its email) is now the
-  default, ahead of the folder name; an explicit label you set still wins over both, and the folder
-  name remains the last resort for an instance with no resolved identity. The dir is still shown
-  under each name, so two profiles on one account stay distinguishable. `SessionsView` reads the
-  same shared instance list rather than fetching its own, so a session's instance chip and the
-  Instances table can no longer disagree about what the same instance is called.
-- **Accounts resolve themselves; the "Resolve" button is gone.** Resolving reads `config.json` and
-  the token cache off disk, so a stopped instance resolves exactly as well as a running one, but
-  auto-resolution was gated on `isRunning`, which meant a stopped instance sat there offering a
-  button that would have worked on the first click, every time. That is a chore, not a choice. Every
-  instance now resolves on its own, running or not, and an instance with no identity yet (logged
-  out, offline) is retried once a minute so signing one in surfaces without a restart. The inline
-  button and its ⋮ entry are both removed; the toolbar's Refresh now force-re-resolves every account
-  live, which is the only case a manual action was ever good for (a stale cached identity). Resolving
-  no longer marks the row busy, it changes nothing about the instance, and flagging it made the
-  row's buttons flicker un-clickable whenever a background resolve was in flight.
-- **The Instances table's quota numbers stay current while you watch them.** The background sweep
-  refreshes the server's usage cache every 15 minutes, but the UI only ever pulled that cache once,
-  on mount, so an open Instances tab kept showing its first reading and went quietly stale for as
-  long as you left it open. It now pulls on the same 4-second cycle the instance list already
-  refreshes on, measured firing in lockstep with it. This is a read of the server's own cache: no
-  probe, no `claude`, no request to Anthropic, and no quota spent, so there was no reason to do it
-  once and hope. The "Refresh all usage" tooltip no longer claims each check "spawns a real claude
-  process", which stopped being true when checks became a direct ~300ms API read.
-- **Fewer rules on the Instances screen.** The two tables abutted, separated only by a hairline
-  sitting flush against the desktop table's last row, which read as one continuous table whose last
-  rows happened to have different columns. They are now separated by space instead, and both section
-  toolbars lost their bottom border, the sticky table header immediately below each one already
-  draws that line, so the second rule was weight for nothing. This matches Sessions, Queue, and the
-  app header, which were borderless already. The row separators stay; they are the ones doing work.
-- **Renaming an instance is now instant and works while it is running.** A rename used to move the
-  instance's on-disk profile folder, which Windows will not allow while Claude Desktop holds it open.
-  The name is now a display label kept as UI metadata (`~/.ccmanagerui/instance-meta.json`, never a
-  secret) that overlays the folder name wherever it is shown; the folder keeps its original name as
-  the stable id that sessions are tagged by. The old `POST /api/instances/:dir/rename` folder-rename
-  route was replaced by `POST /api/instances/:dir/meta` (display label, icon, and color in one call).
-- **A running instance's row leads with Focus.** For a running instance the primary button is now
-  "Focus" (bring its window to the front); "Quit" moved into the ⋮ menu, so the common action is one
-  click and the destructive one is deliberate. The ⋮ menu was widened so "Create desktop shortcut"
-  no longer wraps.
-- **Header and panel cleanup.** Removed the redundant "New run" button from the app header (it
-  already lives in the queue drawer), and dropped two divider lines (below the queue drawer's toolbar
-  and below the sessions search box). The sessions list and its instance filter now show each
-  instance's display label.
+- **Instances are named after their account.** The account's profile name, or the start of its email, is the default name ahead of the folder name, and a label you set still wins. Sessions and the Instances table now always agree on a name.
+- **Accounts resolve themselves.** Stopped instances resolve as well as running ones, instances with no identity yet are retried once a minute, and the Resolve button is removed. Refresh re-resolves everything for the rare stale case.
+- **Quota numbers stay current while you watch.** The open Instances tab now follows the app's cache every few seconds instead of freezing on its first reading. This costs no quota.
+- **Fewer divider lines on the Instances screen.** The two tables are separated by space, and the redundant toolbar borders are gone.
+- **Renaming is instant and works while running.** The name is now a display label, so it no longer needs the profile folder to be renamed, which Windows blocks while Claude Desktop is open.
+- **Running rows lead with Focus.** Focus brings the window forward, and Quit moves into the menu so it is deliberate.
+- **Header cleanup.** The redundant New run button is gone from the header, two divider lines were dropped, and the sessions list and filter show each instance's display name.
 
 ### Fixed
 
-- **A burn rate of "zero" no longer means "work freely".** The reported percentage is an INTEGER, so a
-  burn of 0.8%/hour does not tick the number for over an hour. The first cut of the forecast measured
-  that flat stretch, concluded the burn was zero, and reported "you will never hit the cap" while
-  sitting at 98% used. That is a false green light, the single most expensive way the feature can be
-  wrong, since an agent keeps working and is cut off mid-task holding unsaved context. The burn rate is
-  now a RANGE: a measured delta of `d` could truly be as much as `d + 1` given integer rounding, so the
-  upper bound is `(d + 1) / hours`, which is always above zero. Every derived figure (`headroomHours`,
-  `exhaustsAt`, `exhaustsBeforeReset`, and the token budget's denominator) is computed from that upper
-  bound, making the forecast deliberately pessimistic. The asymmetry is the point: a needless warning
-  costs a moment of caution, a false green light costs the whole task. The measurement floor also rose
-  from a 20-minute to a 45-minute span, below which an integer percentage simply cannot resolve a slow
-  burn and the answer is honestly reported as unknown rather than as zero.
-- **Rebuild.bat could leave a STALE daemon serving old code while reporting success.** It found the
-  daemon solely by the port recorded in `~/.<app>/runtime.json`; with that pointer missing it printed
-  "App does not appear to be running", killed nothing, and relaunched the shortcut, which no-ops
-  against the tray's single-instance mutex. Nothing then checked the outcome, so the build was fresh on
-  disk while the process serving it was hours old (found in the wild at 10h39m). The pointer is now
-  only a hint: `misc/Restart-Daemon.ps1` probes every bun/node listener's `/api/health` and stops only
-  processes that identify themselves as this app (`service` === package.json `name`, the same contract
-  the single-instance guard uses), which both finds an orphan the pointer forgot and cannot kill a
-  sibling app. `misc/Wait-Daemon.ps1` then asserts the daemon now answering actually started AFTER the
-  restart, because "the daemon is up" proves nothing when the stale one was up the whole time.
-- **Mutating API routes no longer 500 on an odd request body.** A body that is valid JSON but not an
-  object (a bare `null`, a number, or a string) used to crash the handler with a 500; every mutating
-  route now runs the body through a shared object guard and degrades gracefully. Creating a new
-  instance also starts it with a clean appearance, so reusing a name never resurrects a deleted
-  instance's old label, icon, or color.
+- **A burn rate of "zero" no longer means "work freely".** Because the percentage is a whole number, a slow burn looked like none and the forecast said you would never hit the cap at 98% used. The forecast is now deliberately pessimistic, and says unknown when it cannot tell.
+- **Rebuilding could leave a stale app serving old code.** The restart now finds the app even when its record is missing, stops only processes that identify as this app, and checks that the new one actually started after the restart.
+- **Odd request bodies no longer cause server errors.** Creating an instance also starts it with a clean appearance, so a reused name never revives an old label, icon or colour.
 
 ## [0.1.0] - 2026-07-13
 
 **TL;DR**
 
-- **MSIX detection with link to classic Claude Desktop.**
-- **Portable mode and MCP stdio server.**
-- **Background auto-update loop.**
-- **Instance management and discovery fixed.**
-- **Queue moved to a slide-in drawer.**
-- **Settings reorganized into tabs.**
-- **Drawers and composer UI improved.**
-- **Port, refresh timing, and layout improvements.**
+- **Warns when only the unusable Microsoft Store build of Claude Desktop is installed**
+- **Portable mode opens the app in its own window**
+- **An MCP server exposes sessions, queue and instances to Claude**
+- **Optional background auto-update**
+- **Quitting no longer closes the Claude Desktop instances it launched**
+- **Queue moved to a slide-in drawer and Settings split into tabs**
+- **Instance discovery, menus, toasts and drawers fixed**
+- **The default port moved to 7787**
 
 **Everything in 0.1.0**
 
 ### Added
 
-- **MSIX install warning (Instances tab)**: the daemon now detects which Claude Desktop build
-  is installed on Windows (`GET /api/desktop-install`, `server/src/core/desktop-install.ts`).
-  Anthropic's current download page ships a ~7 MB `ClaudeSetup.exe` bootstrapper that installs
-  the MSIX package under the ACL-locked `C:\Program Files\WindowsApps`; that build can't be
-  launched with `--user-data-dir`, so instance create/open can't work with it. When only the
-  MSIX build (or no Claude Desktop at all) is present, the Instances tab shows a warning
-  banner linking the classic ~217 MB Squirrel installer
-  (`https://claude.ai/api/desktop/win32/x64/exe/latest/redirect`).
-  `CCMANAGERUI_FAKE_DESKTOP_INSTALL` (msix-only | none | ok) forces the detection result for
-  dev/testing.
-- **Portable mode**: a server-persisted setting (Settings → Appearance → Portable window) that
-  opens CC Manager UI in its own chromeless Chromium app window (`msedge`/`chrome --app=`, no
-  tabs or address bar) instead of a browser tab. Applies both to the in-app toggle (`POST
-  /api/portable-window`) and the desktop tray launcher, which now opens the UI through the
-  portable-mode-aware `Open-AppUi` helper. The window gets its own dedicated Chromium profile
-  (`~/.ccmanagerui/portable-profile`, `--user-data-dir`) so it remembers its size/position
-  across launches instead of sharing the main browser profile; both open paths derive the same
-  profile dir from `runtime.json`'s location.
-- **MCP stdio server** (`server/src/mcp.ts`, `bun run mcp`), exposes CC Manager UI's
-  sessions/queue/instances API over MCP stdio for use from Claude Code / Claude Desktop.
-- **Background auto-update loop**: an opt-in daemon-wide timer that checks the update remote on
-  a schedule and, when a newer commit is available and the working tree is clean, pulls +
-  reinstalls + rebuilds + self-relaunches so the running daemon stays current unattended. Off by
-  default; never touches a dirty working tree.
-- Repo hygiene pass to bring the tree up to the standard of its LunarWerx siblings: CI
-  (`.github/workflows/ci.yml`, lint + typecheck + build + test on ubuntu/windows), an Architect
-  config (`.arkitect/`) with a gating bundle-weight-budget check, an MIT `LICENSE`,
-  `.editorconfig`, `bunfig.toml`, and a documented `.env.example`.
-
-### Fixed
-
-- **Quitting CC Manager UI no longer closes the Claude Desktop instances it launched.** The
-  Windows tray host quits by tree-killing the daemon's whole process tree
-  (`taskkill /PID <daemon> /T /F`), and instances were spawned as direct children of the daemon,
-  so Quit dragged every open Claude instance down with it. Neither `.unref()` nor Bun's
-  `detached: true` breaks the Windows process tree; the launch now goes through a `cmd /c start ""`
-  hand-off that re-parents the instance out of the daemon's tree, so it survives Quit
-  (`server/src/core/instances.ts` `buildInstanceLaunch`, `server/tests/instances-launch.test.ts`).
-  macOS already detached via `open`; Linux now spawns with `detached: true` (setsid).
-- **The Instances ⋮ "More actions" menu opens again.** Its trigger had been wrapped in a
-  tooltip, and the nested `TooltipTrigger`/`DropdownMenuTrigger` (both `as-child`) swallowed the
-  click so the menu never opened, while the zero-delay tooltip itself was intrusive. The kebab
-  is now a bare dropdown trigger with an `aria-label`, it opens on click, with no tooltip.
-- **The Instances refresh icon no longer spins on every poll.** The list silently re-polls every
-  4 s and the spinner was tied to that `loading` flag, so it flickered constantly and read as a
-  constant spin. Background poll ticks are now silent; the icon spins only on a first load or a
-  user-initiated refresh.
-- **Instance discovery no longer breaks on profile paths that contain a space.** When an
-  instance's `--user-data-dir` has a space (a space in the Windows user name, or a space in the
-  instance name itself), `Bun.spawn`/libuv wraps the whole `"--user-data-dir=C:\a b\c"` token in
-  quotes, and the previous command-line parser truncated the path at the first space, so the
-  running instance was mis-matched (it showed as "stopped" or as a stray external row). The
-  `core/process.ts` parser now handles all three quotings (unquoted, value-quoted, and
-  whole-token-quoted), see `tests/process-parse.test.ts`.
-- **Composer toasts render as real toasts.** The "Queued N message(s)" confirmation showed as
-  bare unstyled text lines: vue-sonner v2 ships its styling as a separate stylesheet that was
-  never imported. `main.ts` now imports `vue-sonner/style.css`, so every toast gets its card,
-  border, and shadow back.
-- **Open drawers no longer cover the header buttons.** The top bar now shares the push-panel
-  padding shift with the main content (plus its own 16px), so New run / Queue / theme /
-  Settings slide left to stay clickable instead of disappearing under the settings or queue
-  drawer.
-- **Push panels no longer crush the centered shell (kit-wide).** The settings/queue drawers
-  dock to the viewport's right edge, but the content shift now equals only the panel's
-  actual overlap with the centered app shell (zero on a wide monitor) instead of the full
-  panel width. This removes the dead band that squeezed the Instances table to half size
-  and nudged the Sessions placeholder left whenever Settings was opened.
-- Built SPA now talks to the daemon over same-origin relative URLs instead of a hardcoded
-  `http://localhost:7787`, so the UI keeps working when the daemon port-hops off its preferred
-  port. Dev (Vite) behavior is unchanged; `VITE_API_BASE` still overrides both.
-- Free-port probe (`find-free-port`) is now loopback-aware: it no longer picks a port that's
-  only bound on another interface, closing a race where the daemon could report itself bound to
-  a port a different loopback-only process (e.g. `wrangler dev`) was already holding.
+- **Warning for the Microsoft Store build of Claude Desktop.** That build cannot be launched with separate profiles, so the Instances tab shows a banner with a link to the classic installer when only it, or nothing, is installed.
+- **Portable mode.** A setting opens the app in its own chromeless browser window instead of a tab. The window has its own profile, so it remembers its size and position, and both the in-app toggle and the tray launcher use it.
+- **An MCP server.** It exposes the sessions, queue and instances to Claude Code and Claude Desktop.
+- **Background auto-update.** Off by default, it checks on a schedule and updates and relaunches unattended, but never touches a working copy with local changes.
 
 ### Changed
 
-- **The composer lost its top divider line** (the transcript column stays borderless).
-- **Queue moved from a tab to a slide-in drawer.** The queue now opens as a right-side push
-  drawer from a header button (with the running-count badge), so the list rides alongside
-  the Sessions or Instances view instead of replacing it. Only one drawer (queue or
-  settings) is open at a time.
-- **Settings split into tabs.** The Settings panel now groups its sections under three tabs
-  (General / Scheduler / Accounts) using the shared kit's segmented tab bar, instead of one
-  long scroll. General holds appearance, updates, and auto-update; the "Save settings" footer
-  stays visible on every tab and still flushes the scheduler form.
-- **One Updates group, and it explains itself.** The separate Auto-update section merged into
-  the Updates group (the auto-check toggle and interval sit right under the manual check).
-  The cryptic "No update source" row now reads "Updates can't be checked" with a visible
-  explanation (no Git remote linked; add one or set `CCMANAGERUI_UPDATE_REPO`), and the
-  auto-update rows gray out while there is no source to check.
-- **Queue resume lives in the queue drawer.** The transcript header's primary button now
-  opens/closes the queue drawer; the "Queue resume" action (builder in resume mode) moved
-  into the drawer's toolbar next to New run. "Show tool activity" shrank from a labeled
-  switch to an icon toggle (pressed = tool events shown), matching the ID button beside it.
-- **Multi-select banner is count-only.** "Sending to N sessions" no longer tries to list every
-  target's title (they always truncated into noise).
-- **Drawer headers/footers lost their divider lines (kit-wide).** The shared panel shell no
-  longer draws a border under its title bar or above its footer.
-- **Header cleanup**: the scheduler pill left the top bar (its toggle plus counts and interval
-  controls already live in Settings → Scheduler); the Queue page now shows a small "Scheduler
-  on" chip whenever it's enabled, so auto-dispatch is still visible where it matters. The
-  "New run" header button is now a compact plus icon that expands on hover/keyboard focus to
-  reveal its label (same pattern as DevWebUI's top bar), and the Queue page title gained an
-  info hint explaining what the queue is and that nothing runs by itself while the scheduler
-  is off.
-- **Default port moved 8787 → 7787.** 8787 collided with both another local dev server and
-  `wrangler dev`'s default. Set `PORT` to override; the daemon still hops to the next free port
-  if its preferred one is busy and records where it landed in `~/.ccmanagerui/runtime.json`.
+- **The queue is a slide-in drawer.** It opens from a header button with a running-count badge and sits beside Sessions or Instances. Only one drawer is open at a time.
+- **Settings is split into tabs.** General, Scheduler and Accounts replace one long scroll, and the save button stays visible on every tab.
+- **One Updates group that explains itself.** Auto-update is merged into it, and when updates cannot be checked it says why and greys out the related options.
+- **Queue resume lives in the queue drawer.** The transcript header button opens the drawer, and Show tool activity became an icon toggle.
+- **The multi-select banner shows only a count.**
+- **Cleaner chrome.** The composer, drawer headers and footers lost their divider lines, the scheduler pill left the top bar, New run became an expanding icon button, and the Queue page explains itself.
+- **The default port moved to 7787.** The old one clashed with other local dev servers. The app still hops to a free port if it is busy.
+
+### Fixed
+
+- **Quitting closed the Claude Desktop instances it launched.** Instances now start outside the app's process tree and survive Quit.
+- **The Instances "More actions" menu opens again.** A nested tooltip had swallowed the click.
+- **The refresh icon no longer spins on every poll.** It spins only on first load or when you ask.
+- **Instance discovery handles profile paths with spaces.** Such instances no longer show as stopped or as stray external rows.
+- **Toasts render as real toasts.** The queued-message confirmation had lost its card, border and shadow.
+- **Open drawers no longer cover the header buttons.** They shift left to stay clickable.
+- **Push panels no longer crush the centred layout.** The shift now matches the real overlap, so opening Settings no longer squeezes the Instances table.
+- **The app keeps working when its port changes.** The page now talks to the app by relative address instead of a fixed port.
+- **The free-port check no longer picks a port held on another interface.** This closes a race with other local tools.
 
