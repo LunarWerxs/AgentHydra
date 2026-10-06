@@ -14,7 +14,8 @@
 // id, number (unless taken here) and name. A LOG OUT REACHES EVERY PC: a login this PC shared and then
 // logged out turns its row into a signed-out marker naming that login; a PC still on that same login
 // logs out of it, and one signed in since sends its own up instead. Nothing is read or written while an
-// operation runs on the instance.
+// operation runs on the instance. A DELETE REACHES EVERY PC: the row becomes a deleted marker, and every PC
+// removes that account and never adopts it again.
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
@@ -43,8 +44,8 @@ interface Cookie { name: string; value: string; expires?: number }
 /** One login as the sync compares it: its sign-in's identity (a hash) and when that sign-in expires. */
 export interface FreeLogin { cookies: Cookie[]; auth: string; exp: number }
 export interface StoreCreds { url: string; token: string; key: Buffer }
-interface Shared { id: string; num: number; provider: FreeProvider; name: string; auth: string; cookies?: Cookie[]; signedOut?: true }
-interface Row { id: string; version: number; meta?: { signedOut?: boolean } }
+interface Shared { id: string; num: number; provider: FreeProvider; name: string; auth: string; cookies?: Cookie[]; signedOut?: true; deleted?: true }
+interface Row { id: string; version: number; meta?: { signedOut?: boolean; deleted?: boolean } }
 /** What this PC and the store last agreed on for a row: its version, and the sign-in it held and when that
  *  expires (null: none). */
 interface Agreed { version: number; auth: string | null; exp?: number | null }
@@ -60,6 +61,12 @@ export interface FreeSyncHost {
   landed(id: string): void
   /** Log out here, as the Log out action does. */
   forget(id: string): Promise<void>
+  /** Accounts deleted here that the store has not been told of yet. */
+  deleted(): Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>[]
+  /** The store knows of that deletion: drop its tombstone. */
+  settled(id: string): void
+  /** Delete the account here because another PC deleted it (no tombstone: the store already knows). */
+  remove(id: string): Promise<void>
 }
 
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
@@ -120,7 +127,7 @@ function open(key: Buffer, id: string, blob: unknown): Shared | null {
     const s = JSON.parse(gunzipSync(Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()])).toString('utf8')) as Shared
     const valid = s.id === id && FREE_PROVIDERS.includes(s.provider) && Number.isInteger(s.num) && s.num > 0 &&
       typeof s.name === 'string' && s.name.trim().length > 0 && s.name.length <= 100 && !/[\x00-\x1f]/.test(s.name) &&
-      typeof s.auth === 'string' && (s.signedOut === true || (Array.isArray(s.cookies) && s.cookies.every(isCookie)))
+      typeof s.auth === 'string' && (s.signedOut === true || s.deleted === true || (Array.isArray(s.cookies) && s.cookies.every(isCookie)))
     return valid ? s : null
   } catch { return null }
 }
@@ -202,13 +209,28 @@ export class FreeSync {
       if (list.status !== 200 || !Array.isArray(list.json?.free)) throw new Error(`the store answered ${list.status} to the Free list`)
       const rows = new Map<string, Row>((list.json.free as Row[]).filter(r => UUID.test(r.id)).map(r => [r.id, r]))
       const problems: string[] = []
-      for (const instance of this.host.list()) {
+      // Taken before the tombstones settle: this pass's list still shows their rows as live.
+      const tombs = new Set(this.host.deleted().map(d => d.id))
+      for (const t of this.host.deleted()) {
+        try {
+          const row = rows.get(t.id)
+          if (!row || row.meta?.deleted) { this.host.settled(t.id); delete this.agreed[t.id]; continue }
+          const { id, num, provider, name } = t
+          // A 409 leaves the tombstone for the next pass; a write that landed settles it.
+          if (await this.put(c, id, row.version, seal(c.key, { id, num, provider, name, auth: '', deleted: true }), { deleted: true }, { auth: null, exp: null })) { this.host.settled(id); delete this.agreed[id] }
+        } catch (e) { problems.push(`${t.id.slice(0, 8)}: ${e instanceof Error ? e.message : String(e)}`) }
+      }
+      for (const instance of [...this.host.list()]) {
         if (this.host.busy(instance.id)) continue
+        if (rows.get(instance.id)?.meta?.deleted) {
+          try { await this.host.remove(instance.id); delete this.agreed[instance.id] } catch (e) { problems.push(`#${instance.num}: ${e instanceof Error ? e.message : String(e)}`) }
+          continue
+        }
         try { await this.one(c, instance, rows.get(instance.id)) } catch (e) { problems.push(`#${instance.num}: ${e instanceof Error ? e.message : String(e)}`) }
       }
       const here = new Set(this.host.list().map(i => i.id))
       for (const row of rows.values()) {
-        if (here.has(row.id) || row.meta?.signedOut) continue
+        if (here.has(row.id) || row.meta?.signedOut || row.meta?.deleted || tombs.has(row.id)) continue
         try { await this.adopt(c, row) } catch (e) { problems.push(`${row.id.slice(0, 8)}: ${e instanceof Error ? e.message : String(e)}`) }
       }
       this.save()
@@ -294,12 +316,13 @@ export class FreeSync {
     await this.put(c, id, version, seal(c.key, { id, num, provider, name, auth, signedOut: true }), { signedOut: true }, { auth: null, exp: null })
   }
 
-  private async put(c: StoreCreds, id: string, version: number, blob: string, meta: Row['meta'], held: Omit<Agreed, 'version'>): Promise<void> {
+  private async put(c: StoreCreds, id: string, version: number, blob: string, meta: Row['meta'], held: Omit<Agreed, 'version'>): Promise<boolean> {
     const r = await this.call(c, 'PUT', `/v1/free/${id}`, { version, blob, meta })
     // 409: another PC wrote it meanwhile; the next pass reads theirs and decides.
-    if (r.status === 409) return
+    if (r.status === 409) return false
     if (r.status !== 200 || !Number.isInteger(r.json?.version)) throw new Error(`the store answered ${r.status} to a write`)
     this.agreed[id] = { version: r.json.version, ...held }
+    return true
   }
 
   private save(): void {

@@ -15,6 +15,8 @@ from .results import transcript
 
 
 SCHEMA_VERSION = 1
+# The smallest question that still costs a turn; the reply is discarded.
+KEEPALIVE_PROMPT = "Reply with the single word: ok"
 
 
 def read_config(path: Path) -> dict:
@@ -153,9 +155,8 @@ def execute(args, *, api, on_text=None) -> dict:
             active_chat, entry = resolve(reference or "last", registry, config)
         selected_org = http.valid_uuid(args.org_id) if args.org_id else None
         # An alias binds to its original organization; explicit mismatches fail early.
-        preferred_org = (
-            selected_org or (entry or {}).get("organization_id") or config.get("organization_id")
-        )
+        # The remembered org is passed separately: owner report 2026-10-06, it must not block a new login.
+        preferred_org = selected_org or (entry or {}).get("organization_id")
         if entry and selected_org and selected_org != entry["organization_id"]:
             raise ClaudeError(
                 "That chat belongs to another organization.", code="organization_mismatch"
@@ -166,8 +167,36 @@ def execute(args, *, api, on_text=None) -> dict:
                 "No saved login. Run 'python claudfree.py login' once.", code="login_required"
             )
         client = http.ClaudeHttp(baseline, timeout=args.request_timeout)
-        organization = client.authenticate(preferred_org)
+        organization = client.authenticate(
+            preferred_org, remembered_org=config.get("organization_id")
+        )
         org = organization["uuid"]
+        if args.command == "nudge":
+            # Nothing is recorded, so Desk never imports this chat. It asks the cheapest model the account offers
+            # (AgentHydra's CLI keepalive uses Haiku too); one Claude refuses outright gets a single retry on the
+            # model a chat would use. Only a refusal: a network failure may have sent the message already.
+            cheap = args.model or client.model_for(org, "haiku", own_default=False)
+            usual = config.get("model") or client.model_for(org, "sonnet")
+            tried = [m for m in dict.fromkeys([cheap, usual]) if m]
+            if not tried:
+                raise ClaudeError("Choose a Claude model with --model.", code="model_required")
+            for i, model in enumerate(tried):
+                try:
+                    client.send(
+                        org,
+                        KEEPALIVE_PROMPT,
+                        model,
+                        new_chat_id=str(uuid4()),
+                        temporary=True,
+                        timezone=args.timezone,
+                        locale=args.locale,
+                        on_text=None,
+                    )
+                    break
+                except ClaudeError as error:
+                    if error.code != "http_rejected" or i == len(tried) - 1:
+                        raise
+            return {"nudged": True, "organization_id": org}
         if args.command == "usage":
             # An empty endpoint may fall back to a historical reading, never a new POST.
             from .usage import read_cache, report
@@ -254,7 +283,13 @@ def execute(args, *, api, on_text=None) -> dict:
                     result["messages"] = transcript(conversation)
                 return result
 
-            model = args.model or (conversation or {}).get("model") or config.get("model")
+            # A login that never chatted remembers no model: it takes the one claude.ai would (owner, 2026-10-06).
+            model = (
+                args.model
+                or (conversation or {}).get("model")
+                or config.get("model")
+                or client.model_for(org, "sonnet")
+            )
             if not model:
                 raise ClaudeError("Choose a Claude model with --model.", code="model_required")
             if not isinstance(model, str) or not re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model):

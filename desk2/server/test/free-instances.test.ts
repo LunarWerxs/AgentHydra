@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { ServerContext } from '../src/context'
-import type { FreeRequest } from '../../shared/free-instances'
+import type { FreeInstance, FreeRequest, FreeUsage } from '../../shared/free-instances'
+import { nudgeDue } from '../src/free-instances/keepalive'
 import { commandArgs, type FreeRunner, type FreeRunRequest, type RunOutput } from '../src/free-instances/runner'
 import { parseResult } from '../src/free-instances/results'
 import { FreeInstances, validateRequest } from '../src/free-instances/service'
@@ -308,6 +309,77 @@ describe('Free jobs and routes', () => {
     label = 'Third Name'
     service.start(op({ instanceId: auto.id })); await tick()
     expect(auto.name).toBe('Renamed')
+  })
+  test('delete removes the account, its chats and state folder, runs forget, and is refused while an operation runs', async () => {
+    let release: (value: RunOutput) => void = () => {}
+    const forgets: FreeRunRequest[] = []
+    const { service, app, op, instance, config } = fixture(async (_c, r) => {
+      if (r.command === 'forget') { forgets.push(r); return { code: 0, stdout: 'removed' } }
+      if (r.command === 'chat') return new Promise(resolve => { release = resolve })
+      return output(r.command === 'chats' ? { ok: true, chats: [{ chat_id: CHAT, is_temporary: true, name: 'Example chat' }] } : r.command === 'auth' ? { ok: true, authenticated: true } : { ok: true, available: false, windows: [] })
+    })
+    service.start(op()); await tick()
+    expect(service.threads()).toHaveLength(1)
+    expect(existsSync(config.stateDir)).toBe(true)
+    service.start(op({ command: 'chat', prompt: 'Example prompt' })); await tick()
+    expect((await app.request(`/api/free/instances/${instance.id}`, { method: 'DELETE' })).status).toBe(409)
+    release(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Example reply' })); await tick()
+    expect((await app.request(`/api/free/instances/${instance.id}`, { method: 'DELETE' })).status).toBe(200)
+    expect(service.status().instances).toEqual([])
+    expect(service.threads()).toEqual([])
+    expect(existsSync(config.stateDir)).toBe(false)
+    expect(forgets.map(f => f.instanceId)).toEqual([instance.id])
+    expect(service.syncHost().deleted().map(d => d.id)).toEqual([instance.id])
+    expect((await app.request(`/api/free/instances/${CHAT}`, { method: 'DELETE' })).status).toBe(404)
+  })
+  test('settings start at the defaults, persist, and refuse unknown keys and out-of-range floors', async () => {
+    const { service, home, runtime } = fixture()
+    expect(service.settings()).toEqual({ keepWindows: false, weeklyFloorPct: 85 })
+    expect(service.updateSettings({ keepWindows: true, weeklyFloorPct: 70 })).toEqual({ keepWindows: true, weeklyFloorPct: 70 })
+    const again = new FreeInstances(home, undefined, runtime)
+    services.push(again)
+    expect(again.settings()).toEqual({ keepWindows: true, weeklyFloorPct: 70 })
+    for (const bad of [{ other: 1 }, { weeklyFloorPct: 0 }, { weeklyFloorPct: 101 }, { weeklyFloorPct: 50.5 }, { keepWindows: 'yes' }, null]) expect(() => service.updateSettings(bad)).toThrow()
+    expect(service.settings().weeklyFloorPct).toBe(70)
+  })
+  test('nudgeDue follows the CLI keepalive rules', () => {
+    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const window = (id: string, used: number, resets: string | null) => ({ id, used_percent: used, remaining_percent: 100 - used, resets_at: resets, reset_passed: false })
+    const future = '2026-10-06T15:00:00Z'
+    const past = '2026-10-06T09:00:00Z'
+    const usage = (windows: ReturnType<typeof window>[]): FreeUsage => ({ available: true, is_snapshot: false, observed_at: null, note: '', windows })
+    const base: FreeInstance = { id: INSTANCE, num: 1, provider: 'claude', name: 'Example', autoName: false, loggedIn: true, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: usage([window('five_hour', 0, null), window('seven_day', 10, future)]) }
+    const on = { keepWindows: true, weeklyFloorPct: 85 }
+    const hour = 3_600_000
+    const cases: [string, Partial<FreeInstance>, Partial<typeof on>, boolean][] = [
+      ['idle and signed in', {}, {}, true],
+      ['switched off', {}, { keepWindows: false }, false],
+      ['ChatGPT', { provider: 'chatgpt' }, {}, false],
+      ['signed out', { loggedIn: false }, {}, false],
+      ['unreadable reading', { usage: null }, {}, false],
+      ['five-hour window running', { usage: usage([window('five_hour', 5, future)]) }, {}, false],
+      ['five-hour window ended', { usage: usage([window('five_hour', 5, past)]) }, {}, true],
+      ['weekly at the floor', { usage: usage([window('seven_day', 85, future)]) }, {}, false],
+      ['weekly under a higher floor', { usage: usage([window('seven_day', 85, future)]) }, { weeklyFloorPct: 90 }, true],
+      ['recent good nudge', { nudge: { at: NOW - hour, ok: true } }, {}, false],
+      ['old good nudge', { nudge: { at: NOW - 6 * hour, ok: true } }, {}, true],
+      ['recent failed nudge', { nudge: { at: NOW - 10 * 60_000, ok: false } }, {}, false],
+      ['old failed nudge', { nudge: { at: NOW - 2 * hour, ok: false } }, {}, true],
+    ]
+    for (const [label, change, settings, due] of cases) expect([label, nudgeDue({ ...base, ...change }, { ...on, ...settings }, NOW)]).toEqual([label, due])
+  })
+  test('keepWindows nudges a signed-in Claude account then reads its usage, never adds a chat, and skips ChatGPT', async () => {
+    const calls: string[] = []
+    const { service, instance } = fixture(async (_c, r) => { calls.push(`${r.provider}:${r.command}`); return output(r.command === 'nudge' ? { ok: true, nudged: true } : { ok: true, available: true, windows: [] }) })
+    const gpt = service.create({ provider: 'chatgpt', name: 'Example GPT' })
+    for (const i of [instance, gpt]) { i.loggedIn = true; i.usage = { available: true, is_snapshot: false, observed_at: null, note: '', windows: [] } }
+    service.updateSettings({ keepWindows: true })
+    service.keepWindows()
+    await tick(); await tick()
+    expect(calls).toEqual(['claude:nudge', 'claude:usage'])
+    expect(instance.nudge?.ok).toBe(true)
+    expect(gpt.nudge).toBeUndefined()
+    expect(service.threads()).toEqual([])
   })
   test('legacy migration copies encrypted state into isolated homes once, without removing its source', () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-migrate-')); dirs.push(home)

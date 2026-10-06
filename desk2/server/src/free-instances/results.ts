@@ -35,6 +35,7 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
     return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined)
   }
   if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null }
+  if (command === 'nudge') return { ok: true }
   if (command === 'chats') return { ok: true, chats: list(r.chats).map(item => {
     const c = object(item)
     return { chat_id: str(c.chat_id, 100), name: str(c.name, 200) || null, is_temporary: c.is_temporary === true ? true : c.is_temporary === false ? false : null,

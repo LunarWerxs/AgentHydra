@@ -197,7 +197,9 @@ class ClaudeHttp:
         finally:
             response.close()
 
-    def authenticate(self, preferred_org: str | None = None) -> dict[str, Any]:
+    def authenticate(
+        self, preferred_org: str | None = None, *, remembered_org: str | None = None
+    ) -> dict[str, Any]:
         # A saved chat's organization takes precedence over the last active browser tab.
         organizations = self._json("GET", "/api/organizations")
         if not isinstance(organizations, list):
@@ -209,6 +211,15 @@ class ClaudeHttp:
                 if org["uuid"] == wanted:
                     return org
             raise HttpError("This session does not have access to the selected organization.")
+        if remembered_org:
+            # Owner report 2026-10-06: the org left by a previous account is only a default, never a block.
+            try:
+                wanted = valid_uuid(remembered_org)
+            except HttpError:
+                wanted = None
+            for org in available:
+                if org["uuid"] == wanted:
+                    return org
         last_active = next(
             (c["value"] for c in self.state.get("cookies", []) if c.get("name") == "lastActiveOrg"),
             None,
@@ -242,6 +253,42 @@ class ClaudeHttp:
                 if isinstance(org_name, str):
                     name = re.sub(r"[’']s Organization$", "", org_name.strip(), flags=re.I)
             return account_label(name, email)
+        except Exception:
+            return None
+
+    def model_for(self, org_id: str, prefer: str, *, own_default: bool = True) -> str | None:
+        """The model a new chat gets when none is remembered; never raises.
+
+        A login that never chatted has no model in its config (seen 2026-10-06), and claude.ai stores no
+        default for a free account (settings.default_model is null). Its organization lists the models it
+        offers (claude_ai_bootstrap_models_config, newest first; retired ones are inactive or overflow):
+        the account's own default when it has one (unless `own_default` is off), else the first active
+        model whose id holds `prefer` ("sonnet" for a chat, as claude.ai picks; "haiku" for a keepalive
+        nudge, the cheapest), else the account's default, else the first active one.
+        """
+        try:
+            body = self._json("GET", "/api/account")
+            if not isinstance(body, dict):
+                return None
+            own = (body.get("settings") or {}).get("default_model")
+            own = own if isinstance(own, str) and re.fullmatch(r"claude-[a-zA-Z0-9._-]+", own) else None
+            if own and own_default:
+                return own
+            offered: list[str] = [own] if own else []
+            for membership in body.get("memberships") or []:
+                organization = (membership or {}).get("organization") or {}
+                if organization.get("uuid") not in (None, org_id):
+                    continue
+                for entry in organization.get("claude_ai_bootstrap_models_config") or []:
+                    model = (entry or {}).get("model")
+                    if (
+                        isinstance(model, str)
+                        and re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model)
+                        and not entry.get("inactive")
+                        and not entry.get("overflow")
+                    ):
+                        offered.append(model)
+            return next((m for m in offered if prefer in m), offered[0] if offered else None)
         except Exception:
             return None
 

@@ -44,6 +44,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "read",
             "track",
             "chats",
+            "nudge",
             "schema",
             "mcp",
             "mcp-config",
@@ -175,7 +176,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     if args.stream and (args.command not in {"chat", "resume"} or args.json_output):
         # Token callbacks and a JSON envelope cannot share the same stdout stream.
         parser.error("--stream is only valid with chat/resume and cannot be combined with --json")
+    if args.command == "nudge" and not args.json_output:
+        # The human printer has no nudge layout; Desk always asks for JSON.
+        parser.error("nudge requires --json")
     if args.json_output and args.command not in {
+        "nudge",
         "auth",
         "usage",
         "chat",
@@ -221,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             from .api import Client
 
             print(json.dumps(Client.schema(), ensure_ascii=False, indent=2))
-        elif args.command in {"auth", "usage", "chat", "resume", "read", "track", "chats"}:
+        elif args.command in {"auth", "usage", "chat", "resume", "read", "track", "chats", "nudge"}:
             run_http(args)
         elif args.command == "forget":
             from .service import forget_session

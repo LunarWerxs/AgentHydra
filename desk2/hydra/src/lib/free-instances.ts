@@ -1,4 +1,4 @@
-import type { FreeInstance, FreeJob, FreeProvider, FreeRequest, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
+import type { FreeInstance, FreeJob, FreeProvider, FreeRequest, FreeSettings, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
 import { ref } from 'vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import type { UsageLimit, UsageSnapshot } from '@/lib/api'
@@ -30,6 +30,9 @@ export const freeApi = {
   rename: (id: string, name: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}`, 'PATCH', { name }),
   // The server may first set up the runtime and stop a live ChatGPT worker (its forget waits up to 4 minutes).
   logout: (id: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}/logout`, 'POST', undefined, 300_000),
+  remove: (id: string) => request<{ ok: true }>(`instances/${encodeURIComponent(id)}`, 'DELETE'),
+  settings: () => request<FreeSettings>('settings'),
+  updateSettings: (patch: Partial<FreeSettings>) => request<FreeSettings>('settings', 'PATCH', patch),
   threads: () => request<FreeThread[]>('threads'),
   start: (operation: FreeRequest) => request<FreeJob>('jobs', 'POST', operation),
   job: (id: string) => request<FreeJob>(`jobs/${encodeURIComponent(id)}`),

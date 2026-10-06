@@ -38,10 +38,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
   freeInstances: {
     nameLabel: 'freeInstances.nameLabel',
     namePlaceholder: 'freeInstances.namePlaceholder',
-    createDialogTitle: 'freeInstances.createDialogTitle',
-    createDialogDescription: 'freeInstances.createDialogDescription',
-    createDialogSubmit: 'freeInstances.createDialogSubmit',
-    createDialogCreating: 'freeInstances.createDialogCreating',
     renameDialogTitle: 'freeInstances.renameDialogTitle',
     renameDialogDescription: 'freeInstances.renameDialogDescription',
     renameDialogSubmit: 'freeInstances.renameDialogSubmit',
@@ -51,7 +47,7 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
 
 /** The delete dialog (DeleteInstanceDialog.vue) on all four instance tables. The type-the-name prompt
  *  and the copy-name chip are one shared wording (instances.deleteDialogTypeName), not per table. */
-export type DeleteDialogNamespace = 'instances' | Exclude<CliDialogNamespace, 'freeInstances'>
+export type DeleteDialogNamespace = 'instances' | CliDialogNamespace
 
 export const DELETE_DIALOG_KEYS = {
   instances: {
@@ -85,5 +81,13 @@ export const DELETE_DIALOG_KEYS = {
     mismatch: 'dshInstances.deleteDialogMismatch',
     submit: 'dshInstances.deleteDialogSubmit',
     deleting: 'dshInstances.deleteDialogDeleting',
+  },
+  freeInstances: {
+    title: 'freeInstances.deleteDialogTitle',
+    description: 'freeInstances.deleteDialogDescription',
+    placeholder: 'freeInstances.deleteDialogPlaceholder',
+    mismatch: 'freeInstances.deleteDialogMismatch',
+    submit: 'freeInstances.deleteDialogSubmit',
+    deleting: 'freeInstances.deleteDialogDeleting',
   },
 } as const satisfies Record<DeleteDialogNamespace, Record<string, string>>

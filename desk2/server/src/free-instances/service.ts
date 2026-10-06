@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_COMMANDS, FREE_PROVIDERS, type FreeInstance, type FreeJob, type FreeRequest, type FreeStatus, type FreeThread } from '@shared/free-instances'
+import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeInstance, type FreeJob, type FreeRequest, type FreeSettings, type FreeStatus, type FreeThread } from '@shared/free-instances'
+import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { failure, parseResult } from './results'
 import { runFree, type FreeRunner } from './runner'
 import { ManagedFreeRuntime, type FreeRuntime } from './runtime'
@@ -29,6 +30,7 @@ export function validateRequest(value: unknown): FreeRequest {
   if (reference ? typeof r.chatId !== 'string' || !UUID.test(r.chatId) : r.chatId !== undefined) throw new FreeError('Use an explicit chat UUID for read, resume or track.')
   if (send ? typeof r.prompt !== 'string' || !r.prompt.trim() || r.prompt.length > 100_000 : r.prompt !== undefined) throw new FreeError('Messages must contain 1–100,000 characters, only for chat or resume.')
   if (r.name !== undefined) { if (!['chat', 'track'].includes(r.command)) throw new FreeError('Name is an option for chat or track.'); name(r.name) }
+  if (r.command === 'nudge' && r.provider !== 'claude') throw new FreeError('A keepalive nudge is for Claude only.')
   if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
   if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !send || r.provider !== 'claude')) throw new FreeError('Web search is an option for Claude messages only.')
   return { ...r }
@@ -44,6 +46,8 @@ export class FreeInstances {
   private forgetting = new Set<string>()
   private stopping = false
   private cleanup = setInterval(() => this.prune(), 60_000).unref()
+  /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
+  private keeper: ReturnType<typeof setTimeout> = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
@@ -79,7 +83,7 @@ export class FreeInstances {
   async logout(id: string): Promise<FreeInstance> {
     const instance = this.instance(id)
     if (this.stopping) throw new FreeError('Desk is stopping. Log out after reconnecting.', 503)
-    if (this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running')) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
+    if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
     this.forgetting.add(id)
     try {
       try { await this.runtime.ensure(instance.provider) }
@@ -96,11 +100,57 @@ export class FreeInstances {
     this.onLoginChange?.()
     return instance
   }
+  /**
+   * Deletes the account here: its login, state folder, chats and row. Deleting reaches every PC, as a log out does:
+   * the sync leaves a tombstone for the store, and the other PCs remove it too (they pass `tombstone: false`).
+   */
+  async remove(id: string, opts: { tombstone?: boolean } = {}): Promise<{ ok: true }> {
+    const instance = this.instance(id)
+    if (this.stopping) throw new FreeError('Desk is stopping. Delete the account after reconnecting.', 503)
+    if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
+    this.forgetting.add(id)
+    try {
+      // The harness's forget also stops a live ChatGPT worker; its failure does not matter, the folder delete removes the login file anyway.
+      try {
+        await this.runtime.ensure(instance.provider)
+        await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000))
+      } catch { /* deleted regardless */ }
+      for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
+      this.store.remove(id, opts.tombstone ?? true)
+    } finally { this.forgetting.delete(id) }
+    this.onLoginChange?.()
+    return { ok: true }
+  }
+  private busy(id: string): boolean {
+    return this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running')
+  }
+  settings(): FreeSettings { return this.store.data.settings ?? { ...FREE_SETTINGS_DEFAULTS } }
+  updateSettings(value: unknown): FreeSettings {
+    const r = record(value)
+    if (Object.keys(r).some(k => k !== 'keepWindows' && k !== 'weeklyFloorPct')) throw new FreeError('Only keepWindows and weeklyFloorPct can be changed.')
+    if (r.keepWindows !== undefined && typeof r.keepWindows !== 'boolean') throw new FreeError('keepWindows must be true or false.')
+    if (r.weeklyFloorPct !== undefined && (!Number.isInteger(r.weeklyFloorPct) || (r.weeklyFloorPct as number) < 1 || (r.weeklyFloorPct as number) > 100)) throw new FreeError('weeklyFloorPct must be a whole number from 1 to 100.')
+    this.store.data.settings = { ...this.settings(), ...r }
+    this.store.save()
+    setTimeout(() => this.keepWindows(), 0).unref()
+    return this.store.data.settings
+  }
+  /** Starts a nudge on each signed-in Claude account that is due (keepalive.ts); one that is busy waits for the next pass. */
+  keepWindows(): void {
+    const settings = this.settings()
+    for (const instance of [...this.store.data.instances]) {
+      if (!nudgeDue(instance, settings, Date.now()) || this.busy(instance.id)) continue
+      try { this.start({ requestId: randomUUID(), instanceId: instance.id, provider: 'claude', command: 'nudge' }) } catch { /* Desk is stopping or its jobs are full; the next pass tries again */ }
+    }
+  }
   /** What the Free login sync (sync.ts) reads and does here. */
   syncHost(): FreeSyncHost {
     return {
       list: () => this.store.data.instances,
-      busy: id => this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running'),
+      deleted: () => this.store.data.deleted ?? [],
+      settled: id => this.store.settle(id),
+      remove: async id => { await this.remove(id, { tombstone: false }) },
+      busy: id => this.busy(id),
       sessionFile: i => join(this.runtime.config(i.id).stateDir, i.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi'),
       adopt: shared => this.store.adopt(shared),
       landed: id => {
@@ -187,6 +237,11 @@ export class FreeInstances {
           try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, controller.signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
         }
       }
+      if (r.command === 'nudge') {
+        instance.nudge = { at: Date.now(), ok: job.result.ok }
+        // Read the quota again so the window the nudge started shows.
+        if (job.result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, controller.signal))) } catch { /* the nudge worked; the next refresh reads it */ }
+      }
       this.apply(r, job.result)
     } catch {
       job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
@@ -206,7 +261,7 @@ export class FreeInstances {
         this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined)
       }
     }
-    if (!['auth', 'login', 'usage', 'chats'].includes(r.command)) {
+    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {
       if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
       const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
       const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
@@ -215,5 +270,5 @@ export class FreeInstances {
     }
     this.store.save()
   }
-  stop(): void { this.stopping = true; clearInterval(this.cleanup); for (const controller of this.controllers.values()) controller.abort() }
+  stop(): void { this.stopping = true; clearInterval(this.cleanup); clearTimeout(this.keeper); clearInterval(this.keeper); for (const controller of this.controllers.values()) controller.abort() }
 }

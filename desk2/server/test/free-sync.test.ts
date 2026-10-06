@@ -66,6 +66,40 @@ const sessionKey = (value: string, expires: number) => [
 ]
 const signedInAs = (file: string) => readLogin(file, 'claude')?.cookies.find(c => c.name === 'sessionKey')?.value
 
+test.skipIf(process.platform !== 'win32')('a deleted account disappears on the other PC, is not adopted again, and its tombstone settles', async () => {
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc()
+    const b = pc()
+    const syncA = new FreeSync(a.home, a.host, creds)
+    const syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'claude', name: 'Example account' })
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('first', 1_900_000_000))
+    await syncA.pass()
+    await syncB.pass()
+    await settled(b.service)
+    expect(b.service.status().instances).toHaveLength(1)
+
+    await a.service.remove(account.id)
+    expect(a.host.deleted().map(d => d.id)).toEqual([account.id])
+    await syncA.pass()
+    expect(a.host.deleted()).toEqual([])
+    await syncB.pass()
+    expect(b.service.status().instances).toEqual([])
+    // Neither PC takes the account back on a later pass.
+    await syncB.pass()
+    await syncA.pass()
+    expect(b.service.status().instances).toEqual([])
+    expect(a.service.status().instances).toEqual([])
+    expect(b.host.deleted()).toEqual([])
+  } finally {
+    store.stop()
+  }
+})
+
 test.skipIf(process.platform !== 'win32')('a Free login reaches the other PC, the newer sign-in wins, and a log out reaches both', async () => {
   const token = randomBytes(16).toString('hex')
   const store = fakeStore(token)

@@ -1,7 +1,7 @@
 /** Free account instances are web accounts, independent of Desktop and CLI instances. */
 export const FREE_PROVIDERS = ['claude', 'chatgpt'] as const
 export type FreeProvider = (typeof FREE_PROVIDERS)[number]
-export const FREE_COMMANDS = ['auth', 'usage', 'chats', 'read', 'chat', 'resume', 'track', 'login'] as const
+export const FREE_COMMANDS = ['auth', 'usage', 'chats', 'read', 'chat', 'resume', 'track', 'login', 'nudge'] as const
 export type FreeCommand = (typeof FREE_COMMANDS)[number]
 /** Run by Desk itself, never accepted as a job: 'forget' is log out (it also stops a live ChatGPT worker). */
 export type FreeHarnessCommand = FreeCommand | 'forget'
@@ -75,7 +75,14 @@ export interface FreeInstance {
   lastSignedInAt: number | null
   lastActiveAt: number | null
   usage: FreeUsage | null
+  /** The last keepalive nudge (keepalive.ts): when it ran and whether it worked; null or absent if none ran yet. */
+  nudge?: { at: number; ok: boolean } | null
 }
+/** What a deleted account leaves behind until the login sync has told the store (sync.ts). */
+export type FreeDeleted = Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>
+export interface FreeSettings { keepWindows: boolean; weeklyFloorPct: number }
+/** Off until switched on, because a nudge spends real quota; 85 is the CLI keepalive's floor. */
+export const FREE_SETTINGS_DEFAULTS: FreeSettings = { keepWindows: false, weeklyFloorPct: 85 }
 /** Metadata only. Message content stays at the provider and in ephemeral job results. */
 export interface FreeThread {
   id: string

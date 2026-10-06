@@ -16,6 +16,8 @@ def run(args):
         timeout=args.request_timeout,
         auto_prepare=not args.no_auto_prepare,
     )
+    if args.command == "nudge":
+        raise ClaudeError("Keep windows running is for Claude logins only.", code="unsupported")
     if args.command == "schema":
         print(json.dumps(client.schema(), indent=2))
     elif args.command == "mcp-config":

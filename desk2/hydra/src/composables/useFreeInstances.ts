@@ -14,6 +14,8 @@ const followers = new Map<string, Promise<FreeResult | null>>()
 const checked = new Set<string>()
 let refreshing: Promise<void> | null = null
 
+const CHECK_AFTER_MS = 15 * 60_000
+
 const busy = (id: string) => jobs[id]?.state === 'running'
 
 async function snapshot(): Promise<void> {
@@ -94,6 +96,24 @@ async function logout(instance: FreeInstance): Promise<boolean> {
   }
 }
 
+/** Deletes the account here and, through the login sync, on the owner's other PCs. Returns whether it
+ *  worked; the reason lands in errors[instance.id]. */
+async function remove(instance: FreeInstance): Promise<boolean> {
+  if (busy(instance.id)) return false
+  errors[instance.id] = ''
+  try {
+    await freeApi.remove(instance.id)
+    instances.value = instances.value.filter(i => i.id !== instance.id)
+    threads.value = threads.value.filter(t => t.instanceId !== instance.id)
+    return true
+  } catch (error) {
+    errors[instance.id] = error instanceof Error ? error.message : 'Could not delete. Try again.'
+    // The server may still have finished (a timed-out request): show what it holds now.
+    await snapshot().catch(() => {})
+    return false
+  }
+}
+
 function refreshFree(): Promise<void> {
   if (refreshing) return refreshing
   loading.value = true
@@ -105,9 +125,11 @@ function refreshFree(): Promise<void> {
         const running = jobs[instance.id]
         if (running?.state === 'running') void follow(running)
         else if (rememberedJob(instance.id)) void recover(instance.id)
-        else if (!instance.checkedAt && !checked.has(instance.id)) {
+        else if (!checked.has(instance.id) && (!instance.checkedAt || (instance.loggedIn && Date.now() - instance.checkedAt > CHECK_AFTER_MS))) {
           checked.add(instance.id)
-          // Imported logins need a read-only check once; this never opens a browser.
+          // Owner, 2026-10-06: "the Claude ones are showing 'Not checked yet.' They should probably
+          // check on load." Each account is checked once per page session, when it never was or its
+          // reading is stale; this is read-only and never opens a browser.
           void run(instance, 'auth')
         }
       }
@@ -118,6 +140,6 @@ function refreshFree(): Promise<void> {
 }
 
 export function useFreeInstances() {
-  return { instances, threads, jobs, errors, loaded, loading, loadError, busy, run, logout, recover, refreshFree,
+  return { instances, threads, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree,
     activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
 }
