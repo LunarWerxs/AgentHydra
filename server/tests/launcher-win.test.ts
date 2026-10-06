@@ -156,7 +156,8 @@ function serveRelease(opts: { sumOf?: Uint8Array } = {}) {
   served.set(`/release/v${VERSION}/${BUNDLE}.zip`, archive)
   served.set(
     `/release/v${VERSION}/SHA256SUMS.txt`,
-    `${sha256(opts.sumOf ?? archive)}  ${BUNDLE}.zip\n`,
+    // release.yml runs `sha256sum out/*`, so the published list names the path, not the bare file
+    `${sha256(opts.sumOf ?? archive)}  out/${BUNDLE}.zip\n`,
   )
 }
 

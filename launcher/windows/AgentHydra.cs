@@ -357,14 +357,15 @@ namespace AgentHydra
             return sb.ToString();
         }
 
-        /// <summary>Checks the file against its line in a sha256sum-style list (hash, spaces, optional *, name).</summary>
+        /// <summary>Checks the file against its line in a sha256sum-style list (hash, spaces, optional *, path). Only the file name
+        /// of the path counts: release.yml writes the release's list with `sha256sum out/*`, so its lines read `out/AgentHydra-...zip`.</summary>
         static void VerifyHash(string file, string asset, string sums)
         {
             string expected = null;
             foreach (string line in sums.Split('\n'))
             {
                 Match m = Regex.Match(line.Trim(), @"^([0-9a-fA-F]{64})\s+\*?(?:\./)?(.+)$");
-                if (m.Success && m.Groups[2].Value.Trim() == asset)
+                if (m.Success && Path.GetFileName(m.Groups[2].Value.Trim()) == asset)
                 {
                     expected = m.Groups[1].Value.ToLowerInvariant();
                     break;
