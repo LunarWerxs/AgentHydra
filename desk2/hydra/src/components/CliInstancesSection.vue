@@ -768,7 +768,8 @@ onMounted(() => {
                 </IconTooltip>
               </template>
               <!-- The keepalive started this 5-hour window, or its last nudge did not (session-keepalive.ts):
-                   a dot on the 5-hour counter, not an icon by the name (owner, 2026-10-06). -->
+                   a dot on the 5-hour counter, not an icon by the name (owner, 2026-10-06). At half strength:
+                   a note, not an alarm (owner, 2026-10-06: "about half as vibrant"). -->
               <template #session-mark>
                 <IconTooltip
                   v-if="nudgeNotes.get(inst.id)"
@@ -778,7 +779,7 @@ onMounted(() => {
                   <span
                     role="img"
                     class="block size-2 rounded-full ring-2 ring-background"
-                    :class="nudgeNotes.get(inst.id)!.ok ? 'bg-info' : 'bg-warning'"
+                    :class="nudgeNotes.get(inst.id)!.ok ? 'bg-info/50' : 'bg-warning/50'"
                     :aria-label="nudgeNotes.get(inst.id)!.label"
                   />
                 </IconTooltip>

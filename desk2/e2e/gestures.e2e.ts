@@ -4,6 +4,8 @@
 // job: the menu or popover opened, the sidebar hid, the row became the selected one, the toggle flipped once, the name copied once.
 // Gestures: tap (touchStart/touchEnd), long-press (900 ms touch), press (mouse down/up with no move before it), hover-press (move,
 // 150 ms, down/up: the ordinary mouse path, and the moment a 120 ms tooltip opens), right-click, key (focus, Enter), hover, focus.
+// hover-leave judges the way out: rest until it opens, then move away; it must have opened and be gone. `paused` holds the page as
+// a window without focus (lib/pause-motion.ts), where every tooltip and breakdown the pointer left stayed on screen.
 // Starts the built Desk 2 (web/dist, hydra/dist: run `bun run build` first) as a hidden process on E2E_PORT (default 7819) with a
 // throwaway HYDRA_DESK_HOME; /ah/api goes on to the live AgentHydra daemon, read only: no case here acts on an account (the Open
 // and Focus row icons are only hovered or focused), it only opens menus and popovers, hides the sidebar, selects a row, flips a
@@ -21,7 +23,7 @@ const CDP = Number(process.env.E2E_CDP_PORT) || 9439
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-type Kind = 'tap' | 'long-press' | 'press' | 'hover-press' | 'right-click' | 'key' | 'hover' | 'focus'
+type Kind = 'tap' | 'long-press' | 'press' | 'hover-press' | 'right-click' | 'key' | 'hover' | 'focus' | 'hover-leave'
 interface Case {
   page: 'pane' | 'desk'
   what: string
@@ -36,6 +38,8 @@ interface Case {
   diag?: string
   /** hover-press: ms between arriving and pressing (default 150). */
   wait?: number
+  /** Hold the page as a window without focus does: its animations paused (the class lib/pause-motion.ts sets). */
+  paused?: boolean
 }
 
 const VISIBLE = `(els) => els.find((el) => { const r = el.getBoundingClientRect(); if (r.width < 6 || r.height < 6 || r.top < 0 || r.bottom > innerHeight) return false;
@@ -43,6 +47,10 @@ const VISIBLE = `(els) => els.find((el) => { const r = el.getBoundingClientRect(
 const MENU_OPEN = `document.querySelectorAll('[role="menu"]').length > 0`
 const POPOVER_OPEN = `document.querySelectorAll('[data-slot="popover-content"], [role="dialog"]').length > 0`
 const TIP_OPEN = `document.querySelectorAll('[data-slot="tooltip-content"]').length > 0`
+// Each breakdown's state, animation and opacity: a closed one still on screen says why it stayed.
+const POPOVER_STATES =`[...document.querySelectorAll('[data-slot="popover-content"]')].map((e) => { const c = getComputedStyle(e); return [e.getAttribute('data-state'), c.animationName, c.animationPlayState, c.opacity] })`
+// A usage chip in an Instances row (UsageBadge): its breakdown opens on hover.
+const USAGE = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] [data-slot="popover-trigger"].tabular-nums')])`
 const ROW_MENU = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] button[aria-haspopup="menu"]')])`
 const ROW_CELL = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] td:nth-child(2)')])`
 const HIDE = `(${VISIBLE})([...document.querySelectorAll('button[aria-label="Hide sidebar"]')])`
@@ -71,6 +79,9 @@ each(['hover', 'focus'], { page: 'pane', what: 'row action icon (Open/Focus) sho
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'name cell copies once, no tooltip', pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
 CASES.push({ page: 'pane', what: 'name cell copies once, no tooltip (300 ms rest)', kind: 'hover-press', wait: 300, pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
 each(['long-press'], { page: 'pane', what: 'name cell long-press shows its tooltip, no copy', pick: NAME, ok: `${TOASTS} === 0 && (${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
+// Owner, 2026-10-06 ("these stupid popups won't stop"): every tooltip and breakdown the pointer passed stayed on screen.
+each(['hover-leave'], { page: 'pane', what: 'name cell tooltip goes with the pointer, window unfocused', pick: NAME, ok: TIP_OPEN, tab: '6', paused: true })
+each(['hover-leave'], { page: 'pane', what: 'usage breakdown goes with the pointer, window unfocused', pick: USAGE, ok: POPOVER_OPEN, paused: true, diag: POPOVER_STATES })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Tip button: Hide sidebar hides it', pick: HIDE, ok: HIDDEN })
 each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outside a session) is selected', pick: ROW, ok: SELECTED })
 each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pick: ROW, ok: MENU_OPEN })
@@ -171,7 +182,9 @@ try {
     const p = await ev(`(() => { const el = ${c.pick}; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, label: el.getAttribute('aria-label') || '' } })()`)
     if (!p) { lines.push({ ok: false, line: `FAIL ${name} :: the target left the screen` }); console.log(lines.at(-1)!.line); continue }
     const ok = c.ok.replaceAll('X', String(p.x)).replaceAll('Y', String(p.y))
+    if (c.paused) await ev(`document.documentElement.classList.add('motion-paused')`)
     const before = await ev(ok)
+    let mid: unknown = null
     if (process.env.GESTURE_TRACE) await ev(TRACE)
     const mouse = (type: string, button = 'none', buttons = 0) => send('Input.dispatchMouseEvent', { type, x: p.x, y: p.y, button, buttons, clickCount: button === 'none' ? 0 : 1 })
     if (c.kind === 'tap' || c.kind === 'long-press') {
@@ -185,6 +198,13 @@ try {
     } else if (c.kind === 'hover') {
       await mouse('mouseMoved')
       await sleep(1200)
+    } else if (c.kind === 'hover-leave') {
+      await mouse('mouseMoved')
+      await sleep(1200)
+      mid = await ev(ok)
+      await park()
+      // Gone, not gone fast: a closing breakdown waits 220 ms, then fades; one left on screen never goes.
+      await sleep(700)
     } else if (c.kind === 'right-click') {
       await mouse('mouseMoved')
       await sleep(150)
@@ -199,8 +219,9 @@ try {
     await sleep(800)
     const after = await ev(ok)
     const diag = c.diag ? ` ${JSON.stringify(await ev(c.diag))}` : ''
-    const pass = !before && !!after
-    lines.push({ ok: pass, line: `${pass ? 'PASS' : 'FAIL'} ${name} :: before ${before}, after ${after}${diag}${p.label ? ` [${p.label}]` : ''}` })
+    // hover-leave: it opened and is gone; the rest: the control did its job.
+    const pass = c.kind === 'hover-leave' ? !before && !!mid && !after : !before && !!after
+    lines.push({ ok: pass, line: `${pass ? 'PASS' : 'FAIL'} ${name} :: before ${before}${c.kind === 'hover-leave' ? `, open ${mid}` : ''}, after ${after}${diag}${p.label ? ` [${p.label}]` : ''}` })
     console.log(lines.at(-1)!.line)
     if (process.env.GESTURE_TRACE) console.log(`     trace ${JSON.stringify(await ev(`window.__log`))}`)
   }

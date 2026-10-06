@@ -194,7 +194,7 @@ function onContextMenu(e: MouseEvent): void {
               :usage-key="row.usage.key"
               @check="row.usage.onCheck()"
             />
-            <span v-if="$slots['session-mark']" class="absolute -right-1 -top-1 flex"><slot name="session-mark" /></span>
+            <span v-if="$slots['session-mark']" class="absolute -right-0.5 -top-0.5 flex"><slot name="session-mark" /></span>
           </span>
           <UsageBar
             v-if="sessionReset"
@@ -240,7 +240,7 @@ function onContextMenu(e: MouseEvent): void {
             :usage-key="row.usage.key"
             @check="row.usage.onCheck()"
           />
-          <span v-if="$slots['session-mark']" class="absolute -right-1 -top-1 flex"><slot name="session-mark" /></span>
+          <span v-if="$slots['session-mark']" class="absolute -right-0.5 -top-0.5 flex"><slot name="session-mark" /></span>
         </span>
         <span v-else class="text-xs text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>

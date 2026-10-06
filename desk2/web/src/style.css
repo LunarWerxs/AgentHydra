@@ -290,11 +290,13 @@
  * Nothing moves while the window is unfocused, hidden or minimized (src/lib/pause-motion.ts sets the class):
  * a running row's pulse or spinner would keep the compositor and WebView2's GPU process drawing 60 frames
  * a second for nobody. It resumes where it stopped. With reduced motion asked for, pulses hold still and
- * spinners slow down (they are what says a row is running).
+ * spinners slow down (they are what says a row is running). A popup's own open and close (anything reka marks with
+ * data-state) keeps running: it lasts a tenth of a second, and a closed tooltip or popover leaves the page only when
+ * its close ends, so paused, every one the pointer passed stayed on screen (owner, 2026-10-06).
  */
-html.motion-paused *,
-html.motion-paused *::before,
-html.motion-paused *::after {
+html.motion-paused *:not([data-state]),
+html.motion-paused *:not([data-state])::before,
+html.motion-paused *:not([data-state])::after {
   animation-play-state: paused !important;
 }
 @media (prefers-reduced-motion: reduce) {
