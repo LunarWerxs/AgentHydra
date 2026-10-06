@@ -3943,13 +3943,14 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
 }
 
 /** Desk 2's own route for a chat it runs (desk2 plugins/20-engine.ts POST /api/sessions/:id/ping): a
- *  real turn, with a closed chat resumed. 404 or no server there means the chat is not one of its. */
+ *  real turn, with a closed chat resumed. 404 or no server there means the chat is not one of its.
+ *  Asked on Desk 2's port whether or not Desk 2 sits beside this daemon (DESK2_URL): a release exe
+ *  runs from its own folder while Desk 2 runs from a checkout, and its chats still need waking. */
 const desk: NonNullable<CliMaytePingDeps['desk']> = {
   async send(sessionId, text) {
-    const { DESK2_URL } = await import('./config')
-    if (!DESK2_URL) return { ok: false, reason: 'no Desk 2 here', notDesk: true }
+    const url = `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
     try {
-      const res = await fetch(`${DESK2_URL}/api/sessions/${encodeURIComponent(sessionId)}/ping`, {
+      const res = await fetch(`${url}/api/sessions/${encodeURIComponent(sessionId)}/ping`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ text }),
