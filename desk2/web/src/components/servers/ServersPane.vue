@@ -2,9 +2,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, Play, RefreshCw, RotateCw, Square, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
+import type { BrowserOpenRequest } from '@shared/browser'
 import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
 import { devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
-import { clampPane, type FolderSetup, isUp, needsSetup, openable, otherRunning, paneView, parseAddress, proxyAddress, statusDot, statusWord, tailLines, type Dot } from './logic'
+import { clampPane, type FolderSetup, isUp, needsSetup, openable, otherRunning, paneView, parseAddress, proxyAddress, statusDot, statusWord, tailLines } from './logic'
+import { browserRequest, claimBrowserRequest } from './browser-request'
+import SavedBrowsers from './SavedBrowsers.vue'
+import { DOT, ICON_BTN, INPUT, TEXT_BTN, tab } from './styles'
 
 // The right-hand servers pane (title bar's Browser button), like Claude Code Desktop's: a Servers | Browser switch
 // in its header, always there. Servers is the list of this chat's localhost servers from DevWebUI (Start / Stop /
@@ -167,6 +171,22 @@ async function tryAgain() {
 
 // ---- the browser: one click away on the header's switch, and shown when a server (or an address) is opened ----
 const mode = ref<'list' | 'browser'>('list')
+/** Browser mode's source: a localhost dev server in a frame, or the workspace's saved browsers (live, driven by the AI and the person). */
+const source = ref<'dev' | 'saved'>('dev')
+/** The transcript card's request the pane is acting on; SavedBrowsers selects its profile. */
+const request = ref<BrowserOpenRequest | null>(null)
+// A request that fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
+watch(
+  browserRequest,
+  () => {
+    const r = claimBrowserRequest()
+    if (!r) return
+    request.value = r
+    source.value = 'saved'
+    mode.value = 'browser'
+  },
+  { immediate: true }
+)
 const addressInput = ref<HTMLInputElement | null>(null)
 /** With no page open yet, the switch lands in the address bar. */
 function showBrowser() {
@@ -269,21 +289,6 @@ function onResizeKey(e: KeyboardEvent) {
   else if (e.key === 'ArrowRight') emit('resize', clampPane(props.width - 16, window.innerWidth * 0.7))
 }
 
-const DOT: Record<Dot, string> = {
-  run: 'bg-[var(--success)]',
-  wait: 'bg-[var(--warning)] animate-pulse',
-  bad: 'bg-[var(--danger)]',
-  off: 'bg-[var(--text-muted)] opacity-50'
-}
-const ICON_BTN =
-  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40'
-const TEXT_BTN =
-  'flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[12px] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40'
-const INPUT =
-  'h-6 min-w-0 flex-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
-const TAB =
-  'flex h-6 shrink-0 cursor-default items-center gap-1 rounded-[var(--radius-6)] px-2 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
-const tab = (on: boolean) => [TAB, on ? 'bg-[var(--fill-selected)] font-medium text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]']
 </script>
 
 <template>
@@ -424,6 +429,12 @@ const tab = (on: boolean) => [TAB, on ? 'bg-[var(--fill-selected)] font-medium t
 
     <!-- Kept mounted while the list shows, so going back to the list does not reload the page. -->
     <div v-show="mode === 'browser'" class="flex min-h-0 flex-1 flex-col">
+      <div role="tablist" aria-label="Browser source" class="flex h-8 shrink-0 items-center gap-0.5 border-t border-border px-2">
+        <button type="button" role="tab" :aria-selected="source === 'dev'" :class="tab(source === 'dev')" @click="source = 'dev'">Dev server</button>
+        <button type="button" role="tab" :aria-selected="source === 'saved'" :class="tab(source === 'saved')" @click="source = 'saved'">Saved browsers</button>
+      </div>
+      <SavedBrowsers v-if="source === 'saved' && mode === 'browser'" :cwd="cwd" :request="request" />
+      <div v-show="source === 'dev'" class="flex min-h-0 flex-1 flex-col">
       <form class="flex h-8 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="submitAddress">
         <Tip label="Back"><button type="button" :class="ICON_BTN" aria-label="Back" :disabled="at <= 0" @click="back"><ArrowLeft class="size-4" /></button></Tip>
         <Tip label="Forward"><button type="button" :class="ICON_BTN" aria-label="Forward" :disabled="at >= history.length - 1" @click="forward"><ArrowRight class="size-4" /></button></Tip>
@@ -463,6 +474,7 @@ const tab = (on: boolean) => [TAB, on ? 'bg-[var(--fill-selected)] font-medium t
           :aria-pressed="viaManager"
           @click="viaManager = !viaManager"
         >{{ viaManager ? 'Show directly' : 'Blank? Show through the server manager' }}</button>
+      </div>
       </div>
     </div>
   </section>
