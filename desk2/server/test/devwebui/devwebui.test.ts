@@ -246,7 +246,8 @@ test('/dw/folder sets up a folder DevWebUI can build a .devwebui for, and keeps 
   // Asked again, the folder is now a project: nothing is written twice.
   expect(await (await folder(desk, cwd)).json()).toMatchObject({ project: { id: 'new1' } })
   expect(fake.calls.slice(3)).toEqual(['GET /api/projects'])
-})
+  // Real git processes: alone the test takes about 1 s, but 2026-10-06's full gate under load ran past 5 s.
+}, 30_000)
 
 test('/dw/folder says when there is nothing to run, and refuses another page, no cwd, and no daemon', async () => {
   const empty = temp('desk-dw-empty-')
