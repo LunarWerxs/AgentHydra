@@ -5,12 +5,14 @@
 // <home>/logs/devservers.log (a process started through WMI has no stdout to redirect).
 //
 // It listens on 127.0.0.1 on a port the OS picks, behind a random token; service.json (ServiceFile) says where and
-// how to ask, and is written only once it listens. Every request needs `authorization: Bearer <token>`. The routes
+// how to ask, and is written only once it listens; service.lock (its pid) keeps a second one from starting for the same
+// home meanwhile. Every request needs `authorization: Bearer <token>`. The routes
 // are the ones the servers pane was built on, answered by the manager (manager.ts); Desk forwards /dw/api/<rest> to
 // /api/<rest> one to one.
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { uptime } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import { projectForCwd } from '@shared/devwebui'
@@ -22,6 +24,9 @@ import { serviceStamp } from './stamp'
 export const devServersDir = (home: string): string => join(home, 'devservers')
 export const serviceFilePath = (home: string): string => join(devServersDir(home), 'service.json')
 export const resumeFilePath = (home: string): string => join(devServersDir(home), 'resume.json')
+export const serviceLockPath = (home: string): string => join(devServersDir(home), 'service.lock')
+/** How long a new service waits for one that holds the lock (starting, or stopping) to answer or go. */
+const LOCK_WAIT_MS = 15_000
 export const serviceLogPath = (home: string): string => join(home, 'logs', 'devservers.log')
 
 /** service.json as it is on disk, or null when it is missing or not one. */
@@ -81,6 +86,53 @@ export async function serviceAlreadyRunning(home: string): Promise<boolean> {
   }
 }
 
+const lockHolder = (lock: string): number | null => {
+  try {
+    const pid = Number(readFileSync(lock, 'utf8').trim())
+    return Number.isInteger(pid) && pid > 0 ? pid : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Makes this process the one service of `home` for its whole life (service.json alone cannot: it is written only once
+ * the service listens). Refused while a live service answers, or while the process holding the lock (one starting or
+ * stopping) is alive after `waitMs`. A lock left by a dead process, or from before the last boot, is taken over. The
+ * lock goes when this process exits.
+ */
+export async function takeServiceLock(home: string, waitMs = LOCK_WAIT_MS): Promise<{ ok: true } | { ok: false; why: string }> {
+  const lock = serviceLockPath(home)
+  mkdirSync(devServersDir(home), { recursive: true })
+  const deadline = Date.now() + waitMs
+  for (;;) {
+    if (await serviceAlreadyRunning(home)) return { ok: false, why: 'a service already runs for this home' }
+    try {
+      writeFileSync(lock, String(process.pid), { flag: 'wx' })
+      process.on('exit', () => {
+        if (lockHolder(lock) === process.pid) rmSync(lock, { force: true })
+      })
+      return { ok: true }
+    } catch (err) {
+      if ((err as { code?: unknown }).code !== 'EEXIST') throw err
+    }
+    const holder = lockHolder(lock)
+    if (holder === process.pid) return { ok: true }
+    let bornBeforeBoot = false
+    try {
+      bornBeforeBoot = statSync(lock).mtimeMs < Date.now() - uptime() * 1000
+    } catch {
+      // floor-ok: a lock that went meanwhile is tried again at once
+    }
+    if (holder === null || !pidAlive(holder) || bornBeforeBoot) {
+      rmSync(lock, { force: true })
+      continue
+    }
+    if (Date.now() >= deadline) return { ok: false, why: `another dev-servers service (pid ${holder}) holds ${lock} and does not answer` }
+    await Bun.sleep(200)
+  }
+}
+
 export async function startService(o: ServiceOptions): Promise<RunningService> {
   const { home, devServers: dev } = o
   const stamp = o.stamp ?? serviceStamp()
@@ -106,6 +158,13 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
     if (!sameToken(given, token)) return c.json({ error: 'unauthorized' }, 401)
     await next()
   })
+  // Once a shutdown is asked for, no new work: a server started now would outlive the service with nobody to stop it,
+  // and /health stops saying ok so Desk starts the next service instead of sending more here.
+  let closing = false
+  app.use('/api/*', async (c, next) => {
+    if (closing && c.req.path !== '/api/shutdown') return c.json({ error: 'the dev-servers service is stopping' }, 503)
+    await next()
+  })
 
   const body = async (c: { req: { json(): Promise<unknown> } }): Promise<Record<string, unknown>> => {
     const parsed = await c.req.json().catch(() => null)
@@ -116,7 +175,7 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
     return v
   }
 
-  app.get('/health', (c) => c.json({ ok: true, pid: process.pid, stamp, running: dev.runningIds().length }))
+  app.get('/health', (c) => c.json({ ok: !closing, pid: process.pid, stamp, running: dev.runningIds().length }))
 
   app.get('/api/projects', async (c) => c.json(await dev.listProjects()))
   app.get('/api/processes/:id', async (c) => {
@@ -157,6 +216,7 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
     settle = r
   })
   const shutdown = (restart = false): Promise<void> => {
+    closing = true
     finishing ??= (async () => {
       try {
         // A restart records what ran so the next service starts it again; a plain stop must not bring it back.
@@ -175,6 +235,7 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
   }
   app.post('/api/shutdown', async (c) => {
     const restart = (await body(c)).restart === true
+    closing = true
     // Answer first: the server is closed once the stop is done.
     setTimeout(() => void shutdown(restart), 20)
     return c.json({ ok: true })
@@ -217,8 +278,9 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   logConsoleTo(serviceLogPath(home))
-  if (await serviceAlreadyRunning(home)) {
-    console.log('[devservers] a service already runs for this home; exiting')
+  const lock = await takeServiceLock(home)
+  if (!lock.ok) {
+    console.log(`[devservers] ${lock.why}; exiting`)
     process.exit(0)
   }
   const { createDevServers } = await import('./manager')

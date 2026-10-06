@@ -2,10 +2,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { useDevServers } from '../../src/components/servers/store'
 
 // The views read one client: it asks once for all of them, never starts the service by hand (Desk does, for the first
-// list read, once), leaves a service stopped from Settings stopped, and polls only while one is on screen.
+// list read, once), leaves a service stopped from Settings stopped (a poll's read never starts it), sends one action
+// per server at a time, and polls only while one is on screen.
 const calls = new Map<string, number>()
 let state: 'stopped' | 'running' = 'stopped'
 let startBody: unknown = null
+/** A Stop from Settings that lands right after the next status answer. */
+let stopAfterStatus = false
+/** Holds a server action's answer until opened. */
+let gate: Promise<void> | null = null
 const realFetch = globalThis.fetch
 const realDocument = (globalThis as { document?: unknown }).document
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
@@ -15,14 +20,27 @@ beforeAll(() => {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     calls.set(url, (calls.get(url) ?? 0) + 1)
-    if (url === '/dw/status') return json({ state, pid: state === 'running' ? 4242 : null })
+    if (url === '/dw/status') {
+      const s = state
+      if (stopAfterStatus) {
+        stopAfterStatus = false
+        state = 'stopped'
+      }
+      return json({ state: s, pid: s === 'running' ? 4242 : null })
+    }
     if (url === '/dw/service') {
       startBody = JSON.parse(String(init?.body))
       state = 'running'
       return json({ state, pid: 4242 })
     }
-    // Desk starts the service for the first request that needs it.
-    state = 'running'
+    if (url.startsWith('/dw/api/processes/')) {
+      await gate
+      return json({ ok: true, process: {}, reused: false, coStarted: [] })
+    }
+    // A read marked x-dw-no-start is answered only while the service runs; any other request makes Desk start it.
+    if (new Headers(init?.headers).has('x-dw-no-start')) {
+      if (state !== 'running') return new Response(JSON.stringify({ error: 'the dev-servers service is not running' }), { status: 503, headers: { 'content-type': 'application/json' } })
+    } else state = 'running'
     return json([{ id: 'p1', name: 'Example', path: 'C:/Users/me/Code/example/.devwebui', enabled: true, processes: [] }])
   }) as typeof fetch
 })
@@ -32,6 +50,8 @@ afterAll(() => {
 })
 const settle = () => new Promise((r) => setTimeout(r, 30))
 const count = (url: string) => calls.get(url) ?? 0
+/** Where the fake service stands now (a read the compiler does not narrow). */
+const serviceState = (): typeof state => state
 
 describe('the shared dev-servers client', () => {
   it('a Settings-only view reads the status and asks for nothing, so it never starts the service', async () => {
@@ -86,5 +106,31 @@ describe('the shared dev-servers client', () => {
     await settle()
     expect(count('/dw/status')).toBe(2)
     back()
+  })
+
+  it('a list read already on its way when the service is stopped does not start it again', async () => {
+    const servers = useDevServers()
+    state = 'running'
+    const release = servers.use()
+    await settle()
+    stopAfterStatus = true
+    await servers.refresh()
+    expect(serviceState()).toBe('stopped')
+    release()
+  })
+
+  it('a second click on a server while its first action runs sends nothing more', async () => {
+    const servers = useDevServers()
+    let open: () => void = () => {}
+    gate = new Promise<void>((r) => {
+      open = r
+    })
+    calls.clear()
+    const first = servers.act({ id: 'p1.web' }, 'start')
+    const second = servers.act({ id: 'p1.web' }, 'start')
+    open()
+    await Promise.all([first, second])
+    expect(count('/dw/api/processes/p1.web/start')).toBe(1)
+    gate = null
   })
 })

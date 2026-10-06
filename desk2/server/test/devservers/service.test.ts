@@ -1,13 +1,14 @@
 // devservers/service.ts with a fake DevServers (no manager, no dev server, no real process): every request needs the
-// token, the manager's errors keep their status, the localhost list leaves out the service's own port, and a shutdown
-// stops what it started, records a restart's servers in resume.json, removes service.json and exits.
+// token, the manager's errors keep their status, the localhost list leaves out the service's own port, a shutdown
+// stops what it started, records a restart's servers in resume.json, removes service.json and exits, takes no new work
+// meanwhile, and one lock keeps a second service of the same home from starting.
 
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type DevServers, DevServerError } from '../../src/devservers/contract'
-import { readServiceFile, resumeFilePath, serviceAlreadyRunning, serviceFilePath, startService, type RunningService } from '../../src/devservers/service'
+import { readServiceFile, resumeFilePath, serviceAlreadyRunning, serviceFilePath, serviceLockPath, startService, takeServiceLock, type RunningService } from '../../src/devservers/service'
 import type { ProcInfo } from '../../src/localhost/ports'
 
 const temps: string[] = []
@@ -158,6 +159,45 @@ test('a plain shutdown stops the servers and leaves nothing to resume', async ()
   expect(dev.stopped).toBe(1)
   expect(existsSync(serviceFilePath(b.home))).toBe(false)
   expect(b.exits).toEqual([0])
+})
+
+test('once a shutdown is asked for, /health stops saying ok and no new work is taken', async () => {
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => {
+    release = r
+  })
+  const started: string[] = []
+  const dev = fakeDevServers({
+    start: async (id) => {
+      started.push(id)
+      return { ok: true as const, process: {} as never, reused: false, coStarted: [] }
+    },
+    stopAll: () => gate
+  })
+  const b = await boot(dev)
+  await b.call('/api/shutdown', { method: 'POST', body: '{}' })
+  // The servers are still being stopped: a start now would outlive the service.
+  expect((await b.call('/api/processes/p1.web/start', { method: 'POST', body: '{}' })).status).toBe(503)
+  expect(((await (await b.call('/health')).json()) as { ok: unknown }).ok).toBe(false)
+  expect(started).toEqual([])
+  release()
+  await b.svc.done
+})
+
+test('one service per home: the lock is taken, refused while a live process holds it, and taken over from a dead one', async () => {
+  const h = home()
+  expect(await takeServiceLock(h, 0)).toEqual({ ok: true })
+  expect(readFileSync(serviceLockPath(h), 'utf8')).toBe(String(process.pid))
+
+  // A live process holds it (this test's parent stands in for a service still starting).
+  writeFileSync(serviceLockPath(h), String(process.ppid))
+  expect((await takeServiceLock(h, 0)).ok).toBe(false)
+
+  const gone = Bun.spawn([process.execPath, '-e', ''])
+  await gone.exited
+  writeFileSync(serviceLockPath(h), String(gone.pid))
+  expect(await takeServiceLock(h, 0)).toEqual({ ok: true })
+  expect(readFileSync(serviceLockPath(h), 'utf8')).toBe(String(process.pid))
 })
 
 test('a live service is told apart from a file a dead one left behind', async () => {

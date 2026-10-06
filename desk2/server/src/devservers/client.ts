@@ -124,7 +124,8 @@ export function createDevServicesClient(deps: ClientDeps): DevServicesClient {
   /** The service that answers right now (service.json plus /health naming its pid), or null. */
   const probe = async (): Promise<Live | null> => {
     const file = readServiceFile(home)
-    if (!file) return null
+    // A file whose pid is gone was left by a dead service: whatever listens on its port now never gets the token.
+    if (!file || !alive(file.pid)) return null
     try {
       const res = await call(file, '/health', { signal: AbortSignal.timeout(HEALTH_MS) })
       if (!res.ok) return null

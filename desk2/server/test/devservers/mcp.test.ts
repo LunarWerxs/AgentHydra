@@ -1,6 +1,7 @@
 // devservers/mcp.ts against a fake Desk (a fetch function: no network): what each tool asks Desk and what it tells the
-// chat. The point of the tools is the reuse message ("Already running at ... use it") against the start one, so a
-// chat never starts a second copy; and a Desk that is not running is said plainly.
+// chat. The point of the tools is the reuse message ("Already running at ... use it") against the start one, and the
+// "on its way" words for one still starting, so a chat never starts a second copy; another project's server is
+// reached only by its full id; and a Desk that is not running, or an answer that is not Desk's, is said plainly.
 
 import { expect, test } from 'bun:test'
 import type { DevWebEnsure, DevWebProcess, DevWebServers } from '@shared/devwebui'
@@ -30,10 +31,13 @@ const proc = (over: Partial<DevWebProcess>): DevWebProcess => ({
 
 const web = proc({ status: 'running', owner: 'outside', pid: 77 })
 const api = proc({ id: 'p1.api', localId: 'api', name: 'Api', port: 4300, status: 'stopped', conflict: 'port 4300 is in use by example-app (pid 9)' })
-const project = { id: 'p1', name: 'Site', path: `${CWD}/.devwebui`, enabled: true, processes: [web, api] }
+const docs = proc({ id: 'p1.docs', localId: 'docs', name: 'Docs', port: 4400, status: 'starting', owner: 'desk', pid: 66 })
+const project = { id: 'p1', name: 'Site', path: `${CWD}/.devwebui`, enabled: true, processes: [web, api, docs] }
+const worker = proc({ id: 'p2.worker', localId: 'worker', name: 'Worker', cwd: 'C:/Users/me/other', status: 'running', owner: 'desk', pid: 88, projectId: 'p2', projectName: 'Other' })
+const other = { id: 'p2', name: 'Other', path: 'C:/Users/me/other/.devwebui', enabled: true, processes: [worker] }
 const servers: DevWebServers = {
   project,
-  projects: [project],
+  projects: [project, other],
   others: [{ port: 5173, address: '127.0.0.1', pid: 100, process: 'node', kind: 'dev', url: 'http://localhost:5173/', title: 'Example', http: 200 }]
 }
 
@@ -76,8 +80,8 @@ const make = (routes: Parameters<typeof fakeDesk>[0]) => {
 test('dev_server_start says "already running, use it" for a copy that runs, and "started" for one it began', async () => {
   let reused = true
   const { desk, mcp } = make({
-    'POST /ensure': () =>
-      ({ ok: true, reused, process: reused ? web : proc({ owner: 'desk', status: 'running', pid: 55 }), url: 'http://localhost:4173', project }) satisfies DevWebEnsure
+    'POST /ensure': (body) =>
+      ({ ok: true, reused, process: reused ? web : proc({ owner: 'desk', status: body.wait === false ? 'starting' : 'running', pid: 55 }), url: 'http://localhost:4173', project }) satisfies DevWebEnsure
   })
   const first = await call(mcp, 'dev_server_start', { server: 'web' })
   expect(first).toEqual({ text: 'Already running at http://localhost:4173 (started by outside AgentHydra, pid 77); use it.', isError: false })
@@ -89,7 +93,9 @@ test('dev_server_start says "already running, use it" for a copy that runs, and 
   // The folder is the chat's by default, a given one wins, and nothing a browser would send goes with it.
   expect(desk.calls[0]!.body).toEqual({ cwd: CWD, server: 'web' })
   expect(desk.calls[1]!.body).toEqual({ cwd: CWD })
-  await call(mcp, 'dev_server_start', { cwd: 'C:/Users/me/other', wait: false })
+  // Not waited for, it is not up yet: said so, or a refused first request would read as a failed start.
+  const early = await call(mcp, 'dev_server_start', { cwd: 'C:/Users/me/other', wait: false })
+  expect(early.text).toStartWith('Starting Web; it will answer at http://localhost:4173 once up.')
   expect(desk.calls[2]!.body).toEqual({ cwd: 'C:/Users/me/other', wait: false })
   for (const c of desk.calls) {
     expect(c.headers.origin).toBeUndefined()
@@ -129,6 +135,7 @@ test('dev_servers lists the folder\'s servers with who runs them, a conflict, an
   expect(r.isError).toBe(false)
   expect(r.text).toContain('Web (id web): running at http://localhost:4173, started by outside AgentHydra, pid 77')
   expect(r.text).toContain('Api (id api): stopped; port 4300 is in use by example-app (pid 9)')
+  expect(r.text).toContain('Docs (id docs): starting, will answer at http://localhost:4400, started by AgentHydra; do not start another')
   expect(r.text).toContain('port 5173: node (pid 100)')
   expect(r.text).toContain('http://localhost:5173/')
   expect(desk.calls[0]!.path).toBe('/dw/api/servers')
@@ -153,6 +160,35 @@ test('dev_server_stop finds the server by name, id or local id, and stops that o
   expect(none.isError).toBe(true)
   expect(none.text).toContain('Web, Api')
   expect(stopped).toHaveLength(4)
+})
+
+test("another project's server is reached only by its full id, never by a name the folder does not have", async () => {
+  const stopped: string[] = []
+  const { mcp } = make({
+    'GET /servers': () => servers,
+    'POST /processes/p2.worker/stop': () => {
+      stopped.push('p2.worker')
+      return { ok: true, process: worker, coStopped: [] }
+    }
+  })
+  const byName = await call(mcp, 'dev_server_stop', { server: 'worker' })
+  expect(byName.isError).toBe(true)
+  expect(byName.text).toContain('full id')
+  expect(stopped).toEqual([])
+  expect((await call(mcp, 'dev_server_stop', { server: 'p2.worker' })).text).toBe('Stopped Worker.')
+  expect(stopped).toEqual(['p2.worker'])
+})
+
+test('a relative folder is refused before Desk is asked, and an answer that is not JSON is said plainly', async () => {
+  const { desk, mcp } = make({ 'POST /ensure': () => '<html>another program</html>' })
+  const rel = await call(mcp, 'dev_servers', { cwd: 'site' })
+  expect(rel.isError).toBe(true)
+  expect(rel.text).toContain('absolute folder')
+  expect(desk.calls).toHaveLength(0)
+
+  const odd = await call(mcp, 'dev_server_start')
+  expect(odd.isError).toBe(true)
+  expect(odd.text).toContain('not a dev-servers answer')
 })
 
 test('dev_server_logs gives the last 60 lines by default, marks stderr, and is capped', async () => {

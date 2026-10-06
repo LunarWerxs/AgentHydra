@@ -71,6 +71,8 @@ interface Entry {
   pendingStart: boolean
   /** The start in flight: a second start of the same server joins it instead of spawning again. */
   startOp: Promise<DevWebStartAnswer> | null
+  /** An outside server being ended, until its port goes quiet: a start waits for it rather than spawn on top of it. */
+  outsideStop: Promise<void> | null
   exitWaiters: Array<() => void>
   /** Bumped by every start and stop: a start that finds it moved was overtaken (stopped meanwhile) and gives up. */
   generation: number
@@ -239,6 +241,7 @@ class Manager implements DevServers {
       stopping: false,
       pendingStart: false,
       startOp: null,
+      outsideStop: null,
       exitWaiters: [],
       generation: 0,
       readyTimer: null,
@@ -490,7 +493,7 @@ class Manager implements DevServers {
   }
 
   private adopt(e: Entry, pid: number, port: number | null, scan: Scan | null): void {
-    const had = e.outside
+    const had = e.outside?.pid === pid ? e.outside : null
     e.outside = { pid, port, since: had?.since ?? scan?.procs.get(pid)?.created ?? this.now() }
     e.conflict = null
     e.status = 'stopped'
@@ -517,9 +520,12 @@ class Manager implements DevServers {
     await Promise.all([...ports].map(async (p) => answers.set(p, own.has(p) ? false : await this.safeListening(p))))
 
     const needVerdict = cands.filter((e) => e.def.port && answers.get(e.def.port) && e.outside?.port !== e.def.port)
+    // Before a start or stop acts on a server taken up as outside, the program on its port is looked at again.
+    const recheck = force && cands.some((e) => e.def.port && answers.get(e.def.port) && e.outside?.port === e.def.port)
     const portless = cands.filter((e) => !e.def.port && !e.outside)
     let scan: Scan | null = null
-    if (needVerdict.length) {
+    if (recheck) scan = await this.getScan(LOOK_MIN_MS)
+    else if (needVerdict.length) {
       scan = await this.getScan(SCAN_TTL_MS)
       const s = scan
       if (needVerdict.some((e) => !s.listeners.some((l) => l.port === e.def.port))) scan = await this.getScan(LOOK_MIN_MS)
@@ -549,9 +555,9 @@ class Manager implements DevServers {
           continue
         }
         if (e.outside?.port === port) {
-          const pid = scan?.listeners.find((l) => l.port === port)?.pid
-          if (pid) e.outside.pid = pid
-          continue
+          const pids = scan?.listeners.filter((l) => l.port === port).map((l) => l.pid) ?? []
+          // The same program, or no scan to tell: still the server taken up. Another program there is judged afresh.
+          if (!pids.length || pids.includes(e.outside.pid)) continue
         }
         if (!scan) continue
         const v = judgePort(port, scan, ctx)
@@ -592,6 +598,9 @@ class Manager implements DevServers {
   }
 
   private async runStart(e: Entry, expand: boolean): Promise<DevWebStartAnswer> {
+    // A start already waiting for its dependency port is this start: a new generation would cancel that wait and
+    // leave it waiting for good.
+    if (e.pendingStart && !e.child) return this.answer(e, true, [])
     this.cancelQueued(e.def.id)
     const gen = ++e.generation
     await this.refresh(true)
@@ -599,6 +608,13 @@ class Manager implements DevServers {
     if (overtaken()) return this.answer(e, false, [])
     if (e.child && e.stopping) {
       await new Promise<void>((r) => e.exitWaiters.push(r))
+      if (overtaken()) return this.answer(e, false, [])
+    }
+    // An outside server still going down holds its port: start once it has gone, or use it if it never goes.
+    if (e.outsideStop) {
+      await e.outsideStop
+      if (overtaken()) return this.answer(e, false, [])
+      await this.refresh(true)
       if (overtaken()) return this.answer(e, false, [])
     }
     if (this.isUp(e)) {
@@ -873,8 +889,15 @@ class Manager implements DevServers {
     const e = this.must(id)
     await this.refresh(true)
     await this.stopEntry(e)
+    // A start still looking when the stop came was overtaken by it: it ends first, and this one starts afresh.
+    await e.startOp?.catch(() => undefined)
     e.restarts += 1
-    await this.startOne(e, false)
+    const answer = await this.startOne(e, false)
+    // Still served after the stop (a straggler of the old run's tree, taken up as outside): ended too, then started, once.
+    if (answer.reused && e.outside) {
+      await this.stopEntry(e)
+      await this.startOne(e, false)
+    }
     return { ok: true, process: this.view(e) }
   }
 
@@ -908,25 +931,30 @@ class Manager implements DevServers {
         }, KILL_GRACE_MS)
       })
     }
+    if (e.outsideStop) return e.outsideStop
     if (e.outside) return this.stopOutside(e)
     return Promise.resolve()
   }
 
   /** An outside server was asked to stop (a person or chat asked): its pid's tree is ended, then its port is waited for. */
-  private async stopOutside(e: Entry): Promise<void> {
+  private stopOutside(e: Entry): Promise<void> {
     const o = e.outside
-    if (!o) return
+    if (!o) return Promise.resolve()
+    this.dropOutside(e)
+    if (!this.adoptContext().selfPids.includes(o.pid)) this.safeKill(o.pid)
+    const port = o.port
+    if (!port) return Promise.resolve()
     e.stopping = true // keeps the status look from taking it up again while it goes down
-    try {
-      this.dropOutside(e)
-      if (!this.adoptContext().selfPids.includes(o.pid)) this.safeKill(o.pid)
-      if (o.port) {
-        const until = Date.now() + OUTSIDE_STOP_WAIT_MS
-        while (Date.now() < until && (await this.safeListening(o.port))) await sleep(150)
-      }
-    } finally {
-      e.stopping = false
+    const quiet = async () => {
+      const until = Date.now() + OUTSIDE_STOP_WAIT_MS
+      while (Date.now() < until && (await this.safeListening(port))) await sleep(150)
     }
+    const done: Promise<void> = quiet().finally(() => {
+      if (e.outsideStop === done) e.outsideStop = null
+      if (!e.child) e.stopping = false
+    })
+    e.outsideStop = done
+    return done
   }
 
   // ---- loading projects -------------------------------------------------------
@@ -1011,7 +1039,7 @@ class Manager implements DevServers {
         }
         if (Date.now() >= deadline) {
           const where = e.def.port ? ` on port ${e.def.port}` : ''
-          return { ok: false, error: `${e.def.name} did not answer${where} within ${ENSURE_WAIT_MS / 1000} s.`, process: this.view(e), logTail: tail() }
+          return { ok: false, error: `${e.def.name} did not answer${where} within ${ENSURE_WAIT_MS / 1000} s. It is still starting: look at its logs, and do not start a second copy.`, process: this.view(e), logTail: tail() }
         }
         await sleep(ENSURE_POLL_MS)
       }

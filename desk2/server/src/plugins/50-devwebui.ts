@@ -2,8 +2,9 @@
 // dev-servers service (server/src/devservers), its own hidden process that Desk starts when something asks and never
 // stops. GET /dw/status says where it stands (and never starts it); POST /dw/service starts, stops or restarts it
 // (Settings); POST /dw/folder sets up a chat's folder in it; /dw/api/* goes on to the service's /api/* one to one;
-// /dw/proxy/<id>/* shows a running server through Desk (devservers/proxy.ts). Everything but /dw/status starts the
-// service first when it is not running (client.ts), once however many ask.
+// /dw/proxy/<id>/* shows a running server through Desk (devservers/proxy.ts). Everything but /dw/status and a read
+// marked DW_NO_START (the pane's polls) starts the service first when it is not running (client.ts), once however
+// many ask.
 //
 // Desk's localOnly guard (index.ts) runs first on every route. Like /ah/, a browser request here must come from
 // Desk 2's own page, while a local client that sends no Origin or Sec-Fetch headers (the chats' dev-servers tool,
@@ -11,7 +12,7 @@
 // Referer, cookies, Sec-Fetch headers or Authorization, and the service's own token is added there, never shown.
 
 import type { Hono } from 'hono'
-import { DW_API, DW_FOLDER, DW_PROXY, DW_SERVICE, DW_STATUS } from '@shared/devwebui'
+import { DW_API, DW_FOLDER, DW_NO_START, DW_PROXY, DW_SERVICE, DW_STATUS } from '@shared/devwebui'
 import type { ServerContext } from '../context'
 import { type DevServicesClient, devServicesClient } from '../devservers/client'
 import { createDevProxy } from '../devservers/proxy'
@@ -39,7 +40,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     } catch (err) {
       return Response.json({ error: `the dev-servers service is not available: ${err instanceof Error ? err.message : String(err)}` }, { status: 503 })
     }
-    // fetch has already undone any compression, so the length and encoding it was sent with no longer hold.
+    return passOn(res)
+  }
+
+  /** The service's answer for the page: fetch has already undone any compression, so its length and encoding no longer hold. */
+  const passOn = (res: Response): Response => {
     const out = new Headers(res.headers)
     out.delete('content-encoding')
     out.delete('content-length')
@@ -79,7 +84,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return c.json({ error: why }, 403)
     const url = new URL(c.req.url)
-    return forward(c, `/api${url.pathname.slice(DW_API.length)}${url.search}`)
+    const path = `/api${url.pathname.slice(DW_API.length)}${url.search}`
+    // A poll's read never starts the service: one stopped while the read was on its way stays stopped.
+    if (c.req.method === 'GET' && c.req.header(DW_NO_START)) {
+      const res = await client.peek(path)
+      return res ? passOn(res) : c.json({ error: 'the dev-servers service is not running' }, 503)
+    }
+    return forward(c, path)
   })
 
   const showThrough = async (c: Parameters<typeof proxy.redirect>[0]): Promise<Response> => {

@@ -1,6 +1,6 @@
 // The manager on fake ports and a fake scan (no real port is read, no home folder touched): one copy per server, a
 // conflict is refused and never killed, ids and the import from the old DevWebUI folder, one spawn per concurrent
-// start (a real short-lived bun child), and autostart only on a later load.
+// start (a real short-lived bun child), starts racing waits, stops and restarts, and autostart only on a later load.
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
@@ -47,6 +47,8 @@ class World {
   listeners: Listener[] = []
   procs = new Map<number, ProcInfo>()
   killed: number[] = []
+  /** Made-up pids that keep listening when killed. */
+  stubborn = new Set<number>()
   t = 1_000_000
 
   listen(port: number, pid: number, name: string, command: string): void {
@@ -72,9 +74,10 @@ class World {
       scan: async (): Promise<Scan> => ({ listeners: [...this.listeners], procs: new Map(this.procs), error: null }),
       kill: (pid) => {
         this.killed.push(pid)
-        // A pid this world made up is only recorded; one the manager spawned (a real bun child) is really ended,
-        // or every stop would wait out the grace time and leave the child behind.
+        // A pid this world made up stops listening (unless stubborn); one the manager spawned (a real bun child) is
+        // really ended, or every stop would wait out the grace time and leave the child behind.
         if (!this.procs.has(pid)) killHostTree(pid)
+        else if (!this.stubborn.has(pid)) for (const l of this.listeners.filter((x) => x.pid === pid)) this.close(l.port)
       },
     })
     made.push(ds)
@@ -182,6 +185,96 @@ describe('one copy per server', () => {
     await until(() => existsSync(marker))
     await sleep(500) // a second copy would have written by now
     expect(readFileSync(marker, 'utf8')).toBe('x')
+  })
+
+  test('a start while one waits for its dependency port joins it, and the server starts when the port answers', async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'b', name: 'B', command: LONG, waitForPort: 4999 }])
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+
+    expect((await ds.start(id)).process.status).toBe('waiting')
+    expect((await ds.start(id)).reused).toBe(true)
+    w.open.add(4999)
+    await until(() => ds.runningIds().includes(id))
+  })
+
+  test('a server taken up as outside is judged again before a start or stop acts on it', async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'web', name: 'Web', command: LONG, port: 4173 }])
+    w.listen(4173, 900, 'node', 'node C:/Users/me/app/node_modules/vite/bin/vite.js')
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+    expect(p.processes[0]).toMatchObject({ owner: 'outside', pid: 900 })
+
+    // Vite went and a system service took the port between two looks: the port never stopped answering.
+    w.close(4173)
+    w.listen(4173, 4321, 'svchost', 'C:\\Windows\\System32\\svchost.exe -k netsvcs')
+    w.t += 2000
+    const err = await ds.start(id).then(
+      () => null,
+      (e: unknown) => e as { status: number; message: string }
+    )
+    expect(err?.status).toBe(409)
+    expect(err!.message).toContain('port 4173 is in use by svchost (pid 4321)')
+    await ds.stop(id)
+    expect(w.killed).toEqual([])
+    expect(ds.runningIds()).toEqual([])
+  })
+
+  test('a start while an outside server is being stopped waits for it, and never spawns onto its port', async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'web', name: 'Web', command: LONG, port: 4173 }])
+    w.listen(4173, 900, 'node', 'node C:/Users/me/app/node_modules/vite/bin/vite.js')
+    w.stubborn.add(900)
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+
+    const stopping = ds.stop(id)
+    await sleep(100) // the stop is waiting for the port to go quiet
+    const ans = await ds.start(id)
+    await stopping
+    // It never went, so it is still the server: used, not doubled.
+    expect(ans.reused).toBe(true)
+    expect(ds.runningIds()).toEqual([])
+  })
+})
+
+describe('restart', () => {
+  test('a restart and a start sent together leave the server running', async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'job', name: 'Job', command: LONG }])
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+
+    await Promise.all([ds.restart(id), ds.start(id)])
+    expect(ds.runningIds()).toEqual([id])
+  })
+
+  test('a restart ends what still serves the port after the stop, then starts its own', async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'web', name: 'Web', command: LONG, port: 4173 }])
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+    await ds.start(id)
+
+    // The old run's tree left a listener that is no longer under the child the manager started.
+    w.listen(4173, 777, 'node', 'node C:/Users/me/app/node_modules/vite/bin/vite.js')
+    w.t += 2000
+    await ds.restart(id)
+    expect(w.killed).toContain(777)
+    expect(await ds.process(id)).toMatchObject({ owner: 'desk' })
+    expect(ds.runningIds()).toEqual([id])
   })
 })
 

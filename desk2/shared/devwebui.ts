@@ -7,6 +7,8 @@
 
 export const DW_BASE = '/dw'
 export const DW_API = `${DW_BASE}/api`
+/** A header on a GET /dw/api read: answered only while the service runs, never starting it (the pane's polls). */
+export const DW_NO_START = 'x-dw-no-start'
 /** GET: where the service stands; a 404 means a Desk 2 server started before these routes. */
 export const DW_STATUS = `${DW_BASE}/status`
 /** POST {action: 'start' | 'stop' | 'restart'}: the service itself (Settings). Stop ends the servers it started. */

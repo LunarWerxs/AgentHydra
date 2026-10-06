@@ -10,13 +10,15 @@
 //   paths (/assets/x.js, /@vite/client) reach the server and not Desk, and its scripts, which are the project's and
 //   its packages', are not on Desk's origin where they could call Desk's own API. Browsers resolve every
 //   `*.localhost` to this machine (RFC 6761).
-// - WHY only servers the service lists as up: Desk must not become a relay to any loopback port.
+// - WHY only servers the service lists as up: Desk must not become a relay to any loopback port; AgentHydra's own
+//   ports are refused even when a project file names one.
 // The proxy host is answered before Desk's local-only guard (which refuses such names) and judges the request
-// itself: a browser's Origin must be a loopback name; the port it reaches is one the service lists.
+// itself: a browser's Origin must be the proxied page's own or Desk's; the port it reaches is one the service lists.
 
 import type { Context } from 'hono'
 import type { DevWebProcess, DevWebProject } from '@shared/devwebui'
 import type { HostRoute, WsRoute } from '../context'
+import { AGENTHYDRA_PORT, DESK1_PORT } from '../localhost/ports'
 import type { DevServicesClient } from './client'
 
 /** `p1a2b3c4.web.localhost:7798` -> `p1a2b3c4.web`; anything else null. */
@@ -47,18 +49,28 @@ export function withoutFrameAncestors(csp: string): string | null {
   return kept.length ? kept.join('; ') : null
 }
 
-/** Why a browser request may not use the proxy, or null: a page from another local origin is not Desk's window. */
-function refusal(headers: Headers): string | null {
-  const origin = headers.get('origin')
+/**
+ * Why a browser request may not use the proxy, or null. Only the proxied page itself and Desk's own window may: the
+ * Origin is rewritten to the server's own on the way, so a page from any other origin (another proxied server, a
+ * dev server on another port) would reach the server as if it were the server's own page.
+ */
+function refusal(req: Request): string | null {
+  const origin = req.headers.get('origin')
   if (origin === null) return null
   try {
-    const h = new URL(origin).hostname.replace(/^\[|\]$/g, '').toLowerCase()
-    if (h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h) || h.endsWith('.localhost')) return null
+    const from = new URL(origin)
+    const to = new URL(req.url)
+    if (from.host.toLowerCase() === to.host.toLowerCase()) return null
+    const h = from.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    if ((h === 'localhost' || h === '::1' || /^127(\.\d{1,3}){3}$/.test(h)) && from.port === to.port) return null
   } catch {
     // floor-ok: an Origin that is not a URL is refused below like any other
   }
   return `requests from ${origin} are refused`
 }
+
+/** AgentHydra's own ports (this Desk, Desk 1, the daemon): never a dev server, whatever a project file names. */
+const ownPort = (port: number, req: Request): boolean => port === Number(new URL(req.url).port) || port === DESK1_PORT || port === AGENTHYDRA_PORT
 
 const json = (error: string, status: number): Response => Response.json({ error }, { status })
 
@@ -229,10 +241,11 @@ export function createDevProxy(client: DevServicesClient, base: string): DevProx
   const resolve = async (req: Request): Promise<number | Response> => {
     const label = proxyLabelFromHost(req.headers.get('host'))
     if (!label) return json('not a proxy host', 404)
-    const why = refusal(req.headers)
+    const why = refusal(req)
     if (why) return json(why, 403)
     const port = await portOfLabel(label)
-    return port ?? json(`no running server named ${label} (is it started, and does it have a port?)`, 404)
+    if (port === null) return json(`no running server named ${label} (is it started, and does it have a port?)`, 404)
+    return ownPort(port, req) ? json(`port ${port} is AgentHydra's own and is never shown through the proxy`, 403) : port
   }
 
   const hostRoute: HostRoute = {

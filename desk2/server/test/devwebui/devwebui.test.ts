@@ -19,6 +19,8 @@ const temps: string[] = []
 const stops: (() => unknown)[] = []
 const savedHome = process.env.HYDRA_DESK_HOME
 let pids = 4200
+/** The fake services' pids that count as alive: published and not yet shut down or stopped. */
+const livePids = new Set<number>()
 
 /** Headers as a plain object (this lib has no iterable Headers). */
 function plain(h: Headers): Record<string, string> {
@@ -54,15 +56,18 @@ function fakeService(o: { stamp?: string; running?: number; projects?: unknown[]
   const token = `tok-${Math.random().toString(16).slice(2)}`
   const pid = pids++
   const seen: Seen[] = []
+  const health = { hits: 0 }
   const projects = o.projects ?? []
   const srv = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     async fetch(req) {
       const u = new URL(req.url)
+      if (u.pathname === '/health') health.hits++
       if (req.headers.get('authorization') !== `Bearer ${token}`) return Response.json({ error: 'unauthorized' }, { status: 401 })
       if (u.pathname === '/health') return Response.json({ ok: true, pid, stamp: o.stamp ?? 'new', running: o.running ?? 0 })
       seen.push({ method: req.method, path: u.pathname + u.search, body: await req.text(), headers: plain(req.headers) })
+      if (u.pathname === '/api/shutdown') livePids.delete(pid)
       if (u.pathname === '/api/projects') return Response.json(projects)
       const one = /^\/api\/processes\/([^/]+)$/.exec(u.pathname)
       if (one) {
@@ -77,9 +82,16 @@ function fakeService(o: { stamp?: string; running?: number; projects?: unknown[]
     pid,
     port: srv.port as number,
     seen,
-    stop: () => srv.stop(true),
+    health,
+    stop: () => {
+      livePids.delete(pid)
+      return srv.stop(true)
+    },
+    /** Its process is gone, but something still listens on its port. */
+    die: () => livePids.delete(pid),
     /** service.json, as the real service writes it once it listens. */
     publish(home: string) {
+      livePids.add(pid)
       mkdirSync(join(home, 'devservers'), { recursive: true })
       writeFileSync(serviceFilePath(home), JSON.stringify({ pid, port: srv.port, token, startedAt: 1, stamp: o.stamp ?? 'new' }))
     }
@@ -94,7 +106,7 @@ function newClient(home: string, next?: Fake, o: Partial<ClientDeps> = {}): { cl
   const client = createDevServicesClient({
     home,
     stamp: () => 'new',
-    alive: () => false,
+    alive: (pid) => livePids.has(pid),
     kill: () => {},
     startWaitMs: 5000,
     launch: async () => {
@@ -179,6 +191,18 @@ test('/dw/status says where the service stands and never starts it', async () =>
   expect(launches()).toBe(0)
   svc.publish(home)
   expect(await status(desk)).toEqual({ state: 'running', pid: svc.pid, running: 0 })
+  expect(launches()).toBe(0)
+})
+
+test('a service.json whose pid is gone gets no request: the token never reaches what listens on its port now', async () => {
+  const home = temp('desk-dw-home-')
+  const svc = fakeService()
+  svc.publish(home)
+  svc.die()
+  const { client, launches } = newClient(home, svc)
+  const desk = await boot(client, home)
+  expect(await status(desk)).toEqual({ state: 'stopped', pid: null })
+  expect(svc.health.hits).toBe(0)
   expect(launches()).toBe(0)
 })
 
@@ -359,7 +383,25 @@ test('a request for `<id>.localhost` is relayed to the server with X-Frame-Optio
   expect((await rawGet(port, '/', { host: `p1a2b3c4.idle.localhost:${port}` })).status).toBe(404)
   expect((await rawGet(port, '/', { host: `unknown.localhost:${port}` })).status).toBe(404)
   expect((await rawGet(port, '/', { host, origin: 'https://example.com' })).status).toBe(403)
+  // The Origin is rewritten to the server's own on the way, so only its own page and Desk's window may send one.
+  expect((await rawGet(port, '/', { host, origin: `http://other.localhost:${port}` })).status).toBe(403)
+  expect((await rawGet(port, '/', { host, origin: 'http://localhost:5173' })).status).toBe(403)
   expect(dev.seen).toHaveLength(seenBefore)
+  expect((await rawGet(port, '/', { host, origin: `http://${host}` })).status).toBe(200)
+  expect(dev.seen.at(-1)).toMatchObject({ origin: `http://localhost:${dev.port}` })
+})
+
+test('the proxy never relays to AgentHydra itself, whatever port a project file names', async () => {
+  const home = temp('desk-dw-home-')
+  const procs: object[] = []
+  const svc = fakeService({ projects: [{ id: 'p1a2b3c4', name: 'Site', processes: procs }] })
+  svc.publish(home)
+  const desk = await boot(newClient(home).client, home)
+  const port = Number(new URL(desk.url).port)
+  procs.push({ id: 'p1a2b3c4.desk', localId: 'desk', name: 'Desk', status: 'running', port })
+  const res = await rawGet(port, '/dw/status', { host: `p1a2b3c4.desk.localhost:${port}` })
+  expect(res.status).toBe(403)
+  expect(res.body).toContain(`port ${port} is AgentHydra's own`)
 })
 
 test('Desk itself still refuses a `localhost` name it does not know, and the proxy name is not a way into its API', async () => {

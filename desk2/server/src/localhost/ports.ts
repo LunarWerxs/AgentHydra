@@ -268,8 +268,8 @@ export interface ClassifyContext {
 }
 
 /** Desk 1's port: it is another AgentHydra window, never a dev server. */
-const DESK1_PORT = 7795
-const AGENTHYDRA_PORT = 7787
+export const DESK1_PORT = 7795
+export const AGENTHYDRA_PORT = 7787
 
 export function classify(l: Listener, p: ProcInfo | undefined, c: ClassifyContext): LocalServerKind {
   const name = (p?.name ?? '').toLowerCase()

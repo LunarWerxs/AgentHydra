@@ -86,7 +86,8 @@ function createDevServers() {
     }
     if (loaded) return
     try {
-      projects.value = await listProjects()
+      // Never the read that starts it: a Stop clicked while this was on its way must stay a stop.
+      projects.value = await listProjects({ start: false })
       projectsError.value = null
     } catch (err) {
       projectsError.value = err instanceof Error ? err.message : String(err)
@@ -172,6 +173,8 @@ function createDevServers() {
   const tryAgain = (): Promise<void> => service('start')
 
   async function run(key: string, fn: () => Promise<unknown>): Promise<void> {
+    // One action per server (or project) at a time: a second click while the first runs is the same click.
+    if (busy.value.has(key)) return
     actionError.value = null
     busy.value = new Set(busy.value).add(key)
     try {
@@ -191,8 +194,8 @@ function createDevServers() {
     if (list) projects.value = list.map((pr) => ({ ...pr, processes: pr.processes.map((x) => (x.id === id && !isUp(x.status) ? { ...x, status: 'starting' as const } : x)) }))
   }
   function act(p: Pick<DevWebProcess, 'id'>, action: 'start' | 'stop' | 'restart'): Promise<void> {
-    if (action === 'start') markStarting(p.id)
     return run(p.id, async () => {
+      if (action === 'start') markStarting(p.id)
       const answer = await processAction(p.id, action)
       if (action === 'start' && startReused(answer)) reused.value++
     })

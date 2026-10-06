@@ -1,6 +1,6 @@
 // The calls the servers pane makes: Desk 2's /dw/status, /dw/service and /dw/folder, and the dev-servers service's API behind /dw/api.
 import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
-import { DW_API, DW_FOLDER, DW_LOCALHOST, DW_SERVICE, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStartAnswer, type DevWebStatus, type LocalServers } from '@shared/devwebui'
+import { DW_API, DW_FOLDER, DW_LOCALHOST, DW_NO_START, DW_SERVICE, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStartAnswer, type DevWebStatus, type LocalServers } from '@shared/devwebui'
 
 /** Thrown when /dw/status is not there: a Desk 2 server started before the route existed. */
 export class RouteMissing extends Error {}
@@ -34,7 +34,8 @@ export async function devwebStatus(): Promise<DevWebStatus> {
 /** The service itself (Settings, and Try again): Stop ends the servers it started. */
 export const devwebService = (action: 'start' | 'stop' | 'restart'): Promise<DevWebStatus> => call(DW_SERVICE, post({ action }))
 
-export const listProjects = (): Promise<DevWebProject[]> => call(`${DW_API}/projects`)
+/** `start: false` (a poll) is answered only while the service runs and never starts it. */
+export const listProjects = (o: { start?: boolean } = {}): Promise<DevWebProject[]> => call(`${DW_API}/projects`, o.start === false ? { headers: { [DW_NO_START]: '1' } } : undefined)
 
 /** A start answers `reused` when the server was already up (Desk's or one run outside) and nothing was started. */
 export function processAction(id: string, action: 'start'): Promise<DevWebStartAnswer>
