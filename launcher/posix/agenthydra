@@ -1,0 +1,376 @@
+#!/bin/sh
+# AgentHydra launcher for Linux and macOS: the same job as AgentHydra.exe on Windows.
+# It repairs missing parts of the install from this version's release archive, downloads the pinned
+# bun on first run, then execs `runtime/bun app/server.js "$@"`. POSIX sh only: it must run under
+# dash and macOS /bin/sh. The daemon is an MCP stdio server, so a normal run prints nothing of its
+# own on stdout; messages go to stderr, and only --version and --ensure-bun answer on stdout.
+
+AH_VERSION='@VERSION@'
+
+RELEASE_BASE=${AGENTHYDRA_RELEASE_BASE:-https://github.com/LunarWerxs/AgentHydra/releases/download}
+BUN_BASE=${AGENTHYDRA_BUN_BASE:-https://github.com/oven-sh/bun/releases/download}
+RELEASE_BASE=${RELEASE_BASE%/}
+BUN_BASE=${BUN_BASE%/}
+
+die() {
+  printf 'agenthydra: %s\n' "$*" >&2
+  exit 1
+}
+
+say() {
+  printf 'agenthydra: %s\n' "$*" >&2
+}
+
+# INSTALL is this script's own folder, with symlinks (a copy in /usr/local/bin) followed.
+src=$0
+while [ -L "$src" ]; do
+  link=$(readlink "$src")
+  case $link in
+    /*) src=$link ;;
+    *) src=$(dirname "$src")/$link ;;
+  esac
+done
+INSTALL=$(cd "$(dirname "$src")" && pwd -P) || die "cannot find its own folder"
+RT=$INSTALL/runtime
+LOCK=$INSTALL/.agenthydra-launcher.lock
+
+case ${1-} in
+  --version)
+    printf '%s\n' "$AH_VERSION"
+    exit 0
+    ;;
+esac
+
+WORK=
+LOCKED=
+
+cleanup() {
+  if [ -n "$WORK" ]; then
+    rm -rf "$WORK"
+  fi
+  WORK=
+  if [ -n "$LOCKED" ]; then
+    rm -rf "$LOCK"
+    LOCKED=
+  fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# The tools are picked in the main shell, never inside $(...), so a missing one ends the launcher
+# with one clear line instead of only ending a subshell.
+need_fetch() {
+  [ -n "${FETCH-}" ] && return 0
+  if command -v curl >/dev/null 2>&1; then
+    FETCH=curl
+  elif command -v wget >/dev/null 2>&1; then
+    FETCH=wget
+  else
+    die "curl or wget is required to download AgentHydra: install one of them (for example 'apt install curl')"
+  fi
+}
+
+need_unzip() {
+  [ -n "${UNZIP-}" ] && return 0
+  if command -v unzip >/dev/null 2>&1; then
+    UNZIP=unzip
+  elif command -v python3 >/dev/null 2>&1; then
+    UNZIP=python3
+  else
+    die "unzip or python3 is required to unpack bun: install one of them (for example 'apt install unzip')"
+  fi
+}
+
+need_hash() {
+  [ -n "${HASH-}" ] && return 0
+  if command -v sha256sum >/dev/null 2>&1; then
+    HASH=sha256sum
+  elif command -v shasum >/dev/null 2>&1; then
+    HASH=shasum
+  elif command -v openssl >/dev/null 2>&1; then
+    HASH=openssl
+  else
+    die "sha256sum, shasum or openssl is required to verify downloads: install one of them (for example 'apt install coreutils')"
+  fi
+}
+
+need_tar() {
+  command -v tar >/dev/null 2>&1 || die "tar is required to unpack AgentHydra: install it (for example 'apt install tar')"
+}
+
+fetch() { # fetch URL DEST
+  if [ "$FETCH" = curl ]; then
+    curl -fsSL --retry 2 --connect-timeout 30 -o "$2" "$1" >/dev/null 2>&1
+  else
+    wget -q -O "$2" "$1" >/dev/null 2>&1
+  fi || die "cannot download $1"
+}
+
+sha256_of() { # sha256_of FILE: the lowercase hex digest
+  case $HASH in
+    sha256sum) sha256sum "$1" | awk '{ print tolower($1); exit }' ;;
+    shasum) shasum -a 256 "$1" | awk '{ print tolower($1); exit }' ;;
+    # openssl prints `SHA2-256(file)= <hex>` (or `SHA256(...)`): the digest is the last field.
+    openssl) openssl dgst -sha256 "$1" | awk '{ print tolower($NF); exit }' ;;
+  esac
+}
+
+# verify FILE NAME SUMS: FILE's SHA-256 must equal the line for NAME in SUMS. Both checksum files
+# are `<hash>  <path>` lines (the release's is made by `sha256sum out/*`, so only the base name of
+# the path counts), and a missing line is a refusal like a mismatch.
+verify() {
+  want=$(tr -d '\r' <"$3" | awk -v n="$2" '{ f = $2; sub(/^\*/, "", f); k = split(f, p, "/"); if (p[k] == n) { print tolower($1); exit } }')
+  [ -n "$want" ] || die "$2 has no line in its checksum file: refusing it"
+  got=$(sha256_of "$1")
+  [ "$got" = "$want" ] || die "SHA-256 of $2 does not match its checksum file: refusing it"
+}
+
+unzip_to() { # unzip_to ZIP DIR
+  if [ "$UNZIP" = unzip ]; then
+    unzip -oq "$1" -d "$2" >/dev/null
+  else
+    python3 -m zipfile -e "$1" "$2" >/dev/null
+  fi || die "cannot unpack $1"
+}
+
+stamp_id() {
+  printf '%s-%s' "$(date +%Y%m%d%H%M%S)" "$$"
+}
+
+# --- the one-at-a-time lock -------------------------------------------------------------------
+# A lock directory taken with mkdir, which is atomic. It is stale when it is older than 10 minutes
+# or when the pid recorded in it is gone; a stale one is renamed away first (only one waiter can
+# win that rename) and then removed.
+
+lock_is_stale() {
+  if [ -f "$LOCK/owner" ]; then
+    owner_pid= owner_at=
+    read -r owner_pid owner_at <"$LOCK/owner" 2>/dev/null
+    if [ -n "$owner_pid" ] && ! kill -0 "$owner_pid" 2>/dev/null; then
+      return 0
+    fi
+    now=$(date +%s)
+    case $owner_at in
+      '' | *[!0-9]*) ;;
+      *) [ $((now - owner_at)) -gt 600 ] && return 0 ;;
+    esac
+    return 1
+  fi
+  # The holder died between mkdir and writing its owner file: the directory's own age decides.
+  [ -n "$(find "$LOCK" -maxdepth 0 -mmin +10 2>/dev/null)" ]
+}
+
+take_lock() {
+  waited=
+  while ! mkdir "$LOCK" 2>/dev/null; do
+    if lock_is_stale; then
+      gone=$LOCK.stale-$$
+      if mv "$LOCK" "$gone" 2>/dev/null; then
+        rm -rf "$gone"
+      fi
+      continue
+    fi
+    if [ -z "$waited" ]; then
+      say "another AgentHydra launcher is installing; waiting for it"
+      waited=1
+    fi
+    sleep 1
+  done
+  LOCKED=1
+  printf '%s %s\n' "$$" "$(date +%s)" >"$LOCK/owner"
+}
+
+release_lock() {
+  rm -rf "$LOCK"
+  LOCKED=
+}
+
+# --- repair -----------------------------------------------------------------------------------
+
+parts_missing() {
+  [ -f "$INSTALL/app/server.js" ] && [ -f "$INSTALL/app/release.json" ] &&
+    [ -f "$INSTALL/app/bun-version" ] && [ -d "$INSTALL/desk2" ] && [ -d "$INSTALL/orchestrator" ] &&
+    return 1
+  return 0
+}
+
+target_name() {
+  # AGENTHYDRA_UNAME names another uname: the tests run this script under Git for Windows' sh, whose
+  # own uname says MINGW64, and a stand-in lets them pose as linux-x64 there.
+  os=$(${AGENTHYDRA_UNAME:-uname} -s)
+  arch=$(${AGENTHYDRA_UNAME:-uname} -m)
+  case $os in
+    Linux) OS=linux ;;
+    Darwin) OS=darwin ;;
+    *) die "unsupported system $os: AgentHydra runs on Linux and macOS here (Windows uses AgentHydra.exe)" ;;
+  esac
+  case $arch in
+    x86_64 | amd64) ARCH=x64 ;;
+    aarch64 | arm64) ARCH=arm64 ;;
+    *) die "unsupported CPU $arch: AgentHydra supports x86_64 and arm64" ;;
+  esac
+  # A shell started under Rosetta reports x86_64 on an Apple Silicon Mac; the Mac's own arm64 build is the right one.
+  if [ "$OS" = darwin ] && [ "$ARCH" = x64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+    ARCH=arm64
+  fi
+}
+
+# Moves one missing path from the unpacked archive into the install; a present path is left alone.
+adopt() { # adopt RELATIVE-PATH
+  [ -e "$INSTALL/$1" ] && return 0
+  [ -e "$STAGE/$1" ] || return 0
+  mkdir -p "$(dirname "$INSTALL/$1")"
+  mv "$STAGE/$1" "$INSTALL/$1"
+}
+
+repair_parts() {
+  need_fetch
+  need_hash
+  need_tar
+  target_name
+  name=AgentHydra-$AH_VERSION-$OS-$ARCH.tar.gz
+  url=$RELEASE_BASE/v$AH_VERSION
+  WORK=$INSTALL/.repair-$(stamp_id)
+  mkdir -p "$WORK/x" || die "cannot write in $INSTALL"
+  say "restoring missing parts from $name"
+  fetch "$url/$name" "$WORK/$name"
+  fetch "$url/SHA256SUMS.txt" "$WORK/SHA256SUMS.txt"
+  verify "$WORK/$name" "$name" "$WORK/SHA256SUMS.txt"
+  tar -xzf "$WORK/$name" -C "$WORK/x" >/dev/null 2>&1 || die "cannot unpack $name"
+  STAGE=$WORK/x/AgentHydra-$AH_VERSION-$OS-$ARCH
+  [ -d "$STAGE" ] || die "$name does not hold the AgentHydra-$AH_VERSION-$OS-$ARCH folder"
+  # app/ is adopted file by file: a present app/ with a missing server.js must still be completed.
+  if [ -d "$STAGE/app" ]; then
+    for entry in "$STAGE"/app/* "$STAGE"/app/.[!.]*; do
+      [ -e "$entry" ] && adopt "app/$(basename "$entry")"
+    done
+  fi
+  adopt desk2
+  adopt orchestrator
+  rm -rf "$WORK"
+  WORK=
+  parts_missing && die "$name did not restore every part of the install"
+  return 0
+}
+
+ensure_parts() {
+  parts_missing || return 0
+  take_lock
+  # Another launcher may have finished the same work while this one waited for the lock.
+  if parts_missing; then
+    rm -rf "$INSTALL"/.repair-*
+    repair_parts
+  fi
+  release_lock
+}
+
+# --- bun --------------------------------------------------------------------------------------
+
+has_avx2() {
+  if [ "$OS" = darwin ]; then
+    sysctl -n machdep.cpu.leaf7_features 2>/dev/null | grep -Eiq '(^|[[:space:]])avx2([[:space:]]|$)'
+  elif [ -r /proc/cpuinfo ]; then
+    grep -Eiq '^flags.*[[:space:]]avx2([[:space:]]|$)' /proc/cpuinfo
+  else
+    return 0 # nothing to read: the regular build is the better guess
+  fi
+}
+
+is_musl() {
+  ldd --version 2>&1 | grep -qi musl && return 0
+  for f in /lib/ld-musl-*; do
+    [ -e "$f" ] && return 0
+  done
+  return 1
+}
+
+bun_asset() {
+  target_name
+  asset=bun-$OS-
+  if [ "$ARCH" = arm64 ]; then
+    asset=${asset}aarch64
+  else
+    asset=${asset}x64
+  fi
+  if [ "$OS" = linux ] && is_musl; then
+    asset=$asset-musl
+  fi
+  # bun ships no arm64 baseline build, and no macOS arm64 CPU lacks what bun needs.
+  if [ "$ARCH" = x64 ] && ! has_avx2; then
+    asset=$asset-baseline
+  fi
+}
+
+read_pin() {
+  PIN=
+  [ -f "$INSTALL/app/bun-version" ] && PIN=$(tr -d ' \t\r\n' <"$INSTALL/app/bun-version")
+  [ -n "$PIN" ] || die "app/bun-version is missing or empty: cannot tell which bun to use"
+}
+
+bun_current() {
+  [ -x "$RT/bun" ] && [ -f "$RT/bun.version" ] && [ "$(tr -d ' \t\r\n' <"$RT/bun.version")" = "$PIN" ]
+}
+
+install_bun() {
+  need_fetch
+  need_unzip
+  need_hash
+  bun_asset
+  name=$asset.zip
+  url=$BUN_BASE/bun-v$PIN
+  mkdir -p "$RT" || die "cannot write in $RT"
+  rm -rf "$RT"/.new-*
+  WORK=$RT/.new-$(stamp_id)
+  mkdir "$WORK" || die "cannot write in $RT"
+  say "downloading bun $PIN ($asset)"
+  fetch "$url/$name" "$WORK/$name"
+  fetch "$url/SHASUMS256.txt" "$WORK/SHASUMS256.txt"
+  verify "$WORK/$name" "$name" "$WORK/SHASUMS256.txt"
+  unzip_to "$WORK/$name" "$WORK/x"
+  found=
+  for f in "$WORK/x/$asset/bun" "$WORK/x/bun"; do
+    [ -f "$f" ] && found=$f && break
+  done
+  [ -n "$found" ] || die "$name does not hold a bun executable"
+  chmod 755 "$found"
+  mv "$found" "$WORK/bun"
+  # A running bun can be renamed but not overwritten, so the old one moves aside first. Asides from
+  # earlier swaps are removed; their processes (if any are still running) keep their open file.
+  rm -f "$RT"/bun.old-*
+  if [ -e "$RT/bun" ] || [ -L "$RT/bun" ]; then
+    mv "$RT/bun" "$RT/bun.old-$(stamp_id)" || die "cannot move the old bun aside"
+  fi
+  mv "$WORK/bun" "$RT/bun" || die "cannot move the new bun into $RT"
+  # The stamp is written last, through a rename: no stamp means the next launch redoes the work.
+  printf '%s\n' "$PIN" >"$RT/bun.version.tmp" && mv "$RT/bun.version.tmp" "$RT/bun.version" ||
+    die "cannot write $RT/bun.version"
+  rm -rf "$WORK"
+  WORK=
+}
+
+ensure_bun() {
+  read_pin
+  bun_current && return 0
+  take_lock
+  # Another launcher may have installed this bun while this one waited for the lock.
+  bun_current || install_bun
+  release_lock
+}
+
+# --- main -------------------------------------------------------------------------------------
+
+ensure_parts
+ensure_bun
+
+case ${1-} in
+  --ensure-bun)
+    printf '%s\n' "$RT/bun"
+    exit 0
+    ;;
+esac
+
+# Exec keeps the working directory, environment, stdio and exit code as they are. The lock is
+# already released, and the exit trap must not run in the process that replaces this one.
+trap - EXIT
+exec "$RT/bun" "$INSTALL/app/server.js" "$@"
