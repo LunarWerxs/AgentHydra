@@ -52,13 +52,13 @@ const props = defineProps<{
           v-if="row.custom"
           class="inline-block rounded bg-blue-100 px-2 py-0.5 text-xs text-blue-900 dark:bg-blue-900 dark:text-blue-100"
         >
-          Custom
+          {{ $t('hswarm.v.models.badgeCustom') }}
         </span>
         <span
           v-if="row.vision"
           class="inline-block rounded bg-purple-100 px-2 py-0.5 text-xs text-purple-900 dark:bg-purple-900 dark:text-purple-100"
         >
-          Vision
+          {{ $t('hswarm.v.models.badgeVision') }}
         </span>
       </TableCell>
 

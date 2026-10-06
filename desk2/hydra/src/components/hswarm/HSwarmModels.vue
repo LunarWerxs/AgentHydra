@@ -531,7 +531,7 @@ onMounted(() => {
             ? {
                 icon: AlertCircle,
                 title: t('hswarm.v.models.noModels'),
-                hint: t('hswarm.v.models.noModelsHint'),
+                hint: '',
               }
             : null
         "

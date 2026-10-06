@@ -70,7 +70,7 @@ const stateVariant = computed(() => {
             size="sm"
             variant="ghost"
             @click="row.onCheck?.()"
-            title="Probe balance"
+            :title="$t('hswarm.v.providers.checkKeyTitle')"
           >
             <CheckCircle2 class="size-4" />
           </Button>
@@ -79,7 +79,7 @@ const stateVariant = computed(() => {
             size="sm"
             variant="ghost"
             @click="row.onRemove?.()"
-            title="Remove key"
+            :title="$t('hswarm.v.providers.removeKeyTitle')"
           >
             <Trash2 class="size-4" />
           </Button>

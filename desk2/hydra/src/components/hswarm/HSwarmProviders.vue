@@ -499,7 +499,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               ? {
                   icon: AlertCircle,
                   title: t('hswarm.v.providers.noProviders'),
-                  hint: t('hswarm.v.providers.addOneNow'),
+                  hint: '',
                 }
               : null
           "
@@ -557,7 +557,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         <!-- Keys section -->
         <InstanceCard>
           <InstanceSectionHeader
-            title="hswarm.v.providers.keys"
+            :title="t('hswarm.v.providers.keys')"
             :count="selectedProviderKeys.length"
             :refreshing="loading"
             :refresh-label="t('hswarm.v.providers.probeBalance')"
@@ -617,7 +617,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         <!-- Models section -->
         <InstanceCard v-if="modelsForSelectedProvider.length > 0">
           <InstanceSectionHeader
-            title="hswarm.v.providers.models"
+            :title="t('hswarm.v.providers.models')"
             :count="modelsForSelectedProvider.length"
             :refreshing="false"
             :refresh-label="t('hswarm.refresh')"
