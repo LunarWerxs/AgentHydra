@@ -19,6 +19,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -98,7 +99,9 @@ const bunBase = () => `http://127.0.0.1:${server.port}/bun`
 
 beforeAll(async () => {
   if (!runnable) return
-  root = mkdtempSync(join(tmpdir(), 'ah-launcher-test-'))
+  // The long form of the temp path: a CI runner's TEMP is the 8.3 short form (C:\Users\RUNNER~1), and the
+  // launcher prints the paths it resolves in the long form, so the expected paths have to be long too.
+  root = realpathSync.native(mkdtempSync(join(tmpdir(), 'ah-launcher-test-')))
   launcherExe = await buildLauncher({
     outfile: join(root, 'build', 'AgentHydra.exe'),
     version: VERSION,
