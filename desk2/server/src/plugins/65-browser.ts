@@ -7,7 +7,7 @@
 
 import type { Hono } from 'hono'
 import { BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened } from '@shared/browser'
-import { capturePreview, firstTab, LaunchError, launchChrome, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
+import { capturePreview, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
 import type { ServerContext } from '../context'
@@ -99,6 +99,9 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (!ref) return c.json({ error: `no browser '${profile}' for this chat's workspace` }, ofAnotherWorkspace(listing, profile) ? 403 : 404)
     if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 404)
     try {
+      // A page the pane is showing live already streams frames: answer from the newest, never a second capture.
+      const frame = liveFrame(ref.port)
+      if (frame) return new Response(new Uint8Array(frame), { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } })
       const tab = await LiveSession.pick(ref.port, null)
       if (!tab) return c.json({ error: `'${profile}' has no page open` }, 404)
       const jpeg = await capturePreview(ref.port, tab.id)

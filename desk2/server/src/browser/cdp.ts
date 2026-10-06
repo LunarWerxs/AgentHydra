@@ -206,6 +206,16 @@ interface Pending {
   reject(e: Error): void
 }
 
+/** The live sessions by Chrome port, so a preview request can reuse the frames one is already receiving. */
+const liveSessions = new Map<number, Set<LiveSession>>()
+
+/** The newest screencast frame (JPEG bytes) of a page being shown live on this port, or null when none is. */
+export function liveFrame(port: number): Buffer | null {
+  let newest: { at: number; data: string } | null = null
+  for (const s of liveSessions.get(port) ?? []) if (s.frame && (!newest || s.frame.at > newest.at)) newest = s.frame
+  return newest ? Buffer.from(newest.data, 'base64') : null
+}
+
 /** One page of a profile's Chrome, shown live: frames and page changes out, input in. */
 export class LiveSession {
   private cdp: WebSocket | null = null
@@ -217,6 +227,8 @@ export class LiveSession {
   private ended = false
   /** Bumped by every attach, so events of a socket that was replaced are dropped. */
   private epoch = 0
+  /** The newest screencast frame (base64 JPEG), kept for liveFrame(). */
+  frame: { at: number; data: string } | null = null
 
   constructor(
     private readonly port: number,
@@ -231,6 +243,9 @@ export class LiveSession {
   }
 
   async start(tab: BrowserTab): Promise<void> {
+    const mine = liveSessions.get(this.port) ?? new Set<LiveSession>()
+    mine.add(this)
+    liveSessions.set(this.port, mine)
     await this.attach(tab)
     this.poll = setInterval(() => void this.watch(), 1000)
   }
@@ -304,6 +319,7 @@ export class LiveSession {
         // floor-ok: the socket went away; the next frame never comes
       })
       if (epoch === this.epoch && typeof msg.params.data === 'string') {
+        this.frame = { at: Date.now(), data: msg.params.data }
         this.out({ type: 'frame', data: msg.params.data, width: Math.round(meta.deviceWidth ?? 0), height: Math.round(meta.deviceHeight ?? 0) })
       }
       return
@@ -369,6 +385,10 @@ export class LiveSession {
     this.poll = null
     this.epoch++
     this.detach()
+    this.frame = null
+    const mine = liveSessions.get(this.port)
+    mine?.delete(this)
+    if (mine?.size === 0) liveSessions.delete(this.port)
   }
 
   /** One message from the page. Anything malformed is dropped. */

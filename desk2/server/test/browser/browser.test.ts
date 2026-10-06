@@ -402,6 +402,12 @@ describe.skipIf(!chrome)('live view of a real headless Chrome', () => {
     expect((frame as Extract<BrowserLiveOut, { type: 'frame' }>).data.length).toBeGreaterThan(100)
     expect((frame as Extract<BrowserLiveOut, { type: 'frame' }>).width).toBeGreaterThan(0)
 
+    // While the pane streams the page, a preview is that stream's newest frame, not a second capture.
+    const shown = await preview(desk, cwd, 'alpha')
+    expect(shown.status).toBe(200)
+    const bytes = Buffer.from(await shown.arrayBuffer()).toString('base64')
+    expect(live.got.some((m) => m.type === 'frame' && m.data === bytes)).toBe(true)
+
     live.ws.send(JSON.stringify({ type: 'navigate', url: 'data:text/html,<p>no</p>' }))
     live.ws.send(JSON.stringify({ type: 'navigate', url: `http://127.0.0.1:${site.port}/hello` }))
     const page = await live.until((m) => m.type === 'page' && m.tab.url.includes(`127.0.0.1:${site.port}/hello`))

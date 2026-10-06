@@ -69,12 +69,15 @@ async function tick() {
   if (busy || !cwd) return
   busy = true
   try {
-    const open = (await openProfiles(cwd)).has(info.value.profile)
-    const frame = open ? await nextFrame(cwd, info.value.profile).catch(() => null) : null
+    const open = await openProfiles(cwd)
+    // Only a read that succeeded and does not list the profile means closed; a failed read or frame keeps the last good one.
+    const closed = open !== null && !open.has(info.value.profile)
+    const frame = closed ? null : await nextFrame(cwd, info.value.profile).catch(() => null)
     if (!watching.value) {
       if (frame) URL.revokeObjectURL(frame)
       return
     }
+    if (!frame && !closed) return
     const old = live.value
     live.value = frame
     if (old) URL.revokeObjectURL(old)
@@ -128,7 +131,7 @@ function open() {
         :title="`Watch this browser live${info.url ? ': ' + info.url : ''}`"
         @click="open"
       >
-        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-top" draggable="false" />
+        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" draggable="false" />
         <span v-else class="flex size-full flex-col items-center justify-center gap-1 bg-fill-hover text-text-muted">
           <Globe class="size-5" aria-hidden="true" />
           <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
