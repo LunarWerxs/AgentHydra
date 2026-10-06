@@ -103,6 +103,12 @@ describe.skipIf(!win)('tray launcher', () => {
     // Sentinel + pointer must sit under the SAME config dir the daemon writes to.
     expect(cfg.infoFile).toContain('runtime.json')
     expect(cfg.sentinelFile).toContain('shutdown.request')
+    // Open shows Hydra Desk 2 (owner, 2026-10-06): the tray runs Desk 2's launcher from misc/, so a
+    // moved or renamed launcher would leave the icon opening nothing, with no error anywhere.
+    expect(cfg.openCommand.exe).toEndWith('\\System32\\wscript.exe')
+    const script = cfg.openCommand.args.at(-1)
+    expect(join(APP, 'misc', script)).toBe(join(APP, 'desk2', 'launcher', 'start.vbs'))
+    expect(existsSync(join(APP, 'misc', script))).toBe(true)
   })
 
   test('the .ico has a tray-sized (<=48px) frame (a 256-only icon renders blank)', () => {

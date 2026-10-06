@@ -70,6 +70,23 @@ one-engine-plus-thin-per-app-adapter shape survives the port:
 }
 ```
 
+**Open is the daemon's URL, unless the app has its own window.** By default Open (the menu item, a
+double-click, the cold start and a second launch of the shortcut) shows the daemon's live URL in the
+browser, or in an app-mode window in portable mode. An app whose window is a native host of its own
+names it with `openCommand`, and Open runs that instead, windowless:
+
+```json
+"openCommand": { "exe": "%SystemRoot%\\System32\\wscript.exe", "args": ["//B", "//Nologo", "..\\desk2\\launcher\\start.vbs"] }
+```
+
+`exe` and the args are expanded like every other value, a relative `exe` resolves against the
+config's folder, the command runs in that folder, and `{URL}` in an arg is the live URL. A command
+that cannot be started falls back to the URL. A malformed `openCommand` is ignored.
+
+**`--background`** (`lunarwerx-tray.exe App-Tray.json --background`) starts the tray without
+opening anything, and exits quietly when the tray is already running. It is for an app's own window
+launcher, which starts the tray beside the window it is opening anyway.
+
 ## What the watchdog writes to `misc/Tray.log`
 
 Every 5 s the health tick probes `/api/health`. Three silent probes in a row count as a death, and

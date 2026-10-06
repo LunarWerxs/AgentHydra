@@ -76,6 +76,9 @@ pub struct Config {
     pub portable_window_size: Option<WindowSize>,
     /// Additionally append `?window-size=WxH`, for apps whose web build applies it via resizeTo.
     pub portable_window_size_hint: bool,
+    /// What Open runs instead of opening the daemon's URL, for an app whose window is its own
+    /// native host rather than a browser page (AgentHydra opens Hydra Desk 2 this way).
+    pub open_command: Option<OpenCommand>,
 
     /// Optional EXTRA menu item that POSTs to the live daemon. For apps that supervise work the
     /// daemon owns (DevWebUI's managed dev servers) rather than just the daemon itself: Restart and
@@ -101,6 +104,23 @@ pub struct Config {
 pub struct FirstRunStep {
     pub missing: String,
     pub run: String,
+}
+
+/// `"openCommand": { "exe": "%SystemRoot%\\System32\\wscript.exe", "args": ["//B", "launch.vbs"] }`.
+/// `exe` and each arg are expanded like every other value, a relative `exe` resolves against the
+/// config's folder, the command runs IN that folder (so a relative script path in `args` means the
+/// same thing as the config's own relative paths), and `{URL}` in an arg is the daemon's live URL.
+#[derive(Debug, Clone)]
+pub struct OpenCommand {
+    pub exe: PathBuf,
+    pub args: Vec<String>,
+    pub cwd: PathBuf,
+}
+
+impl OpenCommand {
+    pub fn args_for(&self, url: &str) -> Vec<String> {
+        self.args.iter().map(|a| a.replace("{URL}", url)).collect()
+    }
 }
 
 fn opt_string(v: Option<&str>) -> Option<String> {
@@ -243,6 +263,30 @@ fn resolve_is_dev_tree(v: &Json) -> bool {
     }
 }
 
+/// A malformed value (no `exe`, a non-string arg) degrades to "feature off": Open then shows the
+/// daemon's URL as it always has, never a half-built command.
+fn resolve_open_command(v: &Json, script_dir: &Path) -> Option<OpenCommand> {
+    let spec = v.get("openCommand")?;
+    let exe = PathBuf::from(expand(spec.str_at("exe").filter(|s| !s.is_empty())?));
+    let args = match spec.get("args") {
+        None => Vec::new(),
+        Some(Json::Arr(items)) => items
+            .iter()
+            .map(|a| a.as_str().map(expand))
+            .collect::<Option<Vec<_>>>()?,
+        Some(_) => return None,
+    };
+    Some(OpenCommand {
+        exe: if exe.is_absolute() {
+            exe
+        } else {
+            script_dir.join(exe)
+        },
+        args,
+        cwd: script_dir.to_path_buf(),
+    })
+}
+
 /// A COMPILED tree has no first run. The steps bootstrap a source checkout (`bun install`, `bun
 /// run build`); a release bundle ships the built artifacts and no interpreter, so every step's
 /// `missing` path is absent there and all of them would fire — spawning bun commands that can
@@ -306,6 +350,7 @@ impl Config {
 
         let size = resolve_window_size(v);
         let start_env = resolve_start_env(v);
+        let open_command = resolve_open_command(v, &script_dir);
 
         Ok(Config {
             display_name: need("displayName")?,
@@ -358,6 +403,7 @@ impl Config {
                 .unwrap_or(true),
             portable_window_size: size,
             portable_window_size_hint: v.flag_at("portableWindowSizeHint"),
+            open_command,
             action_path: opt_string(v.str_at("actionPath")),
             action_label: v.str_at("actionLabel").unwrap_or("Run action").to_string(),
             action_ok_text: v.str_at("actionOkText").unwrap_or("Done.").to_string(),
@@ -426,6 +472,65 @@ mod tests {
         );
         let v = json::parse(&src).expect("valid json");
         Config::from_json(&v, Path::new("test-tray.json")).expect("valid config")
+    }
+
+    /// A config at `cfg_path` carrying `extra` (a JSON fragment of further keys).
+    fn config_at(cfg_path: &str, extra: &str) -> Config {
+        let src = format!(
+            r#"{{
+                "displayName": "Test", "serviceName": "test", "mutexName": "TestTray",
+                "appRoot": "{}", "infoFile": "runtime.json",
+                "startCommand": "bun server/src/index.ts"{extra}
+            }}"#,
+            env!("CARGO_MANIFEST_DIR").replace('\\', "\\\\")
+        );
+        let v = json::parse(&src).expect("valid json");
+        Config::from_json(&v, Path::new(cfg_path)).expect("valid config")
+    }
+
+    #[test]
+    fn open_runs_the_configured_command_from_the_config_folder() {
+        let cfg = config_at(
+            r"C:\apps\demo\misc\demo-tray.json",
+            r#", "openCommand": { "exe": "launch.exe", "args": ["//B", "..\\desk\\start.vbs", "--url={URL}"] }"#,
+        );
+        let open = cfg.open_command.expect("openCommand is set");
+        assert_eq!(open.exe, PathBuf::from(r"C:\apps\demo\misc\launch.exe"));
+        assert_eq!(open.cwd, PathBuf::from(r"C:\apps\demo\misc"));
+        assert_eq!(
+            open.args_for("http://127.0.0.1:7787"),
+            ["//B", r"..\desk\start.vbs", "--url=http://127.0.0.1:7787"]
+        );
+    }
+
+    #[test]
+    fn an_open_command_exe_is_expanded_and_an_absolute_one_kept() {
+        let cfg = config_at(
+            r"C:\apps\demo\misc\demo-tray.json",
+            r#", "openCommand": { "exe": "%SystemRoot|C:\\Windows%\\System32\\wscript.exe" }"#,
+        );
+        let open = cfg.open_command.expect("openCommand is set");
+        assert!(open.exe.is_absolute(), "exe: {}", open.exe.display());
+        assert!(
+            open.exe.ends_with(r"System32\wscript.exe"),
+            "exe: {}",
+            open.exe.display()
+        );
+        assert!(open.args.is_empty());
+    }
+
+    #[test]
+    fn no_or_a_malformed_open_command_keeps_open_on_the_url() {
+        for extra in [
+            "",
+            r#", "openCommand": { "args": ["x"] }"#,
+            r#", "openCommand": { "exe": "" }"#,
+            r#", "openCommand": { "exe": "a.exe", "args": [1] }"#,
+            r#", "openCommand": { "exe": "a.exe", "args": "x" }"#,
+        ] {
+            let cfg = config_at(r"C:\apps\demo\misc\demo-tray.json", extra);
+            assert!(cfg.open_command.is_none(), "{extra}");
+        }
     }
 
     #[test]

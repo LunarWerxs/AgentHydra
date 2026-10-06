@@ -6,7 +6,9 @@
 #      appended to ~/.hydra-desk-2/logs/server.log, its pids in ~/.hydra-desk-2/server.pid (stop.ps1 reads it).
 #      A server this launcher started that is still booting is waited on, never started twice.
 #   3. Wait for health up to 20 s; if it never answers, show a message box naming the log and exit 1.
-#   4. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
+#   4. Start AgentHydra's tray icon (misc/lunarwerx-tray.exe AgentHydra-Tray.json --background) when it is
+#      not running: the icon goes with this window, and its Open runs this launcher (openCommand).
+#   5. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
 #      ~/.hydra-desk-2/window.json, then shows; a second run only focuses the open window. On the host's
 #      first run (no %LOCALAPPDATA%\HydraDesk2\webview yet) the old Edge app window is asked to close
 #      first, so the host can copy its localStorage over.
@@ -39,6 +41,8 @@ $PidFile = Join-Path $DeskHome 'server.pid'
 $WindowProfile = Join-Path $env:LOCALAPPDATA 'HydraDesk2\window'  # the old Edge app profile (hand-over only)
 $WebViewData = Join-Path $env:LOCALAPPDATA 'HydraDesk2\webview'
 $HealthTimeoutSec = 20
+$TrayExe = Join-Path (Split-Path -Parent $DeskRoot) 'misc\lunarwerx-tray.exe'
+$TrayConfig = 'AgentHydra-Tray.json'
 
 function Say([string]$msg) {
   if ($DryRun) { Write-Output "[dry-run] $msg"; return }
@@ -183,6 +187,29 @@ function Start-Server {
   return $wrapper
 }
 
+function Get-TrayHost {
+  Get-CimInstance Win32_Process -Filter "Name='lunarwerx-tray.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { ([string]$_.CommandLine).ToLowerInvariant().Contains($TrayConfig.ToLowerInvariant()) } | Select-Object -First 1
+}
+
+# AgentHydra's tray icon, started beside this window when it is not running (it starts or adopts the
+# AgentHydra daemon itself). --background: no window of its own, since this launcher opens Desk 2 anyway.
+# Through WMI, as the server is, so a tray started from a worker's shell does not die with that worker's job.
+function Start-Tray {
+  $running = Get-TrayHost
+  if ($running) { Say "AgentHydra tray already running (pid $($running.ProcessId))"; return }
+  if (-not (Test-Path -LiteralPath $TrayExe)) { Say "no AgentHydra tray at ${TrayExe}: not starting one"; return }
+  $trayDir = Split-Path -Parent $TrayExe
+  try {
+    $made = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
+      CommandLine = "`"$TrayExe`" $TrayConfig --background"; CurrentDirectory = $trayDir
+    }
+    if ($made.ReturnValue -eq 0) { Say "started the AgentHydra tray (pid $($made.ProcessId))"; return }
+  } catch { }
+  Start-Process -FilePath $TrayExe -ArgumentList $TrayConfig, '--background' -WorkingDirectory $trayDir | Out-Null
+  Say 'started the AgentHydra tray with Start-Process (WMI did not start it)'
+}
+
 function Wait-Health($wrapper) {
   $deadline = (Get-Date).AddSeconds($HealthTimeoutSec)
   while ((Get-Date) -lt $deadline) {
@@ -211,6 +238,10 @@ if ($DryRun) {
     Say "would wait up to $HealthTimeoutSec s for health, else show an error box"
   }
   if (-not (Test-Path (Join-Path $DeskRoot 'web\dist\index.html'))) { Say 'note: web\dist is not built yet (bun run build); the window would be empty' }
+  $tray = Get-TrayHost
+  if ($tray) { Say "AgentHydra tray already running (pid $($tray.ProcessId))" }
+  elseif (Test-Path -LiteralPath $TrayExe) { Say "would start the AgentHydra tray hidden: $TrayExe $TrayConfig --background" }
+  else { Say "no AgentHydra tray at ${TrayExe}: would not start one" }
   if ($NoWindow) { Say 'would not open or focus a window (-NoWindow)' }
   elseif (-not (Test-Path -LiteralPath $HostExe)) { Say "$HostExe is missing: would fail with an error box" }
   else {
@@ -250,6 +281,7 @@ try {
   if (-not (Test-Path (Join-Path $DeskRoot 'web\dist\index.html'))) {
     Say 'warning: web\dist is not built; run `bun run build` in the desk folder'
   }
+  Start-Tray
   if ($NoWindow) { return }
 
   if (-not (Test-Path -LiteralPath $HostExe)) { Fail "Hydra Desk 2's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }

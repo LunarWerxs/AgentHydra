@@ -378,12 +378,19 @@ The full design is in [SPEC.md](SPEC.md). The contract between the server and th
 
 ## Starting it
 
-**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk" shortcut on the
+**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk 2" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
 waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
 the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it
 never starts a second server. No console window appears: the shortcut runs `launcher\start.vbs`, which
 runs `launcher\start.ps1` hidden.
+
+**AgentHydra's tray icon is Desk 2's** (owner, 2026-10-06: Desk 2 becomes AgentHydra 2.0, and the old
+AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\lunarwerx-tray.exe
+AgentHydra-Tray.json --background`, hidden, through WMI like the server) whenever it is not running, and
+the tray keeps the AgentHydra daemon alive as before. The tray's Open (its menu, a double-click, the
+AgentHydra shortcut, the tray's own start) runs this launcher (`openCommand` in `..\misc\AgentHydra-Tray.json`),
+so the icon opens or focuses this window, never the old one. Either one brings up the other.
 
 ```powershell
 powershell -NoProfile -File launcher\install-shortcuts.ps1   # make the shortcuts (-DryRun to preview)

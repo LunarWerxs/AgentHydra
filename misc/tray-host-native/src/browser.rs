@@ -117,8 +117,13 @@ fn portable_mode(cfg: &Config) -> bool {
 }
 
 /// Open the app UI at `url`. Never fails loudly: worst case it falls back to a normal browser tab
-/// rather than opening nothing.
+/// rather than opening nothing. An app with `openCommand` opens its own window that way instead.
 pub fn open_ui(cfg: &Config, url: &str) {
+    if let Some(open) = &cfg.open_command {
+        if crate::win::spawn_in(&open.exe, &open.args_for(url), &open.cwd) {
+            return;
+        }
+    }
     if !portable_mode(cfg) {
         shell_open(url);
         return;
