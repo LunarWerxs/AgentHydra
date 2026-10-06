@@ -53,6 +53,7 @@ import {
   withDaemonWarning,
 } from './mcp-client'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
+import { FREE_TOOLS } from './mcp-free'
 import { withOutputShaping } from './mcp-output'
 import {
   CALLER_AWARE_TOOLS,
@@ -1814,6 +1815,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   // --- fan-out: one task list -> N visible chats on N accounts (mcp-fan-out.ts)
   ...FAN_OUT_TOOLS,
+  ...FREE_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:
@@ -2253,7 +2255,12 @@ from, to}, or fan_out {tasks:[{cwd, prompt}]} (VISIBLE desktop chats on OTHER ac
 one a person is in); fan_out_status {} reads verdicts, fan_out_send {group, text} steers.
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
 ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS: fan_out_delete {group}, or
-orchestrator_run delete_chat <chat>.`
+orchestrator_run delete_chat <chat>.
+
+FREE ACCOUNTS are the person's own claude.ai and chatgpt.com free web logins (AgentHydra's Instances → Free):
+free_chat {tasks:[{prompt}]} starts a private thread on the idle account with the most room, one
+task per account at once; {chat_id, prompt} continues a thread, which remembers what was said in
+it. free_results {batch} polls, free_threads lists the threads, free_read reads one back.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
