@@ -20,4 +20,10 @@ export function refusal(changelog: string, version: string): string | null
 export function unreleasedRefusal(changelog: string): string | null
 
 /** The release page body; throws with the refusal when the version may not be released. */
-export function formatReleaseBody(changelog: string, version: string): string
+export function formatReleaseBody(changelog: string, version: string, options?: { history?: boolean }): string
+
+/** A section's details as a release page shows them: wrapped bullets on one line, emoji headings, single blank lines. */
+export function renderSectionDetails(lines: string[]): string
+
+/** One release line's page: the kept version with its folded patches (TL;DR, details oldest first, downloads). */
+export function formatLineBody(changelog: string, keptVersion: string, patchVersions: string[], options?: { history?: boolean }): string
