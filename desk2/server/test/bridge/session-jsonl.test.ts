@@ -110,6 +110,23 @@ describe('outside session .jsonl', () => {
     expect(texts()).toEqual(['newer one', 'newer two', 'newer three'])
   })
 
+  test('a chat with many past sessions: an unchanged file answers for a stat, a changed one is read again', () => {
+    // A CliMayte chat reads every session it has had at each poll (one had 94); a cap on what is remembered
+    // re-parsed them all every few seconds on the server's one thread, and every click waited behind it.
+    const dir = temp()
+    const rec = (n: number, text: string) =>
+      JSON.stringify({ type: 'user', uuid: `u${n}`, timestamp: new Date(Date.UTC(2026, 9, 3, 10, 0, n)).toISOString(), message: { role: 'user', content: text } })
+    const files = Array.from({ length: 40 }, (_, i) => {
+      const f = join(dir, `past-${i}.jsonl`)
+      writeFileSync(f, `${rec(1, `session ${i}`)}\n`)
+      return f
+    })
+    const first = files.map((f) => sessionJsonlItems(f))
+    files.forEach((f, i) => expect(sessionJsonlItems(f)).toBe(first[i]!))
+    appendFileSync(files[0]!, `${rec(2, 'later')}\n`)
+    expect(sessionJsonlItems(files[0]!).map((i) => (i.kind === 'user' ? i.text : i.kind))).toEqual(['session 0', 'later'])
+  })
+
   test('keeps the full text of an answer: newlines, lists, headings and fences', () => {
     const dir = temp()
     const f = join(dir, `${SID}.jsonl`)

@@ -172,6 +172,18 @@ interface Memo {
 const memo = new Map<string, Memo>()
 const FINGERPRINT = 64
 
+/**
+ * Files pushed out of `memo`: their stat and the items they answered, without the records. A CliMayte chat
+ * reads every session it has had at each poll (one had 94, ten chats 136 files): with only MEMO_MAX remembered,
+ * each poll re-parsed them all, 0.6 to 1.6 s on the server's one thread, and every click waited behind it. An
+ * unchanged one costs a stat; a changed one is read again from its tail.
+ */
+const settled = new Map<string, Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items'>>()
+const SETTLED_MAX = 1024
+
+const unchanged = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: { ino: number; size: number; mtimeMs: number }) =>
+  m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino
+
 /** Reads [from, size) of a file. */
 function readFrom(path: string, from: number, size: number): Buffer {
   const buf = Buffer.alloc(size - from)
@@ -199,7 +211,13 @@ function readFrom(path: string, from: number, size: number): Buffer {
 export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
   const st = statSync(path)
   let m = memo.get(path)
-  if (m && m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino) return m.items
+  if (m && unchanged(m, st)) return m.items
+  const kept = settled.get(path)
+  if (kept && unchanged(kept, st)) {
+    settled.delete(path)
+    settled.set(path, kept)
+    return kept.items
+  }
   if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
   let from = 0
   let buf: Buffer | null = null
@@ -249,6 +267,12 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
   memo.delete(path)
   memo.set(path, fresh)
-  if (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value!)
+  settled.delete(path)
+  if (memo.size > MEMO_MAX) {
+    const [old, out] = memo.entries().next().value!
+    memo.delete(old)
+    settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items })
+    if (settled.size > SETTLED_MAX) settled.delete(settled.keys().next().value!)
+  }
   return fresh.items
 }
