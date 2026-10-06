@@ -245,9 +245,18 @@ if (isWindows) {
 const archive = join(out, isWindows ? `${name}.zip` : `${name}.tar.gz`)
 rmSync(archive, { force: true })
 if (isWindows) {
-  const sevenZip = spawnSync('7z', ['i'], { stdio: 'ignore' })
-  if (!sevenZip.error) {
-    run('7z', ['a', '-tzip', archive, name], out)
+  // 7-Zip is often installed without being on PATH; Compress-Archive takes over six minutes on this bundle.
+  const sevenZipCandidates = [
+    '7z',
+    ...[process.env.ProgramFiles, process.env['ProgramFiles(x86)']]
+      .filter((dir): dir is string => !!dir)
+      .map((dir) => join(dir, '7-Zip', '7z.exe')),
+  ]
+  const sevenZip = sevenZipCandidates.find(
+    (exe) => !spawnSync(exe, ['i'], { stdio: 'ignore' }).error,
+  )
+  if (sevenZip) {
+    run(sevenZip, ['a', '-tzip', archive, name], out)
   } else {
     run(
       'powershell',
