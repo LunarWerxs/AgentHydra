@@ -973,7 +973,12 @@ more than 5 minutes, the five-minute rule's bound).
 
 **Batching** (so fifteen finishes cost the chat one turn, not fifteen): a settled group, or an origin
 with no live work left, goes out 10 s later; otherwise the first event the chat must act on opens a
-window that closes after 90 s of quiet or 5 minutes after it opened, whichever is first.
+window that closes after 90 s of quiet or 5 minutes after it opened, whichever is first. Each ping
+is now a real turn of a large chat, so while the same origin still has live (or asking) workers, a
+`finished` or `needs-verdict` line is held and wakes nothing: it goes out with the next waking line
+(failed, check-failed, cancelled, asking), when its group settles, when the origin has no live work
+left, or `HOLD_FINISHED_MS` (30 minutes) after the oldest held line, so a straggler cannot hide
+finished results forever.
 Information-only events ride along with the next batch, or go alone after 30 minutes. A 15 s
 heartbeat catches stuck workers and due batches. The outbox is `<POINTER_DIR>/climayte/pings.json`:
 an event is written pending before the send and marked delivered only once the send is confirmed, so

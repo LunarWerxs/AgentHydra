@@ -14,6 +14,7 @@ import type { CliMayteWorker } from '../src/climayte-lib'
 import {
   type CliMayteOrigin,
   type CliMaytePingDeps,
+  HOLD_FINISHED_MS,
   hhmm,
   PING_HEADER,
   type PingAttempt,
@@ -286,16 +287,17 @@ function harness(
 const running = (id: string, over: Partial<PingWorker> = {}) =>
   worker({ id, title: `Task ${id}`, ...over })
 const doneOf = (w: PingWorker): PingWorker => ({ ...w, status: 'done' })
+const failedOf = (w: PingWorker): PingWorker => ({ ...w, status: 'failed', error: 'boom' })
 
 describe('batching', () => {
-  test('three finishes 20 s apart give one flush after 90 s quiet', async () => {
+  test('three failures 20 s apart give one flush after 90 s quiet', async () => {
     const ws = ['w-a', 'w-b', 'w-c', 'w-live'].map((id) => running(id))
     const h = harness({ workers: ws })
-    h.change(doneOf(ws[0]))
+    h.change(failedOf(ws[0]))
     await h.at(20_000)
-    h.change(doneOf(ws[1]))
+    h.change(failedOf(ws[1]))
     await h.at(40_000)
-    h.change(doneOf(ws[2]))
+    h.change(failedOf(ws[2]))
     await h.at(129_000)
     expect(h.sent).toHaveLength(0)
     await h.at(130_000)
@@ -306,12 +308,12 @@ describe('batching', () => {
     h.ping.stop()
   })
 
-  test('a flood of 15 finishes is one ping, capped at 5 minutes from the oldest', async () => {
+  test('a flood of 15 failures is one ping, capped at 5 minutes from the oldest', async () => {
     const ws = Array.from({ length: 16 }, (_, i) => running(`w-${i}`))
     const h = harness({ workers: ws })
     for (let i = 0; i < 15; i++) {
       await h.at(i * 20_000)
-      h.change(doneOf(ws[i]))
+      h.change(failedOf(ws[i]))
     }
     await h.at(299_000)
     expect(h.sent).toHaveLength(0)
@@ -349,12 +351,57 @@ describe('batching', () => {
       attempts: [attempt(94, { outcome: 'quota', endedAt: T0 }), attempt(102, { startedAt: T0 })],
     })
     await h.at(60_000)
-    h.change(doneOf(f))
+    h.change(failedOf(f))
     await h.at(150_000)
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).toContain('Ping 1-2, 2 updates')
     await h.at(3_600_000)
     expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a finish is held while the group has a worker running; the last finish sends both at once', async () => {
+    const a = running('w-a')
+    const b = running('w-b')
+    const h = harness({ workers: [a, b] })
+    h.change(doneOf(a))
+    await h.at(5 * 60_000)
+    expect(h.sent).toHaveLength(0)
+    h.change(doneOf(b))
+    await h.at(5 * 60_000 + 10_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('w-a')
+    expect(h.sent[0].text).toContain('w-b')
+    expect(h.sent[0].text).toContain('settled')
+    h.ping.stop()
+  })
+
+  test('a lone finish with a sibling still running goes at HOLD_FINISHED_MS', async () => {
+    const a = running('w-a')
+    const h = harness({ workers: [a, running('w-b')] })
+    h.change(doneOf(a))
+    await h.at(HOLD_FINISHED_MS - 1000)
+    expect(h.sent).toHaveLength(0)
+    await h.at(HOLD_FINISHED_MS + 16_000) // the heartbeat that follows
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('w-a')
+    await h.at(3 * HOLD_FINISHED_MS)
+    expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a failure still goes after the usual quiet window and carries the held finish', async () => {
+    const a = running('w-a')
+    const b = running('w-b')
+    const h = harness({ workers: [a, b, running('w-live')] })
+    h.change(doneOf(a))
+    await h.at(10 * 60_000)
+    h.change(failedOf(b))
+    await h.at(10 * 60_000 + 89_000)
+    expect(h.sent).toHaveLength(0)
+    await h.at(10 * 60_000 + 91_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('Ping 1-2, 2 updates')
     h.ping.stop()
   })
 
@@ -781,7 +828,7 @@ describe('stale lines are dropped when the outbox flushes', () => {
     h.change(doneOf(ws[0]))
     h.change(doneOf(ws[1]))
     h.change(judge(doneOf(ws[0])))
-    await h.at(200_000)
+    await h.at(HOLD_FINISHED_MS + 1000) // w-live is still running: the finish is held
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).toContain('w-b')
     expect(h.sent[0].text).not.toContain('w-a')
@@ -825,7 +872,7 @@ describe('stale lines are dropped when the outbox flushes', () => {
       status: 'done',
       verdicts: [{ verdict: 'pass', by: 'check', at: T0 + 1000 }],
     })
-    await h.at(200_000)
+    await h.at(HOLD_FINISHED_MS + 1000)
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).toContain('check passed')
     h.ping.stop()

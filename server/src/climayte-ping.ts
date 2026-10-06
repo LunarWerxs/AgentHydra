@@ -9,7 +9,10 @@
 // HOW: every worker change is diffed against the last snapshot of that worker (pingEvents). What the
 // chat must act on (finished, needs-verdict, check-failed, failed, cancelled, group-done) and what it
 // only needs to know (limited-moved, stuck) goes into a per-origin outbox, batched so a burst of
-// finishes costs the chat one turn, not fifteen. The outbox lives in `<dir>/pings.json`: an event is
+// finishes costs the chat one turn, not fifteen. A ping is a real turn of a large chat now, so while
+// the origin still has live workers a finished or needs-verdict line is held, not waking: it goes out
+// with the next waking line (failed, check-failed, cancelled, asking), when its group settles, when
+// the origin has no live work left, or HOLD_FINISHED_MS after the oldest held one. The outbox lives in `<dir>/pings.json`: an event is
 // written there as pending before the send and marked delivered only once the send is confirmed, so
 // a daemon restart replays what was not delivered and never what was.
 //
@@ -53,6 +56,8 @@ export const QUIET_FLUSH_MS = 90_000
 export const MAX_BATCH_MS = 5 * 60_000
 /** Information-only events go alone after this, when nothing waking comes to carry them. */
 export const INFO_ALONE_MS = 30 * 60_000
+/** A finished or needs-verdict line is held this long at most while the origin has other work live. */
+export const HOLD_FINISHED_MS = 30 * 60_000
 /** The timer that catches stuck workers and due batches. */
 export const HEARTBEAT_MS = 15_000
 /** A chat that is not live is tried again this often... */
@@ -118,6 +123,8 @@ export type PingKind =
   | 'stuck' // information only: waiting longer than STUCK_AFTER_MS
 
 const INFO_KINDS: ReadonlySet<PingKind> = new Set(['limited-moved', 'stuck'])
+/** Results the chat can read on its next look: held while the same origin still has live workers. */
+const HELD_KINDS: ReadonlySet<PingKind> = new Set(['finished', 'needs-verdict'])
 const TERMINAL: ReadonlySet<CliMayteStatus> = new Set(['done', 'failed', 'cancelled'])
 
 export interface PingEvent {
@@ -614,7 +621,12 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     const waking = box.pending.filter((p) => !INFO_KINDS.has(p.kind))
     if (waking.length) {
       if (box.urgentAt != null) return box.urgentAt + SETTLED_FLUSH_MS
-      const ats = waking.map((p) => p.at)
+      // A finish is held while the origin has other work live: it goes with the next line that wakes
+      // for its own sake, or HOLD_FINISHED_MS after the oldest held one.
+      const holding = !noLive(box.origin)
+      const waker = holding ? waking.filter((p) => !HELD_KINDS.has(p.kind)) : waking
+      if (!waker.length) return Math.min(...waking.map((p) => p.at)) + HOLD_FINISHED_MS
+      const ats = waker.map((p) => p.at)
       return Math.min(Math.max(...ats) + QUIET_FLUSH_MS, Math.min(...ats) + MAX_BATCH_MS)
     }
     return Math.min(...box.pending.map((p) => p.at)) + INFO_ALONE_MS
