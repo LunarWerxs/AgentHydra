@@ -79,7 +79,8 @@ describe('PreviewFeed', () => {
     const f = fakeDeps()
     const feed = new PreviewFeed(f.deps, () => {}, { pollMs: 20, retryMs: 10_000, firstFrameMs: 30 })
     feed.setWanted(true)
-    await Bun.sleep(100)
+    // Waits for the fallback rather than a fixed 100 ms: a loaded machine (the full gate) can run 30 ms timers late.
+    for (const end = Date.now() + 2000; Date.now() < end && !(f.streams[0].closed && f.polls() > 1); ) await Bun.sleep(10)
     expect(f.streams[0].closed).toBe(true)
     expect(f.polls()).toBeGreaterThan(1)
     feed.setWanted(false)
