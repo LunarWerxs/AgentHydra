@@ -366,6 +366,8 @@ dev server on 4798 (open http://127.0.0.1:4798). `bun run build` builds the wind
 which the server on 7798 serves; the launcher's window needs that build. `bun test` and
 `bun run typecheck` are the checks.
 
+`bun e2e/stream-frames.e2e.ts` streams a long reply (an em dash, a 240-line TypeScript block) into the transcript in headless chrome-headless-shell and writes `tmp/stream-frames.json`: frames over the 8.33 ms budget, style recalcs, layouts and DOM mutations per chunk (needs `bun add -d puppeteer`).
+
 To regenerate the icon: `python launcher\make-icon.py` (needs Pillow), then re-run
 `install-shortcuts.ps1` so Windows picks it up.
 

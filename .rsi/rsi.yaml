@@ -1,0 +1,29 @@
+schema: hydra-rsi/1
+metrics:
+  - id: desk2.stream.frames_over_budget
+    kind: count
+    better: lower
+    unit: frames
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.framesOverBudget'
+    heavy: true
+    gate: exact
+  - id: desk2.stream.style_recalcs_per_chunk
+    kind: count
+    better: lower
+    unit: recalcs
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.styleRecalcsPerChunk'
+    heavy: true
+    gate: exact
+  - id: desk2.stream.layouts_per_chunk
+    kind: count
+    better: lower
+    unit: layouts
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.layoutsPerChunk'
+    heavy: true
+    gate: exact
