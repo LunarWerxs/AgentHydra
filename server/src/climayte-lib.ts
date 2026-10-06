@@ -1693,6 +1693,13 @@ export function dueOrder(
   )
 }
 
+/** Who gets a launch slot first (climayte-pacing): 0 a turn a person just sent (a chat's follow-up),
+ *  1 any other work, 2 a resume after the CLI was killed (a daemon restart), which waits for the rest. */
+export function launchRank(w: Pick<CliMayteWorker, 'chat' | 'attempts'>): 0 | 1 | 2 {
+  if (w.attempts?.at(-1)?.outcome === 'interrupted') return 2
+  return w.chat === true ? 0 : 1
+}
+
 /** Of `candidates` (each an account's config dir), the one holding the newest copy of a session's
  *  transcript (by its file's mtime), or null when none holds it. A tie goes to the earlier one.
  *  Field note 30: a move copied from the account last TRIED, where a refused login had written

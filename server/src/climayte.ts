@@ -134,7 +134,6 @@ import {
   climayteModel,
   climaytePriority,
   contextTokens,
-  dueOrder,
   isLoginWall,
   isOrgDisabled,
   isWalledNow,
@@ -162,7 +161,7 @@ import {
 } from './climayte-ping'
 import { FIT_PCT, projectedPct, sizeTask } from './climayte-placement'
 import { launchRunner, type RunnerPids, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { roomNow, scheduleWorker, tickAccounts, tickState } from './climayte-schedule'
+import { roomNow, scheduleDue, tickAccounts, tickState } from './climayte-schedule'
 import {
   attemptUnits,
   bestRung,
@@ -1095,19 +1094,11 @@ async function tick(): Promise<void> {
     pollChecks()
     recheckSignedOut(accounts, now)
     const state = tickState(accounts, now)
-    const due = [...workers.values()]
-      .filter(
-        (w) =>
-          (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold,
-      )
-      .sort(dueOrder)
-    for (const w of due) {
-      try {
-        scheduleWorker(state, w)
-      } catch (err) {
-        console.error(`[climayte] could not schedule ${w.id}:`, err)
-      }
-    }
+    const due = [...workers.values()].filter(
+      (w) =>
+        (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold,
+    )
+    scheduleDue(state, due)
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
     processBatchWakes(now)

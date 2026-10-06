@@ -22,8 +22,10 @@ import {
   accountInUse,
   type CliMayteAccount,
   type CliMayteWorker,
+  dueOrder,
   groupCap,
   isLoginWall,
+  launchRank,
   maxPerAccount,
   pickAccount,
   rankAccounts,
@@ -32,6 +34,7 @@ import {
   weekStopPct,
 } from './climayte-lib'
 import { type MachineMemory, memoryShort, RAMP_MS } from './climayte-memory'
+import { takeLaunchSlot } from './climayte-pacing'
 import {
   type CliMaytePlacement,
   type CostEstimate,
@@ -468,6 +471,26 @@ function holdForMemory(w: CliMayteWorker, short: string): void {
 const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
   !readingPending(acct, s.now) && !memoryShort(s.memory, s.growing)
 
+let launcher = launch
+
+/** Test seam: start tasks with `fn` instead of a real CLI (null: the real one). */
+export function setLauncher(fn: typeof launch | null): void {
+  launcher = fn ?? launch
+}
+
+/** One tick's due tasks, in the order they take launch slots: a person's turn first, background
+ *  resumes after a restart last, each rank in dueOrder. */
+export function scheduleDue(s: TickState, due: CliMayteWorker[]): void {
+  const ordered = [...due].sort((a, b) => launchRank(a) - launchRank(b) || dueOrder(a, b))
+  for (const w of ordered) {
+    try {
+      scheduleWorker(s, w)
+    } catch (err) {
+      console.error(`[climayte] could not schedule ${w.id}:`, err)
+    }
+  }
+}
+
 /** Start the task on the picked account, and count it there for the rest of this tick; first its
  *  usage is read again if that is due (holdForReading), and the machine must have the memory for it
  *  (holdForMemory). */
@@ -487,6 +510,8 @@ function startOn(
     holdForMemory(w, short)
     return
   }
+  // No slot: the task stays as it is, due again next tick (never failed or dropped).
+  if (!takeLaunchSlot(s.now)) return
   const expected = cost.pct
   // The row's size says what this start was placed on, not the estimate at dispatch.
   if (w.size)
@@ -496,7 +521,7 @@ function startOn(
       basis: basisText(cost, w),
     }
   try {
-    launch(w, acct, s.accounts, s.active.get(acct.id) ?? 0)
+    launcher(w, acct, s.accounts, s.active.get(acct.id) ?? 0)
   } catch (err) {
     console.error(`[climayte] could not launch ${w.id}:`, err)
     retryLaunch(w, acct, err)
