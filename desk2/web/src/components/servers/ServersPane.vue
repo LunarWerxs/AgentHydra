@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { AppWindow, Globe, Plus, RefreshCw, Search, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
-import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
-import { browserClose, browserProfiles, devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
+import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus, type LocalServers } from '@shared/devwebui'
+import { browserClose, browserProfiles, devwebStart, devwebStatus, listProjects, localhostServers, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
 import { activateTab, clampPane, closeTab, type FolderSetup, loadTabs, needsSetup, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, retargetTab, saveTabs, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import NewTab from './NewTab.vue'
@@ -18,7 +18,8 @@ import { DOT, ICON_BTN } from './styles'
 // saved browser, live. Tabs are remembered per chat folder. A folder that is not a project yet is set up by itself
 // (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server stopped.
 // Opening the pane starts the server manager when it is not running; status is polled while the pane is open and the
-// window is on screen.
+// window is on screen. After them the New tab lists "Other localhost servers": what listens on this machine that
+// DevWebUI did not start (GET /dw/localhost), open-only, scanned at most every 8 s.
 const props = defineProps<{ cwd: string; width: number }>()
 const emit = defineEmits<{ close: []; resize: [width: number] }>()
 
@@ -44,6 +45,7 @@ let alive = true
 let started = false
 
 async function refresh() {
+  void loadLocal()
   let s: DevWebStatus
   try {
     s = await devwebStatus()
@@ -189,6 +191,29 @@ async function loadProfiles(force = false) {
   }
 }
 
+// ---- other localhost servers, for the New tab page ----
+const localList = shallowRef<LocalServers | null>(null)
+const localError = ref<string | null>(null)
+const allPorts = ref(false)
+let localAt = 0
+async function loadLocal(force = false) {
+  if (!force && Date.now() - localAt < 8000) return
+  localAt = Date.now()
+  const all = allPorts.value
+  try {
+    const r = await localhostServers(all)
+    if (all !== allPorts.value) return
+    localList.value = r
+    localError.value = r.error
+  } catch (err) {
+    if (all === allPorts.value) localError.value = err instanceof Error ? err.message : String(err)
+  }
+}
+function setAllPorts(on: boolean) {
+  allPorts.value = on
+  void loadLocal(true)
+}
+
 // ---- the tabs, remembered per chat folder ----
 const state = ref<TabsState>(loadTabs(props.cwd))
 const activeTab = computed(() => state.value.tabs.find((t) => t.id === state.value.active) ?? state.value.tabs[0]!)
@@ -292,6 +317,7 @@ watch(
 const savedEl = ref<{ refresh: () => Promise<void> } | null>(null)
 async function refreshAll() {
   void loadProfiles(true)
+  void loadLocal(true)
   await refresh()
   if (activeTab.value.kind === 'saved') await savedEl.value?.refresh()
 }
@@ -403,6 +429,10 @@ function onResizeKey(e: KeyboardEvent) {
         :profiles="profileList"
         :profiles-error="profilesError"
         :action-error="actionError"
+        :local="localList"
+        :local-error="localError"
+        :all-ports="allPorts"
+        @all-ports="setAllPorts"
         @server="openServer(t.id, $event)"
         @toggle="toggle"
         @restart="restart"

@@ -2,8 +2,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import type { DevWebProcess, DevWebProject } from '@shared/devwebui'
-import { enterTarget, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
+import type { DevWebProcess, DevWebProject, LocalServers } from '@shared/devwebui'
+import { enterTarget, filterLocal, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
 import { chipHosts, splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
@@ -21,8 +21,13 @@ const props = defineProps<{
   profiles: ProfileRow[] | null
   profilesError: string | null
   actionError: string | null
+  /** Servers listening on this machine that DevWebUI did not start; null until the first answer. */
+  local: LocalServers | null
+  localError: string | null
+  allPorts: boolean
 }>()
 const emit = defineEmits<{
+  allPorts: [on: boolean]
   server: [proc: DevWebProcess]
   toggle: [proc: DevWebProcess]
   restart: [proc: DevWebProcess]
@@ -48,12 +53,15 @@ const other = computed(() => {
   ).map((proc) => ({ proc, project: byProc.get(proc.id) as DevWebProject }))
 })
 const saved = computed(() => filterProfiles(props.profiles ?? [], query.value))
+const localRows = computed(() => filterLocal(props.local?.servers ?? [], query.value))
+// Shown once it has an answer worth a row, a hidden count to widen, or an error; never on the "restart AgentHydra" page.
+const showLocal = computed(() => props.view.kind !== 'restart-desk' && (!!props.localError || !!props.local?.servers.length || !!props.local?.hidden || props.allPorts) && (!query.value.trim() || localRows.value.length > 0))
 // The saved browsers are a different kind of thing from the servers above them: a rule and a wider gap set them apart.
 const apart = computed(() => props.view.kind !== 'loading' && props.view.kind !== 'starting')
 const moreTitle = (hosts: string[]) => splitChips(hosts).more.join(String.fromCharCode(10))
 // A login chip that only repeats the row's shown name is left out.
 const chipsOf = (r: ProfileRow) => chipHosts(r.label ?? r.name, r.hosts)
-const nothingMatches = computed(() => query.value.trim() !== '' && !own.value.length && !other.value.length && !saved.value.length)
+const nothingMatches = computed(() => query.value.trim() !== '' && !own.value.length && !other.value.length && !saved.value.length && !localRows.value.length)
 
 function enter() {
   const servers = [...own.value, ...other.value.map((r) => r.proc)]
@@ -156,6 +164,26 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
               <Tip label="Stop">
                 <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="emit('toggle', r.proc)"><Square class="size-3.5" /></button>
               </Tip>
+            </li>
+          </ul>
+        </section>
+
+        <section v-if="showLocal" class="pt-2" aria-label="Other localhost servers">
+          <div class="flex min-h-[28px] items-center gap-1 px-1">
+            <span class="text-[12px] font-medium text-[var(--text-muted)]">Other localhost servers</span>
+            <span class="flex-1" />
+            <button type="button" :class="TEXT_BTN" :aria-pressed="allPorts" @click="emit('allPorts', !allPorts)">{{ allPorts ? 'Dev servers only' : local?.hidden ? `All ports (${local?.hidden} hidden)` : 'All ports' }}</button>
+          </div>
+          <div v-if="localError" class="rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ localError }}</div>
+          <div v-else-if="!local?.servers.length" class="px-1 py-2 text-center text-[var(--text-muted)]" role="status">No other localhost servers.</div>
+          <ul v-else-if="localRows.length" class="flex flex-col gap-0.5" aria-label="Servers on this machine that DevWebUI did not start">
+            <li v-for="s in localRows" :key="s.port" class="flex min-h-[28px] items-center gap-1.5 rounded-[var(--radius-6)] px-1 hover:bg-[var(--fill-hover)]">
+              <button type="button" class="flex min-h-[28px] min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-6)] text-left focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" :aria-label="`Open localhost:${s.port}`" @click="emit('address', s.url)">
+                <span class="size-2 shrink-0 rounded-full" :class="DOT.run" aria-hidden="true" />
+                <span class="tnum shrink-0 font-medium">:{{ s.port }}</span>
+                <span v-if="s.title" class="truncate">{{ s.title }}</span>
+                <span v-if="s.process" class="truncate text-[12px] text-[var(--text-muted)]">{{ s.process }}</span>
+              </button>
             </li>
           </ul>
         </section>

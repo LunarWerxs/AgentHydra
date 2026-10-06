@@ -1,6 +1,6 @@
 // The calls the servers pane makes: Desk 2's /dw/status, /dw/start and /dw/folder, and DevWebUI's own API behind /dw/api.
 import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
-import { DW_API, DW_BASE, DW_FOLDER, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
+import { DW_API, DW_BASE, DW_FOLDER, DW_LOCALHOST, DW_STATUS, type DevWebFolder, type DevWebLogLine, type DevWebProject, type DevWebStatus, type LocalServers } from '@shared/devwebui'
 
 /** Thrown when /dw/status is not there: a Desk 2 server started before the route existed. */
 export class RouteMissing extends Error {}
@@ -49,6 +49,9 @@ export async function processLogs(id: string): Promise<DevWebLogLine[]> {
 
 /** The chat folder's project, set up in the server manager when it is not yet (no Add step). */
 export const setUpFolder = (cwd: string): Promise<DevWebFolder> => call(DW_FOLDER, post({ cwd }))
+
+/** The localhost servers DevWebUI did not start (Desk 2's own /dw/localhost); `all` adds the ports the dev-server filter hides. */
+export const localhostServers = (all = false): Promise<LocalServers> => call(all ? `${DW_LOCALHOST}?all=1` : DW_LOCALHOST)
 
 // ---- saved browsers (shared/browser.ts) ----
 export const browserProfiles = (cwd: string): Promise<BrowserProfiles> => call(`${BROWSER_PROFILES}?${new URLSearchParams({ cwd })}`)

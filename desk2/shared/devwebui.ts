@@ -19,7 +19,38 @@ export interface DevWebStatus {
   reason?: string
 }
 
-export type DevWebProcessStatus = 'stopped' | 'starting' | 'waiting' | 'running' | 'stopping' | 'crashed'
+/** GET (?all=1 for every port): the localhost servers DevWebUI did not start (server/src/localhost). Desk 2's own route, not DevWebUI's API. */
+export const DW_LOCALHOST = `${DW_BASE}/localhost`
+
+/** What a listening port is: this window or a chat's host, AgentHydra's daemon, an OS service, a tool daemon, a dev runtime, or any other program. */
+export type LocalServerKind = 'desk' | 'agenthydra' | 'system' | 'service' | 'dev' | 'app'
+
+export interface LocalServer {
+  port: number
+  address: string
+  pid: number
+  /** The owning process's name, without .exe; null when it could not be read. */
+  process: string | null
+  kind: LocalServerKind
+  /** Where a click opens it. */
+  url: string
+  /** The page's <title> when it answers HTTP with HTML. */
+  title: string | null
+  /** The HTTP status it answered with; null when it did not answer (or was not asked). */
+  http: number | null
+}
+
+export interface LocalServers {
+  /** Dev servers only, or every port with all=1. */
+  servers: LocalServer[]
+  /** Ports left out of `servers` (DevWebUI's own are not counted). */
+  hidden: number
+  /** Why the ports could not be read. */
+  error: string | null
+  scannedAt: number
+}
+
+export type DevWebProcessStatus ='stopped' | 'starting' | 'waiting' | 'running' | 'stopping' | 'crashed'
 
 export interface DevWebProcess {
   id: string
@@ -29,6 +60,8 @@ export interface DevWebProcess {
   port?: number
   url?: string
   status: DevWebProcessStatus
+  /** The running process's id; the localhost list leaves out whatever it owns. */
+  pid?: number | null
   exitCode: number | null
   projectId: string
 }

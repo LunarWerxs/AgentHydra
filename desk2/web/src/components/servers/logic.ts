@@ -2,7 +2,7 @@
 // daemon's status and the project list, when it sets the chat's folder up, a server's dot, the address bar's
 // input, and the pane's width.
 import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
-import { type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, processAddress, projectForCwd } from '@shared/devwebui'
+import { type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
 import { shortName } from './names'
 
 /** What the pane draws. */
@@ -354,7 +354,10 @@ export function matchesFilter(text: string, filter: string): boolean {
 export const filterServers = <T extends Pick<DevWebProcess, 'name' | 'port' | 'status'>>(procs: T[], filter: string): T[] =>
   procs.filter((p) => matchesFilter(`${p.name} ${p.port ? `:${p.port} ${p.port}` : ''} ${p.status}`, filter))
 
-export const filterProfiles = (rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.label ?? ''} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
+export const filterLocal = <T extends Pick<LocalServer, 'port' | 'process' | 'title'>>(rows: T[], filter: string): T[] =>
+  rows.filter((r) => matchesFilter(`:${r.port} ${r.port} ${r.process ?? ''} ${r.title ?? ''}`, filter))
+
+export const filterProfiles =(rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.label ?? ''} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
 
 /** True when the text is meant as an address, not as a search: a port, a scheme, localhost, a host with a dot, or host:port. */
 export function looksLikeAddress(text: string): boolean {
