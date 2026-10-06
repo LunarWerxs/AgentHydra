@@ -5,7 +5,6 @@ Playwright storage_state shape the HTTP clients already read; origins are always
 """
 
 import asyncio
-import json
 import time
 from urllib.parse import urlsplit
 
@@ -14,9 +13,8 @@ from .errors import ClaudeError
 
 CLAUDE_URL = "https://claude.ai/new"
 CHATGPT_URL = "https://chatgpt.com/"
-COMPOSER = '[contenteditable="true"][role="textbox"], .ProseMirror[contenteditable="true"], textarea[placeholder*="Claude" i]'
 
-# Visible = nonzero box and not hidden by style; shared by both checks.
+# Visible = nonzero box and not hidden by style.
 _VISIBLE_JS = """(el) => {
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
@@ -106,12 +104,19 @@ async def load_cookies(browser, cookies: list[dict]) -> None:
 async def claude_signed_in(browser, tab) -> bool:
     if urlsplit(tab.url or "").hostname != "claude.ai":
         return False
-    if not any(state.claude_domain(c.domain) for c in await browser.cookies.get_all()):
+    # Owner 2026-10-06: a visible signed-out page passed the old composer check. Signed out there is no
+    # sessionKey cookie and /api/organizations answers 403; only names are read, only a boolean leaves the page.
+    if not any(c.name == "sessionKey" and state.claude_domain(c.domain) for c in await browser.cookies.get_all()):
         return False
     return bool(
         await tab.evaluate(
-            f"(() => {{ const visible = {_VISIBLE_JS}; "
-            f"return [...document.querySelectorAll({json.dumps(COMPOSER)})].some(visible); }})()"
+            """(async () => {
+                const r = await fetch('/api/organizations');
+                if (!r.ok) return false;
+                const b = await r.json();
+                return Array.isArray(b) && b.some(o => o && o.uuid);
+            })()""",
+            await_promise=True,
         )
     )
 

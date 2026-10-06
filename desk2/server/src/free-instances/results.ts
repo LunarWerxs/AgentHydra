@@ -34,7 +34,7 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
     const e = object(r.error)
     return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined)
   }
-  if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true }
+  if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null }
   if (command === 'chats') return { ok: true, chats: list(r.chats).map(item => {
     const c = object(item)
     return { chat_id: str(c.chat_id, 100), name: str(c.name, 200) || null, is_temporary: c.is_temporary === true ? true : c.is_temporary === false ? false : null,
@@ -42,7 +42,7 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
   }).filter(c => c.is_temporary !== false) }
   if (command === 'usage') {
     const usage: FreeUsage = { available: r.available === true, unlimited_text: r.available === true && r.unlimited_text === true,
-      text_model: str(r.text_model, 100) || undefined, is_snapshot: r.is_snapshot === true,
+      text_model: str(r.text_model, 100) || undefined, plan: str(r.plan, 20).trim() || null, is_snapshot: r.is_snapshot === true,
       observed_at: str(r.observed_at, 100) || null, note: str(r.note, 2000),
       windows: list(r.windows).map(item => { const w = object(item); return { id: str(w.id, 100), used_percent: percent(w.used_percent), remaining_percent: percent(w.remaining_percent), resets_at: str(w.resets_at, 100) || null, reset_passed: w.reset_passed === true } }) }
     return { ok: true, usage }

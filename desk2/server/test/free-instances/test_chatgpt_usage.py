@@ -6,6 +6,7 @@ from unittest.mock import Mock
 
 from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL, TEXT_MODEL_NAME
 from claudfree.errors import ClaudeError
+from claudfree.http import account_label
 
 
 def account(plan, **extra):
@@ -35,11 +36,35 @@ class ChatGPTUsageTests(unittest.TestCase):
         self.assertIsNotNone(result["observed_at"])
         self.assertIn("separate limits", result["note"])
         self.assertNotIn("example@example.test", json.dumps(result))
+        self.assertEqual(result["plan"], "free")
+        self.assertEqual(result["source"], "verified_free_text_policy")
+
+    def test_paid_personal_plan_includes_the_free_text_policy(self):
+        result = usage({"personal": account("go")}, [model()])
+        self.assertTrue(result["unlimited_text"])
+        self.assertEqual(result["plan"], "go")
+        self.assertEqual(result["source"], "plan_includes_free_text_policy")
+        self.assertIn("on the Go plan, which includes everything in Free", result["note"])
+
+    def test_account_label_rules(self):
+        cases = [
+            (("Example Owner", "owner@example.test"), "Example Owner"),
+            (("owner@example.test", None), "owner"),
+            (("", "owner@example.test"), "owner"),
+            (("Exam\x00ple\x1b Owner", None), "Example Owner"),
+            (("x" * 90, None), "x" * 60),
+            ((None, None), None),
+            (("  ", ""), None),
+        ]
+        for args, expected in cases:
+            with self.subTest(args=args):
+                self.assertEqual(account_label(*args), expected)
 
     def test_ambiguous_or_unverified_access_stays_unknown(self):
         cases = [
             ({}, [model()]),
-            ({"paid": account("plus")}, [model()]),
+            ({"paid": account("enterprise")}, [model()]),
+            ({"personal": account("go"), "workspace": account("team")}, [model()]),
             ({"personal": account("free"), "workspace": account("team")}, [model()]),
             ({"personal": account("free"), "malformed": {}}, [model()]),
             ({"personal": account("free")}, []),

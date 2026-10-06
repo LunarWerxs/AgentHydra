@@ -38,6 +38,7 @@ export interface FreeUsage {
   available: boolean
   unlimited_text?: boolean
   text_model?: string
+  plan?: string | null
   is_snapshot: boolean
   observed_at: string | null
   note: string
@@ -47,6 +48,7 @@ export interface FreeResult {
   ok: boolean
   model?: string
   authenticated?: boolean
+  account_label?: string | null
   chat_id?: string
   chat_name?: string | null
   server_conversation_id?: string
@@ -64,6 +66,8 @@ export interface FreeInstance {
   num: number
   provider: FreeProvider
   name: string
+  /** True while the name follows the signed-in account: set when the account was added without a name; a rename clears it. */
+  autoName: boolean
   loggedIn: boolean
   checkedAt: number | null
   /** When this account was last seen signed in; null if it never was or you logged it out. Set while signed out,

@@ -61,13 +61,14 @@ export class FreeInstances {
   create(value: unknown): FreeInstance {
     const r = record(value)
     if (Object.keys(r).some(k => !['provider', 'name'].includes(k)) || !FREE_PROVIDERS.includes(r.provider as FreeInstance['provider'])) throw new FreeError('Choose Claude or ChatGPT.')
-    return this.store.create(r.provider as FreeInstance['provider'], name(r.name))
+    return this.store.create(r.provider as FreeInstance['provider'], r.name === undefined ? undefined : name(r.name))
   }
   rename(id: string, value: unknown): FreeInstance {
     const r = record(value)
     if (Object.keys(r).some(k => k !== 'name')) throw new FreeError('Only a name can be changed.')
     const instance = this.instance(id)
     instance.name = name(r.name)
+    instance.autoName = false
     this.store.save()
     return instance
   }
@@ -175,7 +176,12 @@ export class FreeInstances {
       if (r.command === 'auth' || r.command === 'login') {
         instance.loggedIn = job.result.ok && job.result.authenticated === true
         instance.checkedAt = Date.now()
-        if (instance.loggedIn) { instance.lastSignedInAt = instance.checkedAt; this.onLoginChange?.() }
+        if (instance.loggedIn) {
+          instance.lastSignedInAt = instance.checkedAt
+          const label = job.result.account_label
+          if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
+          this.onLoginChange?.()
+        }
         // Read-only followups bring imported chats and available quota into the shared view.
         if (instance.loggedIn) for (const command of ['chats', 'usage'] as const) {
           try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, controller.signal))) } catch { /* auth still succeeded; refresh can retry a read */ }

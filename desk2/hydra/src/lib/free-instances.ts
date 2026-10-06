@@ -26,7 +26,7 @@ async function request<T>(path: string, method = 'GET', body?: unknown, timeout 
 
 export const freeApi = {
   status: () => request<FreeStatus>('status'),
-  create: (provider: FreeProvider, name: string) => request<FreeInstance>('instances', 'POST', { provider, name }),
+  create: (provider: FreeProvider) => request<FreeInstance>('instances', 'POST', { provider }),
   rename: (id: string, name: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}`, 'PATCH', { name }),
   // The server may first set up the runtime and stop a live ChatGPT worker (its forget waits up to 4 minutes).
   logout: (id: string) => request<FreeInstance>(`instances/${encodeURIComponent(id)}/logout`, 'POST', undefined, 300_000),

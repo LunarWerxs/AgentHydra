@@ -183,6 +183,7 @@ def execute(args, *, api, on_text=None) -> dict:
                 "organization_id": org,
                 "transport": "http",
                 "browser_launched": False,
+                "account_label": client.account_label_for(organization),
             }
         if args.command == "chats":
             for item in registry.list():

@@ -131,7 +131,13 @@ function rowModel(i: FreeInstance): InstanceRowModel {
     // cells say so, the model in the hover, as a pay-as-you-go row's say it has none.
     ...(i.usage?.unlimited_text
       ? {
-          noQuota: t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
+          noQuota:
+            i.usage.plan && i.usage.plan !== 'free'
+              ? t('freeInstances.unlimitedPlanHint', {
+                  model: i.usage.text_model ?? '',
+                  plan: i.usage.plan.charAt(0).toUpperCase() + i.usage.plan.slice(1),
+                })
+              : t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
           noQuotaLabel: t('freeInstances.unlimited'),
         }
       : {
@@ -194,33 +200,19 @@ async function refreshAccounts() {
   await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => run(i, 'auth')))
 }
 
-// --- add: the header's + menu names the provider, the shared name dialog the login ---
-const createOpen = ref(false)
-const createProvider = ref<FreeProvider>('claude')
-const creating = ref(false)
-const createError = ref<string | null>(null)
+// --- add: the header's + menu names the provider; the server names the account after its login ---
 const createOptions = computed(() =>
   FREE_PROVIDERS.map((p) => ({ id: p, provider: freeLogo(p), label: providerName(p) })),
 )
-function openCreate(id?: string) {
-  createProvider.value = id === 'chatgpt' ? 'chatgpt' : 'claude'
-  createError.value = null
-  createOpen.value = true
-}
-async function onCreateSubmit(name: string) {
-  creating.value = true
-  createError.value = null
+async function openCreate(id?: string) {
   try {
-    const created = await freeApi.create(createProvider.value, name)
+    const created = await freeApi.create(id === 'chatgpt' ? 'chatgpt' : 'claude')
     // Into the list as it is, not through a refresh: a refresh would start a login check on the
     // new row and hold the sign-in below off it.
     instances.value = [...instances.value, created]
-    createOpen.value = false
     void signIn(created)
   } catch (e) {
-    createError.value = e instanceof Error ? e.message : t('freeInstances.createFailed')
-  } finally {
-    creating.value = false
+    toast.error(e instanceof Error ? e.message : t('freeInstances.createFailed'))
   }
 }
 
@@ -228,7 +220,9 @@ async function onCreateSubmit(name: string) {
 async function signIn(i: FreeInstance) {
   toast.info(t('freeInstances.signingIn'), { description: t('freeInstances.preparing') })
   const result = await run(i, 'login')
-  if (result?.ok && result.authenticated) toast.success(t('freeInstances.signedIn', { name: i.name }))
+  // The server renames an automatic name to the account's: read the row again for the toast.
+  const name = instances.value.find((x) => x.id === i.id)?.name ?? i.name
+  if (result?.ok && result.authenticated) toast.success(t('freeInstances.signedIn', { name }))
   else if (result || errors[i.id]) toast.error(errors[i.id] || t('freeInstances.signInUnverified'))
 }
 async function cancelSignIn(i: FreeInstance) {
@@ -385,15 +379,6 @@ async function onRenameSubmit(name: string) {
       </div>
     </InstanceCard>
 
-    <CliInstanceNameDialog
-      v-model:open="createOpen"
-      mode="create"
-      namespace="freeInstances"
-      :current-name="providerName(createProvider)"
-      :submitting="creating"
-      :error-message="createError"
-      @submit="onCreateSubmit"
-    />
     <LogoutInstanceDialog
       v-model:open="logoutOpen"
       :instance-name="logoutTarget?.name ?? null"

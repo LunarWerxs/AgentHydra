@@ -105,8 +105,8 @@ class ChatGPTClient(Client):
             )
         transport = "http"
         if command == "auth":
-            with connection(self._state, args.request_timeout):
-                value = {"authenticated": True}
+            with connection(self._state, args.request_timeout) as http:
+                value = {"authenticated": True, "account_label": http.account_label}
         elif command == "usage":
             with connection(self._state, args.request_timeout) as http:
                 value = http.usage()

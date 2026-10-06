@@ -10,7 +10,7 @@ from uuid import uuid4
 import requests
 
 from ..errors import ClaudeError
-from ..http import valid_uuid
+from ..http import account_label, valid_uuid
 from ..results import code_blocks
 from .stream import events
 from .preparation import Preparations, account_key
@@ -18,6 +18,7 @@ from .preparation import Preparations, account_key
 BASE = "https://chatgpt.com"
 TEXT_MODEL = "gpt-5-6-mini"
 TEXT_MODEL_NAME = "GPT-5.6 Luna"
+UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include everything in Free
 
 
 def visible_messages(conversation):
@@ -112,6 +113,7 @@ class ChatGPTHttp:
         self.timeout = timeout
         self.preparations = preparations
         self.account_key = None
+        self.account_label = None
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/"}
         )
@@ -245,6 +247,10 @@ class ChatGPTHttp:
                 "ChatGPT login expired. Run login --provider chatgpt.", code="login_required"
             )
         self.session.headers["Authorization"] = "Bearer " + body["accessToken"]
+        try:
+            self.account_label = account_label(body["user"].get("name"), body["user"].get("email"))
+        except Exception:
+            self.account_label = None
         identifier = body["user"].get("id")
         self.account_key = (
             account_key(identifier) if isinstance(identifier, str) and identifier else None
@@ -284,13 +290,19 @@ class ChatGPTHttp:
         luna = any(isinstance(model, dict) and model.get("slug") == TEXT_MODEL
                    and model.get("title") == TEXT_MODEL_NAME and model.get("reasoning_type") == "none"
                    for model in advertised) if isinstance(advertised, list) else False
-        unlimited = bool(plans) and all(plan == "free" for plan in plans) and luna
+        unlimited = bool(plans) and all(p in UNLIMITED_PLANS for p in plans) and luna
+        plan = plans[0] if plans and all(p == plans[0] for p in plans) else None
         return {
+            "plan": plan,
             "available": unlimited,
             "unlimited_text": unlimited,
             "text_model": TEXT_MODEL_NAME,
             "model_slug": TEXT_MODEL,
-            "source": "verified_free_text_policy" if unlimited else "not_exposed",
+            "source": (
+                "not_exposed" if not unlimited
+                else "verified_free_text_policy" if plan == "free"
+                else "plan_includes_free_text_policy"
+            ),
             "observed_at": datetime.now(timezone.utc).isoformat(),
             "is_snapshot": False,
             "windows": [],
@@ -298,6 +310,9 @@ class ChatGPTHttp:
             "note": (
                 "GPT-5.6 Luna: unlimited everyday text on the Free plan, subject to abuse safeguards. "
                 "Uploads, images, voice and other tools have separate limits. This is a verified plan policy, not a remaining-message counter."
+                if unlimited and plan == "free" else
+                f"GPT-5.6 Luna: unlimited everyday text on the {plan.capitalize() if plan else 'paid'} plan, which includes everything in Free, subject to abuse safeguards. "
+                "Uploads, images, voice and other tools have separate limits. This is a plan policy, not a remaining-message counter."
                 if unlimited else
                 "An unlimited Free text allowance could not be verified for this login. No remaining-message counter was returned."
             ),

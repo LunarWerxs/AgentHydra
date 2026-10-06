@@ -21,6 +21,19 @@ class HttpError(ClaudeError):
     """A credential-free error suitable for the CLI."""
 
 
+def account_label(name: Any, email: Any) -> str | None:
+    """Short display name: the name unless it is an address, else an address's local part."""
+    name = name.strip() if isinstance(name, str) else ""
+    email = email.strip() if isinstance(email, str) else ""
+    if name and "@" not in name:
+        label = name
+    else:
+        address = email or name
+        label = address.split("@", 1)[0] if "@" in address else ""
+    label = "".join(ch for ch in label if ch.isprintable()).strip()
+    return label[:60] or None
+
+
 def valid_uuid(value: str) -> str:
     # Validate before interpolation: caller-provided IDs never become URL paths.
     try:
@@ -209,6 +222,28 @@ class ClaudeHttp:
         if not available:
             raise HttpError("The login has no accessible Claude organization.")
         raise HttpError("Several organizations are available. Choose one with --org-id.")
+
+    def account_label_for(self, org: dict[str, Any]) -> str | None:
+        """A short display name for the signed-in account; never raises."""
+        try:
+            try:
+                body = self._json("GET", "/api/account")
+            except Exception:
+                body = None
+            name = email = None
+            if isinstance(body, dict):
+                for source in (body, body.get("account")):
+                    if not isinstance(source, dict):
+                        continue
+                    name = name or next((source[k] for k in ("display_name", "full_name", "name") if isinstance(source.get(k), str) and source[k].strip()), None)
+                    email = email or next((source[k] for k in ("email_address", "email") if isinstance(source.get(k), str) and source[k].strip()), None)
+            if not name and not email:
+                org_name = org.get("name")
+                if isinstance(org_name, str):
+                    name = re.sub(r"[’']s Organization$", "", org_name.strip(), flags=re.I)
+            return account_label(name, email)
+        except Exception:
+            return None
 
     def read(self, organization_id: str, chat_id: str) -> dict[str, Any]:
         # Rich rendering includes tool evidence that the legacy text field omits.

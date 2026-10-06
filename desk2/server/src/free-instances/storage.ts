@@ -4,6 +4,8 @@ import { isAbsolute, join } from 'node:path'
 import type { FreeInstance, FreeProvider, FreeThread } from '@shared/free-instances'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** A name nobody had to type ("Claude", "ChatGPT 2") follows the account; a deliberate one stays. */
+const generic = (name: string): boolean => /^(claude|chatgpt)\s*#?\d*$/i.test(name.trim())
 interface Data { instances: FreeInstance[]; threads: FreeThread[] }
 
 /** Persistent account/chat metadata only. DPAPI files are copied without decrypting them. */
@@ -19,11 +21,12 @@ export class FreeStorage {
       this.data = value
       // Older records lack lastSignedInAt: a signed-in account was last signed in when it was last checked.
       for (const i of this.data.instances) if (typeof i.lastSignedInAt !== 'number') i.lastSignedInAt = i.loggedIn ? i.checkedAt ?? null : null
+      for (const i of this.data.instances) if (typeof i.autoName !== 'boolean') i.autoName = generic(i.name)
       for (const t of this.data.threads) if (t.status === 'running') { t.status = 'failed'; t.error = 'Desk restarted during the request. Read this chat before sending again.' }
     } else this.migrate()
   }
-  create(provider: FreeProvider, name: string): FreeInstance {
-    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
+  create(provider: FreeProvider, name?: string): FreeInstance {
+    const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
     mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
     this.data.instances.push(instance)
     this.save()
@@ -33,7 +36,7 @@ export class FreeStorage {
   adopt(shared: Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>): FreeInstance {
     const taken = this.data.instances.some(i => i.num === shared.num)
     const num = taken ? Math.max(0, ...this.data.instances.map(i => i.num)) + 1 : shared.num
-    const instance: FreeInstance = { ...shared, num, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
+    const instance: FreeInstance = { ...shared, num, autoName: generic(shared.name), loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
     mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
     this.data.instances.push(instance)
     this.save()
@@ -52,7 +55,7 @@ export class FreeStorage {
     for (const provider of ['claude', 'chatgpt'] as const) {
       const from = provider === 'chatgpt' ? join(source, 'chatgpt') : source
       if (!existsSync(join(from, 'session.dpapi'))) continue
-      const instance = this.create(provider, provider === 'claude' ? 'Claude' : 'ChatGPT')
+      const instance = this.create(provider)
       const state = join(this.home, 'free', 'instances', instance.id)
       const to = provider === 'chatgpt' ? join(state, 'chatgpt') : state
       mkdirSync(to, { recursive: true })

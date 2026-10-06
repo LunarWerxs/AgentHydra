@@ -89,7 +89,7 @@ describe('Free instance boundary', () => {
   test('auth and chat lists never expose raw session/account fields', () => {
     const secret = { token: 'fake-secret', email: 'example@example.test', cookie: 'fixture', organization_id: CHAT }
     const auth = parseResult('auth', output({ ok: true, authenticated: true, ...secret }))
-    expect(auth).toEqual({ ok: true, authenticated: true })
+    expect(auth).toEqual({ ok: true, authenticated: true, account_label: null })
     const chats = parseResult('chats', output({ ok: true, chats: [
       { chat_id: CHAT, is_temporary: true, name: 'private', ...secret },
       { chat_id: 'regular', is_temporary: false },
@@ -133,7 +133,7 @@ describe('Free instance boundary', () => {
   test('malformed output and login logs are not forwarded, errors retain recovery UUID', () => {
     expect(JSON.stringify(parseResult('chat', { code: 1, stdout: 'cookie=fake-secret\ntraceback' }))).not.toContain('fake-secret')
     expect(parseResult('login', { code: 0, stdout: 'private local path and diagnostics' }).ok).toBe(false)
-    expect(parseResult('login', output({ ok: true, authenticated: true, token: 'fake-secret' }))).toEqual({ ok: true, authenticated: true })
+    expect(parseResult('login', output({ ok: true, authenticated: true, token: 'fake-secret' }))).toEqual({ ok: true, authenticated: true, account_label: null })
     expect(parseResult('resume', output({ ok: false, error: { code: 'timeout', message: 'Read first', chat_id: CHAT, raw: 'private' } }, 1))).toEqual({ ok: false, error: { code: 'timeout', message: 'Read first', chat_id: CHAT } })
   })
 })
@@ -290,6 +290,24 @@ describe('Free jobs and routes', () => {
     expect(instance.lastSignedInAt).toBeNull()
     expect(forgets.map(f => [f.instanceId, f.provider])).toEqual([[instance.id, 'claude'], [instance.id, 'claude']])
     expect((await app.request(`/api/free/instances/${CHAT}/logout`, { method: 'POST' })).status).toBe(404)
+  })
+  test('an instance made without a name takes the account name at sign-in; a renamed one keeps its name', async () => {
+    let label = 'Example Owner'
+    const { service, op } = fixture(async (_c, r) => output(r.command === 'auth' ? { ok: true, authenticated: true, account_label: label } : r.command === 'chats' ? { ok: true, chats: [] } : { ok: true, available: false, windows: [] }))
+    const auto = service.create({ provider: 'claude' })
+    expect([auto.name, auto.autoName]).toEqual(['Claude', true])
+    service.start(op({ instanceId: auto.id })); await tick()
+    expect(auto.name).toBe('Example Owner')
+    const named = service.create({ provider: 'claude', name: 'Mine' })
+    label = 'Someone Else'
+    service.start(op({ instanceId: auto.id })); await tick()
+    expect(auto.name).toBe('Someone Else')
+    service.start(op({ instanceId: named.id })); await tick()
+    expect(named.name).toBe('Mine')
+    service.rename(auto.id, { name: 'Renamed' })
+    label = 'Third Name'
+    service.start(op({ instanceId: auto.id })); await tick()
+    expect(auto.name).toBe('Renamed')
   })
   test('legacy migration copies encrypted state into isolated homes once, without removing its source', () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-migrate-')); dirs.push(home)
