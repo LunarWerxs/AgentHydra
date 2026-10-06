@@ -3,6 +3,7 @@
 // input, and the pane's width.
 import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
 import { type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, processAddress, projectForCwd } from '@shared/devwebui'
+import { shortName } from './names'
 
 /** What the pane draws. */
 export type PaneView =
@@ -223,6 +224,8 @@ export function formatAgo(iso: string | null, now = Date.now()): string {
 
 export interface ProfileRow {
   name: string
+  /** The short name shown for it (`shortName`); `name` stays what a tool takes. */
+  label?: string
   note: string | null
   /** Hosts the profile holds a session for. */
   hosts: string[]
@@ -231,7 +234,14 @@ export interface ProfileRow {
 }
 
 export function profileRows(list: BrowserProfiles | null, now = Date.now()): ProfileRow[] {
-  return (list?.profiles ?? []).map((p) => ({ name: p.name, note: p.note?.trim() ? p.note.trim() : null, hosts: [...new Set(p.sessionHosts)], open: p.open, lastUsed: formatAgo(p.lastUsedAt, now) }))
+  return (list?.profiles ?? []).map((p) => ({
+    name: p.name,
+    label: shortName(p),
+    note: p.note?.trim() ? p.note.trim() : null,
+    hosts: [...new Set(p.sessionHosts)],
+    open: p.open,
+    lastUsed: formatAgo(p.lastUsedAt, now)
+  }))
 }
 
 /** What the transcript card asked to see: the profile when the list has it, else just the address. */
@@ -344,7 +354,7 @@ export function matchesFilter(text: string, filter: string): boolean {
 export const filterServers = <T extends Pick<DevWebProcess, 'name' | 'port' | 'status'>>(procs: T[], filter: string): T[] =>
   procs.filter((p) => matchesFilter(`${p.name} ${p.port ? `:${p.port} ${p.port}` : ''} ${p.status}`, filter))
 
-export const filterProfiles = (rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
+export const filterProfiles = (rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.label ?? ''} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
 
 /** True when the text is meant as an address, not as a search: a port, a scheme, localhost, a host with a dot, or host:port. */
 export function looksLikeAddress(text: string): boolean {

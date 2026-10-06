@@ -27,8 +27,8 @@ describe('the saved browsers list', () => {
     const got = await browserProfiles('C:/Users/me/Code/App')
     expect(asked).toBe(`${BROWSER_PROFILES}?cwd=C%3A%2FUsers%2Fme%2FCode%2FApp`)
     expect(profileRows(got, NOW)).toEqual([
-      { name: 'shop', note: 'Store admin for the example shop', hosts: ['admin.example.com', 'mail.example.test'], open: true, lastUsed: '5 min ago' },
-      { name: 'scratch', note: null, hosts: [], open: false, lastUsed: 'never used' }
+      { name: 'shop', label: 'Example', note: 'Store admin for the example shop', hosts: ['admin.example.com', 'mail.example.test'], open: true, lastUsed: '5 min ago' },
+      { name: 'scratch', label: 'scratch', note: null, hosts: [], open: false, lastUsed: 'never used' }
     ])
   })
   it('an empty list is no rows, and the error field rides along', () => {

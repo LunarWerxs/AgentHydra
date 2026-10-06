@@ -128,6 +128,7 @@ export async function listProfiles(cwd: string): Promise<Listing> {
         port: live?.port ?? null,
         profile: {
           name,
+          ...(typeof entry.title === 'string' && entry.title.trim() !== '' ? { title: entry.title.trim() } : {}),
           note: typeof entry.note === 'string' && entry.note.trim() !== '' ? entry.note : null,
           sites,
           sessionHosts: stringList(entry.sessionHosts),

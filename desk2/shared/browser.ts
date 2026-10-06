@@ -51,6 +51,8 @@ export interface BrowserSite {
 export interface BrowserProfile {
   /** The name a browser_* tool takes as profile:'<name>'. */
   name: string
+  /** A short display name the AI gave it (browser_profile_note's title); absent when none was set. */
+  title?: string
   /** What it holds and is for, as the AI recorded it (browser_profile_note); null when none was recorded. */
   note: string | null
   /** Hosts it was last seen to reach or be stopped at, newest first. */

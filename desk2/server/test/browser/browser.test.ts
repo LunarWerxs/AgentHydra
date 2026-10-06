@@ -142,6 +142,20 @@ describe('workspace of a chat', () => {
 })
 
 describe('profiles listed', () => {
+  test('a registry title is read when it is a non-empty string, else absent', async () => {
+    makeStore({
+      registry: {
+        profiles: {
+          [`${WS_PROJ}/alpha`]: { title: '  Shop admin ', note: 'n' },
+          [`${WS_PROJ}/beta`]: { title: '   ' },
+        },
+      },
+    })
+    const desk = await boot()
+    const r = await profiles(desk, 'c:/Users/me/Proj')
+    expect(r.profiles.find((p) => p.name === 'alpha')?.title).toBe('Shop admin')
+    expect(r.profiles.find((p) => p.name === 'beta')?.title).toBeUndefined()
+  })
   test('own ones carry note, sites newest first, session hosts and a last-used time; another workspace’s are never listed', async () => {
     makeStore()
     const desk = await boot()

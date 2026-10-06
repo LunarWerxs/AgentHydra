@@ -4,6 +4,7 @@ import { Play, RotateCw, Search, Square } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess, DevWebProject } from '@shared/devwebui'
 import { enterTarget, filterProfiles, filterServers, isUp, type PaneView, type ProfileRow, statusDot, statusWord } from './logic'
+import { splitChips } from './names'
 import { DOT, ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // The New tab page: the servers DevWebUI found for this chat's folder, then the workspace's saved browsers, both
@@ -47,6 +48,9 @@ const other = computed(() => {
   ).map((proc) => ({ proc, project: byProc.get(proc.id) as DevWebProject }))
 })
 const saved = computed(() => filterProfiles(props.profiles ?? [], query.value))
+// The saved browsers are a different kind of thing from the servers above them: a rule and a wider gap set them apart.
+const apart = computed(() => props.view.kind !== 'loading' && props.view.kind !== 'starting')
+const moreTitle = (hosts: string[]) => splitChips(hosts).more.join(String.fromCharCode(10))
 const nothingMatches = computed(() => query.value.trim() !== '' && !own.value.length && !other.value.length && !saved.value.length)
 
 function enter() {
@@ -154,7 +158,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
           </ul>
         </section>
 
-        <section v-if="!query.trim() || saved.length" class="pt-2" aria-label="Saved browsers">
+        <section v-if="!query.trim() || saved.length" :class="apart ? 'mt-5 border-t border-border pt-4' : 'pt-2'" aria-label="Saved browsers">
           <div class="px-1 pb-0.5 text-[12px] font-medium text-[var(--text-muted)]">Saved browsers</div>
           <div v-if="profilesError" class="rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ profilesError }}</div>
           <div v-else-if="!profiles" class="px-1 text-[var(--text-muted)]" role="status">Loading…</div>
@@ -164,13 +168,14 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
               <button type="button" class="flex w-full flex-col gap-0.5 rounded-[var(--radius-6)] px-2 py-1.5 text-left transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" :aria-label="`Show ${r.name}`" @click="emit('saved', r.name)">
                 <span class="flex items-center gap-1.5">
                   <span class="size-2 shrink-0 rounded-full" :class="r.open ? DOT.run : DOT.off" :title="r.open ? 'Open' : 'Not open'" aria-hidden="true" />
-                  <span class="truncate font-medium">{{ r.name }}</span>
+                  <span class="truncate font-medium" :title="r.label && r.label !== r.name ? r.name : undefined">{{ r.label ?? r.name }}</span>
                   <span class="flex-1" />
                   <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ r.open ? 'open · ' : '' }}{{ r.lastUsed }}</span>
                 </span>
                 <span class="truncate text-[12px]" :class="r.note ? 'text-[var(--text-2)]' : 'text-[var(--text-muted)]'" :title="r.note ?? undefined">{{ r.note ?? 'no note' }}</span>
                 <span class="flex flex-wrap gap-1">
-                  <span v-for="h in r.hosts" :key="h" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]">{{ h }}</span>
+                  <span v-for="h in splitChips(r.hosts).shown" :key="h" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]">{{ h }}</span>
+                  <span v-if="splitChips(r.hosts).more.length" class="rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[11px] text-[var(--text-2)]" :title="moreTitle(r.hosts)">+{{ splitChips(r.hosts).more.length }}</span>
                   <span v-if="!r.hosts.length" class="text-[11px] text-[var(--text-muted)]">not signed in anywhere</span>
                 </span>
               </button>
