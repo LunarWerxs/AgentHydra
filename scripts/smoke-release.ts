@@ -4,13 +4,16 @@
  *
  *   bun scripts/smoke-release.ts --bundle-dir <dir with one AgentHydra-* folder, or the folder> --port <daemon> --desk-port <desk2>
  *
- * Starts the bundle's daemon and Desk 2's server (on the bundle's own desk2/runtime/bun), never the
- * launcher, window host or tray. Kills exactly what it started, by pid and child tree. Exit 1 on any
- * failed assertion, with the tails of both logs.
+ * A release ships no Bun, so the smoke seeds the bundle's runtime/ with this process's own Bun and a
+ * runtime/bun.version equal to app/bun-version, then starts the daemon through the launcher with both
+ * download bases pointed at an address that refuses: a bundle that tries to download anything fails.
+ * Desk 2's server runs on the same seeded Bun. Never the window host or tray. Kills exactly what it
+ * started, by pid and child tree. Exit 1 on any failed assertion, with the tails of both logs.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -18,11 +21,14 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 const isWin = process.platform === 'win32'
+/** A loopback port nothing listens on: connecting to it is refused at once. */
+const REFUSING_BASE = 'http://127.0.0.1:1'
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(name)
@@ -114,6 +120,18 @@ function killTree(pid: number): void {
   }
 }
 
+/** Paths under `dir` (relative, slash-separated) whose file name is one of `names`, skipping `skip`. */
+function findNamed(dir: string, names: Set<string>, skip: string, rel = ''): string[] {
+  const found: string[] = []
+  for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+    const path = rel ? `${rel}/${e.name}` : e.name
+    if (e.isDirectory()) {
+      if (path !== skip) found.push(...findNamed(dir, names, skip, path))
+    } else if (names.has(e.name.toLowerCase())) found.push(path)
+  }
+  return found
+}
+
 async function get(url: string, init: RequestInit = {}): Promise<Response> {
   return fetch(url, { ...init, signal: AbortSignal.timeout(10_000) })
 }
@@ -139,9 +157,16 @@ async function assetOf(base: string, html: string, label: string): Promise<void>
 
 try {
   const exe = join(bundle, isWin ? 'AgentHydra.exe' : 'agenthydra')
-  const bun = join(bundle, 'desk2', 'runtime', isWin ? 'bun.exe' : 'bun')
+  const runtimeDir = join(bundle, 'runtime')
+  const bun = join(runtimeDir, isWin ? 'bun.exe' : 'bun')
 
-  const required = [exe, bun, join(bundle, 'desk2/server/src/index.ts')]
+  const required = [
+    exe,
+    join(bundle, 'app/server.js'),
+    join(bundle, 'app/release.json'),
+    join(bundle, 'app/bun-version'),
+    join(bundle, 'desk2/server/src/index.ts'),
+  ]
   if (isWin) {
     required.push(
       join(bundle, 'desk2/launcher/start.vbs'),
@@ -165,6 +190,15 @@ try {
     missing.length === 0,
     `bundle files present${missing.length ? `; missing ${missing.map((m) => m.slice(bundle.length + 1)).join(', ')}` : ''}`,
   )
+  if (missing.length) throw new Error('bundle is incomplete')
+
+  // The release ships neither Bun nor Claude Code: the only Bun is the one this smoke seeds below.
+  const strays = findNamed(bundle, new Set(['bun', 'bun.exe', 'claude', 'claude.exe']), 'runtime')
+  check(
+    strays.length === 0,
+    `no bun or claude binary in the bundle${strays.length ? `; found ${strays.join(', ')}` : ''}`,
+  )
+  check(!existsSync(join(bundle, 'desk2/runtime')), 'no desk2/runtime')
 
   const orch = join(bundle, 'orchestrator')
   const pyTools =
@@ -193,12 +227,6 @@ try {
     'orchestrator payload (orch.py, hydralib.py, a scripts/*.py tool; no tests, __pycache__ or state)',
   )
 
-  const bunV = spawnSync(bun, ['--version'], { encoding: 'utf8' })
-  check(bunV.status === 0, `desk2/runtime/bun --version (${bunV.stdout.trim()})`)
-  const dv = spawnSync(exe, ['--version'], { encoding: 'utf8' })
-  check(dv.status === 0 && dv.stdout.trim().length > 0, `daemon --version (${dv.stdout.trim()})`)
-  if (failed) throw new Error('bundle is incomplete')
-
   const home = join(scratch, 'home')
   const local = join(home, 'AppData', 'Local')
   const roam = join(home, 'AppData', 'Roaming')
@@ -215,10 +243,38 @@ try {
     AGENTHYDRA_MCP_CONFIG: join(home, 'mcp.json'),
     AGENTHYDRA_NO_OPEN: '1',
     AGENTHYDRA_NO_PING: '1',
+    AGENTHYDRA_HEADLESS: '1',
+    // Nothing may be downloaded: both bases refuse, so a launcher that tries fails the smoke.
+    AGENTHYDRA_RELEASE_BASE: REFUSING_BASE,
+    AGENTHYDRA_BUN_BASE: REFUSING_BASE,
   }
+
+  const pin = readFileSync(join(bundle, 'app/bun-version'), 'utf8').trim()
+  mkdirSync(runtimeDir, { recursive: true })
+  copyFileSync(process.execPath, bun)
+  writeFileSync(
+    join(runtimeDir, 'bun.version'),
+    `${pin}
+`,
+  )
+  const bundleVersion = (
+    JSON.parse(readFileSync(join(bundle, 'app/release.json'), 'utf8')) as { version?: string }
+  ).version
+  const lv = spawnSync(exe, ['--version'], { encoding: 'utf8', env, windowsHide: true })
+  check(
+    lv.status === 0 && lv.stdout.trim() === bundleVersion,
+    `launcher --version prints the bundle's version (${lv.stdout.trim()})`,
+  )
+  const eb = spawnSync(exe, ['--ensure-bun'], { encoding: 'utf8', env, windowsHide: true })
+  check(
+    eb.status === 0 && resolve(eb.stdout.trim()).toLowerCase() === resolve(bun).toLowerCase(),
+    `launcher --ensure-bun prints the seeded bun (${eb.stdout.trim() || eb.stderr.trim()})`,
+  )
+  if (failed) throw new Error('the launcher did not report the seeded bundle')
   const daemonUrl = `http://127.0.0.1:${port}`
   const deskUrl = `http://127.0.0.1:${deskPort}`
 
+  // The daemon through the launcher, as a user starts it.
   start(
     exe,
     [],
@@ -241,8 +297,8 @@ try {
       distribution?: string
     }
     check(
-      h.service === 'agenthydra' && h.distribution === 'compiled',
-      `daemon health is agenthydra/compiled (${h.service}/${h.distribution})`,
+      h.service === 'agenthydra' && h.distribution === 'release',
+      `daemon health is agenthydra/release (${h.service}/${h.distribution})`,
     )
     const o = (await (await get(`${daemonUrl}/api/orchestrator`)).json()) as { present?: boolean }
     check(o.present === true, '/api/orchestrator present:true')

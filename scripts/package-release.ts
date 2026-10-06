@@ -2,22 +2,22 @@
 /**
  * Stage and archive one AgentHydra release bundle (the same script in CI and on a PC).
  *
- *   bun scripts/package-release.ts --target <windows-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64> --out <dir>
+ *   bun scripts/package-release.ts --target <windows-x64|linux-x64|linux-arm64|darwin-x64|darwin-arm64> --out <dir> [--bun-version x.y.z]
  *
  * Writes <out>/AgentHydra-<version>-<target>/ and its archive beside it (Windows also gets the lone
- * exe). The daemon is compiled by scripts/build.ts; Desk 2 ships as source plus production
- * node_modules on a bundled bun (desk2/runtime). Needs desk2/web/dist and desk2/hydra/dist already
- * built; it never builds them and never writes into the checkout.
+ * exe, which is the same launcher). No Bun and no Claude Code binary ship: the daemon is plain JS
+ * (scripts/build.ts --bundle, whose app/bun-version is the pin, the running Bun.version unless
+ * --bun-version says otherwise) beside a small launcher that downloads that Bun on first run. Desk 2
+ * ships as source plus production node_modules and runs on the launcher's Bun. Needs
+ * desk2/web/dist and desk2/hydra/dist already built; it never builds them and never writes into the
+ * checkout.
  */
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
 import {
-  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -25,18 +25,15 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
+import { buildLauncher } from './build-launcher'
+import { writePosixLauncher } from './launcher-posix'
 
 const ROOT = resolve(import.meta.dir, '..')
 const VERSION: string = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
 const TARGETS = ['windows-x64', 'linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64']
 const NODE_OS: Record<string, string> = { windows: 'win32', linux: 'linux', darwin: 'darwin' }
-const BUN_ASSET: Record<string, string> = {
-  'windows-x64': 'bun-windows-x64',
-  'linux-x64': 'bun-linux-x64',
-  'linux-arm64': 'bun-linux-aarch64',
-  'darwin-x64': 'bun-darwin-x64',
-  'darwin-arm64': 'bun-darwin-aarch64',
-}
+/** The Windows archive must stay a small download: Bun and Claude Code are fetched on first run. */
+const WINDOWS_ARCHIVE_LIMIT = 30 * 1024 * 1024
 const MISC_FILES = [
   'lunarwerx-tray.exe',
   'AgentHydra-Tray.json',
@@ -200,42 +197,36 @@ function installServerOnly(dir: string, target: string, hostTarget: string): voi
   run(process.execPath, installArgs(target, hostTarget, false), dir)
 }
 
-async function fetchBun(target: string, dest: string, work: string): Promise<void> {
-  const asset = `${BUN_ASSET[target]}.zip`
-  const base = `https://github.com/oven-sh/bun/releases/download/bun-v${Bun.version}`
-  const zip = join(work, asset)
-  const res = await fetch(`${base}/${asset}`)
-  if (!res.ok) fail(`download ${asset} failed: HTTP ${res.status}`)
-  const bytes = new Uint8Array(await res.arrayBuffer())
-  const sums = await (await fetch(`${base}/SHASUMS256.txt`)).text()
-  const want = sums
-    .split('\n')
-    .map((l) => l.trim().split(/\s+/))
-    .find((p) => p[1]?.replace(/^\*/, '') === asset)?.[0]
-  const got = createHash('sha256').update(bytes).digest('hex')
-  if (!want || want.toLowerCase() !== got) fail(`${asset} does not match SHASUMS256.txt`)
-  await Bun.write(zip, bytes)
-  const out = join(work, 'unzipped')
-  mkdirSync(out)
-  if (process.platform === 'win32') {
-    run(
-      'powershell',
-      ['-NoProfile', '-Command', `Expand-Archive -LiteralPath '${zip}' -DestinationPath '${out}'`],
-      work,
-    )
-  } else {
-    run('unzip', ['-q', zip, '-d', out], work)
+// What a runtime never loads from node_modules: type declarations, source maps, human docs and the
+// folders packages keep their own tests and samples in. License files stay.
+const PRUNE_DIRS = new Set(['test', 'tests', '__tests__', 'docs', 'example', 'examples'])
+const PRUNE_FILE = /(\.map|\.d\.[cm]?ts)$|^(readme|changelog)(\.[^.]*)?\.md$/i
+
+/**
+ * Trims a production node_modules in place. Every Claude Code platform package of the Agent SDK goes:
+ * each carries a 200 MB binary, and Desk 2 resolves or downloads Claude Code itself.
+ */
+function pruneNodeModules(dir: string): void {
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) {
+      if (PRUNE_DIRS.has(e.name) || /^claude-agent-sdk-/.test(e.name)) {
+        rmSync(p, { recursive: true, force: true })
+      } else {
+        pruneNodeModules(p)
+      }
+    } else if (PRUNE_FILE.test(e.name)) {
+      rmSync(p, { force: true })
+    }
   }
-  const exe = target.startsWith('windows') ? 'bun.exe' : 'bun'
-  const found = join(out, BUN_ASSET[target], exe)
-  if (!existsSync(found)) fail(`${asset} has no ${exe}`)
-  copyFileSync(found, dest)
 }
 
 const target = arg('--target')
 const outArg = arg('--out')
+const bunVersion = (arg('--bun-version') ?? Bun.version).trim()
 if (!target || !TARGETS.includes(target)) fail(`--target must be one of ${TARGETS.join(', ')}`)
 if (!outArg) fail('--out <dir> is required')
+if (!/^\d+\.\d+\.\d+$/.test(bunVersion)) fail(`--bun-version must be x.y.z, got ${bunVersion}`)
 const out = resolve(outArg)
 const isWindows = target === 'windows-x64'
 const platform = process.platform === 'win32' ? 'windows' : process.platform
@@ -253,17 +244,39 @@ const name = `AgentHydra-${VERSION}-${target}`
 const stage = join(out, name)
 rmSync(stage, { recursive: true, force: true })
 mkdirSync(stage, { recursive: true })
-console.log(`Packaging AgentHydra ${VERSION} for ${target} into ${stage}`)
+console.log(`Packaging AgentHydra ${VERSION} for ${target} into ${stage} (Bun ${bunVersion})`)
 
-// The daemon. Windows compiles unminified (--minify panics Bun on a Windows host; see scripts/build.ts).
-const daemon = join(stage, isWindows ? 'AgentHydra.exe' : 'agenthydra')
+// The daemon as app/ (server.js, its web assets, release.json and bun-version, the pin the launcher
+// downloads), then the launcher that runs it.
 run(
   process.execPath,
-  ['scripts/build.ts', '--skip-web', '--target', target, '--outfile', daemon],
+  [
+    'scripts/build.ts',
+    '--bundle',
+    '--skip-web',
+    '--target',
+    target,
+    '--outdir',
+    stage,
+    '--bun-version',
+    bunVersion,
+  ],
   ROOT,
 )
-if (target === hostTarget) run(daemon, ['--version'], ROOT)
-if (isWindows) copyFileSync(daemon, join(out, `${name}.exe`))
+if (readFileSync(join(stage, 'app/bun-version'), 'utf8').trim() !== bunVersion)
+  fail('app/bun-version does not hold the pin')
+const launcher = join(stage, isWindows ? 'AgentHydra.exe' : 'agenthydra')
+if (isWindows) {
+  await buildLauncher({ outfile: launcher, version: VERSION })
+  copyFileSync(launcher, join(out, `${name}.exe`))
+} else {
+  writePosixLauncher({ outfile: launcher, version: VERSION })
+}
+if (target === hostTarget) {
+  const v = spawnSync(launcher, ['--version'], { cwd: ROOT, encoding: 'utf8' })
+  if (v.status !== 0 || v.stdout.trim() !== VERSION)
+    fail(`${launcher} --version printed "${v.stdout.trim()}", expected ${VERSION}`)
+}
 
 // The orchestrator's python half: never tests, bytecode or state.
 const orch = join(stage, 'orchestrator')
@@ -275,7 +288,7 @@ cpSync(join(ROOT, 'orchestrator/docs'), join(orch, 'docs'), { recursive: true })
 rmSync(join(orch, 'scripts/tests'), { recursive: true, force: true })
 removePycache(orch)
 
-// Desk 2: tracked source, the built dists, production node_modules, the bundled bun.
+// Desk 2: tracked source, the built dists and production node_modules; it runs on the launcher's Bun.
 const desk2 = join(stage, 'desk2')
 stageTracked('desk2', stage, DESK2_SKIP)
 for (const dist of ['web/dist', 'hydra/dist']) {
@@ -283,25 +296,13 @@ for (const dist of ['web/dist', 'hydra/dist']) {
 }
 installServerOnly(desk2, target, hostTarget)
 
-const runtime = join(desk2, 'runtime')
-mkdirSync(runtime)
-const bunDest = join(runtime, isWindows ? 'bun.exe' : 'bun')
-if (target === hostTarget) {
-  copyFileSync(process.execPath, bunDest)
-} else {
-  const work = mkdtempSync(join(out, '.bun-dl-'))
-  try {
-    await fetchBun(target, bunDest, work)
-  } finally {
-    rmSync(work, { recursive: true, force: true })
-  }
-}
-if (!isWindows) chmodSync(bunDest, 0o755)
+pruneNodeModules(join(desk2, 'node_modules'))
 
 if (isWindows) {
-  const launcher = join(desk2, 'launcher')
-  mkdirSync(launcher)
-  for (const f of LAUNCHER_FILES) copyFileSync(join(ROOT, 'desk2/launcher', f), join(launcher, f))
+  const deskLauncher = join(desk2, 'launcher')
+  mkdirSync(deskLauncher)
+  for (const f of LAUNCHER_FILES)
+    copyFileSync(join(ROOT, 'desk2/launcher', f), join(deskLauncher, f))
 }
 
 if (isWindows) {
@@ -339,13 +340,26 @@ if (isWindows) {
   run('tar', ['-czf', archive, name], out)
 }
 
+const deskModules = dirSize(join(desk2, 'node_modules'))
 const sizes = {
-  daemon: dirSize(daemon),
-  'desk2 runtime': dirSize(runtime),
-  'desk2 node_modules': dirSize(join(desk2, 'node_modules')),
-  dists: dirSize(join(desk2, 'web/dist')) + dirSize(join(desk2, 'hydra/dist')),
+  launcher: dirSize(launcher),
+  'app (daemon)': dirSize(join(stage, 'app')),
+  'desk2 node_modules': deskModules,
+  'desk2 dists': dirSize(join(desk2, 'web/dist')) + dirSize(join(desk2, 'hydra/dist')),
+  'desk2 other':
+    dirSize(desk2) -
+    deskModules -
+    dirSize(join(desk2, 'web/dist')) -
+    dirSize(join(desk2, 'hydra/dist')),
+  orchestrator: dirSize(orch),
+  misc: dirSize(join(stage, 'misc')),
 }
-console.log(`\nBundle size (${name}):`)
+console.log(`
+Bundle size (${name}):`)
 for (const [k, v] of Object.entries(sizes)) console.log(`  ${k.padEnd(20)} ${mb(v)}`)
 console.log(`  ${'folder total'.padEnd(20)} ${mb(dirSize(stage))}`)
 console.log(`  ${'archive'.padEnd(20)} ${mb(statSync(archive).size)}  ${archive}`)
+if (isWindows && statSync(archive).size > WINDOWS_ARCHIVE_LIMIT)
+  fail(
+    `the Windows archive is ${mb(statSync(archive).size)}, over the ${mb(WINDOWS_ARCHIVE_LIMIT)} limit`,
+  )
