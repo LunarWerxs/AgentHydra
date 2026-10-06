@@ -1,5 +1,35 @@
 # Releasing
 
+## AgentHydra is 2.0: no 1.x release, and the notes open with a TL;DR
+
+- **The 1.x line is closed** (owner, 2026-10-06: "why do we keep releasing updates to GitHub on the
+  1.x path of Agent Hydra? ... when Agent Hydra became the new Hydra Desk UI, it was Agent Hydra
+  2.0"). The next release is 2.0.0, and it ships Desk 2 (`desk2/`) as AgentHydra's window
+  ([AGENTHYDRA-2-CUTOVER.md](AGENTHYDRA-2-CUTOVER.md)). A tag below 2.0.0 is refused by the pre-push
+  hook and by `release.yml`, and a tag build whose Windows zip has no `desk2/` does not publish.
+- **The release page reads like SageThumbs'** (owner, same day: "We always need to do it like Sage
+  does. You have a TL;DR, bullet points ... then you have the details in, like, a read more").
+  `scripts/release-notes.mjs` builds it from the version's CHANGELOG section: the icon, the TL;DR,
+  every line of the section under "Read more", then the downloads. A section with more than two
+  changes must open with its own TL;DR, or the hook and the workflow refuse the tag:
+
+  ```md
+  ## [2.0.0] - 2026-10-07
+
+  **TL;DR**
+
+  - **One short headline per change that matters**
+
+  **Everything in 2.0.0**
+
+  ### Added
+  - **The headline.** One to three plain sentences a user cares about.
+  ```
+
+  `node scripts/release-notes.mjs 2.0.0` prints the page; `--check` only says whether it may ship.
+  Write each bullet for someone who uses AgentHydra: what changed for them, in a few sentences. The
+  owner's quotes, measurements, endpoints and file names belong in the commit message and the docs.
+
 ## Pushing `main` is the release
 
 Auto-update (see the README's Auto-update section) applies each update as a `git pull --ff-only`
@@ -20,6 +50,8 @@ every push and enforces two rules that used to be memory only, then runs the hos
 2. **A `v*.*.*` tag is refused while `docs/todo/TODO.md` has an open section.** Nothing pending
    ships past a release. There is no override: finish the item and delete its section, or the
    owner deletes it. The queue is gitignored, so this can only fire on a machine that holds it.
+   A tag is also refused when `scripts/release-notes.mjs` would refuse it: below 2.0.0, no
+   CHANGELOG section, or a long section with no TL;DR (read from the tagged commit).
 3. **The kit check runs, and a release tag needs green CI on its commit.** On a machine with the
    private `../../lunarwerx-ui` checkout, every push runs `bun run check:local` (kit drift), the
    one lane GitHub structurally cannot run. With a `v*.*.*` tag in the push, the hook also asks
@@ -42,7 +74,9 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
 1. **Bump the version.** Update `version` in `package.json`.
 2. **Update the changelog.** Move the relevant `[Unreleased]` entries in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` heading, following the existing Keep a Changelog format already used
-   in that file.
+   in that file, and open it with its `**TL;DR**` block (above). Only entries for what this release
+   ships: a change to `desk2/` rides only in a release that ships Desk 2.
+   `node scripts/release-notes.mjs X.Y.Z` shows the page GitHub will get.
    **Then freeze the MCP API level:** `bun run mcp:api-level --write` commits the live tool surface
    as `server/mcp-api-levels/<version>.json`. `bun test` refuses a version with no level, and
    replays every level against the live tools, so a later release that drops a tool or makes an

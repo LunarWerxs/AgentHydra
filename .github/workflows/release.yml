@@ -78,6 +78,10 @@ jobs:
             echo "tag v$TAG_V does not match package.json version $PKG_V — bump package.json (and CHANGELOG) first"
             exit 1
           fi
+          # Nothing below 2.0.0, and a long CHANGELOG section opens with a TL;DR (owner, 2026-10-06:
+          # 1.11.0-1.13.0 shipped on the closed 1.x line, and "do it like Sage does"). Checked before
+          # anything compiles; the pre-push hook runs the same check before the tag leaves a PC.
+          bun scripts/release-notes.mjs --check "$TAG_V"
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -140,6 +144,18 @@ jobs:
             # and a fallback that isn't in the bundle is not a fallback.
             cp misc/Tray-Host.ps1 misc/AgentHydra-Tray.ps1 misc/Tray-Launch.vbs \
                "${stage}/${name}/misc/"
+            # AGENTHYDRA 2.0 IS DESK 2 (owner, 2026-10-06: "when Agent Hydra became the new Hydra Desk
+            # UI, it was Agent Hydra 2.0"). The tray's Open runs desk2\launcher\start.vbs where it
+            # exists (misc/AgentHydra-Tray.json `requires`), so a zip without it would still open the
+            # old window. A tag run refuses to publish one; a branch run (validating the pipeline)
+            # only warns. docs/AGENTHYDRA-2-CUTOVER.md has what staging Desk 2 takes.
+            if [ ! -f "${stage}/${name}/desk2/launcher/start.vbs" ]; then
+              if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+                echo "::error::the Windows zip has no desk2/: AgentHydra 2.0 ships Desk 2 as its window"
+                exit 1
+              fi
+              echo "::warning::the Windows zip has no desk2/ (fine for a branch run, refused for a tag)"
+            fi
             # windows-latest has 7z on PATH; git-bash there has no `zip`
             (cd "$stage" && 7z a -tzip "$GITHUB_WORKSPACE/out/${name}.zip" "$name" > /dev/null)
           else
@@ -315,57 +331,14 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - name: Extract release notes from CHANGELOG
+      - name: Release notes from CHANGELOG
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          awk -v version="$version" '
-            index($0, "## [" version "]") == 1 { capture = 1; next }
-            capture && /^## / { exit }
-            capture { print }
-          ' CHANGELOG.md > RELEASE_NOTES.md
-          if ! grep -q '[^[:space:]]' RELEASE_NOTES.md; then
-            echo "::error::CHANGELOG.md has no release section for ${GITHUB_REF_NAME}"
-            exit 1
-          fi
-          # Which Windows download? The two Windows assets sit side by side with nothing at the
-          # download point telling them apart, and the .exe is the bigger, more obvious, more "just
-          # download the app" choice. It used to be the one that could not show a tray icon at all -
-          # the icon is drawn by misc/lunarwerx-tray.exe and a single file carried no misc/ folder -
-          # and this table was where we admitted that instead of fixing it. Since 0.41.0 the toolkit
-          # is embedded in the binary and written out on first run, so the icon column is yes for
-          # both; the orchestrator row below is the one real difference that remains. Renaming the
-          # assets is
-          # NOT the fix: the updater matches its archive by name (`-<target>.zip`), so a rename
-          # silently breaks self-update for every install already out there. Saying it here is free
-          # and lands exactly where the choice is made.
-          #
-          # ⛔ AND THE SAME IS NOW TRUE OF THE ORCHESTRATOR, one row down (2026-09-03). The python
-          # toolbox is staged as a FOLDER beside the executable, so like misc/ it can only ride in
-          # the zip — and this table used to end "Everything else is identical", which turned a
-          # second silent omission into a written promise. An .exe install answers
-          # GET /api/orchestrator with present:false and its four MCP tools do nothing. Whenever a
-          # payload is staged into "${stage}/${name}/" rather than compiled INTO the binary, it is
-          # absent from the single-file download by construction: say so here, in the same breath,
-          # or this row grows a third quiet exception.
-          cat >> RELEASE_NOTES.md <<'NOTE'
-
-          ---
-
-          ### Which Windows download?
-
-          | file | tray icon | orchestrator | notes |
-          | --- | --- | --- | --- |
-          | `...-windows-x64.zip` | **yes** | **yes** | The executable plus the `misc\` tray toolkit and the `orchestrator\` toolbox. Double-click `AgentHydra.exe` and the daemon starts the tray launcher for you; or run `misc\Create-Shortcut.ps1` once for a shortcut that launches through it directly. |
-          | `...-windows-x64.exe` | **yes** | no | One portable file, nothing to unpack. Since 0.41.0 the tray toolkit rides INSIDE the binary and is written out beside the app's state on first run, so the icon, Quit and the supervisor all work. The `orchestrator\` toolbox is still a folder and still only ships in the zip, so its tools report themselves as not installed. |
-
-          Both self-update, and both are the same daemon with the same tray. The zip additionally
-          carries the `orchestrator\` toolbox as a folder beside the executable, which a single file
-          cannot: there, `GET /api/orchestrator` answers `present:false` and names the folder it
-          looked for, rather than looking broken. The single file only notifies you about the tray
-          if it could not place it - which is a fault, not a limitation.
-          NOTE
+          # The release page: the icon, the section's TL;DR, every line of it under "Read more", then
+          # the downloads (scripts/release-notes.mjs; owner, 2026-10-06: "do it like Sage does").
+          # It refuses a version with no section, below 2.0.0, or long with no TL;DR.
+          node scripts/release-notes.mjs "${GITHUB_REF_NAME#v}" > RELEASE_NOTES.md
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:

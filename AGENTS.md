@@ -73,6 +73,24 @@ Keep unrelated working-tree changes intact. Build and check the main UI in
 `web/`; `orchestrator/web/` is a separate interface. Configuration/API details and
 the current compiler compatibility note are in the native-control runbook.
 
+## Releases, CHANGELOG and READMEs (owner, 2026-10-06)
+
+- **AgentHydra is 2.0: never release 1.x.** The window that was Hydra Desk 2 (`desk2/`) is
+  AgentHydra 2.0, and the next release is 2.0.0, shipping it. Nothing is released before it ships
+  Desk 2. The pre-push hook and `release.yml` refuse a tag below 2.0.0, and a tag build whose Windows
+  zip has no `desk2/` does not publish. 1.11.0 to 1.13.0 went out on the closed line from another PC,
+  with Desk 2's entries in their notes though their downloads had no Desk 2. See
+  [docs/RELEASING.md](docs/RELEASING.md).
+- **Release notes, CHANGELOG sections and READMEs open with a TL;DR, and the detail is folded**,
+  as SageThumbs does it ("I ain't fucking reading that 10,000-mile-long detailed bullshit list just
+  to figure out that you fixed two little things"). A CHANGELOG version section opens with
+  `**TL;DR**`, one short headline bullet per change, then `**Everything in X.Y.Z**`;
+  `scripts/release-notes.mjs` turns it into the release page and refuses a long section without one.
+  A CHANGELOG bullet is a bold headline plus one to three plain sentences for a user. Owner quotes,
+  measurements, endpoints and file names go in the commit message and the docs, not the CHANGELOG.
+  A README opens with what the thing is and a TL;DR list; its long sections sit in
+  `<details><summary>` blocks.
+
 ## Public repository
 
 This repo is PUBLIC (LunarWerxs/AgentHydra), `desk/` and `desk2/` included.

@@ -19,6 +19,13 @@
  *     it; a clone without the file has nothing to gate on and passes. There is deliberately NO
  *     override for this rule: the item gets done, or the owner deletes it himself.
  *
+ *  3. A release tag is refused when scripts/release-notes.mjs would refuse to publish it: a version
+ *     below 2.0.0, or a long CHANGELOG section with no TL;DR. On 2026-10-06 the owner asked "why do
+ *     we keep releasing updates to GitHub on the 1.x path of Agent Hydra?" (1.11.0 to 1.13.0 had
+ *     shipped from another PC on the old line), and of the release page "We always need to do it
+ *     like Sage does": a TL;DR, then the detail under "read more". release.yml runs the same check;
+ *     here it stops the tag before it reaches GitHub. No override, as for rule 2.
+ *
  * VISIBILITY IS FAIL-CLOSED. A remote that is not GitHub, a lookup that times out, a rate limit -
  * every "could not tell" is treated as public. A guard that passes when it cannot see is a guard
  * that passes exactly when something is wrong. `--no-verify` still skips this hook, which a hook
@@ -33,8 +40,10 @@
  *   GH_TOKEN / GITHUB_TOKEN          optional; sent with the lookup so a rate limit cannot turn a
  *                                    private repo into "unknown"
  */
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const PUBLIC_HEADING = "# WARNING: THIS REPOSITORY IS **PUBLIC**";
 const LOOKUP_TIMEOUT_MS = 5000;
@@ -202,8 +211,49 @@ async function main() {
       );
       return 1;
     }
+    const refused = await releaseRefusals(releaseTags);
+    if (refused.length > 0) {
+      console.error(
+        [
+          "",
+          "✗ release refused:",
+          ...refused.map((r) => `    ${r.ref}: ${r.why}`),
+          "",
+          "  scripts/release-notes.mjs builds the release page and decides what may ship; release.yml",
+          "  runs the same check. There is no override for this rule.",
+          "",
+        ].join("\n"),
+      );
+      return 1;
+    }
   }
   return 0;
+}
+
+/**
+ * Rule 3: each release tag scripts/release-notes.mjs would refuse, with its reason. The CHANGELOG is
+ * read from the tagged commit (the working tree's can differ). A checkout without the script, such as
+ * a throwaway test repository, has nothing to check against and passes.
+ */
+async function releaseRefusals(releaseTags) {
+  const script = join(process.cwd(), "scripts", "release-notes.mjs");
+  if (!existsSync(script)) return [];
+  const { refusal } = await import(pathToFileURL(script).href);
+  const out = [];
+  for (const r of releaseTags) {
+    let changelog = "";
+    try {
+      changelog = execFileSync("git", ["show", `${r.localSha}:CHANGELOG.md`], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      /* no CHANGELOG.md in that commit: refusal() says the version has no section */
+    }
+    const why = refusal(changelog, r.remoteRef.replace(/^refs\/tags\/v/, ""));
+    if (why) out.push({ ref: r.remoteRef, why });
+  }
+  return out;
 }
 
 // Only run as a hook when executed directly; the exports above are importable by the tests.

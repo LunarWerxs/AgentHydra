@@ -1,5 +1,19 @@
 # AgentHydra 2.0 (Hydra Desk 2)
 
+AgentHydra 2.0 is AgentHydra's window (it was Hydra Desk 2): your chats on the left, the open chat on the
+right, and AgentHydra's accounts, CliMayte and HSwarm pages inside it.
+
+## TL;DR
+
+- **Every chat in one sidebar:** this PC's and your other PC's, with CliMayte and HSwarm work as badges
+- **AgentHydra inside the window:** accounts and quota, CliMayte, HSwarm, analytics, one Settings dialog
+- **Servers and a small browser beside the chat**, through DevWebUI
+- **Git through RepoYeti:** commit, push, pull, branch and Create PR, and one Changes tab
+- **Connectors** for RepoYeti, ReDesign, DevWebUI and Connections, without copying them in
+- **Free claude.ai and ChatGPT accounts** that can take work
+- **Videos and pictures play in the chat**
+- **Start it** from the AgentHydra shortcut or the tray's Open ([Starting it](#starting-it))
+
 This folder is AgentHydra's window: AgentHydra 2.0, called Hydra Desk 2 until 2026-10-06 (owner: "HydraDesk
 is no longer called HydraDesk. It is now called AgentHydra"). Its window, its **AgentHydra** shortcut
 (`launcher/install-shortcuts.ps1`, which also sends the old "Hydra Desk 2" shortcuts to the Recycle Bin)
@@ -13,6 +27,9 @@ without touching Jacob's app. Everything below is Hydra Desk's own description, 
 folders changed to Desk 2's.
 
 ## What Desk 2 adds
+
+<details>
+<summary><b>Read more: everything Desk 2 adds</b></summary>
 
 A first, quick version of each, to see whether the direction is right. The layout is Desk's own: the
 sidebar on the left stays put, and only the pane on the right changes.
@@ -383,7 +400,12 @@ sidebar on the left stays put, and only the pane on the right changes.
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
+</details>
+
 ## Planned next
+
+<details>
+<summary><b>Read more: what is planned next</b></summary>
 
 **Dev servers in the sidebar** (owner, 2026-10-06). To start once AgentHydra 2.0 (Desk 2 taking over from the
 old AgentHydra window, which is being retired) has finished consolidating. Today DevWebUI is reached only through
@@ -427,7 +449,12 @@ is that it never hides whether a chat is working.
 The full design is in [SPEC.md](SPEC.md). The contract between the server and the window is
 [shared/protocol.ts](shared/protocol.ts).
 
+</details>
+
 ## Starting it
+
+<details>
+<summary><b>Read more: starting it, the launcher and the window</b></summary>
 
 **The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk 2" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
@@ -476,6 +503,8 @@ from; the page's `web/public/favicon.svg` and `favicon.ico` are copies. To chang
 rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe into `launcher/`) and re-run
 `install-shortcuts.ps1`.
 
+</details>
+
 ## Ports
 
 | Port | What |
@@ -518,6 +547,9 @@ If AgentHydra is not running, the window says so in a banner and those lists sta
 keep working.
 
 ## Free instances
+
+<details>
+<summary><b>Read more: Free instances</b></summary>
 
 **Instances → Free** is the same card, header, table and rows as the CLI and desktop instances (kind
 `free` in `hydra/src/lib/instance-table.ts`; usage in the same 5h and Week cells, sort and filter as
@@ -594,3 +626,5 @@ as new threads on idle accounts with room, the one used longest ago first, or co
 (`server/src/mcp-free.ts` in the engine; docs/REFERENCE.md has the details).
 
 This folder is part of AgentHydra's public repo: everything committed here is published.
+
+</details>

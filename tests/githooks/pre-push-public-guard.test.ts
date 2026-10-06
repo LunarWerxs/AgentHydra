@@ -1,7 +1,8 @@
 // tests/githooks/pre-push-public-guard.test.ts - the pre-push gate. A PUBLIC remote, or one whose
 // visibility cannot be proven, refuses the push and prints the heading; AGENTHYDRA_PUSH_PUBLIC=1
 // announces and proceeds; a private remote is untouched; a release tag is refused while
-// docs/todo/TODO.md has an open section, and nothing overrides that.
+// docs/todo/TODO.md has an open section, and nothing overrides that; and a release tag that
+// scripts/release-notes.mjs would refuse (below 2.0.0, or a long section with no TL;DR) never lands.
 //
 // Drives the real, on-disk `.githooks/pre-push` and `.githooks/check-public-push.mjs` (copied
 // fresh at test time, never duplicated by hand) against a throwaway repo pushing to a throwaway
@@ -238,6 +239,47 @@ describe('.githooks/pre-push: a public remote is announced and refused', () => {
         const r = push(repo, PRIVATE, 'v1.2.3')
         expect(r.status).toBe(0)
         expect(originHas(origin, 'refs/tags/v1.2.3')).toBe(true)
+      },
+      HOOK_TEST_TIMEOUT,
+    )
+
+    test(
+      "release-notes.mjs's refusals stop the tag: a 1.x version, or a long section with no TL;DR",
+      () => {
+        // The real script beside the hook, as in this repo; the throwaway repo above has none.
+        mkdirSync(join(repo, 'scripts'), { recursive: true })
+        writeFileSync(
+          join(repo, 'scripts', 'release-notes.mjs'),
+          readFileSync(join(REPO_ROOT, 'scripts', 'release-notes.mjs')),
+        )
+        const bullets = '### Added\n\n- **One.** a\n- **Two.** b\n- **Three.** c\n'
+        const tldr = '**TL;DR**\n\n- **One**\n\n**Everything in 2.0.0**\n\n'
+        writeFileSync(
+          join(repo, 'CHANGELOG.md'),
+          `# Changelog\n\n## [2.0.0] - 2026-10-07\n\n${bullets}\n## [1.14.0] - 2026-10-06\n\n${bullets}`,
+        )
+        git(repo, {}, 'add', 'CHANGELOG.md')
+        git(repo, {}, 'commit', '-q', '-m', 'notes')
+        git(repo, {}, 'tag', 'v1.14.0')
+        git(repo, {}, 'tag', 'v2.0.0')
+        const old = push(repo, PRIVATE, 'v1.14.0')
+        expect(old.status).not.toBe(0)
+        expect(old.output).toContain('below 2.0.0')
+        expect(originHas(origin, 'refs/tags/v1.14.0')).toBe(false)
+        const wall = push(repo, PRIVATE, 'v2.0.0')
+        expect(wall.status).not.toBe(0)
+        expect(wall.output).toContain('no TL;DR')
+
+        // The same section with its TL;DR ships.
+        writeFileSync(
+          join(repo, 'CHANGELOG.md'),
+          `# Changelog\n\n## [2.0.0] - 2026-10-07\n\n${tldr}${bullets}`,
+        )
+        git(repo, {}, 'commit', '-q', '-am', 'tldr')
+        git(repo, {}, 'tag', '-f', 'v2.0.0')
+        const ok = push(repo, PRIVATE, 'v2.0.0')
+        expect(ok.status).toBe(0)
+        expect(originHas(origin, 'refs/tags/v2.0.0')).toBe(true)
       },
       HOOK_TEST_TIMEOUT,
     )
