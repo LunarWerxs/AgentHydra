@@ -2600,225 +2600,45 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
-- **The Instances toolbar's "Usage filter" is now just "Filter", and it asks three questions
-  instead of one** (`web/src/lib/instance-filter.ts`, `web/src/composables/useInstanceFilter.ts`,
-  `web/src/components/InstanceFilterMenu.vue`). Alongside the two quota windows it now filters by
-  STATUS (open / closed) and by PLAN (Max 20×, Pro, Free, … - the list is built from the accounts
-  actually on screen, so it names your plans rather than a guessed catalogue). The three facets are
-  OR-ed: picking two narrows the tables rather than cancelling out. Both new facets are true
-  whichever columns are showing, so the button no longer appears only in usage mode - only the
-  QUOTA half stands down with the percentages it measures, and the flyout says so in place rather
-  than silently ceasing to apply. Existing settings are untouched: the storage keys keep their
-  `usageFilter` spelling (a preference key is a wire format, not a label), status defaults to
-  "any" and no plan is picked, so an upgraded install filters exactly as it did.
-- **A row whose fact is not KNOWN is never filtered out.** An unlinked CLI login has no window to
-  be open or closed and no account record of its own, and a desktop instance's plan arrives a beat
-  after its row does. Both were already the rule for an unread quota reading; extending it is what
-  stops rows blinking out of the table and back on every refresh, and what stops "show me the open
-  ones" emptying the CLI table. The Codex table joins the filter on the same terms.
+- **Filter now asks three questions**: usage (5-hour and weekly windows), status (open/closed) and plan. Rows with unknown facts are never filtered out. Codex table joins the filter.
 
 ### Changed
 
-- **The two 5-hour quota cells are grey now; colour is spent on the weekly ones**
-  (`web/src/components/UsageBar.vue`, `UsageBadge.vue`). A usage-mode row carried four coloured
-  cells, and four hues side by side average out to "busy" - the eye had to read each one to find
-  the alarming one. The 5-hour window is the one that gives its colour up, because it refills the
-  same afternoon: a spent session means "not right now", a spent week means "not at all", and only
-  the second is worth an alarm. Both 5-hour cells keep their number, their length and their
-  popover; the Session bar simply reads in the same neutral grey the Plan chip does.
+- **5-hour quota cells are now grey;** colour is reserved for weekly windows which matter more.
 
 ### Removed
 
-- **`fleet-git.ts`, and with it every git call AgentHydra made on its own initiative**
-  (`server/src/fleet-git.ts` and `server/tests/fleet-git.test.ts` deleted, the `git` key dropped
-  from `GET /api/fleet`). That section ran `rev-parse --show-toplevel` per live session cwd, then
-  `rev-parse --abbrev-ref` + `status --porcelain` + `rev-list --count` per repo - concurrently,
-  uncapped, uncached, on EVERY request. Against a 22.7k-file checkout that is a full status walk
-  each time, and anything calling the endpoint in a loop buries the machine; the owner watched
-  exactly that happen. Nothing consumed the result: no web code, no orchestrator code and no
-  Python read `git`, `offMain`, `dirtyCount`, `notRepo` or `aheadCount`, and the module's own
-  header said what to DO about a dirty or off-main repo was "a later piece's business" - a piece
-  never built. A producer with no consumer paying the most expensive read in the process.
-  Cross-repo git state is Odin's job, and Odin only does it when a person runs a scan. Standing
-  rule (owner, 2026-09-07): **nothing runs git unless it was explicitly asked for, for a specific
-  reason.** `path-key.ts` stays - `desktop-landing` and `codex-desktop` still use it - with its
-  header de-referenced. The five remaining git callers are all explicitly triggered and untouched:
-  the source-mode version stamp, the updater's own `git pull`, the ChatGPT context pack's
-  `ls-files`, and the tunnel's `check-ignore`.
+- **Git calls removed from daemon's own initiative.** `fleet-git.ts` no longer polls repos on every request. Cross-repo state is Odin's job, and the five remaining git callers are all explicitly triggered.
 
 ### Fixed
 
-- **Every reply the courier tried to deliver failed with "delivery actuator missing"**
-  (`server/src/routes/session-message.ts`). The message endpoint resolved its PowerShell actuator
-  from `process.cwd()`, which is wherever the daemon happened to be started, not where the file
-  is: a daemon launched in `server/` looked for `server/misc/Deliver-DesktopChat.ps1` and refused
-  every delivery. It resolves from `APP_ROOT` now, like the rest of the codebase's `misc/` lookups,
-  which is also what makes it land beside the executable in a compiled bundle. Found when a batch
-  move's `resume` notes staged and then could not be delivered.
-- **The tray-invariant poll could take the whole daemon down, and the guardrail that exists to
-  catch exactly that could not see it** (`server/src/tray-invariant.ts`). Its tick was an arrow
-  assigned to a const, so `timer-callback-can-kill-the-daemon` - which only reads `function NAME()`
-  declarations - fell through to "unguarded" and gated CI red on `main`. The tick is a declaration
-  whose body opens with `try` now, so the protection is one the check can actually verify rather
-  than one it has to take on trust; the overlap guard keeps its old meaning, with `running` still
-  cleared only by the tick that set it.
-- **The permission picker never opened on a window that was minimized or not in front, so a chat
-  that moved accounts had to have "Bypass permissions" clicked by hand**
-  (`orchestrator/scripts/actuator/approve_prompt.ps1`). `Press-Space` posts `WM_KEYDOWN`/`WM_KEYUP`
-  straight at the render widget; such a window drops the key with no error, and the function
-  returned true anyway because all it checked was that `PostMessage` had been called. Measured on
-  one live window with the picker forced closed and verified closed before each attempt:
-  **minimized 0/2, background 1/2, foreground 2/2**. Background is a coin flip because UIA
-  `SetFocus()` only sometimes activates the window as a side effect - which is why this read as
-  intermittent rather than broken, and why an earlier fix went after a confirmation dialog that
-  was never the problem (the dialog is raised BY the menu, and the menu was not opening). The
-  window is now restored and activated once, before the first read of the accessibility tree
-  rather than at the keypress - doing it at the keypress still failed one rail earlier, on
-  `selected the row but the pane still does not show '<title>'` - and the previous foreground
-  window is handed back on every exit path. Only a by-hand act reaches this: the picker stays
-  gated behind `--force` and the fleet pass behind the tray icon, so no background lane pulls a
-  window onto your screen.
-- **A chat sitting in "Auto" or "Manual" could never be moved to bypass at all.** The composer
-  button is matched against a name list that had gone stale: the app renders Auto / Manual /
-  Accept edits / Plan / Bypass permissions, while the list carried three names that exist nowhere
-  in the app and still called Plan "Plan mode". A non-matching chat reported "no permission picker
-  is showing".
-- **"opened the picker but no item appeared" was printed for a picker that had never opened**,
-  which sent two separate investigations after an imaginary locale/label problem. The two failures
-  are now told apart and named, and the never-opened branch says so explicitly.
-- **`manage_desktop_chat.ps1` had the same defect, with two confidently wrong diagnoses.** Against
-  a minimized window the kebab hunt reported `not rendered in any searched running instance
-  (collapsed group or virtualized out)` and the archive path reported an EMPTY `menu opened but no
-  'Archive' item matched a known label. Menu showed: .` - neither naming the real cause. It now
-  restores and activates before searching (`-List` stays passive and never pulls a window
-  forward), and the header no longer promises "zero focus theft", because that promise was costing
-  correctness. `chip.ps1` carried a byte-for-byte copy of the broken `Press-Space` and is fixed the
-  same way.
-- **`automation_chat.py` reported `APP-CONFIRMED via its own picker` for runs whose picker had
-  just REFUSED**, quoting the refusal inside the confirmation. It computed the verdict from
-  `state/mode-confirmed.json` - a persistent ledger answering "has this chat ever been confirmed" -
-  *after* driving the picker, so any chat confirmed once claimed confirmation forever. A verdict
-  about this run now comes from this run, via an allow-list of the actuator's success lines so that
-  a new failure string reads as not-confirmed rather than silently as success; the ledger is
-  consulted only when no picker ran. Verified live from a fully minimized window: 5/5 mode flips
-  both directions, the archive and rename paths, and the full `--force` chain.
+- **Message delivery now resolves PowerShell from `APP_ROOT`** instead of `process.cwd()`, fixing compilation and respecting move staging.
 
-- **The "Bypass all permissions?" popup is finally clicked - it was an in-page modal all along**
-  (`orchestrator/scripts/actuator/approve_prompt.ps1`). Every previous fix here assumed the
-  confirmation owned its own top-level HWND. Measured live 2026-09-07: it does not. It renders as a
-  `ControlType.Window` element INSIDE the main window's tree (name `Bypass all permissions?`, a
-  `Cancel` and a confirm named for the mode), and while it is up the composer toolbar leaves the
-  tree entirely - which is what every failing run reported as "the picker now reads 'gone'". The
-  hunt did see the confirm and threw it away: a modal is CENTRED, so its confirm sat at x=1312
-  while the `Model: ...` anchor put the pane guard at 1586, and `-ge $minXm` rejected the one button
-  it came for - the same defect this file's own header records for `Find-ModeBtn`, repeated one
-  function down. In-page modals are now handed to the confirm hunt as non-main roots (no positional
-  guard, since inside a modal there is nothing to confuse the confirm with) and scanned first; the
-  deny list and the must-be-new rail are unchanged. Proven on two chats in two workspaces:
-  `MODE SET 'Accept edits' -> 'Bypass permissions' ... (confirmed the app's 'Bypass permissions' prompt)`.
-- **A move can no longer claim `app-confirmed` on a confirmation the OTHER account earned**
-  (`orchestrator/scripts/migrate_chat.py`). `mode-confirmed.json` is keyed by session id alone, so
-  a chat confirmed long ago in the app it just LEFT still answered yes for the app it just joined.
-  Measured on the six-chat Andreea drain of 2026-09-07: all six reported `app-confirmed` while
-  their own evidence string began `REFUSED`, and the four nobody checked were sitting on
-  `acceptEdits`. The adjudicator now voids any prior confirmation before driving the picker, so the
-  only entry that can exist is the one this run's actuator earned.
-- **A chat that landed a second ago is no longer "not here"** (same actuator). The sidebar row is
-  rendered on the app's own clock, and one instant look turned that delay into `no sidebar row`,
-  losing the whole permission stamp - five of six chats in the same drain. It polls for 6s now; an
-  absent row still refuses, and a row already on screen costs the same single scan as before.
-- **A crashed orchestrator run no longer blocks every retry forever** (`server/src/orchestrator.ts`,
-  `server/tests/orchestrator-stale-lock.test.ts`). The daemon-side `inFlight` map held only a start
-  time, and the `finally` that clears it runs on every normal path - so the one way an entry could
-  survive was a spawn promise that never settles, and then the lock was **immortal**, because
-  nothing else ever removed it. Measured 2026-09-07: a `migrate_batch` died with no python process
-  left anywhere on the machine, and the retry still returned `409 already running (started 85s
-  ago)`. That is the worst shape a lock can take - it turns a CRASH into a HANG, reports a dead run
-  as healthy, and the caller believes it. An entry now carries a `deadline` of its own
-  `timeoutMs` plus a 60s grace, which is a fact rather than a heuristic: `realSpawn` enforces that
-  timeout by killing the child, so a lock outliving it cannot have a live run behind it. Past the
-  deadline the entry is reaped and its kill switch fired defensively first; `orchestratorBusy()`
-  reaps too, so an immortal lock cannot wedge an update either. **Releasing is now an identity
-  check, not a name check** - once a lock can be replaced, an abandoned promise settling late would
-  otherwise delete the SUCCESSOR's entry and hand out the concurrent acting pass this map exists to
-  prevent. Four tests, verified to fail (3 of 4, including the successor case) against the old
-  never-reap behaviour before being accepted.
+- **Tray-invariant poll no longer crashes daemon.** Tick handler is now a declared function the guardrail can verify.
 
-- **The permission-mode confirmation is hunted in every window the app owns, not just its main
-  one** (`orchestrator/scripts/actuator/approve_prompt.ps1`). ⚠ **This did NOT fix the by-hand
-  clicking, and the commit that landed it claimed a root cause that was wrong.** The real cause,
-  measured separately the same day, is the background-window swallow now documented in that
-  script's header: `Press-Space` posts its key at the render widget, a BACKGROUND window never
-  opens the picker menu at all, and `Press-Space` returned `$true` regardless because it only
-  ever checked that `PostMessage` was called - so the confirm hunt found nothing to click because
-  **there was never a dialog** (background = 0 picker items, foreground = 5, on one live window).
-  What is retained here is a narrower, still-true improvement: the hunt and its diagnostic no
-  longer assume a dialog must be a descendant of `MainWindowHandle`. The old diagnostic scanned
-  only the main window, so its "buttons on screen" list printed the frame's own Minimize/Maximize
-  and read as "no dialog appeared" - which is equally consistent with "looking in the wrong place"
-  and with "nothing was ever raised", and that ambiguity is what sent the investigation at the
-  search root instead of at focus. `Get-ProcRoots` now returns the main window plus every visible
-  top-level window of the same process, used in all three places - the pre-invoke RuntimeId
-  snapshot, the confirm poll, and the diagnostic (buttons outside the main window are tagged
-  `[dialog]`). Nothing widens about WHAT may be pressed: `DENY_NAMES` is still never pressed and
-  the must-be-new rail is intact, strictly so because the snapshot now covers the same roots the
-  hunt does. The pane/position guards that separate the dialog's confirm from the composer's
-  picker and the sidebar chips apply only in the main window, since those live there and requiring
-  a separate dialog's button to sit right of the pane would reject the very button wanted.
-  `Get-ProcRoots` is deliberately defined above its first caller: PowerShell binds functions as
-  the script runs, and a definition further down left the snapshot call in its `catch{}` with an
-  EMPTY set, silently disarming must-be-new. Not yet exercised against a live dialog - and with
-  the foreground fix in place the dialog now appears where the old code was already looking, so
-  this widening is defence against a shape that has not yet been observed, not a proven path.
+- **Permission picker now works on minimized windows.** Window is restored and activated before tree access. Different failures (never opened / opened but empty) are now distinguished.
 
-- **The window actuators aim by identity, never by substring or position** (every
-  `orchestrator/scripts/actuator/*.ps1`, plus `spawn_chat.py` and `migrate_chat.py`), after the
-  owner watched one click the project selector in the wrong account's window. A bare `-Instance`
-  now matches the profile dir's leaf name EXACTLY (`pap3r rotate` no longer also matches
-  `pap3r rotate2`), a blank `-Instance` is refused for anything that clicks or types (it used to
-  scan every running account), zero or several matching windows is a refusal that names every
-  candidate, a sidebar row must equal the title exactly rather than end with it, a key is never
-  posted until the focused element is proven to be the target, and a dialog's confirm button must
-  be NEW since the action that opened it rather than any enabled button named OK/Continue/Yes
-  anywhere on screen. `trust_dialog.ps1` finally takes an `-Instance`. Python callers hand the
-  actuators the unique profile DIR rather than the fleet name. Proven live: the rename drill on
-  the hardened scripts round-trips a real chat by bare instance name in 9.4s.
-- **A batch move no longer reports a chat that landed and then crashed in a later phase as "NOT
-  moved"** (`orchestrator/scripts/migrate_batch.py`). Phases two and three only run on a verified
-  landing, so a settle or stamp that raises keeps `landed: true`, marks the chat `ok: false` with
-  what did not finish, keeps its OTHER tidy-up running, and the report gets a distinct
-  "LANDED but not finished" bucket instead of the re-run advice. Per-chat `secs` also stops
-  charging the first chat with every later chat's stamping.
-- **The naming door restates the daemon's own title** (`migrate_chat.py`). A chat renamed in the
-  app whose index row still carried its first message was refused twice with "confirm_title does
-  not match" - the second time through the breaker. The door compares against the ROW, so the row
-  is what is restated now, via the per-id route.
-- **A compiled `dist/AgentHydra.exe` run from the repo finds the orchestrator one level up**
-  (`server/src/orchestrator.ts`). Launched as the daemon it looked for `dist/orchestrator`, and
-  every orchestrator-backed tool (`move_chats`, `orchestrator_menu`) died with "no orch.py" while
-  the tree sat beside it. A release zip with no toolbox still reports honestly.
-- **The migrate stopwatch now splits the two slow phases** into `settle-drive` / `settle-confirm`
-  and `stamp-doctrine` / `stamp-picker`, so a slow move says which half is slow. First measurement:
-  7.8s driving the source app's archive control, 8.0s for the single-move bypass watch, 5.2s
-  driving the target app's picker.
-- **The per-window UI lock is reclaimed on proof of death, not on age** (`orchestrator/scripts/
-  lib/windowlib.py`). `instance_lock` deleted any lock directory older than 15 minutes without
-  checking who held it, so a lane that legitimately ran long had its lock taken mid-gesture and
-  two lanes then drove one Electron window: the interleaved sidebar click the lock exists to
-  prevent. The actuator alone runs up to 240s per press and `spawn_chat` stacks several behind a
-  120s wait, so the ceiling was reachable in normal work. The lock now carries an owner record
-  (pid plus that pid's OS creation time, so a recycled pid cannot impersonate the holder) and
-  reuses `joblocklib`'s proof-of-death check: a provably live holder keeps its lock at any age, a
-  provably dead one is reclaimed at once instead of waiting the clock out, and age remains only
-  where liveness cannot be determined so a crash still cannot wedge a lane. Release is
-  token-checked, closing the second half of the same defect, where the original holder removed
-  the directory unconditionally on exit and deleted its successor's lock.
-- **The naming pass now takes that same lock instead of a private one it alone respected**
-  (`orchestrator/scripts/name_chats.py`). It kept its own `state/naming-<instance>.lock`, which
-  excluded a second naming pass and nothing else, so it could drive a window while the courier,
-  `archive_chat`, `migrate_chat` or `spawn_chat` was already driving it. The private copy carried
-  both age-reclaim defects above. Its non-blocking posture is unchanged (`wait_secs=0`): a pass
-  that finds the window busy steps back and says so.
+- **Chat in wrong permission mode can now move to bypass.** Composer button list updated to match app's actual modes.
+
+- **"Bypass all permissions?" modal is now clickable.** It's an in-page modal, not top-level. Scan includes all process windows, not just main. Position guards apply only in main window.
+
+- **Orchestrator crashes no longer block retry forever.** Entry carries deadline; expired locks are reaped. Release is identity-checked not name-checked.
+
+- **Permission hunt works in every app window**, with better diagnostics showing buttons outside main.
+
+- **Window actuators match by exact identity**, not substring or position. Instance name must match profile dir leaf exactly. Dialog confirm must be new since the action. Python callers pass full profile DIR.
+
+- **Batch moves report "LANDED but not finished"** instead of "NOT moved" when later phases fail. Per-chat timing no longer charges first chat with later ones.
+
+- **Naming door restates the daemon's actual title** via per-id route instead of guessing from index.
+
+- **Compiled builds find orchestrator at the right path** (one level up from `dist/`).
+
+- **Migrate stopwatch shows which phase is slow** (`settle-drive/confirm` and `stamp-doctrine/picker`).
+
+- **UI locks are reclaimed on proof of holder death**, not after 15 minutes. Owner record carries pid and OS creation time. Release is token-checked.
+
+- **Naming pass uses shared lock**, not a private one that excluded other actuators.
 
 ## [0.39.1] - 2026-09-06
 
