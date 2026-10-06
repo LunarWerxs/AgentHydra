@@ -1,19 +1,19 @@
 // What the one instance table (components/InstanceTable.vue) and the one instance row
 // (components/InstanceRow.vue) are fed: a list of column definitions per table, and one row model
-// per instance. The Claude desktop, Claude CLI, Codex and DeepSeek tables differ only in the columns
-// they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03: "identical
-// code, just different content").
+// per instance. The Claude desktop, Claude CLI, Codex, DeepSeek and Free tables differ only in the
+// columns they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03:
+// "identical code, just different content").
 
 import type { TokenParts } from '@agenthydra/server/types'
 import type { Component } from 'vue'
 import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import type { Provider } from '@/components/ProviderLogo.vue'
+import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import TokenWindowFlyout from '@/components/TokenWindowFlyout.vue'
 import type { BadgeVariants } from '@/components/ui/badge'
 import type { CMInstance, UsageSnapshot } from '@/lib/api'
 
-export type InstanceTableKind = 'desktop' | 'cli'
+export type InstanceTableKind = 'desktop' | 'cli' | 'free'
 
 export type InstanceColumnKey =
   | 'status'
@@ -136,7 +136,14 @@ const COLUMNS: ColumnDef[] = [
     mode: 'process',
     skeleton: 'h-5 w-14',
   },
-  { key: 'plan', label: 'instances.colPlan', sortable: true, skeleton: 'h-5 w-14' },
+  // A Free web login has no plan to show: its provider is the logo before its number.
+  {
+    key: 'plan',
+    label: 'instances.colPlan',
+    sortable: true,
+    kinds: ['desktop', 'cli'],
+    skeleton: 'h-5 w-14',
+  },
   {
     key: 'lastActive',
     label: 'instances.colLastActive',
@@ -218,7 +225,7 @@ export interface InstanceRowModel {
   /** Set aside by the filter: drawn faded, never disabled. */
   dimmed?: boolean
   /** The provider's mark before the number (the tables that mix providers). */
-  provider?: Provider
+  provider?: LogoProvider
   status: { on: boolean; pulse?: boolean; title: string }
   glyph?: { dir: string; icon?: CMInstance['icon']; color?: CMInstance['color']; running: boolean }
   name: {

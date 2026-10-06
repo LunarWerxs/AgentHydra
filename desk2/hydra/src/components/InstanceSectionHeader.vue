@@ -8,9 +8,18 @@
 // the toggle, outside its button, so it may hold a tooltip trigger (the CLI table's pooled gauges
 // while it is folded); `tools` sits before Refresh (the desktop table's usage-mode switch and filter
 // menus).
+//
+// A table that mixes providers (desktop, Free) passes `createOptions`: the plus then opens one item
+// per provider, its logo and label, and `create` carries the chosen option's id.
 import { ChevronDown, Plus, RefreshCw } from '@lucide/vue'
-import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
+import ProviderLogo, { type LogoProvider } from '@/components/ProviderLogo.vue'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const open = defineModel<boolean>('open', { default: true })
@@ -18,7 +27,7 @@ const open = defineModel<boolean>('open', { default: true })
 withDefaults(
   defineProps<{
     /** The provider's logo beside the title; omitted for a table that mixes providers. */
-    provider?: Provider
+    provider?: LogoProvider
     title: string
     /** In brackets after the title ("4", "4 of 6"); null or omitted shows none. */
     count?: string | number | null
@@ -31,6 +40,8 @@ withDefaults(
     refreshDisabled?: boolean
     /** The create button's label, its tooltip; omitted means no create button. */
     createLabel?: string
+    /** One menu item per provider under the create button, instead of a plain button. */
+    createOptions?: { id: string; provider: LogoProvider; label: string }[]
     /** False hides the chevron (a table switched off in Settings has nothing to fold). */
     collapsible?: boolean
   }>(),
@@ -40,11 +51,12 @@ withDefaults(
     countHint: undefined,
     refreshHint: undefined,
     createLabel: undefined,
+    createOptions: undefined,
     collapsible: true,
   },
 )
 
-defineEmits<{ refresh: []; create: [] }>()
+defineEmits<{ refresh: []; create: [id?: string] }>()
 </script>
 
 <template>
@@ -87,7 +99,30 @@ defineEmits<{ refresh: []; create: [] }>()
            in a full row that wrapped it onto the next line, out from under the pointer, so it
            shrank, came back and widened again, many times a second (owner, 2026-10-01). Nothing in
            this row changes size on hover. -->
-      <IconTooltip v-if="createLabel" :label="createLabel">
+      <!-- The DropdownMenu root sits INSIDE the tooltip's slot, wrapped in a span: see
+           scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
+      <IconTooltip v-if="createLabel && createOptions?.length" :label="createLabel">
+        <span class="inline-flex">
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <Button size="icon" :aria-label="createLabel">
+                <Plus />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem
+                v-for="option in createOptions"
+                :key="option.id"
+                @click="$emit('create', option.id)"
+              >
+                <ProviderLogo :provider="option.provider" class="size-3.5" />
+                {{ option.label }}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      </IconTooltip>
+      <IconTooltip v-else-if="createLabel && !createOptions" :label="createLabel">
         <Button size="icon" :aria-label="createLabel" @click="$emit('create')">
           <Plus />
         </Button>

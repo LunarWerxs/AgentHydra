@@ -16,7 +16,6 @@ import {
   MonitorDown,
   Pencil,
   Play,
-  Plus,
   RefreshCw,
   RotateCcw,
   Square,
@@ -36,6 +35,7 @@ import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
@@ -46,7 +46,7 @@ import InstanceTable from '@/components/InstanceTable.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
-import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
+import type { Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,16 +58,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
@@ -720,6 +717,14 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
+/** The header's + menu (InstanceSectionHeader), one item per provider switched on. */
+const createOptions = computed(() =>
+  createProviders.value.map((provider) => ({
+    id: provider,
+    provider,
+    label: t(CREATE_LABEL[provider]),
+  })),
+)
 
 /**
  * "New … instance". A provider the filter is leaving out is listed again first, so the row being
@@ -1321,146 +1326,122 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col">
-    <!-- Borderless toolbar, matching Sessions/Queue and the app header (App.vue): the sticky table
-         header right below already draws a line there, and two rules a row apart was one of them
-         doing nothing but adding weight.
-         One table for every provider's desktop instances, so the heading is a title, not a
-         collapse toggle, and carries no provider logo (each row carries its own). The count covers
-         every provider and reads "x of y" once the filter is hiding rows, so it never silently
-         disagrees with the number of instances that exist. No count while the skeleton stands in:
-         it read "(0)" and then jumped to the real number. -->
-    <InstanceSectionHeader
-      :title="$t('instances.title')"
-      :count="
-        claudeSkeleton
-          ? null
-          : hiddenByFilter > 0
-            ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
-            : totalRows
-      "
-      :refresh-label="$t('instances.refresh')"
-      :refresh-hint="$t('instances.refreshHint')"
-      :refreshing="loading"
-      :collapsible="false"
-      @refresh="handleRefresh"
-    >
-      <template #meta>
-        <span
-          v-if="hiddenByFilter > 0 && !claudeSkeleton"
-          class="text-xs font-normal text-muted-foreground"
-        >
-          {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
-        </span>
-      </template>
-      <template #tools>
-        <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
-             (secondary) while on, so the toolbar itself says which set of columns you're looking
-             at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
-        <IconTooltip
-          :label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-          :description="$t('instances.usageModeHint')"
-        >
-          <Button
-            :variant="usageMode ? 'secondary' : 'outline'"
-            size="icon"
-            :aria-pressed="usageMode"
-            :aria-label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-            @click="toggleUsageMode"
+  <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
+       half-hidden behind the window chrome (owner, 2026-09-20). -->
+  <div class="flex min-h-full flex-col pb-16">
+    <InstanceCard>
+      <!-- The card's header bar (InstanceCard): the table's column headings right below draw the
+           line under it.
+           One table for every provider's desktop instances, so the heading is a title, not a
+           collapse toggle, and carries no provider logo (each row carries its own). The count covers
+           every provider and reads "x of y" once the filter is hiding rows, so it never silently
+           disagrees with the number of instances that exist. No count while the skeleton stands in:
+           it read "(0)" and then jumped to the real number. -->
+      <InstanceSectionHeader
+        :title="$t('instances.title')"
+        :count="
+          claudeSkeleton
+            ? null
+            : hiddenByFilter > 0
+              ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
+              : totalRows
+        "
+        :refresh-label="$t('instances.refresh')"
+        :refresh-hint="$t('instances.refreshHint')"
+        :refreshing="loading"
+        :create-label="$t('instances.createInstance')"
+        :create-options="createOptions"
+        :collapsible="false"
+        @refresh="handleRefresh"
+        @create="(id) => onCreateFor(id as Provider)"
+      >
+        <template #meta>
+          <span
+            v-if="hiddenByFilter > 0 && !claudeSkeleton"
+            class="text-xs font-normal text-muted-foreground"
           >
-            <component :is="usageMode ? Cpu : Timer" />
-          </Button>
-        </IconTooltip>
-        <!-- Always here, in both column modes: status and plan are true whichever columns are on
-             screen, and only the QUOTA facet stands down with them (see
-             composables/useInstanceFilter.ts). A dimmed or short table must always have the
-             control that explains it visible in the same toolbar. -->
-        <InstanceFilterMenu :present-plans="presentPlans" />
-        <IconTooltip
-          :label="$t('instances.refreshAllUsage')"
-          :description="$t('instances.refreshAllUsageHint')"
-        >
-          <Button
-            variant="outline"
-            size="icon"
-            :disabled="
-              refreshingAllUsage ||
-              instances.length + cliInstances.length + codexInstances.length === 0
-            "
-            :aria-label="$t('instances.refreshAllUsage')"
-            @click="onRefreshAllUsage"
-          >
-            <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
-          </Button>
-        </IconTooltip>
-        <PageSettingsDialog
-          v-model:open="instanceSettingsOpen"
-          trigger
-          :title="$t('instances.settingsTitle')"
-        >
-          <InstanceSettings />
-        </PageSettingsDialog>
-        <!-- Create: a menu with one item per provider switched on. An icon with a tooltip like its
-             neighbours: it used to widen on hover to show its label, which in a full row wrapped
-             it out from under the pointer, so it flickered (owner, 2026-10-01). The DropdownMenu
-             root sits INSIDE the tooltip's slot, wrapped in a span: see
-             scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
-        <IconTooltip v-if="createProviders.length > 0" :label="$t('instances.createInstance')">
-          <span class="inline-flex">
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <Button size="icon" :aria-label="$t('instances.createInstance')">
-                  <Plus />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  v-for="provider in createProviders"
-                  :key="provider"
-                  @click="onCreateFor(provider)"
-                >
-                  <ProviderLogo :provider="provider" class="size-3.5" />
-                  {{ $t(CREATE_LABEL[provider]) }}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
           </span>
-        </IconTooltip>
-      </template>
-    </InstanceSectionHeader>
+        </template>
+        <template #tools>
+          <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
+               (secondary) while on, so the toolbar itself says which set of columns you're looking
+               at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
+          <IconTooltip
+            :label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
+            :description="$t('instances.usageModeHint')"
+          >
+            <Button
+              :variant="usageMode ? 'secondary' : 'outline'"
+              size="icon"
+              :aria-pressed="usageMode"
+              :aria-label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
+              @click="toggleUsageMode"
+            >
+              <component :is="usageMode ? Cpu : Timer" />
+            </Button>
+          </IconTooltip>
+          <!-- Always here, in both column modes: status and plan are true whichever columns are on
+               screen, and only the QUOTA facet stands down with them (see
+               composables/useInstanceFilter.ts). A dimmed or short table must always have the
+               control that explains it visible in the same toolbar. -->
+          <InstanceFilterMenu :present-plans="presentPlans" />
+          <IconTooltip
+            :label="$t('instances.refreshAllUsage')"
+            :description="$t('instances.refreshAllUsageHint')"
+          >
+            <Button
+              variant="outline"
+              size="icon"
+              :disabled="
+                refreshingAllUsage ||
+                instances.length + cliInstances.length + codexInstances.length === 0
+              "
+              :aria-label="$t('instances.refreshAllUsage')"
+              @click="onRefreshAllUsage"
+            >
+              <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
+            </Button>
+          </IconTooltip>
+          <PageSettingsDialog
+            v-model:open="instanceSettingsOpen"
+            trigger
+            :title="$t('instances.settingsTitle')"
+          >
+            <InstanceSettings />
+          </PageSettingsDialog>
+        </template>
+      </InstanceSectionHeader>
 
-    <div
-      v-if="desktopWarning"
-      class="flex items-start gap-2 border-b border-border bg-warning/10 px-3 py-2"
-    >
-      <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning" />
-      <div class="min-w-0 text-sm">
-        <p class="font-medium text-warning">{{ $t(desktopWarning.titleKey) }}</p>
-        <p class="mt-0.5 text-xs text-muted-foreground">{{ $t(desktopWarning.bodyKey) }}</p>
-        <p class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-          <a
-            :href="CLASSIC_DESKTOP_INSTALLER_URL"
-            target="_blank"
-            rel="noreferrer"
-            class="font-medium text-warning underline underline-offset-2"
-          >
-            {{ $t('instances.desktopWarnDownload') }}
-          </a>
-          <a
-            :href="DESKTOP_DOWNLOAD_PAGE_URL"
-            target="_blank"
-            rel="noreferrer"
-            class="text-muted-foreground underline underline-offset-2"
-          >
-            {{ $t('instances.desktopWarnAllDownloads') }}
-          </a>
-        </p>
+      <div
+        v-if="desktopWarning"
+        class="flex items-start gap-2 border-b border-border bg-warning/10 px-3 py-2"
+      >
+        <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning" />
+        <div class="min-w-0 text-sm">
+          <p class="font-medium text-warning">{{ $t(desktopWarning.titleKey) }}</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">{{ $t(desktopWarning.bodyKey) }}</p>
+          <p class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <a
+              :href="CLASSIC_DESKTOP_INSTALLER_URL"
+              target="_blank"
+              rel="noreferrer"
+              class="font-medium text-warning underline underline-offset-2"
+            >
+              {{ $t('instances.desktopWarnDownload') }}
+            </a>
+            <a
+              :href="DESKTOP_DOWNLOAD_PAGE_URL"
+              target="_blank"
+              rel="noreferrer"
+              class="text-muted-foreground underline underline-offset-2"
+            >
+              {{ $t('instances.desktopWarnAllDownloads') }}
+            </a>
+          </p>
+        </div>
       </div>
-    </div>
 
-    <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
-         half-hidden behind the window chrome (owner, 2026-09-20). -->
-    <div class="flex flex-col gap-10 pb-16">
       <!-- ONE table for every provider's desktop instances: the same InstanceTable and InstanceRow
            the CLI tab draws, fed this kind's columns (lib/instance-table.ts). The Claude rows are
            the bodies below; the Codex and DeepSeek rows are their own components handing the same
@@ -1788,7 +1769,7 @@ onUnmounted(() => {
           <DshInstanceRows ref="dshRows" :columns="columns" />
         </tbody>
       </InstanceTable>
-    </div>
+    </InstanceCard>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it
          closes on any outside click and its only control is the archived toggle. -->

@@ -32,8 +32,9 @@ const emit = defineEmits<{
 
 const name = ref('')
 
+// Rename starts from the current name; create from a suggested one when the table passes it.
 watch(open, (isOpen) => {
-  if (isOpen) name.value = props.mode === 'rename' ? (props.currentName ?? '') : ''
+  if (isOpen) name.value = props.currentName ?? ''
 })
 
 const keys = computed(() => CLI_INSTANCE_DIALOG_KEYS[props.namespace ?? 'cliInstances'])
