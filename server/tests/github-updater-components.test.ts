@@ -495,7 +495,7 @@ test('a complete install on the current version is still refused as up to date',
 test('install.ps1 and the self-updater agree on the release components', () => {
   const script = readFileSync(resolve(import.meta.dir, '../../install.ps1'), 'utf8')
   const block = script.slice(script.indexOf('$ReleaseComponents = @('))
-  const names = [...block.slice(0, block.indexOf(')')).matchAll(/Name = '([A-Za-z]+)'/g)].map(
+  const names = [...block.slice(0, block.indexOf(')')).matchAll(/Name = '([A-Za-z0-9]+)'/g)].map(
     (m) => m[1],
   )
   expect(new Set(names)).toEqual(new Set(['exe', ...RELEASE_COMPONENTS.map((c) => c.name)]))
