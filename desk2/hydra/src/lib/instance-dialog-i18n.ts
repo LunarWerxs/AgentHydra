@@ -1,4 +1,4 @@
-export type CliDialogNamespace = 'cliInstances' | 'codexInstances' | 'dshInstances'
+export type CliDialogNamespace = 'cliInstances' | 'codexInstances' | 'dshInstances' | 'freeInstances'
 
 // Keep these as full, static key paths. Besides making the reusable dialogs type-safe, this lets
 // the locale audit verify both namespaces instead of treating template-built paths as unknown.
@@ -35,11 +35,23 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
     renameDialogSubmit: 'codexInstances.renameDialogSubmit',
     renameDialogRenaming: 'codexInstances.renameDialogRenaming',
   },
+  freeInstances: {
+    nameLabel: 'freeInstances.nameLabel',
+    namePlaceholder: 'freeInstances.namePlaceholder',
+    createDialogTitle: 'freeInstances.createDialogTitle',
+    createDialogDescription: 'freeInstances.createDialogDescription',
+    createDialogSubmit: 'freeInstances.createDialogSubmit',
+    createDialogCreating: 'freeInstances.createDialogCreating',
+    renameDialogTitle: 'freeInstances.renameDialogTitle',
+    renameDialogDescription: 'freeInstances.renameDialogDescription',
+    renameDialogSubmit: 'freeInstances.renameDialogSubmit',
+    renameDialogRenaming: 'freeInstances.renameDialogRenaming',
+  },
 } as const
 
 /** The delete dialog (DeleteInstanceDialog.vue) on all four instance tables. The type-the-name prompt
  *  and the copy-name chip are one shared wording (instances.deleteDialogTypeName), not per table. */
-export type DeleteDialogNamespace = 'instances' | CliDialogNamespace
+export type DeleteDialogNamespace = 'instances' | Exclude<CliDialogNamespace, 'freeInstances'>
 
 export const DELETE_DIALOG_KEYS = {
   instances: {

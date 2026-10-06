@@ -1,0 +1,101 @@
+import { spawn, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import type { FreeConfig, FreeProvider } from '@shared/free-instances'
+
+export interface FreeRuntime {
+  ready(): boolean
+  config(instanceId: string): FreeConfig
+  ensure(provider: FreeProvider, login: boolean): Promise<void>
+}
+
+/** Node's restricted reader cannot follow Bun links into a global package store. */
+export function nodeDependenciesReady(directory: string): boolean {
+  try {
+    const root = realpathSync(directory)
+    const packageDir = join(directory, 'node_modules', 'happy-dom')
+    for (const file of ['package.json', 'lib/index.js']) {
+      const path = relative(root, realpathSync(join(packageDir, file)))
+      if (isAbsolute(path) || path === '..' || path.startsWith(`..${sep}`)) return false
+    }
+    return JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')).version === '20.14.5'
+  } catch { return false }
+}
+
+/** Only this owned process tree is stopped, including a sign-in window it created. */
+export function terminate(child: ChildProcess): void {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  if (process.platform === 'win32' && child.pid) {
+    const killer = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true, shell: false, stdio: 'ignore' })
+    killer.on('error', () => child.kill())
+  } else child.kill()
+}
+
+/** Setup logs stay private; argv is fixed by the runtime, never supplied by a page. */
+function setup(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(exe, args, { cwd, env, shell: false, windowsHide: true, stdio: 'ignore' })
+    const timer = setTimeout(() => { terminate(child); reject(new Error('setup_failed')) }, 600_000)
+    child.once('error', () => { clearTimeout(timer); reject(new Error('setup_failed')) })
+    child.once('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error('setup_failed')) })
+  })
+}
+
+/** Source is bundled with Desk; dependencies and state belong to Desk's data home. */
+export class ManagedFreeRuntime implements FreeRuntime {
+  private root: string
+  private python: string
+  private harnessDir = join(dirname(fileURLToPath(import.meta.url)), 'harness')
+  private preparing: Promise<void> | null = null
+  private prepared = new Set<string>()
+  constructor(private home: string) {
+    this.root = join(home, 'free', 'runtime')
+    this.python = join(this.root, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
+  }
+  ready(): boolean { return existsSync(join(this.root, 'python-ready')) && existsSync(this.python) }
+  config(instanceId: string): FreeConfig {
+    return { harnessDir: this.harnessDir, python: this.python, stateDir: join(this.home, 'free', 'instances', instanceId), cacheDir: join(this.root, 'cache') }
+  }
+  async ensure(provider: FreeProvider, login: boolean): Promise<void> {
+    // Concurrent accounts share one dependency installation, never their cookies or locks.
+    while (this.preparing) await this.preparing
+    const key = `${provider}/${login}`
+    if (this.prepared.has(key)) return
+    const task = this.prepare(provider, login)
+    this.preparing = task
+    try { await task; this.prepared.add(key) } finally { if (this.preparing === task) this.preparing = null }
+  }
+  private async prepare(provider: FreeProvider, login: boolean): Promise<void> {
+    mkdirSync(this.root, { recursive: true })
+    const c = this.config('setup')
+    // The setup run's own state goes to Desk's data home too: without it the harness fell back to a
+    // folder beside its code, inside the repo.
+    const env = { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_CACHE_DIR: c.cacheDir, CLAUDFREE_STATE_DIR: join(this.root, 'state') }
+    if (!this.ready()) {
+      if (!existsSync(this.python)) {
+        if (process.platform === 'win32') {
+          try { await setup('py', ['-3', '-m', 'venv', join(this.root, '.venv')], this.root) }
+          catch { await setup('python', ['-m', 'venv', join(this.root, '.venv')], this.root) }
+        } else await setup('python3', ['-m', 'venv', join(this.root, '.venv')], this.root)
+      }
+      await setup(this.python, ['-m', 'pip', 'install', '--disable-pip-version-check', 'requests==2.34.2', 'camoufox==0.5.6', 'playwright==1.62.0'], this.root, env)
+      writeFileSync(join(this.root, 'python-ready'), '1')
+    }
+    if (provider === 'chatgpt') {
+      const dependencyDir = join(c.cacheDir, 'chatgpt-runtime')
+      mkdirSync(dependencyDir, { recursive: true })
+      if (!nodeDependenciesReady(dependencyDir)) {
+        writeFileSync(join(dependencyDir, 'package.json'), JSON.stringify({ private: true, dependencies: { 'happy-dom': '20.14.5' } }))
+        await setup(process.execPath, ['install', '--ignore-scripts', '--linker', 'hoisted', '--backend', 'copyfile', '--force'], dependencyDir, env)
+        if (!nodeDependenciesReady(dependencyDir)) throw new Error('setup_failed')
+      }
+      try { await setup(this.python, ['-c', 'from claudfree.chatgpt.runtime import installation; installation()'], this.harnessDir, env) }
+      catch { await setup(this.python, ['-c', 'from claudfree.chatgpt.runtime import download_assets, installation; download_assets(); installation()'], this.harnessDir, env) }
+    }
+    if (login) {
+      try { await setup(this.python, ['-c', 'from pathlib import Path; from camoufox.pkgman import launch_path; assert Path(launch_path()).is_file()'], this.root, env) }
+      catch { await setup(this.python, ['-m', 'camoufox', 'fetch'], this.root, env) }
+    }
+  }
+}

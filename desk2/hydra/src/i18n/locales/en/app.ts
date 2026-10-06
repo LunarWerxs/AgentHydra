@@ -37,5 +37,6 @@ export default {
   shortcutHswarm: 'Go to HSwarm',
   tabAnalytics: 'Analytics',
   tabCli: 'CLI',
+  tabFree: 'Free',
   tabHswarm: 'HSwarm',
 }

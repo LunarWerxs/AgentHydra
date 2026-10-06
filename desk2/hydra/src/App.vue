@@ -46,6 +46,7 @@ import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { hswarmNodeAsk, INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { freeThreadAsk } from '@/lib/free-instances'
 import { lazyView } from '@/lib/lazy-view'
 import {
   deskInstanceAsk,
@@ -82,6 +83,7 @@ const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
 const CliView = lazyView(() => import('@/components/CliView.vue'))
 const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
 const InstancesHomeView = lazyView(() => import('@/components/InstancesHomeView.vue'))
+const FreeInstancesView = lazyView(() => import('@/components/FreeInstancesView.vue'))
 const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
@@ -129,6 +131,7 @@ function openClimayte() {
   hswarmNodeAsk.value = 'climayte'
   view.value = 'hswarm'
 }
+watch(freeThreadAsk, (ask) => { if (ask) openClimayte() }, { flush: 'sync' })
 // "Open HSwarm" from a stats card (its numbers are HSwarm's savings): the Savings node, not whatever node
 // the tree showed last, CliMayte's included.
 function openHswarmSavings() {
@@ -277,6 +280,7 @@ const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
 const instancesSub: { id: AppView; labelKey: string; icon: typeof Terminal }[] = [
   { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
   { id: 'desktop', labelKey: 'app.tabDesktop', icon: Monitor },
+  { id: 'free', labelKey: 'app.tabFree', icon: MessagesSquare },
 ]
 const inInstances = computed(() => INSTANCES_VIEWS.includes(view.value))
 // The tab on screen. 'desktop' is the fallback, as the v-else chain it replaces was.
@@ -284,6 +288,7 @@ const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
   'instances-home': InstancesHomeView,
   cli: CliView,
+  free: FreeInstancesView,
   hswarm: HSwarmView,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)

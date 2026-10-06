@@ -49,6 +49,11 @@ import CliMayteFloat from '@/components/CliMayteFloat.vue'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
+import FreeThreadDetail from '@/components/FreeThreadDetail.vue'
+import { useFreeInstances } from '@/composables/useFreeInstances'
+import { freeThreadAsk } from '@/lib/free-instances'
+import { freeThreadRow } from '@/lib/free-threads'
+import type { FreeThread } from '@desk/shared/free-instances'
 import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -94,7 +99,10 @@ let floatApp: ReturnType<typeof createApp> | null = null
  *  read-only. `remote` is the one flag that tells them apart; it is never set on a local worker. */
 type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
+  free?: FreeThread
 }
+const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, activeCount: freeActiveCount } = useFreeInstances()
+const selectedFree = ref<{ instanceId: string; chatId?: string } | null>(null)
 // The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts.
 const {
   workers,
@@ -113,7 +121,7 @@ const {
   refreshCliMayte,
 } = useCliMayteData()
 /** Every row the list shows: this PC's workers, then the other PCs'. */
-const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
+const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeThreads.value.map(t => freeThreadRow(t, freeInstances.value.find(i => i.id === t.instanceId)))])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
 const remoteNotes = computed<Array<{ pc: string; note: string }>>(() =>
   remote.value?.enabled
@@ -162,7 +170,7 @@ const now = ref(Date.now())
 /** Running: only the tasks that can still change (isCliMayteActive); All: every one. Kept in this
  *  browser, under the key of the "Hide finished" switch it replaces, so the choice carries over. */
 const runningOnly = useStorage('agenthydra.climayte.hideFinished', false)
-const activeCount = runningCount
+const activeCount = computed(() => runningCount.value + freeActiveCount.value)
 /** The list under the filter, newest first. */
 const listed = computed(() =>
   (runningOnly.value ? rows.value.filter(isCliMayteActive) : [...rows.value]).sort(
@@ -241,7 +249,7 @@ let clock: (() => void) | null = null
 
 async function loadDetail() {
   const id = selectedId.value
-  if (!id || selectedRemote.value) return
+  if (!id || selectedRemote.value || selectedFree.value) return
   try {
     const d = await (detailReading.get(id) ?? getCliMayteWorker(id))
     // An unchanged detail keeps the old reference, so a poll with nothing new redraws nothing.
@@ -270,7 +278,7 @@ function remember(id: string, d: Detail) {
  *  opening it paints whole. A copy older than the row is read again. */
 function prefetch(w: ListRow) {
   clearTimeout(restTimer)
-  if (w.remote) return
+  if (w.remote || w.free) return
   const id = rowKey(w)
   if (detailReading.has(id) || (freshDetail(id)?.updatedAt ?? -1) >= w.updatedAt) return
   const read = getCliMayteWorker(id)
@@ -308,7 +316,7 @@ function showOlder() {
  *  the open task's detail. Between those, lib/warm-data.ts keeps the list fresh (about every 2 minutes). */
 async function load(opts: { silent?: boolean; side?: boolean } = {}) {
   const wasLoaded = loaded.value
-  await refreshCliMayte(opts)
+  await Promise.allSettled([refreshCliMayte(opts), refreshFree()])
   if (unreachable.value) {
     if (!opts.silent && wasLoaded) toast.error(t('climayte.loadFailed'))
     return
@@ -351,8 +359,9 @@ function select(w: ListRow) {
   if (selectedId.value === null) listScroll = listEl.value?.scrollTop ?? 0
   selectedId.value = key
   endHold()
-  // A remote row has no local worker to ask about: it shows what the row has.
-  if (w.remote) {
+  selectedFree.value = w.free ? { instanceId: w.free.instanceId, chatId: w.free.chatId } : null
+  // A remote row has no local worker to ask about: it shows what the row has. A Free chat has its own detail.
+  if (w.remote || w.free) {
     detail.value = null
     return
   }
@@ -369,15 +378,16 @@ function select(w: ListRow) {
 /** Back to the list, scrolled where it was, with the row that was open focused. */
 async function back() {
   const key = selectedId.value
-  if (key === null) return
+  if (key === null && !selectedFree.value) return
   selectedId.value = null
+  selectedFree.value = null
   detail.value = null
   endHold()
   await nextTick()
   const el = listEl.value
   if (!el) return
   el.scrollTop = listScroll
-  el.querySelector<HTMLElement>(`[data-task="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
+  if (key) el.querySelector<HTMLElement>(`[data-task="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
 }
 watch(
   () => props.home,
@@ -454,6 +464,7 @@ function rowHint(w: ListRow): string {
 }
 
 function rowHintText(w: ListRow): string {
+  if (w.free) return [w.title, w.model, w.account, w.free.chatId, w.error].filter(Boolean).join('\n')
   const note = climayteQueuedNote(w, now.value)
   const line =
     (w.status === 'failed' || w.status === 'waiting') && w.error
@@ -529,7 +540,7 @@ function rowView(w: ListRow): RowView {
     mark: verdictMark(w),
     tag: runTag(w),
     hint: rowHint(w),
-    time: activeLabel(activeS(w)),
+    time: w.free ? new Date(w.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : activeLabel(activeS(w)),
     account: w.account ? pii(w.account) : t('climayte.noAccount'),
   }
   rowViews.set(key, { w, clock, tasks, words, view })
@@ -562,6 +573,13 @@ watch(
 )
 
 // HSwarmView keeps this page in a KeepAlive, so this runs when its node is first opened too.
+watch(freeThreadAsk, ask => {
+  if (!ask) return
+  selectedFree.value = ask
+  selectedId.value = ask.chatId ? `free:${ask.instanceId}/${ask.chatId}` : null
+  detail.value = null
+  freeThreadAsk.value = null
+}, { immediate: true })
 onActivated(() => {
   active = true
   // On screen: what the shared list has is there already; read it now.
@@ -618,7 +636,7 @@ onUnmounted(() => {
       </h2>
       <div class="ms-auto flex items-center gap-1">
         <div
-          v-if="!selectedId && rows.length"
+          v-if="!selectedId && !selectedFree && rows.length"
           class="me-1 flex items-center gap-1"
           role="group"
           :aria-label="$t('climayte.filterLabel')"
@@ -663,7 +681,7 @@ onUnmounted(() => {
     </header>
 
     <p
-      v-if="loaded && unreachable"
+      v-if="unreachable && (loaded || freeThreads.length)"
       role="status"
       class="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning"
     >
@@ -671,8 +689,12 @@ onUnmounted(() => {
       {{ $t('climayte.staleBanner') }}
     </p>
 
+    <div v-if="selectedFree" class="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
+      <div class="flex shrink-0 items-center"><Button size="sm" variant="ghost" class="-ms-2" @click="back()"><ArrowLeft />{{ $t('climayte.backToTasks') }}</Button></div>
+      <FreeThreadDetail :key="`${selectedFree.instanceId}/${selectedFree.chatId || 'new'}`" :instance-id="selectedFree.instanceId" :chat-id="selectedFree.chatId" @identified="selectedId = `free:${selectedFree.instanceId}/${$event}`" />
+    </div>
     <div
-      v-if="!loaded && unreachable"
+      v-else-if="!loaded && unreachable && !freeThreads.length"
       role="alert"
       class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
     >
@@ -684,7 +706,7 @@ onUnmounted(() => {
       </Button>
     </div>
 
-    <div v-else-if="!loaded" class="flex flex-col gap-1.5 px-4" aria-busy="true">
+    <div v-else-if="!loaded && !freeLoaded" class="flex flex-col gap-1.5 px-4" aria-busy="true">
       <Skeleton v-for="i in 5" :key="i" class="h-7" />
     </div>
 

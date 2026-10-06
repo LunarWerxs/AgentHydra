@@ -1,0 +1,18 @@
+{
+  "runtime": {"package": "happy-dom", "version": "20.14.5", "module": "lib/index.js"},
+  "entry": "4813494d-okcxqld7kfttimw4.js",
+  "assets": {
+    "4813494d-okcxqld7kfttimw4.js": "60b94dee7a83b802aa7cc3d4c91be45d8ba040f1846cc27526492c4ccc2abecb",
+    "2340486e-fjhppe5kgy0c0p77.js": "9fb17a3e155b2ab02db7644a8b62bd231627fc190f761b76ac232e263620370c",
+    "f025431a-ehagpvg3m4e1cduv.js": "6cca086e94082e4bf068b37df0975262aae960892417619c2d94b5f27058f428"
+  },
+  "exports": {
+    "initialize": "al",
+    "prepare": "$c",
+    "finalize": "Qc",
+    "proof": "hl",
+    "turnstile": "dl",
+    "observe": "fl",
+    "headers": "nl"
+  }
+}

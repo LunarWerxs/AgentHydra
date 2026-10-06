@@ -40,6 +40,7 @@ import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: used as a component in the template, which Biome cannot see; a type-only import left the search box an unstyled <input>
 import { Input } from '@/components/ui/input'
 import { useCliMayteData } from '@/composables/useCliMayteData'
+import { useFreeInstances } from '@/composables/useFreeInstances'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
@@ -65,7 +66,9 @@ const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
   useHswarmApi()
 // CliMayte's shared task list (kept warm by lib/warm-data.ts): its node counts the tasks that can still change.
-const { runningCount: climayteRunning } = useCliMayteData()
+const { runningCount: cliRunning } = useCliMayteData()
+const { activeCount: freeRunning } = useFreeInstances()
+const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {

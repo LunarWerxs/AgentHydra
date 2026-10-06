@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claudfree"
+version = "0.7.0"
+description = "Claude Incognito and ChatGPT Temporary Chats through Python, CLI and MCP"
+requires-python = ">=3.11"
+dependencies = ["requests==2.34.2"]
+
+[project.optional-dependencies]
+browser = ["camoufox==0.5.6", "playwright==1.62.0"]
+mcp = ["mcp==2.3.0"]
+dev = ["pytest==9.1.1", "ruff==0.16.10"]
+beta = ["httpx[http2]==0.28.1", "h2==4.4.1"]
+
+[project.scripts]
+claudfree = "claudfree.cli:entrypoint"
+claudfree-mcp = "claudfree.mcp_server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["claudfree*"]
+
+[tool.setuptools.package-data]
+"claudfree.chatgpt" = ["*.mjs", "runtime_profile.json"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+cache-dir = ".state/cache/ruff"
+extend-exclude = [".state", ".venv", "artifacts"]
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+cache_dir = ".state/cache/pytest"
+norecursedirs = [".state", ".venv", "artifacts"]

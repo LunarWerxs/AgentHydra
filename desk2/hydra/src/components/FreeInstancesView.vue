@@ -1,0 +1,415 @@
+<script setup lang="ts">
+// Free instances: Claude and ChatGPT web logins (Incognito and Temporary chats) that Desk runs
+// through the bundled harness (server/src/free-instances). The same card, header, table, row, sort
+// and filter as the CLI and desktop tables (lib/instance-table.ts, kind 'free'); what is its own is
+// the facts on each row and the menu items. A row's private chats open under HSwarm → CliMayte.
+import {
+  Funnel,
+  LogIn,
+  LogOut,
+  MessagesSquare,
+  Pencil,
+  RefreshCw,
+  SearchCheck,
+  TriangleAlert,
+  X,
+} from '@lucide/vue'
+import {
+  FREE_PROVIDERS,
+  type FreeCommand,
+  type FreeInstance,
+  type FreeProvider,
+} from '@desk/shared/free-instances'
+import { useStorage } from '@vueuse/core'
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { toast } from 'vue-sonner'
+import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
+import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
+import InstanceRow from '@/components/InstanceRow.vue'
+import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
+import InstanceTable from '@/components/InstanceTable.vue'
+import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import { Button } from '@/components/ui/button'
+import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
+import { TableBody } from '@/components/ui/table'
+import { useFreeInstances } from '@/composables/useFreeInstances'
+import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { pii } from '@/composables/usePrivacy'
+import { useUsageMode } from '@/composables/useUsageMode'
+import { timeAgo } from '@/lib/format'
+import { freeApi, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
+import { shortDisplayName } from '@/lib/instance-appearance'
+import { type InstanceRowModel, instanceColumns } from '@/lib/instance-table'
+import IconTooltip from '@/shell/IconTooltip.vue'
+
+const { t } = useI18n()
+const { instances, jobs, errors, loaded, loading, loadError, busy, run, logout, recover, refreshFree } =
+  useFreeInstances()
+/** Whether the table is unfolded, kept in this browser, as on the CLI tab. */
+const accountsOpen = useStorage('agenthydra.free.accountsOpen', true)
+// The tab-wide column mode and clock (composables/useUsageMode.ts), as the other tables read them.
+const { usageMode, now } = useUsageMode(true)
+
+const providerName = (p: FreeProvider) =>
+  t(p === 'claude' ? 'freeInstances.claude' : 'freeInstances.chatgpt')
+const chatMode = (p: FreeProvider) =>
+  t(p === 'claude' ? 'freeInstances.incognito' : 'freeInstances.temporary')
+/** Whether the instance's one running operation is one of these. */
+const runningOf = (i: FreeInstance, ...commands: FreeCommand[]) =>
+  busy(i.id) && commands.includes(jobs[i.id]!.command)
+
+// One snapshot per reading, so the usage cells see a new object only when the reading changed.
+const snapshots = computed(
+  () => new Map(instances.value.map((i) => [i.id, freeUsageSnapshot(i.usage)])),
+)
+const usageFor = (i: FreeInstance) => snapshots.value.get(i.id) ?? null
+
+// A Free login is never open or closed and has no plan the filter offers, so only its sign-in and
+// usage can set it aside (as on the CLI tab).
+const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+  rows: () => instances.value,
+  rowKey: (i: FreeInstance) => i.id,
+  facts: (i: FreeInstance) => ({ usage: usageFor(i), signedIn: i.loggedIn }),
+  columns: [
+    { key: 'status', accessor: (i: FreeInstance) => i.loggedIn },
+    { key: 'name', accessor: (i: FreeInstance) => i.name },
+    { key: 'lastActive', accessor: (i: FreeInstance) => i.lastActiveAt ?? undefined },
+    ...quotaSortColumns(usageFor, (i: FreeInstance) => i.provider, now),
+  ],
+})
+const columns = computed(() => instanceColumns('free', { usageMode: usageMode.value }))
+
+const firstLoad = computed(() => !loaded.value && !loadError.value)
+const headingCount = computed(() =>
+  firstLoad.value
+    ? '…'
+    : hiddenByFilter.value === 0
+      ? String(visibleRows.value.length)
+      : t('instances.countOfTotal', { shown: visibleRows.value.length, total: instances.value.length }),
+)
+const emptyState = computed(() =>
+  visibleRows.value.length > 0 || firstLoad.value
+    ? null
+    : loadError.value && instances.value.length === 0
+      ? { icon: TriangleAlert, title: loadError.value, hint: t('freeInstances.loadFailedHint') }
+      : instances.value.length > 0
+        ? { icon: Funnel, title: t('instances.filterAllHidden'), hint: t('instances.filterAllHiddenHint') }
+        : { icon: MessagesSquare, title: t('freeInstances.noInstances'), hint: t('freeInstances.addHint') },
+)
+
+/** What the shared row draws for one Free login (components/InstanceRow.vue). */
+function rowModel(i: FreeInstance): InstanceRowModel {
+  const shown = shortDisplayName(pii(i.name), 36)
+  const working = busy(i.id)
+  return {
+    id: i.id,
+    num: i.num,
+    dimmed: isDimmed(i),
+    provider: freeLogo(i.provider),
+    status: {
+      on: i.loggedIn,
+      pulse: working,
+      title: t(working ? 'freeInstances.working' : i.loggedIn ? 'freeInstances.connected' : 'freeInstances.unchecked'),
+    },
+    name: {
+      shown,
+      // A Free login carries no address, so its name is plain text (owner, 2026-10-06) and its hover
+      // keeps the provider, the chat kind and the last check.
+      tooltip: () => ({
+        label: i.name,
+        description: `${providerName(i.provider)} · ${chatMode(i.provider)}`,
+        detail: i.checkedAt
+          ? t('freeInstances.checkedAt', { time: new Date(i.checkedAt).toLocaleString() })
+          : t('freeInstances.unchecked'),
+      }),
+    },
+    // The name is the login; the provider is the logo and the chat kind is in the name's hover.
+    account: {},
+    // An account whose text model has no cap (ChatGPT's free one) has no window to draw: its quota
+    // cells say so, the model in the hover, as a pay-as-you-go row's say it has none.
+    ...(i.usage?.unlimited_text
+      ? {
+          noQuota: t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
+          noQuotaLabel: t('freeInstances.unlimited'),
+        }
+      : {
+          usage: {
+            snapshot: usageFor(i),
+            checking: runningOf(i, 'auth', 'usage'),
+            key: `free:${i.id}`,
+            onCheck: () => void run(i, 'usage'),
+          },
+        }),
+    lastRunning: i.lastActiveAt
+      ? {
+          // A getter, as on the desktop table: only the cell that draws it ticks with the clock.
+          get label() {
+            void now.value
+            return timeAgo(i.lastActiveAt)
+          },
+          running: runningOf(i, 'chat', 'resume'),
+          title: new Date(i.lastActiveAt).toLocaleString(),
+        }
+      : null,
+    menu: { name: i.name, actions: menuActionsFor(i), class: 'max-w-56' },
+  }
+}
+const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+
+/** The icon row at the top of a row's kebab (InstanceMenuHeader), in the order every table uses. */
+function menuActionsFor(i: FreeInstance): MenuIconAction[] {
+  return [
+    {
+      key: 'checkUsage',
+      icon: RefreshCw,
+      label: t('freeInstances.check'),
+      run: () => void run(i, 'auth'),
+      spin: runningOf(i, 'auth'),
+      disabled: busy(i.id),
+    },
+    {
+      key: 'rename',
+      icon: Pencil,
+      label: t('freeInstances.rename'),
+      closes: true,
+      run: () => openRename(i),
+      disabled: busy(i.id),
+    },
+    {
+      key: 'logout',
+      icon: LogOut,
+      label: t('freeInstances.logout'),
+      closes: true,
+      run: () => openLogout(i),
+      disabled: !i.loggedIn || busy(i.id),
+    },
+  ]
+}
+
+/** Refresh re-reads the list, then checks every saved login (read-only: no window opens). */
+async function refreshAccounts() {
+  await refreshFree()
+  await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => run(i, 'auth')))
+}
+
+// --- add: the header's + menu names the provider, the shared name dialog the login ---
+const createOpen = ref(false)
+const createProvider = ref<FreeProvider>('claude')
+const creating = ref(false)
+const createError = ref<string | null>(null)
+const createOptions = computed(() =>
+  FREE_PROVIDERS.map((p) => ({ id: p, provider: freeLogo(p), label: providerName(p) })),
+)
+function openCreate(id?: string) {
+  createProvider.value = id === 'chatgpt' ? 'chatgpt' : 'claude'
+  createError.value = null
+  createOpen.value = true
+}
+async function onCreateSubmit(name: string) {
+  creating.value = true
+  createError.value = null
+  try {
+    const created = await freeApi.create(createProvider.value, name)
+    // Into the list as it is, not through a refresh: a refresh would start a login check on the
+    // new row and hold the sign-in below off it.
+    instances.value = [...instances.value, created]
+    createOpen.value = false
+    void signIn(created)
+  } catch (e) {
+    createError.value = e instanceof Error ? e.message : t('freeInstances.createFailed')
+  } finally {
+    creating.value = false
+  }
+}
+
+// --- sign in: a visible browser window; the row pulses until the harness has checked it ---
+async function signIn(i: FreeInstance) {
+  toast.info(t('freeInstances.signingIn'), { description: t('freeInstances.preparing') })
+  const result = await run(i, 'login')
+  if (result?.ok && result.authenticated) toast.success(t('freeInstances.signedIn', { name: i.name }))
+  else if (result || errors[i.id]) toast.error(errors[i.id] || t('freeInstances.signInUnverified'))
+}
+async function cancelSignIn(i: FreeInstance) {
+  const job = jobs[i.id]
+  if (job?.state !== 'running') return
+  try {
+    await freeApi.cancel(job.id)
+  } catch (e) {
+    // The window may still be open: say so rather than look cancelled.
+    toast.error(e instanceof Error ? e.message : t('freeInstances.cancelFailed'))
+  }
+}
+
+// --- log out: removes the stored login; the row's chats stay ---
+const logoutOpen = ref(false)
+const logoutTarget = ref<FreeInstance | null>(null)
+const loggingOut = ref(false)
+function openLogout(i: FreeInstance) {
+  logoutTarget.value = i
+  logoutOpen.value = true
+}
+async function onLogoutConfirm() {
+  const i = logoutTarget.value
+  if (!i) return
+  loggingOut.value = true
+  try {
+    if (await logout(i)) toast.success(t('freeInstances.toastLogout'))
+    else toast.error(errors[i.id] || t('freeInstances.toastLogoutFailed'))
+  } finally {
+    loggingOut.value = false
+    logoutOpen.value = false
+    logoutTarget.value = null
+  }
+}
+
+// --- rename ---
+const renameOpen = ref(false)
+const renameTarget = ref<FreeInstance | null>(null)
+const renaming = ref(false)
+const renameError = ref<string | null>(null)
+function openRename(i: FreeInstance) {
+  renameTarget.value = i
+  renameError.value = null
+  renameOpen.value = true
+}
+async function onRenameSubmit(name: string) {
+  const i = renameTarget.value
+  if (!i) return
+  renaming.value = true
+  renameError.value = null
+  try {
+    await freeApi.rename(i.id, name)
+    toast.success(t('freeInstances.toastRenamed'))
+    renameOpen.value = false
+    renameTarget.value = null
+    await refreshFree()
+  } catch (e) {
+    renameError.value = e instanceof Error ? e.message : t('freeInstances.renameFailed')
+  } finally {
+    renaming.value = false
+  }
+}
+</script>
+
+<template>
+  <!-- pb-16 as on the desktop tab: the last row clears the window chrome. -->
+  <div class="pb-16">
+    <InstanceCard>
+      <InstanceSectionHeader
+        v-model:open="accountsOpen"
+        :title="$t('freeInstances.title')"
+        :count="headingCount"
+        :refresh-label="$t('freeInstances.refresh')"
+        :refresh-hint="$t('freeInstances.refreshHint')"
+        :refreshing="loading"
+        :create-label="$t('freeInstances.add')"
+        :create-options="createOptions"
+        @refresh="refreshAccounts"
+        @create="openCreate"
+      >
+        <template #meta>
+          <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
+            {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
+          </span>
+        </template>
+      </InstanceSectionHeader>
+
+      <div v-show="accountsOpen">
+        <InstanceTable
+          :columns="columns"
+          :indicator-for="indicatorFor"
+          :skeleton="firstLoad"
+          :skeleton-rows="2"
+          :empty="emptyState"
+          @sort="toggleSort"
+        >
+          <TableBody v-if="visibleRows.length > 0">
+            <InstanceRow
+              v-for="inst in visibleRows"
+              :key="inst.id"
+              :columns="columns"
+              :row="rowModels.get(inst.id)!"
+            >
+              <template #name-extra>
+                <!-- The last operation failed: what the harness said, on the row it belongs to. -->
+                <IconTooltip
+                  v-if="errors[inst.id]"
+                  :label="$t('freeInstances.failed')"
+                  :description="errors[inst.id]"
+                >
+                  <span class="inline-flex items-center" :aria-label="$t('freeInstances.failed')">
+                    <TriangleAlert class="size-3.5 text-destructive" />
+                  </span>
+                </IconTooltip>
+              </template>
+              <!-- The row's one primary action, as Open is on a desktop row. -->
+              <template #primary>
+                <IconTooltip :label="$t('freeInstances.newChat')" :description="$t('freeInstances.chatLocation')">
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    :aria-label="$t('freeInstances.newChatShort')"
+                    :disabled="!inst.loggedIn || busy(inst.id)"
+                    @click="openFreeThread(inst.id)"
+                  >
+                    <MessagesSquare />
+                  </Button>
+                </IconTooltip>
+              </template>
+              <template #menu>
+                <DropdownMenuItem v-if="runningOf(inst, 'login')" @click="cancelSignIn(inst)">
+                  <X /> {{ $t('freeInstances.cancelSignIn') }}
+                </DropdownMenuItem>
+                <!-- Only while signed out; "again" once this login has been signed in before. -->
+                <DropdownMenuItem
+                  v-else-if="!inst.loggedIn"
+                  :disabled="busy(inst.id)"
+                  @click="signIn(inst)"
+                >
+                  <LogIn />
+                  {{ $t(inst.lastSignedInAt ? 'freeInstances.signInAgain' : 'freeInstances.login') }}
+                </DropdownMenuItem>
+                <!-- The page lost track of a running operation: look it up rather than send again. -->
+                <DropdownMenuItem
+                  v-if="errors[inst.id] && jobs[inst.id]?.state === 'running'"
+                  @click="recover(inst.id)"
+                >
+                  <SearchCheck /> {{ $t('freeInstances.recover') }}
+                </DropdownMenuItem>
+              </template>
+            </InstanceRow>
+          </TableBody>
+        </InstanceTable>
+      </div>
+    </InstanceCard>
+
+    <CliInstanceNameDialog
+      v-model:open="createOpen"
+      mode="create"
+      namespace="freeInstances"
+      :current-name="providerName(createProvider)"
+      :submitting="creating"
+      :error-message="createError"
+      @submit="onCreateSubmit"
+    />
+    <LogoutInstanceDialog
+      v-model:open="logoutOpen"
+      :instance-name="logoutTarget?.name ?? null"
+      :account-email="null"
+      :description="$t('freeInstances.logoutDialogDescription')"
+      :submitting="loggingOut"
+      @confirm="onLogoutConfirm"
+    />
+    <CliInstanceNameDialog
+      v-model:open="renameOpen"
+      mode="rename"
+      namespace="freeInstances"
+      :current-name="renameTarget?.name ?? null"
+      :submitting="renaming"
+      :error-message="renameError"
+      @submit="onRenameSubmit"
+    />
+  </div>
+</template>
