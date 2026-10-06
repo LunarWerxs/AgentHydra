@@ -99,6 +99,7 @@ function desk(home: string, deps: HostedDeps) {
   const events: ServerEvent[] = []
   const m = new ChatManager({
     home,
+    claudeHome: home,
     emit: (e) => events.push(e),
     settings: () => DEFAULT_SETTINGS,
     bridge: fakeBridge().bridge,

@@ -11,13 +11,15 @@ export interface QuickAddTarget {
   id: string
   num: number
   name: string
+  /** The account this instance last held, when known: CliQuickAdd puts it in the email box. */
+  email?: string | null
 }
 
 const target = ref<QuickAddTarget | null>(null)
 
 function setQuickAddTarget(next: QuickAddTarget): void {
   // A fresh object each time, so pointing at the same row twice still reads as a new request.
-  target.value = { id: next.id, num: next.num, name: next.name }
+  target.value = { id: next.id, num: next.num, name: next.name, email: next.email ?? null }
 }
 
 function clearQuickAddTarget(): void {

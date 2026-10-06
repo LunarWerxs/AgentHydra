@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
 // left-handed sidebar"). A tree on the left (Overview, Providers > each provider > its models, All models,
-// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte, Help) picks what the right pane
+// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte > Waves, Help) picks what the right pane
 // shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
 // is a drawer, as in the console.
 //
@@ -9,7 +9,9 @@
 // sidebar. Routing should be an option under the HSwarm in the sidebar, and CliMayte should also be an
 // item under that, and then the things would show on the right side"). Routing holds HSwarm's routing and
 // AgentHydra's cost routing between API keys and subscriptions; CliMayte lists its tasks in the pane, as
-// a manager. Both are AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
+// a manager, and its Waves child lists the manager waves (owner, 2026-10-06: "Move the waves section into
+// a subsection called waves underneath CLI Mate, instead of having it be in the same window"). Both are
+// AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
 //
 // In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04: one
 // sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
@@ -21,6 +23,7 @@ import {
   Info,
   Layers,
   LayoutGrid,
+  ListChecks,
   Menu,
   Network,
   PiggyBank,
@@ -32,7 +35,7 @@ import {
   Server,
   X,
 } from '@lucide/vue'
-import { type Component, computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { type Component, computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -40,10 +43,11 @@ import { Button } from '@/components/ui/button'
 // biome-ignore lint/style/useImportType: used as a component in the template, which Biome cannot see; a type-only import left the search box an unstyled <input>
 import { Input } from '@/components/ui/input'
 import { useCliMayteData } from '@/composables/useCliMayteData'
+import { useFreeInstances } from '@/composables/useFreeInstances'
 import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
-import { isCliMayteActive } from '@/lib/climayte-status'
+import { lazyView } from '@/lib/lazy-view'
 import { deskSwarmAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { reconcileList } from '@/lib/reconcile'
@@ -57,14 +61,19 @@ import HSwarmRouting from './hswarm/HSwarmRouting.vue'
 import HSwarmSavings from './hswarm/HSwarmSavings.vue'
 import HSwarmTools from './hswarm/HSwarmTools.vue'
 
-// CliMayte's page loads the first time its node is opened (its task detail is most of it).
-const CliMayteView = defineAsyncComponent(() => import('@/components/CliMayteView.vue'))
+// CliMayte's page loads the first time its node is opened (its task detail is most of it); a pane left
+// open across a Desk update that asks for the old chunk takes lazyView's stale-pane path.
+const CliMayteView = lazyView(() => import('@/components/CliMayteView.vue'))
 
 const { t } = useI18n()
 const { status, error, loading, state, clients, jobs, loadClients, loadJobs, refreshHswarm, fetchState, refresh, apiCall } =
   useHswarmApi()
 // CliMayte's shared task list (kept warm by lib/warm-data.ts): its node counts the tasks that can still change.
-const { workers: climayteTasks } = useCliMayteData()
+const { runningCount: cliRunning, waves } = useCliMayteData()
+// The Waves row counts the waves still being worked (running, or reported and waiting to be verified).
+const liveWaves = computed(() => waves.value.filter((w) => w.status === 'running' || w.status === 'reported').length)
+const { activeCount: freeRunning } = useFreeInstances()
+const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
 type Dot = 'ok' | 'warn' | 'nokey' | 'off' | 'run' | 'bad'
 interface TreeNode {
@@ -171,7 +180,7 @@ function jobDot(s: string): Dot {
 }
 
 const hasKeys = computed(() => !!state.value?.providers?.some((p: any) => p.keys > 0))
-const climayteActive = computed(() => climayteTasks.value.filter(isCliMayteActive).length)
+const climayteActive = climayteRunning
 
 // The console's tree: a model is part of its provider, so each provider opens onto its models. Routing and
 // CliMayte are there before HSwarm's state is (or while HSwarm is down): their pages are AgentHydra's.
@@ -185,6 +194,9 @@ const nodes = computed<TreeNode[]>(() => {
     icon: Network,
     count: active || null,
     dotTitle: active ? t('hswarm.nav.climayteActive', { n: active }) : undefined,
+    kids: [
+      { id: 'climayte/waves', label: t('climayte.waves'), icon: ListChecks, count: liveWaves.value || null },
+    ],
   }
   if (!s) return [routing, climayte]
   const provs = [...(s.providers ?? [])].sort(
@@ -404,7 +416,7 @@ function openPath(path: string[]) {
 // otherwise be what the row shows. A Desk task row (hswarmNodeAsk) selects the node without this.
 const climayteHome = ref(0)
 function pick(id: string) {
-  if (id === 'climayte') climayteHome.value++
+  if (id === 'climayte' || id === 'climayte/waves') climayteHome.value++
   select(id)
 }
 
@@ -597,6 +609,7 @@ const ICON_NAME = new Map<Component, EmbedIcon>([
   [Plug, 'plug'],
   [Layers, 'layers'],
   [Network, 'network'],
+  [ListChecks, 'list-checks'],
   [Info, 'info'],
 ])
 function deskRow(r: TreeRow): SidebarRow {
@@ -952,7 +965,12 @@ async function handleRefresh() {
         <!-- CliMayte's tasks are AgentHydra's: shown whether or not HSwarm runs. Kept built while another
              node is open, so its float window (picture-in-picture) stays open across nodes. -->
         <KeepAlive>
-          <CliMayteView v-if="page.component === CliMayteView" :home="climayteHome" @open="openPath" />
+          <CliMayteView
+            v-if="page.component === CliMayteView"
+            :home="climayteHome"
+            :section="sel === 'climayte/waves' ? 'waves' : 'tasks'"
+            @open="openPath"
+          />
         </KeepAlive>
         <template v-if="page.component !== CliMayteView">
           <!-- Error state -->

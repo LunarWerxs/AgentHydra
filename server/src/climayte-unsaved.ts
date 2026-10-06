@@ -4,7 +4,7 @@
 // and the task sat 'done' for 2h26m while the two tasks after it waited on work that was never in git.
 
 import { spawnSync } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { tailText, transcriptCandidates, transcriptFile } from './climayte-core'
 import type { CliMayteAccount, CliMayteWorker } from './climayte-lib'
@@ -25,6 +25,49 @@ const PATHSPEC_CHUNK = 200
  *  wanted) is not held to a commit. */
 const NO_COMMIT =
   /\b(?:do not|don't|never|without) (?:commit|committing)\b|\bleave [^.\n]{0,40}\buncommitted\b/i
+
+/** Extensions a check's output names files by; a list, so "e.g" and "v1.2" are not taken for files. */
+const OUTPUT_FILE =
+  /(?:[A-Za-z]:)?[\w@.\-/\\]*[\w-]\.(?:tsx?|jsx?|mjs|cjs|vue|py|rs|go|json|md|css|scss|html|lua|ya?ml|toml|sh|ps1|cs|java|kt|cpp|c|h)(?![\w])/gi
+
+/** The file paths a check's output names (`src/foo.vue(3,5)`, `desk2/x/foo.ts:12`), lower-cased with
+ *  forward slashes. */
+export function outputPaths(output: string): string[] {
+  const found = (output.match(OUTPUT_FILE) ?? []).map((p) =>
+    p.replaceAll('\\', '/').replace(/^\.\//, '').toLowerCase(),
+  )
+  return [...new Set(found)]
+}
+
+/** True when the check failed on someone else's work in a shared checkout: the output names at least
+ *  one file, none of them is one the task edited, and one of them has uncommitted changes (`dirty`,
+ *  repo-relative) that are not the task's. A named file nobody changed (a test the task's own change
+ *  broke) does not count: the failure is then the task's. Printed paths match by suffix (output prints
+ *  paths relative to wherever the check ran, the edits are absolute). */
+export function failsOnlyOnOthersFiles(output: string, edited: string[], dirty: string[]): boolean {
+  const named = outputPaths(output)
+  if (!named.length) return false
+  const same = (a: string, n: string) => a === n || a.endsWith(`/${n}`)
+  const mine = edited.map((p) => p.replaceAll('\\', '/').toLowerCase())
+  if (named.some((n) => mine.some((m) => same(m, n)))) return false
+  const changed = dirty.map((p) => p.replaceAll('\\', '/').toLowerCase())
+  return named.some((n) => changed.some((d) => same(d, n)))
+}
+
+/** The files `cwd`'s repository shows changed or untracked, repo-relative; null when git cannot say. */
+export function dirtyFiles(cwd: string): string[] | null {
+  const out = git(cwd, ['status', '--porcelain', '-z', '-uall'])
+  if (out === null) return null
+  const files: string[] = []
+  const parts = out.split('\0')
+  for (let j = 0; j < parts.length; j++) {
+    const e = parts[j] as string
+    if (e.length < 4) continue
+    files.push(e.slice(3))
+    if (e[0] === 'R' || e[0] === 'C') j++ // a rename's source path follows it
+  }
+  return files
+}
 
 /** Each file the transcript's Edit, Write, MultiEdit and NotebookEdit calls changed, absolute, with
  *  the time of the newest such call (ms; Infinity when its line has no timestamp). */
@@ -57,6 +100,19 @@ export function editedPaths(jsonl: string, cwd: string): Map<string, number> {
 /** A repo-relative path as compared: Windows paths differ only in case when they are the same file. */
 const keyOf = (rel: string): string => (process.platform === 'win32' ? rel.toLowerCase() : rel)
 
+/** A path as the filesystem names it, the form `git rev-parse --show-toplevel` prints: Windows' 8.3
+ *  short names resolve (a GitHub runner's TEMP is C:\Users\RUNNER~1\..., while git says runneradmin,
+ *  so every edit read as outside the repository and nothing was ever uncommitted: CI, 2026-10-06), as
+ *  do macOS' /var -> /private/var and any junction or symlink. A path that is gone is kept as given;
+ *  a file the session wrote that no longer exists is never counted anyway. */
+function canonical(p: string): string {
+  try {
+    return realpathSync.native(p)
+  } catch {
+    return p
+  }
+}
+
 function git(cwd: string, args: string[]): string | null {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
   return r.status === 0 ? (r.stdout ?? '') : null
@@ -67,12 +123,13 @@ function git(cwd: string, args: string[]): string | null {
  *  Ignored files never show. [] outside a repository. */
 export function uncommittedOf(cwd: string, edits: Map<string, number>): string[] {
   if (!edits.size) return []
-  const top = git(cwd, ['rev-parse', '--show-toplevel'])?.trim()
-  if (!top) return []
+  const shown = git(cwd, ['rev-parse', '--show-toplevel'])?.trim()
+  if (!shown) return []
+  const top = canonical(shown)
   const lastWrite = new Map<string, number>()
   const rels: string[] = []
   for (const [abs, at] of edits) {
-    const rel = relative(top, abs).replaceAll('\\', '/')
+    const rel = relative(top, canonical(abs)).replaceAll('\\', '/')
     if (!rel || rel.startsWith('../') || rel === '..' || isAbsolute(rel)) continue
     lastWrite.set(keyOf(rel), at)
     rels.push(rel)
@@ -115,6 +172,17 @@ export function uncommittedOf(cwd: string, edits: Map<string, number>): string[]
  *  task that says not to commit. */
 export function unsavedEdits(w: CliMayteWorker, accounts: CliMayteAccount[]): string[] {
   if (NO_COMMIT.test(w.prompt)) return []
+  return uncommittedOf(w.cwd, editsOf(w, accounts))
+}
+
+/** Every file the worker's sessions changed, committed or not, as forward-slash paths (absolute as
+ *  the sessions named them). Read through the same budget as unsavedEdits. The severity of a failed
+ *  check asks whether the files it names are this task's (climayte.ts judgeCheck). */
+export function editedFilesOf(w: CliMayteWorker, accounts: CliMayteAccount[]): string[] {
+  return [...editsOf(w, accounts).keys()].map((p) => p.replaceAll('\\', '/'))
+}
+
+function editsOf(w: CliMayteWorker, accounts: CliMayteAccount[]): Map<string, number> {
   const dirs = transcriptCandidates(w, accounts).map((c) => c.configDir)
   const edits = new Map<string, number>()
   let budget = TASK_READ_BUDGET
@@ -129,5 +197,5 @@ export function unsavedEdits(w: CliMayteWorker, accounts: CliMayteAccount[]): st
       break
     }
   }
-  return uncommittedOf(w.cwd, edits)
+  return edits
 }

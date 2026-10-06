@@ -89,6 +89,6 @@ export function rowTip(row: Pick<AccountRow, 'account' | 'inUse' | 'liveChats'>,
   }
   const lines = [line('5-hour', a.fiveHourPct, a.fiveHourResetsAt), line('Weekly', a.weeklyPct, a.weeklyResetsAt)]
   if (row.inUse) lines.push('In use by a person or another session')
-  if (row.liveChats > 0) lines.push(`${row.liveChats} live Hydra Desk ${row.liveChats === 1 ? 'chat' : 'chats'}`)
+  if (row.liveChats > 0) lines.push(`${row.liveChats} live ${row.liveChats === 1 ? 'chat' : 'chats'} in this window`)
   return lines.join('\n')
 }

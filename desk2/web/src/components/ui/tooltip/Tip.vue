@@ -26,7 +26,12 @@ const props = withDefaults(
 // when the label went). Turning disabled closes it too.
 const off = computed(() => props.disabled || !props.label)
 const open = ref(false)
-const { seen, listeners } = useFirstInterest({ replay: true })
+const { seen, listeners } = useFirstInterest({
+  replay: true,
+  afterPress: () => {
+    open.value = false
+  },
+})
 const standIn = { 'data-slot': 'tooltip-trigger', 'data-state': 'closed' }
 watch(off, (v) => {
   if (v) open.value = false

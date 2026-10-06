@@ -128,7 +128,8 @@ export type TranscriptItem =
   | (ItemBase & { kind: 'user'; text: string; images?: ImageRef[]; queued?: boolean })
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
   | (ItemBase & { kind: 'note'; from: string; text: string })
-  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean })
+  /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest). */
+  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string })
   | (ItemBase & { kind: 'thinking'; text: string; streaming?: boolean })
   | (ItemBase & {
       kind: 'tool_use'
@@ -256,6 +257,19 @@ export interface DesktopMessageResult {
   detail: string
 }
 
+/**
+ * POST /api/external/sessions/:id/branch: "Copy up to here into a new chat". AgentHydra writes a new Claude Code
+ * session beside this one holding it up to the reply `uuid` (its session-branch), titled "<title> (branch)";
+ * the original is not touched. Answers the new session's id; errors answer { error } with the daemon's reason.
+ */
+export interface ExternalBranchRequest {
+  uuid: string
+  title?: string
+}
+export interface ExternalBranchResult {
+  id: string
+}
+
 /** The overlay Hydra Desk keeps on an outside session (PATCH /api/external/sessions/:id/meta answers it). */
 export interface SessionMeta {
   title: string | null // null = the session's own title
@@ -334,6 +348,7 @@ export interface CliMayteWorker {
   originWorkerId?: string | null // the worker that dispatched it, when a worker did
   originTitle?: string | null // the title of the chat that dispatched it, as its own PC knows it (another PC's only)
   sessions?: string[] // every session the worker has had (a handoff gives it a new sessionId and keeps the old ones here)
+  folder?: string | null // another PC's only: the last name of the folder it runs in, never the path (its `cwd` stays null)
   startedAt: number | null
   endedAt: number | null // when it settled; null while active
   lastActivityAt: number | null
@@ -350,8 +365,8 @@ export interface CliMayteWorker {
   eta?: { minutes: number; at: number; tookS: number | null } | null
   /**
    * The other PC's name when the worker runs there (AgentHydra's shared queue, GET /api/corch/remote);
-   * absent or null = this PC. Such a worker has no folder, and its session and origin are only ids that
-   * PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and
+   * absent or null = this PC. Such a worker has no folder here (only `folder`, its folder's last name), and
+   * its session and origin are only ids that PC shared (a snapshot from an older AgentHydra has neither); its id may equal one of this PC's, and
    * nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
    */
   pc?: string | null
@@ -379,6 +394,8 @@ export interface SwarmJob {
   callerTitle: string | null
   /** The other PC's name when the job ran there; null = this PC. Such jobs show only while the cloud is on. */
   pc: string | null
+  /** Another PC's only: the last name of its caller's folder, never the path; absent or null when not shared. */
+  folder?: string | null
 }
 
 export interface AccountInfo extends AccountRef {

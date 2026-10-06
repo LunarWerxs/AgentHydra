@@ -145,7 +145,7 @@ onMounted(() => {
 
     <!-- Error state -->
     <Alert v-if="error" variant="destructive">
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertTitle>{{ t('hswarm.v.clients.loadError') }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
       <Button
@@ -182,7 +182,7 @@ onMounted(() => {
                 <TableHead>{{ t('hswarm.v.clients.client') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.clients.status') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.clients.configFile') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.clients.actions') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.clients.actions') }}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -206,7 +206,7 @@ onMounted(() => {
                     {{ client.exists ? t('hswarm.v.clients.exists') : t('hswarm.v.clients.notExists') }}
                   </div>
                 </TableCell>
-                <TableCell class="text-right space-x-2">
+                <TableCell class="text-end space-x-2">
                   <Button
                     size="sm"
                     :variant="client.registered ? 'outline' : 'default'"

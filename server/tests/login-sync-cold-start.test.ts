@@ -103,7 +103,7 @@ const poll = (w: W, e: Env, since: number, inm: boolean, pc = thisPc) =>
 const putLogin = (w: W, e: Env, id: string) =>
   ask(w, e, `/v1/logins/${id}`, 'PUT', { version: 0, blob: 'x', meta: {} })
 const HEAD_READ =
-  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1'
+  'SELECT rev, floor, logins_rev, queues_rev, chats_rev, free_rev, gone_rev FROM store_rev WHERE id = 1'
 
 test('an idle changes poll from a cold isolate runs no D1 statement and answers 304 with the other PCs in x-seen', async () => {
   const sqlite = new Database(':memory:')
@@ -132,7 +132,14 @@ test('an idle changes poll from a cold isolate runs no D1 statement and answers 
   // an old client sends no If-None-Match: the same 200 body as before, still no D1
   const old = await poll(cold, e, 1, false)
   expect(old.status).toBe(200)
-  expect(await old.json()).toEqual({ rev: 1, logins: [], queues: [], chats: [], gone: [] })
+  expect(await old.json()).toEqual({
+    rev: 1,
+    logins: [],
+    queues: [],
+    chats: [],
+    free: [],
+    gone: [],
+  })
   expect(db.statements()).toEqual([])
 })
 
@@ -205,7 +212,7 @@ const cost = (db: ReturnType<typeof d1>) => ({
   rows: db.rowsRead(),
   sql: db.statements().map((s) => s.sql),
 })
-const shape = { rev: expect.any(Number), logins: [], queues: [], chats: [], gone: [] }
+const shape = { rev: expect.any(Number), logins: [], queues: [], chats: [], free: [], gone: [] }
 
 test('a poll after one chat write runs the chats query only; an idle poll runs none', async () => {
   const db = d1(new Database(':memory:'))
@@ -287,6 +294,55 @@ test('a database one schema version behind gets gone_rev from its tombstones, an
   const res = await poll(await load('mig-b'), e2, 3, false)
   expect(await res.json()).toEqual({ ...shape, rev: 9, gone: [{ table: 'logins', id: gone }] })
   expect(sqlite.query('SELECT gone_rev FROM store_rev').get()).toEqual({ gone_rev: 7 })
+})
+
+// The live store was at schema 2 when Free logins came (2026-10-06): its first request after the deploy
+// must add the table and free_rev (the head reads free_rev on every route), and a Free row must never
+// show in /v1/logins, where an AgentHydra that predates it would land it as a CLI login.
+test('a database at schema 2 gets the Free table, and a Free row stays out of the logins', async () => {
+  // The schema-2 store, written out: every table and store_rev column but the Free ones.
+  const sqlite = new Database(':memory:')
+  for (const [table, key] of [
+    ['logins', 'id'],
+    ['queues', 'pc'],
+    ['chats', 'id'],
+  ])
+    sqlite.run(
+      `CREATE TABLE ${table} (${key} TEXT PRIMARY KEY, version INTEGER NOT NULL, blob TEXT NOT NULL, meta TEXT NOT NULL, updated_at INTEGER NOT NULL, rev INTEGER NOT NULL DEFAULT 0)`,
+    )
+  sqlite.run(
+    'CREATE TABLE tombstones (table_name TEXT NOT NULL, id TEXT NOT NULL, rev INTEGER NOT NULL, time INTEGER NOT NULL, PRIMARY KEY (table_name, id))',
+  )
+  sqlite.run(
+    'CREATE TABLE store_rev (id INTEGER PRIMARY KEY CHECK (id = 1), rev INTEGER NOT NULL, floor INTEGER NOT NULL, logins_rev INTEGER NOT NULL DEFAULT 0, queues_rev INTEGER NOT NULL DEFAULT 0, chats_rev INTEGER NOT NULL DEFAULT 0, gone_rev INTEGER NOT NULL DEFAULT 0)',
+  )
+  sqlite.run('INSERT INTO store_rev (id, rev, floor) VALUES (1, 0, 0)')
+  sqlite.run(
+    'CREATE TABLE chat_chunks (chat TEXT NOT NULL, seq INTEGER NOT NULL, blob TEXT NOT NULL, by TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (chat, seq))',
+  )
+  sqlite.run(
+    'CREATE TABLE chat_usage (id INTEGER PRIMARY KEY CHECK (id = 1), chars INTEGER NOT NULL)',
+  )
+  sqlite.run('INSERT INTO chat_usage VALUES (1, 0)')
+  sqlite.run('PRAGMA user_version = 2')
+  const login = uuid()
+  sqlite.run(`INSERT INTO logins VALUES ('${login}', 1, 'x', '{}', 1000, 0)`)
+
+  const e = await storeEnv(d1(sqlite), 'free-b') // a new Durable Object and a new Worker isolate
+  const w = await load('free-b')
+  expect((await poll(w, e, 0, false)).status).toBe(200)
+  const id = uuid()
+  const put = await ask(w, e, `/v1/free/${id}`, 'PUT', { version: 0, blob: 'x', meta: {} })
+  expect(await put.json()).toEqual({ version: 1 })
+
+  const read = async (r: Promise<Response>) => (await (await r).json()) as any
+  const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id)
+  expect(ids((await read(ask(w, e, '/v1/logins'))).logins)).toEqual([login])
+  expect(ids((await read(ask(w, e, '/v1/free'))).free)).toEqual([id])
+  expect((await read(ask(w, e, `/v1/free/${id}`))).blob).toBe('x')
+  const c = await read(poll(w, e, 0, false))
+  expect(ids(c.free)).toEqual([id])
+  expect(c.logins).toEqual([])
 })
 
 test('chunk uploads read no chat_usage row, keep it equal to the chunks, and the room limit survives a restart', async () => {

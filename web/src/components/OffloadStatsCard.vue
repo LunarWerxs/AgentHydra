@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The CliMayte tab's one stats card: what was offloaded, to CliMayte (its tasks, runs and tokens) and
+// The CliMayte page's one stats card: what was offloaded, to CliMayte (its tasks, runs and tokens) and
 // to HSwarm (what it saved), side by side when there is room and stacked when narrow, with "What
 // works" under them as a small pass/fail bar chart per model; the per-kind list opens from it. HSwarm
 // numbers come from lib/swarm-stats.ts (shared with SwarmStatsCard.vue); the source note is the

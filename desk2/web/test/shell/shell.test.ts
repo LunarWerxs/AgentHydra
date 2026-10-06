@@ -168,7 +168,7 @@ describe('condensed account popup', () => {
     const a = account('35', { fiveHourPct: 6, weeklyPct: 43, fiveHourResetsAt: now + 47 * 60_000, inUse: true })
     const [row] = accountRows([a], [chat('x', { account: { id: '35', label: '#35', configDir: null } })], 'auto').slice(1)
     const tip = rowTip(row!, now)
-    expect(tip).toBe('5-hour 6%, resets in 47m\nWeekly 43%\nIn use by a person or another session\n1 live Hydra Desk chat')
+    expect(tip).toBe('5-hour 6%, resets in 47m\nWeekly 43%\nIn use by a person or another session\n1 live chat in this window')
     expect(row!.label).toBe('#35 sue')
     expect(tip + row!.label).not.toContain('@')
     expect(rowTip(accountRows([account('7', { signedIn: false })], [], 'auto')[1]!, now)).toStartWith('Signed out')
@@ -199,8 +199,8 @@ describe('settings dialog', () => {
   const settings = readFileSync(join(import.meta.dir, '../../src/components/panes/SettingsView.vue'), 'utf8')
   const frame = readFileSync(join(import.meta.dir, '../../src/components/shell/DeskFrame.vue'), 'utf8')
 
-  it('reuses the popup rows for its accounts row and reads the store only through the source', () => {
-    expect(settings).toContain('<AccountsList embedded />')
+  // No Accounts page since 2026-10-06 (owner): the account for new chats is the sidebar's account menu.
+  it('reads the store only through the source', () => {
     expect(settings).not.toContain('useDesk')
   })
 

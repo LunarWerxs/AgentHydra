@@ -48,7 +48,9 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
 </script>
 
 <template>
-  <Table :density="density">
+  <!-- Rows about a third shorter (owner, 2026-10-06): 41px became ~27: py-px cells around the 24px
+       buttons, and a h-7 header. Set here, not in the shared table kit, so only these tables shrink. -->
+  <Table :density="density" class="[&_td]:py-px [&_th]:h-7">
     <TableHeader sticky>
       <TableRow>
         <TableHead

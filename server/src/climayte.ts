@@ -162,10 +162,11 @@ import {
   OPUS,
   pickConfig,
   rereadUnits,
+  scoreOf,
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
-import { unsavedEdits } from './climayte-unsaved'
+import { dirtyFiles, editedFilesOf, failsOnlyOnOthersFiles, unsavedEdits } from './climayte-unsaved'
 import {
   judgeWaveTask,
   readWave,
@@ -675,6 +676,32 @@ function unsavedOf(w: CliMayteWorker): string[] {
   }
 }
 
+/** Every file the worker's sessions changed; null when they cannot be read, which reads as unknown
+ *  (a failed check then scores as rework, not as someone else's). */
+function editedOf(w: CliMayteWorker): string[] | null {
+  try {
+    return editedFilesOf(w, accountsProvider())
+  } catch (err) {
+    console.error(`[climayte] ${w.id}: its edited files could not be read:`, err)
+    return null
+  }
+}
+
+/** How bad a failed check was (CliMayteVerdict.severity): 0 when it could not run, timed out, or
+ *  failed only on another session's uncommitted files in a shared checkout (failsOnlyOnOthersFiles);
+ *  else 2 (rework). `others` says which of those it was. */
+function checkSeverity(
+  w: CliMayteWorker,
+  code: number | null,
+  output: string,
+): { severity: 0 | 2; others: boolean } {
+  if (code === null || code === 126 || code === 127) return { severity: 0, others: false }
+  const edited = editedOf(w)
+  const dirty = edited ? dirtyFiles(w.cwd) : null
+  const others = !!edited && !!dirty && failsOnlyOnOthersFiles(output, edited, dirty)
+  return { severity: others ? 0 : 2, others }
+}
+
 function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
   w.status = 'done'
   const cmd = firstLine(w.check, 200)
@@ -700,6 +727,7 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
       note: `The check \`${cmd}\` could not run (${code === null ? output : `exit ${code}`}); the work was not judged.`,
       retry: false,
       by: 'check',
+      severity: 0,
     })
     return
   }
@@ -707,10 +735,13 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
     (w.verdicts ?? []).filter((v) => v.by === 'check' && v.verdict === 'fail').length + 1
   const retry = fails < MAX_CHECK_FAILS
   const files = `${unsaved.slice(0, 15).join(', ')}${unsaved.length > 15 ? ` and ${unsaved.length - 15} more` : ''}`
+  const sev = unsaved.length
+    ? { severity: 1 as const, others: false }
+    : checkSeverity(w, code, output)
   const note = unsaved.length
     ? `The check \`${cmd}\` passed, but files you changed are not committed: ${files}. Commit them by pathspec (and push if the task pushes), then report again.`
     : `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
-${code === null ? '' : output.trim()}`
+${code === null ? '' : output.trim()}${sev.others ? "\nThe failing files are not ones this task edited, and another session's uncommitted changes are in them." : ''}`
   if (!retry) {
     w.status = 'failed'
     w.error = unsaved.length
@@ -718,7 +749,7 @@ ${code === null ? '' : output.trim()}`
       : `The check still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(output)}`
     journal(w, 'failed', { error: firstLine(w.error) })
   }
-  climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check' })
+  climayteVerdict(w.id, { verdict: 'fail', note, retry, by: 'check', severity: sev.severity })
 }
 
 /** Workers whose CLI a daemon restart would kill: only attempts the daemon spawned itself (before
@@ -1752,7 +1783,9 @@ function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
         w.error = `The wave's proof still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(j.note)}`
         journal(w, 'failed', { error: firstLine(w.error) })
       }
-      climayteVerdict(w.id, { verdict: 'fail', note: j.note, retry, by: 'wave' })
+      // Commits outside the brief's paths are a slip; any other failed proof is rework.
+      const severity = j.proof.paths === false ? 1 : 2
+      climayteVerdict(w.id, { verdict: 'fail', note: j.note, retry, by: 'wave', severity })
     } else {
       task.state = 'escalated'
       wave.escalations.push({ key: task.key, reason: `unproven: ${j.note}`, at: now })
@@ -3012,6 +3045,7 @@ function verdictRecord(
   note: string | null,
   by: unknown,
   provisional = false,
+  severity?: 0 | 1 | 2 | 3,
 ): CliMayteVerdict {
   // The work this verdict judges: every attempt since the previous verdict.
   const previous = w.verdicts?.at(-1)
@@ -3036,6 +3070,7 @@ function verdictRecord(
       : ran.reduce((sum, a) => sum + rereadUnits(a, w.model), 0),
     by: by === 'check' || by === 'owner' || by === 'wave' ? by : 'orchestrator',
     ...(provisional ? { provisional: true } : {}),
+    ...(severity !== undefined ? { severity } : {}),
     ...(span !== undefined ? { span } : {}),
   }
 }
@@ -3090,6 +3125,8 @@ export function climayteVerdict(
     kind?: unknown
     by?: unknown
     provisional?: boolean
+    /** A fail's severity, 0-3 (CliMayteVerdict.severity); refused on a pass. */
+    severity?: unknown
   },
 ): { ok: boolean; message: string; next?: { model: string; effort: string | null } | null } {
   load()
@@ -3104,9 +3141,26 @@ export function climayteVerdict(
   const note = typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null
   if (input.verdict === 'fail' && !note)
     return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
+  const sev = input.severity
+  if (sev !== undefined && sev !== null) {
+    if (input.verdict === 'pass')
+      return { ok: false, message: 'A pass has no severity: it is for a fail (0-3).' }
+    if (sev !== 0 && sev !== 1 && sev !== 2 && sev !== 3)
+      return {
+        ok: false,
+        message: "severity must be an integer 0-3 (0 not the model's, 1 slip, 2 rework, 3 failed).",
+      }
+  }
   const badKind = tagKind(w, input.kind)
   if (badKind !== null) return { ok: false, message: badKind }
-  const verdict = verdictRecord(w, input.verdict, note, input.by, input.provisional === true)
+  const verdict = verdictRecord(
+    w,
+    input.verdict,
+    note,
+    input.by,
+    input.provisional === true,
+    sev === 0 || sev === 1 || sev === 2 || sev === 3 ? sev : undefined,
+  )
   w.verdicts = [...(w.verdicts ?? []), verdict]
   let next: { model: string; effort: string | null } | null = null
   let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
@@ -3118,6 +3172,7 @@ export function climayteVerdict(
     model: verdict.model,
     effort: verdict.effort,
     kind: w.kind ?? undefined,
+    severity: verdict.severity,
     reason: next ? `sent back on ${configLabel(next)}` : undefined,
   })
   changed(w)
@@ -3524,6 +3579,12 @@ export function climayteScorecard(): {
     effort: string | null
     pass: number
     fail: number
+    slip: number
+    rework: number
+    failed: number
+    excluded: number
+    /** Credit over scored verdicts (scoreOf); null with none scored. */
+    score: number | null
     pctPerTask: number | null
     pick: boolean
   }>
@@ -3559,6 +3620,11 @@ export function climayteScorecard(): {
         effort: r.effort,
         pass: r.pass,
         fail: r.fail,
+        slip: r.slip,
+        rework: r.rework,
+        failed: r.failed,
+        excluded: r.excluded,
+        score: scoreOf(r),
         pctPerTask: n ? Math.round((r.units / n / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
         pick:
           best !== undefined &&

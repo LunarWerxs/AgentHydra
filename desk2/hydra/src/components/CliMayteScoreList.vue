@@ -54,9 +54,17 @@ const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefa
           </span>
           <span
             class="flex items-center gap-1 tabular-nums text-destructive"
-            :title="$t('climayte.scoreFails', { n: r.fail })"
+            :title="$t('climayte.scoreFailsSplit', { n: r.fail, slip: r.slip ?? 0, rework: r.rework ?? 0, failed: r.failed ?? r.fail })"
           >
             <ThumbsDown class="size-3" aria-hidden="true" />{{ r.fail }}
+          </span>
+          <span v-if="r.score != null" class="tabular-nums font-medium">{{ Math.round(r.score * 100) }}%</span>
+          <span
+            v-if="r.excluded > 0"
+            class="tabular-nums text-muted-foreground"
+            :title="$t('climayte.scoreNotCounted', { n: r.excluded })"
+          >
+            +{{ r.excluded }}
           </span>
           <span class="tabular-nums text-muted-foreground">
             {{ r.pctPerTask === null ? '—' : $t('climayte.scorePerTask', { pct: r.pctPerTask.toFixed(1) }) }}

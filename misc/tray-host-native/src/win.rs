@@ -294,6 +294,19 @@ pub fn shell_open(target: &str) {
     }
 }
 
+/// The same, run in `cwd`, saying whether it started.
+pub fn spawn_in(exe: &Path, args: &[String], cwd: &Path) -> bool {
+    Command::new(exe)
+        .args(args)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .spawn()
+        .is_ok()
+}
+
 /// Launch a specific executable with arguments, detached and windowless.
 pub fn shell_open_with(exe: &Path, args: &[String]) {
     let _ = Command::new(exe)

@@ -49,6 +49,11 @@ export interface TooltipTouchContext {
   endHold: () => void
   /** Dismiss now, refusal and all. */
   closeByTouch: () => void
+  /** The real trigger element, registered once it is mounted (null when it goes). Lets the
+   *  open-tooltip watchdog tell THIS tooltip's trigger from every other element on the page. */
+  setTrigger: (el: HTMLElement | null) => void
+  /** Where the portaled content is, asked at check time (null when it goes). */
+  setContent: (get: (() => unknown) | null) => void
 }
 
 export const TOOLTIP_TOUCH_KEY: InjectionKey<TooltipTouchContext> = Symbol("lunarwerx-tooltip-touch")

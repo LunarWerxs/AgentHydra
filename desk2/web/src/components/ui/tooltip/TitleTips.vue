@@ -54,11 +54,25 @@ function onOver(e: PointerEvent) {
   const label = labelOf(el)
   if (!label) return
   target = el
-  timer = setTimeout(() => show(el, label), SHOW_MS)
+  timer = setTimeout(() => {
+    // The control can be gone by now (a re-render, a closed menu); a box for it would never be cleared.
+    if (el.isConnected) show(el, label)
+    else hide()
+  }, SHOW_MS)
+}
+
+// The pointer left the document or the page was hidden: no pointerover will ever follow to clear the box.
+function onOut(e: PointerEvent) {
+  if (e.relatedTarget === null) hide()
+}
+function onVisibility() {
+  if (document.hidden) hide()
 }
 
 onMounted(() => {
   document.addEventListener('pointerover', onOver, true)
+  document.addEventListener('pointerout', onOut, true)
+  document.addEventListener('visibilitychange', onVisibility)
   document.addEventListener('pointerdown', hide, true)
   document.addEventListener('keydown', hide, true)
   document.addEventListener('scroll', hide, true)
@@ -66,6 +80,8 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('pointerover', onOver, true)
+  document.removeEventListener('pointerout', onOut, true)
+  document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('pointerdown', hide, true)
   document.removeEventListener('keydown', hide, true)
   document.removeEventListener('scroll', hide, true)

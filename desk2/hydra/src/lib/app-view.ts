@@ -30,18 +30,20 @@ export type AppView =
   | 'instances-home'
   | 'cli'
   | 'desktop'
+  | 'free'
   | 'analytics'
   | 'hswarm'
 export const APP_VIEWS: readonly AppView[] = [
   'instances-home',
   'cli',
   'desktop',
+  'free',
   'analytics',
   'hswarm',
 ]
 
-/** The views under the Instances group: the landing page and its two sub-pages. */
-export const INSTANCES_VIEWS: readonly AppView[] = ['instances-home', 'cli', 'desktop']
+/** The views under the Instances group: the landing page and its account categories. */
+export const INSTANCES_VIEWS: readonly AppView[] = ['instances-home', 'cli', 'desktop', 'free']
 
 /** Tabs that were folded into another one, and where they went. The Corch tab (now CliMayte) became
  *  part of the CLI tab (2026-09-30); a window that last stood on it opens there rather than falling

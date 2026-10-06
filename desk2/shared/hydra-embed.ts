@@ -102,6 +102,10 @@ export interface SidebarModel {
   footer?: SidebarButton[]
 }
 
+/** The Settings pages the copy opens Desk's Settings on: Updates, and each Instances table's page. */
+export const AH_SETTINGS_PAGES = ['updates', 'cli', 'desktop', 'free'] as const
+export type AhSettingsPage = (typeof AH_SETTINGS_PAGES)[number]
+
 /** The copy to Desk. */
 export type AhMessage =
   /** The copy is listening (sent on start): Desk sends what it held back. */
@@ -110,6 +114,10 @@ export type AhMessage =
   | { type: 'ah:open-session'; session_id: string; source?: string }
   /** Desk shows its cloud list, every session of both PCs. */
   | { type: 'ah:show-sessions' }
+  /** Desk opens its Settings, which hold AgentHydra's: on Updates, or on a table's page (its gear). */
+  | { type: 'ah:open-settings'; section?: AhSettingsPage }
+  /** Whether a newer AgentHydra is waiting: a dot on Desk's Settings gear, the copy's own gear being gone. */
+  | { type: 'ah:update-dot'; on: boolean }
   /** The current tab's sidebar, or null for a tab without one. */
   | { type: 'ah:sidebar'; model: SidebarModel | null }
 
@@ -129,3 +137,6 @@ export type DeskMessage =
    *  polls rest until it slides back in; the frame stays loaded either way. Desk says it when the frame
    *  is ready and each time the pane slides in or out; on true the copy sends its current sidebar again. */
   | { type: 'desk:visible'; visible: boolean }
+  /** Desk's Settings saved an AgentHydra setting: the copy reads its settings again (a table shown or
+   *  hidden, the keepalive switched). */
+  | { type: 'desk:settings-changed' }

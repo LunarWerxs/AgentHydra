@@ -13,6 +13,7 @@ import incidents from './en/incidents'
 import instances from './en/instances'
 import notifications from './en/notifications'
 import queue from './en/queue'
+import routingCost from './en/routingCost'
 import run from './en/run'
 import scheduler from './en/scheduler'
 import sessions from './en/sessions'
@@ -33,6 +34,7 @@ export default {
   instances,
   notifications,
   queue,
+  routingCost,
   run,
   scheduler,
   sessions,

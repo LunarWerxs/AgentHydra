@@ -48,7 +48,7 @@ test('a failed SDK turn appends one row, and the move to another account marks i
   writeFileSync(file, '{"type":"user"}\n')
   const q = fakeQueries()
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts: async () => [a, b] }
-  const m = new ChatManager({ home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: sid, cwd, title: 'Outside', configDir: a.configDir })
   await m.send(chat.id, 'carry on')
@@ -71,7 +71,7 @@ test('a refused first message appends one row', async () => {
   failing.bridge.startWorker = async () => {
     throw new Error('pictures cannot be sent')
   }
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: failing.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: failing.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
   managers.push(m)
   const chat = await m.create({ cwd: temp('desk-fl-cwd-'), prompt: 'keep these words' })
   await waitFor(() => m.get(chat.id).status === 'error')

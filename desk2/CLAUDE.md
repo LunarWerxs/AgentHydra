@@ -1,10 +1,13 @@
-# Hydra Desk 2 (Michael's copy of desk/)
+# AgentHydra 2.0 (Hydra Desk 2, Michael's copy of desk/)
 
-This folder is Hydra Desk 2: a copy of Jacob's Hydra Desk (`../desk`) made on 2026-10-04 so Michael can
-try new things on it without touching Jacob's app. Both run side by side: Desk 2 is on port 7798, keeps
+This folder is AgentHydra's window, AgentHydra 2.0: called Hydra Desk 2 until 2026-10-06, when the owner
+named it AgentHydra. What a person sees says AgentHydra (the window title, the shortcut, the launcher's
+messages); the folder, port, data folders, `HydraDesk2.exe` and the mutexes keep Desk 2's names, each a
+migration of its own if ever renamed. It began as a copy of Jacob's Hydra Desk (`../desk`) made on
+2026-10-04 so Michael can try new things on it without touching Jacob's app. Both run side by side: Desk 2 is on port 7798, keeps
 its data in `~/.hydra-desk-2/`, opens in its own native window (`launcher/HydraDesk2.exe`, a WebView2
 host built from `launcher/host`, its data in `%LOCALAPPDATA%\HydraDesk2\webview`), and has its own
-"Hydra Desk 2" shortcut. SPEC.md is the design it started from and still describes what is
+"AgentHydra" shortcut. SPEC.md is the design it started from and still describes what is
 unchanged; what Desk 2 adds is in README.md under "What Desk 2 adds". shared/protocol.ts is the contract
 between server/ and web/.
 
@@ -30,6 +33,10 @@ between server/ and web/.
   `~/.devwebui`), starts `bun server/src/index.ts` there hidden when the pane asks, and forwards `/dw/api/*` with the
   daemon's `.cookie` credential. Contract: `shared/devwebui.ts`. Tests set `DEVWEBUI_HOME` to a temp folder. Change
   `../devwebui` only when the pane truly needs it, upstream-shaped, and name it in the commit message.
+- A Dev servers view in the sidebar is planned (README, "Planned next", owner 2026-10-06): build it on
+  `web/src/components/servers/api.ts` and `logic.ts`, the one DevWebUI client, never a second one.
+- After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
+  `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp

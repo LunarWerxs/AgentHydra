@@ -129,7 +129,7 @@ describe('a reconnect keeps the open chat', () => {
 describe('a chat whose history does not load', () => {
   // 2026-10-05: after a server restart chats sat on "No messages yet" with their history on disk.
   RELOAD_WAITS_MS.splice(0, RELOAD_WAITS_MS.length, 5)
-  const said = "Hydra Desk 2's server is not answering (it may be restarting)"
+  const said = "This window's server is not answering (it may be restarting)"
 
   test('after a reconnect it is asked for again until it lands, with why it is missing meanwhile', async () => {
     down.set('/api/chats/rc-down/items', 2)
@@ -174,7 +174,7 @@ describe('the window title', () => {
     document.title = ''
     push(hello([{ ...summary('rc-title'), status: 'working' }]))
     await until(() => document.title !== '')
-    expect(document.title).toBe('(1 working) Hydra Desk 2')
+    expect(document.title).toBe('(1 working) AgentHydra')
   })
 })
 

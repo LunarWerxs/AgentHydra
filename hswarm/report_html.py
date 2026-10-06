@@ -231,7 +231,7 @@ _DAY_SQL = ("SELECT date(u.ts, 'localtime') AS day, u.machine AS machine, COUNT(
             "SUM(u.saved_low_usd) AS saved_low_usd, SUM(CASE WHEN u.est_usd IS NULL THEN 1 ELSE 0 END) AS unpriced, "
             "SUM(u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)) AS est_tokens, "
             "COALESCE(SUM(u.worker_tokens), 0) AS worker_tokens, SUM(CASE WHEN p.id IS NULL THEN 1 ELSE 0 END) AS unsized "
-            "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id GROUP BY day, u.machine")
+            "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id GROUP BY date(u.ts, 'localtime'), u.machine")
 
 
 def per_day(c, rates: dict) -> list[dict]:

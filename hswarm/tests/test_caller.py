@@ -151,7 +151,8 @@ def test_jobs_list_carries_the_full_caller_ids_of_a_chat_with_no_session(tmp_pat
     rows = _jobs_list(monkeypatch, m)
     row = next(r for r in rows if r["job_id"] == job.id)
     assert row["caller"] == "temp9 / local_aa / proj"
-    assert row["caller_ids"] == {"session_id": "", "chat_id": chat, "instance": "temp9"}
+    # The caller's folder by its last name only: tmp_path's own folders stay out.
+    assert row["caller_ids"] == {"session_id": "", "chat_id": chat, "instance": "temp9", "folder": "proj"}
 
 
 def test_jobs_list_keeps_a_running_job_older_than_the_limit(tmp_path, monkeypatch):

@@ -1,4 +1,4 @@
-export type CliDialogNamespace = 'cliInstances' | 'codexInstances' | 'dshInstances'
+export type CliDialogNamespace = 'cliInstances' | 'codexInstances' | 'dshInstances' | 'freeInstances'
 
 // Keep these as full, static key paths. Besides making the reusable dialogs type-safe, this lets
 // the locale audit verify both namespaces instead of treating template-built paths as unknown.
@@ -34,6 +34,14 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
     renameDialogDescription: 'codexInstances.renameDialogDescription',
     renameDialogSubmit: 'codexInstances.renameDialogSubmit',
     renameDialogRenaming: 'codexInstances.renameDialogRenaming',
+  },
+  freeInstances: {
+    nameLabel: 'freeInstances.nameLabel',
+    namePlaceholder: 'freeInstances.namePlaceholder',
+    renameDialogTitle: 'freeInstances.renameDialogTitle',
+    renameDialogDescription: 'freeInstances.renameDialogDescription',
+    renameDialogSubmit: 'freeInstances.renameDialogSubmit',
+    renameDialogRenaming: 'freeInstances.renameDialogRenaming',
   },
 } as const
 
@@ -73,5 +81,13 @@ export const DELETE_DIALOG_KEYS = {
     mismatch: 'dshInstances.deleteDialogMismatch',
     submit: 'dshInstances.deleteDialogSubmit',
     deleting: 'dshInstances.deleteDialogDeleting',
+  },
+  freeInstances: {
+    title: 'freeInstances.deleteDialogTitle',
+    description: 'freeInstances.deleteDialogDescription',
+    placeholder: 'freeInstances.deleteDialogPlaceholder',
+    mismatch: 'freeInstances.deleteDialogMismatch',
+    submit: 'freeInstances.deleteDialogSubmit',
+    deleting: 'freeInstances.deleteDialogDeleting',
   },
 } as const satisfies Record<DeleteDialogNamespace, Record<string, string>>

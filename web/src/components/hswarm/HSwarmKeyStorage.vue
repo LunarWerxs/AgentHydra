@@ -171,11 +171,11 @@ onMounted(load)
           <span>{{ status.pending_requests ?? 0 }}</span>
         </template>
       </div>
-      <p v-if="status.vault_error" class="text-destructive break-words">{{ status.vault_error }}</p>
+      <p v-if="status.vault_error" class="text-destructive wrap-break-word">{{ status.vault_error }}</p>
 
       <!-- This machine asked a vault for access and waits for the grant -->
       <div v-if="status.request && !inVault" class="rounded-md border border-border p-2 space-y-1">
-        <p v-if="status.request.error" class="text-destructive break-words">{{ status.request.error }}</p>
+        <p v-if="status.request.error" class="text-destructive wrap-break-word">{{ status.request.error }}</p>
         <template v-else>
           <p>{{ t('hswarm.v.providers.storage.requestWaiting') }}</p>
           <p>

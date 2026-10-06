@@ -32,6 +32,7 @@ import {
 import type { EmbedIcon, EmbedTone, SidebarModel, SidebarRow } from '@shared/hydra-embed'
 import { icons } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
+import { cleanSidebar } from '@/components/sidebar/clean'
 import { tellHydra } from './api'
 
 // Hydra Desk 2: the sidebar of AgentHydra's current tab (HSwarm's tree), drawn here in
@@ -39,7 +40,9 @@ import { tellHydra } from './api'
 // everything, beside the content). The copy describes it (shared/hydra-embed.ts) and keeps every rule of
 // what a row says; a click goes back to it. Rows are 26px like the desk list; hovers are the native
 // title, so a 300-row tree costs no tooltip per row.
-const props = defineProps<{ model: SidebarModel }>()
+// `stale`: the tree kept from the last open, drawn until the live one arrives; it is inert so a click can
+// never name a row the live pane no longer has.
+const props = defineProps<{ model: SidebarModel; stale?: boolean }>()
 
 const ICONS: Record<EmbedIcon, Component> = {
   network: Network,
@@ -169,7 +172,7 @@ const FOOT_BTN =
 </script>
 
 <template>
-  <div class="flex flex-col" role="region" :aria-label="model.title" data-testid="hydra-sidebar">
+  <div class="flex flex-col" :class="stale ? 'opacity-60' : ''" :inert="stale" :aria-busy="stale || undefined" role="region" :aria-label="model.title" data-testid="hydra-sidebar">
     <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
       <component :is="icon(model.icon)" v-if="model.icon" class="size-3.5 shrink-0" />
       <span class="min-w-0 truncate font-medium text-text-2">{{ model.title }}</span>
@@ -301,8 +304,9 @@ const FOOT_BTN =
             <span v-if="r.mark" class="inline-flex shrink-0" :class="tone(r.mark.tone)" :title="r.mark.hint ?? r.mark.label">
               <component :is="icon(r.mark.icon)" class="size-3.5" :aria-label="r.mark.label" />
             </span>
-            <span v-if="r.meta" class="shrink-0 font-mono text-[11px] leading-4 text-text-muted">{{ r.meta }}</span>
-            <span v-if="r.time" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">{{ r.time }}</span>
+            <!-- Clean sidebar (sidebar/clean.ts) leaves the detail and the time out; warnings and marks stay. -->
+            <span v-if="r.meta && !cleanSidebar" class="shrink-0 font-mono text-[11px] leading-4 text-text-muted">{{ r.meta }}</span>
+            <span v-if="r.time && !cleanSidebar" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">{{ r.time }}</span>
             <button
               v-if="r.star"
               type="button"

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const TITLE: &str = "Hydra Desk 2";
+// AgentHydra 2.0, once called Hydra Desk 2 (owner, 2026-10-06). The tray's hidden window has this title
+// too (the tray host names it after the app), so single_instance looks for a visible one.
+const TITLE: &str = "AgentHydra";
 // --bg-page in desk2/web/src/style.css (the body background); the title bar and the WebView use it.
 const BG: (u8, u8, u8) = (0x15, 0x15, 0x15);
 const TEXT: (u8, u8, u8) = (0xe6, 0xe6, 0xe6);
@@ -219,7 +221,7 @@ mod win {
             data: isize,
         ) -> i32;
         fn SetWindowPos(h: Hwnd, after: Hwnd, x: i32, y: i32, w: i32, hh: i32, flags: u32) -> i32;
-        fn FindWindowW(class: *const u16, title: *const u16) -> Hwnd;
+        fn FindWindowExW(parent: Hwnd, after: Hwnd, class: *const u16, title: *const u16) -> Hwnd;
         fn IsIconic(h: Hwnd) -> i32;
         fn IsWindowVisible(h: Hwnd) -> i32;
         fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
@@ -233,6 +235,7 @@ mod win {
             flags: u32,
         ) -> isize;
         fn SendMessageW(h: Hwnd, msg: u32, w: usize, l: isize) -> isize;
+        fn GetSystemMetrics(index: i32) -> i32;
         fn SetProcessDpiAwarenessContext(v: isize) -> i32;
     }
     #[link(name = "dwmapi")]
@@ -243,6 +246,7 @@ mod win {
     extern "system" {
         fn CreateMutexW(attrs: *const c_void, owner: i32, name: *const u16) -> isize;
         fn GetLastError() -> u32;
+        fn GetModuleHandleW(name: *const u16) -> isize;
     }
     #[link(name = "shell32")]
     extern "system" {
@@ -360,12 +364,22 @@ mod win {
         }
     }
 
-    pub fn set_icon(h: isize, path: &std::path::Path) {
-        let p = wide(&path.to_string_lossy());
+    /// AgentHydra's icon, compiled into this exe as icon 1 (build.rs), at the sizes Windows draws: the
+    /// big one (SM_CXICON) for the taskbar and Alt+Tab, the small one (SM_CXSMICON) for the title bar.
+    pub fn set_icon(h: isize) {
         unsafe {
-            // IMAGE_ICON, LR_LOADFROMFILE
-            for (kind, size) in [(1usize, 32), (0usize, 16)] {
-                let ic = LoadImageW(0, p.as_ptr(), 1, size, size, 0x10);
+            let exe = GetModuleHandleW(std::ptr::null());
+            // ICON_BIG / ICON_SMALL; IMAGE_ICON, MAKEINTRESOURCE(1)
+            for (kind, metric) in [(1usize, 11), (0usize, 49)] {
+                let size = GetSystemMetrics(metric);
+                let ic = LoadImageW(
+                    exe,
+                    std::ptr::without_provenance::<u16>(1),
+                    1,
+                    size,
+                    size,
+                    0,
+                );
                 if ic != 0 {
                     SendMessageW(h, 0x0080, kind, ic);
                 }
@@ -382,15 +396,18 @@ mod win {
             if GetLastError() != 183 {
                 return true;
             }
+            // The first window of this title that is shown (a minimised one counts): never the tray's
+            // hidden one, which shares the title.
             let t = wide(title);
-            let h = FindWindowW(std::ptr::null(), t.as_ptr());
+            let mut h = FindWindowExW(0, 0, std::ptr::null(), t.as_ptr());
+            while h != 0 && IsWindowVisible(h) == 0 {
+                h = FindWindowExW(0, h, std::ptr::null(), t.as_ptr());
+            }
             if h != 0 {
                 if IsIconic(h) != 0 {
                     ShowWindow(h, 9);
                 }
-                if IsWindowVisible(h) != 0 {
-                    SetForegroundWindow(h);
-                }
+                SetForegroundWindow(h);
             }
             false
         }
@@ -521,11 +538,7 @@ fn run(url: String, udf: PathBuf, state_file: PathBuf, rect: Rect, maximized: bo
     let hwnd = window.hwnd();
     win::set_outer_rect(hwnd, &rect);
     win::title_bar(hwnd, BG, TEXT);
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            win::set_icon(hwnd, &dir.join("hydra-desk.ico"));
-        }
-    }
+    win::set_icon(hwnd);
     if maximized {
         window.set_maximized(true);
     }

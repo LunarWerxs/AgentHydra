@@ -5,7 +5,7 @@
 // session (of several, across handoffs) that has the message, on the account whose folder holds it.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { AccountInfo, ChatSummary, ServerEvent, TranscriptItem } from '@shared/protocol'
@@ -63,6 +63,7 @@ function boot(o: { chats?: (w: World) => { chat: ChatSummary; items: TranscriptI
   const events: ServerEvent[] = []
   const m = new ChatManager({
     home,
+    claudeHome: home,
     emit: (event) => events.push(event),
     settings: () => ({ ...DEFAULT_SETTINGS, defaultAccountId: a.id }),
     bridge,
@@ -73,7 +74,7 @@ function boot(o: { chats?: (w: World) => { chat: ChatSummary; items: TranscriptI
     newChats: o.newChats ?? 'sdk',
   })
   managers.push(m)
-  return { m, cwd, a, b, state: fake.state, events, ...q }
+  return { m, cwd, a, b, claudeHome: home, state: fake.state, events, ...q }
 }
 
 /** A session transcript at <config dir>/projects/<cwd's folder>/<id>.jsonl, one entry a line. */
@@ -180,6 +181,8 @@ test('a message whose id no entry has is found by its text, the same words sent 
   expect(t.m.listItems(first.id).map((i) => i.id)).toEqual(['u-1', 'a-1', 'u-2', 'a-2'])
   await t.m.send(first.id, 'go')
   expect(t.last().options.resumeSessionAt).toBe('m-1')
+  // This chat has no account folder, so the session is seeded under the home the manager was given (never the real ~/.claude).
+  expect(existsSync(join(t.claudeHome, '.claude', 'projects', encodeProjectDir(t.cwd), `${SID}.jsonl`))).toBe(true)
 
   const second = await t.m.forkBefore(src.id, 'old-4')
   await t.m.send(second.id, 'go')

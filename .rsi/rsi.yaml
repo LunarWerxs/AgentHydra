@@ -1,0 +1,53 @@
+schema: hydra-rsi/1
+metrics:
+  # Frames over budget come from main-thread timings: it moved 81..88 of 110 between runs on one
+  # machine, so it is a time (judged against a measured band), not a count.
+  - id: desk2.stream.frames_over_budget
+    kind: time
+    better: lower
+    unit: frames
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.framesOverBudget'
+  - id: desk2.stream.style_recalcs_per_chunk
+    kind: count
+    better: lower
+    unit: recalcs
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.styleRecalcsPerChunk'
+    gate: exact
+  - id: desk2.stream.layouts_per_chunk
+    kind: count
+    better: lower
+    unit: layouts
+    measure: "bun desk2/e2e/stream-frames.e2e.ts"
+    file: desk2/tmp/stream-frames.json
+    pick: 'json:$.layoutsPerChunk'
+    gate: exact
+  # Claude Code keeps 2,048 characters of a server's instructions and every chat pays them on every
+  # request: past the cut, the last rules are never read.
+  - id: mcp.instructions_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: 'bun -e "const m = await import(''./server/src/mcp.ts''); console.log(JSON.stringify({chars: m.SERVER_INSTRUCTIONS.length}))"'
+    pick: 'json:$.chars'
+    light: true
+  # Every native HSwarm task re-sends its system prompt and tool schemas on every turn: the prefix of a
+  # read task with a schema, the common shape (today's date line left out, its length moves by month).
+  - id: hswarm.read_task.prefix_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: "python scripts/rsi/hswarm-prefix.py"
+    pick: 'json:$.chars'
+    light: true
+  # Every CliMayte worker carries this brief on every turn of its session.
+  - id: climayte.worker_brief_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: 'bun -e "const m = await import(''./server/src/climayte-lib.ts''); console.log(JSON.stringify({chars: m.WORKER_BRIEF.length}))"'
+    pick: 'json:$.chars'
+    light: true

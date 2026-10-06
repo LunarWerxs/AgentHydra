@@ -1,4 +1,4 @@
-# Restarts the Hydra Desk 2 server onto the code on disk, the chats running on (SPEC "Chat hosts"): stop.ps1,
+# Restarts the AgentHydra server onto the code on disk, the chats running on (SPEC "Chat hosts"): stop.ps1,
 # which lets the chats go to their hosts, then start.ps1 -NoWindow. The open window reconnects by itself,
 # and reloads once its page changed. A change to the window alone needs no restart: `bun run build` in the
 # desk folder is enough (the window picks the new build up within a minute).

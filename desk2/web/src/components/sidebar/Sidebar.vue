@@ -9,12 +9,12 @@ import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { useShellSource } from '@/components/shell/source'
 const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 import { useCloud } from '@/components/cloud/store'
-import { deskOnPcs } from '@/components/cloud/logic'
+import { ahSource, appShown, deskOnPcs } from '@/components/cloud/logic'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
-import { hydraOpen, hydraSidebar, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
+import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { EyeOff } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
@@ -25,6 +25,7 @@ import {
   addToCloudGroups,
   addToDeskGroups,
   addedStatus,
+  addedPulse,
   isAddedRow,
   nestTasks,
   runningJobsIn,
@@ -100,7 +101,7 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-// 240, not the real app's 220: the chrome bar over it carries Hydra Desk 2's three extra buttons.
+// 240, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's four extra buttons.
 const MIN_WIDTH = 240
 const MAX_WIDTH = 420
 
@@ -177,7 +178,7 @@ function onCloudSearchKey(e: KeyboardEvent) {
 const { order, save: saveOrder } = useSidebarOrder()
 
 // While AgentHydra is open, a tab of it with a sidebar of its own (HSwarm's tree) has it drawn here.
-const hydraModel = computed(() => (hydraOpen.value ? hydraSidebar.value : null))
+const hydraModel = computed(() => hydraShown.value?.model ?? null)
 
 // Groups hidden with their header's right-click (hidden.ts), out of the list unless the Filter menu's Show hidden.
 const hiddenGroups = useHiddenGroups()
@@ -191,6 +192,8 @@ const groups = computed(() =>
     query: query.value,
     filter: filter.value,
     external: onPcs.value.external,
+    // The Filter menu's Apps (cloud store scopes) narrow this list's outside sessions too; Claude alone by default.
+    showApp: (s) => appShown(ahSource(s.source), cloud.scopes.value.apps),
     order: order.value,
     hidden: hiddenGroups.hidden.value,
     showHidden: hiddenGroups.showHidden.value
@@ -386,6 +389,11 @@ const addedGlyph = (id: string): StatusGlyph | undefined => {
 }
 /** A cloud row's dot: an added row's, or its desk row's. */
 const cloudDot = (id: string) => addedGlyph(id) ?? deskDots.value.get(id)
+/** How an added row's cloud pulses, from the work it stands for and lists (tasks.ts addedPulse); undefined for any other row. */
+const cloudPulse = (id: string) => {
+  const a = addedRows.value.get(id)
+  return a ? addedPulse(a) : undefined
+}
 /** An HSwarm job opens on AgentHydra's HSwarm page, selected in its list (the id goes to App.vue's deskSwarmAsk watch). */
 const openJob = (j: SwarmJob) => openSwarmInHydra(j.id)
 /** A task with a session here opens its transcript; one still queued, or another PC's, opens on CliMayte's tab. */
@@ -688,9 +696,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </div>
 
-        <HydraSidebar v-if="hydraModel" :model="hydraModel" />
+        <HydraSidebar v-if="hydraModel" :model="hydraModel" :stale="hydraShown?.stale" />
 
-        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
+        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>
@@ -862,9 +870,16 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <component :is="icons.more" class="ml-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
-      <Tip label="Settings" side="top">
-        <button type="button" aria-label="Settings" class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text" @click="src.openSettings()">
+      <Tip :label="ahUpdateDot ? 'Settings: an AgentHydra update is waiting' : 'Settings'" side="top">
+        <button
+          type="button"
+          aria-label="Settings"
+          :aria-description="ahUpdateDot ? 'An AgentHydra update is waiting' : undefined"
+          class="relative flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text"
+          @click="src.openSettings()"
+        >
           <component :is="sidebarIcons.footer" class="size-4" />
+          <span v-if="ahUpdateDot" class="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-accent" aria-hidden="true" />
         </button>
       </Tip>
     </footer>

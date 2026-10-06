@@ -221,6 +221,9 @@ describe('transcripts', () => {
     // AgentHydra cut this input: kept raw rather than dropped
     expect(Object.keys(tools[4].input)).toEqual(['raw'])
     expect(new Set(items.map((i) => i.id)).size).toBe(items.length)
+    // a reply that names its transcript line can be copied up to (the action under it); one that does not cannot
+    const replies = items.filter((i) => i.kind === 'assistant_text') as Extract<(typeof items)[number], { kind: 'assistant_text' }>[]
+    expect(replies.map((r) => r.branchFrom)).toEqual([undefined, '00000000-0000-4000-8000-00000000c0de'])
   })
 
   test('a worker detail becomes its task, event lines and running last tool', () => {
@@ -238,9 +241,9 @@ describe('a worker of another PC', () => {
     createdAt: 1, updatedAt: 2, activeS: 1, costUsd: null, lastActivity: null, error: null, verdict: null,
   }
 
-  test('the title of the chat that started it and its earlier sessions pass through; an older PC sends neither', () => {
-    const mapped = mapRemoteWorker({ ...base, originSessionId: 's-chat', originTitle: 'Example chat', sessions: ['s-1', 's-2'] }, 'OTHER-PC', new Map())
-    expect(mapped).toMatchObject({ originTitle: 'Example chat', sessions: ['s-1', 's-2'], pc: 'OTHER-PC' })
-    expect(mapRemoteWorker(base, 'OTHER-PC', new Map())).toMatchObject({ originTitle: null, sessions: [] })
+  test('the title of the chat that started it, its earlier sessions and its folder\'s last name pass through; an older PC sends none', () => {
+    const mapped = mapRemoteWorker({ ...base, originSessionId: 's-chat', originTitle: 'Example chat', sessions: ['s-1', 's-2'], folder: 'Example-repo' }, 'OTHER-PC', new Map())
+    expect(mapped).toMatchObject({ originTitle: 'Example chat', sessions: ['s-1', 's-2'], folder: 'Example-repo', cwd: null, pc: 'OTHER-PC' })
+    expect(mapRemoteWorker(base, 'OTHER-PC', new Map())).toMatchObject({ originTitle: null, sessions: [], folder: null })
   })
 })

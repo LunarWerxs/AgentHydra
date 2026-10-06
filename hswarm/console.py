@@ -161,7 +161,9 @@ _CALLER_IDS: dict[str, dict] = {}  # job id -> its full caller ids: the stamp is
 
 
 def _caller_ids(job_id: str, live) -> dict:
-    """{session_id, chat_id, instance} in full, from the job's own stamp (the running job in memory, else job.json); "" when unknown."""
+    """{session_id, chat_id, instance} in full, and `folder`, the last name of the caller's folder (never its path), from the
+    job's own stamp (the running job in memory, else job.json); "" when unknown. AgentHydra shares these with the owner's
+    other PC, whose Hydra Desk files the job under that folder's group."""
     if job_id in _CALLER_IDS:
         return _CALLER_IDS[job_id]
     stamp = live.caller if live is not None else None
@@ -172,6 +174,7 @@ def _caller_ids(job_id: str, live) -> dict:
         stamp = doc.get("caller") if isinstance(doc, dict) else None
     stamp = stamp if isinstance(stamp, dict) else {}
     ids = {k: str(stamp.get(k) or "") for k in ("session_id", "chat_id", "instance")}
+    ids["folder"] = next((p for p in reversed(re.split(r"[\\/]+", str(stamp.get("cwd") or ""))) if p), "")
     if live is None or live.finished:  # a running job's stamp is already complete, but keep the cache to jobs that are done
         while len(_CALLER_IDS) >= 1024:
             _CALLER_IDS.pop(next(iter(_CALLER_IDS)))
@@ -185,7 +188,7 @@ def _with_caller_ids(rows: list[dict], live: dict) -> list[dict]:
 
 async def _jobs(b: dict) -> dict:
     """GET jobs: newest first, each as hswarm_status answers it plus `caller_ids` {session_id, chat_id, instance} (the full
-    values of the job's stamp, "" when unknown) beside the `caller` key string.
+    values of the job's stamp, "" when unknown) and its `folder`'s last name, beside the `caller` key string.
 
     `limit` (default 20) counts FINISHED jobs only: every RUNNING job is always listed, however many newer finished jobs
     exist. `state=running` lists only the running jobs; any other `state` value keeps the finished jobs in that state."""

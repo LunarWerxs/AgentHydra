@@ -71,21 +71,30 @@ function setReason(key: string, reason: UsageReason) {
  *  nothing). Safe to call more than once; a later call just re-syncs, and an unchanged cache
  *  assigns nothing. */
 let hydrating: Promise<void> | null = null
-/** One read at a time: the CLI and desktop kinds both refresh it, and share a running request.
+/** One read at a time: every caller shares a running request, and one that comes within
+ *  HYDRATE_REUSE_MS of a read that worked reuses it (the cli and desktop kinds load 1.5s apart at
+ *  startup, and a page that opens on the Instances tab reads beside App's own refresh). A failed read
+ *  starts no reuse window, so the next caller tries again.
  *  `skipSame` (the background refresh) writes nothing when the cache is the one already read. */
 function hydrate(skipSame = false): Promise<void> {
-  return (hydrating ??= hydrateOnce(skipSame).finally(() => {
+  if (!hydrating && Date.now() - hydratedAt < HYDRATE_REUSE_MS) return Promise.resolve()
+  return (hydrating ??= hydrateOnce(skipSame).then((ok) => {
+    if (ok) hydratedAt = Date.now()
+  }).finally(() => {
     hydrating = null
   }))
 }
+const HYDRATE_REUSE_MS = 5_000
+let hydratedAt = 0
 
-async function hydrateOnce(skipSame: boolean): Promise<void> {
+/** True when the read worked. */
+async function hydrateOnce(skipSame: boolean): Promise<boolean> {
   const res = await guard(api.getUsageCache())
   if (res) {
     const text = JSON.stringify(res)
     if (skipSame && text === lastHydrateText) {
       hydrated.value = true
-      return
+      return true
     }
     lastHydrateText = text
     snapshots.value = reconcileMap(snapshots.value, Object.entries(res.cache))
@@ -94,6 +103,7 @@ async function hydrateOnce(skipSame: boolean): Promise<void> {
       lastAutoRefreshAt.value = res.lastAutoRefreshAt
   }
   hydrated.value = true
+  return !!res
 }
 
 // --- keeping the numbers current -----------------------------------------------------------------

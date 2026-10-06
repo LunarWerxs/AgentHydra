@@ -18,9 +18,7 @@ import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_F
 import {
   BridgeError,
   createClient,
-  type AhChatRow,
   type AhCliInstance,
-  type AhRemoteQueues,
   type AhSearchResult,
   type AhSessionRow,
   type AhWorker,
@@ -97,9 +95,28 @@ export function createBridge(opts: BridgeOptions = {}) {
   const homeStats = createHomeStats(client, now)
   let configDirs: { at: number; byId: Map<string, string> } | null = null
   let instancesRead: { at: number; read: Promise<AhCliInstance[]> } | null = null
-  let sessionsRead: { at: number; read: Promise<AhSessionRow[]> } | null = null
-  let remotesRead: { at: number; read: Promise<AhRemoteQueues | null> } | null = null
-  let chatsRead: { at: number; read: Promise<AhChatRow[]> } | null = null
+  /** One read shared by every caller for `freshMs`. A failure is never kept as an answer: its callers get the
+   *  rejection, and the next caller reads again after a wait that doubles while the route keeps failing (one
+   *  worker tick, then two, four, up to `freshMs`), so a route that hangs costs its timeout every few ticks. */
+  function sharedRead<T>(freshMs: number, load: () => Promise<T>): () => Promise<T> {
+    let slot: { at: number; ms: number; read: Promise<T> } | null = null
+    let fails = 0
+    return () => {
+      if (slot && now() - slot.at < slot.ms) return slot.read
+      const entry = { at: now(), ms: freshMs, read: load() }
+      slot = entry
+      entry.read.then(
+        () => {
+          fails = 0
+        },
+        () => {
+          fails++
+          entry.ms = Math.min(freshMs, WORKERS_FRESH_MS * 2 ** (fails - 1))
+        },
+      )
+      return entry.read
+    }
+  }
 
   /** The CLI instances, read once per INSTANCES_FRESH_MS however many callers ask (a poll tick asks three ways). */
   /** The CLI instances' config folders from the last read, for the synchronous sessionRoots(). */
@@ -200,13 +217,14 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
-  /** The other PCs' queues, read at most every REMOTES_FRESH_MS. Shared between remoteWorkers and swarmJobs. */
-  function cachedRemoteQueues(): Promise<AhRemoteQueues | null> {
-    if (remotesRead && now() - remotesRead.at < REMOTES_FRESH_MS) return remotesRead.read
-    const read = client.remoteQueues().catch(() => null)
-    remotesRead = { at: now(), read }
-    return read
-  }
+  /** The other PCs' queues, read at most every REMOTES_FRESH_MS. Shared between remoteWorkers and swarmJobs.
+   *  An AgentHydra without the route (404) is kept as none; any other failure is retried (sharedRead). */
+  const cachedRemoteQueues = sharedRead(REMOTES_FRESH_MS, () =>
+    client.remoteQueues().catch((err) => {
+      if (err instanceof BridgeError && err.status === 404) return null
+      throw err
+    }),
+  )
 
   /** The other PCs' workers. An AgentHydra without the route (404), one that fails, or sharing off is none:
    *  never a failure of this PC's list. Read at most every REMOTES_FRESH_MS. */
@@ -250,7 +268,8 @@ export function createBridge(opts: BridgeOptions = {}) {
   async function workers(o: { all?: boolean } = {}): Promise<CliMayteWorker[]> {
     const remote = remoteWorkers(o.all)
     try {
-      const raw = await rawWorkers(o.all)
+      // A copy: the read is shared by every caller of the tick, none may change it.
+      const raw = [...(await rawWorkers(o.all))]
       // Workers matched to a chat that AgentHydra's recent-finished window dropped stay listed under it.
       const have = new Set(raw.map((w) => w.id))
       const missing = extraWorkerIds().filter((id) => !have.has(id))
@@ -277,26 +296,10 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** The 24-hour transcript index, read at most every SESSIONS_FRESH_MS. */
-  function sessionsIndex(): Promise<AhSessionRow[]> {
-    if (sessionsRead && now() - sessionsRead.at < SESSIONS_FRESH_MS) return sessionsRead.read
-    const read = client.sessions().catch(() => [])
-    sessionsRead = { at: now(), read }
-    read.catch(() => {
-      if (sessionsRead?.read === read) sessionsRead = null
-    })
-    return read
-  }
+  const sessionsIndex = sharedRead(SESSIONS_FRESH_MS, () => client.sessions())
 
   /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
-  function chatsForExternal(): Promise<AhChatRow[]> {
-    if (chatsRead && now() - chatsRead.at < SESSIONS_FRESH_MS) return chatsRead.read
-    const read = client.chats().catch(() => [])
-    chatsRead = { at: now(), read }
-    read.catch(() => {
-      if (chatsRead?.read === read) chatsRead = null
-    })
-    return read
-  }
+  const chatsForExternal = sharedRead(SESSIONS_FRESH_MS, () => client.chats())
 
   /** AgentHydra's reads behind the outside sessions, or null when every one failed to reach it (it is down). */
   async function externalInputs(): Promise<ExternalInputs | null> {

@@ -907,6 +907,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
   })
 
   test('commits are checked, a pass stays provisional and out of the scorecard, a later verdict replaces it', async () => {
+    const passes = opusHighCode()?.pass ?? 0
     const run = climayteRun({
       tasks: [
         codeTask('inside', `inside FAKE-COMMITS:${sha.inside}`),
@@ -964,13 +965,15 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     // The provisional pass is not on the scorecard. The orchestrator's fail on the same work leaves
     // one fail, not a pass and a fail. The row is the rung these workers ran (Opus high), named by
     // model too: climayte.test.ts, run first in the same process, leaves a Sonnet high code row.
+    // Counted from the row as this test found it: since 5ee3c78f that file's check test finishes an
+    // Opus high code task of its own, so on Linux the row already holds its pass (CI, 2026-10-06).
     const row = () => opusHighCode()
-    expect(row()?.pass ?? 0).toBe(0)
+    expect(row()?.pass ?? 0).toBe(passes)
     const fails = row()?.fail ?? 0
     expect(
       climayteVerdict(ids[0] as string, { verdict: 'fail', note: 'wrong', retry: false }).ok,
     ).toBe(true)
-    expect(row()?.pass ?? 0).toBe(0)
+    expect(row()?.pass ?? 0).toBe(passes)
     expect(row()?.fail).toBe(fails + 1)
     expect(climayteList({ id: ids[0] as string })[0]?.verdicts?.map((v) => v.by)).toEqual([
       'wave',

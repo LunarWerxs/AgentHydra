@@ -2,8 +2,8 @@
 // shown, one choice per kind in the Filter menu's "Sub-items" part, remembered like the task toggle (owner,
 // 2026-10-05: "show whether or not the CliMayte and ZSwarm tasks are shown as just an icon, like a number ...
 // in a way that is not insanely cluttering up my sidebar"). List draws their lines under the row; Count draws a
-// badge at the row's right edge (its icon and how many run) and the lines only after a click on it. Pure, so
-// the window and the tests share it.
+// badge at the row's right edge (its icon, how many run and, for CliMayte, a dot per account) and the lines only
+// after a click on it. Pure, so the window and the tests share it.
 import { ref, watch } from 'vue'
 import type { SwarmJob } from '@shared/protocol'
 import type { TaskNode } from './tasks'
@@ -12,8 +12,8 @@ export type SubMode = 'list' | 'count'
 export type SubKind = 'tasks' | 'jobs'
 
 export const SUB_MODE_KEYS: Record<SubKind, string> = { tasks: 'hydra-desk.sidebar.tasks-mode', jobs: 'hydra-desk.sidebar.jobs-mode' }
-/** What each kind shows until the owner chooses: CliMayte's lines as before, HSwarm's jobs as a badge. */
-export const SUB_MODE_DEFAULTS: Record<SubKind, SubMode> = { tasks: 'list', jobs: 'count' }
+/** What each kind shows until the owner chooses: a badge for both (owner, 2026-10-06, of CliMayte's: "the same option ... that I can click to see if I want"); List puts the lines back under the row. */
+export const SUB_MODE_DEFAULTS: Record<SubKind, SubMode> = { tasks: 'count', jobs: 'count' }
 export const SUB_KIND_LABELS: Record<SubKind, string> = { tasks: 'CliMayte tasks', jobs: 'HSwarm jobs' }
 
 /** A stored value as a mode: anything but 'list' or 'count' (nothing stored, a stale value) is the kind's default. */
@@ -40,12 +40,21 @@ export function toggleExpanded(rowKey: string, kind: SubKind) {
   expanded.value = next
 }
 
-/** One kind's badge on a row: how many run, how many there are, and the titles its tooltip lists. */
+/** An account a kind's items run on (a CliMayte task's '#68'), once each: those with a running item first, then in the order the items list them. */
+export interface SubAccount {
+  label: string
+  running: boolean
+}
+
+/** One kind's badge on a row: how many run, how many there are, the titles its tooltip lists, and the accounts its items run on. */
 export interface SubBadge {
   kind: SubKind
   running: number
   total: number
+  /** The titles its tooltip lists, a CliMayte task after its account (`#68 · title`). */
   titles: string[]
+  /** The accounts its items run on (CliMayte's; HSwarm's jobs have none): its badge draws a dot per account in that account's colour (account-tone.ts). */
+  accounts: SubAccount[]
   /** Its lines are open under the row. */
   open: boolean
 }
@@ -59,13 +68,18 @@ export function badgeTip(b: SubBadge): string {
   return [head, ...b.titles.slice(0, TIP_TITLES), ...more, b.open ? 'Click to fold' : 'Click to list them'].join('\n')
 }
 
-const badgeOf = (kind: SubKind, items: readonly { title: string; active: boolean }[], open: boolean): SubBadge => ({
-  kind,
-  running: items.filter((i) => i.active).length,
-  total: items.length,
-  titles: items.map((i) => i.title),
-  open
-})
+const badgeOf = (kind: SubKind, items: readonly { title: string; active: boolean; account?: string | null }[], open: boolean): SubBadge => {
+  const byAccount = new Map<string, boolean>()
+  for (const i of items) if (i.account) byAccount.set(i.account, (byAccount.get(i.account) ?? false) || i.active)
+  return {
+    kind,
+    running: items.filter((i) => i.active).length,
+    total: items.length,
+    titles: items.map((i) => (i.account ? `${i.account} · ${i.title}` : i.title)),
+    accounts: [...byAccount].map(([label, running]) => ({ label, running })).sort((a, b) => Number(b.running) - Number(a.running)),
+    open
+  }
+}
 
 /**
  * What a row draws of its sub-items: the lines (`nodes`, `jobs`) of each kind that is in List mode or opened by
@@ -79,7 +93,7 @@ export function rowSubItems(
   open: ReadonlySet<string>
 ): { nodes: TaskNode[]; jobs: SwarmJob[]; badges: SubBadge[] } {
   const badges: SubBadge[] = []
-  const shown = (kind: SubKind, items: readonly { title: string; active: boolean }[]) => {
+  const shown = (kind: SubKind, items: readonly { title: string; active: boolean; account?: string | null }[]) => {
     if (modes[kind] === 'list') return true
     const isOpen = open.has(openKey(rowKey, kind))
     if (items.length) badges.push(badgeOf(kind, items, isOpen))
@@ -87,7 +101,7 @@ export function rowSubItems(
   }
   const taskList = tasks ?? []
   const jobList = jobs ?? []
-  const showTasks = shown('tasks', taskList.map((n) => ({ title: n.worker.title, active: n.worker.active })))
+  const showTasks = shown('tasks', taskList.map((n) => ({ title: n.worker.title, active: n.worker.active, account: n.worker.account })))
   const showJobs = shown('jobs', jobList)
   return { nodes: showTasks ? [...taskList] : [], jobs: showJobs ? [...jobList] : [], badges }
 }

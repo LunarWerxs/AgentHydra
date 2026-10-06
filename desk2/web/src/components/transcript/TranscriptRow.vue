@@ -58,6 +58,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
       :text="item.text"
       :ts="item.ts"
       :resend="turnPrompt"
+      :branch-from="item.branchFrom"
       :class="overlayActions && 'absolute left-0 top-full z-10 bg-bg-page'"
     />
   </div>

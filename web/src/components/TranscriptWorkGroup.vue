@@ -192,7 +192,7 @@ const showElapsed = computed(() => !!elapsed.value && (props.live || !props.grou
     </button>
 
     <ExpandTransition :open="open">
-      <ol class="ms-[0.4375rem] mt-1 mb-0.5 space-y-0.5 border-s border-border/70 ps-3">
+      <ol class="ms-1.75 mt-1 mb-0.5 space-y-0.5 border-s border-border/70 ps-3">
         <li
           v-for="step in group.steps"
           :key="step.key"

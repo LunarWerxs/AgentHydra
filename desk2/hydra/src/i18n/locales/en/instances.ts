@@ -1,7 +1,8 @@
 // Instances view — sortable instance table, toolbar, row actions, create dialog.
 export default {
   title: 'Instances',
-  settingsTitle: 'Instances settings',
+  // The table's gear: its settings are in Desk's Settings, Instances → Desktop.
+  settingsTitle: 'Settings',
   refresh: 'Refresh',
   refreshHint: 'Reload every instance list and re-check the Claude Desktop install',
   createInstance: 'Create instance',
@@ -49,6 +50,9 @@ export default {
   quit: 'Quit',
   focusHint: 'Bring this instance to the foreground',
   focusShort: 'Focus',
+  // The name cell: a click copies the account's full address, its hover says so (owner, 2026-10-06).
+  nameCopyHint: 'Click to copy the address',
+  toastEmailCopied: 'Copied {email}',
   delete: 'Delete',
   edit: 'Edit',
   moreActions: 'More actions',
@@ -167,10 +171,6 @@ export default {
     'This is your real, non-isolated Claude Desktop, not an instance created here. Quitting it closes any conversation in progress.',
   quitExternalDialogSubmit: 'Quit it anyway',
   quitExternalDialogQuitting: 'Quitting…',
-  usageModeOn: 'Show usage columns',
-  usageModeOff: 'Show process columns',
-  usageModeHint:
-    'Swap PID, uptime and memory for what is left of each quota window and how long until it resets.',
   // The Filter flyout (toolbar) — three facets, OR-ed. See composables/useInstanceFilter.ts.
   filterTitle: 'Filter',
   filterHint:
@@ -452,16 +452,6 @@ export default {
     cliUsable: 'of {total} CLI accounts usable now',
     desktopUsable: 'of {total} desktop accounts usable now',
     usableDetail: '{signedIn} signed in, {spent} at a limit, {signedOut} signed out',
-    pool5hLabel: '5h {pct}% left',
-    pool5hEmpty: '5h n/a',
-    poolWeekLabel: 'Week {pct}% left',
-    poolWeekEmpty: 'Week n/a',
-    pool5hTip: '5-hour limit: {pct}% left across these accounts',
-    pool5hNone: '5-hour limit: no usage reading yet',
-    poolWeekTip: 'Weekly limit: {pct}% left across these accounts',
-    poolWeekNone: 'Weekly limit: no usage reading yet',
-    poolCounted: 'Accounts counted: {n}, weighted by plan size.',
-    poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
     // Nearest their limit: every signed-in account with a reading, the most used first.
     nearest: 'Nearest their limit',
     nearestHint:

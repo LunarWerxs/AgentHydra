@@ -12,8 +12,8 @@
 //   Sessions on this PC: how busy is this PC now, in the last hour, in the last day?
 //   The 24-hour charts: when did it happen, and on which models?
 //   HSwarm: what did the swarm save, and on which accounts?
-// Colour only where it means something: greys by default, the accent on an account near its limit,
-// the warning tones only for a real warning (a pool running low, no usable account, a failed task).
+// Colour only where it means something: greys by default, the warning tones only for a real warning
+// (a pool or an account at 70% used or more, no usable account, a failed task).
 // Every number comes from an API the other views already read; a part with a detail page emits
 // `navigate` with that view's id and the nav opens it.
 //   Desktop / CLI accounts: useInstances (/api/instances), useCliInstances (/api/cli-instances) and
@@ -26,7 +26,7 @@ import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import SwarmStatsCard from '@/components/swarm-stats/SwarmStatsCard.vue'
 import { Button } from '@/components/ui/button'
-import UsageBar from '@/components/UsageBar.vue'
+import PooledUsageGauges from '@/components/PooledUsageGauges.vue'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useHomeSessions } from '@/composables/useHomeSessions'
@@ -39,7 +39,6 @@ import {
   countPerHour,
   type HeadroomRow,
   hourStarts,
-  severityOf,
   sortHeadroom,
   usableNow,
   usedPct,
@@ -49,8 +48,7 @@ import { accountDisplay, useHswarmApi } from '@/lib/hswarm-api'
 import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
 import { accountSaved, useSwarmStats } from '@/lib/swarm-stats'
 import { usageBadgeVariant } from '@/lib/usage'
-import { type PooledRemaining, pooledRemaining } from '@/lib/usage-pool'
-import type { WaitSeverity } from '@/lib/usage-reset'
+import { pooledRemaining } from '@/lib/usage-pool'
 import { refreshWarm } from '@/lib/warm-data'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -107,50 +105,8 @@ interface PoolInput {
   planLabel?: string | null
   usage: ReturnType<typeof snapshotFor>
 }
-interface Gauge {
-  key: 'session' | 'week'
-  pct: number | null
-  variant: WaitSeverity | 'neutral'
-  label: string
-  tip: string
-  counted: string
-  leftOut?: string
-}
 
-/** One window's pooled gauge. Grey while plenty is left; the CLI table's own warning tones
- *  (usageBadgeVariant) only once the pool runs low, so a coloured bar here always means something. */
-function gauge(key: Gauge['key'], pool: PooledRemaining): Gauge {
-  const pct = pool.pct
-  const tone = pct === null ? 'success' : usageBadgeVariant(100 - pct)
-  const session = key === 'session'
-  let label: string
-  let tip: string
-  if (pct === null) {
-    label = session ? t('instances.home.pool5hEmpty') : t('instances.home.poolWeekEmpty')
-    tip = session ? t('instances.home.pool5hNone') : t('instances.home.poolWeekNone')
-  } else {
-    label = session
-      ? t('instances.home.pool5hLabel', { pct })
-      : t('instances.home.poolWeekLabel', { pct })
-    tip = session
-      ? t('instances.home.pool5hTip', { pct })
-      : t('instances.home.poolWeekTip', { pct })
-  }
-  return {
-    key,
-    pct,
-    variant: tone === 'success' ? 'neutral' : tone,
-    label,
-    tip,
-    counted: t('instances.home.poolCounted', { n: pool.counted }),
-    leftOut:
-      pool.signedOut + pool.unread > 0
-        ? t('instances.home.poolLeftOut', { signedOut: pool.signedOut, unread: pool.unread })
-        : undefined,
-  }
-}
-
-/** One kind's line: usable now (home-charts usableNow), the breakdown, the two gauges. */
+/** One kind's line: usable now (home-charts usableNow), the breakdown, the two pooled windows. */
 function accountLine(rows: PoolInput[]) {
   const { signedIn, spent, usable } = usableNow(
     rows.map((r) => ({ signedIn: r.signedIn, session: r.usage?.session, week: r.usage?.weekAll })),
@@ -169,7 +125,8 @@ function accountLine(rows: PoolInput[]) {
       spent,
       signedOut: rows.length - signedIn,
     }),
-    gauges: [gauge('session', pool('session')), gauge('week', pool('weekAll'))],
+    session: pool('session'),
+    week: pool('weekAll'),
   }
 }
 // One computed per kind, so a CLI poll does not redo the desktop line. A CLI login's plan falls back
@@ -251,8 +208,14 @@ const headroom = computed(() => {
 const limitsOpen = ref(false)
 const limitRows = computed(() => (limitsOpen.value ? headroom.value : headroom.value.slice(0, TOP)))
 const limitMore = computed(() => Math.max(0, headroom.value.length - TOP))
-/** 70% used or more (home-charts severityOf): the one place this page spends the accent. */
-const nearLimit = (pct: number | null) => pct !== null && severityOf(pct) !== 'ok'
+/** The same rule as the pooled week gauge above (usageBadgeVariant on the used share: amber from 70%,
+ *  red over 90%), so a row and a gauge never disagree about what is a warning. Grey below it. */
+const toneOf = (pct: number | null) => {
+  const tone = pct === null ? 'success' : usageBadgeVariant(pct)
+  return tone === 'success' ? null : tone
+}
+const BAR_TONE = { warning: 'bg-warning', destructive: 'bg-destructive' } as const
+const TEXT_TONE = { warning: 'text-warning', destructive: 'text-destructive' } as const
 const worstOf = (r: HeadroomRow) => Math.max(r.session ?? 0, r.week ?? 0)
 const pctText = (pct: number | null) => (pct === null ? '–' : `${Math.round(pct)}%`)
 
@@ -463,19 +426,7 @@ const swarmMore = computed(() => Math.max(0, swarmAll.value.length - TOP))
                 <span class="truncate text-xs text-muted-foreground">{{ line.text }}</span>
               </button>
             </IconTooltip>
-            <div class="ml-auto flex items-center gap-1.5">
-              <IconTooltip
-                v-for="g in line.gauges"
-                :key="g.key"
-                :label="g.tip"
-                :description="g.counted"
-                :detail="g.leftOut"
-              >
-                <div class="w-24 shrink-0">
-                  <UsageBar :fill-pct="g.pct ?? 0" :variant="g.variant" :label="g.label" />
-                </div>
-              </IconTooltip>
-            </div>
+            <PooledUsageGauges class="ml-auto" gray :session="line.session" :week="line.week" />
           </li>
         </ul>
         <p v-else class="py-2 text-2xs text-muted-foreground">{{ $t('instances.home.noAccounts') }}</p>
@@ -510,20 +461,20 @@ const swarmMore = computed(() => Math.max(0, swarmAll.value.length - TOP))
                   />
                   <span class="truncate">{{ r.label }}</span>
                 </span>
-                <span class="h-1 overflow-hidden rounded-full bg-muted-foreground/10">
+                <span class="h-1 overflow-hidden rounded-full bg-muted-foreground/10 dark:bg-muted-foreground/15">
                   <span
                     class="block h-full rounded-full"
-                    :class="nearLimit(worstOf(r)) ? 'bg-primary' : 'bg-muted-foreground/35'"
+                    :class="toneOf(worstOf(r)) ? BAR_TONE[toneOf(worstOf(r))!] : 'bg-muted-foreground/35'"
                     :style="{ width: `${worstOf(r)}%` }"
                   ></span>
                 </span>
                 <span
                   class="text-end tabular-nums"
-                  :class="nearLimit(r.session) ? 'font-semibold text-foreground' : 'text-muted-foreground'"
+                  :class="toneOf(r.session) ? ['font-semibold', TEXT_TONE[toneOf(r.session)!]] : 'text-muted-foreground'"
                 >{{ pctText(r.session) }}</span>
                 <span
                   class="text-end tabular-nums"
-                  :class="nearLimit(r.week) ? 'font-semibold text-foreground' : 'text-muted-foreground'"
+                  :class="toneOf(r.week) ? ['font-semibold', TEXT_TONE[toneOf(r.week)!]] : 'text-muted-foreground'"
                 >{{ pctText(r.week) }}</span>
               </button>
             </li>
@@ -600,7 +551,7 @@ const swarmMore = computed(() => Math.max(0, swarmAll.value.length - TOP))
             class="grid grid-cols-[minmax(0,7rem)_minmax(2rem,1fr)_auto] items-center gap-2"
           >
             <span class="truncate text-muted-foreground">{{ m.key }}</span>
-            <span class="h-1 overflow-hidden rounded-full bg-muted-foreground/10">
+            <span class="h-1 overflow-hidden rounded-full bg-muted-foreground/10 dark:bg-muted-foreground/15">
               <span class="block h-full rounded-full bg-muted-foreground/35" :style="{ width: `${m.pct}%` }"></span>
             </span>
             <span class="tabular-nums">{{ m.n }}</span>

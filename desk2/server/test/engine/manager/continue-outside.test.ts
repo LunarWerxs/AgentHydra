@@ -60,6 +60,7 @@ function boot(w: World, o: { external?: ExternalSession[]; older?: ExternalSessi
   }
   const m = new ChatManager({
     home: w.home,
+    claudeHome: w.home,
     emit: () => {},
     settings: () => ({ ...DEFAULT_SETTINGS, defaultAccountId: w.a.id, ...o.settings }),
     bridge,

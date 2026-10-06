@@ -7,8 +7,8 @@ instructions below, before operating or modifying desktop chat management.
 
 For supported archive and migration-source cleanup, use AgentHydra's production
 programmatic path first. **Start debugger automatically** is saved per account in
-the Instances tab's settings (its gear) and activates on the next **AgentHydra
-Open**; do not repeat developer menu clicks. Enabling `allowDevTools` alone does
+AgentHydra's **Settings → Instances → Desktop** (the Desktop table's gear opens it)
+and activates on the next **AgentHydra Open**; do not repeat developer menu clicks. Enabling `allowDevTools` alone does
 not start the debugger.
 
 See [the native-control runbook](docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md) for exact
@@ -27,8 +27,9 @@ right-click menus, pop-ups or developer-menu toggles.
   **Open through AgentHydra** (`POST /api/instances/:encodedDir/open`). It does not
   need a developer-menu click at every launch. A direct Claude shortcut bypasses
   this launch setting.
-- The user-facing control is **Instances tab → gear (Instances settings) →
-  Claude native control → Start debugger automatically**, per account. Preserve existing port and routing
+- The user-facing control is **Settings → Instances → Desktop → Claude native
+  control → Start debugger automatically**, per account (the old window of a
+  release build: Instances tab → gear). Preserve existing port and routing
   mode; each profile must have a distinct debugger port. New profiles are not
   automatically opted in. Check saved settings instead of assuming a fleet-wide
   default.

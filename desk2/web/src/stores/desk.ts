@@ -31,7 +31,9 @@ import type {
   QueueSettingsPatch,
   QueueState,
   SendNowRequest,
-  SendNowResult
+  SendNowResult,
+  ExternalBranchRequest,
+  ExternalBranchResult
 } from '@shared/protocol'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
@@ -231,7 +233,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   // Nothing answered (the browser says only "Failed to fetch"): the server is stopped or restarting.
   const res = await fetch(BASE_URL + path, init).catch((err: unknown) => {
-    throw new Error("Hydra Desk 2's server is not answering (it may be restarting)", { cause: err })
+    throw new Error("This window's server is not answering (it may be restarting)", { cause: err })
   })
   if (!res.ok) {
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
@@ -489,7 +491,7 @@ function updateWindowTitle() {
   if (working > 0) parts.push(`${working} working`)
   if (needsYou > 0) parts.push(`${needsYou} need you`)
   const prefix = parts.length > 0 ? `(${parts.join(', ')}) ` : ''
-  document.title = `${prefix}Hydra Desk 2`
+  document.title = `${prefix}AgentHydra`
 }
 
 watch(
@@ -888,6 +890,18 @@ export function useDesk() {
       const s = findExternal(sessionId)
       if (s) Object.assign(s, { pinned: meta.pinned, archived: meta.archived, unread: meta.unread, group: meta.group }, meta.title ? { title: meta.title } : {})
       return meta
+    },
+
+    /** "Copy up to here into a new chat" on an outside Claude Code session's reply: AgentHydra writes the copy beside it, which opens. */
+    async branchExternal(sessionId: string, uuid: string): Promise<string> {
+      const title = findExternal(sessionId)?.title
+      const made = await fetchJson<ExternalBranchResult>(`/external/sessions/${encodeURIComponent(sessionId)}/branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uuid, ...(title ? { title } : {}) } satisfies ExternalBranchRequest)
+      })
+      store.selected = { kind: 'external', id: made.id }
+      return made.id
     },
 
     /** Lists an outside session the list lacks (older than its 24 hours) by fetching it; rejects on AgentHydra's 404. */

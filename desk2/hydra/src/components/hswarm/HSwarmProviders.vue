@@ -468,7 +468,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               </a>
             </div>
           </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <Label class="text-sm">{{ t('hswarm.v.providers.enabled') }}</Label>
             <Switch
               :model-value="!!selectedProviderData.enabled"

@@ -16,7 +16,7 @@
     { "role": "user", "kind": "tool_result", "text": "<tool_use_error>File does not exist.</tool_use_error>", "tool_name": null, "timestamp": "2026-10-03T23:10:13.000Z" },
     { "role": "assistant", "kind": "tool_use", "text": "{\"file_path\":\"src/date.ts\",\"old_string\":\"const d = new Date(s)\",\"new_string\":\"const d = new Date(`${s}T00:00:00Z`)\",\"replace_all\":false,\"content\":\"a very long value that the daemon cut off here…", "tool_name": "Edit", "timestamp": "2026-10-03T23:10:20.000Z" },
     { "role": "user", "kind": "tool_result", "text": "The file src/date.ts has been updated.", "tool_name": null, "timestamp": "2026-10-03T23:10:21.000Z" },
-    { "role": "assistant", "kind": "text", "text": "Fixed the timezone bug in `parseDate`. Re-running the suite.", "tool_name": null, "timestamp": "2026-10-03T23:10:25.000Z" },
+    { "role": "assistant", "kind": "text", "text": "Fixed the timezone bug in `parseDate`. Re-running the suite.", "tool_name": null, "uuid": "00000000-0000-4000-8000-00000000c0de", "timestamp": "2026-10-03T23:10:25.000Z" },
     { "role": "assistant", "kind": "tool_use", "text": "{\"command\":\"bun test\"}", "tool_name": "Bash", "timestamp": "2026-10-03T23:10:26.000Z" }
   ],
   "has_more": true

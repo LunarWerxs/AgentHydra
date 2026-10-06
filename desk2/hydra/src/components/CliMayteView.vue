@@ -7,8 +7,11 @@
 // Running shows only the tasks that can still change (queued, running, waiting or being checked), All
 // every one, and another PC's tasks come with a cloud while the queue is shared. A click opens the task
 // (CliMayteWorkerDetail.vue, whose log is CliMayte's journal) in place of the list; its back button, or
-// a click on the CliMayte row, goes back to the list where it was. The waves and the scorecard (the
-// totals and "What works", OffloadStatsCard.vue) sit above the list, each folded until it is opened.
+// a click on the CliMayte row, goes back to the list where it was. The scorecard (the totals and "What
+// works", OffloadStatsCard.vue) sits above the list, folded until it is opened. The manager waves are the
+// tree's CliMayte > Waves row (`section: 'waves'`, owner 2026-10-06: "Move the waves section into a
+// subsection called waves underneath CLI Mate"): the same page shows them in place of the list, and a
+// wave's manager opens here as any task does, its back button returning to the waves.
 // None of it goes into Desk's sidebar: on the HSwarm tab that is HSwarm's tree.
 //
 // The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts: the page
@@ -21,6 +24,7 @@ import {
   ChevronRight,
   Cloud,
   CloudOff,
+  ListChecks,
   Network,
   PictureInPicture2,
   RefreshCw,
@@ -49,6 +53,11 @@ import CliMayteFloat from '@/components/CliMayteFloat.vue'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
+import FreeThreadDetail from '@/components/FreeThreadDetail.vue'
+import { useFreeInstances } from '@/composables/useFreeInstances'
+import { freeThreadAsk } from '@/lib/free-instances'
+import { freeThreadRow } from '@/lib/free-threads'
+import type { FreeThread } from '@desk/shared/free-instances'
 import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -81,7 +90,7 @@ import { visibleInterval } from '@/lib/visible-poll'
 import InfoHint from '@/shell/InfoHint.vue'
 
 /** `home`: HSwarmView bumps it when the CliMayte row is clicked, which goes back to the list. */
-const props = defineProps<{ home?: number }>()
+const props = withDefaults(defineProps<{ home?: number; section?: 'tasks' | 'waves' }>(), { section: 'tasks' })
 /** `open`: a tree path for HSwarmView to show (the scorecard's HSwarm link opens HSwarm's savings). */
 const emit = defineEmits<{ open: [path: string[]] }>()
 
@@ -94,11 +103,15 @@ let floatApp: ReturnType<typeof createApp> | null = null
  *  read-only. `remote` is the one flag that tells them apart; it is never set on a local worker. */
 type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
+  free?: FreeThread
 }
+const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, activeCount: freeActiveCount } = useFreeInstances()
+const selectedFree = ref<{ instanceId: string; chatId?: string } | null>(null)
 // The data is one shared copy (composables/useCliMayteData.ts), kept warm by lib/warm-data.ts.
 const {
   workers,
   remote,
+  runningCount,
   totals,
   scorecard,
   waves,
@@ -112,7 +125,7 @@ const {
   refreshCliMayte,
 } = useCliMayteData()
 /** Every row the list shows: this PC's workers, then the other PCs'. */
-const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value])
+const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeThreads.value.map(t => freeThreadRow(t, freeInstances.value.find(i => i.id === t.instanceId)))])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
 const remoteNotes = computed<Array<{ pc: string; note: string }>>(() =>
   remote.value?.enabled
@@ -135,12 +148,33 @@ watch(
 /** The open task's row key; null while the list is on screen. */
 const selectedId = ref<string | null>(null)
 const detail = ref<(CliMayteWorkerView & { events: string[] }) | null>(null)
+/** The last few details read ahead of an opening (hover, focus, press), by task id, with when they were read.
+ *  One older than DETAIL_FRESH_MS is read again rather than painted: a task moves on. */
+const DETAIL_KEEP = 6
+const DETAIL_FRESH_MS = 30_000
+const detailCache = new Map<string, { d: CliMayteWorkerView & { events: string[] }; at: number }>()
+function freshDetail(id: string): (CliMayteWorkerView & { events: string[] }) | null {
+  const hit = detailCache.get(id)
+  return hit && Date.now() - hit.at < DETAIL_FRESH_MS ? hit.d : null
+}
+type Detail = CliMayteWorkerView & { events: string[] }
+/** Read-aheads still on their way, by task id: an opening or a refresh waits for one rather than asking again. */
+const detailReading = new Map<string, Promise<Detail | null>>()
+/** A just-opened task whose detail is not here yet: its Result, notice and reports are held a short beat
+ *  rather than drawn absent and popped in. */
+const HOLD_MS = 250
+const holding = ref(false)
+let holdTimer: ReturnType<typeof setTimeout> | undefined
+function endHold() {
+  clearTimeout(holdTimer)
+  holding.value = false
+}
 const now = ref(Date.now())
 
 /** Running: only the tasks that can still change (isCliMayteActive); All: every one. Kept in this
  *  browser, under the key of the "Hide finished" switch it replaces, so the choice carries over. */
 const runningOnly = useStorage('agenthydra.climayte.hideFinished', false)
-const activeCount = computed(() => rows.value.reduce((n, w) => n + (isCliMayteActive(w) ? 1 : 0), 0))
+const activeCount = computed(() => runningCount.value + freeActiveCount.value)
 /** The list under the filter, newest first. */
 const listed = computed(() =>
   (runningOnly.value ? rows.value.filter(isCliMayteActive) : [...rows.value]).sort(
@@ -219,14 +253,54 @@ let clock: (() => void) | null = null
 
 async function loadDetail() {
   const id = selectedId.value
-  if (!id || selectedRemote.value) return
+  if (!id || selectedRemote.value || selectedFree.value) return
   try {
-    const d = await getCliMayteWorker(id)
+    const d = await (detailReading.get(id) ?? getCliMayteWorker(id))
     // An unchanged detail keeps the old reference, so a poll with nothing new redraws nothing.
     if (selectedId.value === id && !sameData(detail.value, d)) detail.value = d
+    if (d) remember(id, d)
   } catch {
     // Keep the last detail; `unreachable` and its banner speak for a daemon that is down.
+  } finally {
+    if (selectedId.value === id) endHold()
   }
+}
+
+function remember(id: string, d: Detail) {
+  const old = detailCache.get(id)?.d
+  // A read that answers late (a read-ahead overtaken by the opening's own read) never replaces a newer one.
+  if (old && old.updatedAt > d.updatedAt) return
+  detailCache.delete(id)
+  detailCache.set(id, { d: old && sameData(old, d) ? old : d, at: Date.now() })
+  for (const k of detailCache.keys()) {
+    if (detailCache.size <= DETAIL_KEEP) break
+    detailCache.delete(k)
+  }
+}
+
+/** The first sign of interest in a local row (a press, or a hover or focus that rests): read its detail so
+ *  opening it paints whole. A copy older than the row is read again. */
+function prefetch(w: ListRow) {
+  clearTimeout(restTimer)
+  if (w.remote || w.free) return
+  const id = rowKey(w)
+  if (detailReading.has(id) || (freshDetail(id)?.updatedAt ?? -1) >= w.updatedAt) return
+  const read = getCliMayteWorker(id)
+  detailReading.set(id, read)
+  read
+    .then((d) => d && remember(id, d))
+    .catch(() => {}) // floor-ok: a read-ahead only; opening the task reads again through loadDetail, and `unreachable` speaks for a daemon that is down
+    .finally(() => detailReading.delete(id))
+}
+/** A pointer or the keyboard passing over rows reads only the one it stops on, not every row on its way. */
+const REST_MS = 120
+let restTimer: ReturnType<typeof setTimeout> | undefined
+function prefetchOnRest(w: ListRow) {
+  clearTimeout(restTimer)
+  restTimer = setTimeout(() => prefetch(w), REST_MS)
+}
+function cancelRest() {
+  clearTimeout(restTimer)
 }
 
 /** The row's verdict mark (lib/climayte-status.ts) with its hover: who judged it, and what they said. */
@@ -234,7 +308,12 @@ function verdictMark(w: CliMayteWorkerView) {
   const m = climayteVerdictMark(w)
   if (!m) return null
   const said = t(m.key, m.values)
-  return { kind: m.kind, label: said, hint: m.note ? `${said}: ${m.note}` : said }
+  const sev = m.kind === 'fail' ? w.verdicts?.[w.verdicts.length - 1]?.severity : undefined
+  return {
+    kind: m.kind,
+    label: sev === undefined ? said : t(`climayte.severity${sev}`),
+    hint: m.note ? `${said}: ${m.note}` : said,
+  }
 }
 
 function showOlder() {
@@ -246,7 +325,7 @@ function showOlder() {
  *  the open task's detail. Between those, lib/warm-data.ts keeps the list fresh (about every 2 minutes). */
 async function load(opts: { silent?: boolean; side?: boolean } = {}) {
   const wasLoaded = loaded.value
-  await refreshCliMayte(opts)
+  await Promise.allSettled([refreshCliMayte(opts), refreshFree()])
   if (unreachable.value) {
     if (!opts.silent && wasLoaded) toast.error(t('climayte.loadFailed'))
     return
@@ -288,22 +367,36 @@ function select(w: ListRow) {
   if (selectedId.value === key) return
   if (selectedId.value === null) listScroll = listEl.value?.scrollTop ?? 0
   selectedId.value = key
-  detail.value = null
-  // A remote row has no local worker to ask about: it shows what the row has.
-  if (!w.remote) void loadDetail()
+  endHold()
+  selectedFree.value = w.free ? { instanceId: w.free.instanceId, chatId: w.free.chatId } : null
+  // A remote row has no local worker to ask about: it shows what the row has. A Free chat has its own detail.
+  if (w.remote || w.free) {
+    detail.value = null
+    return
+  }
+  // A read-ahead older than the row the list shows would paint an older state first: read it again instead.
+  const hit = freshDetail(key)
+  detail.value = hit && hit.updatedAt >= w.updatedAt ? hit : null
+  if (!detail.value) {
+    holding.value = true
+    holdTimer = setTimeout(endHold, HOLD_MS)
+  }
+  void loadDetail()
 }
 
 /** Back to the list, scrolled where it was, with the row that was open focused. */
 async function back() {
   const key = selectedId.value
-  if (key === null) return
+  if (key === null && !selectedFree.value) return
   selectedId.value = null
+  selectedFree.value = null
   detail.value = null
+  endHold()
   await nextTick()
   const el = listEl.value
   if (!el) return
   el.scrollTop = listScroll
-  el.querySelector<HTMLElement>(`[data-task="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
+  if (key) el.querySelector<HTMLElement>(`[data-task="${CSS.escape(key)}"]`)?.focus({ preventScroll: true })
 }
 watch(
   () => props.home,
@@ -380,6 +473,7 @@ function rowHint(w: ListRow): string {
 }
 
 function rowHintText(w: ListRow): string {
+  if (w.free) return [w.title, w.model, w.account, w.free.chatId, w.error].filter(Boolean).join('\n')
   const note = climayteQueuedNote(w, now.value)
   const line =
     (w.status === 'failed' || w.status === 'waiting') && w.error
@@ -455,7 +549,7 @@ function rowView(w: ListRow): RowView {
     mark: verdictMark(w),
     tag: runTag(w),
     hint: rowHint(w),
-    time: activeLabel(activeS(w)),
+    time: w.free ? new Date(w.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : activeLabel(activeS(w)),
     account: w.account ? pii(w.account) : t('climayte.noAccount'),
   }
   rowViews.set(key, { w, clock, tasks, words, view })
@@ -488,6 +582,13 @@ watch(
 )
 
 // HSwarmView keeps this page in a KeepAlive, so this runs when its node is first opened too.
+watch(freeThreadAsk, ask => {
+  if (!ask) return
+  selectedFree.value = ask
+  selectedId.value = ask.chatId ? `free:${ask.instanceId}/${ask.chatId}` : null
+  detail.value = null
+  freeThreadAsk.value = null
+}, { immediate: true })
 onActivated(() => {
   active = true
   // On screen: what the shared list has is there already; read it now.
@@ -512,6 +613,8 @@ onUnmounted(() => {
   window.removeEventListener('focus', onVisible)
   clock?.()
   clock = null
+  clearTimeout(restTimer)
+  clearTimeout(holdTimer)
   unmountFloat()
   closeFloat()
 })
@@ -522,7 +625,12 @@ onUnmounted(() => {
     <!-- One line: the title with what CliMayte is behind its info mark (owner, 2026-10-01: a
          description is never a paragraph over the UI), the filter, the float and refresh. -->
     <header class="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-3 pb-2">
-      <h2 class="flex min-w-0 items-center gap-2 text-base font-semibold">
+      <h2 v-if="section === 'waves'" class="flex min-w-0 items-center gap-2 text-base font-semibold">
+        <ListChecks class="size-4.5 shrink-0" aria-hidden="true" />
+        {{ $t('climayte.waves') }}
+        <InfoHint :text="$t('climayte.wavesInfo')" />
+      </h2>
+      <h2 v-else class="flex min-w-0 items-center gap-2 text-base font-semibold">
         <Network class="size-4.5 shrink-0" aria-hidden="true" />
         {{ $t('climayte.title') }}
         <span v-if="rows.length" class="font-normal text-muted-foreground">({{ rows.length }})</span>
@@ -542,7 +650,7 @@ onUnmounted(() => {
       </h2>
       <div class="ms-auto flex items-center gap-1">
         <div
-          v-if="!selectedId && rows.length"
+          v-if="section === 'tasks' && !selectedId && !selectedFree && rows.length"
           class="me-1 flex items-center gap-1"
           role="group"
           :aria-label="$t('climayte.filterLabel')"
@@ -587,7 +695,7 @@ onUnmounted(() => {
     </header>
 
     <p
-      v-if="loaded && unreachable"
+      v-if="unreachable && (loaded || freeThreads.length)"
       role="status"
       class="mx-4 mb-2 flex shrink-0 items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-1.5 text-xs text-warning"
     >
@@ -595,8 +703,12 @@ onUnmounted(() => {
       {{ $t('climayte.staleBanner') }}
     </p>
 
+    <div v-if="selectedFree" class="flex min-h-0 flex-1 flex-col gap-2 px-4 pb-4">
+      <div class="flex shrink-0 items-center"><Button size="sm" variant="ghost" class="-ms-2" @click="back()"><ArrowLeft />{{ $t('climayte.backToTasks') }}</Button></div>
+      <FreeThreadDetail :key="`${selectedFree.instanceId}/${selectedFree.chatId || 'new'}`" :instance-id="selectedFree.instanceId" :chat-id="selectedFree.chatId" @identified="selectedId = `free:${selectedFree.instanceId}/${$event}`" />
+    </div>
     <div
-      v-if="!loaded && unreachable"
+      v-else-if="!loaded && unreachable && !freeThreads.length"
       role="alert"
       class="m-auto flex flex-col items-center gap-2 rounded-lg border border-dashed px-6 py-12 text-center"
     >
@@ -608,8 +720,19 @@ onUnmounted(() => {
       </Button>
     </div>
 
-    <div v-else-if="!loaded" class="flex flex-col gap-1.5 px-4" aria-busy="true">
+    <div v-else-if="!loaded && !freeLoaded" class="flex flex-col gap-1.5 px-4" aria-busy="true">
       <Skeleton v-for="i in 5" :key="i" class="h-7" />
+    </div>
+
+    <!-- The Waves row: the waves in place of the list. -->
+    <div v-else-if="section === 'waves' && !selectedId" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <CliMayteWaves
+        :waves="waves"
+        :workers="workers"
+        :more="hasOlder"
+        :now="now"
+        @select-worker="selectManager"
+      />
     </div>
 
     <div
@@ -627,7 +750,7 @@ onUnmounted(() => {
       <div class="flex shrink-0 items-center">
         <Button size="sm" variant="ghost" class="-ms-2" @click="back()">
           <ArrowLeft />
-          {{ $t('climayte.backToTasks') }}
+          {{ section === 'waves' ? $t('climayte.backToWaves') : $t('climayte.backToTasks') }}
         </Button>
       </div>
       <!-- Another PC's task is read-only: what its row has, no controls, no call for it here. -->
@@ -680,21 +803,14 @@ onUnmounted(() => {
         :worker="selected"
         :tasks="workers"
         :events-loading="!detail"
+        :hold="holding"
         :now="now"
         @changed="load({ silent: true, side: true })"
       />
     </div>
 
-    <!-- The list, under the waves and the scorecard (each folded until opened). -->
+    <!-- The list, under the scorecard (folded until opened). -->
     <div v-else ref="listEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-      <CliMayteWaves
-        class="mb-2"
-        :waves="waves"
-        :workers="workers"
-        :more="hasOlder"
-        :now="now"
-        @select-worker="selectManager"
-      />
       <Collapsible v-model:open="scoreOpen" class="mb-2 flex flex-col gap-1.5">
         <CollapsibleTrigger as-child>
           <button
@@ -725,6 +841,11 @@ onUnmounted(() => {
             :class="w.remote?.stale ? 'opacity-60' : ''"
             :title="rowView(w).hint"
             @click="select(w)"
+            @pointerenter="prefetchOnRest(w)"
+            @pointerleave="cancelRest"
+            @focus="prefetchOnRest(w)"
+            @blur="cancelRest"
+            @pointerdown="prefetch(w)"
           >
             <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
             <span class="min-w-0 flex-1 truncate text-sm">{{ w.title }}</span>

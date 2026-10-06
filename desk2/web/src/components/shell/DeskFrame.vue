@@ -15,9 +15,10 @@ const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
 import HydraPane from '@/components/hydra/HydraPane.vue'
-import { OPEN_HYDRA_EVENT, hydraOpen, hydraSidebar } from '@/components/hydra/api'
+import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { showTasks } from '@/components/sidebar/tasks'
+import { cleanSidebar } from '@/components/sidebar/clean'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
@@ -28,6 +29,8 @@ import { NavHistory, SidebarPeek, chatViewOf, matchShortcut, viewUnder, type Vie
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel } from '@/lib/lazy-panel'
+import { requestedSection } from '@/components/panes/settings-request'
+import type { SettingsSection } from '@/components/panes/settings'
 import { actionError } from '@/lib/action-error'
 
 // The whole window: sidebar (288, resizable), the chrome bar over its top, and the pane with the
@@ -36,7 +39,7 @@ const props = defineProps<{
   /** Gallery only: the composer renders from fixtures. */ demo?: boolean
   /** Gallery only: the account popup starts open. */ accountsOpen?: boolean
   /** Gallery only: the sidebar starts hidden. */ sidebarHidden?: boolean
-  /** Gallery and parity only: views visited before the current one, so Back starts enabled. */ history?: View[]
+  /** Gallery and parity only: views visited before the current one, so Alt + Left has somewhere to go. */ history?: View[]
 }>()
 
 const src = useShellSource()
@@ -209,15 +212,9 @@ function openSearch() {
   sidebar.value?.openSearch()
 }
 
-// Back / Forward
+// Back / Forward: Alt + Left / Right (the chrome bar's arrows are gone, owner 2026-10-06).
 const history = new NavHistory()
 for (const v of props.history ?? []) history.visit(v)
-const canBack = ref(false)
-const canForward = ref(false)
-function syncNav() {
-  canBack.value = history.canBack
-  canForward.value = history.canForward
-}
 function travel(dir: 'back' | 'forward') {
   let next = dir === 'back' ? history.back() : history.forward()
   // Skip chats that were deleted since.
@@ -226,16 +223,8 @@ function travel(dir: 'back' | 'forward') {
     next = dir === 'back' ? history.back() : history.forward()
   }
   if (next) src.select(next)
-  syncNav()
 }
-watch(
-  view,
-  (v) => {
-    history.visit(v.kind === 'chat' && !chat.value ? { kind: 'new' } : v)
-    syncNav()
-  },
-  { immediate: true }
-)
+watch(view, (v) => history.visit(v.kind === 'chat' && !chat.value ? { kind: 'new' } : v), { immediate: true })
 
 // Opening a chat loads its transcript and clears its unread mark (its orange dot goes back to the idle
 // ring). A turn that ends while its chat is open in the focused window was seen, so it is cleared too;
@@ -286,14 +275,34 @@ function toggleHydra(open = !hydraOpen.value) {
 }
 const onOpenHydra = () => toggleHydra(true)
 // Picking anything slides the chat back; an outside session came from the cloud list, which stays.
+// Settings is a pop-up over whatever is on screen, so opening and closing it leaves AgentHydra where it is:
+// a table's gear opens its Instances page over the table, and closing Settings goes back to it.
 watch(
   () => src.selected.value,
-  (v) => {
-    if (!hydraOpen.value) return
+  (v, was) => {
+    if (!hydraOpen.value || v.kind === 'settings' || was?.kind === 'settings') return
     if (v.kind === 'external') cloudForHydra = false
     toggleHydra(false)
   }
 )
+// A table's gear in the AgentHydra pane opens its Instances page: the pane's settings are in Desk's dialog
+// now (panes/agenthydra.ts, panes/instances.ts).
+function openSettingsOn(section?: SettingsSection) {
+  requestedSection.value = section ?? null
+  src.openSettings()
+}
+// The Connections sign-in (Settings → Connections) comes back to this page with ?connected=1 or
+// ?connect=failed: AgentHydra's /oauth/callback lands on its own address, which sends a page visit on to
+// Desk (server/src/index.ts). The result shows on Connections; the query goes so a reload does not ask again.
+function takeConnectReturn() {
+  const params = new URLSearchParams(window.location.search)
+  if (!params.has('connected') && !params.has('connect')) return
+  params.delete('connected')
+  params.delete('connect')
+  const query = params.toString()
+  window.history.replaceState(window.history.state, '', window.location.pathname + (query ? `?${query}` : '') + window.location.hash)
+  openSettingsOn('connections')
+}
 function showSessions() {
   cloudForHydra = false
   cloud.on.value = true
@@ -311,8 +320,10 @@ function toggleTasks() {
   // An AgentHydra tab with a list of its own (HSwarm's tree) has the sidebar while it is open, so the
   // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
   // does nothing in the sidebar").
-  if (hydraOpen.value && hydraSidebar.value) toggleHydra(false)
+  if (hydraOpen.value && hydraShown.value) toggleHydra(false)
 }
+
+const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
 
 // Right pane
 const pane = ref<RightPane | null>(null)
@@ -427,6 +438,7 @@ function onKey(e: KeyboardEvent) {
 }
 
 onMounted(() => {
+  if (!props.demo) takeConnectReturn()
   window.addEventListener('keydown', onKey)
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.addEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
@@ -454,9 +466,9 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (CliMayte, after Forward,
-// AgentHydra and Cloud, ends at 230).
-const CHROME_COLLAPSED = 238
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Clean sidebar, the sixth,
+// ends at 200).
+const CHROME_COLLAPSED = 208
 const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 
@@ -466,21 +478,19 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
     <ChromeBar
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
-      :can-back="canBack"
-      :can-forward="canForward"
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
       :tasks-on="showTasks"
+      :clean-on="cleanSidebar"
       :update="demo ? null : updateOffer"
       @restart="restartServer"
       @hydra="toggleHydra()"
       @cloud="toggleCloud"
       @tasks="toggleTasks"
+      @clean="toggleClean"
       @new="src.select({ kind: 'new' })"
       @search="openSearch"
       @toggle-sidebar="toggleSidebar()"
-      @back="travel('back')"
-      @forward="travel('forward')"
       @settings="src.openSettings()"
     />
 
@@ -542,17 +552,10 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               @account="pickAccount"
               :tasks-open="!!tasks"
               :tasks-running="tasksRunningCount"
+              :alert="actionError && (!sidebarOpen || cloud.on.value) ? actionError : ''"
               @toggle-tasks="toggleTasksPanel"
               @update:show-thinking="setShowThinking"
             />
-            <!-- A failed rename or delete from the title bar shows here when neither the sidebar list nor the cloud list is on screen to say it. -->
-            <p
-              v-if="actionError && (!sidebarOpen || cloud.on.value)"
-              role="alert"
-              class="pointer-events-none flex h-8 max-w-[28%] shrink-0 items-center truncate pr-3 text-[12px] leading-4 text-danger-text"
-            >
-              {{ actionError }}
-            </p>
           </div>
 
           <main class="col-start-1 row-start-2 flex min-h-0 min-w-0">
@@ -613,6 +616,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             @close="toggleHydra(false)"
             @open-session="(id: string) => src.select({ kind: 'external', id })"
             @show-sessions="showSessions"
+            @open-settings="openSettingsOn"
           />
         </div>
       </div>

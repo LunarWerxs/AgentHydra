@@ -78,6 +78,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     env: deps.env as Record<string, string | undefined> | undefined,
     agentHydraMcp: deps.agentHydraMcp as McpServerConfig | null | undefined,
     mainClaudeJson: deps.mainClaudeJson as string | null | undefined,
+    claudeHome: deps.claudeHome as string | undefined,
     storeDebounceMs: typeof deps.storeDebounceMs === 'number' ? deps.storeDebounceMs : undefined,
     newChats: deps.newChats === 'sdk' ? 'sdk' : undefined,
   })

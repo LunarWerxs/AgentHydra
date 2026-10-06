@@ -32,7 +32,7 @@ const tip = (i: number) => {
         <template v-for="(s, k) in series" :key="s.key">
           <div
             v-if="(h.values[k] ?? 0) > 0"
-            class="w-full first:rounded-b-[1px] last:rounded-t-[2px]"
+            class="w-full first:rounded-b-[1px] last:rounded-t-xs"
             :style="{ height: `${((h.values[k] ?? 0) / max) * 100}%`, background: s.color, minHeight: '2px' }"
           ></div>
         </template>

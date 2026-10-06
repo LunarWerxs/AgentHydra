@@ -44,6 +44,7 @@ import { j as getJson } from '@/lib/api'
 import { EMBEDDED, openInDesk } from '@/lib/desk-embed'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
+import { missingQueued } from '@/lib/job-tasks'
 import { formatTokens, formatUsd } from '@/lib/kit'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -451,7 +452,25 @@ const taskRows = computed<TaskRow[]>(() => {
       full: t('hswarm.v.jobs.noAnswerYet'),
     }),
   )
-  return [...running, ...(r.results ?? []).map(resultRow)]
+  const finished = (r.results ?? []).map(resultRow)
+  // Queued tasks have no id or answer yet, so HSwarm lists none: a muted line each, last, so the lines
+  // add up to the summary's counts (the same counts it reads).
+  const s = jobDetail.value?.status
+  const counts = (s?.job_id ? s.counts : undefined) ?? openRow.value?.counts
+  const queued = Array.from(
+    { length: missingQueued(counts, [...running, ...finished]) },
+    (_, i): TaskRow => ({
+      id: `queued-${i + 1}`,
+      status: 'pending',
+      model: '',
+      cost: undefined,
+      mark: taskMark('pending'),
+      first: t('hswarm.v.jobs.markQueued'),
+      firstTone: 'text-muted-foreground',
+      full: t('hswarm.v.jobs.noAnswerQueued'),
+    }),
+  )
+  return [...running, ...finished, ...queued]
 })
 
 const taskCounts = computed(() => {

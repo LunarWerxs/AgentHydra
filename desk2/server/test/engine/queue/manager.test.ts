@@ -54,7 +54,7 @@ function setup(accounts: AccountInfo[]) {
     listAccounts: async () => accounts,
   }
   const q = fakeQueries()
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, now: () => ++clock, newChats: 'sdk' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, now: () => ++clock, newChats: 'sdk' })
   managers.push(m)
   return { m, home, ...q }
 }
@@ -92,7 +92,7 @@ test('a queued chat is in chats.json once createFromQueue answers, not after the
   temps.push(home)
   process.env.HYDRA_DESK_HOME = home
   const q = fakeQueries()
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 60_000, newChats: 'sdk' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 60_000, newChats: 'sdk' })
   managers.push(m)
   const made = await m.createFromQueue({ cwd: home, prompt: 'once' }, { waitForRoom: false })
   if (!('chat' in made)) throw new Error('the chat was not created')

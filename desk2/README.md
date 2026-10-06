@@ -1,19 +1,46 @@
-# Hydra Desk 2
+# AgentHydra 2.0 (Hydra Desk 2)
 
-Hydra Desk 2 is Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things
-on without touching Jacob's app. It runs beside it: port 7798, data in `~/.hydra-desk-2/`, its own
-window (`launcher/HydraDesk2.exe`, WebView2 data in `%LOCALAPPDATA%\HydraDesk2\webview`), and its own **Hydra Desk 2** shortcut
-(`launcher/install-shortcuts.ps1`). Everything below is Hydra Desk's own description, with the ports
-and folders changed to Desk 2's.
+This folder is AgentHydra's window: AgentHydra 2.0, called Hydra Desk 2 until 2026-10-06 (owner: "HydraDesk
+is no longer called HydraDesk. It is now called AgentHydra"). Its window, its **AgentHydra** shortcut
+(`launcher/install-shortcuts.ps1`, which also sends the old "Hydra Desk 2" shortcuts to the Recycle Bin)
+and its messages say AgentHydra; the folder and the internal names keep Desk 2's: `desk2/`, port 7798,
+data in `~/.hydra-desk-2/`, the window host `launcher/HydraDesk2.exe` (WebView2 data in
+`%LOCALAPPDATA%\HydraDesk2\webview`). The daemon on 7787 no longer shows the old window where this folder
+is beside it: a page asked of it goes on to this window (`server/src/index.ts`, `DESK2_URL`).
+
+It began as Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things on
+without touching Jacob's app. Everything below is Hydra Desk's own description, with the ports and
+folders changed to Desk 2's.
 
 ## What Desk 2 adds
 
 A first, quick version of each, to see whether the direction is right. The layout is Desk's own: the
 sidebar on the left stays put, and only the pane on the right changes.
 
+- **A clean sidebar, and no Back and Forward arrows** (owner, 2026-10-06). The chrome bar holds Menu, Hide
+  sidebar, AgentHydra, Cloud, CliMayte and Clean sidebar; Alt + Left / Right still go back and forward.
+  Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves each row's account number, its
+  time since the last activity, a working chat's elapsed time and the AgentHydra lists' detail and time
+  out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
+- **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
+  Instances has a page per table: CLI (the Claude CLI table shown, its process columns, Keep windows
+  running and its weekly floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI,
+  DeepSeek; its process columns; paid extra usage; Claude native control) and Free (its process columns, and
+  Keep windows running with its weekly floor for Claude logins, `/api/free/settings`).
+  Each table's gear opens its page over the table (`ah:open-settings`; Settings, a pop-up, leaves the pane open); the pane's own popover, its "Instances settings"
+  dialog and its toolbar column toggle are gone. "Show process columns" is each table's own now
+  (`hydra/src/composables/useUsageMode.ts`, `USAGE_MODE_KEYS`; Desk writes the same keys,
+  `web/src/components/panes/instances.ts`). The pane's header gear beside Discord is gone too: Desk's
+  Settings gear, bottom left, carries the "a newer AgentHydra is waiting" dot (`ah:update-dot`) and opens
+  on Updates while it shows.
+- **CLI rows: a dot for a window AgentHydra started, no icon for no reset** (owner, 2026-10-06). A 5-hour
+  window the keepalive started is a dot on the row's 5-hour counter, like a notification dot (blue; amber
+  when its last nudge failed), not a timer by the name (`InstanceRow.vue`'s `session-mark` slot). An account
+  offered no limit reset shows no reset icon.
+
 - **Servers and a small browser beside the chat, like Claude Code Desktop's.** The title bar's Browser button opens a right pane (wider than Changes, drag its left edge to resize, the width is remembered) with a Servers | Browser switch in its header, always there. Servers lists this chat's localhost servers, centred in the pane: a status dot, name, port, Start / Stop / Restart, Open for one that runs, the last output of one that crashed, Start all / Stop all, and below them the servers other folders have running ("Also running", Open / Stop). Browser is the page: an address bar, back, forward, reload and open in the system browser, and before anything is opened "No page open" with a button for each server that answers. Open shows a server there, and Start opens it as soon as it answers; the header then has the server's name and Stop, and a stopped server shows "X is stopped" with Start over the page. "Open an address, or a port" at the bottom opens any address. The chat's folder needs no Add step: `POST /dw/folder {cwd}` (`server/src/devwebui/folder.ts`) uses the project DevWebUI already has for that folder, or sets one up from Claude Code's `.claude/launch.json` (its preview servers: `runtimeExecutable`/`runtimeArgs` or `program`, `port`, `cwd`, `env`) or else package.json's dev scripts, every server left stopped, and adds the `.devwebui` file it writes to the repo's `.git/info/exclude` so it never shows in git status; a folder with neither says so, with Look again. The servers come from DevWebUI (`../devwebui`), found through `DEVWEBUI_URL` or its `runtime.json` pointer and started hidden by `server/src/plugins/50-devwebui.ts` when the pane is opened and none answers (log in `~/.hydra-desk-2/logs/devwebui.log`; it keeps running when Desk 2 exits). `/dw/api/*` goes on to the daemon only for Desk 2's own page, with DevWebUI's local credential added server-side; `GET /dw/status` says running, starting, stopped or failed. A Desk 2 server started before this existed shows "Restart Hydra Desk 2 to turn on servers".
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
-  after Back and Forward (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
+  after Hide sidebar (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
   HSwarm it is HSwarm's tree alone (`hydra/src/components/HSwarmView.vue`), Routing and CliMayte two of its
   nodes (CliMayte after Jobs; owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm sidebar.
@@ -25,8 +52,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   already on screen, so no other tab's rows are left behind. CliMayte has no tab of its own (owner,
   2026-10-05: "move what is currently on the CliMayte tab into HSwarm"): its node shows a compact manager
   list inside the pane, one line per task (status, title, account, model, time, a cloud for another PC's
-  task), Running / All, the waves above it and the scorecard closed; a click opens the task with "Back to
-  tasks", and CliMayte's tasks never go into Desk's sidebar. Desk's links land on the node: a task row
+  task), Running / All, the scorecard closed above it; a click opens the task with "Back to tasks", and
+  CliMayte's tasks never go into Desk's sidebar. The manager waves are CliMayte's child row, Waves
+  (owner, 2026-10-06: "Move the waves section into a subsection called waves underneath CLI Mate"),
+  counting the live ones; a wave's manager opens there with "Back to waves". Desk's links land on the node: a task row
   opens CliMayte on that task, a job row Jobs on that job. The Routing node is one page: HSwarm's
   routing first (`hswarm/HSwarmRouting.vue`), then AgentHydra's cost routing between API keys and the
   Claude subscriptions (`hswarm/HSwarmCostRouting.vue`, alone while HSwarm is down): the on/off switch, the
@@ -60,9 +89,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   (and their groups after the desk's groups), each kept where it first appeared. The cloud icon means the
   other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
   different app, sure, but it's not cloud"): a row from the other PC leads with a cloud, its tooltip naming
-  that PC (and the app when it is not Claude), pulsing gray while that chat works, and shows the PC's name
-  in a gray chip (the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and
-  other apps' chats lead with a small muted mark for their app (`rowLead` in `web/src/components/cloud/logic.ts`).
+  that PC (and the app when it is not Claude), pulsing gray while that chat or the work a row was added for
+  runs (blue for a running HSwarm job), and nothing else sets it apart (owner, 2026-10-05: no PC-name chip;
+  the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and other apps' chats
+  lead with a small muted mark for their app in both lists (`rowLead` in `web/src/components/cloud/logic.ts`),
+  and the Apps ticks below decide which apps' chats the desk list shows too (Desk's own chats always).
   Each row shows its AgentHydra instance number (#37), as AgentHydra's rows do. The Filter menu opens with
   Apps, one checkbox per app (Claude, Codex, OpenCode, Hermes, DSH, HSwarm), one click each, and starts at
   Claude alone (owner, 2026-10-05: "I don't necessarily want to see open code or ChatGPT in my sidebar by
@@ -136,8 +167,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   chat (a synced chat, an outside session or a Desk chat), else as its PC titles it, else after its first
   task; when nothing says which chat started it (a Desk chat run as a worker, a dispatcher that is gone, a
   PC whose AgentHydra is too old), the task is the row (`nestTasks` and `addToDeskGroups` /
-  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares no folders for its
-  tasks, so its chat that is not synced here goes in a "No folder" group after the list's own. Added rows
+  `addToCloudGroups` in `web/src/components/sidebar/tasks.ts`). The other PC shares only the last name of
+  a task's folder (and of an HSwarm job's caller's), never its path, so its chat that is not synced here
+  goes in the one group here whose folder has that name, else in a group of that name after the list's
+  own (two groups with the name are a guess, so it gets its own; owner, 2026-10-06); only work with no
+  name at all goes in "No folder". Added rows
   stay out while a search is typed, under the Archived filter and in a hidden group, as the list's own
   rows do; with the cloud off only this PC's are added. A folded group's heading carries a gray dot with
   how many CliMayte tasks run under it, a blue dot with how many HSwarm jobs, and a green dot with how
@@ -158,10 +192,14 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **A list or a count per kind.** The Filter menu's Sub-items choose, per kind, whether a row shows its
   CliMayte tasks and HSwarm jobs as lines (List) or as a small badge with the kind's icon and how many run
   (Count: blue for running HSwarm jobs, light gray for running CliMayte tasks, muted when only finished
-  ones are left, its icon pulsing while any run) at the row's right edge; defaults: CliMayte List,
-  HSwarm Count (owner, 2026-10-05: "just an icon, like a number ... not insanely cluttering up my
-  sidebar"). A badge's tooltip names up to eight of them; a click shows that row's lines inline until the
-  next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
+  ones are left, its icon pulsing while any run) at the row's right edge; both default to Count (owner,
+  2026-10-05: "just an icon, like a number ... not insanely cluttering up my sidebar"; 2026-10-06, of
+  CliMayte's: "the same option ... that I can click to see if I want"). A CliMayte badge also has a dot per
+  account its tasks run on (up to three, dimmed for one with nothing running) in that account's colour, and
+  each task line shows its account (`#68`) in the same colour (`sidebar/account-tone.ts`: AgentHydra's
+  instance palette without the blue that is HSwarm's, or the red, green and gray a line's mark uses). A
+  badge's tooltip names up to eight of them, a task after its account; a click shows that row's lines inline
+  until the next click. Kept in `hydra-desk.sidebar.tasks-mode` and `hydra-desk.sidebar.jobs-mode`.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
@@ -180,6 +218,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   slides it up out of view and back down; it lies over the top of the transcript, so the page never
   re-lays out while it moves. The chat title in the title bar is centred. It reads AgentHydra through
   Desk 2's `/ah/api`.
+- **One card for every Instances table** (owner, 2026-10-06). CLI, Desktop and Free each sit in the same
+  lighter, rounded card (`InstanceCard.vue`): the header bar is its top, the rows inside it. A table
+  that mixes providers (Desktop, Free) has a + menu with one item per provider, from the shared header.
 - **The copy's own changes.** Its desktop Instances table keeps its column widths and row order while
   the stats load (fixed columns, placeholders the size of what replaces them; Memory and Tokens re-sort
   on a header click or Refresh, not on every poll), and an HSwarm job opens its summary right under its
@@ -211,8 +252,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   and account, sessions and tokens, what eats tokens, sessions worth a look, tools, busiest hours,
   sessions at once, recurring mistakes, recent edits and the coding tools here. The Instances landing
   ("At a glance", `hydra/src/components/InstancesHomeView.vue`) leads with how many CLI and desktop
-  accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars, and the
-  accounts nearest their limit; then CliMayte's and this PC's session numbers, the 24-hour charts, and
+  accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars (the CLI
+  table's own gauges, in gray), and the accounts nearest their limit, with one warning rule for both:
+  amber from 70% used, red above 90%; then CliMayte's and this PC's session numbers, the 24-hour charts, and
   HSwarm by account. On both, every section has a short title with its explanation behind an info icon,
   long lists show their top 5 behind "+N more", charts are gray, and colour means something: Analytics'
   one blue marks the current period or the top item, the landing's accent marks an account at 70% or
@@ -302,6 +344,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   the daemon's `POST /api/sessions/:id/message`) and runs when its turn ends; until the transcript shows
   it, it is listed as queued. Text only: files, pictures and voice are off there. An idle chat still
   continues as a copy, as above.
+- **Copy up to here into a new chat.** Under a finished reply in an outside Claude Code session, a button
+  has AgentHydra copy the session up to that reply into a new session beside it, "<title> (branch)", which
+  opens; the original is not touched (`POST /api/external/sessions/:id/branch`, on to the daemon's
+  `POST /api/sessions/:id/branch`). AgentHydra's old Sessions tab had it; Desk 2 has it now that it shows
+  those sessions (2026-10-06).
 - **Its own window, opening where you left it.** Desk 2 opens in its own native window,
   `launcher/HydraDesk2.exe` (WebView2, built from `launcher/host`), instead of an Edge app window
   (owner, 2026-10-05: "It loads and then it auto-adjusts itself on the screen ... I want it to load in
@@ -329,9 +376,39 @@ sidebar on the left stays put, and only the pane on the right changes.
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
+## Planned next
+
+**Dev servers in the sidebar** (owner, 2026-10-06). To start once AgentHydra 2.0 (Desk 2 taking over from the
+old AgentHydra window, which is being retired) has finished consolidating. Today DevWebUI is reached only through
+a chat's Browser button, and only for that chat's folder; nothing shows every dev server at once. The plan:
+
+- **A fourth title-bar button, Dev servers,** beside Cloud and CliMayte, working like Cloud. On, the sidebar
+  lists DevWebUI's projects with their servers under each: a status dot (`statusDot` in
+  `web/src/components/servers/logic.ts`), running ones first, Start / Stop / Restart on hover, Start all /
+  Stop all on a project's header. Off, the desk list comes back. Blue while on, like the others.
+- **Opening a server uses the servers pane that exists.** A click opens the right pane on that server's project,
+  its browser and logs, whatever chat is open. `ServersPane` takes a folder today (`cwd`, the chat's), so the
+  sidebar hands it `projectDir(project)`. No new screen in the main area.
+- **Desk draws it, from the client it already has.** Desk 2 reaches DevWebUI through `/dw/api`
+  (`server/src/plugins/50-devwebui.ts`, types in `shared/devwebui.ts`), and `web/src/components/servers/api.ts`
+  and `logic.ts` are its one client. The sidebar and the pane read the same project list through one polling loop,
+  only while one of them is on screen and the window is visible, so they never disagree. No iframe and no embed
+  messages, unlike the AgentHydra button. Turning the view on starts the server manager when it is not running,
+  as the pane does.
+- **Maybe later, from the CliMayte button's pattern:** a small dot on a chat whose folder has a server running,
+  with the view off.
+- **First version:** the project and server list, the dots, Start / Stop / Restart, and opening a server in the
+  pane with its logs. DevWebUI's own settings and environment editing stay in DevWebUI.
+- **Jacob's DevWebUI work goes into Desk 2,** not the old AgentHydra window (`../web`). The seam is the `/dw/api`
+  contract in `shared/devwebui.ts`: if DevWebUI's daemon moves into AgentHydra's, only where the plugin finds it
+  changes (`DEVWEBUI_URL`, or `runtime.json` in `DEVWEBUI_HOME`), not the sidebar. Agree that with him before
+  building.
+- **Checks:** unit tests for the list's order and grouping beside `logic.ts`'s, gesture cases for the new button
+  and a server row in `e2e/gestures.e2e.ts`, then `bun run build` and `bun run e2e:gestures`.
+
 ---
 
-<img src="launcher/hydra-desk.png" width="96" alt="Hydra Desk icon">
+<img src="../misc/AgentHydra-icon.png" width="96" alt="AgentHydra icon">
 
 Hydra Desk is Jacob's own Claude Code desktop: a replacement for the Code tab of Claude Desktop. It
 runs Claude Code chats itself, through the Claude Agent SDK, and shows at a glance which chats are
@@ -345,12 +422,19 @@ The full design is in [SPEC.md](SPEC.md). The contract between the server and th
 
 ## Starting it
 
-**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk" shortcut on the
+**The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts a "Hydra Desk 2" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,
 waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
 the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it
 never starts a second server. No console window appears: the shortcut runs `launcher\start.vbs`, which
 runs `launcher\start.ps1` hidden.
+
+**AgentHydra's tray icon is Desk 2's** (owner, 2026-10-06: Desk 2 becomes AgentHydra 2.0, and the old
+AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\lunarwerx-tray.exe
+AgentHydra-Tray.json --background`, hidden, through WMI like the server) whenever it is not running, and
+the tray keeps the AgentHydra daemon alive as before. The tray's Open (its menu, a double-click, the
+AgentHydra shortcut, the tray's own start) runs this launcher (`openCommand` in `..\misc\AgentHydra-Tray.json`),
+so the icon opens or focuses this window, never the old one. Either one brings up the other.
 
 ```powershell
 powershell -NoProfile -File launcher\install-shortcuts.ps1   # make the shortcuts (-DryRun to preview)
@@ -369,8 +453,21 @@ dev server on 4798 (open http://127.0.0.1:4798). `bun run build` builds the wind
 which the server on 7798 serves; the launcher's window needs that build. `bun test` and
 `bun run typecheck` are the checks.
 
-To regenerate the icon: `python launcher\make-icon.py` (needs Pillow), then re-run
-`install-shortcuts.ps1` so Windows picks it up.
+`bun e2e/stream-frames.e2e.ts` streams a long reply (an em dash, a 240-line TypeScript block) into the transcript in headless chrome-headless-shell and writes `tmp/stream-frames.json`: frames over the 8.33 ms budget, style recalcs, layouts and DOM mutations per chunk (needs `bun add -d puppeteer`).
+
+`bun run e2e:gestures` (after `bun run build`) starts the built window as a hidden server on 7819 with a
+throwaway home and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
+long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
+sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 31
+cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
+`GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
+any change to a tooltip, menu, popover, sidebar row or lazy overlay.
+
+The icon is AgentHydra's own (owner, 2026-10-06), never one of Desk's: `misc/AgentHydra.ico`, compiled into
+`launcher/HydraDesk2.exe` by `launcher/host/build.rs`, where the window, the taskbar and both shortcuts take it
+from; the page's `web/public/favicon.svg` and `favicon.ico` are copies. To change it, follow `misc/Make-Icon.ps1`,
+rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe into `launcher/`) and re-run
+`install-shortcuts.ps1`.
 
 ## Ports
 
@@ -412,3 +509,76 @@ it, and works without it:
 
 If AgentHydra is not running, the window says so in a banner and those lists stay empty; your own chats
 keep working.
+
+## Free instances
+
+**Instances → Free** is the same card, header, table and rows as the CLI and desktop instances (kind
+`free` in `hydra/src/lib/instance-table.ts`; usage in the same 5h and Week cells, sort and filter as
+theirs). Its + menu offers Claude or ChatGPT; name the login, and Desk prepares the tools, then opens a
+visible window for manual sign-in while the row pulses. Multiple logins to either provider have separate encrypted state. The ClaudFree 0.7 harness
+is bundled in `server/src/free-instances/harness`; no external checkout or folder picker is needed.
+Python 3.11+, Bun and Node.js must be installed. Dependencies are prepared automatically outside the
+repo in `~/.hydra-desk-2/free/runtime`. Instance state lives in `free/instances/{instanceId}` and metadata
+in `free/accounts.json`. A previous `free-instances.json` connection is imported once, copying its
+encrypted login and registry without removing the original files. Nothing of a login is ever kept in
+the repo: the bundled harness keeps its state in the profile even when run by hand, and `*.dpapi` is
+ignored.
+
+**The logins reach the other PCs** through AgentHydra's Login sync (owner, 2026-10-06), when it is set
+up and on: the same store, key and token, read from the AgentHydra daemon on this PC, in the store's own
+`free` table (`server/src/free-instances/sync.ts`, `cloud/login-sync-worker`). Each Free instance is one
+row, sealed with the sync key; only its cookies travel (they are the sign-in), sealed again on each PC
+for its own Windows user. The newer sign-in wins (the one whose sign-in cookie expires later); an account
+another PC added appears here with its number and name and is checked at once; a log out reaches every
+PC still on that login, and a delete reaches every PC (its row becomes a sealed marker no PC adopts
+again). A pass runs 15 s after start, every 2 minutes, and right after a sign-in or a
+log out; `GET /api/free/sync` says when it last ran and its last error. A PC takes part once it runs
+Desk 2 with this feature and its AgentHydra is joined to the same Login sync.
+
+The table provides login checks, usage, renaming, New private chat and Delete (the account, its chat
+handles and its saved login, here and on the other PCs; its chats stay at the provider). Opening it
+checks, once per page session, each account never checked or whose reading is over 15 minutes old.
+Claude reports no usage for a free account until it sends a message, so such a row says "No reading yet".
+
+**Keep windows running** (owner, 2026-10-06; `server/src/free-instances/keepalive.ts`) mirrors
+AgentHydra's CLI keepalive for Free Claude logins: every 10 minutes, a signed-in account whose 5-hour
+window is not running gets one temporary chat ("Reply with the single word: ok", the `nudge` command) on
+the cheapest model it offers, then a usage check. It is skipped at or above the weekly floor, when the
+reading is unknown, within 5 hours of a nudge and within an hour of a failed one; the nudge is never
+recorded as a chat. Off by default, saved in `free/accounts.json`: `GET /api/free/settings`, and
+`PATCH /api/free/settings` with `{keepWindows, weeklyFloorPct}` (a whole 1-100, default 85).
+
+Conversations live under
+**HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
+The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
+**Sign in** opens the installed Chrome or Edge on a throwaway profile through zendriver (the CLI sign-in window's engine); normal messaging uses HTTP, without a browser fallback. Desk's Free runtime no longer installs Playwright or Camoufox (an older runtime is rebuilt once).
+Usage counters that the provider does not expose stay unknown, and
+historical usage readings retain their observation and reset times. Free web accounts use their own
+allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
+
+ChatGPT messages use only **GPT-5.6 Luna Instant** (`gpt-5-6-mini`). Its usage check reads the account
+plan and available models over HTTP. When it verifies Free access to this model, the table shows
+**Unlimited** for everyday text, as described in [OpenAI's Free plan](https://chatgpt.com/pricing/).
+Abuse safeguards and separate limits for uploads, images, voice and other tools still apply. This
+is a plan policy, not a measured remaining-message count; unverified accounts stay Unknown.
+
+For local automation, `GET /api/free/status` reports instances and jobs; `POST /api/free/instances`
+accepts `{provider, name}` and returns the instance UUID. `PATCH /api/free/instances/{instanceId}`
+renames it with `{name}`; `DELETE` there deletes it (409 while one of its operations runs). `GET /api/free/threads` lists chat metadata including instance, local and
+server UUIDs. `POST /api/free/jobs` accepts a unique `requestId` UUID, `instanceId`, matching `provider`
+(`claude` or `chatgpt`) and `command` (`auth`, `usage`, `chats`, `read`, `chat`, `resume`, `track`, `login`, and `nudge` for Claude). Messages
+use `prompt`; `read`, `resume` and `track` require an explicit `chatId` UUID. `name` is optional for new
+chats and required for tracking. Claude messages also accept `webSearch`. Poll
+`GET /api/free/jobs/{requestId}` until `state` is `done`, then inspect `result.ok` and `result.error`.
+The job's `phase` distinguishes automatic setup from the operation. `DELETE /api/free/jobs/{requestId}`
+cancels its owned process, including a login window. Requests from another browser origin are refused.
+Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.
+
+Only one operation per instance runs at a time. Repeated POSTs with the same request UUID and payload
+share the existing job while it remains cached; no operation is automatically resent. Job results live
+in memory for at most 15 minutes, bounded to 16 jobs, and disappear on a server restart. A lost job or
+interrupted send means refresh the tracked chats and read the relevant UUID before deciding to send
+again. The harness's chat handles survive restarts; provider retention still limits their lifetime.
+Desk does not write Free transcripts to its normal SDK chat store.
+
+This folder is part of AgentHydra's public repo: everything committed here is published.

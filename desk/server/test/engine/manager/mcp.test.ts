@@ -46,7 +46,7 @@ async function boot(o: { agentHydraMcp: McpServerConfig | null; home?: string })
     port: 0,
     home,
     pluginsDir: plugins,
-    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: o.agentHydraMcp, env: { PATH: '/bin' }, storeDebounceMs: 1 },
+    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: o.agentHydraMcp, env: { PATH: '/bin' }, storeDebounceMs: 1, claudeHome: home },
   })
   servers.push(desk)
   return { desk, home, ...q }
@@ -233,6 +233,7 @@ describe('a chat\'s MCP status and toggle', () => {
     const q = fakeQueries()
     const m = new ChatManager({
       home,
+      claudeHome: home,
       emit: () => {},
       settings: () => DEFAULT_SETTINGS,
       bridge: fakeBridge().bridge,

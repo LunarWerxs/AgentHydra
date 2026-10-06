@@ -1,5 +1,5 @@
-# Stops the Hydra Desk 2 server that launcher/start.ps1 started. Chats keep running (SPEC "Chat hosts"): a chat
-# Hydra Desk 2 runs itself is in its own host process, outside the server's tree, and a CliMayte worker chat runs
+# Stops the AgentHydra server that launcher/start.ps1 started. Chats keep running (SPEC "Chat hosts"): a chat
+# AgentHydra runs itself is in its own host process, outside the server's tree, and a CliMayte worker chat runs
 # in AgentHydra; the next server takes them over.
 #
 #   1. POST /api/server/shutdown: the server writes its state and lets go of the chats, then exits.

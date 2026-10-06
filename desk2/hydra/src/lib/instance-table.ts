@@ -1,19 +1,18 @@
 // What the one instance table (components/InstanceTable.vue) and the one instance row
 // (components/InstanceRow.vue) are fed: a list of column definitions per table, and one row model
-// per instance. The Claude desktop, Claude CLI, Codex and DeepSeek tables differ only in the columns
-// they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03: "identical
-// code, just different content").
+// per instance. The Claude desktop, Claude CLI, Codex, DeepSeek and Free tables differ only in the
+// columns they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03:
+// "identical code, just different content").
 
 import type { TokenParts } from '@agenthydra/server/types'
 import type { Component } from 'vue'
 import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
-import type { Provider } from '@/components/ProviderLogo.vue'
+import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import TokenWindowFlyout from '@/components/TokenWindowFlyout.vue'
-import type { BadgeVariants } from '@/components/ui/badge'
 import type { CMInstance, UsageSnapshot } from '@/lib/api'
 
-export type InstanceTableKind = 'desktop' | 'cli'
+export type InstanceTableKind = 'desktop' | 'cli' | 'free'
 
 export type InstanceColumnKey =
   | 'status'
@@ -136,7 +135,14 @@ const COLUMNS: ColumnDef[] = [
     mode: 'process',
     skeleton: 'h-5 w-14',
   },
-  { key: 'plan', label: 'instances.colPlan', sortable: true, skeleton: 'h-5 w-14' },
+  // A Free web login has no plan to show: its provider is the logo before its number.
+  {
+    key: 'plan',
+    label: 'instances.colPlan',
+    sortable: true,
+    kinds: ['desktop', 'cli'],
+    skeleton: 'h-5 w-14',
+  },
   {
     key: 'lastActive',
     label: 'instances.colLastActive',
@@ -172,18 +178,6 @@ export function instanceColumns(
   ).map(({ kinds: _k, mode: _m, ...c }) => c)
 }
 
-/** The Name cell's second line: the signed-in account, as the email handle (the address is the hover). */
-export function accountLine(
-  account: InstanceRowModel['account'],
-  name: string,
-): { text: string; title?: string } | null {
-  const email = account.email?.trim() || null
-  const text = email?.split('@')[0]?.trim() || account.fallback?.trim() || account.empty || null
-  // A CLI row is named after its account: say it once.
-  if (!text || text === name.trim() || (email && email === name.trim())) return null
-  return { text, title: email ?? undefined }
-}
-
 /** A CLI login is named "<email> (<plan>)" by quick add; the plan has its own column. */
 export function withoutPlanSuffix(name: string, plan: string | null | undefined): string {
   const t = name.trim()
@@ -198,17 +192,28 @@ export interface InstanceNameTooltip {
 }
 
 /**
- * The name cell's hover. Three facts compete for two lines, so the cut decides the order: a name
- * that fits keeps the folder on top and the hint under it; a name that was cut leads with the full
- * name and pushes the other two down a line each.
+ * The name cell's hover (owner, 2026-10-06: the address and the folder, since the row no longer
+ * prints the account's handle). It leads with the address, or the full name when the row has none,
+ * then the folder. The third line is the full name when the name was cut, else the copy hint (the
+ * click copies the address, so a row without one has nothing to hint).
  */
 export function nameTooltipFor(
-  name: { full: string; shown: string; folder: string; hint?: string },
+  name: {
+    full: string
+    shown: string
+    email?: string | null
+    folder?: string
+    copyHint: string
+  },
   clipped: boolean,
 ): InstanceNameTooltip {
-  return name.shown === name.full && !clipped
-    ? { label: name.folder, description: name.hint }
-    : { label: name.full, description: name.folder, detail: name.hint }
+  const email = name.email?.trim() || null
+  const cut = name.shown !== name.full || clipped
+  return {
+    label: email ?? name.full,
+    description: name.folder || undefined,
+    detail: cut ? (email ? name.full : undefined) : email ? name.copyHint : undefined,
+  }
 }
 
 /** What one instance is, to the shared row. Each table builds one per instance it lists. */
@@ -218,26 +223,21 @@ export interface InstanceRowModel {
   /** Set aside by the filter: drawn faded, never disabled. */
   dimmed?: boolean
   /** The provider's mark before the number (the tables that mix providers). */
-  provider?: Provider
+  provider?: LogoProvider
   status: { on: boolean; pulse?: boolean; title: string }
   glyph?: { dir: string; icon?: CMInstance['icon']; color?: CMInstance['color']; running: boolean }
   name: {
     shown: string
     tooltip: (clipped: boolean) => InstanceNameTooltip
-    /** A running instance's name focuses its window. */
-    onClick?: () => void
-    busy?: boolean
+    /** The account's full address: a click on the name copies it. No address, no click. */
+    copy?: string | null
   }
   /** A small badge after the name (External, Default). */
   badge?: { label: string; title?: string }
-  account: {
-    email?: string | null
-    profile?: string | null
-    fallback?: string | null
-    variant?: BadgeVariants['variant']
-    /** Said when there is neither an address nor a fallback; a dash when omitted. */
-    empty?: string
-  }
+  /** The account beside the name. The address is not printed (the name copies it, its hover shows
+   *  it): `note` is a state said instead when there is no address ("Logged out", "API key"), and
+   *  `stale` marks a login the live check could not confirm. */
+  account: { note?: string | null; stale?: boolean }
   configDir?: string
   pid?: number | null
   uptime?: string | null
@@ -250,6 +250,8 @@ export interface InstanceRowModel {
     onCheck: () => void
   }
   noQuota?: string
+  /** Said in the quota cells instead of the dash, when there is no window by design ("Unlimited"). */
+  noQuotaLabel?: string
   plan?: { label: string; plain?: boolean; title?: string } | null
   /** The Last active cell: "Now" while running, else how long ago. */
   lastRunning?: { label: string; running: boolean; title?: string } | null

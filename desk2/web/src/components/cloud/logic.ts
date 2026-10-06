@@ -203,19 +203,31 @@ export function originLabel(r: Pick<CloudSession, 'source' | 'instance' | 'insta
   return [sourceName(r.source), r.instanceNum !== null ? `#${r.instanceNum}` : r.instance, `on ${pcOf(r, thisPc)}`].filter(Boolean).join(' · ')
 }
 
-/** What a row leads with: a cloud (another PC's chat) with its words, a muted mark for its app with its words, or nothing (its dot). */
+/** What a row shows besides its dot: a cloud (another PC's chat, in the dot's place) with its words, a muted mark for its app (beside the dot, never replacing it) with its words, or nothing. */
 export type RowLead = { kind: 'cloud'; label: string } | { kind: 'app'; app: string; label: string } | null
 
 /**
  * The cloud means another PC, nothing else (owner, 2026-10-05: "why chats on my computer are considered
- * cloud ... it's not cloud"). A chat of another app on this PC the desk list does not show leads with
- * its app's mark instead. A row added for running work (`added`) has a cloud only for another PC.
+ * cloud ... it's not cloud"). A chat of another app on this PC carries
+ * its app's mark beside its dot. A row added for running work (`added`) has a cloud only for another PC.
  */
-export function rowLead(r: Pick<CloudSession, 'source' | 'fromPc'>, thisPc: string, o: { onDesk: boolean; added: boolean }): RowLead {
+export function rowLead(r: Pick<CloudSession, 'source' | 'fromPc'>, thisPc: string, o: { added: boolean }): RowLead {
   const pc = r.fromPc && r.fromPc !== thisPc ? r.fromPc : null
   if (pc) return { kind: 'cloud', label: o.added ? `On ${pc}` : fromPcLabel(pc, r.source) }
-  if (o.added || o.onDesk || r.source === 'claude') return null
-  return { kind: 'app', app: r.source, label: `${sourceName(r.source)} chat on this PC` }
+  return o.added ? null : appLead(r.source)
+}
+
+/** The muted mark of a chat on this PC from an app that is not Claude, in both lists (the desk list's ExternalRow too); null for Claude's. */
+export function appLead(source: string): RowLead {
+  return source === 'claude' ? null : { kind: 'app', app: source, label: `${sourceName(source)} chat on this PC` }
+}
+
+/**
+ * Whether the Apps scope lets an app's chats through. A named app by its tick; an app the desk cannot name
+ * ('other') only with every app but HSwarm ticked, the way the cloud list treats a session it cannot name.
+ */
+export function appShown(app: string, apps: readonly string[]): boolean {
+  return (SOURCE_VALUES as readonly string[]).includes(app) ? apps.includes(app) : allOf(apps, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
 }
 
 /** Every PC the rows name, this one first. */
@@ -279,8 +291,8 @@ type DeskExternal = Pick<ExternalSession, 'id' | 'title' | 'cwd' | 'group' | 'so
 /** A cloud row of what the desk knows of a session; what only AgentHydra counts (messages, queued work) is left at nothing. */
 const deskRow = (r: Omit<CloudSession, 'lastCwd' | 'messageCount' | 'dispatched'>): CloudSession => ({ ...r, lastCwd: null, messageCount: 0, dispatched: false })
 
-/** An outside session's source in AgentHydra's spelling; 'other' is a tool the desk does not name. */
-const ahSource = (s: ExternalSession['source']): string => (s === 'codex' ? 'codex' : s === 'other' ? 'other' : 'claude')
+/** An outside session's source in AgentHydra's spelling (the app it is of); 'other' is a tool the desk does not name. */
+export const ahSource = (s: ExternalSession['source']): string => (s === 'codex' ? 'codex' : s === 'other' ? 'other' : 'claude')
 
 /**
  * Every session the desk list lists, by session id: a Desk chat by its session, and the outside sessions
@@ -337,9 +349,7 @@ export function deskPlaces(chats: DeskChat[], external: DeskExternal[]): Map<str
  * of those narrows, the row stays out.
  */
 function keepsDeskRow(r: CloudSession, s: CloudScopes, thisPc: string): boolean {
-  const named = (SOURCE_VALUES as readonly string[]).includes(r.source)
-  const sourceOk = named ? s.apps.includes(r.source as CloudSource) : allOf(s.apps, SOURCE_VALUES.filter((v) => v !== 'zswarm'))
-  if (!sourceOk || !s.archived.includes(r.archived ? 'archived' : 'active')) return false
+  if (!appShown(r.source, s.apps) || !s.archived.includes(r.archived ? 'archived' : 'active')) return false
   if (!pcKept(r, s.pcs, thisPc)) return false
   if (!allOf(s.shape, SHAPE_VALUES)) return false
   const claudeNarrowed = s.instance !== null || !allOf(s.dispatched, DISPATCHED_VALUES) || !allOf(s.rateLimit, RATE_LIMIT_VALUES)

@@ -1188,7 +1188,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_verdict',
     description:
-      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Every verdict is kept with the model and thinking level that produced the result and what it cost, and climayte_scorecard learns from them which setting each kind of task needs (model `auto` in climayte_run uses that). A fail needs `note` (what was wrong, self-contained: the worker gets it; at most 8,000 characters, a longer one is refused, never cut) and sends the task back to the SAME session one rung up the ladder (Haiku 4.5, Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
+      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Verdicts feed climayte_scorecard, which picks the setting for model `auto`. A fail needs `severity` (0 not the model's: check or brief at fault, not scored; 1 slip: a small fix; 2 rework: a real part wrong; 3 failed: unusable) and `note` (what was wrong, self-contained: the worker gets it; at most 8,000 characters, a longer one is refused, never cut) and sends the task back to the SAME session one rung up the ladder (Haiku 4.5, Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
     inputSchema: S(
       {
         id: { type: 'string' },
@@ -1201,15 +1201,26 @@ export const TOOLS: McpEngineTool[] = [
         note: { type: 'string' },
         retry: { type: 'boolean' },
         kind: { type: 'string' },
+        severity: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 3,
+          description: "A fail's severity, 0-3.",
+        },
       },
       ['verdict'],
     ),
     run: (a) => {
       const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
       if (!ids.length && (a.id == null || !str(a.id))) throw new Error('pass `id` or `ids`')
+      if (str(a.verdict) === 'fail' && a.severity == null)
+        throw new Error(
+          "a fail needs `severity`: 0 not the model's (not scored), 1 slip (a small fix), 2 rework (a real part wrong), 3 failed (wrong or unusable)",
+        )
       const body = JSON.stringify({
         ...(ids.length ? { ids } : {}),
         verdict: str(a.verdict),
+        severity: a.severity != null ? Number(a.severity) : undefined,
         note: a.note != null ? str(a.note) : undefined,
         retry: a.retry === false ? false : undefined,
         kind: a.kind != null ? str(a.kind) : undefined,
@@ -2232,9 +2243,9 @@ list_usage {} surveys every account (\`deepseek\` = HSwarm's balance). Mechanica
 goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a human.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
-work on his CLI accounts, moving it when one runs out. Use it for Claude-quality pieces, above all
-while accounts sit idle (check_my_usage says how many). AgentHydra picks the account (skips one a
-person or another session is using, weighs quota); see climayte_status.
+work on his CLI accounts, moving it when one runs out; use it while accounts sit idle
+(check_my_usage says how many). AgentHydra picks the account, never one a person or another
+session is using; see climayte_status.
 
 THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
 tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,

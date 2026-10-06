@@ -209,7 +209,7 @@ onMounted(async () => {
 
     <!-- Error Alert -->
     <Alert v-if="error" variant="destructive">
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
     </Alert>
@@ -252,10 +252,10 @@ onMounted(async () => {
                 <TableHead>{{ t('hswarm.v.jobs.table.jobId') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.label') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.state') }}</TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.tasks') }}
                 </TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.cost') }}
                 </TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.created') }}</TableHead>
@@ -278,10 +278,10 @@ onMounted(async () => {
                     {{ job.state }}
                   </Badge>
                 </TableCell>
-                <TableCell class="text-right text-sm">
+                <TableCell class="text-end text-sm">
                   {{ getTaskCounts(job) }}
                 </TableCell>
-                <TableCell class="text-right font-mono text-sm">
+                <TableCell class="text-end font-mono text-sm">
                   {{ formatTokens(job.tokens) }}
                   <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                 </TableCell>
@@ -319,10 +319,10 @@ onMounted(async () => {
                 <TableHead>{{ t('hswarm.v.jobs.table.jobId') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.label') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.state') }}</TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.tasks') }}
                 </TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.cost') }}
                 </TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.created') }}</TableHead>
@@ -345,10 +345,10 @@ onMounted(async () => {
                     {{ job.state }}
                   </Badge>
                 </TableCell>
-                <TableCell class="text-right text-sm">
+                <TableCell class="text-end text-sm">
                   {{ getTaskCounts(job) }}
                 </TableCell>
-                <TableCell class="text-right font-mono text-sm">
+                <TableCell class="text-end font-mono text-sm">
                   {{ formatTokens(job.tokens) }}
                   <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                 </TableCell>
@@ -387,7 +387,7 @@ onMounted(async () => {
 
         <!-- Detail Error -->
         <Alert v-if="detailError" variant="destructive" class="mb-2">
-          <AlertCircle class="h-4 w-4" />
+          <AlertCircle class="size-4" />
           <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
           <AlertDescription>{{ detailError }}</AlertDescription>
         </Alert>
@@ -468,7 +468,7 @@ onMounted(async () => {
                     <TableHead>
                       {{ t('hswarm.v.jobs.taskModel') }}
                     </TableHead>
-                    <TableHead class="text-right">
+                    <TableHead class="text-end">
                       {{ t('hswarm.v.jobs.taskCost') }}
                     </TableHead>
                     <TableHead>
@@ -495,7 +495,7 @@ onMounted(async () => {
                     <TableCell class="font-mono text-xs">
                       {{ result.model || '–' }}
                     </TableCell>
-                    <TableCell class="text-right font-mono text-xs">
+                    <TableCell class="text-end font-mono text-xs">
                       {{ formatTokens(usageTokens(result.usage)) }}
                       <div v-if="usageTokens(result.usage) != null" class="text-muted-foreground">{{ costText(result.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                     </TableCell>

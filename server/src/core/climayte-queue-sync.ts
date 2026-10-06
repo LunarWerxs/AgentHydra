@@ -11,8 +11,9 @@
 // WHAT A SNAPSHOT HOLDS: the workers that are queued, running, waiting or checking, and the ones
 // finished in the last 24 hours, each cut down to what a reader of the list needs (RemoteWorker:
 // never the prompt, results, logs or paths; its session, origin and wave ids, so the other PC draws it
-// under the chat that spawned it, that chat's title as this PC's session list shows it, and the
-// worker's earlier session ids: still never a prompt, a path or a Claude home), and this PC's newest live usage reading per account. It
+// under the chat that spawned it, that chat's title as this PC's session list shows it, the worker's
+// earlier session ids and the last name of its folder: still never a prompt, a path or a Claude home),
+// and this PC's newest live usage reading per account. It
 // is gzipped, then AES-256-GCM encrypted under the sync's own key with `climayte-queue:<pc>` as
 // associated data, so a blob cannot be passed off as another PC's. Over the store's 256 KB cap the
 // oldest finished workers go first; the active ones never do.
@@ -36,6 +37,7 @@ import { gunzipSync } from 'node:zlib' // the first format
 import { liveByAccount, workers } from '../climayte-core'
 import { type CliMayteWorker, ranSeconds } from '../climayte-lib'
 import {
+  folderName,
   keepRemote,
   noteSeen,
   type QueueSnapshot,
@@ -166,7 +168,7 @@ const hswarmJobsFetch: SwarmJobsFetch = async (signal) => {
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 
 /** One jobs-list row cut down to the shared fields; null when it has no id. Never its dir, cwd,
- *  prompts or caller key string. */
+ *  prompts or caller key string: of where it ran, only its caller's folder's last name. */
 function reduceJob(row: unknown): RemoteSwarmJob | null {
   const j = row as Record<string, any> | null
   const id = str(j?.job_id)
@@ -186,6 +188,7 @@ function reduceJob(row: unknown): RemoteSwarmJob | null {
     finished: str(j.finished),
     callerSessionId: str(j.caller_ids?.session_id),
     callerChatId: str(j.caller_ids?.chat_id),
+    folder: folderName(str(j.caller_ids?.folder)),
   }
 }
 
@@ -253,6 +256,7 @@ function reduce(w: CliMayteWorker, now: number): RemoteWorker {
     wave: w.wave ?? null,
     sessions: [...(w.sessions ?? [])],
     originTitle: o?.kind === 'chat' ? (titleCache.get(o.sessionId)?.title ?? null) : null,
+    folder: folderName(w.cwd),
   }
 }
 
@@ -406,7 +410,7 @@ const byId = (workers: QueueSnapshot['workers']): QueueSnapshot['workers'] =>
 /** What a reader of the list sees change: a change here uploads at once and counts as news. */
 const shapePrint = (snap: QueueSnapshot): string =>
   hash([
-    (snap.jobs ?? []).map((j) => [j.id, j.label, j.state, j.finished, j.callerSessionId]),
+    (snap.jobs ?? []).map((j) => [j.id, j.label, j.state, j.finished, j.callerSessionId, j.folder]),
     byId(snap.workers).map((w) => [
       w.id,
       w.title,
@@ -420,6 +424,7 @@ const shapePrint = (snap: QueueSnapshot): string =>
       w.verdict,
       w.sessions,
       w.originTitle,
+      w.folder,
     ]),
   ])
 

@@ -64,7 +64,7 @@ const statusGlyph = (worker: CliMayteWorker): string => {
 }
 
 const glyphClass = (worker: CliMayteWorker): string => {
-  const base = 'flex-shrink-0 w-3 h-3'
+  const base = 'shrink-0 w-3 h-3'
   const status = statusGlyph(worker)
   switch (status) {
     case 'running':
@@ -129,7 +129,7 @@ const cancelWorker = async (worker: CliMayteWorker) => {
               <div class="flex-1 min-w-0">
                 <div class="text-[13px] font-medium truncate">{{ worker.title }}</div>
               </div>
-              <div class="flex-shrink-0 text-[12px] text-[var(--text-muted)]">
+              <div class="shrink-0 text-[12px] text-[var(--text-muted)]">
                 {{ elapsedTime(worker) }}
               </div>
             </div>

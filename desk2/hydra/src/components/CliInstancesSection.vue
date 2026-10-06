@@ -25,12 +25,11 @@ import {
   RotateCcw,
   Settings2,
   Terminal,
-  Timer,
   Trash2,
   Unlink,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
@@ -41,6 +40,7 @@ import CliLoginMoveDialog from '@/components/CliLoginMoveDialog.vue'
 import CliLoginSyncDialog from '@/components/CliLoginSyncDialog.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceNumber from '@/components/InstanceNumber.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
@@ -51,12 +51,7 @@ import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PooledUsageGauges from '@/components/PooledUsageGauges.vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { TableBody } from '@/components/ui/table'
-import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
@@ -67,6 +62,7 @@ import { useCliTokenWindow } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { openSettingsInDesk } from '@/lib/desk-embed'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import {
@@ -79,7 +75,6 @@ import { tokenPartsFor } from '@/lib/token-window'
 import { billsPastLimit, usageReasonMessageKey, windowLengthMs, windowResetMs } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
-import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   cliInstances,
@@ -121,7 +116,7 @@ const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
 // toggle up in InstancesView flips this table too, because "how much quota is left" is a question
 // you ask of every instance at once. Here the swap trades the config-dir column — the least useful
 // thing on screen when you're asking about quota — for the two reset countdowns.
-const { usageMode, now } = useUsageMode(true)
+const { usageMode, now } = useUsageMode(true, 'cli')
 // The header's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
 // CLI account, the ones linked to a desktop row included, since CliMayte runs on those too.
 const poolOf = (which: 'session' | 'weekAll') =>
@@ -179,6 +174,7 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
   rows: () => cliInstances.value,
   rowKey: (i: CliInstance) => i.id,
   facts: filterFacts,
+  table: 'cli',
   columns: [
     { key: 'status', accessor: (i: CliInstance) => i.loggedIn },
     { key: 'name', accessor: (i: CliInstance) => i.name },
@@ -227,11 +223,31 @@ function lastActiveLabel(at: number): string {
   return timeAgo(at)
 }
 
+/** The CLI login has no email field, but quick add names it after the address: that name, else the
+ *  linked account's label when it is one, else none (owner, 2026-10-06). It is also what "Log in
+ *  again" puts back in Quick add's email box. */
+function previousEmailOf(inst: CliInstance): string | null {
+  const name = withoutPlanSuffix(inst.name, planFor(inst))
+  return name.includes('@')
+    ? name
+    : inst.associatedAccountLabel?.includes('@')
+      ? inst.associatedAccountLabel
+      : null
+}
+
+/** The address "Log in again" puts back: only for a login that ended by itself (its credential file is still
+ *  there and the daemon noted it dead, loginNote). A log out you chose deletes the file, so that row offers a
+ *  plain "Log in" with an empty box (owner, 2026-10-06: "Sign in again is for accounts that got logged out"). */
+function reloginEmailOf(inst: CliInstance): string | null {
+  return !inst.loggedIn && inst.loginNote ? previousEmailOf(inst) : null
+}
+
 /** What the shared row draws for one CLI login (components/InstanceRow.vue). */
 function rowModel(inst: CliInstance): InstanceRowModel {
   const plan = planFor(inst)
   // The plan has its own column, so it stays out of the name.
   const name = withoutPlanSuffix(inst.name, plan)
+  const email = previousEmailOf(inst)
   return {
     id: inst.id,
     num: inst.num,
@@ -244,12 +260,19 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       shown: shortDisplayName(pii(name), nameMax),
       tooltip: (clipped) =>
         nameTooltipFor(
-          { full: name, shown: shortDisplayName(pii(name), nameMax), folder: inst.configDir },
+          {
+            full: pii(name),
+            shown: shortDisplayName(pii(name), nameMax),
+            email,
+            folder: inst.configDir,
+            copyHint: t('instances.nameCopyHint'),
+          },
           clipped,
         ),
+      copy: email,
     },
-    // The name IS the account here; only a legacy pasted credential adds a second line.
-    account: { fallback: inst.associatedAccountLabel },
+    // The name IS the account here.
+    account: {},
     lastRunning: inst.lastActiveAt
       ? {
           label: lastActiveLabel(inst.lastActiveAt),
@@ -467,7 +490,12 @@ async function onLaunch(inst: CliInstance) {
 // (owner, 2026-10-02), and it replaced the dialog that created an instance by name.
 const quickAdd = ref<{ focusEmail: () => void } | null>(null)
 async function onLogin(inst: CliInstance) {
-  setQuickAddTarget({ id: inst.id, num: inst.num, name: inst.name })
+  setQuickAddTarget({
+    id: inst.id,
+    num: inst.num,
+    name: inst.name,
+    email: reloginEmailOf(inst),
+  })
   await nextTick()
   quickAdd.value?.focusEmail()
 }
@@ -502,38 +530,6 @@ async function onCheckUsageFromPopover(inst: CliInstance) {
   void refreshCliInstances({ silent: true })
 }
 
-// The keepalive's switch (server/src/session-keepalive.ts): the same setting as in Settings, here
-// behind the table's gear.
-const {
-  keepaliveEnabled,
-  keepaliveWeeklyFloorPct,
-  loaded: settingsLoaded,
-  load: loadSettings,
-  update: updateSettings,
-} = useAppSettings()
-// A switch turned on runs a pass at once; its nudges reach the rows on a refresh 15 s later. One
-// pending refresh at a time, and none after the tab is left.
-let keepaliveRefresh: ReturnType<typeof setTimeout> | null = null
-const clearKeepaliveRefresh = (): void => {
-  if (keepaliveRefresh !== null) clearTimeout(keepaliveRefresh)
-  keepaliveRefresh = null
-}
-async function onKeepaliveSwitch(value: boolean) {
-  if (!(await updateSettings({ keepaliveEnabled: value }))) {
-    toast.error(t('cliInstances.keepaliveSaveFailed'))
-    return
-  }
-  clearKeepaliveRefresh()
-  if (value)
-    keepaliveRefresh = setTimeout(() => {
-      keepaliveRefresh = null
-      void refreshCliInstances({ silent: true })
-    }, 15_000)
-}
-async function onKeepaliveFloor(value: string | number) {
-  if (!(await updateSettings({ keepaliveWeeklyFloorPct: Number(value) })))
-    toast.error(t('cliInstances.keepaliveSaveFailed'))
-}
 /** A row's nudge note: shown while the window a nudge started still runs, or for six hours after a
  *  nudge that did not start one (it is tried again after an hour; the note says why it failed). */
 function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description: string } | null {
@@ -620,279 +616,236 @@ onMounted(() => {
   // there and nowhere else, so a row stays blank until something asks. Read now; lib/warm-data.ts
   // reads it again about every 2 minutes.
   void hydrateUsage()
-  if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
-})
-onUnmounted(() => {
-  clearKeepaliveRefresh()
 })
 </script>
 
 <template>
-  <!-- No border-t: the parent (CliView) separates this table from CliMayte with space instead. -->
-  <div>
-    <!-- The shared header every instance table uses; the count says "x of y" while the filter
-         sets rows aside (see headingCount). It folds the table away (owner, 2026-10-01: "the
-         list of accounts should be collapsable"), which leaves CliMayte below the whole window.
-         The header carries the two pooled gauges either way. Its plus shows Quick add's email row. -->
-    <InstanceSectionHeader
-      v-model:open="accountsOpen"
-      provider="claude"
-      :title="$t('cliInstances.title')"
-      :count="headingCount"
-      :refresh-label="$t('cliInstances.refresh')"
-      :refreshing="loading"
-      :create-label="$t('cliInstances.createInstance')"
-      @refresh="refreshCliInstances()"
-      @create="quickAdd?.focusEmail()"
-    >
-      <!-- Folded or open (owner, 2026-10-04): the pool's total is not something the rows add up. -->
-      <template #summary>
-        <PooledUsageGauges
-          v-if="cliInstances.length > 0"
-          :session="sessionPool"
-          :week="weekPool"
-        />
-      </template>
-      <template #tools>
-        <!-- This table's own settings, behind a gear on the table (owner, 2026-10-01: a setting
-             lives on the page where he would look for it, and "Keep windows running" is a setting,
-             not a labelled switch across the header). The Popover root sits INSIDE the tooltip's
-             slot: see scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
-        <IconTooltip :label="$t('cliInstances.tableSettings')">
-          <span class="inline-flex">
-            <Popover>
-              <PopoverTrigger as-child>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  :aria-label="$t('cliInstances.tableSettings')"
-                >
-                  <Settings2 />
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="end" class="w-64">
-                <div class="flex items-center gap-1.5 text-xs">
-                  <label class="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-3">
-                    <span class="flex items-center gap-1.5">
-                      <Timer class="size-3.5 text-muted-foreground" />
-                      {{ $t('cliInstances.keepaliveSwitch') }}
-                    </span>
-                    <!-- Drawn once the setting is known: a switch that starts off and turns itself
-                         on a moment later reads as one that moved by itself (SUE round, 2026-10-01). -->
-                    <Switch
-                      v-if="settingsLoaded"
-                      :model-value="keepaliveEnabled"
-                      :aria-label="$t('cliInstances.keepaliveSwitch')"
-                      @update:model-value="onKeepaliveSwitch"
-                    />
-                    <Skeleton v-else class="h-4 w-7" />
-                  </label>
-                  <InfoHint
-                    :text="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
-                  />
-                </div>
-                <!-- Its one number, here with it (it was in the Settings panel's Providers section). -->
-                <div v-if="settingsLoaded && keepaliveEnabled" class="mt-2 flex items-center gap-1.5 text-xs">
-                  <label class="flex min-w-0 flex-1 items-center justify-between gap-3">
-                    {{ $t('settings.keepaliveFloorLabel') }}
-                    <Input
-                      class="w-16"
-                      type="number"
-                      min="0"
-                      max="100"
-                      :model-value="keepaliveWeeklyFloorPct"
-                      @update:model-value="onKeepaliveFloor"
-                    />
-                  </label>
-                  <InfoHint :text="$t('settings.keepaliveFloorHint')" />
-                </div>
-              </PopoverContent>
-            </Popover>
-          </span>
-        </IconTooltip>
-        <!-- A cloud and nothing else (owner, 2026-10-01: "The login sync should just be the icon of
-             a cloud"); its name is the tooltip. -->
-        <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
-          <Button
-            variant="outline"
-            size="icon"
-            :aria-label="$t('cliInstances.sync')"
-            @click="syncOpen = true"
-          >
-            <Cloud />
-          </Button>
-        </IconTooltip>
-        <IconTooltip :label="$t('cliInstances.moveIn')">
-          <Button
-            variant="outline"
-            size="icon"
-            :aria-label="$t('cliInstances.moveIn')"
-            @click="openMoveIn"
-          >
-            <FileDown />
-          </Button>
-        </IconTooltip>
-      </template>
-      <template #meta>
-        <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
-          {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
-        </span>
-      </template>
-    </InstanceSectionHeader>
-
-    <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table.
-         It draws nothing until the header's plus (or a row's "Log in") asks for its email row. -->
-    <CliQuickAdd
-      ref="quickAdd"
-      class="px-3 pb-3"
-      @signed-in="refreshCliInstances({ silent: true })"
-    />
-
-    <!-- As long as its rows: unfolded, the table never scrolls inside itself, the tab scrolls instead
-         (owner, 2026-10-01: "make this not scroll when expanded (just make it long)"). -->
-    <div v-show="accountsOpen">
-      <!-- visibleRows, not cliInstances: with the usage filter set to hide, this table can be
-           emptied while it still has rows to show, and a blank tbody explains nothing. -->
-      <InstanceTable
-        :columns="columns"
-        :indicator-for="indicatorFor"
-        :skeleton="loading && visibleRows.length === 0"
-        :skeleton-rows="2"
-        :empty="emptyState"
-        @sort="toggleSort"
+  <!-- pb-16 as on the desktop tab: the last row clears the window chrome. -->
+  <div class="pb-16">
+    <InstanceCard>
+      <!-- The shared header every instance table uses; the count says "x of y" while the filter
+           sets rows aside (see headingCount). It folds the table away (owner, 2026-10-01: "the
+           list of accounts should be collapsable"), which leaves CliMayte below the whole window.
+           The header carries the two pooled gauges either way. Its plus shows Quick add's email row. -->
+      <InstanceSectionHeader
+        v-model:open="accountsOpen"
+        provider="claude"
+        :title="$t('cliInstances.title')"
+        :count="headingCount"
+        :refresh-label="$t('cliInstances.refresh')"
+        :refreshing="loading"
+        :create-label="$t('cliInstances.createInstance')"
+        @refresh="refreshCliInstances()"
+        @create="quickAdd?.focusEmail()"
       >
-        <TableBody v-if="visibleRows.length > 0">
-          <InstanceRow v-for="inst in visibleRows" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
-            <template #name-extra>
-              <!-- Linked to a desktop instance: the same account, also shown on that row in the
-                   Instances tab. The chip names the row by its number; the hover says the rest. -->
-              <IconTooltip
-                v-if="linkedDesktop(inst)"
-                :label="linkedLabel(inst)"
-                :description="$t('cliInstances.linkedToHint')"
-              >
-                <span class="inline-flex items-center gap-0.5 text-muted-foreground" :aria-label="linkedLabel(inst)">
-                  <Monitor class="size-3.5" />
-                  <InstanceNumber :num="linkedDesktop(inst)!.num" />
-                </span>
-              </IconTooltip>
-              <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
-                   Hidden at 0: an idle account needs no badge saying so. Green, the colour of
-                   running (owner, 2026-10-01: "that should be green, not blue"). -->
-              <IconTooltip
-                v-if="(inst.liveSessions ?? 0) > 0"
-                :label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
-              >
-                <span
-                  class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-success/15 px-1 text-3xs font-semibold tabular-nums text-success"
-                  :aria-label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
+        <!-- Folded or open (owner, 2026-10-04): the pool's total is not something the rows add up. -->
+        <template #summary>
+          <PooledUsageGauges
+            v-if="cliInstances.length > 0"
+            :session="sessionPool"
+            :week="weekPool"
+          />
+        </template>
+        <template #tools>
+          <!-- This table's settings (Keep windows running, its process columns) are in Desk's Settings,
+               Instances → CLI (owner, 2026-10-06): the gear opens them there. -->
+          <IconTooltip :label="$t('cliInstances.tableSettings')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('cliInstances.tableSettings')"
+              @click="openSettingsInDesk('cli')"
+            >
+              <Settings2 />
+            </Button>
+          </IconTooltip>
+          <!-- A cloud and nothing else (owner, 2026-10-01: "The login sync should just be the icon of
+               a cloud"); its name is the tooltip. -->
+          <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('cliInstances.sync')"
+              @click="syncOpen = true"
+            >
+              <Cloud />
+            </Button>
+          </IconTooltip>
+          <IconTooltip :label="$t('cliInstances.moveIn')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('cliInstances.moveIn')"
+              @click="openMoveIn"
+            >
+              <FileDown />
+            </Button>
+          </IconTooltip>
+        </template>
+        <template #meta>
+          <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
+            {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
+          </span>
+        </template>
+      </InstanceSectionHeader>
+
+      <!-- Quick add: type an email, confirm in the browser, the new CLI instance lands in the table.
+           It draws nothing until the header's plus (or a row's "Log in") asks for its email row. -->
+      <CliQuickAdd
+        ref="quickAdd"
+        class="px-3 pb-3"
+        @signed-in="refreshCliInstances({ silent: true })"
+      />
+
+      <!-- As long as its rows: unfolded, the table never scrolls inside itself, the tab scrolls instead
+           (owner, 2026-10-01: "make this not scroll when expanded (just make it long)"). -->
+      <div v-show="accountsOpen">
+        <!-- visibleRows, not cliInstances: with the usage filter set to hide, this table can be
+             emptied while it still has rows to show, and a blank tbody explains nothing. -->
+        <InstanceTable
+          :columns="columns"
+          :indicator-for="indicatorFor"
+          :skeleton="loading && visibleRows.length === 0"
+          :skeleton-rows="2"
+          :empty="emptyState"
+          @sort="toggleSort"
+        >
+          <TableBody v-if="visibleRows.length > 0">
+            <InstanceRow v-for="inst in visibleRows" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
+              <template #name-extra>
+                <!-- Linked to a desktop instance: the same account, also shown on that row in the
+                     Instances tab. The chip names the row by its number; the hover says the rest. -->
+                <IconTooltip
+                  v-if="linkedDesktop(inst)"
+                  :label="linkedLabel(inst)"
+                  :description="$t('cliInstances.linkedToHint')"
                 >
-                  {{ inst.liveSessions }}
-                </span>
-              </IconTooltip>
-              <CliLimitResetIcon :result="inst.lastLimitReset" />
-              <!-- The keepalive started this window, or its last nudge did not (session-keepalive.ts). -->
-              <IconTooltip
-                v-if="nudgeNotes.get(inst.id)"
-                :label="nudgeNotes.get(inst.id)!.label"
-                :description="nudgeNotes.get(inst.id)!.description"
-              >
-                <span class="inline-flex items-center" :aria-label="nudgeNotes.get(inst.id)!.label">
-                  <Timer
-                    class="size-3.5"
-                    :class="nudgeNotes.get(inst.id)!.ok ? 'text-info' : 'text-warning'"
+                  <span class="inline-flex items-center gap-0.5 text-muted-foreground" :aria-label="linkedLabel(inst)">
+                    <Monitor class="size-3.5" />
+                    <InstanceNumber :num="linkedDesktop(inst)!.num" />
+                  </span>
+                </IconTooltip>
+                <!-- How many Claude sessions run on this login right now, CliMayte's workers included.
+                     Hidden at 0: an idle account needs no badge saying so. Green, the colour of
+                     running (owner, 2026-10-01: "that should be green, not blue"). -->
+                <IconTooltip
+                  v-if="(inst.liveSessions ?? 0) > 0"
+                  :label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
+                >
+                  <span
+                    class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-success/15 px-1 text-3xs font-semibold tabular-nums text-success"
+                    :aria-label="$t('cliInstances.liveSessions', inst.liveSessions ?? 0)"
+                  >
+                    {{ inst.liveSessions }}
+                  </span>
+                </IconTooltip>
+                <CliLimitResetIcon :result="inst.lastLimitReset" />
+                <!-- Its login went to the other PC from here (cli-login-move.ts). -->
+                <IconTooltip
+                  v-if="inst.movedAway"
+                  :label="$t('cliInstances.movedAwayLabel')"
+                  :description="
+                    $t('cliInstances.movedAwayHint', {
+                      ago: timeAgo(inst.movedAway.at),
+                      file: inst.movedAway.file,
+                    })
+                  "
+                >
+                  <span class="inline-flex items-center" :aria-label="$t('cliInstances.movedAwayLabel')">
+                    <ArrowRightLeft class="size-3.5 text-muted-foreground" />
+                  </span>
+                </IconTooltip>
+                <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
+                <IconTooltip
+                  v-if="billsPastLimit(usageFor(inst))"
+                  :label="$t('instances.usageCreditsOn')"
+                  :description="$t('instances.extraUsageOnHint')"
+                >
+                  <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
+                    <CreditCard class="size-3.5 text-warning" />
+                  </span>
+                </IconTooltip>
+              </template>
+              <!-- The keepalive started this 5-hour window, or its last nudge did not (session-keepalive.ts):
+                   a dot on the 5-hour counter, not an icon by the name (owner, 2026-10-06). -->
+              <template #session-mark>
+                <IconTooltip
+                  v-if="nudgeNotes.get(inst.id)"
+                  :label="nudgeNotes.get(inst.id)!.label"
+                  :description="nudgeNotes.get(inst.id)!.description"
+                >
+                  <span
+                    role="img"
+                    class="block size-2 rounded-full ring-2 ring-background"
+                    :class="nudgeNotes.get(inst.id)!.ok ? 'bg-info' : 'bg-warning'"
+                    :aria-label="nudgeNotes.get(inst.id)!.label"
                   />
-                </span>
-              </IconTooltip>
-              <!-- Its login went to the other PC from here (cli-login-move.ts). -->
-              <IconTooltip
-                v-if="inst.movedAway"
-                :label="$t('cliInstances.movedAwayLabel')"
-                :description="
-                  $t('cliInstances.movedAwayHint', {
-                    ago: timeAgo(inst.movedAway.at),
-                    file: inst.movedAway.file,
-                  })
-                "
-              >
-                <span class="inline-flex items-center" :aria-label="$t('cliInstances.movedAwayLabel')">
-                  <ArrowRightLeft class="size-3.5 text-muted-foreground" />
-                </span>
-              </IconTooltip>
-              <!-- Paid extra usage ON: past its limits this account bills instead of stopping. -->
-              <IconTooltip
-                v-if="billsPastLimit(usageFor(inst))"
-                :label="$t('instances.usageCreditsOn')"
-                :description="$t('instances.extraUsageOnHint')"
-              >
-                <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
-                  <CreditCard class="size-3.5 text-warning" />
-                </span>
-              </IconTooltip>
-            </template>
-            <template #menu>
-              <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
-                   launch the cli"). -->
-              <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
-                <Play /> {{ $t('cliInstances.launch') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
-                <LogIn /> {{ $t('cliInstances.login') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
-                <Monitor /> {{ $t('cliInstances.linkDesktop') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                v-if="linkedDesktop(inst)"
-                :disabled="isBusy(inst)"
-                @click="onUnlink(inst)"
-              >
-                <Unlink /> {{ $t('instances.unlinkCli') }}
-              </DropdownMenuItem>
-              <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
-                   With none saved (the norm now — accounts come from signing in instances),
-                   the dialog is an empty dead end, so hide it until such a credential exists.
-                   "Link to desktop instance" above is the primary path either way. -->
-              <DropdownMenuItem
-                v-if="associateAccountOptions.length > 0"
-                :disabled="isBusy(inst)"
-                @click="openAssociateDialog(inst)"
-              >
-                <Link2 /> {{ $t('cliInstances.associate') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                v-if="inst.loggedIn"
-                :disabled="isBusy(inst)"
-                @click="openLimitReset(inst)"
-              >
-                <RotateCcw /> {{ $t('cliInstances.limitReset') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                v-if="inst.loggedIn"
-                :disabled="isBusy(inst) || (inst.liveSessions ?? 0) > 0"
-                @click="openMoveOut(inst)"
-              >
-                <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
-              </DropdownMenuItem>
-              <!-- A signed-out account keeps its last reading, dimmed; this blanks it until
-                   the next reading (owner, 2026-10-02). -->
-              <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
-                <Eraser /> {{ $t('cliInstances.clearUsage') }}
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                :disabled="isBusy(inst)"
-                @click="openDeleteDialog(inst)"
-              >
-                <Trash2 /> {{ $t('cliInstances.delete') }}
-              </DropdownMenuItem>
-            </template>
-          </InstanceRow>
-        </TableBody>
-      </InstanceTable>
-    </div>
+                </IconTooltip>
+              </template>
+              <template #menu>
+                <!-- Launch lives here, not on the row (owner, 2026-10-01: "I kinda never need to
+                     launch the cli"). -->
+                <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
+                  <Play /> {{ $t('cliInstances.launch') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem v-if="!inst.loggedIn" :disabled="isBusy(inst)" @click="onLogin(inst)">
+                  <LogIn /> {{ reloginEmailOf(inst) ? $t('cliInstances.loginAgain') : $t('cliInstances.login') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
+                  <Monitor /> {{ $t('cliInstances.linkDesktop') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="linkedDesktop(inst)"
+                  :disabled="isBusy(inst)"
+                  @click="onUnlink(inst)"
+                >
+                  <Unlink /> {{ $t('instances.unlinkCli') }}
+                </DropdownMenuItem>
+                <!-- "Associate account" points a CLI instance at a LEGACY pasted credential.
+                     With none saved (the norm now — accounts come from signing in instances),
+                     the dialog is an empty dead end, so hide it until such a credential exists.
+                     "Link to desktop instance" above is the primary path either way. -->
+                <DropdownMenuItem
+                  v-if="associateAccountOptions.length > 0"
+                  :disabled="isBusy(inst)"
+                  @click="openAssociateDialog(inst)"
+                >
+                  <Link2 /> {{ $t('cliInstances.associate') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="inst.loggedIn"
+                  :disabled="isBusy(inst)"
+                  @click="openLimitReset(inst)"
+                >
+                  <RotateCcw /> {{ $t('cliInstances.limitReset') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  v-if="inst.loggedIn"
+                  :disabled="isBusy(inst) || (inst.liveSessions ?? 0) > 0"
+                  @click="openMoveOut(inst)"
+                >
+                  <ArrowRightLeft /> {{ $t('cliInstances.moveOut') }}
+                </DropdownMenuItem>
+                <!-- A signed-out account keeps its last reading, dimmed; this blanks it until
+                     the next reading (owner, 2026-10-02). -->
+                <DropdownMenuItem :disabled="!usageFor(inst)" @click="onClearUsage(inst)">
+                  <Eraser /> {{ $t('cliInstances.clearUsage') }}
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  variant="destructive"
+                  :disabled="isBusy(inst)"
+                  @click="openDeleteDialog(inst)"
+                >
+                  <Trash2 /> {{ $t('cliInstances.delete') }}
+                </DropdownMenuItem>
+              </template>
+            </InstanceRow>
+          </TableBody>
+        </InstanceTable>
+      </div>
+    </InstanceCard>
 
     <CliInstanceNameDialog
       v-model:open="renameOpen"

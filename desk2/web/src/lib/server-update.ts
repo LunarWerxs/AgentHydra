@@ -74,5 +74,5 @@ export async function restartServer(): Promise<void> {
 /** A refusal's sentence; "no route ..." means the server is older than this window. */
 export function refusalText(status: number, error: unknown): string | null {
   if (typeof error !== 'string' || !error) return null
-  return status === 404 && error.startsWith('no route ') ? "Hydra Desk 2's server is older than this window: Menu > Restart to update" : error
+  return status === 404 && error.startsWith('no route ') ? "This window's server is older than the window: Menu > Restart to update" : error
 }

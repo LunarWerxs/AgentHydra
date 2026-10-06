@@ -13,6 +13,11 @@ const props = withDefaults(defineProps<TooltipProviderProps>(), {
   // fallback below never triggers (the kit-wide tooltip kill-switch silently does nothing).
   // An explicit `undefined` default overrides that implicit coercion.
   disabled: undefined,
+  // Same trap, and the same fix: an absent Boolean would read `false`, and `v-bind="props"` below would
+  // hand reka that `false`. Focus that is not keyboard focus (reka returning focus to a DropdownMenu or
+  // Dialog trigger as it closes) must not open a tooltip: the pointer is elsewhere, so nothing would
+  // ever close it. Keyboard :focus-visible focus still opens one; an explicit prop still wins.
+  ignoreNonKeyboardFocus: true,
 })
 
 // Global kill-switch: unless a caller pins `disabled` explicitly, follow the shared

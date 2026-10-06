@@ -5,7 +5,14 @@
 import { computed } from 'vue'
 
 const props = defineProps<{
-  rows: Array<{ key: string; label: string; pass: number; fail: number }>
+  rows: Array<{
+    key: string
+    label: string
+    pass: number
+    fail: number
+    credit?: number
+    hint?: string
+  }>
   /** Shown beside the rows past `limit`, e.g. "3 more". */
   moreLabel?: (n: number) => string
   limit?: number
@@ -19,23 +26,25 @@ const sorted = computed(() =>
 const shown = computed(() => (props.limit ? sorted.value.slice(0, props.limit) : sorted.value))
 const hidden = computed(() => sorted.value.length - shown.value.length)
 const max = computed(() => Math.max(1, ...sorted.value.map((r) => r.pass + r.fail)))
-const share = (r: { pass: number; fail: number }) => {
+// `credit` (default: pass) is the weighted pass count, so a small fix counts for most of a pass.
+const credit = (r: { pass: number; credit?: number }) => r.credit ?? r.pass
+const share = (r: { pass: number; fail: number; credit?: number }) => {
   const n = r.pass + r.fail
-  return n ? Math.round((r.pass / n) * 100) : 0
+  return n ? Math.round((credit(r) / n) * 100) : 0
 }
 </script>
 
 <template>
   <ul class="flex flex-col gap-1 text-2xs">
-    <li v-for="r in shown" :key="r.key" class="flex items-center gap-2">
+    <li v-for="r in shown" :key="r.key" class="flex items-center gap-2" :title="r.hint">
       <span class="w-20 shrink-0 truncate text-muted-foreground" :title="r.label">{{ r.label }}</span>
       <div class="flex h-2 min-w-0 flex-1 items-center">
         <div
           class="flex h-full overflow-hidden rounded-full bg-muted"
           :style="{ width: `${Math.max(4, ((r.pass + r.fail) / max) * 100)}%` }"
         >
-          <div class="h-full bg-success" :style="{ flexGrow: r.pass }" />
-          <div class="h-full bg-destructive" :style="{ flexGrow: r.fail }" />
+          <div class="h-full bg-success" :style="{ flexGrow: credit(r) }" />
+          <div class="h-full bg-destructive" :style="{ flexGrow: r.pass + r.fail - credit(r) }" />
         </div>
       </div>
       <span class="shrink-0 tabular-nums">

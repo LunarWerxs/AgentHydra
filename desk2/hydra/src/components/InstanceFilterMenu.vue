@@ -78,8 +78,8 @@ const {
 } = useInstanceFilter()
 
 // The trigger carries the rule when the filter is on or a provider is left out, so the toolbar says
-// what the tables are doing without needing the flyout opened. `secondary` matches the pressed
-// usage-mode toggle beside it, which is the established "this mode is on" signal in this toolbar.
+// what the tables are doing without needing the flyout opened. `secondary` is the kit's "this mode
+// is on" look for a toolbar button.
 const showsRule = computed(() => enabled.value || providersNarrowed.value)
 const triggerVariant = computed(() => (showsRule.value ? 'secondary' : 'outline'))
 

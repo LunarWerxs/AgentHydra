@@ -26,17 +26,9 @@
 
 import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
-export type AppView =
-  | 'sessions'
-  | 'climayte'
-  | 'instances-home'
-  | 'cli'
-  | 'desktop'
-  | 'analytics'
-  | 'hswarm'
+export type AppView = 'sessions' | 'instances-home' | 'cli' | 'desktop' | 'analytics' | 'hswarm'
 export const APP_VIEWS: readonly AppView[] = [
   'sessions',
-  'climayte',
   'instances-home',
   'cli',
   'desktop',
@@ -55,6 +47,8 @@ const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
   // `instances` was the desktop accounts page; the id now belongs to the group's landing page
   // (`instances-home`), so a stored `instances` keeps meaning the desktop page it always meant.
   instances: 'desktop',
+  // CliMayte moved into the HSwarm tab, a node of its tree (2026-10-05).
+  climayte: 'hswarm',
 }
 
 /** The one key, under both storages. Same name deliberately: they hold the same kind of value, for
@@ -139,3 +133,7 @@ export function createTabView(stored: Ref<AppView>, session: Storage | null): Re
 
 /** Provided by App.vue: lets a nested view switch the tab (e.g. a stats card's "open HSwarm"). */
 export const OPEN_VIEW: InjectionKey<(view: AppView) => void> = Symbol('open-view')
+
+/** A node of the HSwarm tab's tree asked for from outside it (App.vue: the CliMayte shortcut and tiles,
+ *  a stats card's "open HSwarm"). HSwarmView selects it and clears it. */
+export const hswarmNodeAsk = ref<string | null>(null)

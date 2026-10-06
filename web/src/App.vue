@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   BarChart3,
-  Bot,
   Boxes,
   ChevronDown,
   Layers,
@@ -22,7 +21,6 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AnalyticsView from '@/components/AnalyticsView.vue'
 import AutomationSettings from '@/components/AutomationSettings.vue'
-import CliMayteView from '@/components/CliMayteView.vue'
 import CliView from '@/components/CliView.vue'
 import HSwarmView from '@/components/HSwarmView.vue'
 import InstancesHomeView from '@/components/InstancesHomeView.vue'
@@ -54,7 +52,7 @@ import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { shutdownApp } from '@/lib/api'
-import { INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { hswarmNodeAsk, INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
 import { pendingSessionJump } from '@/lib/session-jump'
 import { REBRAND_NOTICE_KEY } from '@/lib/storage-rebrand'
 import { type ThemeMode, useTheme } from '@/lib/theme'
@@ -90,6 +88,19 @@ watch(pendingSessionJump, (j) => {
   if (j) view.value = 'sessions'
 })
 
+// CliMayte has no tab of its own: it is a node of the HSwarm tab's tree (owner, 2026-10-05: "CliMayte
+// should also be an item under that").
+function openClimayte() {
+  hswarmNodeAsk.value = 'climayte'
+  view.value = 'hswarm'
+}
+// "Open HSwarm" from a stats card (its numbers are HSwarm's savings): the Savings node, not whatever node
+// the tree showed last, CliMayte's included.
+function openHswarmSavings() {
+  hswarmNodeAsk.value = 'savings'
+  view.value = 'hswarm'
+}
+
 // The shell's own bindings — global, so they are on every view and lead the `?` sheet. Registered
 // here rather than in each view because that is what makes them true everywhere.
 useShortcuts([
@@ -111,9 +122,7 @@ useShortcuts([
     keys: 'mod+2',
     labelKey: 'app.shortcutClimayte',
     groupKey: 'app.shortcutGroupApp',
-    run: () => {
-      view.value = 'climayte'
-    },
+    run: openClimayte,
   },
   {
     keys: 'mod+3',
@@ -241,7 +250,6 @@ async function onShutdown() {
 // sit in a hover dropdown. The group reads as active on any of its three views.
 const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
   { id: 'sessions', labelKey: 'app.tabSessions', icon: MessagesSquare },
-  { id: 'climayte', labelKey: 'app.tabClimayte', icon: Bot },
   { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
@@ -309,7 +317,9 @@ function pickInstancesSub(id: AppView) {
 function onHomeNavigate(
   to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'hswarm',
 ) {
-  view.value = to === 'instances' ? 'desktop' : to
+  if (to === 'climayte') openClimayte()
+  else if (to === 'hswarm') openHswarmSavings()
+  else view.value = to === 'instances' ? 'desktop' : to
 }
 
 provide(OPEN_VIEW, (v: AppView) => {
@@ -581,7 +591,6 @@ onUnmounted(stopAvailabilityPolling)
         <Transition name="view-fade" mode="out-in">
           <SessionsView v-if="view === 'sessions'" />
           <AnalyticsView v-else-if="view === 'analytics'" />
-          <CliMayteView v-else-if="view === 'climayte'" class="h-full" />
           <InstancesHomeView v-else-if="view === 'instances-home'" @navigate="onHomeNavigate" />
           <CliView v-else-if="view === 'cli'" />
           <HSwarmView v-else-if="view === 'hswarm'" />

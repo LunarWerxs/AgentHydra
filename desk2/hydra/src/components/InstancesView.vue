@@ -4,7 +4,6 @@ import {
   ArrowRightLeft,
   Boxes,
   Coins,
-  Cpu,
   CreditCard,
   Eraser,
   FolderOpen,
@@ -16,12 +15,11 @@ import {
   MonitorDown,
   Pencil,
   Play,
-  Plus,
   RefreshCw,
   RotateCcw,
+  Settings2,
   Square,
   Terminal,
-  Timer,
   Trash2,
   TriangleAlert,
   Unlink,
@@ -36,17 +34,16 @@ import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
+import InstanceCard from '@/components/InstanceCard.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
-import InstanceSettings from '@/components/InstanceSettings.vue'
 import InstanceTable from '@/components/InstanceTable.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
-import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
-import ProviderLogo, { type Provider } from '@/components/ProviderLogo.vue'
+import type { Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -58,16 +55,13 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import {
-  DropdownMenu,
   DropdownMenuCheckboxItem,
-  DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubContent,
   DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
@@ -85,6 +79,7 @@ import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import { openSettingsInDesk } from '@/lib/desk-embed'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
@@ -157,7 +152,7 @@ const { resetBankedHint, codeCreditFor, codeCreditLabel, codeCreditHint, usageCr
 // QUOTA columns ("how much is left, and when does it come back?"). See composables/useUsageMode.ts
 // for why it's a mode rather than a per-column picker. `now` is the shared clock every countdown
 // cell in both tables formats against, so the whole tab ticks together.
-const { usageMode, toggle: toggleUsageMode, now } = useUsageMode(true)
+const { usageMode, now } = useUsageMode(true)
 
 // The sort survives a reload: persisted through useUiPrefs. It orders the Claude rows; the Codex
 // and DeepSeek rows below them keep their own order.
@@ -549,8 +544,6 @@ interface ProviderRowsHandle {
   /** Rows the filter took out of this provider (Codex says so; DeepSeek filters none). */
   hiddenByFilter?: number
 }
-/** The gear's dialog: this tab's own settings (InstanceSettings.vue). */
-const instanceSettingsOpen = ref(false)
 const codexRows = ref<ProviderRowsHandle | null>(null)
 const dshRows = ref<ProviderRowsHandle | null>(null)
 
@@ -608,9 +601,11 @@ const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode
  *   5h / Week: the 2.75rem usage chip, a 0.375rem gap and the 5rem reset bar
  *   usage: its 3.5rem skeleton (the chip is 2.75rem); plan: a "Max 20x" badge
  *   last active: "Last active" with its hint ("10/12/2025" fits under it)
- *   tokens: "Tokens · Week"; actions: Launch or Focus beside the menu button (Codex rows too)
- * Measured in the running table (2026-10-04): Last active, Tokens and Actions came out 104, 90 and
- * 118 px once the Codex rows were in, so theirs are those, rounded up.
+ *   tokens: "Tokens" and its sort arrow, the window note gone (owner, 2026-10-06)
+ *   actions: one 24px icon button, a 4px gap, the 24px menu button and the cell's 12px padding
+ *   (owner, 2026-10-06: icons instead of words)
+ * Measured in the running table (2026-10-04): Last active came out 104 px once the Codex rows were
+ * in, so its width is that, rounded up.
  */
 const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   pid: '3.5rem',
@@ -621,8 +616,8 @@ const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
   usage: '4.25rem',
   plan: '4.75rem',
   lastActive: '6.5rem',
-  tokens: '5.75rem',
-  actions: '7.5rem',
+  tokens: '4.5rem',
+  actions: '4rem',
 }
 
 /** What the shared row draws for one Claude desktop instance. */
@@ -644,25 +639,20 @@ function rowModel(inst: CMInstance): InstanceRowModel {
           {
             full: piiDisplayName(inst),
             shown,
+            email: accountEmail(inst.account),
             folder: inst.dir,
-            hint: inst.isRunning ? t('instances.focusHint') : undefined,
+            copyHint: t('instances.nameCopyHint'),
           },
           clipped,
         ),
-      onClick: inst.isRunning ? () => void onFocus(inst) : undefined,
-      busy: isBusy(inst),
+      copy: accountEmail(inst.account),
     },
     badge: inst.isExternal ? { label: t('instances.external') } : undefined,
     // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
     // missing account is a moment, not a state you act on.
     account: accountName
-      ? {
-          email: inst.account?.email,
-          profile: inst.account?.name,
-          fallback: inst.account?.label,
-          variant: accountBadgeVariant(inst),
-        }
-      : { empty: t('instances.resolving') },
+      ? { stale: accountBadgeVariant(inst) === 'warning' }
+      : { note: t('instances.resolving') },
     pid: inst.pid,
     // A getter for the same reason as lastRunning's label: the cell that draws it ticks with the clock.
     get uptime() {
@@ -720,6 +710,14 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
+/** The header's + menu (InstanceSectionHeader), one item per provider switched on. */
+const createOptions = computed(() =>
+  createProviders.value.map((provider) => ({
+    id: provider,
+    provider,
+    label: t(CREATE_LABEL[provider]),
+  })),
+)
 
 /**
  * "New … instance". A provider the filter is leaving out is listed again first, so the row being
@@ -1321,146 +1319,110 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex min-h-full flex-col">
-    <!-- Borderless toolbar, matching Sessions/Queue and the app header (App.vue): the sticky table
-         header right below already draws a line there, and two rules a row apart was one of them
-         doing nothing but adding weight.
-         One table for every provider's desktop instances, so the heading is a title, not a
-         collapse toggle, and carries no provider logo (each row carries its own). The count covers
-         every provider and reads "x of y" once the filter is hiding rows, so it never silently
-         disagrees with the number of instances that exist. No count while the skeleton stands in:
-         it read "(0)" and then jumped to the real number. -->
-    <InstanceSectionHeader
-      :title="$t('instances.title')"
-      :count="
-        claudeSkeleton
-          ? null
-          : hiddenByFilter > 0
-            ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
-            : totalRows
-      "
-      :refresh-label="$t('instances.refresh')"
-      :refresh-hint="$t('instances.refreshHint')"
-      :refreshing="loading"
-      :collapsible="false"
-      @refresh="handleRefresh"
-    >
-      <template #meta>
-        <span
-          v-if="hiddenByFilter > 0 && !claudeSkeleton"
-          class="text-xs font-normal text-muted-foreground"
-        >
-          {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
-        </span>
-      </template>
-      <template #tools>
-        <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
-             (secondary) while on, so the toolbar itself says which set of columns you're looking
-             at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
-        <IconTooltip
-          :label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-          :description="$t('instances.usageModeHint')"
-        >
-          <Button
-            :variant="usageMode ? 'secondary' : 'outline'"
-            size="icon"
-            :aria-pressed="usageMode"
-            :aria-label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-            @click="toggleUsageMode"
+  <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
+       half-hidden behind the window chrome (owner, 2026-09-20). -->
+  <div class="flex min-h-full flex-col pb-16">
+    <InstanceCard>
+      <!-- The card's header bar (InstanceCard): the table's column headings right below draw the
+           line under it.
+           One table for every provider's desktop instances, so the heading is a title, not a
+           collapse toggle, and carries no provider logo (each row carries its own). The count covers
+           every provider and reads "x of y" once the filter is hiding rows, so it never silently
+           disagrees with the number of instances that exist. No count while the skeleton stands in:
+           it read "(0)" and then jumped to the real number. -->
+      <InstanceSectionHeader
+        :title="$t('instances.title')"
+        :count="
+          claudeSkeleton
+            ? null
+            : hiddenByFilter > 0
+              ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
+              : totalRows
+        "
+        :refresh-label="$t('instances.refresh')"
+        :refresh-hint="$t('instances.refreshHint')"
+        :refreshing="loading"
+        :create-label="$t('instances.createInstance')"
+        :create-options="createOptions"
+        :collapsible="false"
+        @refresh="handleRefresh"
+        @create="(id) => onCreateFor(id as Provider)"
+      >
+        <template #meta>
+          <span
+            v-if="hiddenByFilter > 0 && !claudeSkeleton"
+            class="text-xs font-normal text-muted-foreground"
           >
-            <component :is="usageMode ? Cpu : Timer" />
-          </Button>
-        </IconTooltip>
-        <!-- Always here, in both column modes: status and plan are true whichever columns are on
-             screen, and only the QUOTA facet stands down with them (see
-             composables/useInstanceFilter.ts). A dimmed or short table must always have the
-             control that explains it visible in the same toolbar. -->
-        <InstanceFilterMenu :present-plans="presentPlans" />
-        <IconTooltip
-          :label="$t('instances.refreshAllUsage')"
-          :description="$t('instances.refreshAllUsageHint')"
-        >
-          <Button
-            variant="outline"
-            size="icon"
-            :disabled="
-              refreshingAllUsage ||
-              instances.length + cliInstances.length + codexInstances.length === 0
-            "
-            :aria-label="$t('instances.refreshAllUsage')"
-            @click="onRefreshAllUsage"
-          >
-            <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
-          </Button>
-        </IconTooltip>
-        <PageSettingsDialog
-          v-model:open="instanceSettingsOpen"
-          trigger
-          :title="$t('instances.settingsTitle')"
-        >
-          <InstanceSettings />
-        </PageSettingsDialog>
-        <!-- Create: a menu with one item per provider switched on. An icon with a tooltip like its
-             neighbours: it used to widen on hover to show its label, which in a full row wrapped
-             it out from under the pointer, so it flickered (owner, 2026-10-01). The DropdownMenu
-             root sits INSIDE the tooltip's slot, wrapped in a span: see
-             scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
-        <IconTooltip v-if="createProviders.length > 0" :label="$t('instances.createInstance')">
-          <span class="inline-flex">
-            <DropdownMenu>
-              <DropdownMenuTrigger as-child>
-                <Button size="icon" :aria-label="$t('instances.createInstance')">
-                  <Plus />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem
-                  v-for="provider in createProviders"
-                  :key="provider"
-                  @click="onCreateFor(provider)"
-                >
-                  <ProviderLogo :provider="provider" class="size-3.5" />
-                  {{ $t(CREATE_LABEL[provider]) }}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
           </span>
-        </IconTooltip>
-      </template>
-    </InstanceSectionHeader>
+        </template>
+        <template #tools>
+          <!-- Always here, in both column modes: status and plan are true whichever columns are on
+               screen, and only the QUOTA facet stands down with them (see
+               composables/useInstanceFilter.ts). A dimmed or short table must always have the
+               control that explains it visible in the same toolbar. -->
+          <InstanceFilterMenu :present-plans="presentPlans" />
+          <IconTooltip
+            :label="$t('instances.refreshAllUsage')"
+            :description="$t('instances.refreshAllUsageHint')"
+          >
+            <Button
+              variant="outline"
+              size="icon"
+              :disabled="
+                refreshingAllUsage ||
+                instances.length + cliInstances.length + codexInstances.length === 0
+              "
+              :aria-label="$t('instances.refreshAllUsage')"
+              @click="onRefreshAllUsage"
+            >
+              <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
+            </Button>
+          </IconTooltip>
+          <!-- This table's settings (which tables show, paid extra usage, Claude native control, its
+               process columns) are in Desk's Settings, Instances → Desktop (owner, 2026-10-06). -->
+          <IconTooltip :label="$t('instances.settingsTitle')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('instances.settingsTitle')"
+              @click="openSettingsInDesk('desktop')"
+            >
+              <Settings2 />
+            </Button>
+          </IconTooltip>
+        </template>
+      </InstanceSectionHeader>
 
-    <div
-      v-if="desktopWarning"
-      class="flex items-start gap-2 border-b border-border bg-warning/10 px-3 py-2"
-    >
-      <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning" />
-      <div class="min-w-0 text-sm">
-        <p class="font-medium text-warning">{{ $t(desktopWarning.titleKey) }}</p>
-        <p class="mt-0.5 text-xs text-muted-foreground">{{ $t(desktopWarning.bodyKey) }}</p>
-        <p class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
-          <a
-            :href="CLASSIC_DESKTOP_INSTALLER_URL"
-            target="_blank"
-            rel="noreferrer"
-            class="font-medium text-warning underline underline-offset-2"
-          >
-            {{ $t('instances.desktopWarnDownload') }}
-          </a>
-          <a
-            :href="DESKTOP_DOWNLOAD_PAGE_URL"
-            target="_blank"
-            rel="noreferrer"
-            class="text-muted-foreground underline underline-offset-2"
-          >
-            {{ $t('instances.desktopWarnAllDownloads') }}
-          </a>
-        </p>
+      <div
+        v-if="desktopWarning"
+        class="flex items-start gap-2 border-b border-border bg-warning/10 px-3 py-2"
+      >
+        <TriangleAlert class="mt-0.5 size-4 shrink-0 text-warning" />
+        <div class="min-w-0 text-sm">
+          <p class="font-medium text-warning">{{ $t(desktopWarning.titleKey) }}</p>
+          <p class="mt-0.5 text-xs text-muted-foreground">{{ $t(desktopWarning.bodyKey) }}</p>
+          <p class="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+            <a
+              :href="CLASSIC_DESKTOP_INSTALLER_URL"
+              target="_blank"
+              rel="noreferrer"
+              class="font-medium text-warning underline underline-offset-2"
+            >
+              {{ $t('instances.desktopWarnDownload') }}
+            </a>
+            <a
+              :href="DESKTOP_DOWNLOAD_PAGE_URL"
+              target="_blank"
+              rel="noreferrer"
+              class="text-muted-foreground underline underline-offset-2"
+            >
+              {{ $t('instances.desktopWarnAllDownloads') }}
+            </a>
+          </p>
+        </div>
       </div>
-    </div>
 
-    <!-- pb-16: the last section sat flush against the bottom edge of the scroll area, its last row
-         half-hidden behind the window chrome (owner, 2026-09-20). -->
-    <div class="flex flex-col gap-10 pb-16">
       <!-- ONE table for every provider's desktop instances: the same InstanceTable and InstanceRow
            the CLI tab draws, fed this kind's columns (lib/instance-table.ts). The Claude rows are
            the bodies below; the Codex and DeepSeek rows are their own components handing the same
@@ -1605,27 +1567,41 @@ onUnmounted(() => {
               </span>
             </template>
             <template #primary>
-              <Button
-                v-if="!inst.isRunning"
-                variant="outline"
-                size="sm"
-                :disabled="isBusy(inst)"
-                @click="onOpen(inst)"
-              >
-                <Play /> {{ $t('instances.open') }}
-              </Button>
+              <!-- Icon-only actions (owner, 2026-10-06): the word is the tooltip and the aria-label. -->
+              <IconTooltip v-if="!inst.isRunning" :label="$t('instances.open')">
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  :aria-label="$t('instances.open')"
+                  :disabled="isBusy(inst)"
+                  @click="onOpen(inst)"
+                >
+                  <Play />
+                </Button>
+              </IconTooltip>
               <!-- running: the primary action is Focus (bring the window forward); Quit moves
                    under the kebab so the common action is one click and the destructive one is
                    deliberate. The pulsing green dot is the one the status dot carries. -->
-              <Button v-else variant="outline" size="sm" :disabled="isBusy(inst)" @click="onFocus(inst)">
-                <span class="relative inline-flex">
-                  <AppWindow />
-                  <span
-                    class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
-                  />
-                </span>
-                {{ $t('instances.focusShort') }}
-              </Button>
+              <IconTooltip
+                v-else
+                :label="$t('instances.focusShort')"
+                :description="$t('instances.focusHint')"
+              >
+                <Button
+                  variant="outline"
+                  size="icon-sm"
+                  :aria-label="$t('instances.focusShort')"
+                  :disabled="isBusy(inst)"
+                  @click="onFocus(inst)"
+                >
+                  <span class="relative inline-flex">
+                    <AppWindow />
+                    <span
+                      class="absolute -right-1 -top-1 size-1.5 rounded-full bg-success ring-2 ring-background animate-pulse"
+                    />
+                  </span>
+                </Button>
+              </IconTooltip>
             </template>
             <template #menu>
 
@@ -1788,7 +1764,7 @@ onUnmounted(() => {
           <DshInstanceRows ref="dshRows" :columns="columns" />
         </tbody>
       </InstanceTable>
-    </div>
+    </InstanceCard>
 
     <!-- "Chats": this one account's chats, read-only. No action on the account itself, so it
          closes on any outside click and its only control is the archived toggle. -->

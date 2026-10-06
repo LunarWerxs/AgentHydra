@@ -60,5 +60,6 @@ export default {
   markCancelled: 'Cancelled',
   noAnswer: 'No answer.',
   noAnswerYet: 'Still running: no answer yet.',
+  noAnswerQueued: 'Queued: not started yet.',
   noResults: 'No task results yet.',
 }

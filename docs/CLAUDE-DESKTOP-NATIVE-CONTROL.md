@@ -61,7 +61,8 @@ identity mismatch is refused; do not weaken those guards to make one launch.
 
 ## AgentHydra settings
 
-Open **Instances tab → gear (Instances settings) → Claude native control**, choose the desktop account,
+Open **Settings → Instances → Desktop → Claude native control** (the Desktop table's gear opens it; in the
+old window of a release build, **Instances tab → gear**), choose the desktop account,
 and enable **Start debugger automatically**. Settings are saved per profile; the
 panel lists all accounts with automatic startup enabled. The panel and the settings API
 are authoritative for current configuration; the account examples below record past proofs.
@@ -287,7 +288,7 @@ executable; the new behavior applies to AgentHydra's Open action.
 The historical #8 proof used a manually enabled inspector on port 9229. Ashley #15
 (`work`) demonstrated `launchDebugger:true` on port 19315 without a developer-menu
 setting. #8, #37 and Ashley were closed after those tests. These are test records, not a
-current fleet configuration list: read `/api/claude-native/settings` or the Instances settings.
+current fleet configuration list: read `/api/claude-native/settings` or Settings → Instances → Desktop.
 Overlapping native operations for one profile return a terminal, undispatched busy
 result so their bystander-state checks cannot interfere with each other.
 

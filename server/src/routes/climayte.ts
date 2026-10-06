@@ -262,6 +262,7 @@ app.post('/api/corch/workers/:id/verdict', async (c) => {
     note: body.note,
     retry: body.retry,
     kind: body.kind,
+    severity: body.severity,
     // Only the view says 'owner'; a check's verdict never comes over HTTP.
     by: body.by === 'owner' ? 'owner' : 'orchestrator',
   })
@@ -282,6 +283,7 @@ app.post('/api/corch/verdicts', async (c) => {
       note: body.note,
       retry: body.retry,
       kind: body.kind,
+      severity: body.severity,
       by: body.by === 'owner' ? 'owner' : 'orchestrator',
     }),
   )

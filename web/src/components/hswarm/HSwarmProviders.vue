@@ -410,10 +410,10 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               <TableRow>
                 <TableHead>{{ t('hswarm.v.providers.state') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.providers.colProvider') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.readyKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.restingKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.disabledKeys') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.providers.colKeys') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.providers.readyKeys') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.providers.restingKeys') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.providers.disabledKeys') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.providers.colKeys') }}</TableHead>
                 <TableHead class="w-12">{{ t('hswarm.v.providers.on') }}</TableHead>
               </TableRow>
             </TableHeader>
@@ -431,10 +431,10 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
                     {{ p.name }}
                   </button>
                 </TableCell>
-                <TableCell class="text-right font-mono">{{ p.ready ?? 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.resting || 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.disabled || 0 }}</TableCell>
-                <TableCell class="text-right font-mono">{{ p.keys }}</TableCell>
+                <TableCell class="text-end font-mono">{{ p.ready ?? 0 }}</TableCell>
+                <TableCell class="text-end font-mono">{{ p.resting || 0 }}</TableCell>
+                <TableCell class="text-end font-mono">{{ p.disabled || 0 }}</TableCell>
+                <TableCell class="text-end font-mono">{{ p.keys }}</TableCell>
                 <TableCell>
                   <Switch
                     :model-value="!!p.enabled"
@@ -468,7 +468,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
               </a>
             </div>
           </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
+          <div class="flex items-center gap-2 shrink-0">
             <Label class="text-sm">{{ t('hswarm.v.providers.enabled') }}</Label>
             <Switch
               :checked="selectedProviderData.enabled"
@@ -526,7 +526,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
                   <TableHead>{{ t('hswarm.v.providers.fingerprint') }}</TableHead>
                   <TableHead>{{ t('hswarm.v.providers.priority') }}</TableHead>
                   <TableHead>{{ t('hswarm.v.providers.state') }}</TableHead>
-                  <TableHead class="w-16 text-right">
+                  <TableHead class="w-16 text-end">
                     {{ t('hswarm.v.providers.actions') }}
                   </TableHead>
                 </TableRow>
@@ -574,7 +574,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
                       {{ t('hswarm.v.providers.keyReady') }}
                     </Badge>
                   </TableCell>
-                  <TableCell class="text-right">
+                  <TableCell class="text-end">
                     <div class="flex justify-end gap-1">
                       <Button
                         size="sm"

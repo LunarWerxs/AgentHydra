@@ -42,7 +42,6 @@ function stubStorage(
 describe('parseAppView', () => {
   test('accepts the tabs that exist and refuses everything else', () => {
     expect(parseAppView('sessions')).toBe('sessions')
-    expect(parseAppView('climayte')).toBe('climayte')
     expect(parseAppView('instances-home')).toBe('instances-home')
     expect(parseAppView('desktop')).toBe('desktop')
     expect(parseAppView('cli')).toBe('cli')
@@ -51,6 +50,8 @@ describe('parseAppView', () => {
     expect(parseAppView('analytics')).toBe('analytics')
     // The Corch tab was folded into the CLI tab: a window last on it opens there, not on a dead tab.
     expect(parseAppView('corch')).toBe('cli')
+    // CliMayte became a node of the HSwarm tab's tree (2026-10-05): a window last on it opens HSwarm.
+    expect(parseAppView('climayte')).toBe('hswarm')
     // A downgrade-era or hand-edited value must not render a tab the app does not have.
     expect(parseAppView('quantum')).toBeNull()
     expect(parseAppView(null)).toBeNull()

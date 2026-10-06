@@ -10,6 +10,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
 import RowMenuList from './RowMenuList.vue'
+import { cleanSidebar } from './clean'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
@@ -35,8 +36,9 @@ const [DefineBody, ReuseBody] = createReusableTemplate()
 
 const dotClass = computed(() => glyphDotClass(glyph.value))
 
+// Clean sidebar (clean.ts) leaves a working chat's elapsed time out; its pulsing dot still says it works.
 const elapsed = computed(() =>
-  props.chat.status === 'working' || props.chat.status === 'starting' ? elapsedLabel(props.chat.turnStartedAt, clock.value) : ''
+  !cleanSidebar.value && (props.chat.status === 'working' || props.chat.status === 'starting') ? elapsedLabel(props.chat.turnStartedAt, clock.value) : ''
 )
 const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, clock.value) : ''))
 

@@ -119,6 +119,19 @@ export interface CliMayteVerdict {
   /** Provisional verdicts (by: 'wave') stay out of the scorecard until the orchestrator confirms them
    *  by calling climayte_wave_verify with ok: true. */
   provisional?: boolean
+  /** How bad a fail was (owner, 2026-10-06: "Did it really fail, or did something have to just do a
+   *  slight bit of work to fix it? ... a catastrophic fail, or ... a whoopsie-daisy?"). Only on a fail.
+   *  0 not the model's: the work was not judged or the failure is not this task's. The check could not
+   *    run (126/127, never started, runner lost) or timed out, or it failed only on files this task
+   *    did not edit (another session's work, the environment, a flaky check); an orchestrator may also
+   *    say the brief was wrong. NOT SCORED (neither pass nor fail; its units stay out of the cost).
+   *  1 slip: right work, a small miss someone fixes in minutes: files not committed, a file outside the
+   *    brief's paths, a one-line, typo, lint or format fix, a small missed test or doc update.
+   *  2 rework: a real part is wrong or missing and needs a substantive follow-up, the approach stands.
+   *  3 failed: wrong, unusable or harmful: misunderstood the task, nothing useful, broke unrelated
+   *    things, claimed a success that was not there.
+   *  Absent on a fail (older daemon, the old window's thumbs-down) counts as 3. */
+  severity?: 0 | 1 | 2 | 3
   /** The work this verdict judges: the start of the task's newest attempt when it was recorded. A
    *  verdict with the same span as the one before judges the same work (no attempt since) and
    *  replaces it in the scorecard. Absent on older verdicts: each counts on its own. */
@@ -158,8 +171,25 @@ export interface ScoreRow {
   model: string | null
   effort: string | null
   pass: number
+  /** Scored fails, = slip + rework + failed. */
   fail: number
+  slip: number
+  rework: number
+  /** Severity 3, and fails with no severity. */
+  failed: number
+  /** Severity-0 fails: in neither pass nor fail, and their units are not counted. */
+  excluded: number
   units: number
+}
+
+/** Credit a scored verdict earns: a pass 1, a slip 2/3, a rework 1/3, a failed 0. */
+export const SLIP_CREDIT = 2 / 3
+export const REWORK_CREDIT = 1 / 3
+
+/** A row's weighted pass rate (credit over scored verdicts), null with none scored. */
+export function scoreOf(r: Pick<ScoreRow, 'pass' | 'slip' | 'rework' | 'fail'>): number | null {
+  const n = r.pass + r.fail
+  return n ? (r.pass + r.slip * SLIP_CREDIT + r.rework * REWORK_CREDIT) / n : null
 }
 
 /** Every verdict on record, summed per kind and setting; ladder order (cheapest first) within a
@@ -185,10 +215,24 @@ export function scoreRows(
         effort: v.effort,
         pass: 0,
         fail: 0,
+        slip: 0,
+        rework: 0,
+        failed: 0,
+        excluded: 0,
         units: 0,
       }
+      rows.set(key, row)
+      if (v.verdict === 'fail' && v.severity === 0) {
+        row.excluded++
+        continue
+      }
       if (v.verdict === 'pass') row.pass++
-      else row.fail++
+      else {
+        row.fail++
+        if (v.severity === 1) row.slip++
+        else if (v.severity === 2) row.rework++
+        else row.failed++
+      }
       // The work only: a move's re-read is what the move cost, not what the kind costs.
       row.units += Math.max(0, v.units - (v.reread ?? 0))
       rows.set(key, row)
@@ -233,17 +277,20 @@ interface RungStat {
 }
 
 function statAt(rows: ScoreRow[], kind: string, i: number): RungStat {
-  let pass = 0
-  let fail = 0
+  const sum = { pass: 0, fail: 0, slip: 0, rework: 0 }
   let units = 0
   for (const x of rows)
     if (x.kind === kind && ladderIndex({ model: ladderModel(x.model), effort: x.effort }) === i) {
-      pass += x.pass
-      fail += x.fail
+      sum.pass += x.pass
+      sum.fail += x.fail
+      sum.slip += x.slip
+      sum.rework += x.rework
       units += x.units
     }
-  const n = pass + fail
-  return { n, pass, rate: n ? pass / n : 0, perPass: pass ? units / pass : Infinity }
+  const n = sum.pass + sum.fail
+  const rate = scoreOf(sum) ?? 0
+  const credit = rate * n
+  return { n, pass: sum.pass, rate, perPass: credit ? units / credit : Infinity }
 }
 
 const trusted = (s: RungStat): boolean => s.n >= MIN_SAMPLES && s.rate >= PASS_BAR

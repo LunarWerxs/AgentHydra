@@ -124,15 +124,15 @@ const selectSession = (session: ExternalSession) => {
 
           <!-- Metadata row -->
           <div class="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
-            <span v-if="session.source" class="flex-shrink-0">{{ sourceIcon(session.source) }}</span>
-            <span v-if="session.instance" class="flex-shrink-0">{{ session.instance }}</span>
+            <span v-if="session.source" class="shrink-0">{{ sourceIcon(session.source) }}</span>
+            <span v-if="session.instance" class="shrink-0">{{ session.instance }}</span>
             <span v-if="session.cwd" class="truncate text-[var(--text-muted)]">{{ session.cwd }}</span>
           </div>
 
           <!-- Activity and time -->
           <div class="flex items-center gap-2 text-[12px] text-[var(--text-muted)] mt-1">
             <span v-if="session.activity" class="truncate">{{ session.activity }}</span>
-            <span v-if="session.lastActivityAt" class="flex-shrink-0">{{ time }}</span>
+            <span v-if="session.lastActivityAt" class="shrink-0">{{ time }}</span>
           </div>
         </div>
       </div>

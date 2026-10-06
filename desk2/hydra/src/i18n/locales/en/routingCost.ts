@@ -19,7 +19,7 @@ export default {
   closeRatioNote: 'Two costs within this factor count as close.',
   discountsTitle: 'Bulk-rate discount',
   discountsNote:
-    'Percent off list prices that you pay per provider; it lowers the API side of every comparison.',
+    'Percent off list prices that you pay per provider; it lowers the API side of every comparison. A free-tier key is 100% off; paid credit that is never refilled is best left at 0, so a Claude subscription, whose weekly quota is lost if unused, goes first.',
   discountAnthropic: 'Anthropic',
   discountDeepseek: 'DeepSeek',
   discountOpenrouter: 'OpenRouter',

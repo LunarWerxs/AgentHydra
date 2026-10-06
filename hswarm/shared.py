@@ -53,8 +53,7 @@ HEADERS = {"session": "x-hswarm-session", "chat": "x-hswarm-chat", "instance": "
            "mcp_session": "mcp-session-id",
            "climayte_worker": "x-hswarm-climayte-worker",  # "1" when the calling chat is a CliMayte worker (climayte_route.eligible)
            "envelope": "x-hswarm-envelope"}  # the spawn envelope a cc worker's hswarm runs under (envelope.inherited)
-SHARED_NOTE = (" This is the ONE hswarm server every chat on this machine shares, so it cannot see your folder: give every "
-               "task that uses tools or files an ABSOLUTE cwd (your project folder).")
+SHARED_NOTE = " This one server is shared by every chat on this machine and cannot see your folder: hence the ABSOLUTE cwd."
 PACKAGE = Path(__file__).resolve().parent
 
 

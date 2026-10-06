@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { AhMessage } from '@shared/hydra-embed'
-import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './api'
+import { AH_SETTINGS_PAGES, type AhMessage, type AhSettingsPage } from '@shared/hydra-embed'
+import { attachHydraFrame, hydraReady, setAhUpdateWaiting, setHydraSidebar, setHydraVisible } from './api'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
@@ -15,7 +15,8 @@ import { attachHydraFrame, hydraReady, hydraSidebar, setHydraVisible } from './a
 // closes it. Out of view the copy is told so (desk:visible) and its polls rest until it comes back.
 // The copy gets the room the chrome bar covers on the left as --desk-pad-left.
 const props = defineProps<{ open: boolean; /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number }>()
-const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': [] }>()
+const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': []; 'open-settings': [section?: AhSettingsPage] }>()
+const settingsPage = (v: unknown) => (AH_SETTINGS_PAGES as readonly unknown[]).includes(v) ? (v as AhSettingsPage) : undefined
 
 const SRC = '/ah/?embed=desk'
 const daemon = ref<string | null>(null)
@@ -70,10 +71,14 @@ function onMessage(e: MessageEvent) {
   if (m?.type === 'ah:ready') hydraReady(e.source as Window)
   else if (m?.type === 'ah:open-session' && typeof m.session_id === 'string' && m.session_id) emit('open-session', m.session_id)
   else if (m?.type === 'ah:show-sessions') emit('show-sessions')
-  else if (m?.type === 'ah:sidebar') hydraSidebar.value = m.model && Array.isArray(m.model.sections) ? m.model : null
+  else if (m?.type === 'ah:open-settings') emit('open-settings', settingsPage(m.section))
+  else if (m?.type === 'ah:update-dot') setAhUpdateWaiting(m.on === true)
+  else if (m?.type === 'ah:sidebar') setHydraSidebar(m.model && Array.isArray(m.model.sections) ? m.model : null)
 }
+// An Escape that closes a pop-up over the pane (Settings, which a table's gear opens, or a menu) is the
+// pop-up's: the window hears it after the document, while the pop-up is still there.
 function onKey(e: KeyboardEvent) {
-  if (props.open && e.key === 'Escape' && !e.defaultPrevented) emit('close')
+  if (props.open && e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('[role="dialog"], [role="menu"]')) emit('close')
 }
 // The copy asks to close when Escape is pressed inside its own frame (keys do not cross frames).
 const onCloseAsk = () => props.open && emit('close')

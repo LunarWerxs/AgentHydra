@@ -577,6 +577,37 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   wrote it is a peer's and not counted, and a task whose prompt says not to commit is not held to it
   (2026-10-05: a check passed with 15 files never committed, and the task sat done 2h26m while the
   tasks after it waited on work that was not in git).
+- **Fail severity** (owner, 2026-10-06: "Did it really fail, or did something have to just do a slight
+  bit of work to fix it? Was it ... a catastrophic fail, or was it just kind of like a
+  whoopsie-daisy?"; before it, every non-pass read as a full fail and Opus sat at 73%, Sonnet at 75%).
+  A fail carries `severity`:
+  - **0 not the model's**: the work was not judged or the failure is not this task's. The check could
+    not run (126/127, never started, runner lost) or timed out, or it failed only on files this task
+    did not edit (another session's work in a shared checkout, the environment, a flaky check); an
+    orchestrator may also say the brief was wrong. NOT SCORED: neither a pass nor a fail, and its
+    units stay out of the cost.
+  - **1 slip**: right work, a small miss someone fixes in minutes: files not committed, a file outside
+    the brief's paths, a one-line, typo, lint or format fix, a small missed test or doc update.
+  - **2 rework**: a real part is wrong or missing and needs a substantive follow-up, though the
+    approach stands.
+  - **3 failed**: wrong, unusable or harmful: misunderstood the task, nothing useful, broke unrelated
+    things, claimed a success that was not there.
+
+  Credit per scored verdict: pass 1, slip 2/3, rework 1/3, failed 0 (`SLIP_CREDIT`, `REWORK_CREDIT`,
+  `scoreOf`). The rate that trusts or writes off a rung (`MIN_SAMPLES`, `PASS_BAR`, `BAD_BAR`) is
+  credit over scored verdicts, and `perPass` is units over credit, so a slip-heavy rung that is cheap
+  can be picked where all-full-fails would never trust it. A fail with no severity (recorded before
+  this, by an older daemon, or by the old window's thumbs-down) counts as 3, as before. A pass takes
+  no severity (refused). The orchestrator's `climayte_verdict` must give one on a fail; the route
+  still takes a fail without. The check sets it by code (`judgeCheck`): broken or timed out 0; exit 0
+  with uncommitted files 1; a non-zero exit 0 when its output names files, none is one the task
+  edited (read from the sessions' transcripts like the uncommitted check), and one of them has
+  another session's uncommitted changes (`git status` in the task's folder; `failsOnlyOnOthersFiles`,
+  the note then says so), else 2, so a test the task's own change broke stays its fail; a transcript
+  that cannot be read is unknown, so 2. A wave's fail
+  (`judgeInWave`) is 1 for commits outside the brief's paths, else 2. Retries, send-backs and
+  status are unchanged: only the severity is new. Scorecard rows carry `slip`, `rework`, `failed`,
+  `excluded` and `score`.
 - **The ladder**, cheapest first: Haiku 4.5 (run with no `--effort`), Sonnet 5.5 low, medium, high,
   then Opus 5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high.
 - **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Before a
@@ -1058,7 +1089,7 @@ file present answered `loggedIn: false`).
 
 When a signed-in CLI account has no 5-hour window running (its reading has no reset time, or the
 reset is in the past), the keepalive sends it one cheap prompt so the window starts now and resets
-sooner. Off by default (it spends quota); on in the CLI table's gear ("Keep windows running", with its weekly floor).
+sooner. Off by default (it spends quota); on in **Settings → Instances → CLI** ("Keep windows running", with its weekly floor; the CLI table's gear opens it).
 
 - A nudge: `claude -p 'Reply with the single word: ok' --system-prompt <one line> --model haiku
   --effort low --max-turns 1 --tools '' --disable-slash-commands --no-session-persistence
@@ -1165,8 +1196,11 @@ toggle on (`POST /api/cli-instances/sync/queue {enabled}`; `shareQueue`, off by 
 `login-sync.json` beside this PC's `pcId`), each login-sync pass also uploads a snapshot of this PC's
 queue under its `pcId` and reads the other PCs'. The snapshot is the queued, running, waiting and
 checking workers plus those finished in the last 24 hours (id, title, group, status, kind, model,
-effort, account, times, active time, cost, last activity, error, verdict: never the prompt, results,
-logs or paths) and this PC's newest live usage reading per account, gzipped and AES-256-GCM encrypted
+effort, account, times, active time, cost, last activity, error, verdict, and the last name of its
+folder, "AgentHydra" for `D:/x/AgentHydra`: never the prompt, results, logs or paths; an HSwarm job
+carries its caller's folder's last name the same way, so the other PC's Hydra Desk files a chat it
+does not have under that folder's group, owner 2026-10-06) and this PC's newest live usage reading per
+account, gzipped and AES-256-GCM encrypted
 under the sync's key with `climayte-queue:<pcId>` as associated data. Over 256 KB the oldest finished
 workers go first. It is uploaded at once when a worker changed, when this PC's live readings moved
 (percentages in 5-point steps, reading times ignored) at most every 10 minutes, and never just to
@@ -1198,6 +1232,29 @@ waited for; a second one never starts while one runs. Its state file `desktop-ch
 beside `login-sync.json` and survives turning the switch off. Status carries `shareChats`,
 `chatsError` (apart from `lastError` and `queueError`) and `chats` (empty while off). Test:
 `server/tests/cli-login-sync-chats.test.ts`.
+
+**View only (owner, 2026-10-05):** "I don't want them to actually sync back and forth. I just want to
+view the ones running on his computer, and he can view the ones running on mine." The two-way sync had
+landed the other PC's chats in this PC's Claude Desktop sidebar (written into `~/.claude/projects`,
+then imported), where someone could go on in them and send turns back. Now:
+
+- Only the PC a chat started on (`origin.pc`) writes it. A copy of another PC's chat is never sent,
+  however it grows here.
+- Another PC's chats come down into the viewer, `DATA_DIR/remote-chats/<project>/<session>.jsonl`
+  (`REMOTE_CHATS_DIR`), never into `~/.claude` or a desktop chat list. The session list reads it as a
+  Claude store marked `remote`, so Sessions and Desk 2's cloud list show those rows with `from_pc` and
+  the origin's title and archive state.
+- When the store's copy of a PC's own chat is not what that PC last wrote (a chat the two-way sync
+  marked `diverged`, or one a PC still on that version wrote into), the starting PC deletes the
+  session's rows, which takes the transcript chunks with them, and sends its own transcript again from
+  byte 0.
+- A chat the two-way sync landed is taken back out once (`retire` in `core/desktop-chat-local.ts`): its
+  desktop records are archived (never deleted) and every copy of its transcript moves into the viewer.
+  It stays where it is if someone on this PC went on in it, and the viewer then downloads its own copy.
+  On MPC-HELL that took out Jacob's 3 chats (4 transcript files: one he had moved between folders had
+  been written under both).
+
+Tests: `server/tests/desktop-chat-sync.test.ts`, `server/tests/desktop-chat-local.test.ts`.
 
 The store stays small (2026-10-03): a chat archived three days ago leaves it, row and transcript, and is
 never sent again (`ARCHIVED_KEEP_MS`); the Worker refuses chunks past 400 MB of chats (`CHAT_STORE_MB`

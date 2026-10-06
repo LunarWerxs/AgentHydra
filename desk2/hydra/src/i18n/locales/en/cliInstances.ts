@@ -13,9 +13,9 @@ export default {
   poolSessionEmpty: '5h n/a',
   poolWeekLabel: 'Week {pct}% left',
   poolWeekEmpty: 'Week n/a',
-  poolSessionTip: '5-hour limit: {pct}% left across your CLI accounts',
+  poolSessionTip: '5-hour limit: {pct}% left across these accounts',
   poolSessionNone: '5-hour limit: no usage reading yet',
-  poolWeekTip: 'Weekly limit: {pct}% left across your CLI accounts',
+  poolWeekTip: 'Weekly limit: {pct}% left across these accounts',
   poolWeekNone: 'Weekly limit: no usage reading yet',
   poolCounted: 'Accounts counted: {n}, weighted by plan size (a Max 5x counts as five Pros).',
   poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
@@ -47,6 +47,9 @@ export default {
     '{n} Claude session running on this account, CliMayte’s included | {n} Claude sessions running on this account, CliMayte’s included',
   launch: 'Launch',
   login: 'Log in',
+  loginAgain: 'Log in again',
+  // Quick add's submit button while a row's "Log in" has pointed it at that instance.
+  quickAddLogin: 'Log in',
   // "Log in" on a row points Quick add at that instance (CliQuickAdd.vue, useQuickAddTarget.ts).
   quickAddTarget:
     'Signing in #{num} {name} again: the account you sign in with replaces its current login.',
@@ -72,8 +75,6 @@ export default {
   limitResetUsedHint: 'Available again {date}. Checked {ago}.',
   limitResetDoneLabel: 'Limit reset used {ago}',
   limitResetDoneHint: 'Next one available {date}.',
-  limitResetNoneLabel: 'No limit reset',
-  limitResetNoneHint: 'Checked {ago}.',
   limitResetUnknownDate: 'later',
   delete: 'Delete',
   nameLabel: 'Instance name',
@@ -125,13 +126,8 @@ export default {
   clearUsage: 'Clear usage stats',
   toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
   toastUsageClearFailed: 'Could not clear the usage stats.',
-  // The table's gear, and the keepalive's switch inside it (server/src/session-keepalive.ts; also
-  // in Settings).
-  tableSettings: 'CLI settings',
-  keepaliveSwitch: 'Keep windows running',
-  keepaliveSwitchHint:
-    'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku, one word back, about two cents at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
-  keepaliveSaveFailed: 'Could not change the setting.',
+  // The table's gear: its settings are in Desk's Settings, Instances → CLI.
+  tableSettings: 'Settings',
   // A row's nudge note (lastNudge from GET /api/cli-instances).
   nudgedLabel: 'Window started by AgentHydra {ago}',
   nudgedHint: 'It resets {when}. {model}, {cost} at API prices.',

@@ -256,7 +256,7 @@ onMounted(() => {
       v-if="readyProviders.size === 0"
       variant="destructive"
     >
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertDescription>
         {{ t('hswarm.v.models.noKeyCallout') }}
       </AlertDescription>
@@ -317,7 +317,7 @@ onMounted(() => {
         size="sm"
         @click="addModel"
       >
-        <Plus class="mr-1 h-4 w-4" />
+        <Plus class="me-1 size-4" />
         {{ t('hswarm.addModel') }}
       </Button>
     </div>
@@ -436,7 +436,7 @@ onMounted(() => {
           </Label>
         </div>
 
-        <div class="ml-auto flex items-center gap-3">
+        <div class="ms-auto flex items-center gap-3">
           <Label
             for="order-by"
             class="text-sm font-normal"
@@ -452,7 +452,7 @@ onMounted(() => {
             <option value="name">{{ t('hswarm.v.models.orderName') }}</option>
           </select>
 
-          <div class="ml-auto text-sm text-muted-foreground">
+          <div class="ms-auto text-sm text-muted-foreground">
             {{ filteredModels.length }} {{ t('hswarm.v.models.of') }} {{ allModels.length }}
           </div>
         </div>
@@ -474,8 +474,8 @@ onMounted(() => {
               {{ t('hswarm.v.models.colProvider') }}
             </TableHead>
             <TableHead class="w-20">{{ t('hswarm.v.models.colKind') }}</TableHead>
-            <TableHead class="w-24 text-right">{{ t('hswarm.v.models.colPrice') }}</TableHead>
-            <TableHead class="w-16 text-right">{{ t('hswarm.v.models.colContext') }}</TableHead>
+            <TableHead class="w-24 text-end">{{ t('hswarm.v.models.colPrice') }}</TableHead>
+            <TableHead class="w-16 text-end">{{ t('hswarm.v.models.colContext') }}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -503,7 +503,7 @@ onMounted(() => {
               >
                 <Star
                   :class="{ 'fill-current': m.priority }"
-                  class="h-3 w-3"
+                  class="size-3"
                 />
                 {{ m.priority ? m.priority : '' }}
               </Button>
@@ -535,10 +535,10 @@ onMounted(() => {
                 {{ t('hswarm.v.models.badgeVision') }}
               </span>
             </TableCell>
-            <TableCell class="text-right font-mono text-sm">
+            <TableCell class="text-end font-mono text-sm">
               {{ m.usd_per_1m ? `$${Number(m.usd_per_1m).toFixed(4)}` : '–' }}
             </TableCell>
-            <TableCell class="text-right text-sm">
+            <TableCell class="text-end text-sm">
               {{ m.ctx ? `${m.ctx}k` : '–' }}
             </TableCell>
           </TableRow>

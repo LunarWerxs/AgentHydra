@@ -75,6 +75,7 @@ export interface CliMayteJournalEntry {
   cwd?: string // dispatched / cwd-changed: the folder
   accounts?: number // dispatched: how many accounts it is restricted to (absent: any)
   kind?: string // dispatched / verdict: the kind of work (climayte-scorecard CLIMAYTE_KINDS)
+  severity?: number // verdict: a fail's severity, 0-3 (climayte-scorecard.ts)
   reason?: string // dispatched with model auto: why the scorecard picked that setting
   verdict?: 'pass' | 'fail' // verdict
   priority?: number // dispatched / priority: higher starts first (0: the default)

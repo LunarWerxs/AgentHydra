@@ -33,6 +33,9 @@ from .procs import CREATE_NO_WINDOW, find_bash, run_hidden
 from .spec import Result, Task
 
 DIRECTIONS = ("min", "max")
+KINDS = ("auto", "time", "count", "other")
+_TIME_WORDS = re.compile(r"wall|elapsed|latency|duration|seconds?\b|\bsecs?\b|\bms\b|millis|\btime\b|runtime|real\s", re.I)
+_COUNT_WORDS = re.compile(r"instructions?|\bcalls?\b|allocations?|\ballocs?\b|requests?|tokens?", re.I)
 # The default metric is the LAST number the command prints; nan/inf count, so a diverged run reads as one.
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?|\b(?:nan|inf)\b", re.I)
 
@@ -50,10 +53,20 @@ class Optimize:
     min_gain: float = 0.0  # relative gain an attempt that ADDS lines must beat to be kept
     budget_usd: float | None = None  # stop once the workers have spent this much
     worker: dict = field(default_factory=dict)  # Task defaults for the editing worker (model, role, max_cost_usd ...)
+    baseline_runs: int = 5  # the unchanged tree is measured this many times; its spread is the noise band
+    metric_kind: str = "auto"  # "time" (needs a band), "count" (deterministic, exact), "auto" (guessed from the metric text)
 
     def validated(self) -> "Optimize":
         if self.direction not in DIRECTIONS:
             raise ValueError(f"direction must be one of {DIRECTIONS}")
+        if self.metric_kind not in KINDS:
+            raise ValueError(f"metric_kind must be one of {KINDS}")
+        self.baseline_runs = int(self.baseline_runs)
+        if self.kind() == "time" and self.baseline_runs < 2:
+            raise ValueError(
+                "refusing to start: this looks like a wall-clock metric and baseline_runs < 2 leaves it no noise band, so "
+                "every run-to-run wobble would be kept as a gain. Use baseline_runs >= 2 (default 5), or pass "
+                "metric_kind='count' for a deterministic count (instructions, calls, allocations, requests, tokens)")
         if not self.targets or any(Path(t).is_absolute() or ".." in Path(t).parts for t in self.targets):
             raise ValueError("targets: one or more paths relative to the repo root, none escaping it")
         if not self.metric.strip() or not self.goal.strip():
@@ -61,6 +74,15 @@ class Optimize:
         self.targets = [Path(t).as_posix().rstrip("/") for t in self.targets]
         self.attempts, self.budget_s = max(1, int(self.attempts)), max(5, int(self.budget_s))
         return self
+
+    def kind(self) -> str:
+        """"time", "count" or "other". A metric that names both a time and a count word is a time: the stricter rule."""
+        if self.metric_kind != "auto":
+            return self.metric_kind
+        text = f"{self.metric} {self.pattern or ''}"
+        if _TIME_WORDS.search(text):
+            return "time"
+        return "count" if _COUNT_WORDS.search(text) else "other"
 
 
 def parse_metric(text: str, pattern: str | None = None) -> float | None:
@@ -78,8 +100,9 @@ def parse_metric(text: str, pattern: str | None = None) -> float | None:
     return value if value is not None and math.isfinite(value) else None
 
 
-def verdict(best: float, value: float | None, direction: str, min_gain: float, net_lines: int) -> tuple[bool, str]:
-    """Keep or revert one attempt. Equal-and-shorter is kept; a gain under min_gain that adds lines is not."""
+def verdict(best: float, value: float | None, direction: str, min_gain: float, net_lines: int, noise_band: float = 0.0) -> tuple[bool, str]:
+    """Keep or revert one attempt. Equal-and-shorter is kept; a gain under min_gain that adds lines is not.
+    A gain no larger than noise_band (the baseline's measured spread, absolute) is noise and is not kept for its gain."""
     if value is None:
         return False, "no metric: the run failed, timed out or diverged"
     delta = (best - value) if direction == "min" else (value - best)
@@ -87,6 +110,10 @@ def verdict(best: float, value: float | None, direction: str, min_gain: float, n
         return False, f"worse: {value:g} vs best {best:g}"
     if delta == 0:
         return (True, f"equal metric, {-net_lines} fewer lines") if net_lines < 0 else (False, "no gain")
+    if delta <= noise_band:
+        if net_lines < 0:
+            return True, f"within noise band {noise_band:g}, {-net_lines} fewer lines"
+        return False, f"gain {delta:g} is within the baseline noise band {noise_band:g}"
     gain = delta / abs(best) if best else math.inf
     if net_lines > 0 and gain < min_gain:
         return False, f"gain {gain:.2%} is under min_gain {min_gain:.2%} for {net_lines} added lines"
@@ -121,6 +148,25 @@ async def _measure(spec: Optimize, tree: Path, log: Path) -> tuple[float | None,
     return (parse_metric(out + "\n" + err, spec.pattern) if code == 0 else None), round(time.perf_counter() - t0, 1)
 
 
+async def _baseline(spec: Optimize, tree: Path, logs: Path) -> tuple[float, float]:
+    """(baseline value, noise band) from the unchanged tree. A count is run twice and must agree exactly (band 0);
+    anything else is run baseline_runs times, the median is the baseline and max-min is the band."""
+    count = spec.kind() == "count"
+    runs = 2 if count else max(1, spec.baseline_runs)
+    values: list[float] = []
+    for i in range(runs):
+        value, _ = await _measure(spec, tree, logs / ("baseline.log" if i == 0 else f"baseline{i + 1}.log"))
+        _reset(tree)
+        if value is None:
+            raise RuntimeError(f"the baseline metric run gave no number; see {logs / 'baseline.log'}")
+        values.append(value)
+    if count and values[0] != values[1]:
+        raise RuntimeError(f"refusing to start: the metric is not deterministic, two baseline runs gave {values[0]:g} and "
+                           f"{values[1]:g}. A count is judged exactly, so it must repeat; use a timing metric with a noise band instead")
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2], (0.0 if count else ordered[-1] - ordered[0])
+
+
 def _prompt(spec: Optimize, n: int, best: float, history: list[dict]) -> str:
     better = "lower" if spec.direction == "min" else "higher"
     recent = [f"#{h['n']} {'KEPT' if h['kept'] else 'reverted'} {h['value']} - {h['why']}: {h['summary'][:160]}" for h in history[-8:]]
@@ -144,10 +190,7 @@ async def ratchet(spec: Optimize, run_worker: Callable[[Task], Awaitable[Result]
     tree, branch = run_dir / "tree", f"hswarm/optimize/{run_id}"
     (run_dir / "logs").mkdir(parents=True, exist_ok=True)
     _git(repo, "worktree", "add", "-q", "-b", branch, str(tree), "HEAD")  # from HEAD: uncommitted edits in repo are not included
-    best, _ = await _measure(spec, tree, run_dir / "logs" / "baseline.log")
-    _reset(tree)
-    if best is None:
-        raise RuntimeError(f"the baseline metric run gave no number; see {run_dir / 'logs' / 'baseline.log'}")
+    best, band = await _baseline(spec, tree, run_dir / "logs")
     baseline, history, spent = best, [], 0.0
     for n in range(1, spec.attempts + 1):
         if spec.budget_usd is not None and spent >= spec.budget_usd:
@@ -167,7 +210,7 @@ async def ratchet(spec: Optimize, run_worker: Callable[[Task], Awaitable[Result]
         else:
             net = sum(int(a) - int(d) for a, d, *_ in (ln.split("\t") for ln in _git(tree, "diff", "--cached", "--numstat").splitlines()) if a.isdigit() and d.isdigit())
             rec["value"], rec["metric_s"] = await _measure(spec, tree, run_dir / "logs" / f"a{n}.log")
-            rec["kept"], rec["why"] = verdict(best, rec["value"], spec.direction, spec.min_gain, net)
+            rec["kept"], rec["why"] = verdict(best, rec["value"], spec.direction, spec.min_gain, net, band)
         if rec["kept"]:
             _git(tree, "commit", "-q", "-m", f"optimize #{n}: {rec['value']:g} ({rec['why']})\n\n{rec['summary']}")
             rec["commit"], best = _git(tree, "rev-parse", "--short", "HEAD").strip(), rec["value"]
@@ -176,7 +219,7 @@ async def ratchet(spec: Optimize, run_worker: Callable[[Task], Awaitable[Result]
         with (run_dir / "attempts.jsonl").open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
         print(f"#{n} {'KEPT' if rec['kept'] else 'reverted'} {rec['value']} best={best:g} ${spent:.4f} - {rec['why']}", file=sys.stderr)
-    return {"run": run_id, "branch": branch, "tree": str(tree), "baseline": baseline, "best": best, "direction": spec.direction,
+    return {"run": run_id, "branch": branch, "tree": str(tree), "baseline": baseline, "noise_band": band, "best": best, "direction": spec.direction,
             "attempts": len(history), "kept": sum(1 for h in history if h["kept"]), "cost_usd": round(spent, 6),
             "log": str(run_dir / "attempts.jsonl")}
 
@@ -207,6 +250,8 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--budget-s", dest="budget_s", type=int, default=300, help="metric run budget; killed at 2x")
     ap.add_argument("--attempts", type=int, default=10)
     ap.add_argument("--min-gain", dest="min_gain", type=float, default=0.0, help="relative gain an attempt that adds lines must beat")
+    ap.add_argument("--baseline-runs", dest="baseline_runs", type=int, default=5, help="runs of the unchanged tree to measure the noise band")
+    ap.add_argument("--metric-kind", dest="metric_kind", choices=KINDS, default="auto", help="time needs a band; count is deterministic and exact")
     ap.add_argument("--budget-usd", dest="budget_usd", type=float, help="stop once the workers have spent this much")
     ap.add_argument("--model", default=config.AUTO)
     ap.add_argument("--role")
@@ -214,6 +259,6 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
     worker = {"model": a.model, "role": a.role, "max_cost_usd": a.max_cost_usd}
     spec = Optimize(a.repo, a.goal, a.target, a.metric, a.direction, a.budget_s, a.attempts, a.pattern, a.min_gain, a.budget_usd,
-                    {k: v for k, v in worker.items() if v is not None})
+                    {k: v for k, v in worker.items() if v is not None}, a.baseline_runs, a.metric_kind)
     print(json.dumps(asyncio.run(_run(spec)), indent=1))
     return 0

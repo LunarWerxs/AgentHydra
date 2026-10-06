@@ -156,6 +156,7 @@ describe('the queue snapshot', () => {
         session_id: '11111111-2222-3333-4444-555555555555',
         chat_id: 'c-1',
         instance: 'i-1',
+        folder: 'Example-repo',
       },
       ...over,
     })
@@ -182,6 +183,7 @@ describe('the queue snapshot', () => {
           finished: null,
           callerSessionId: '11111111-2222-3333-4444-555555555555',
           callerChatId: 'c-1',
+          folder: 'Example-repo',
         },
         {
           id: 'j-2',
@@ -193,6 +195,7 @@ describe('the queue snapshot', () => {
           finished: '2026-10-05T10:05:00+00:00',
           callerSessionId: null,
           callerChatId: null,
+          folder: null,
         },
       ])
       expect(JSON.stringify(snap.jobs)).not.toContain('secret')
@@ -249,10 +252,10 @@ describe('the queue snapshot', () => {
     expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.jobs).toBeUndefined()
   })
 
-  test('a chat-dispatched worker carries the chat’s title and its earlier sessions, never a path', async () => {
+  test('a chat-dispatched worker carries the chat’s title, its earlier sessions and its folder’s last name, never a path', async () => {
     resetQueueSync()
     const base = {
-      cwd: 'C:/secret/path',
+      cwd: 'C:\\secret\\Example-repo\\',
       prompt: 'the private prompt',
       pending: [],
       model: null,
@@ -310,6 +313,7 @@ describe('the queue snapshot', () => {
         originSessionId: 's-chat-title',
         originTitle: 'Example chat',
         sessions: ['s-old-1', 's-old-2'],
+        folder: 'Example-repo',
       })
       expect(find('w-by-worker')).toMatchObject({ originTitle: null, sessions: [] })
       expect(JSON.stringify(snap)).not.toContain('secret')

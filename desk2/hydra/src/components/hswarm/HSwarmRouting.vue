@@ -3,7 +3,7 @@
 // Below HSwarm's own routing it carries AgentHydra's cost routing between API keys and subscriptions
 // (HSwarmCostRouting.vue), so the tree's one Routing item holds both.
 import { AlertCircle, Route } from '@lucide/vue'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -57,11 +57,14 @@ const enabledModels = props.state.models?.filter((m: any) => m.enabled) || []
 
 async function handleDailyCapChange() {
   try {
-    const value = dailyCap.value === '' ? undefined : parseFloat(String(dailyCap.value))
-    if ((value ?? null) === (props.state.options?.daily_cap_usd ?? null)) return
+    const raw = String(dailyCap.value ?? '').trim()
+    const value = raw === '' ? null : parseFloat(raw)
+    if (value !== null && !Number.isFinite(value)) return
+    if (value === (props.state.options?.daily_cap_usd ?? null)) return
+    // An empty box removes the cap: HSwarm reads "" as none, and a missing field as "leave it".
     await apiCall('options', {
       method: 'POST',
-      body: JSON.stringify({ daily_cap_usd: value }),
+      body: JSON.stringify({ daily_cap_usd: value ?? '' }),
     })
     emit('changed')
     toast.success(t('hswarm.v.routing.dailyCapUpdated'))
@@ -98,8 +101,13 @@ async function handleRoutingToggle(checked: boolean) {
   }
 }
 
-// The slider's value while it is being dragged; it is saved once, when the drag settles.
+// The slider's value while it is being dragged; it is saved once, when the drag settles, and held until
+// the saved value comes back in the state (a failed save puts the thumb back where it was).
 const biasDraft = ref<number | null>(null)
+watch(
+  () => props.state.options?.load_bias,
+  () => (biasDraft.value = null),
+)
 
 async function handleLoadBiasChange(value: string) {
   try {
@@ -111,6 +119,7 @@ async function handleLoadBiasChange(value: string) {
     emit('changed')
     toast.success(t('hswarm.v.routing.loadBiasSaved'))
   } catch (err) {
+    biasDraft.value = null
     toast.error(err instanceof Error ? err.message : 'Failed to update load bias')
   }
 }
@@ -205,7 +214,7 @@ async function handlePreview() {
                   {{ ROLE_INFO[roleName] }}
                 </p>
               </div>
-              <div class="w-48 flex-shrink-0">
+              <div class="w-48 shrink-0">
                 <Select
                   :model-value="(selectedModel as string) || 'auto'"
                   @update:model-value="(value) => handleRoleChange(roleName, String(value))"
@@ -375,9 +384,9 @@ async function handlePreview() {
                 min="0"
                 max="5"
                 step="0.1"
-                :value="state.options?.load_bias ?? 0"
+                :value="biasDraft ?? state.options?.load_bias ?? 0"
                 @input="(e) => (biasDraft = parseFloat((e.target as HTMLInputElement).value))"
-                @change="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value).finally(() => (biasDraft = null))"
+                @change="(e) => handleLoadBiasChange((e.target as HTMLInputElement).value)"
                 class="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer"
               />
               <p class="text-xs text-muted-foreground">

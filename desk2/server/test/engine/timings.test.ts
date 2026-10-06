@@ -25,7 +25,7 @@ describe('speed tracking', () => {
     // A clock in this month: the log rolls a file last written in another one.
     let clock = Date.now()
     const queries = fakeQueries()
-    const manager = new ChatManager({ home, emit: () => {}, settings: () => SETTINGS, bridge: fakeBridge().bridge, queryImpl: queries.queryImpl, agentHydraMcp: null, now: () => clock, newChats: 'sdk', storeDebounceMs: 0 })
+    const manager = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => SETTINGS, bridge: fakeBridge().bridge, queryImpl: queries.queryImpl, agentHydraMcp: null, now: () => clock, newChats: 'sdk', storeDebounceMs: 0 })
     const chat = await manager.create({ cwd: tmpdir(), prompt: 'hello' })
     await tick()
     const q = queries.last()

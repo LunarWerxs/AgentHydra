@@ -2,6 +2,7 @@
 // reference images, crops and viewports is docs/reference/real/scenes.json; its routes point here.
 import { ref } from 'vue'
 import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
+import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import { cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
 import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
@@ -229,6 +230,11 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     accounts: async () => sceneAccounts(scene),
     pickAccount: async () => scenePick(scene),
     externalItems: async () => scene.items(),
-    diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never
+    diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
+    agentHydra: async () => {
+      throw new Error('AgentHydra is not running')
+    },
+    freeSettings: async () => ({ ...FREE_SETTINGS_DEFAULTS }),
+    patchFreeSettings: async (p) => ({ ...FREE_SETTINGS_DEFAULTS, ...p })
   }
 }

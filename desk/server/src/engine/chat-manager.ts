@@ -59,6 +59,8 @@ export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'cance
 
 export interface ChatManagerOptions {
   home: string
+  /** The home folder whose .claude a chat with no account folder is seeded into (default: the user's own). Tests pass a temp folder so they never write into the real Claude config. */
+  claudeHome?: string
   emit(event: ServerEvent): void
   settings: () => DeskSettings
   bridge: ManagerBridge
@@ -224,6 +226,7 @@ export class ChatManager {
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
   private readonly bridge: ManagerBridge
+  private readonly claudeHome: string | undefined
   private readonly queryImpl: QueryImpl
   private readonly env?: Record<string, string | undefined>
   private readonly agentHydraMcp?: McpServerConfig | null
@@ -237,6 +240,11 @@ export class ChatManager {
   private readonly handoffTokens: number
   private readonly deskUrl: string
 
+  /** The projects folder of a config folder (null: the default one), under the given home so every read and seed agree on it. */
+  private root(configDir: string | null): string {
+    return projectsRoot(configDir, this.claudeHome)
+  }
+
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
     this.failures = new FailureLedger(o.home, o.now)
@@ -245,6 +253,7 @@ export class ChatManager {
     this.emitEvent = o.emit
     this.settingsOf = o.settings
     this.bridge = o.bridge
+    this.claudeHome = o.claudeHome
     // A host outlives the server; with no server it ends after the idle-close minutes once its chat is not working.
     this.queryImpl = o.queryImpl ?? chatQueryImpl({ home: o.home, orphanMinutes: () => o.settings().idleCloseMinutes })
     this.env = o.env
@@ -1021,7 +1030,7 @@ export class ChatManager {
   private checkMoved(chatId: string): void {
     const e = this.chats.get(chatId)
     if (!e?.chat.sessionId || e.chat.workerId !== undefined) return
-    const root = projectsRoot((e.runtime?.startedAs ?? e.chat.account).configDir)
+    const root = this.root((e.runtime?.startedAs ?? e.chat.account).configDir)
     if (this.noteCwd(e, findSessionJsonl(e.chat.sessionId, [root, ...this.bridge.sessionRoots()], e.chat.cwd))) void e.runtime?.closeWhenIdle()
   }
 
@@ -1125,7 +1134,7 @@ export class ChatManager {
     const sessionId = e.chat.sessionId
     if (!sessionId) return null
     const ranIn = ranInOf(e)
-    const file = findSessionJsonl(sessionId, [...(ranIn === undefined ? [] : [projectsRoot(ranIn)]), ...this.bridge.sessionRoots()], e.chat.cwd)
+    const file = findSessionJsonl(sessionId, [...(ranIn === undefined ? [] : [this.root(ranIn)]), ...this.bridge.sessionRoots()], e.chat.cwd)
     const tokens = file ? sessionTokens(file) : null
     return tokens !== null && tokens > this.handoffTokens ? { sessionId, tokens } : null
   }
@@ -1281,9 +1290,9 @@ export class ChatManager {
     const sessionId = chat.sessionId ?? chat.forkedFrom
     if (!sessionId) return null
     const ranIn = ranInOf(e)
-    const prefer = ranIn === undefined ? null : projectsRoot(ranIn)
+    const prefer = ranIn === undefined ? null : this.root(ranIn)
     try {
-      const r = seedSession(sessionId, chat.cwd, chat.account.configDir, this.bridge.sessionRoots(), undefined, prefer)
+      const r = seedSession(sessionId, chat.cwd, chat.account.configDir, this.bridge.sessionRoots(), this.claudeHome, prefer)
       if (r.status === 'copied') {
         this.systemLine(chat.id, 'seed', 'info', `Copied this session into ${chat.account.label}'s folder to continue it under that login. The original is unchanged.`)
       } else if (r.status === 'refreshed') {
@@ -1298,7 +1307,7 @@ export class ChatManager {
     }
     // The CLI resumes from the project folder of the cwd it starts in: after a move the transcript is copied under the new folder's name.
     try {
-      placeInCwd(sessionId, chat.cwd, chat.account.configDir)
+      placeInCwd(sessionId, chat.cwd, chat.account.configDir, this.claudeHome)
     } catch (err) {
       console.warn(`[desk] chat ${chat.id}: could not place session ${sessionId} under ${chat.cwd}: ${err instanceof Error ? err.message : String(err)}`)
     }
@@ -1307,7 +1316,7 @@ export class ChatManager {
 
   /** Where a fork of `sessionId` cuts it (forkPoint), looking in these accounts' folders and every known one; undefined when no file says. */
   private forkPointOf(sessionId: string, cwd: string, accounts: (AccountRef | null | undefined)[]): string | undefined {
-    const roots = [...accounts.flatMap((a) => (a ? [projectsRoot(a.configDir)] : [])), ...this.bridge.sessionRoots()]
+    const roots = [...accounts.flatMap((a) => (a ? [this.root(a.configDir)] : [])), ...this.bridge.sessionRoots()]
     try {
       return forkPoint(sessionId, cwd, roots) ?? undefined
     } catch (err) {

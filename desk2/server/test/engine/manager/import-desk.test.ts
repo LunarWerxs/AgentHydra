@@ -53,6 +53,7 @@ function boot(home: string) {
   process.env.HYDRA_DESK_HOME = home
   const m = new ChatManager({
     home,
+    claudeHome: home,
     emit: () => {},
     settings: () => ({ ...DEFAULT_SETTINGS }),
     bridge: fakeBridge().bridge,

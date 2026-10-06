@@ -24,7 +24,7 @@ function setup(gen: TitleGenerator) {
   temps.push(home)
   process.env.HYDRA_DESK_HOME = home
   const events: unknown[] = []
-  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: gen })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: gen })
   managers.push(m)
   return { home, m, events }
 }
@@ -151,7 +151,7 @@ test('an imported session nobody named is named from its first message; a named 
   const items = { [SID]: [{ kind: 'user', id: 'u-1', ts: 1, text: 'please fix the flaky login test' }, { kind: 'assistant_text', id: 'a-1', ts: 2, text: 'ok' }] as TranscriptItem[] }
   const b = fakeBridge({ items })
   const asked: string[] = []
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: async (req) => (asked.push(req.prompt), 'Fix the flaky login test') })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: async (req) => (asked.push(req.prompt), 'Fix the flaky login test') })
   managers.push(m)
 
   const imported = await m.importSession({ sessionId: SID, cwd: home, configDir: 'C:/fake/instances/68' })

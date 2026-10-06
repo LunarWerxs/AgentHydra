@@ -87,9 +87,14 @@ async function flush(): Promise<void> {
   pending = {}
   saving.value = true
   try {
-    await j('/api/routing/settings', { method: 'PUT', body: JSON.stringify(body) })
+    const saved = await j<RoutingSettings>('/api/routing/settings', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    })
     saveError.value = null
-    // Prices after a discount come from the daemon: read them again, then let the draft go.
+    // The answer is the stored settings, so the draft can go even if the read below fails; prices after
+    // a discount come from the daemon, so read them again.
+    if (model.value) model.value = { ...model.value, settings: saved }
     await refreshRouting()
     if (timer === null) draft.value = {}
   } catch (e) {

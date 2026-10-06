@@ -872,8 +872,31 @@ fn new_token() -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The command line: an optional config file and `--background`, which starts the tray (or finds
+/// it running) WITHOUT opening the UI. For an app's own window launcher that starts the tray beside
+/// the window it is already opening: without it the tray opens a second copy.
+struct Args {
+    config: Option<String>,
+    background: bool,
+}
+
+fn parse_args(args: impl IntoIterator<Item = String>) -> Args {
+    let mut out = Args {
+        config: None,
+        background: false,
+    };
+    for a in args {
+        if a == "--background" {
+            out.background = true;
+        } else if out.config.is_none() && !a.starts_with("--") {
+            out.config = Some(a);
+        }
+    }
+    out
+}
+
 fn config_path() -> PathBuf {
-    if let Some(arg) = std::env::args().nth(1) {
+    if let Some(arg) = parse_args(std::env::args().skip(1)).config {
         let p = PathBuf::from(&arg);
         if p.is_absolute() {
             return p;
@@ -1048,6 +1071,7 @@ fn main() {
         }
     };
     let bench = std::env::var("LUNARWERX_TRAY_BENCH").is_ok();
+    let background = parse_args(std::env::args().skip(1)).background;
     let token = if cfg.shutdown_token_env_var.is_some() {
         new_token()
     } else {
@@ -1060,6 +1084,9 @@ fn main() {
     let mutex = unsafe { CreateMutexW(null_mut(), 1, mutex_name.as_ptr()) };
     let already_hosted = mutex.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     if already_hosted {
+        if background {
+            return;
+        }
         match daemon::live_url(&cfg, daemon::PROBE_POLL) {
             Some(url) => browser::open_ui(&cfg, &url),
             // Nothing serving yet means the winner is still cold-starting. Opening a browser at a
@@ -1141,7 +1168,9 @@ fn main() {
         if get_url().is_none() && report_not_serving_and_teardown(a) {
             return;
         }
-        open_current_ui();
+        if !background {
+            open_current_ui();
+        }
 
         let mut msg: MSG = std::mem::zeroed();
         while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
@@ -1211,5 +1240,29 @@ mod watchdog_tests {
         );
         // Then it is killed, and that death is a new one: it gets revived.
         assert_eq!(die(&mut w, &mut now), Verdict::Revive);
+    }
+}
+
+#[cfg(test)]
+mod args_tests {
+    use super::parse_args;
+
+    fn args(list: &[&str]) -> super::Args {
+        parse_args(list.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn background_is_a_flag_wherever_it_sits_and_never_the_config_file() {
+        for list in [
+            &["App-Tray.json", "--background"][..],
+            &["--background", "App-Tray.json"][..],
+        ] {
+            let a = args(list);
+            assert_eq!(a.config.as_deref(), Some("App-Tray.json"), "{list:?}");
+            assert!(a.background, "{list:?}");
+        }
+        let plain = args(&["App-Tray.json"]);
+        assert!(!plain.background);
+        assert!(args(&["--background"]).config.is_none());
     }
 }

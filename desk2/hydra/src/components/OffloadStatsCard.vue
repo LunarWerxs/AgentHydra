@@ -62,7 +62,10 @@ const totalsHint = computed(() => {
 
 /** One bar per model, summed over kinds and efforts. */
 const modelRows = computed(() => {
-  const map = new Map<string, { key: string; label: string; pass: number; fail: number }>()
+  const map = new Map<
+    string,
+    { key: string; label: string; pass: number; fail: number; slip: number; rework: number; failed: number; excluded: number }
+  >()
   for (const r of props.scorecard?.rows ?? []) {
     const key = r.model ?? ''
     const row = map.get(key) ?? {
@@ -70,12 +73,25 @@ const modelRows = computed(() => {
       label: r.model ? modelName(r.model) : t('climayte.runDefault'),
       pass: 0,
       fail: 0,
+      slip: 0,
+      rework: 0,
+      failed: 0,
+      excluded: 0,
     }
     row.pass += r.pass
     row.fail += r.fail
+    row.slip += r.slip ?? 0
+    row.rework += r.rework ?? 0
+    row.failed += r.failed ?? r.fail
+    row.excluded += r.excluded ?? 0
     map.set(key, row)
   }
-  return [...map.values()]
+  // Pooled from the counts, never by averaging the rows' scores.
+  return [...map.values()].map((row) => ({
+    ...row,
+    credit: row.pass + (row.slip * 2) / 3 + row.rework / 3,
+    hint: t('climayte.scoreModelHint', row),
+  }))
 })
 const listOpen = ref(false)
 </script>

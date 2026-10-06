@@ -7,15 +7,25 @@ describe('settings search', () => {
   it('shows one section under its group headings when the box is empty', () => {
     expect(settingsGroups('general', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['New chats', ['model', 'effort', 'permission']],
-      ['Behaviour', ['notifications', 'idle']]
+      ['Behaviour', ['notifications', 'idle']],
+      ['AgentHydra pages', ['ahTooltips', 'ahPrivacy']]
     ])
   })
 
+  it('leaves a row off its page while the switch it depends on is off, but a search finds it', () => {
+    const on = new Set(['alerts'])
+    const page = settingsGroups('alerts', '', (c) => on.has(c)).flatMap((g) => g.rows.map((r) => r.id))
+    expect(page).toContain('ahEmail')
+    expect(page).not.toContain('ahSmtpHost')
+    expect(page).not.toContain('ahInterval')
+    expect(settingsGroups('alerts', 'smtp host', () => false).flatMap((g) => g.rows.map((r) => r.id))).toEqual(['ahSmtpHost'])
+  })
+
   it('filters every section by label and description, grouped under the section name', () => {
-    expect(matchRows('CLIMAYTE').map((r) => r.id)).toEqual(['account', 'delegate', 'workers', 'bridge'])
+    expect(matchRows('CLIMAYTE').map((r) => r.id)).toEqual(['ahAlerts', 'delegate', 'workers', 'bridge'])
     // Every word must match, in either the label or the description.
     expect(matchRows('model thinks').map((r) => r.id)).toEqual(['effort'])
-    expect(settingsGroups('about', 'climayte').map((g) => g.heading)).toEqual(['Accounts', 'CliMayte'])
+    expect(settingsGroups('about', 'climayte').map((g) => g.heading)).toEqual(['Usage alerts', 'CliMayte'])
   })
 
   it('matches nothing for a setting Hydra Desk does not have', () => {
@@ -26,12 +36,15 @@ describe('settings search', () => {
 
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['general', 'accounts', 'climayte', 'diagnostics', 'about'])
-    expect(stepSection('general', 'ArrowDown')).toBe('accounts')
-    expect(stepSection('general', 'ArrowUp')).toBe('about')
-    expect(stepSection('about', 'ArrowRight')).toBe('general')
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
+      'general', 'alerts', 'climayte', 'connections', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+    ])
+    expect(stepSection('general', 'ArrowDown')).toBe('alerts')
+    expect(stepSection('about', 'ArrowDown')).toBe('cli')
+    expect(stepSection('general', 'ArrowUp')).toBe('free')
+    expect(stepSection('free', 'ArrowRight')).toBe('general')
     expect(stepSection('climayte', 'Home')).toBe('general')
-    expect(stepSection('general', 'End')).toBe('about')
+    expect(stepSection('general', 'End')).toBe('free')
     expect(stepSection('general', 'a')).toBeNull()
   })
 })

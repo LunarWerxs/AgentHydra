@@ -382,6 +382,7 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/queue/chats/:chatId/resume` | `QueueState` (releases that chat's hold) |
 | `GET /api/external/sessions` | `ExternalSession[]` |
 | `GET /api/external/sessions/:id/items` | `TranscriptItem[]` (converted from AgentHydra's transcript) |
+| `POST /api/external/sessions/:id/branch` (ExternalBranchRequest) | `ExternalBranchResult`: AgentHydra (`POST /api/sessions/:id/branch`) copies the Claude Code session up to the reply `uuid` (an item's `branchFrom`) into a new session, titled "<title> (branch)"; no uuid 400, AgentHydra's refusal keeps its status |
 | `GET /api/search?q=&limit=` | `SearchHit[]`: AgentHydra's transcript search (`GET /api/sessions/search`, its `search_sessions` tool), each hit joined with its session row for title and time (`bridge/search.ts`). q 2+ chars (else 400), limit 25 by default, at most 50; AgentHydra down 503, any other failure 502 with the reason |
 | `GET /api/climayte/workers?all=1` | `CliMayteWorker[]` (active + the last 20 finished; all with the flag) |
 | `POST /api/climayte/workers/:id/cancel` | `{ ok: true }` |
@@ -893,7 +894,7 @@ are always 0 (a free port).
 health, then open Microsoft Edge as an app window (`--app=http://127.0.0.1:7798
 --user-data-dir=%LOCALAPPDATA%\HydraDesk2\window`) so it is its own window with its own taskbar entry.
 `launcher/install-shortcuts.ps1` makes Desktop and Start Menu shortcuts named "Hydra Desk" with an icon
-(`launcher/hydra-desk.ico`). Never a visible console window.
+(AgentHydra's icon since 2026-10-06, compiled into `launcher/HydraDesk2.exe`). Never a visible console window.
 
 **Updates without losing the chats.** `launcher/stop.ps1` asks `POST /api/server/shutdown`, waits 15 s,
 then ends what is left of the server by the pids in `~/.hydra-desk-2/server.pid` (`taskkill /T`; chat

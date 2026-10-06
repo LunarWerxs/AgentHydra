@@ -193,7 +193,7 @@ export async function dropQueue(pc: string) {
       .bind('queues', pc, Date.now()),
     storeDb.prepare('DELETE FROM queues WHERE pc = ?').bind(pc),
     storeDb.prepare(
-      'SELECT rev, floor, logins_rev, queues_rev, chats_rev, gone_rev FROM store_rev WHERE id = 1',
+      'SELECT rev, floor, logins_rev, queues_rev, chats_rev, free_rev, gone_rev FROM store_rev WHERE id = 1',
     ),
   ])
   await askHead('end', { token: held, head: done[3]!.results[0] })

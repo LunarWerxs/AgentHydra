@@ -51,7 +51,14 @@ test('a write after the cursor shows up exactly once, with no blob; then the fee
   expect(c.gone).toEqual([])
   expect(JSON.stringify(c)).not.toContain('"blob"')
 
-  expect(await changes(c.rev)).toEqual({ rev: c.rev, logins: [], queues: [], chats: [], gone: [] })
+  expect(await changes(c.rev)).toEqual({
+    rev: c.rev,
+    logins: [],
+    queues: [],
+    chats: [],
+    free: [],
+    gone: [],
+  })
 })
 
 test('an update shows up once under its new version', async () => {
@@ -106,7 +113,7 @@ test('a refused write changes nothing, rev included', async () => {
   ]
   expect(refused.map((r) => r.status)).toEqual([409, 409, 409, 409, 409, 400])
   expect(await listRev()).toBe(rev)
-  expect(await changes(rev)).toEqual({ rev, logins: [], queues: [], chats: [], gone: [] })
+  expect(await changes(rev)).toEqual({ rev, logins: [], queues: [], chats: [], free: [], gone: [] })
 })
 
 test('a cursor from the future (the store was reset) gets full: true', async () => {
@@ -144,6 +151,7 @@ test('rows read: an idle changes call against one full set of list calls', async
     logins: [],
     queues: [],
     chats: [],
+    free: [],
     gone: [],
   })
   const idle = storeDb.rowsRead()

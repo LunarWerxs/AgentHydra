@@ -120,11 +120,13 @@
      invented an oklch palette at hue ~70-85 / chroma ~0.007, which is a brown tint on every
      surface; that was the bug. Keep chroma at essentially zero.
 
-       chrome  #181817   header + session list (darkest)
-       ground  #1a1a19   the working area
+       chrome  #181817   header + session list
+       ground  #151515   the working area: Desk's page colour, so the pane matches the chat beside it
+                         (owner, 2026-10-06: "the current bg for the right side, is #1A1A19, please make
+                         it #151515"; Claude's own was #1a1a19)
        raised  #232321   cards, popovers, table headers, hover
        accent  #d06c74   dusty rose */
-  --background: #1a1a19;
+  --background: #151515;
   --foreground: #ededeb;
   --card: #232321;
   --card-foreground: #ededeb;
@@ -170,38 +172,6 @@
 .dark [data-slot="select-trigger"]:not(.bg-transparent) {
   background-color: var(--input);
   border-color: var(--border);
-}
-
-/* Deep-link landing flash.
-   A deep link into Settings (the queue drawer's scheduler indicator, the header's scheduler chip,
-   the composer's tomorrow gear) scrolls a section into view — but on a long settings page a scroll
-   that lands mid-page leaves you asking which of the visible cards you were actually sent to. This
-   pulses a ring around the target for a beat, so arriving somewhere answers that question instead
-   of posing it. Twice, then it stops: it is a pointer, not an alarm.
-
-   App-local on purpose: kit-base.css is synced from the shared kit (bun run check:kit) and must not
-   grow app-specific rules. */
-@keyframes settings-flash {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 transparent;
-  }
-  25%,
-  75% {
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
-  }
-}
-
-.settings-flash {
-  border-radius: var(--radius-xl);
-  animation: settings-flash 0.9s ease-in-out 2;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-flash {
-    animation: none;
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 45%, transparent);
-  }
 }
 
 /* Hydra Desk 2: the Instances row Desk's session header asked for (lib/desk-embed.ts flashRow): a ring

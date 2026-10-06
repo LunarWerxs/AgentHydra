@@ -178,7 +178,8 @@ export type AhWorkerDetail = AhWorker & { events: string[] }
 
 /**
  * One worker of another PC's shared queue (climayte-queue-sync.ts reduce()). It deliberately carries no
- * prompt or folder; `account.name` is often the login's email and is never shown. Its session, origin
+ * prompt or path, only its folder's last name (`folder`, from 2026-10-06); `account.name` is often the
+ * login's email and is never shown. Its session, origin
  * (the chat's session, or the worker and that worker's session) and wave are ids on its own PC, absent
  * from an AgentHydra older than 2026-10-04.
  */
@@ -204,6 +205,7 @@ export interface AhRemoteWorker {
   wave?: string | null
   originTitle?: string | null
   sessions?: string[]
+  folder?: string | null
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
@@ -224,6 +226,8 @@ export interface AhRemoteJob {
   finished: string | null
   callerSessionId: string | null
   callerChatId: string | null
+  /** The last name of the caller's folder, never the path; absent from an AgentHydra older than 2026-10-06. */
+  folder?: string | null
 }
 
 export interface AhTailEvent {
@@ -232,6 +236,8 @@ export interface AhTailEvent {
   text: string
   tool_name: string | null
   timestamp: string | null
+  /** A Claude reply's transcript line, which a new session can branch from (AgentHydra's session-branch). */
+  uuid?: string
 }
 
 /** GET /api/sessions/:id/tail (TailResult). `error` is set when the transcript was not found. */
@@ -478,6 +484,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
     sendToDesktopChat: (sessionId: string, text: string) =>
       post<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>(`/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }),
+    /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
+    branchSession: (sessionId: string, uuid: string, title: string) =>
+      post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),
     /** AgentHydra's spend report over `period` (all, 30d, 7d): sessions, turns, tokens and dollars per source, model and day. */
     spend: (period: string) => get<AhSpendReport>(`/api/analytics/spend?period=${enc(period)}`, STATS_TIMEOUT_MS),
     activity: (period: string) => get<AhActivityReport>(`/api/analytics/activity?period=${enc(period)}`, STATS_TIMEOUT_MS),

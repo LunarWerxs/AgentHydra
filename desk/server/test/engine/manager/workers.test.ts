@@ -26,7 +26,7 @@ test('a new chat starts a worker, a follow-up goes to that worker, and its statu
   process.env.HYDRA_DESK_HOME = home
   const b = fakeBridge()
   const q = fakeQueries()
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
   managers.push(m)
 
   const chat = await m.create({ cwd: home, prompt: 'reply with the word pong', model: 'haiku' })
@@ -54,7 +54,7 @@ test('a new chat starts a worker, a follow-up goes to that worker, and its statu
 })
 
 function newManager(home: string, b: ReturnType<typeof fakeBridge>) {
-  const m = new ChatManager({ home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
   managers.push(m)
   return m
 }
@@ -140,7 +140,7 @@ test('a sent message shows at once, before the worker has it, and its worker cop
   process.env.HYDRA_DESK_HOME = home
   const b = fakeBridge()
   const events: ServerEvent[] = []
-  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 })
   managers.push(m)
   const chat = await m.create({ cwd: home, prompt: 'hi' })
   while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))

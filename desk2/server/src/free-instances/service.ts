@@ -1,0 +1,274 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { join } from 'node:path'
+import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeInstance, type FreeJob, type FreeRequest, type FreeSettings, type FreeStatus, type FreeThread } from '@shared/free-instances'
+import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
+import { failure, parseResult } from './results'
+import { runFree, type FreeRunner } from './runner'
+import { ManagedFreeRuntime, type FreeRuntime } from './runtime'
+import { FreeStorage } from './storage'
+import type { FreeSyncHost } from './sync'
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export class FreeError extends Error {
+  constructor(message: string, public status: 400 | 404 | 409 | 503 = 400) { super(message) }
+}
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new FreeError('A JSON operation is required.')
+  return value as Record<string, unknown>
+}
+function name(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 100 || /[\x00-\x1f]/.test(value)) throw new FreeError('A name must contain 1–100 printable characters.')
+  return value.trim()
+}
+export function validateRequest(value: unknown): FreeRequest {
+  const r = record(value) as unknown as FreeRequest
+  const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch']
+  if (Object.keys(r).some(k => !keys.includes(k))) throw new FreeError('Unknown operation option.')
+  if (typeof r.requestId !== 'string' || !UUID.test(r.requestId) || typeof r.instanceId !== 'string' || !UUID.test(r.instanceId) || !FREE_PROVIDERS.includes(r.provider) || !FREE_COMMANDS.includes(r.command)) throw new FreeError('Request and instance UUIDs, a supported provider and command are required.')
+  const send = r.command === 'chat' || r.command === 'resume'
+  const reference = ['read', 'resume', 'track'].includes(r.command)
+  if (reference ? typeof r.chatId !== 'string' || !UUID.test(r.chatId) : r.chatId !== undefined) throw new FreeError('Use an explicit chat UUID for read, resume or track.')
+  if (send ? typeof r.prompt !== 'string' || !r.prompt.trim() || r.prompt.length > 100_000 : r.prompt !== undefined) throw new FreeError('Messages must contain 1–100,000 characters, only for chat or resume.')
+  if (r.name !== undefined) { if (!['chat', 'track'].includes(r.command)) throw new FreeError('Name is an option for chat or track.'); name(r.name) }
+  if (r.command === 'nudge' && r.provider !== 'claude') throw new FreeError('A keepalive nudge is for Claude only.')
+  if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
+  if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !send || r.provider !== 'claude')) throw new FreeError('Web search is an option for Claude messages only.')
+  return { ...r }
+}
+
+export class FreeInstances {
+  private store: FreeStorage
+  private runtime: FreeRuntime
+  private jobs = new Map<string, FreeJob>()
+  private fingerprints = new Map<string, string>()
+  private controllers = new Map<string, AbortController>()
+  /** Accounts whose log out is running: no operation may start on them meanwhile. */
+  private forgetting = new Set<string>()
+  private stopping = false
+  private cleanup = setInterval(() => this.prune(), 60_000).unref()
+  /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
+  private keeper: ReturnType<typeof setTimeout> = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
+  /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
+  onLoginChange?: () => void
+  constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
+    this.store = new FreeStorage(home)
+    this.runtime = runtime ?? new ManagedFreeRuntime(home)
+  }
+  private prune(): void {
+    for (const [id, job] of this.jobs) if (job.finishedAt && Date.now() - job.finishedAt > 15 * 60_000) { this.jobs.delete(id); this.fingerprints.delete(id) }
+  }
+  private instance(id: string): FreeInstance {
+    const instance = this.store.data.instances.find(i => i.id === id)
+    if (!instance) throw new FreeError('Free instance not found.', 404)
+    return instance
+  }
+  create(value: unknown): FreeInstance {
+    const r = record(value)
+    if (Object.keys(r).some(k => !['provider', 'name'].includes(k)) || !FREE_PROVIDERS.includes(r.provider as FreeInstance['provider'])) throw new FreeError('Choose Claude or ChatGPT.')
+    return this.store.create(r.provider as FreeInstance['provider'], r.name === undefined ? undefined : name(r.name))
+  }
+  rename(id: string, value: unknown): FreeInstance {
+    const r = record(value)
+    if (Object.keys(r).some(k => k !== 'name')) throw new FreeError('Only a name can be changed.')
+    const instance = this.instance(id)
+    instance.name = name(r.name)
+    instance.autoName = false
+    this.store.save()
+    return instance
+  }
+  /**
+   * Removes the stored sign-in only (chats and metadata stay); the account can sign in again later. The harness's own
+   * forget does it: it deletes the saved login (and for ChatGPT its preparations) under the lock a cookie refresh takes.
+   */
+  async logout(id: string): Promise<FreeInstance> {
+    const instance = this.instance(id)
+    if (this.stopping) throw new FreeError('Desk is stopping. Log out after reconnecting.', 503)
+    if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
+    this.forgetting.add(id)
+    try {
+      try { await this.runtime.ensure(instance.provider) }
+      catch { throw new FreeError('Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.', 503) }
+      const done = await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000)).catch(() => null)
+      if (done?.code !== 0) throw new FreeError('The saved login could not be removed. Try again.', 503)
+    } finally { this.forgetting.delete(id) }
+    instance.loggedIn = false
+    instance.checkedAt = Date.now()
+    instance.usage = null
+    // Logged out on purpose, not lost: the row offers "Sign in", and "Sign in again" stays for an expired login.
+    instance.lastSignedInAt = null
+    this.store.save()
+    this.onLoginChange?.()
+    return instance
+  }
+  /**
+   * Deletes the account here: its login, state folder, chats and row. Deleting reaches every PC, as a log out does:
+   * the sync leaves a tombstone for the store, and the other PCs remove it too (they pass `tombstone: false`).
+   */
+  async remove(id: string, opts: { tombstone?: boolean } = {}): Promise<{ ok: true }> {
+    const instance = this.instance(id)
+    if (this.stopping) throw new FreeError('Desk is stopping. Delete the account after reconnecting.', 503)
+    if (this.busy(id)) throw new FreeError('This account has an operation running. Wait for it to finish or cancel it first.', 409)
+    this.forgetting.add(id)
+    try {
+      // The harness's forget also stops a live ChatGPT worker; its failure does not matter, the folder delete removes the login file anyway.
+      try {
+        await this.runtime.ensure(instance.provider)
+        await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000))
+      } catch { /* deleted regardless */ }
+      for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
+      this.store.remove(id, opts.tombstone ?? true)
+    } finally { this.forgetting.delete(id) }
+    this.onLoginChange?.()
+    return { ok: true }
+  }
+  private busy(id: string): boolean {
+    return this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running')
+  }
+  settings(): FreeSettings { return this.store.data.settings ?? { ...FREE_SETTINGS_DEFAULTS } }
+  updateSettings(value: unknown): FreeSettings {
+    const r = record(value)
+    if (Object.keys(r).some(k => k !== 'keepWindows' && k !== 'weeklyFloorPct')) throw new FreeError('Only keepWindows and weeklyFloorPct can be changed.')
+    if (r.keepWindows !== undefined && typeof r.keepWindows !== 'boolean') throw new FreeError('keepWindows must be true or false.')
+    if (r.weeklyFloorPct !== undefined && (!Number.isInteger(r.weeklyFloorPct) || (r.weeklyFloorPct as number) < 1 || (r.weeklyFloorPct as number) > 100)) throw new FreeError('weeklyFloorPct must be a whole number from 1 to 100.')
+    this.store.data.settings = { ...this.settings(), ...r }
+    this.store.save()
+    setTimeout(() => this.keepWindows(), 0).unref()
+    return this.store.data.settings
+  }
+  /** Starts a nudge on each signed-in Claude account that is due (keepalive.ts); one that is busy waits for the next pass. */
+  keepWindows(): void {
+    const settings = this.settings()
+    for (const instance of [...this.store.data.instances]) {
+      if (!nudgeDue(instance, settings, Date.now()) || this.busy(instance.id)) continue
+      try { this.start({ requestId: randomUUID(), instanceId: instance.id, provider: 'claude', command: 'nudge' }) } catch { /* Desk is stopping or its jobs are full; the next pass tries again */ }
+    }
+  }
+  /** What the Free login sync (sync.ts) reads and does here. */
+  syncHost(): FreeSyncHost {
+    return {
+      list: () => this.store.data.instances,
+      deleted: () => this.store.data.deleted ?? [],
+      settled: id => this.store.settle(id),
+      remove: async id => { await this.remove(id, { tombstone: false }) },
+      busy: id => this.busy(id),
+      sessionFile: i => join(this.runtime.config(i.id).stateDir, i.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi'),
+      adopt: shared => this.store.adopt(shared),
+      landed: id => {
+        const instance = this.instance(id)
+        instance.loggedIn = true
+        instance.checkedAt = instance.lastSignedInAt = Date.now()
+        this.store.save()
+        // Check it here at once: the row then says whether the login works on this PC, with its quota.
+        try { this.start({ requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'auth' }) } catch { /* an operation already runs on it; the next check confirms the login */ }
+      },
+      forget: async id => { await this.logout(id) }
+    }
+  }
+  threads(): FreeThread[] { return this.store.data.threads }
+  status(): FreeStatus {
+    this.prune()
+    return { ready: this.runtime.ready(), instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+  }
+  get(id: string): FreeJob {
+    this.prune()
+    const job = this.jobs.get(id)
+    if (!job) throw new FreeError('Operation not found or expired. Refresh the chat list and read the chat before sending again.', 404)
+    return job
+  }
+  cancel(id: string): void { this.get(id); this.controllers.get(id)?.abort() }
+  start(value: unknown): FreeJob {
+    const r = validateRequest(value)
+    const fingerprint = createHash('sha256').update(JSON.stringify([r.instanceId, r.provider, r.command, r.chatId, r.prompt, r.name, r.webSearch])).digest('hex')
+    const previous = this.jobs.get(r.requestId)
+    if (previous) {
+      if (this.fingerprints.get(r.requestId) !== fingerprint) throw new FreeError('That request UUID already identifies another operation.', 409)
+      return previous
+    }
+    if (this.stopping) throw new FreeError('Desk is stopping. Read the chat after reconnecting.', 503)
+    const instance = this.instance(r.instanceId)
+    if (instance.provider !== r.provider) throw new FreeError('The provider does not match this instance.')
+    if (this.forgetting.has(r.instanceId) || [...this.jobs.values()].some(j => j.instanceId === r.instanceId && j.state === 'running')) throw new FreeError('This account already has an operation running.', 409)
+    this.prune()
+    while (this.jobs.size >= 16) {
+      const oldest = [...this.jobs.values()].find(j => j.state === 'done')
+      if (!oldest) throw new FreeError('Desk already has 16 operations running.', 409)
+      this.jobs.delete(oldest.id); this.fingerprints.delete(oldest.id)
+    }
+    const job: FreeJob = { id: r.requestId, instanceId: r.instanceId, provider: r.provider, command: r.command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: r.chatId }
+    this.jobs.set(job.id, job)
+    this.fingerprints.set(job.id, fingerprint)
+    const controller = new AbortController()
+    this.controllers.set(job.id, controller)
+    this.markThread(r, 'running')
+    void this.execute(job, r, controller)
+    return job
+  }
+  private markThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number): void {
+    if (!chatId || !UUID.test(chatId)) return
+    const id = `${r.instanceId}/${chatId}`
+    let thread = this.store.data.threads.find(t => t.id === id)
+    if (!thread) {
+      thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: createdAt || Date.now(), updatedAt: Date.now(), error }
+      this.store.data.threads.push(thread)
+    }
+    Object.assign(thread, { status, error, updatedAt: Date.now() }, serverId ? { serverId } : {}, title ? { title } : {})
+    this.store.save()
+  }
+  private async execute(job: FreeJob, r: FreeRequest, controller: AbortController): Promise<void> {
+    try {
+      try { await this.runtime.ensure(r.provider) }
+      catch { job.result = failure('setup_failed', 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
+      controller.signal.throwIfAborted()
+      job.phase = 'working'
+      const config = this.runtime.config(r.instanceId)
+      job.result = parseResult(r.command, await this.runner(config, r, controller.signal))
+      const instance = this.instance(r.instanceId)
+      if (r.command === 'auth' || r.command === 'login') {
+        instance.loggedIn = job.result.ok && job.result.authenticated === true
+        instance.checkedAt = Date.now()
+        if (instance.loggedIn) {
+          instance.lastSignedInAt = instance.checkedAt
+          const label = job.result.account_label
+          if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
+          this.onLoginChange?.()
+        }
+        // Read-only followups bring imported chats and available quota into the shared view.
+        if (instance.loggedIn) for (const command of ['chats', 'usage'] as const) {
+          try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, controller.signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
+        }
+      }
+      if (r.command === 'nudge') {
+        instance.nudge = { at: Date.now(), ok: job.result.ok }
+        // Read the quota again so the window the nudge started shows.
+        if (job.result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, controller.signal))) } catch { /* the nudge worked; the next refresh reads it */ }
+      }
+      this.apply(r, job.result)
+    } catch {
+      job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
+      this.markThread(r, 'failed', r.chatId, job.result.error!.message)
+    } finally {
+      job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
+      this.store.save()
+    }
+  }
+  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): void {
+    const instance = this.instance(r.instanceId)
+    if (result.usage) instance.usage = result.usage
+    if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
+    if (result.chats) for (const chat of result.chats) {
+      if (chat.is_temporary === true) {
+        const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chat.chat_id)
+        this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined)
+      }
+    }
+    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {
+      if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
+      const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
+      const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
+      if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
+      this.markThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
+    }
+    this.store.save()
+  }
+  stop(): void { this.stopping = true; clearInterval(this.cleanup); clearTimeout(this.keeper); clearInterval(this.keeper); for (const controller of this.controllers.values()) controller.abort() }
+}
