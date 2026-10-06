@@ -259,6 +259,34 @@ without requiring a separate daemon. `install.ps1` installs the new layout and l
 that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs it from
 its own version's release archive at boot, without a click.
 
+## The 2.0 update mechanism and the 1.x→2.0 migration
+
+In 2.0.0, the launcher (AgentHydra.exe / agenthydra) starts the daemon through Bun: it launches `runtime/bun app/server.js`. The daemon's `process.execPath` is therefore `runtime/bun(.exe)`, not the launcher. The self-updater in `server/src/github-updater.ts` must swap the LAUNCHER_PATH (not `process.execPath`) and must never touch `runtime/`, which the launcher owns.
+
+The in-app update for a 2.0 release install works as follows:
+
+1. The daemon calls `applyUpdate()` with no `exePath` override.
+2. The updater detects that this is a release build (`IS_RELEASE` = true) and defaults `exePath` to `LAUNCHER_PATH`.
+3. It downloads the 2.0.x zip, extracts it, swaps the launcher aside, and moves the new one in place.
+4. It swaps `app/`, `orchestrator/`, and reconciles `desk2/` and `misc/` the same way.
+5. It never touches `runtime/` — the launcher owns it and will download Bun on next start if needed.
+6. The relaunch is handled by the launcher: if `app/bun-version` differs from `runtime/bun.version`, it downloads the new Bun.
+
+**The 1.x→2.0 migration path:** An install on 1.13.0 (the last 1.x release) receives an update to 2.0.0 from the old updater. That old updater:
+
+1. Defaults `exePath` to `process.execPath` (the daemon's running 1.x .exe).
+2. Finds AgentHydra.exe in the 2.0 zip and swaps it: renames the old 1.x exe aside, moves 2.0's launcher in place.
+3. Reconciles `misc/` (the only component it knows about).
+4. Does NOT move `app/`, `orchestrator/`, or `desk2/` — they come with the new launcher's repair at boot.
+
+After the old updater relaunches, the 2.0 launcher runs:
+
+1. It looks for `app/`, `orchestrator/`, `desk2/` — all are present (brought by the zip).
+2. It looks for `runtime/bun` and creates it, downloading Bun if needed.
+3. It runs the daemon normally.
+
+So the 1.x updater successfully installs 2.0. The 2.0 updater adds `runtime/*.old-*` cleanup (in `cleanupStaleUpdateArtifacts`, since the launcher, not the updater, owns runtime/) and corrects the exe path for 2.0's release layout.
+
 ## When a push doesn't trigger anything
 
 GitHub's standard mitigation for an Actions incident is to **throttle webhook triggers**, which

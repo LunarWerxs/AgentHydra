@@ -20,10 +20,11 @@
 //   4. On any failure mid-swap, restore from the renamed-aside originals.
 // Leftover `*.old-*` artifacts are swept on the next boot (cleanupStaleUpdateArtifacts).
 //
-// From 2.0.0 the archive also carries desk2/ (AgentHydra's window, with its own bun) and its dev-servers
-// service. Desk 2 is reconciled file by file (a running bun.exe is moved aside, not overwritten),
-// stopped before its files are replaced and started again after, and a compiled daemon that finds
-// desk2/ missing installs it from its own version's archive once at boot (repairDesk2AtBoot).
+// From 2.0.0 the archive also carries desk2/ (AgentHydra 2.0's window) and its dev-servers service.
+// Desk 2 is reconciled file by file (a running bun.exe is moved aside, not overwritten), stopped before
+// its files are replaced and started again after. The launcher downloads runtime/bun into runtime/ on
+// first run (or when app/bun-version changes) and never ships it; a daemon missing app/ repairs it
+// from its own version's archive at boot.
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
@@ -1319,8 +1320,10 @@ export async function applyUpdate(deps: ApplyUpdateDeps = {}): Promise<UpdateApp
   const rename = deps.rename ?? renameSync
   const move = deps.move ?? ((from: string, to: string) => moveInto(from, to, rename))
 
-  const exePath = deps.exePath ?? process.execPath
   const installDir = deps.installDir ?? APP_ROOT
+  // In a release, the daemon runs through the launcher and process.execPath is runtime/bun(.exe),
+  // not the launcher. The exe being replaced is LAUNCHER_PATH. In a checkout, neither exists.
+  const exePath = deps.exePath ?? (IS_RELEASE ? LAUNCHER_PATH : process.execPath)
   const resolved = await resolveUpdateToApply(doCheckForUpdate, doFetchLatestRelease, installDir)
   // A refusal is already a finished result; only a ResolvedUpdate carries a version to install.
   if (!('remoteVersion' in resolved)) return resolved
@@ -1361,6 +1364,27 @@ export function sweepAsides(dir: string): void {
   }
 }
 
+/** Remove leftover bun.exe.old-* files from runtime/. Only these; a bun still in use is left for
+ *  the next boot, as elsewhere. A launcher that renamed a bun aside while a chat host still ran it
+ *  creates these; they are swept here rather than in the reconcile sweep because runtime/ is never
+ *  a release component (the launcher, not the updater, owns it). */
+function sweepRuntimeAsides(installDir: string): void {
+  const runtime = join(installDir, 'runtime')
+  try {
+    for (const name of readdirSync(runtime)) {
+      if (/^bun(\.exe)?\.old-\d+$/.test(name)) {
+        try {
+          rmSync(join(runtime, name), { force: true })
+        } catch {
+          /* still in use: the next boot */
+        }
+      }
+    }
+  } catch {
+    /* runtime/ doesn't exist or is unreadable: nothing to sweep */
+  }
+}
+
 /** Delete leftover `*.old-*` swap artifacts + a stale staging dir, and the files a reconcile moved
  *  aside inside desk2/ and misc/ once whatever held them has gone. Best-effort, at boot. */
 export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void {
@@ -1395,4 +1419,5 @@ export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void
   for (const comp of RELEASE_COMPONENTS) {
     if (comp.strategy === 'reconcile') sweepAsides(join(installDir, comp.name))
   }
+  sweepRuntimeAsides(installDir)
 }

@@ -746,3 +746,77 @@ test('the boot sweep removes moved-aside files inside component folders and the 
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// ── release-layout update (2.0.0) ─────────────────────────────────────────────────────────────────
+//
+// In a release install, the launcher and runtime/bun are separate: the launcher starts the daemon
+// through bun, so process.execPath is runtime/bun(.exe), not the launcher. An update must swap the
+// launcher (LAUNCHER_PATH), not the running bun, and must never touch runtime/ — the launcher
+// itself owns it. The sweep must clean runtime/*.old-* files that the launcher created.
+
+test('a release-install update swaps the launcher, not the daemon runtime, and runtime asides are swept', async () => {
+  const { root, bundle, install } = applyFixture()
+  try {
+    // Release layout: the launcher starts the daemon through bun, so the daemon's process.execPath
+    // is runtime/bun(.exe), not the launcher. The update must swap the launcher, not the bun.
+    mkdirSync(join(install, 'runtime'), { recursive: true })
+    put(install, 'runtime/bun.exe', 'current bun')
+    put(install, 'runtime/bun.version', '1.0.0')
+    // The launcher is what gets replaced, not the bun the daemon runs on.
+    const launcherPath = join(install, 'AgentHydra.exe')
+    const bun = join(install, 'runtime/bun.exe')
+
+    // The update process: the launcher's path is passed explicitly (in production it comes from
+    // config.LAUNCHER_PATH; in tests IS_RELEASE is false so it would default to process.execPath).
+    const result = await applyUpdate({
+      installDir: install,
+      exePath: launcherPath,
+      checkForUpdate: fakeCheckForUpdate(),
+      fetchLatestRelease: fakeFetchLatestRelease(),
+      downloadAndVerifyUpdate: async () => ({
+        newExe: join(bundle, 'AgentHydra.exe'),
+        bundleDirPath: bundle,
+      }),
+      orchestratorBusy: () => false,
+    })
+
+    expect(result.ok).toBe(true)
+    // The launcher was swapped.
+    expect(readFileSync(launcherPath, 'utf8')).toBe('new exe')
+    // The daemon's bun was left BYTE FOR BYTE AS IT WAS — never moved, never replaced.
+    expect(readFileSync(bun, 'utf8')).toBe('current bun')
+    expect(readFileSync(join(install, 'runtime/bun.version'), 'utf8')).toBe('1.0.0')
+    // The old launcher sits aside for potential rollback until the next boot.
+    const stamp = '1735689600000' // the fake check's checkedAt
+    const launcherAside = `${launcherPath}.old-${stamp}`
+    expect(readFileSync(launcherAside, 'utf8')).toBe('old exe')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('the boot sweep removes old bun files from runtime/ but leaves the current one', () => {
+  const root = scratchRoot()
+  try {
+    put(root, 'runtime/bun.exe', 'current bun')
+    put(root, 'runtime/bun.exe.old-111', 'old bun 1')
+    put(root, 'runtime/bun.exe.old-222', 'old bun 2')
+    put(root, 'runtime/bun.version', '1.0.0')
+    put(root, 'app/server.js', 'daemon')
+
+    cleanupStaleUpdateArtifacts(root)
+
+    // The current bun stays.
+    expect(readFileSync(join(root, 'runtime/bun.exe'), 'utf8')).toBe('current bun')
+    expect(readFileSync(join(root, 'runtime/bun.version'), 'utf8')).toBe('1.0.0')
+    // The old ones are swept.
+    expect(existsSync(join(root, 'runtime/bun.exe.old-111'))).toBe(false)
+    expect(existsSync(join(root, 'runtime/bun.exe.old-222'))).toBe(false)
+    // Other asides (like launcher) still work.
+    put(root, 'AgentHydra.exe.old-333', 'old launcher')
+    cleanupStaleUpdateArtifacts(root)
+    expect(existsSync(join(root, 'AgentHydra.exe.old-333'))).toBe(false)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
