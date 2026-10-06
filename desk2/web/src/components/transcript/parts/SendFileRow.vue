@@ -4,7 +4,7 @@
 // per file. Until the result lands the files are not known; the caption shows alone.
 import { computed } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
-import { imageSrc, openLightbox } from '../lib/media'
+import { imageSrc, openLightbox, tileKey } from '../lib/media'
 import FileCard from './FileCard.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 
@@ -14,6 +14,7 @@ const files = computed(() => props.item.result?.images ?? [])
 const caption = computed(() => (typeof props.item.input.caption === 'string' ? props.item.input.caption : ''))
 const render = computed(() => props.item.input.display !== 'attach')
 const pictures = computed(() => (render.value ? files.value.filter((f) => imageSrc(f)) : []))
+const group = computed(() => pictures.value.map((f) => ({ src: imageSrc(f)!, alt: f.name ?? '' })))
 </script>
 
 <template>
@@ -24,7 +25,9 @@ const pictures = computed(() => (render.value ? files.value.filter((f) => imageS
       type="button"
       class="tx-inline-picture"
       :aria-label="`Open ${f.name || 'picture'}`"
-      @click="openLightbox(imageSrc(f)!, f.name ?? '')"
+      @click="openLightbox(imageSrc(f)!, f.name ?? '', group)"
+      @keydown="tileKey($event, () => openLightbox(imageSrc(f)!, f.name ?? '', group))"
+      @keyup="tileKey($event, () => {})"
     >
       <img :src="imageSrc(f)!" :alt="f.name || 'picture'" loading="lazy" />
     </button>

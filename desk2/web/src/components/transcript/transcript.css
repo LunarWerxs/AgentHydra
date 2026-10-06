@@ -328,8 +328,8 @@
 /* Picture tiles (user bubble, tool results): 8px rounded, 96 high, the white-10% ring. */
 .tx-tile {
   display: block;
-  height: 96px;
-  max-width: 160px;
+  flex: none;
+  max-width: 100%;
   overflow: hidden;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px var(--border);
@@ -337,11 +337,22 @@
 }
 .tx-tile img {
   display: block;
+  width: 100%;
   height: 100%;
-  width: auto;
-  max-width: 160px;
-  object-fit: cover;
+  object-fit: cover; /* the tile already has the picture's own aspect ratio: nothing is cropped */
   border-radius: 8px;
+}
+
+/* Several pictures in one markdown paragraph share a wrapping row instead of stacking. */
+.md p:has(> .md-img ~ .md-img) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.md p:has(> .md-img ~ .md-img) > .md-img img {
+  height: 200px;
+  max-width: 100%;
+  object-fit: contain;
 }
 
 /* The real file card (user/real-markdown-and-file-card.png, sampled): 120x120, r8, #20201f, 1px #4d4d4c

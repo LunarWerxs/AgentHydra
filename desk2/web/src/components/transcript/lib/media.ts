@@ -3,6 +3,8 @@
 import { ref } from 'vue'
 import type { ImageRef } from '@shared/protocol'
 
+import { stepIndex } from './viewer'
+
 export { isSendFileTool } from './tools'
 
 /** The picture's address: the server's cache url, else the bytes the window itself sent; null for a file card only. */
@@ -28,13 +30,39 @@ export function formatSize(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
-/** The picture open in the lightbox, if any. */
-export const lightbox = ref<{ src: string; alt: string } | null>(null)
+export interface ViewerPicture {
+  src: string
+  alt: string
+}
 
-export function openLightbox(src: string, alt = ''): void {
-  lightbox.value = { src, alt }
+/** The viewer's state while it is open: the pictures of one message and which one shows; null when closed. */
+export const lightbox = ref<{ items: ViewerPicture[]; index: number } | null>(null)
+
+/**
+ * Open the viewer on `src`. `group` is the message's pictures in order (Left/Right step through them); without
+ * it, or when `src` is not among them, the viewer holds just that one picture.
+ */
+export function openLightbox(src: string, alt = '', group?: ViewerPicture[]): void {
+  const at = group ? group.findIndex((p) => p.src === src) : -1
+  lightbox.value = at >= 0 ? { items: group!, index: at } : { items: [{ src, alt }], index: 0 }
 }
 
 export function closeLightbox(): void {
   lightbox.value = null
+}
+
+/** Show the previous or next picture of the message; stops at both ends. */
+export function stepLightbox(delta: number): void {
+  const lb = lightbox.value
+  if (lb) lightbox.value = { items: lb.items, index: stepIndex(lb.index, lb.items.length, delta) }
+}
+
+/**
+ * Space on a focused picture tile opens the viewer (a click does too). The key is taken here, both on press
+ * and release, so the button's own "click on Space release" cannot reopen a viewer that Space just closed.
+ */
+export function tileKey(e: { key: string; type: string; preventDefault(): void }, open: () => void): void {
+  if (e.key !== ' ' && e.key !== 'Spacebar') return
+  e.preventDefault()
+  if (e.type === 'keydown') open()
 }

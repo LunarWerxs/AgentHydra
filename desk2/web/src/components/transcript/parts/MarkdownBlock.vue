@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { markdown, shikiReady } from '../lib/highlight'
-import { openLightbox } from '../lib/media'
+import { openLightbox, tileKey } from '../lib/media'
 
 const props = defineProps<{ text: string; streaming?: boolean }>()
 
@@ -51,11 +51,20 @@ function onClick(e: MouseEvent) {
     return
   }
   const zoom = target.closest<HTMLElement>('[data-zoom]')
-  if (zoom) openLightbox(zoom.dataset.zoom ?? '', zoom.querySelector('img')?.alt ?? '')
+  if (zoom) openZoom(zoom)
+}
+// A picture opens the viewer with the block's other pictures, so Left/Right step through them.
+function openZoom(zoom: HTMLElement) {
+  const group = [...(zoom.closest('.md')?.querySelectorAll<HTMLElement>('[data-zoom]') ?? [])].map((b) => ({ src: b.dataset.zoom ?? '', alt: b.querySelector('img')?.alt ?? '' }))
+  openLightbox(zoom.dataset.zoom ?? '', zoom.querySelector('img')?.alt ?? '', group)
+}
+function onKey(e: KeyboardEvent) {
+  const zoom = (e.target as HTMLElement).closest<HTMLElement>('[data-zoom]')
+  if (zoom) tileKey(e, () => openZoom(zoom))
 }
 </script>
 
 <template>
   <!-- markdown-it runs with html disabled, so v-html only ever holds markdown-it's own markup -->
-  <div class="md" :class="streaming && 'md-streaming'" @click="onClick" v-html="html" />
+  <div class="md" :class="streaming && 'md-streaming'" @click="onClick" @keydown="onKey" @keyup="onKey" v-html="html" />
 </template>
