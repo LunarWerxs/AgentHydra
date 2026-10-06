@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from claudfree import http, service
+from claudfree import cli, http, service
 from claudfree.registry import ChatRegistry
 
 ORG_A = "11111111-1111-4111-8111-111111111111"
@@ -131,6 +131,13 @@ def nudge(tmp_path, monkeypatch, config, refuse=(), fail=None):
     except http.HttpError as error:
         outcome = error
     return outcome, sent
+
+
+def test_desk_argv_for_a_nudge_parses():
+    # The argv Desk's runner builds (server/src/free-instances/runner.ts commandArgs): every HTTP command gets
+    # --json --brief. The first nudge refused --brief, live on 2026-10-06, while the tests above passed.
+    args = cli.parse_args(["nudge", "--provider", "claude", "--json", "--brief", "--request-timeout", "120"])
+    assert (args.command, args.json_output, args.brief) == ("nudge", True, True)
 
 
 def test_nudge_sends_one_temporary_message_on_haiku_and_records_nothing(tmp_path, monkeypatch):

@@ -166,7 +166,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--check is only valid with chats")
     if args.brief and (
         not args.json_output
-        or args.command not in {"auth", "usage", "chat", "resume", "read", "track", "chats"}
+        or args.command not in {"auth", "usage", "chat", "resume", "read", "track", "chats", "nudge"}
     ):
         parser.error("--brief requires --json and an HTTP/local chat command")
     if args.prompt and args.stdin_prompt:
