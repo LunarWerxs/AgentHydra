@@ -25,12 +25,11 @@ import {
   RotateCcw,
   Settings2,
   Terminal,
-  Timer,
   Trash2,
   Unlink,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
@@ -52,12 +51,7 @@ import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import PooledUsageGauges from '@/components/PooledUsageGauges.vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Skeleton } from '@/components/ui/skeleton'
-import { Switch } from '@/components/ui/switch'
 import { TableBody } from '@/components/ui/table'
-import { useAppSettings } from '@/composables/useAppSettings'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
@@ -68,6 +62,7 @@ import { useCliTokenWindow } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
+import { openSettingsInDesk } from '@/lib/desk-embed'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import {
@@ -80,7 +75,6 @@ import { tokenPartsFor } from '@/lib/token-window'
 import { billsPastLimit, usageReasonMessageKey, windowLengthMs, windowResetMs } from '@/lib/usage'
 import { planSize, pooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
-import InfoHint from '@/shell/InfoHint.vue'
 
 const {
   cliInstances,
@@ -122,7 +116,7 @@ const usageFor = (inst: CliInstance) => snapshotFor(usageKey(inst))
 // toggle up in InstancesView flips this table too, because "how much quota is left" is a question
 // you ask of every instance at once. Here the swap trades the config-dir column — the least useful
 // thing on screen when you're asking about quota — for the two reset countdowns.
-const { usageMode, now } = useUsageMode(true)
+const { usageMode, now } = useUsageMode(true, 'cli')
 // The header's two gauges (PooledUsageGauges.vue): what is left of each window across EVERY
 // CLI account, the ones linked to a desktop row included, since CliMayte runs on those too.
 const poolOf = (which: 'session' | 'weekAll') =>
@@ -180,6 +174,7 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
   rows: () => cliInstances.value,
   rowKey: (i: CliInstance) => i.id,
   facts: filterFacts,
+  table: 'cli',
   columns: [
     { key: 'status', accessor: (i: CliInstance) => i.loggedIn },
     { key: 'name', accessor: (i: CliInstance) => i.name },
@@ -535,38 +530,6 @@ async function onCheckUsageFromPopover(inst: CliInstance) {
   void refreshCliInstances({ silent: true })
 }
 
-// The keepalive's switch (server/src/session-keepalive.ts): the same setting as in Settings, here
-// behind the table's gear.
-const {
-  keepaliveEnabled,
-  keepaliveWeeklyFloorPct,
-  loaded: settingsLoaded,
-  load: loadSettings,
-  update: updateSettings,
-} = useAppSettings()
-// A switch turned on runs a pass at once; its nudges reach the rows on a refresh 15 s later. One
-// pending refresh at a time, and none after the tab is left.
-let keepaliveRefresh: ReturnType<typeof setTimeout> | null = null
-const clearKeepaliveRefresh = (): void => {
-  if (keepaliveRefresh !== null) clearTimeout(keepaliveRefresh)
-  keepaliveRefresh = null
-}
-async function onKeepaliveSwitch(value: boolean) {
-  if (!(await updateSettings({ keepaliveEnabled: value }))) {
-    toast.error(t('cliInstances.keepaliveSaveFailed'))
-    return
-  }
-  clearKeepaliveRefresh()
-  if (value)
-    keepaliveRefresh = setTimeout(() => {
-      keepaliveRefresh = null
-      void refreshCliInstances({ silent: true })
-    }, 15_000)
-}
-async function onKeepaliveFloor(value: string | number) {
-  if (!(await updateSettings({ keepaliveWeeklyFloorPct: Number(value) })))
-    toast.error(t('cliInstances.keepaliveSaveFailed'))
-}
 /** A row's nudge note: shown while the window a nudge started still runs, or for six hours after a
  *  nudge that did not start one (it is tried again after an hour; the note says why it failed). */
 function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description: string } | null {
@@ -653,11 +616,7 @@ onMounted(() => {
   // there and nowhere else, so a row stays blank until something asks. Read now; lib/warm-data.ts
   // reads it again about every 2 minutes.
   void hydrateUsage()
-  if (!settingsLoaded.value) void loadSettings()
   if (desktopInstances.value.length === 0) void refreshInstances({ silent: true })
-})
-onUnmounted(() => {
-  clearKeepaliveRefresh()
 })
 </script>
 
@@ -689,61 +648,17 @@ onUnmounted(() => {
           />
         </template>
         <template #tools>
-          <!-- This table's own settings, behind a gear on the table (owner, 2026-10-01: a setting
-               lives on the page where he would look for it, and "Keep windows running" is a setting,
-               not a labelled switch across the header). The Popover root sits INSIDE the tooltip's
-               slot: see scripts/checks/reka-popper-root-inside-tooltip.mjs. -->
+          <!-- This table's settings (Keep windows running, its process columns) are in Desk's Settings,
+               Instances → CLI (owner, 2026-10-06): the gear opens them there. -->
           <IconTooltip :label="$t('cliInstances.tableSettings')">
-            <span class="inline-flex">
-              <Popover>
-                <PopoverTrigger as-child>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    :aria-label="$t('cliInstances.tableSettings')"
-                  >
-                    <Settings2 />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent align="end" class="w-64">
-                  <div class="flex items-center gap-1.5 text-xs">
-                    <label class="flex min-w-0 flex-1 cursor-pointer items-center justify-between gap-3">
-                      <span class="flex items-center gap-1.5">
-                        <Timer class="size-3.5 text-muted-foreground" />
-                        {{ $t('cliInstances.keepaliveSwitch') }}
-                      </span>
-                      <!-- Drawn once the setting is known: a switch that starts off and turns itself
-                           on a moment later reads as one that moved by itself (SUE round, 2026-10-01). -->
-                      <Switch
-                        v-if="settingsLoaded"
-                        :model-value="keepaliveEnabled"
-                        :aria-label="$t('cliInstances.keepaliveSwitch')"
-                        @update:model-value="onKeepaliveSwitch"
-                      />
-                      <Skeleton v-else class="h-4 w-7" />
-                    </label>
-                    <InfoHint
-                      :text="$t('cliInstances.keepaliveSwitchHint', { floor: keepaliveWeeklyFloorPct })"
-                    />
-                  </div>
-                  <!-- Its one number, here with it (it was in the Settings panel's Providers section). -->
-                  <div v-if="settingsLoaded && keepaliveEnabled" class="mt-2 flex items-center gap-1.5 text-xs">
-                    <label class="flex min-w-0 flex-1 items-center justify-between gap-3">
-                      {{ $t('settings.keepaliveFloorLabel') }}
-                      <Input
-                        class="w-16"
-                        type="number"
-                        min="0"
-                        max="100"
-                        :model-value="keepaliveWeeklyFloorPct"
-                        @update:model-value="onKeepaliveFloor"
-                      />
-                    </label>
-                    <InfoHint :text="$t('settings.keepaliveFloorHint')" />
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </span>
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('cliInstances.tableSettings')"
+              @click="openSettingsInDesk('cli')"
+            >
+              <Settings2 />
+            </Button>
           </IconTooltip>
           <!-- A cloud and nothing else (owner, 2026-10-01: "The login sync should just be the icon of
                a cloud"); its name is the tooltip. -->
@@ -826,19 +741,6 @@ onUnmounted(() => {
                   </span>
                 </IconTooltip>
                 <CliLimitResetIcon :result="inst.lastLimitReset" />
-                <!-- The keepalive started this window, or its last nudge did not (session-keepalive.ts). -->
-                <IconTooltip
-                  v-if="nudgeNotes.get(inst.id)"
-                  :label="nudgeNotes.get(inst.id)!.label"
-                  :description="nudgeNotes.get(inst.id)!.description"
-                >
-                  <span class="inline-flex items-center" :aria-label="nudgeNotes.get(inst.id)!.label">
-                    <Timer
-                      class="size-3.5"
-                      :class="nudgeNotes.get(inst.id)!.ok ? 'text-info' : 'text-warning'"
-                    />
-                  </span>
-                </IconTooltip>
                 <!-- Its login went to the other PC from here (cli-login-move.ts). -->
                 <IconTooltip
                   v-if="inst.movedAway"
@@ -863,6 +765,22 @@ onUnmounted(() => {
                   <span class="inline-flex items-center" :aria-label="$t('instances.usageCreditsOn')">
                     <CreditCard class="size-3.5 text-warning" />
                   </span>
+                </IconTooltip>
+              </template>
+              <!-- The keepalive started this 5-hour window, or its last nudge did not (session-keepalive.ts):
+                   a dot on the 5-hour counter, not an icon by the name (owner, 2026-10-06). -->
+              <template #session-mark>
+                <IconTooltip
+                  v-if="nudgeNotes.get(inst.id)"
+                  :label="nudgeNotes.get(inst.id)!.label"
+                  :description="nudgeNotes.get(inst.id)!.description"
+                >
+                  <span
+                    role="img"
+                    class="block size-2 rounded-full ring-2 ring-background"
+                    :class="nudgeNotes.get(inst.id)!.ok ? 'bg-info' : 'bg-warning'"
+                    :aria-label="nudgeNotes.get(inst.id)!.label"
+                  />
                 </IconTooltip>
               </template>
               <template #menu>

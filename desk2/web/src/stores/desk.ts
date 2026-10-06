@@ -233,7 +233,7 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   // Nothing answered (the browser says only "Failed to fetch"): the server is stopped or restarting.
   const res = await fetch(BASE_URL + path, init).catch((err: unknown) => {
-    throw new Error("Hydra Desk 2's server is not answering (it may be restarting)", { cause: err })
+    throw new Error("This window's server is not answering (it may be restarting)", { cause: err })
   })
   if (!res.ok) {
     const error = ((await res.json().catch(() => null)) as { error?: unknown } | null)?.error
@@ -491,7 +491,7 @@ function updateWindowTitle() {
   if (working > 0) parts.push(`${working} working`)
   if (needsYou > 0) parts.push(`${needsYou} need you`)
   const prefix = parts.length > 0 ? `(${parts.join(', ')}) ` : ''
-  document.title = `${prefix}Hydra Desk 2`
+  document.title = `${prefix}AgentHydra`
 }
 
 watch(

@@ -59,7 +59,7 @@ describe('Restart to update', () => {
   })
 
   test('a route the running server lacks reads as an old server, not a bare 404', () => {
-    expect(refusalText(404, 'no route POST /api/chats/c1/send-now')).toBe("Hydra Desk 2's server is older than this window: Menu > Restart to update")
+    expect(refusalText(404, 'no route POST /api/chats/c1/send-now')).toBe("This window's server is older than the window: Menu > Restart to update")
     expect(refusalText(404, 'no such chat')).toBe('no such chat')
     expect(refusalText(500, undefined)).toBeNull()
   })

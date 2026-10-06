@@ -207,7 +207,7 @@ export const agentHydraIcon = glyph([
 ])
 
 // Settings dialog nav, as the real Settings nav draws them: 16px outline glyphs.
-import { Activity, BellRing, CloudDownload, Info } from '@lucide/vue'
+import { Activity, BellRing, CloudDownload, Info, Monitor } from '@lucide/vue'
 
 export const settingsIcons = {
   general: Settings,
@@ -217,6 +217,10 @@ export const settingsIcons = {
   diagnostics: Activity,
   updates: CloudDownload,
   about: Info,
+  // Instances: the AgentHydra pane's three tables, with the icons of their tabs.
+  cli: Terminal,
+  desktop: Monitor,
+  free: MessagesSquare,
   search: Search
 } as const
 
@@ -245,8 +249,13 @@ function hairline(shapes: Shape[], strokeWidth = 1): FunctionalComponent {
 export const shellGlyphs = {
   menu: hairline([['path', { d: 'M1.5 3.5H14.5M1.5 8H14.5M1.5 12.5H8.5' }]]),
   sidebarToggle: hairline([['path', { d: 'M2.5 2.5H13.5V13.5H2.5ZM6.5 2.5V13.5' }]]),
-  back: hairline([['path', { d: 'M1.6 8H14.8M6.9 2.7L1.6 8L6.9 13.3' }]], 1.2),
-  forward: hairline([['path', { d: 'M1.2 8H14.4M9.1 2.7L14.4 8L9.1 13.3' }]], 1.2),
+  // The chrome bar's Clean sidebar button: rows of a dot and a title, nothing after them.
+  cleanSidebar: hairline([
+    ['circle', { cx: 2.75, cy: 4, r: 0.75 }],
+    ['circle', { cx: 2.75, cy: 8, r: 0.75 }],
+    ['circle', { cx: 2.75, cy: 12, r: 0.75 }],
+    ['path', { d: 'M5.5 4H13.5M5.5 8H11.5M5.5 12H12.5' }]
+  ]),
   modeChat: hairline([
     ['path', { d: 'M2.5 10.5H6A3.5 3.5 0 1 0 2.5 7Z' }],
     ['path', { d: 'M11 6.7A3.5 3.5 0 0 1 13.5 10V13.5H10A3.5 3.5 0 0 1 7.6 12.5' }]

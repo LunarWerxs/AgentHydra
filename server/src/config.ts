@@ -354,6 +354,17 @@ export const SERVICE_NAME = 'agenthydra'
 export const WEB_DIST_CANDIDATES = [join(APP_ROOT, 'web', 'dist')]
 
 /**
+ * AgentHydra 2.0's window (Hydra Desk 2, desk2/) when it is beside the daemon, as in a checkout: its
+ * launcher is the file the tray's Open `requires` too (misc/AgentHydra-Tray.json). Where it is, the old
+ * window is retired and a page asked of the daemon goes there (owner, 2026-10-06: Hydra Desk 2 "should
+ * be the only existence"). Null in a release zip until a release ships Desk 2: the daemon serves the old
+ * window there, the only one such an install has.
+ */
+export const DESK2_URL = existsSync(join(APP_ROOT, 'desk2', 'launcher', 'start.vbs'))
+  ? `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
+  : null
+
+/**
  * First-run outer size of the portable app window (what Chromium's `--window-size` takes).
  * Only applies to a window the dedicated profile has NEVER seen — the kit's
  * openPortableWindow probes the profile's saved placement first, so a size the user picked

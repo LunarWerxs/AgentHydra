@@ -11,6 +11,7 @@ import {
   Pencil,
   RefreshCw,
   SearchCheck,
+  Settings2,
   Trash2,
   TriangleAlert,
   X,
@@ -41,6 +42,7 @@ import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSo
 import { pii } from '@/composables/usePrivacy'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { timeAgo } from '@/lib/format'
+import { openSettingsInDesk } from '@/lib/desk-embed'
 import { freeApi, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import { type InstanceRowModel, instanceColumns } from '@/lib/instance-table'
@@ -52,7 +54,7 @@ const { instances, jobs, errors, loaded, loading, loadError, busy, run, logout, 
 /** Whether the table is unfolded, kept in this browser, as on the CLI tab. */
 const accountsOpen = useStorage('agenthydra.free.accountsOpen', true)
 // The tab-wide column mode and clock (composables/useUsageMode.ts), as the other tables read them.
-const { usageMode, now } = useUsageMode(true)
+const { usageMode, now } = useUsageMode(true, 'free')
 
 const providerName = (p: FreeProvider) =>
   t(p === 'claude' ? 'freeInstances.claude' : 'freeInstances.chatgpt')
@@ -74,6 +76,7 @@ const { toggleSort, indicatorFor, visibleRows, hiddenByFilter, isDimmed } = useI
   rows: () => instances.value,
   rowKey: (i: FreeInstance) => i.id,
   facts: (i: FreeInstance) => ({ usage: usageFor(i), signedIn: i.loggedIn }),
+  table: 'free',
   columns: [
     { key: 'status', accessor: (i: FreeInstance) => i.loggedIn },
     { key: 'name', accessor: (i: FreeInstance) => i.name },
@@ -358,6 +361,19 @@ async function onRenameSubmit(name: string) {
           <span v-if="hiddenByFilter > 0" class="text-xs font-normal text-muted-foreground">
             {{ $t('instances.filterHiddenCount', { count: hiddenByFilter }) }}
           </span>
+        </template>
+        <!-- This table's settings (its process columns) are in Desk's Settings, Instances → Free. -->
+        <template #tools>
+          <IconTooltip :label="$t('instances.settingsTitle')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('instances.settingsTitle')"
+              @click="openSettingsInDesk('free')"
+            >
+              <Settings2 />
+            </Button>
+          </IconTooltip>
         </template>
       </InstanceSectionHeader>
 

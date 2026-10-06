@@ -8,7 +8,7 @@
     "%VAR|fallback% supplies a default, and a leading ~ is the user profile. That is what lets one",
     "committed config serve both a source checkout and an extracted release zip with no setup step.",
     "",
-    "Open shows Hydra Desk 2, AgentHydra's window from 2026-10-06 (owner): openCommand runs its",
+    "Open shows AgentHydra 2.0's window (desk2/, called Hydra Desk 2 until 2026-10-06): openCommand runs its",
     "launcher, which starts Desk 2's server when it is down and opens or focuses its window. The",
     "launcher in turn starts this tray (--background), so either one brings up the other. Where",
     "desk2/ is not beside misc/ (a release zip until it ships Desk 2), `requires` keeps Open on the",

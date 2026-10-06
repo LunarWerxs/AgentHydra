@@ -33,6 +33,7 @@ import {
   DATA_DIR,
   DATA_DIR_NOTICE,
   DB_PATH,
+  DESK2_URL,
   HOST,
   IS_COMPILED,
   noAutoOpen,
@@ -920,14 +921,24 @@ app.post('/api/shutdown', (c) => {
   return c.json({ ok: true })
 })
 
-// --- serve the built SPA (single-process / production) ----------------------
+// --- the window ---------------------------------------------------------------
+// AgentHydra 2.0 (owner, 2026-10-06): where Desk 2 is beside the daemon (config.ts DESK2_URL), the old
+// window is retired. A page asked of the daemon, the Connections sign-in's return included, goes on to
+// Desk 2 with its query; /api stays the daemon's. Elsewhere (a release zip until it ships Desk 2) the
+// daemon serves the old window, the built SPA below.
 const embeddedWeb = (
   globalThis as {
     __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
   }
 ).__AGENTHYDRA_EMBEDDED_WEB__
 const dist = WEB_DIST_CANDIDATES.find((p) => existsSync(p))
-if (embeddedWeb) {
+if (DESK2_URL) {
+  app.get('/*', (c) => {
+    const url = new URL(c.req.url)
+    if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)
+    return c.redirect(`${DESK2_URL}/${url.search}`, 302)
+  })
+} else if (embeddedWeb) {
   app.get('/*', async (c) => {
     let pathname = decodeURIComponent(new URL(c.req.url).pathname)
     if (pathname === '/' || pathname === '') pathname = '/index.html'

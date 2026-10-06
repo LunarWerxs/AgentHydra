@@ -2,7 +2,8 @@
 // The one instance row: every table's rows (Claude desktop, Claude CLI, Codex, DeepSeek) are this
 // component, drawing the cells their table's column list names (lib/instance-table.ts) from one
 // InstanceRowModel. What differs per kind comes in as slots: `name-extra` (icons after the name),
-// `account-extra` (after the name and its stale-login mark), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
+// `account-extra` (after the name and its stale-login mark), `session-mark` (a dot on the 5-hour counter, as a
+// notification dot sits on an icon), `primary` (the action buttons) and `menu` (the items under the ⋯ menu's header).
 import LazyOverlay from '@/components/ui/lazy/LazyOverlay.vue'
 import { EllipsisVertical, TriangleAlert } from '@lucide/vue'
 import { computed, ref } from 'vue'
@@ -185,13 +186,16 @@ function onContextMenu(e: MouseEvent): void {
            mattering. A row with no quota (a pay-as-you-go key) says so in a dash's hover. -->
       <TableCell v-else-if="col.key === 'session'">
         <div v-if="row.usage" class="flex items-center gap-1.5">
-          <UsageBadge
-            scope="session"
-            :snapshot="row.usage.snapshot"
-            :checking="row.usage.checking"
-            :usage-key="row.usage.key"
-            @check="row.usage.onCheck()"
-          />
+          <span class="relative inline-flex">
+            <UsageBadge
+              scope="session"
+              :snapshot="row.usage.snapshot"
+              :checking="row.usage.checking"
+              :usage-key="row.usage.key"
+              @check="row.usage.onCheck()"
+            />
+            <span v-if="$slots['session-mark']" class="absolute -right-1 -top-1 flex"><slot name="session-mark" /></span>
+          </span>
           <UsageBar
             v-if="sessionReset"
             :fill-pct="sessionRemaining"
@@ -227,14 +231,17 @@ function onContextMenu(e: MouseEvent): void {
         <span v-else class="text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>
 
+      <!-- Process columns have no 5-hour counter: the session mark sits on this one. -->
       <TableCell v-else-if="col.key === 'usage'">
-        <UsageBadge
-          v-if="row.usage"
-          :snapshot="row.usage.snapshot"
-          :checking="row.usage.checking"
-          :usage-key="row.usage.key"
-          @check="row.usage.onCheck()"
-        />
+        <span v-if="row.usage" class="relative inline-flex">
+          <UsageBadge
+            :snapshot="row.usage.snapshot"
+            :checking="row.usage.checking"
+            :usage-key="row.usage.key"
+            @check="row.usage.onCheck()"
+          />
+          <span v-if="$slots['session-mark']" class="absolute -right-1 -top-1 flex"><slot name="session-mark" /></span>
+        </span>
         <span v-else class="text-xs text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>
 

@@ -1058,7 +1058,7 @@ file present answered `loggedIn: false`).
 
 When a signed-in CLI account has no 5-hour window running (its reading has no reset time, or the
 reset is in the past), the keepalive sends it one cheap prompt so the window starts now and resets
-sooner. Off by default (it spends quota); on in the CLI table's gear ("Keep windows running", with its weekly floor).
+sooner. Off by default (it spends quota); on in **Settings → Instances → CLI** ("Keep windows running", with its weekly floor; the CLI table's gear opens it).
 
 - A nudge: `claude -p 'Reply with the single word: ok' --system-prompt <one line> --model haiku
   --effort low --max-turns 1 --tools '' --disable-slash-commands --no-session-persistence

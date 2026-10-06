@@ -1,4 +1,4 @@
-' What the Hydra Desk 2 shortcut runs: start.ps1 through a hidden PowerShell, so no console window
+' What the AgentHydra shortcut runs: start.ps1 through a hidden PowerShell, so no console window
 ' ever flashes (a shortcut straight to "powershell -WindowStyle Hidden" shows one for a moment
 ' before PowerShell can hide it). Arguments are passed through, e.g. start.vbs -DryRun.
 Dim sh, fso, here, args, i

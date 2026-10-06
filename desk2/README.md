@@ -1,19 +1,45 @@
-# Hydra Desk 2
+# AgentHydra 2.0 (Hydra Desk 2)
 
-Hydra Desk 2 is Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things
-on without touching Jacob's app. It runs beside it: port 7798, data in `~/.hydra-desk-2/`, its own
-window (`launcher/HydraDesk2.exe`, WebView2 data in `%LOCALAPPDATA%\HydraDesk2\webview`), and its own **Hydra Desk 2** shortcut
-(`launcher/install-shortcuts.ps1`). Everything below is Hydra Desk's own description, with the ports
-and folders changed to Desk 2's.
+This folder is AgentHydra's window: AgentHydra 2.0, called Hydra Desk 2 until 2026-10-06 (owner: "HydraDesk
+is no longer called HydraDesk. It is now called AgentHydra"). Its window, its **AgentHydra** shortcut
+(`launcher/install-shortcuts.ps1`, which also sends the old "Hydra Desk 2" shortcuts to the Recycle Bin)
+and its messages say AgentHydra; the folder and the internal names keep Desk 2's: `desk2/`, port 7798,
+data in `~/.hydra-desk-2/`, the window host `launcher/HydraDesk2.exe` (WebView2 data in
+`%LOCALAPPDATA%\HydraDesk2\webview`). The daemon on 7787 no longer shows the old window where this folder
+is beside it: a page asked of it goes on to this window (`server/src/index.ts`, `DESK2_URL`).
+
+It began as Michael's copy of Jacob's [Hydra Desk](../desk), made on 2026-10-04 to try new things on
+without touching Jacob's app. Everything below is Hydra Desk's own description, with the ports and
+folders changed to Desk 2's.
 
 ## What Desk 2 adds
 
 A first, quick version of each, to see whether the direction is right. The layout is Desk's own: the
 sidebar on the left stays put, and only the pane on the right changes.
 
+- **A clean sidebar, and no Back and Forward arrows** (owner, 2026-10-06). The chrome bar holds Menu, Hide
+  sidebar, AgentHydra, Cloud, CliMayte and Clean sidebar; Alt + Left / Right still go back and forward.
+  Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves each row's account number, its
+  time since the last activity, a working chat's elapsed time and the AgentHydra lists' detail and time
+  out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
+- **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
+  Instances has a page per table: CLI (the Claude CLI table shown, its process columns, Keep windows
+  running and its weekly floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI,
+  DeepSeek; its process columns; paid extra usage; Claude native control) and Free (its process columns).
+  Each table's gear opens its page over the table (`ah:open-settings`; Settings, a pop-up, leaves the pane open); the pane's own popover, its "Instances settings"
+  dialog and its toolbar column toggle are gone. "Show process columns" is each table's own now
+  (`hydra/src/composables/useUsageMode.ts`, `USAGE_MODE_KEYS`; Desk writes the same keys,
+  `web/src/components/panes/instances.ts`). The pane's header gear beside Discord is gone too: Desk's
+  Settings gear, bottom left, carries the "a newer AgentHydra is waiting" dot (`ah:update-dot`) and opens
+  on Updates while it shows.
+- **CLI rows: a dot for a window AgentHydra started, no icon for no reset** (owner, 2026-10-06). A 5-hour
+  window the keepalive started is a dot on the row's 5-hour counter, like a notification dot (blue; amber
+  when its last nudge failed), not a timer by the name (`InstanceRow.vue`'s `session-mark` slot). An account
+  offered no limit reset shows no reset icon.
+
 - **Servers and a small browser beside the chat, like Claude Code Desktop's.** The title bar's Browser button opens a right pane (wider than Changes, drag its left edge to resize, the width is remembered) with a Servers | Browser switch in its header, always there. Servers lists this chat's localhost servers, centred in the pane: a status dot, name, port, Start / Stop / Restart, Open for one that runs, the last output of one that crashed, Start all / Stop all, and below them the servers other folders have running ("Also running", Open / Stop). Browser is the page: an address bar, back, forward, reload and open in the system browser, and before anything is opened "No page open" with a button for each server that answers. Open shows a server there, and Start opens it as soon as it answers; the header then has the server's name and Stop, and a stopped server shows "X is stopped" with Start over the page. "Open an address, or a port" at the bottom opens any address. The chat's folder needs no Add step: `POST /dw/folder {cwd}` (`server/src/devwebui/folder.ts`) uses the project DevWebUI already has for that folder, or sets one up from Claude Code's `.claude/launch.json` (its preview servers: `runtimeExecutable`/`runtimeArgs` or `program`, `port`, `cwd`, `env`) or else package.json's dev scripts, every server left stopped, and adds the `.devwebui` file it writes to the repo's `.git/info/exclude` so it never shows in git status; a folder with neither says so, with Look again. The servers come from DevWebUI (`../devwebui`), found through `DEVWEBUI_URL` or its `runtime.json` pointer and started hidden by `server/src/plugins/50-devwebui.ts` when the pane is opened and none answers (log in `~/.hydra-desk-2/logs/devwebui.log`; it keeps running when Desk 2 exits). `/dw/api/*` goes on to the daemon only for Desk 2's own page, with DevWebUI's local credential added server-side; `GET /dw/status` says running, starting, stopped or failed. A Desk 2 server started before this existed shows "Restart Hydra Desk 2 to turn on servers".
 - **AgentHydra inside the window, Desk 2's own copy of it.** The AgentHydra button in the chrome bar,
-  after Back and Forward (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
+  after Hide sidebar (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
   HSwarm it is HSwarm's tree alone (`hydra/src/components/HSwarmView.vue`), Routing and CliMayte two of its
   nodes (CliMayte after Jobs; owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm sidebar.
@@ -423,7 +449,7 @@ which the server on 7798 serves; the launcher's window needs that build. `bun te
 `bun run e2e:gestures` (after `bun run build`) starts the built window as a hidden server on 7819 with a
 throwaway home and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
 long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
-sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 39
+sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 31
 cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
 `GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
 any change to a tooltip, menu, popover, sidebar row or lazy overlay.

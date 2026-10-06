@@ -1,4 +1,4 @@
-# Opens Hydra Desk 2 as its own app window, starting the server first when it is not already up.
+# Opens AgentHydra (called Hydra Desk 2 until 2026-10-06) as its own app window, starting the server first when it is not already up.
 #
 #   1. GET http://127.0.0.1:7798/api/health. Answers = the server is up, skip to 4.
 #   2. Otherwise start `bun server/src/index.ts` from the desk folder, hidden and through WMI (outside the
@@ -59,7 +59,7 @@ function Fail([string]$msg) {
   if ($NoDialog -or $DryRun) { [Console]::Error.WriteLine($msg) }
   else {
     # 16 = stop icon. WScript.Shell's Popup needs no WinForms load and shows on the hidden launcher.
-    (New-Object -ComObject WScript.Shell).Popup($msg, 0, 'Hydra Desk 2', 16) | Out-Null
+    (New-Object -ComObject WScript.Shell).Popup($msg, 0, 'AgentHydra', 16) | Out-Null
   }
   exit 1
 }
@@ -124,9 +124,9 @@ function Find-Bun {
 
 function Start-Server {
   $bun = Find-Bun
-  if (-not $bun) { Fail "Hydra Desk 2 could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again." }
+  if (-not $bun) { Fail "AgentHydra could not start: bun is not on PATH.`n`nInstall it from https://bun.sh and try again." }
   $entry = Join-Path $DeskRoot 'server\src\index.ts'
-  if (-not (Test-Path $entry)) { Fail "Hydra Desk 2 could not start: $entry is missing." }
+  if (-not (Test-Path $entry)) { Fail "AgentHydra could not start: $entry is missing." }
 
   New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
   Add-Content -Path $ServerLog -Value ("`r`n==== {0} start.ps1: bun server/src/index.ts on port {1} ====" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Port) -Encoding UTF8
@@ -272,7 +272,7 @@ try {
       $tail = ''
       if (Test-Path $ServerLog) { $tail = (Get-Content -Path $ServerLog -Tail 8 -ErrorAction SilentlyContinue) -join "`n" }
       $why = if ($wrapper -and $wrapper.HasExited) { 'stopped before it answered' } else { "did not answer within $HealthTimeoutSec seconds" }
-      Fail ("Hydra Desk 2's server $why on $HealthUrl.`n`n" +
+      Fail ("AgentHydra's server $why on $HealthUrl.`n`n" +
         "Log: $ServerLog`n`nLast lines:`n$tail")
     }
     Say "server healthy on $Url"
@@ -284,7 +284,7 @@ try {
   Start-Tray
   if ($NoWindow) { return }
 
-  if (-not (Test-Path -LiteralPath $HostExe)) { Fail "Hydra Desk 2's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }
+  if (-not (Test-Path -LiteralPath $HostExe)) { Fail "AgentHydra's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }
   if ($FirstRun) { Close-OldWindow }
   Start-Process -FilePath $HostExe -ArgumentList @("--url", $Url) -WorkingDirectory $PSScriptRoot | Out-Null
   Say "ran $HostExe on $Url$(if ($FirstRun) { ' (first run)' })"

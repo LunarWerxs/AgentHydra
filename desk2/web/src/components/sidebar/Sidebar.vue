@@ -14,7 +14,7 @@ const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue
 import { actionError } from '@/lib/action-error'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
-import { hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
+import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { EyeOff } from '@lucide/vue'
 import TaskRows from './TaskRows.vue'
@@ -101,7 +101,7 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-// 240, not the real app's 220: the chrome bar over it carries Hydra Desk 2's three extra buttons.
+// 240, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's four extra buttons.
 const MIN_WIDTH = 240
 const MAX_WIDTH = 420
 
@@ -865,9 +865,16 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <component :is="icons.more" class="ml-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
-      <Tip label="Settings" side="top">
-        <button type="button" aria-label="Settings" class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text" @click="src.openSettings()">
+      <Tip :label="ahUpdateDot ? 'Settings: an AgentHydra update is waiting' : 'Settings'" side="top">
+        <button
+          type="button"
+          aria-label="Settings"
+          :aria-description="ahUpdateDot ? 'An AgentHydra update is waiting' : undefined"
+          class="relative flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text"
+          @click="src.openSettings()"
+        >
           <component :is="sidebarIcons.footer" class="size-4" />
+          <span v-if="ahUpdateDot" class="absolute right-0.5 top-0.5 size-1.5 rounded-full bg-accent" aria-hidden="true" />
         </button>
       </Tip>
     </footer>

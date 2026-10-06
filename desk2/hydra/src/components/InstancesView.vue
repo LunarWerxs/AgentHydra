@@ -4,7 +4,6 @@ import {
   ArrowRightLeft,
   Boxes,
   Coins,
-  Cpu,
   CreditCard,
   Eraser,
   FolderOpen,
@@ -18,9 +17,9 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Settings2,
   Square,
   Terminal,
-  Timer,
   Trash2,
   TriangleAlert,
   Unlink,
@@ -41,11 +40,9 @@ import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
-import InstanceSettings from '@/components/InstanceSettings.vue'
 import InstanceTable from '@/components/InstanceTable.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
-import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import type { Provider } from '@/components/ProviderLogo.vue'
 import QuitExternalInstanceDialog from '@/components/QuitExternalInstanceDialog.vue'
 import { Button } from '@/components/ui/button'
@@ -82,6 +79,7 @@ import { privacyMode, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import type { ChatListRow, CliInstance, CMDesktopInstall, CMInstance } from '@/lib/api'
+import { openSettingsInDesk } from '@/lib/desk-embed'
 import {
   CLASSIC_DESKTOP_INSTALLER_URL,
   DESKTOP_DOWNLOAD_PAGE_URL,
@@ -154,7 +152,7 @@ const { resetBankedHint, codeCreditFor, codeCreditLabel, codeCreditHint, usageCr
 // QUOTA columns ("how much is left, and when does it come back?"). See composables/useUsageMode.ts
 // for why it's a mode rather than a per-column picker. `now` is the shared clock every countdown
 // cell in both tables formats against, so the whole tab ticks together.
-const { usageMode, toggle: toggleUsageMode, now } = useUsageMode(true)
+const { usageMode, now } = useUsageMode(true)
 
 // The sort survives a reload: persisted through useUiPrefs. It orders the Claude rows; the Codex
 // and DeepSeek rows below them keep their own order.
@@ -546,8 +544,6 @@ interface ProviderRowsHandle {
   /** Rows the filter took out of this provider (Codex says so; DeepSeek filters none). */
   hiddenByFilter?: number
 }
-/** The gear's dialog: this tab's own settings (InstanceSettings.vue). */
-const instanceSettingsOpen = ref(false)
 const codexRows = ref<ProviderRowsHandle | null>(null)
 const dshRows = ref<ProviderRowsHandle | null>(null)
 
@@ -1361,23 +1357,6 @@ onUnmounted(() => {
           </span>
         </template>
         <template #tools>
-          <!-- Usage mode: swaps the process columns for the quota ones across the whole tab. Pressed
-               (secondary) while on, so the toolbar itself says which set of columns you're looking
-               at — the glyph flips too, from a stopwatch (quota/time-to-reset) to a chip (process). -->
-          <IconTooltip
-            :label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-            :description="$t('instances.usageModeHint')"
-          >
-            <Button
-              :variant="usageMode ? 'secondary' : 'outline'"
-              size="icon"
-              :aria-pressed="usageMode"
-              :aria-label="usageMode ? $t('instances.usageModeOff') : $t('instances.usageModeOn')"
-              @click="toggleUsageMode"
-            >
-              <component :is="usageMode ? Cpu : Timer" />
-            </Button>
-          </IconTooltip>
           <!-- Always here, in both column modes: status and plan are true whichever columns are on
                screen, and only the QUOTA facet stands down with them (see
                composables/useInstanceFilter.ts). A dimmed or short table must always have the
@@ -1400,13 +1379,18 @@ onUnmounted(() => {
               <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
             </Button>
           </IconTooltip>
-          <PageSettingsDialog
-            v-model:open="instanceSettingsOpen"
-            trigger
-            :title="$t('instances.settingsTitle')"
-          >
-            <InstanceSettings />
-          </PageSettingsDialog>
+          <!-- This table's settings (which tables show, paid extra usage, Claude native control, its
+               process columns) are in Desk's Settings, Instances → Desktop (owner, 2026-10-06). -->
+          <IconTooltip :label="$t('instances.settingsTitle')">
+            <Button
+              variant="outline"
+              size="icon"
+              :aria-label="$t('instances.settingsTitle')"
+              @click="openSettingsInDesk('desktop')"
+            >
+              <Settings2 />
+            </Button>
+          </IconTooltip>
         </template>
       </InstanceSectionHeader>
 

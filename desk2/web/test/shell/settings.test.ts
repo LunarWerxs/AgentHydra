@@ -36,12 +36,15 @@ describe('settings search', () => {
 
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
-    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual(['general', 'alerts', 'climayte', 'connections', 'diagnostics', 'updates', 'about'])
+    expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
+      'general', 'alerts', 'climayte', 'connections', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+    ])
     expect(stepSection('general', 'ArrowDown')).toBe('alerts')
-    expect(stepSection('general', 'ArrowUp')).toBe('about')
-    expect(stepSection('about', 'ArrowRight')).toBe('general')
+    expect(stepSection('about', 'ArrowDown')).toBe('cli')
+    expect(stepSection('general', 'ArrowUp')).toBe('free')
+    expect(stepSection('free', 'ArrowRight')).toBe('general')
     expect(stepSection('climayte', 'Home')).toBe('general')
-    expect(stepSection('general', 'End')).toBe('about')
+    expect(stepSection('general', 'End')).toBe('free')
     expect(stepSection('general', 'a')).toBeNull()
   })
 })

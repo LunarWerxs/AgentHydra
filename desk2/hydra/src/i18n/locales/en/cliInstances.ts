@@ -75,8 +75,6 @@ export default {
   limitResetUsedHint: 'Available again {date}. Checked {ago}.',
   limitResetDoneLabel: 'Limit reset used {ago}',
   limitResetDoneHint: 'Next one available {date}.',
-  limitResetNoneLabel: 'No limit reset',
-  limitResetNoneHint: 'Checked {ago}.',
   limitResetUnknownDate: 'later',
   delete: 'Delete',
   nameLabel: 'Instance name',
@@ -128,13 +126,8 @@ export default {
   clearUsage: 'Clear usage stats',
   toastUsageCleared: 'Usage stats cleared. The next check shows new numbers; nothing was deleted.',
   toastUsageClearFailed: 'Could not clear the usage stats.',
-  // The table's gear, and the keepalive's switch inside it (server/src/session-keepalive.ts; also
-  // in Settings).
-  tableSettings: 'CLI settings',
-  keepaliveSwitch: 'Keep windows running',
-  keepaliveSwitchHint:
-    'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku, one word back, about two cents at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
-  keepaliveSaveFailed: 'Could not change the setting.',
+  // The table's gear: its settings are in Desk's Settings, Instances → CLI.
+  tableSettings: 'Settings',
   // A row's nudge note (lastNudge from GET /api/cli-instances).
   nudgedLabel: 'Window started by AgentHydra {ago}',
   nudgedHint: 'It resets {when}. {model}, {cost} at API prices.',

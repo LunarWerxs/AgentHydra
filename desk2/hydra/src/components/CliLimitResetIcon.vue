@@ -2,8 +2,9 @@
 // The reset icon beside a CLI account's name, the counterpart of the desktop table's banked-reset
 // icon. It shows only what the CLI itself said the last time `/limit-reset` ran here (the usage
 // endpoint will not say for a CLI login), from a person's run or the daily background check: a
-// reset available or used just now (green), this week's already spent (grey, with when it comes
-// back), or none offered (muted). Nothing is shown before the first run.
+// reset available or used just now (green), or this week's already spent (grey, with when it comes
+// back). Nothing is shown before the first run, nor for an account offered no reset (owner,
+// 2026-10-06: "if a CLI has no limit reset, don't show an icon").
 import { RotateCcw } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -18,15 +19,9 @@ const { now } = useUsageMode()
 
 const view = computed(() => {
   const r = props.result
-  if (!r || r.outcome === 'error') return null
+  if (!r || r.outcome === 'error' || r.outcome === 'unavailable') return null
   const date = r.nextAvailable ?? t('cliInstances.limitResetUnknownDate')
   const ago = formatAgo(now.value.getTime(), r.at)
-  if (r.outcome === 'unavailable')
-    return {
-      tone: 'text-muted-foreground/60',
-      label: t('cliInstances.limitResetNoneLabel'),
-      hint: t('cliInstances.limitResetNoneHint', { ago }),
-    }
   if (r.outcome === 'available')
     return {
       tone: 'text-success',

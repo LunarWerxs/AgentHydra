@@ -5,8 +5,6 @@ export default {
   deskInstanceMissing: 'Instance #{num} is not in the Instances tables',
   tabInstances: 'Instances',
   queue: 'Queue',
-  settings: 'Settings',
-  settingsUpdateAvailable: 'Settings: an update is available',
   discord: 'Join the LunarWerx Discord',
   shellFullWidth: 'Use the full window width',
   shellFitWidth: 'Back to the centered width',

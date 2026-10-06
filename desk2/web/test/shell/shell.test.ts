@@ -168,7 +168,7 @@ describe('condensed account popup', () => {
     const a = account('35', { fiveHourPct: 6, weeklyPct: 43, fiveHourResetsAt: now + 47 * 60_000, inUse: true })
     const [row] = accountRows([a], [chat('x', { account: { id: '35', label: '#35', configDir: null } })], 'auto').slice(1)
     const tip = rowTip(row!, now)
-    expect(tip).toBe('5-hour 6%, resets in 47m\nWeekly 43%\nIn use by a person or another session\n1 live Hydra Desk chat')
+    expect(tip).toBe('5-hour 6%, resets in 47m\nWeekly 43%\nIn use by a person or another session\n1 live chat in this window')
     expect(row!.label).toBe('#35 sue')
     expect(tip + row!.label).not.toContain('@')
     expect(rowTip(accountRows([account('7', { signedIn: false })], [], 'auto')[1]!, now)).toStartWith('Signed out')

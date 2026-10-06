@@ -24,14 +24,22 @@ const SWITCHES: Partial<Record<SettingsRowId, BoolKey>> = {
   ahEmail: 'notifyEmail',
   ahSmtpSecure: 'notifySmtpSecure',
   ahMcp: 'mcpRegisterClaudeCode',
-  ahTray: 'hideTrayIcon'
+  ahTray: 'hideTrayIcon',
+  ahShowCli: 'showCliInstances',
+  ahKeepalive: 'keepaliveEnabled',
+  ahShowDesktop: 'showDesktopInstances',
+  ahShowCodexDesktop: 'codexDesktopEnabled',
+  ahShowCodexCli: 'codexCliEnabled',
+  ahShowDsh: 'dshEnabled',
+  ahExtraUsage: 'allowExtraUsage'
 }
 const NUMBERS: Partial<Record<SettingsRowId, { key: NumKey; min: number; max: number; unit: string }>> = {
   ahMinPct: { key: 'notifyMinPct', min: 0, max: 100, unit: '%' },
   ahSessionMaxWeekly: { key: 'notifySessionMaxWeeklyPct', min: 0, max: 100, unit: '%' },
   ahInterval: { key: 'notifyPersistentIntervalMin', min: 1, max: 1440, unit: 'minutes' },
   ahRepeats: { key: 'notifyPersistentMaxRepeats', min: 0, max: 200, unit: 'reminders' },
-  ahSmtpPort: { key: 'notifySmtpPort', min: 1, max: 65535, unit: '' }
+  ahSmtpPort: { key: 'notifySmtpPort', min: 1, max: 65535, unit: '' },
+  ahKeepaliveFloor: { key: 'keepaliveWeeklyFloorPct', min: 0, max: 100, unit: '%' }
 }
 const TEXTS: Partial<Record<SettingsRowId, { key: TextKey; type: string }>> = {
   ahEmailTo: { key: 'notifyEmailTo', type: 'email' },

@@ -5,30 +5,35 @@ import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
-import { ITEM, MENU } from '@/components/composer/menu'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { settingsIcons } from '@/lib/icons'
 import { usePaneApi } from './api'
-import { BUTTON } from './settings-styles'
-import { SETTINGS_SECTIONS, settingsGroups, stepSection, switchPatch, type SettingsSection } from './settings'
+import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
+import { SETTINGS_SECTIONS, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
+import { ahUpdateDot, seeAhUpdateDot } from '@/components/hydra/api'
 import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
+import { useInstanceSettings } from './instances'
+import InstancesControl from './InstancesControl.vue'
 
 // The body of the Settings dialog, laid out like the real Settings (docs/reference/real/user/
 // real-settings-claude-code.webp) without its account, billing and connector pages: a darker nav with
 // Search and captioned section rows on the left; on the right bold group headings over rows of a label,
 // a wrapping muted description and the control, split by hairlines. Below 640px the nav is a pill row.
-// The `ah` rows are AgentHydra's own settings (agenthydra.ts, AgentHydraControl.vue).
+// The `ah` rows are AgentHydra's own settings (agenthydra.ts, AgentHydraControl.vue); the Instances pages'
+// process columns and Claude native control are instances.ts (InstancesControl.vue).
 const api = usePaneApi()
 const src = useShellSource()
 const ah = useAgentHydraSettings(api)
+const inst = useInstanceSettings(api, ah)
 
 const section = ref<SettingsSection>('general')
 const query = ref('')
 const searching = computed(() => query.value.trim() !== '')
-const groups = computed(() => settingsGroups(section.value, query.value, ah.holds))
+const holds = (c: SettingsCondition) => (c === 'native' ? !!inst.nativeConfig.value : ah.holds(c))
+const groups = computed(() => settingsGroups(section.value, query.value, holds))
 const isAh = (id: string) => id.startsWith('ah')
 // Every Desk row but About's needs the saved settings.
 const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id))))
@@ -36,10 +41,6 @@ const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) =>
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
 
-const TRIGGER =
-  'h-7 w-48 gap-1 rounded-[var(--radius-6)] border-0 bg-fill-5 px-2 text-[13px] leading-[19px] text-text shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover data-[state=open]:bg-fill-hover focus-visible:ring-0 focus-visible:shadow-[var(--focus-ring)]'
-const CONTENT = MENU + ' border-0'
-const SELECT_ITEM = ITEM + ' pr-8 text-text focus:text-text'
 const SEGMENTS = 'flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px'
 const SEGMENT =
   'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-[13px] leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
@@ -135,7 +136,7 @@ async function testNotification() {
     notifyNote.value = 'Notifications are blocked for this window.'
     return
   }
-  new Notification('Hydra Desk', { body: 'Notifications work. You will see one when a chat finishes or needs you.' })
+  new Notification('AgentHydra', { body: 'Notifications work. You will see one when a chat finishes or needs you.' })
   notifyNote.value = 'Sent.'
 }
 
@@ -166,7 +167,11 @@ function pick(id: SettingsSection) {
   section.value = id
   query.value = ''
 }
-// Another part of Desk asked for a section (the AgentHydra pane's gear asks for Updates).
+// A newer AgentHydra is waiting (the footer gear's dot, hydra/api.ts): Settings opens on Updates, and
+// seeing Updates clears the dot. A section another part of Desk asked for comes first.
+if (ahUpdateDot.value) pick('updates')
+watch(section, (id) => id === 'updates' && seeAhUpdateDot(), { immediate: true })
+// Another part of Desk asked for a section (settings-request.ts).
 watch(
   requestedSection,
   (id) => {
@@ -215,6 +220,15 @@ watch(
   showsUpdate,
   (on) => {
     if (on && !ah.update.value && !ah.checking.value) void ah.checkUpdate()
+  },
+  { immediate: true }
+)
+// Claude native control reads its accounts and settings when its rows are first on screen.
+const showsNative = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahNativeAuto')))
+watch(
+  showsNative,
+  (on) => {
+    if (on) void inst.loadNative()
   },
   { immediate: true }
 )
@@ -334,9 +348,11 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-[19px] text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
+                <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 break-words text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
               </div>
 
-              <AgentHydraControl v-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
+              <InstancesControl v-if="inst.owns(r.id)" :id="r.id" :label="r.label" :inst="inst" />
+              <AgentHydraControl v-else-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
               <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-[19px] text-text-2">{{ version ? `v${version}` : '…' }}</span>
               <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-[19px] text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}

@@ -1,7 +1,8 @@
 // Instances view — sortable instance table, toolbar, row actions, create dialog.
 export default {
   title: 'Instances',
-  settingsTitle: 'Instances settings',
+  // The table's gear: its settings are in Desk's Settings, Instances → Desktop.
+  settingsTitle: 'Settings',
   refresh: 'Refresh',
   refreshHint: 'Reload every instance list and re-check the Claude Desktop install',
   createInstance: 'Create instance',
@@ -170,10 +171,6 @@ export default {
     'This is your real, non-isolated Claude Desktop, not an instance created here. Quitting it closes any conversation in progress.',
   quitExternalDialogSubmit: 'Quit it anyway',
   quitExternalDialogQuitting: 'Quitting…',
-  usageModeOn: 'Show usage columns',
-  usageModeOff: 'Show process columns',
-  usageModeHint:
-    'Swap PID, uptime and memory for what is left of each quota window and how long until it resets.',
   // The Filter flyout (toolbar) — three facets, OR-ed. See composables/useInstanceFilter.ts.
   filterTitle: 'Filter',
   filterHint:

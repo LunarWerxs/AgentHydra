@@ -9,7 +9,6 @@ import {
   Minimize2,
   Monitor,
   RotateCw,
-  Settings2,
   Terminal,
 } from '@lucide/vue'
 import {
@@ -61,6 +60,7 @@ import {
   resendSidebar,
   setDeskView,
   showSessionsInDesk,
+  showUpdateDotInDesk,
 } from '@/lib/desk-embed'
 import { refreshForView } from '@/lib/warm-data'
 import { startWarmData } from '@/lib/warm-kinds'
@@ -231,28 +231,14 @@ useShortcuts([
 ])
 
 // The queue drawer docks on the right edge. Settings are Desk's (its Settings dialog holds this
-// window's settings since 2026-10-06), so the gear asks Desk to open them.
+// window's settings since 2026-10-06), and this window has no gear of its own: Desk's Settings gear,
+// bottom left, is always there (owner, 2026-10-06).
 const { queueOpen, automationOpen } = usePanels()
-// The passive "a newer version exists" signal — see the dot on the Settings button below.
-const {
-  updateAvailable,
-  showUpdateDot,
-  dismissUpdateDot,
-  startAvailabilityPolling,
-  stopAvailabilityPolling,
-} = useUpdates()
-
-/**
- * Opening Settings from the header button: Desk's Settings dialog. With an update waiting it opens on
- * Updates, since the dot is the only thing saying a new version exists and the click it invites should
- * land on the answer; the dot then goes quiet for the rest of this run. Next launch it comes back,
- * because the update is still there.
- */
-function onSettingsButton() {
-  const update = showUpdateDot.value
-  if (update) dismissUpdateDot()
-  openSettingsInDesk(update ? 'updates' : undefined)
-}
+// The passive "a newer version exists" signal. Its dot sits on Desk's Settings gear, the door to the
+// update controls: a newer version is not urgent, but it has to be visible without going looking for
+// it. Desk opens Settings on Updates while it shows, and quiets it for the rest of its run.
+const { showUpdateDot, startAvailabilityPolling, stopAvailabilityPolling } = useUpdates()
+watch(showUpdateDot, (on) => showUpdateDotInDesk(on), { immediate: true })
 const anyPanelOpen = computed(() => queueOpen.value)
 const { fullWidth } = useShellWidth()
 // widthPx drives the content shift, the --content-inset-right var, and both panels'
@@ -593,12 +579,6 @@ onUnmounted(stopAvailabilityPolling)
         >
           <component :is="fullWidth ? Minimize2 : Maximize2" />
         </Button>
-        <!-- The update hint lives HERE, on the button that leads to the update controls, rather
-             than as a banner or a toast. A newer version is not urgent — it does not want the
-             screen — but it does have to be visible without going looking for it, and that was the
-             whole failure: the only code that ever checked was the Settings screen's own onMounted,
-             so a user who never opened Settings was never told. A dot on the door to the thing is
-             the smallest signal that still reaches someone who isn't already there. -->
         <!-- The studio's Discord, as a plain icon: this is the page people keep open and come
              back to, so it carries the invite quietly rather than the landing pages' floating
              badge (owner, 2026-09-27). -->
@@ -606,19 +586,6 @@ onUnmounted(stopAvailabilityPolling)
           <a :href="DISCORD_URL" target="_blank" rel="noopener noreferrer" :title="$t('app.discord')" :aria-label="$t('app.discord')">
             <DiscordMark />
           </a>
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          class="relative"
-          :title="updateAvailable ? $t('app.settingsUpdateAvailable') : $t('app.settings')"
-          @click="onSettingsButton"
-        >
-          <Settings2 />
-          <span
-            v-if="showUpdateDot"
-            class="absolute right-0.5 top-0.5 size-2 rounded-full bg-info ring-2 ring-background"
-          />
         </Button>
       </div>
     </header>

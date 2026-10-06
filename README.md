@@ -171,7 +171,8 @@ You can open, focus, quit, create and delete them from here, give each one a nam
 colour so they stop looking identical, and see your isolated CLI logins alongside the desktop
 instance that shares their account.
 
-**Claude native control:** open **Instances tab → gear (Instances settings) → Claude native control** and enable
+**Claude native control:** open **Settings → Instances → Desktop → Claude native control** (the Desktop table's
+gear opens it; in the old window of a release build, **Instances tab → gear**) and enable
 **Start debugger automatically** for a desktop account. Its next **Open** through AgentHydra
 starts the local connection automatically; saving does not open or restart an app. Configured
 accounts use the native session manager for archive and migration-source cleanup, without

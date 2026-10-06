@@ -15,6 +15,19 @@ export function openHydra(): void {
 
 export const hydraOpen = ref(false)
 
+// A newer AgentHydra is waiting (the pane's ah:update-dot): a dot on the sidebar's Settings gear, the door to
+// Settings → Updates, as the pane's own gear had before it went (owner, 2026-10-06). A click on the gear
+// with the dot on opens Updates and quiets it for the rest of this run; the next launch shows it again.
+const updateWaiting = ref(false)
+const updateDotSeen = ref(false)
+export const ahUpdateDot = computed(() => updateWaiting.value && !updateDotSeen.value)
+export function setAhUpdateWaiting(on: boolean): void {
+  updateWaiting.value = on
+}
+export function seeAhUpdateDot(): void {
+  updateDotSeen.value = true
+}
+
 /** The current tab's sidebar, or null when that tab has none (or the frame is not up). */
 export const hydraSidebar = shallowRef<SidebarModel | null>(null)
 // Whether the pane has said anything about its sidebar yet (a null counts: that tab has none). Until it

@@ -10,7 +10,8 @@
 // account's row in Instances (its session header's account chip), a CliMayte task or an HSwarm job (its
 // sidebar's task and job rows).
 import { onScopeDispose, ref, shallowReactive, watch } from 'vue'
-import type { AhMessage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
+import type { AhMessage, AhSettingsPage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
+import { useAppSettings } from '@/composables/useAppSettings'
 import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
 
@@ -33,10 +34,15 @@ export function showSessionsInDesk(): void {
   tellDesk({ type: 'ah:show-sessions' })
 }
 
-/** Desk opens its Settings, which hold this window's settings now (owner, 2026-10-06): on Updates
- *  when the gear's dot says one is waiting. */
-export function openSettingsInDesk(section?: 'updates'): void {
+/** Desk opens its Settings, which hold this window's settings now (owner, 2026-10-06): on a table's
+ *  page from that table's gear (Instances → CLI, Desktop or Free). */
+export function openSettingsInDesk(section?: AhSettingsPage): void {
   tellDesk({ type: 'ah:open-settings', section })
+}
+
+/** Desk draws the "a newer AgentHydra is waiting" dot on its Settings gear; this window has no gear. */
+export function showUpdateDotInDesk(on: boolean): void {
+  tellDesk({ type: 'ah:update-dot', on })
 }
 
 /** Desk's pane (HydraPane.vue) fires this on this window each time AgentHydra is shown, so a page that
@@ -190,6 +196,7 @@ if (EMBEDDED) {
     else if (m.type === 'desk:show-instance') deskInstanceAsk.value = { num: m.num, kind: m.kind }
     else if (m.type === 'desk:open-hswarm') deskSwarmAsk.value = { job: m.job }
     else if (m.type === 'desk:open-worker') deskWorkerAsk.value = { id: m.id, pc: m.pc }
+    else if (m.type === 'desk:settings-changed') void useAppSettings().load()
     else if (m.type === 'desk:visible') {
       setDeskHidden(!m.visible)
       // Desk says so when the pane slides in and when a frame (re)attaches (hydraReady): whatever it

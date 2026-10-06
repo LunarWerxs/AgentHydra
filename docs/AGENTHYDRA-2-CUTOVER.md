@@ -18,6 +18,14 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   checked one by one. What Desk 2 lacked was ported in `2a62884c`: "Copy up to here into a new chat" on an
   outside Claude Code session's reply, the auto-update label, and two class fixes. Until `web/` is
   deleted, a change to `web/src` is made in `desk2/hydra/src` too.
+- **The name is AgentHydra** (owner, 2026-10-06). The window title, the shortcut (`desk2/launcher/install-shortcuts.ps1`
+  writes **AgentHydra** and recycles the old "Hydra Desk 2" ones), the launcher's message boxes and Desk's Settings say
+  AgentHydra. The internal names below are unchanged.
+- **The old window is gone where Desk 2 is.** A page asked of the daemon goes on to Desk 2 when `desk2/` is beside
+  it (`server/src/config.ts` `DESK2_URL`, the same file the tray's `requires` checks), the Connections sign-in's
+  return included; `/api` is untouched. Only a release zip, with no Desk 2, still serves `web/`.
+- **The old window's table settings moved too.** Desk's Settings has an Instances section (CLI, Desktop, Free)
+  holding what the tables' gears held; see `desk2/README.md`.
 - **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` stays
   in the repo: it is Jacob's, and removing it is his call.
 
@@ -28,7 +36,7 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
 | Where | What it does | At cutover |
 | --- | --- | --- |
 | `server/src/config.ts:354` `WEB_DIST_CANDIDATES` | where the built old window is | drop |
-| `server/src/index.ts:924` `embeddedWeb`, and 929-960 | serves the old window, from the compiled exe's embedded copy or from `web/dist` | drop the static serving; `/api/*` stays |
+| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the compiled exe's embedded copy or from `web/dist`, only where `DESK2_URL` is null (a release zip) | drop the static serving; `/api/*` stays |
 | `server/src/index.ts:1031`, `:1611` `openUi` | a release exe's double-click, and boot, open the old window | open Desk 2 (run its launcher) |
 | `server/src/index.ts:839` `/api/portable-window`, `:232-235` `portable_mode` | the chromeless "portable" window of the old UI | drop with the setting (Desk 2 left portable mode behind) |
 | `server/src/instance-mode-window.ts:7`, `server/src/instance-mode.ts:296` | the quick-instances window (`/instances`) and the light daemon that serves it | retarget to Desk 2's copy (`desk2/hydra/src/QuickInstancesApp.vue`) or retire |
@@ -83,11 +91,9 @@ the queue, Free instances, notifications and the shortcut sheet.
 
 1. **Ship Desk 2 in the release** (packaging above). Until then Desk 2 runs from a checkout only.
 2. **Point the daemon's openers at Desk 2**: `openUi` callers, the quick-instances window and its shortcut.
-3. **Rename Hydra Desk 2 to AgentHydra.** User-facing: the window title (`desk2/web/index.html:6`), the
-   shortcut "Hydra Desk 2" (`desk2/launcher/install-shortcuts.ps1:20-35`), the launcher's message boxes
-   (`desk2/launcher/start.ps1`). Internal, each needing a migration if renamed: `HydraDesk2.exe`, the mutex
-   `Local\HydraDesk2Launcher`, `~/.hydra-desk-2/`, `%LOCALAPPDATA%\HydraDesk2`, port 7798 and the `desk2/`
-   folder.
+3. **Rename Hydra Desk 2 to AgentHydra.** User-facing: done 2026-10-06 (above). Internal, each needing a
+   migration if renamed: `HydraDesk2.exe`, the mutexes `Local\HydraDesk2Launcher` and `Local\HydraDesk2Host`,
+   `~/.hydra-desk-2/`, `%LOCALAPPDATA%\HydraDesk2`, port 7798 and the `desk2/` folder.
 4. **Remove `web/`**: the static serving and embedding, the workspace and scripts, the CI steps, the checks
    and tests above, the docs, then the folder.
 5. **`desk/`**: Jacob's to keep or remove.

@@ -45,7 +45,6 @@ const POPOVER_OPEN = `document.querySelectorAll('[data-slot="popover-content"], 
 const TIP_OPEN = `document.querySelectorAll('[data-slot="tooltip-content"]').length > 0`
 const ROW_MENU = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] button[aria-haspopup="menu"]')])`
 const ROW_CELL = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] td:nth-child(2)')])`
-const GEAR = `(${VISIBLE})([...document.querySelectorAll('button')].filter((b) => /settings/i.test(b.getAttribute('aria-label') || '') && b.closest('[data-slot="tooltip-trigger"], [data-grace-area-trigger]')))`
 const HIDE = `(${VISIBLE})([...document.querySelectorAll('button[aria-label="Hide sidebar"]')])`
 const HIDDEN = `!!document.querySelector('button[aria-label="Show sidebar"]')`
 const ROW = `(${VISIBLE})([...document.querySelectorAll('[role="button"][aria-description^="Runs in"]')].filter((el) => !el.getAttribute('aria-current')))`
@@ -55,8 +54,6 @@ const HISTORY = `(${VISIBLE})([...document.querySelectorAll('button[aria-label^=
 // A tooltip-wrapped toggle (aria-pressed): its first value is noted when it is first picked.
 const toggle = (sel: string) => `(() => { const b = (${VISIBLE})([...document.querySelectorAll('${sel}')]); if (b && window.__p0 === undefined) window.__p0 = b.getAttribute('aria-pressed'); return b })()`
 const flipped = (sel: string) => `(document.querySelector('${sel}')?.getAttribute('aria-pressed') !== window.__p0)`
-// Its label flips with it ("Show usage columns" / "Show process columns").
-const USAGE = 'button[aria-pressed][aria-label^="Show "][aria-label$=" columns"]'
 const TASKS = 'button[aria-label="CliMayte tasks in the sidebar"]'
 // Instances rows: icon-only actions in IconTooltips (Open and Focus act on real accounts: hovered or focused, never clicked) and
 // the name cell, a 16px button in an IconTooltip whose click copies the account's address and shows one toast.
@@ -69,10 +66,7 @@ const CASES: Case[] = []
 const each = (kinds: Kind[], c: Omit<Case, 'kind'>) => { for (const kind of kinds) CASES.push({ ...c, kind }) }
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'row ... menu opens', pick: ROW_MENU, ok: MENU_OPEN })
 each(['right-click'], { page: 'pane', what: 'row name cell context menu opens', pick: ROW_CELL, ok: MENU_OPEN })
-each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'IconTooltip gear opens its popover', pick: GEAR, ok: POPOVER_OPEN })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'login history opens its popover', pick: HISTORY, ok: POPOVER_OPEN, tab: '6' })
-each(['tap', 'press', 'hover-press'], { page: 'pane', what: 'usage-mode toggle (kit tooltip) flips once, no tooltip', pick: toggle(USAGE), ok: `${flipped(USAGE)} && !(${TIP_OPEN})`, tab: '6', diag: `[${flipped(USAGE)}, ${TIP_OPEN}]` })
-each(['long-press'], { page: 'pane', what: 'usage-mode toggle (kit tooltip) long-press shows its tooltip, no flip', pick: toggle(USAGE), ok: `!${flipped(USAGE)} && (${TIP_OPEN})`, tab: '6', diag: `[${flipped(USAGE)}, ${TIP_OPEN}]` })
 each(['hover', 'focus'], { page: 'pane', what: 'row action icon (Open/Focus) shows its tooltip', pick: ACTION, ok: TIP_OPEN, tab: '6' })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'name cell copies once, no tooltip', pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
 CASES.push({ page: 'pane', what: 'name cell copies once, no tooltip (300 ms rest)', kind: 'hover-press', wait: 300, pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })

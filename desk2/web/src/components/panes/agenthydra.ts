@@ -7,6 +7,7 @@
 // theme picker (Desk has one theme) and Shut down (the daemon is Desk's engine).
 import { useStorage } from '@vueuse/core'
 import { computed, reactive, ref, watch } from 'vue'
+import { tellHydra } from '@/components/hydra/api'
 import type { PaneApi } from './api'
 import type { SettingsCondition } from './settings'
 
@@ -37,6 +38,15 @@ export interface AhSettings {
   notifySmtpSecure: boolean
   notifySmtpUser: string
   notifySmtpPassSet: boolean
+  // Settings → Instances (the pane's tables): which ones show, the CLI keepalive and paid extra usage.
+  showCliInstances: boolean
+  showDesktopInstances: boolean
+  codexDesktopEnabled: boolean
+  codexCliEnabled: boolean
+  dshEnabled: boolean
+  keepaliveEnabled: boolean
+  keepaliveWeeklyFloorPct: number
+  allowExtraUsage: boolean
 }
 
 type ReadOnly =
@@ -126,6 +136,8 @@ export function useAgentHydraSettings(api: PaneApi) {
     try {
       settings.value = await api.agentHydra<AhSettings>('/settings', { method: 'POST', body: JSON.stringify(patch) })
       savedAt.value = Date.now()
+      // The pane read these at start (a table hidden, the keepalive on): it reads them again now.
+      tellHydra({ type: 'desk:settings-changed' })
       return true
     } catch (e) {
       settings.value = before
@@ -342,6 +354,10 @@ export function useAgentHydraSettings(api: PaneApi) {
         return !!sync.value?.connected
       case 'syncing':
         return !!sync.value?.enabled
+      case 'keepalive':
+        return !!s?.keepaliveEnabled
+      case 'native':
+        return false // the Instances settings decide (instances.ts); SettingsView asks them first
     }
   }
 

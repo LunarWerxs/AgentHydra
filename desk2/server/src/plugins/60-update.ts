@@ -89,7 +89,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
 
   app.post('/api/server/restart', (c) => {
     if (!restartable())
-      return c.json({ error: "This server was not started by Hydra Desk 2's launcher, so it cannot restart itself: run desk2/launcher/restart.ps1" }, 409)
+      return c.json({ error: "This server was not started by AgentHydra's window launcher, so it cannot restart itself: run desk2/launcher/restart.ps1" }, 409)
     mkdirSync(join(ctx.home, 'logs'), { recursive: true })
     const log = join(ctx.home, 'logs', 'restart.log')
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`

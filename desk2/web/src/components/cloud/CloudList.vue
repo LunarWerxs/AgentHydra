@@ -14,6 +14,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
+import { cleanSidebar } from '@/components/sidebar/clean'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
@@ -177,9 +178,10 @@ const ROW =
             <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->
             <component :is="appIcon(r)!" v-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
-            <span v-if="r.instanceNum !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
+            <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
+            <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
-            <RowAge :at="r.lastActivityAt" />
+            <RowAge v-if="!cleanSidebar" :at="r.lastActivityAt" />
     </DefineRowBody>
     <header v-if="shownGroups.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>

@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const TITLE: &str = "Hydra Desk 2";
+// AgentHydra 2.0, once called Hydra Desk 2 (owner, 2026-10-06). The tray's hidden window has this title
+// too (the tray host names it after the app), so single_instance looks for a visible one.
+const TITLE: &str = "AgentHydra";
 // --bg-page in desk2/web/src/style.css (the body background); the title bar and the WebView use it.
 const BG: (u8, u8, u8) = (0x15, 0x15, 0x15);
 const TEXT: (u8, u8, u8) = (0xe6, 0xe6, 0xe6);
@@ -219,7 +221,7 @@ mod win {
             data: isize,
         ) -> i32;
         fn SetWindowPos(h: Hwnd, after: Hwnd, x: i32, y: i32, w: i32, hh: i32, flags: u32) -> i32;
-        fn FindWindowW(class: *const u16, title: *const u16) -> Hwnd;
+        fn FindWindowExW(parent: Hwnd, after: Hwnd, class: *const u16, title: *const u16) -> Hwnd;
         fn IsIconic(h: Hwnd) -> i32;
         fn IsWindowVisible(h: Hwnd) -> i32;
         fn ShowWindow(h: Hwnd, cmd: i32) -> i32;
@@ -382,15 +384,18 @@ mod win {
             if GetLastError() != 183 {
                 return true;
             }
+            // The first window of this title that is shown (a minimised one counts): never the tray's
+            // hidden one, which shares the title.
             let t = wide(title);
-            let h = FindWindowW(std::ptr::null(), t.as_ptr());
+            let mut h = FindWindowExW(0, 0, std::ptr::null(), t.as_ptr());
+            while h != 0 && IsWindowVisible(h) == 0 {
+                h = FindWindowExW(0, h, std::ptr::null(), t.as_ptr());
+            }
             if h != 0 {
                 if IsIconic(h) != 0 {
                     ShowWindow(h, 9);
                 }
-                if IsWindowVisible(h) != 0 {
-                    SetForegroundWindow(h);
-                }
+                SetForegroundWindow(h);
             }
             false
         }

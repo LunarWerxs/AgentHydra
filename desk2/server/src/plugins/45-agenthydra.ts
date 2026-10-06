@@ -82,7 +82,7 @@ export default function plugin(app: Hono): void {
       return new Response(Bun.file(file), { headers: { 'cache-control': cacheControl(path) } })
     }
     // Only the fall-back needs index.html, so a file that is there costs one stat.
-    if (!existsSync(index)) return c.text("Hydra Desk 2's copy of AgentHydra is not built yet: run bun run build in desk2.", 503)
+    if (!existsSync(index)) return c.text("AgentHydra's pages are not built yet: run bun run build in desk2.", 503)
     return new Response(Bun.file(index), { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' } })
   })
 }

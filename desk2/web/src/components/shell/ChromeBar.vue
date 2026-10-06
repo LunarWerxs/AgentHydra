@@ -6,16 +6,18 @@ import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 import type { UpdateOffer } from '@/lib/server-update'
 
-// The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu, Hide sidebar, Back,
-// Forward (28px, r7). The real app's Chat / Code mode switch is left out: Hydra Desk is Code only.
-// Hydra Desk 2 adds three after Forward: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the
-// sidebar lists every session of both PCs) and CliMayte (each session's running CliMayte tasks listed
-// under it, sidebar/tasks.ts). Each shows when it is on: AgentHydra pressed, Cloud and CliMayte blue.
+// The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu and Hide sidebar (28px, r7).
+// The real app's Chat / Code mode switch is left out: Hydra Desk is Code only. Its Back and Forward arrows
+// are gone too (owner, 2026-10-06); Alt + Left / Right still go back and forward (DeskFrame).
+// AgentHydra 2.0 adds four: AgentHydra (slides AgentHydra in beside the sidebar), Cloud (the sidebar lists
+// every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
+// sidebar/tasks.ts) and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
+// Each shows when it is on: AgentHydra pressed, the other three blue.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
-defineProps<{ sidebarOpen: boolean; width: number; canBack: boolean; canForward: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; update?: UpdateOffer | null }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; back: []; forward: []; settings: []; hydra: []; cloud: []; tasks: []; restart: [] }>()
+defineProps<{ sidebarOpen: boolean; width: number; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; cloud: []; tasks: []; clean: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -65,17 +67,7 @@ const BTN = `${BTN_SHAPE} text-text`
         <component :is="shellGlyphs.sidebarToggle" class="size-4" />
       </button>
     </Tip>
-    <Tip label="Back (Alt + Left)">
-      <button type="button" :class="BTN" aria-label="Back" :disabled="!canBack" @click="emit('back')">
-        <component :is="shellGlyphs.back" class="size-4" />
-      </button>
-    </Tip>
-    <Tip label="Forward (Alt + Right)">
-      <button type="button" :class="[BTN, '-ml-0.5']" aria-label="Forward" :disabled="!canForward" @click="emit('forward')">
-        <component :is="shellGlyphs.forward" class="size-4" />
-      </button>
-    </Tip>
-    <Tip :label="hydraOpen ? 'Back to Hydra Desk' : 'AgentHydra'">
+    <Tip :label="hydraOpen ? 'Back to chats' : 'AgentHydra: accounts, instances and HSwarm'">
       <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
         <component :is="agentHydraIcon" class="size-4" />
       </button>
@@ -89,6 +81,11 @@ const BTN = `${BTN_SHAPE} text-text`
     <Tip :label="tasksOn ? 'Hide the CliMayte tasks under each session' : 'CliMayte: the running tasks under each session'">
       <button type="button" :class="[BTN_SHAPE, tasksOn ? 'text-accent-text' : 'text-text']" aria-label="CliMayte tasks in the sidebar" :aria-pressed="!!tasksOn" @click="emit('tasks')">
         <component :is="shellIcons.climayte" class="size-4" />
+      </button>
+    </Tip>
+    <Tip :label="cleanOn ? 'Show account numbers and times in the sidebar' : 'Clean sidebar: titles only, no account numbers or times'">
+      <button type="button" :class="[BTN_SHAPE, cleanOn ? 'text-accent-text' : 'text-text']" aria-label="Clean sidebar" :aria-pressed="!!cleanOn" @click="emit('clean')">
+        <component :is="shellGlyphs.cleanSidebar" class="size-4" />
       </button>
     </Tip>
   </div>

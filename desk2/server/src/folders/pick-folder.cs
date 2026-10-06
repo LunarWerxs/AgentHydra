@@ -90,14 +90,15 @@ namespace HydraDesk
             }
         }
 
-        /** The window in front, when it is Hydra Desk's (its title ends "Hydra Desk"; a browser tab adds its own suffix). */
+        /** The window in front, when it is this app's (its title holds "AgentHydra": the window is named so, and a
+            browser tab adds its own suffix). */
         static IntPtr HydraDeskWindow()
         {
             IntPtr front = GetForegroundWindow();
             if (front == IntPtr.Zero) return IntPtr.Zero;
             StringBuilder title = new StringBuilder(512);
             GetWindowText(front, title, title.Capacity);
-            return title.ToString().Contains("Hydra Desk") ? front : IntPtr.Zero;
+            return title.ToString().Contains("AgentHydra") ? front : IntPtr.Zero;
         }
 
         /** The folder as a shell item; null when it is gone or cannot be parsed. */
