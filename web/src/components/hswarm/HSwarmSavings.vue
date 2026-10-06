@@ -565,7 +565,7 @@ const ariaSort = (tid: string, key: string) => {
                 <rect v-for="(r, i) in g.rects" :key="i" :x="r.x" :y="r.y" :width="r.w" :height="r.h" :fill="r.fill"><title>{{ r.tip }}</title></rect>
               </svg>
             </div>
-            <div class="ms-[46px] mt-0.5 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+            <div class="ms-11.5 mt-0.5 flex justify-between text-[10px] text-muted-foreground tabular-nums">
               <span>{{ c.labels[0]?.slice(5) }}</span>
               <span>{{ c.labels[c.labels.length - 1]?.slice(5) }}</span>
             </div>

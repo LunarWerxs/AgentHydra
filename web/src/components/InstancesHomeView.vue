@@ -360,7 +360,7 @@ onUnmounted(stop)
       <span v-if="failed" class="text-xs text-muted-foreground">{{ $t('instances.home.loadFailed') }}</span>
       <IconTooltip :label="$t('instances.home.refresh')">
         <Button
-          class="ml-auto"
+          class="ms-auto"
           variant="outline"
           size="icon"
           :aria-label="$t('instances.home.refresh')"
@@ -378,12 +378,12 @@ onUnmounted(stop)
       <section class="rounded-lg border bg-card px-3 py-1.5">
         <h3 class="mb-1 flex items-center gap-2 text-xs font-semibold">
           {{ $t('instances.home.chartHeadroom') }}
-          <span class="ml-auto flex items-center gap-2 text-3xs font-normal text-muted-foreground">
+          <span class="ms-auto flex items-center gap-2 text-3xs font-normal text-muted-foreground">
             <span class="flex items-center gap-1"><i class="inline-block h-1.5 w-3 rounded-full bg-foreground/70"></i>{{ $t('instances.home.chart5h') }}</span>
             <span class="flex items-center gap-1"><i class="inline-block h-1.5 w-3 rounded-full bg-foreground/35"></i>{{ $t('instances.home.chartWeek') }}</span>
           </span>
         </h3>
-        <ul v-if="headroom.length" class="max-h-[7.5rem] space-y-0.5 overflow-y-auto">
+        <ul v-if="headroom.length" class="max-h-30 space-y-0.5 overflow-y-auto">
           <li v-for="r in headroom" :key="r.key">
             <button
               type="button"
@@ -414,7 +414,7 @@ onUnmounted(stop)
         <h3 class="mb-1 flex items-center gap-2 text-xs font-semibold">
           {{ $t('instances.home.chartWorkers') }}
           <span class="text-3xs font-normal text-muted-foreground tabular-nums">{{ workersDay }}</span>
-          <span class="ml-auto flex items-center gap-2 text-3xs font-normal text-muted-foreground">
+          <span class="ms-auto flex items-center gap-2 text-3xs font-normal text-muted-foreground">
             <span v-for="s in outcomeSeries" :key="s.key" class="flex items-center gap-1">
               <i class="inline-block size-1.5 rounded-full" :style="{ background: s.color }"></i>{{ s.label }}
             </span>
@@ -450,7 +450,7 @@ onUnmounted(stop)
           <li v-for="m in modelSplit" :key="m.key" class="flex min-w-0 items-center gap-1.5">
             <i class="inline-block size-1.5 shrink-0 rounded-full" :style="{ background: m.color }"></i>
             <span class="truncate text-muted-foreground">{{ m.key }}</span>
-            <span class="ml-auto tabular-nums">{{ m.n }}</span>
+            <span class="ms-auto tabular-nums">{{ m.n }}</span>
           </li>
         </ul>
       </section>
@@ -460,7 +460,7 @@ onUnmounted(stop)
         v-for="tile in tiles"
         :key="tile.key"
         type="button"
-        class="flex items-center gap-2 rounded-md border bg-card px-2 py-1 text-left transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
+        class="flex items-center gap-2 rounded-md border bg-card px-2 py-1 text-start transition-colors hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none"
         :title="tile.sub ? `${tile.label}: ${tile.sub}` : tile.label"
         :aria-label="tile.to ? $t('instances.home.open', { name: tile.label }) : tile.label"
         @click="tile.to && emit('navigate', tile.to)"

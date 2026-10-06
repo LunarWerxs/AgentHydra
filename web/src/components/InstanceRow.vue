@@ -148,7 +148,7 @@ function onContextMenu(e: MouseEvent): void {
                2026-10-04). It gives way first: its shrink weight is far above the name's. -->
           <span
             v-if="account"
-            class="min-w-0 shrink-[8] truncate text-2xs font-normal"
+            class="min-w-0 shrink-8 truncate text-2xs font-normal"
             :class="loginStale ? 'text-warning' : 'text-muted-foreground'"
             :title="loginStale ? `${account.title}\n${$t('instances.loginUnconfirmed')}` : account.title"
           >{{ account.text }}</span>

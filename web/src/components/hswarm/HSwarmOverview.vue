@@ -501,20 +501,20 @@ function formatPercent(value: number): string {
             <table class="w-full text-sm">
               <thead class="bg-muted">
                 <tr>
-                  <th class="px-2 py-1 text-left font-medium">{{ t('hswarm.v.overview.day') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tokens') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.cost') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tasks') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.errors') }}</th>
+                  <th class="px-2 py-1 text-start font-medium">{{ t('hswarm.v.overview.day') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.tokens') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.cost') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.tasks') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.errors') }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="d in [...spendDays].reverse()" :key="d.date" class="border-t hover:bg-muted/50">
                   <td class="px-2 py-1">{{ d.date }}</td>
-                  <td class="px-2 py-1 text-right">{{ formatTokens(d.tokens) }}</td>
-                  <td class="px-2 py-1 text-right">{{ fineUsd(d.cost) }}</td>
-                  <td class="px-2 py-1 text-right">{{ d.tasks }}</td>
-                  <td class="px-2 py-1 text-right">{{ d.error }}</td>
+                  <td class="px-2 py-1 text-end">{{ formatTokens(d.tokens) }}</td>
+                  <td class="px-2 py-1 text-end">{{ fineUsd(d.cost) }}</td>
+                  <td class="px-2 py-1 text-end">{{ d.tasks }}</td>
+                  <td class="px-2 py-1 text-end">{{ d.error }}</td>
                 </tr>
               </tbody>
             </table>
@@ -595,7 +595,7 @@ function formatPercent(value: number): string {
           <div class="flex items-start justify-between gap-2">
             <div>
               <div class="font-medium text-sm flex items-center gap-2">
-                <Stethoscope class="h-4 w-4" />
+                <Stethoscope class="size-4" />
                 {{ t('hswarm.v.overview.doctor') }}
               </div>
               <p class="text-xs text-muted-foreground mt-1">
@@ -625,7 +625,7 @@ function formatPercent(value: number): string {
         <div class="flex items-start justify-between gap-2">
           <div>
             <div class="font-medium text-sm flex items-center gap-2">
-              <Clock class="h-4 w-4" />
+              <Clock class="size-4" />
               {{ t('hswarm.v.overview.balances') }}
             </div>
             <p class="text-xs text-muted-foreground mt-1">
@@ -674,7 +674,7 @@ function formatPercent(value: number): string {
             :disabled="!askPrompt || askRunning || readyKeys === 0"
             @click="submitAsk"
           >
-            <Play class="h-4 w-4 me-1" />
+            <Play class="size-4 me-1" />
             {{ t('hswarm.v.overview.ask') }}
           </Button>
         </div>
