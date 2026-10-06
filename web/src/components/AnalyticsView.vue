@@ -425,6 +425,7 @@ function sinkLabel(id: TokenSink['id']): string {
     return t('analytics.sinkDeepContext', {
       threshold: formatCompact(sinks.value?.deepContext.threshold ?? 0),
     })
+  if (id === 'output') return t('analytics.sinkOutput')
   if (id === 'subagents') return t('analytics.sinkSubagents')
   return t('analytics.sinkCacheWrites')
 }
@@ -432,6 +433,7 @@ function sinkFix(id: TokenSink['id']): string {
   if (id === 'dead-skills') return t('analytics.fixDeadSkills')
   if (id === 'dead-mcp') return t('analytics.fixDeadMcp')
   if (id === 'deep-context') return t('analytics.fixDeepContext')
+  if (id === 'output') return t('analytics.fixOutput')
   if (id === 'subagents') return t('analytics.fixSubagents')
   return t('analytics.fixCacheWrites')
 }

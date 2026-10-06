@@ -69,10 +69,13 @@ import {
   emptySpend,
   modelMultiplier,
   newUsageSeen,
+  parseUsageLine,
   reweighModels,
   W_CACHE_READ,
   W_CACHE_WRITE_1H,
   W_CACHE_WRITE_5M,
+  W_OUTPUT,
+  weighCounts,
 } from './usage-tokens'
 
 /**
@@ -111,8 +114,12 @@ import {
  * 9: Token weights fitted to the subscription meter (usage-tokens.ts). Per-model `weighted` is
  *    re-weighed from its counts on read, but sinks_json holds weighted totals (deep calls, subagent
  *    spend, dead skill loads) that only a rescan can recompute.
+ * 10: The deep-context sink is the prompt read past DEEP_CONTEXT_TOKENS (deepExcess), not the
+ *    whole weight of every deep call: that charged a 151k call's reply, thinking and first 150k to
+ *    the sink and showed it as 61% of 30 days when the part a compaction could save was a tenth
+ *    of that. Only the transcript holds each call's prompt, so only a rescan can recompute it.
  */
-export const ANALYTICS_VERSION = 9
+export const ANALYTICS_VERSION = 10
 
 /**
  * A prompt past this many tokens is a "deep context" call.
@@ -138,6 +145,8 @@ export interface SinkScan {
   mcp: Map<string, { instr: number; tools: Map<string, number> }>
   deepCalls: number
   deepWeighted: number
+  /** What deep calls paid to read the part of their prompt past DEEP_CONTEXT_TOKENS (deepExcessOf). */
+  deepExcess: number
   /** Weighted tokens spent in subagent transcripts (the session's sibling files). */
   subWeighted: number
 }
@@ -150,6 +159,7 @@ interface StoredSinks {
   mcpLoad: Record<string, number>
   deepCalls: number
   deepWeighted: number
+  deepExcess: number
   subWeighted: number
 }
 
@@ -160,6 +170,7 @@ function emptySinks(): SinkScan {
     mcp: new Map(),
     deepCalls: 0,
     deepWeighted: 0,
+    deepExcess: 0,
     subWeighted: 0,
   }
 }
@@ -312,6 +323,7 @@ function storedSinks(s: SinkScan): StoredSinks {
     mcpLoad,
     deepCalls: s.deepCalls,
     deepWeighted: s.deepWeighted,
+    deepExcess: s.deepExcess,
     subWeighted: s.subWeighted,
   }
 }
@@ -773,12 +785,31 @@ function foldClaudeUsageLine(
   const ts = accumulateUsageLine(spend, line, 0, st.seen)
   // A new request's whole prompt lands in one step, so the step IS the call's context size. A
   // streaming record's final form adds output only, and a prompt of 0 never reads as deep.
-  if (spend.input + spend.cacheRead + spend.cacheCreation - promptBefore >= DEEP_CONTEXT_TOKENS) {
+  const prompt = spend.input + spend.cacheRead + spend.cacheCreation - promptBefore
+  if (prompt >= DEEP_CONTEXT_TOKENS) {
     out.sinks.deepCalls++
     out.sinks.deepWeighted += spend.weighted - weightedBefore
+    out.sinks.deepExcess += deepExcessOf(line, prompt)
   }
   if (!sub) st.ownWeighted = spend.weighted
   if (ts !== null) foldClaudeTimestamp(ts, st, out)
+}
+
+/** What a deep call paid to read its prompt past DEEP_CONTEXT_TOKENS: the prompt's weight at the
+ *  call's own rates (cache reads, writes and fresh input, never the reply) times the share of it
+ *  above the line. The part a compaction or a fresh session at the line could have saved. */
+function deepExcessOf(line: string, prompt: number): number {
+  const turn = parseUsageLine(line)
+  if (!turn) return 0
+  const { input, cacheRead, w5m, w1h } = turn.usage
+  const promptWeighted = weighCounts(turn.model, {
+    input,
+    cacheRead,
+    cacheWrite5m: w5m,
+    cacheWrite1h: w1h,
+    output: 0,
+  })
+  return (promptWeighted * (prompt - DEEP_CONTEXT_TOKENS)) / prompt
 }
 
 /** Charge the spend since the last dated line to `ts`'s day and hour, and extend the active time. */
@@ -2058,7 +2089,11 @@ const SINK_FIXES: Record<TokenSink['id'], string> = {
     'Uninstall the skills these sessions never invoke, or scope them to the projects that do: each one is re-read on every call.',
   'dead-mcp':
     'Disable MCP servers these sessions never call, or scope them per project: their instructions and tool names ride along on every call.',
-  'deep-context': `Compact or start a fresh session before the prompt passes ${DEEP_CONTEXT_TOKENS / 1000}k tokens: every call past it re-reads the whole history.`,
+  'deep-context': `Compact or start a fresh session before the prompt passes ${DEEP_CONTEXT_TOKENS / 1000}k tokens: every call past it re-reads the whole history. Counted: only the part read past the line.`,
+  // The largest kind on the meter (31x a cache read per token; 43% of the weight on 2026-10-06)
+  // and in no other sink, so without it the list hid where most of the weight went.
+  output:
+    'Use a lower effort and a smaller model for routine work, and ask for short replies: reply and thinking tokens weigh the most per token of anything on the meter.',
   subagents:
     'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
   // Every cache write, each session's first unavoidable one included, so this is an upper bound on
@@ -2148,6 +2183,8 @@ export function sinkReport(opts: { sinceMs?: number | null } = {}): TokenSinkRep
     cacheWrites: 0,
     deepCalls: 0,
     deepWeighted: 0,
+    deepExcess: 0,
+    output: 0,
     subWeighted: 0,
     spawns: 0,
   }
@@ -2173,6 +2210,8 @@ interface SinkAcc {
   cacheWrites: number
   deepCalls: number
   deepWeighted: number
+  deepExcess: number
+  output: number
   subWeighted: number
   spawns: number
 }
@@ -2249,6 +2288,7 @@ function foldSinkRow(
 
   acc.deepCalls += (s.deepCalls ?? 0) * scale
   acc.deepWeighted += (s.deepWeighted ?? 0) * scale
+  acc.deepExcess += (s.deepExcess ?? 0) * scale
   acc.subWeighted += (s.subWeighted ?? 0) * scale
   // Task is the older name of the Agent tool; both spawn a subagent.
   acc.spawns += ((tools.Task ?? 0) + (tools.Agent ?? 0)) * scale
@@ -2279,6 +2319,7 @@ function foldSinkModels(
     prefixRate += m.turns * W_CACHE_READ * mult
     acc.cacheWrites +=
       (m.cacheCreation5m * W_CACHE_WRITE_5M + m.cacheCreation1h * W_CACHE_WRITE_1H) * mult
+    acc.output += m.output * W_OUTPUT * mult
     acc.totalWeighted += m.weighted
     addTokens(t, m)
   }
@@ -2351,7 +2392,8 @@ function sinkReportOf(acc: SinkAcc): TokenSinkReport {
     sinks: [
       tokenSink('dead-skills', 'structural', 'estimated', acc.deadSkills, total),
       tokenSink('dead-mcp', 'structural', 'estimated', acc.deadMcp, total),
-      tokenSink('deep-context', 'behavioral', 'measured', acc.deepWeighted, total),
+      tokenSink('deep-context', 'behavioral', 'measured', acc.deepExcess, total),
+      tokenSink('output', 'behavioral', 'measured', acc.output, total),
       tokenSink('subagents', 'behavioral', 'measured', acc.subWeighted, total),
       tokenSink('cache-writes', 'behavioral', 'measured', acc.cacheWrites, total),
     ].sort((a, b) => b.weighted - a.weighted),
@@ -2361,6 +2403,7 @@ function sinkReportOf(acc: SinkAcc): TokenSinkReport {
       threshold: DEEP_CONTEXT_TOKENS,
       calls: Math.round(acc.deepCalls),
       weighted: Math.round(acc.deepWeighted),
+      excess: Math.round(acc.deepExcess),
     },
     subagents: { weighted: Math.round(acc.subWeighted), spawns: Math.round(acc.spawns) },
     cacheByAccount: [...acc.cache.entries()]

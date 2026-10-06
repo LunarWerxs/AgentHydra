@@ -530,7 +530,7 @@ export interface DeadLoadRow {
  * call can also carry dead skills - so their shares are lenses on one total, not slices of it.
  */
 export interface TokenSink {
-  id: 'dead-skills' | 'dead-mcp' | 'deep-context' | 'subagents' | 'cache-writes'
+  id: 'dead-skills' | 'dead-mcp' | 'deep-context' | 'output' | 'subagents' | 'cache-writes'
   kind: 'structural' | 'behavioral'
   /** `measured` = summed off recorded usage; `estimated` = derived from injected text length. */
   basis: 'measured' | 'estimated'
@@ -553,8 +553,9 @@ export interface TokenSinkReport {
   skills: DeadLoadRow[]
   /** MCP servers ranked the same way. */
   mcpServers: DeadLoadRow[]
-  /** Calls whose prompt was past `threshold` tokens, and the weighted tokens they spent. */
-  deepContext: { threshold: number; calls: number; weighted: number }
+  /** Calls whose prompt was past `threshold` tokens, the weighted tokens they spent in all, and
+   *  `excess`: what they paid to read the part past the line (the deep-context sink's weight). */
+  deepContext: { threshold: number; calls: number; weighted: number; excess: number }
   /** Weighted tokens spent inside subagent transcripts, and how many were spawned. */
   subagents: { weighted: number; spawns: number }
   /** Cache reads over all prompt tokens, per account. `key` null = not linked to an account. */

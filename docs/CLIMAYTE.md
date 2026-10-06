@@ -390,7 +390,7 @@ the transcript lookups.
   to hand off again within three calls (about 290k tokens and $0.75 each). A session that reaches
   the line hands off whether or not another account has room (`fc1ca87`, owner: never the limit,
   stop at 85-90%); with none, the task waits for the first reset (`waitUntil`). A session whose
-  conversation reaches `CONTEXT_HANDOFF_TOKENS` (150k: the newest main-agent request's input, cache
+  conversation reaches `CONTEXT_HANDOFF_TOKENS` (200k since 2026-10-06; at 150k a handoff cost more than it saved: the newest main-agent request's input, cache
   reads and cache writes, `contextTokens`) is asked the same way, whatever its account's usage;
   its attempt's `windDown.reason` is `'context'`, and the account it left is not nudged against
   (no +100) when the next session is placed. At `CEILING_PCT`
@@ -1698,7 +1698,7 @@ Workers carry `wave?: string` (the wave they belong to; the manager carries it t
   prompt, beside `WORKER_BRIEF`) plus `waveStateText(wave, workers)`: the plan path, each key's state,
   worker, proof and rounds, the escalations and `notes`, rendered from the wave record, about 2-4k
   tokens for 20 tasks. A follow-up wake resumes the session and carries only the batch message. When
-  its conversation passes `MANAGER_CONTEXT_TOKENS` (60k, against 150k for a worker), or after any
+  its conversation passes `MANAGER_CONTEXT_TOKENS` (60k, against 200k for a worker), or after any
   handoff, limit, move or crash, the next wake starts a NEW session from the state text instead of a
   handoff note: there is nothing in the conversation the store does not hold. `climayte_handoff` on
   the manager does the same at once.

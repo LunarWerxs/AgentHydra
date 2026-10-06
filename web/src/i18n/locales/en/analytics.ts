@@ -129,7 +129,10 @@ export default {
     'Ranked in weighted tokens. Structural sinks are configuration, behavioral ones are how sessions ran. They overlap, so the shares do not add up to 100%.',
   sinkDeadSkills: 'Skills loaded but never used',
   sinkDeadMcp: 'MCP servers loaded but never called',
-  sinkDeepContext: 'Calls past {threshold} tokens of context',
+  // Only the part of each prompt past the line: a whole deep call's weight (its reply, its
+  // thinking, its first 150k) once read here as 61% of a month.
+  sinkDeepContext: 'Re-reading context past {threshold} tokens',
+  sinkOutput: 'Replies and thinking',
   sinkSubagents: 'Subagent spend',
   sinkCacheWrites: 'Cache writes',
   sinkStructural: 'Structural',
@@ -141,6 +144,8 @@ export default {
     'Disable MCP servers these sessions never call, or scope them per project: their instructions ride along on every call.',
   fixDeepContext:
     'Compact or start a fresh session before the context gets this deep: every call re-reads the whole history.',
+  fixOutput:
+    'Use a lower effort and a smaller model for routine work, and ask for short replies: reply and thinking tokens weigh the most per token of anything on the meter.',
   fixSubagents:
     'Spawn subagents for wide, parallel searches only: each one pays for its own prefix and history.',
   fixCacheWrites:

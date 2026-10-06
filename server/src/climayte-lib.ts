@@ -772,8 +772,16 @@ export function readingPending(
  *  session before had read too, the rest of their growth was new test and log output. Code tasks
  *  in such chains failed their verdict 4 of 12, against 53 of 183 code verdicts that day, so the
  *  line stays; a task that does not converge is stopped by notConverging (w-6ba9a4ea, a CI debug:
- *  8 handoffs, 82% of a Pro window). */
-export const CONTEXT_HANDOFF_TOKENS = 150_000
+ *  8 handoffs, 82% of a Pro window).
+ *  Raised from 150k to 200k on 2026-10-06 from the analytics meter over 3 days (1,070 tasks, 621
+ *  measured handoffs): a handoff at 150k cost more than it saved. The old session's calls after
+ *  the ask plus the fresh session's cold first request (47k median) came to 0.51B units, and the
+ *  smaller conversation saved 0.43B of reads; 258 of 621 paid back, the break-even being about 40
+ *  calls of the fresh session against a median of 38. Replaying every task's conversation under
+ *  other lines, 200k was cheapest or within 0.03B of it whatever the fresh session re-reads (0k:
+ *  -0.016B, 13k: -0.086B, 26k: -0.191B against 150k; 7 days: -0.109B), with 40% fewer handoffs;
+ *  past 250k the reads cost more again. */
+export const CONTEXT_HANDOFF_TOKENS = 200_000
 
 /** The conversation's size in tokens: what the newest main-agent request in `events` read (input,
  *  cache reads and cache writes). Null when they hold no such request. */

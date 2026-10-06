@@ -132,6 +132,25 @@ describe('what a session loaded and what it used', () => {
     expect(a.sinks.deepWeighted).toBeGreaterThan(0)
   })
 
+  test('the deep-context sink is the prompt read past the line, not the whole deep call', async () => {
+    // A call 50k past the line on Opus (x2), all of it a cache read (0.1), with a 1k reply (31):
+    // the whole call weighs 0.2 x 200k + 62 x 1k = 102k; what reading past the line cost is
+    // 0.2 x 50k = 10k. Charging the sink the whole call made it 61% of a month on this machine.
+    const deep = {
+      input_tokens: 0,
+      cache_read_input_tokens: DEEP_CONTEXT_TOKENS + 50_000,
+      output_tokens: 1_000,
+    }
+    const a = await scanSessionAnalytics(
+      transcript([
+        assistant('2024-08-10T10:00:00.000Z', deep, { id: 'msg_x', requestId: 'req_x' }),
+      ]),
+      'claude',
+    )
+    expect(a.sinks.deepWeighted).toBeCloseTo(0.2 * (DEEP_CONTEXT_TOKENS + 50_000) + 62_000, 3)
+    expect(a.sinks.deepExcess).toBeCloseTo(10_000, 3)
+  })
+
   test("a subagent's spend is the subagent share, not the parent's", async () => {
     const parent = transcript([assistant('2024-08-10T10:00:00.000Z')])
     const child = transcript([
@@ -210,6 +229,7 @@ describe('the sink report ranks dead load across sessions', () => {
       'dead-mcp',
       'dead-skills',
       'deep-context',
+      'output',
       'subagents',
     ])
     const deadSkills = report.sinks.find((s) => s.id === 'dead-skills')
@@ -217,6 +237,8 @@ describe('the sink report ranks dead load across sessions', () => {
     expect(deadSkills?.basis).toBe('estimated')
     expect(deadSkills?.weighted).toBeGreaterThan(0)
     expect(deadSkills?.fix.length).toBeGreaterThan(0)
+    // Replies and thinking: every call here replied 50 tokens on Opus, 50 x 31 x 2 = 3,100 a call.
+    expect(report.sinks.find((s) => s.id === 'output')?.weighted).toBeGreaterThanOrEqual(5 * 3_100)
   })
 })
 

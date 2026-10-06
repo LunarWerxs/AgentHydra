@@ -14,15 +14,15 @@ const reading = (sessionPct: number) => ({
 
 describe('a handoff on conversation size', () => {
   test('an account with room hands off once the conversation passes the line, not before', () => {
-    // 37% of requests on record ran over 150k of context and carried 61% of the cache reads.
-    expect(windDownAt(reading(10), null, now, 160_000)).toEqual({
+    // The line is 200k: below it a fresh session's cold start costs more than its smaller reads save.
+    expect(windDownAt(reading(10), null, now, 210_000)).toEqual({
       reason: 'context',
-      tokens: 160_000,
+      tokens: 210_000,
     })
-    expect(windDownAt(reading(10), null, now, 140_000)).toBeNull()
+    expect(windDownAt(reading(10), null, now, 160_000)).toBeNull()
     expect(windDownAt(reading(10), null, now, null)).toBeNull()
     // At its stop line the account is the reason: the next session must start somewhere else.
-    expect(windDownAt(reading(85), null, now, 160_000)).toMatchObject({ reason: 'usage', pct: 85 })
+    expect(windDownAt(reading(85), null, now, 210_000)).toMatchObject({ reason: 'usage', pct: 85 })
   })
 
   test("the size is the newest main-agent request's, never a subagent's", () => {
@@ -50,7 +50,7 @@ describe('a handoff on conversation size', () => {
   })
 
   test('does not count towards the handoff cap that stops a task going in circles', () => {
-    // A long task hands off every 150k: three of those are the plan, not a failure to converge.
+    // A long task hands off every 200k: three of those are the plan, not a failure to converge.
     const at = (windDown: { reason?: 'context' }) =>
       ({ account: { id: 'a', num: 1, name: 'a' }, outcome: 'handoff', windDown }) as any
     const w = (attempts: unknown[]) =>
