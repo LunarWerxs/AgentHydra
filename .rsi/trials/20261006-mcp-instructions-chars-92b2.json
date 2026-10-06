@@ -1,5 +1,88 @@
 {
-  "closed": null,
+  "closed": {
+    "a": {
+      "commit": "31984c19a004b517120bb3d01f18148cfac99fbe",
+      "def_hash": "289e612a9ed81076",
+      "dirty": false,
+      "id": "m-20261006T035243-7a3135",
+      "load_after": 0.971,
+      "load_before": 0.963,
+      "machine": "MPC-HELL",
+      "metric": "mcp.instructions_chars",
+      "project": "agenthydra",
+      "reason": null,
+      "seconds": 1.658,
+      "settings": {
+        "arm": "a",
+        "gate": "exact",
+        "kind": "size",
+        "ref": "31984c19",
+        "rounds": 2
+      },
+      "started": "2026-10-06T03:52:40+00:00",
+      "status": "ok",
+      "value": 2063
+    },
+    "applies_if": "a repo serves MCP instructions",
+    "at": "2026-10-06T03:52:58+00:00",
+    "b": {
+      "commit": "cb3fe35449c89dd4c5a1747e30f00c38c3a3a566",
+      "def_hash": "289e612a9ed81076",
+      "dirty": false,
+      "id": "m-20261006T035243-afaf55",
+      "load_after": 0.941,
+      "load_before": 0.91,
+      "machine": "MPC-HELL",
+      "metric": "mcp.instructions_chars",
+      "project": "agenthydra",
+      "reason": null,
+      "seconds": 0.252,
+      "settings": {
+        "arm": "b",
+        "gate": "exact",
+        "kind": "size",
+        "ref": "cb3fe354",
+        "rounds": 2
+      },
+      "started": "2026-10-06T03:52:40+00:00",
+      "status": "ok",
+      "value": 2011
+    },
+    "guards": [
+      {
+        "a": 0,
+        "b": 0,
+        "declared": false,
+        "metric": "arkitect_gating_errors",
+        "state": "ok"
+      },
+      {
+        "a": 2013,
+        "b": 2013,
+        "declared": false,
+        "metric": "arkitect_warnings",
+        "state": "ok"
+      },
+      {
+        "a": 97,
+        "b": 97,
+        "declared": false,
+        "metric": "arkitect_no_data",
+        "state": "ok"
+      },
+      {
+        "a": 24,
+        "b": 24,
+        "declared": false,
+        "metric": "deps_total",
+        "state": "ok"
+      }
+    ],
+    "method": "exact: 2063 -> 2011",
+    "note": "the instructions fit under the 2,048-char cut, every rule kept; the test cap now matches the platform limit",
+    "pattern": "an MCP server's instructions over 2,048 chars lose their tail in Claude Code",
+    "verdict": "kept"
+  },
   "def_hash": "289e612a9ed81076",
   "id": "20261006-mcp-instructions-chars-92b2",
   "idea": "trim AgentHydra's MCP instructions under the 2,048-char cut so the probe-chat rule is read, keeping every rule",
