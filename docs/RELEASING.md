@@ -287,6 +287,8 @@ After the old updater relaunches, the 2.0 launcher runs:
 
 So the 1.x updater successfully installs 2.0. The 2.0 updater adds `runtime/*.old-*` cleanup (in `cleanupStaleUpdateArtifacts`, since the launcher, not the updater, owns runtime/) and corrects the exe path for 2.0's release layout.
 
+A 2.x update whose launcher pins a new bun runs the new launcher with `--ensure-bun` (hidden, several minutes allowed) before it relaunches, so the successor starts in seconds; if that fails it is logged and the relaunch goes ahead anyway. A 1.x install cannot do that: its old updater relaunches straight into the 2.0 launcher, which downloads the release zip and bun first, so the old daemon's 60 s ack deadline can pass and it stays up on the port. The 2.0 daemon that finally starts waits for the port, and if its own predecessor (the pointer owner it was relaunched from, answering /api/health on that port) still holds it, ends that process by pid and binds the same port; any other holder is left alone.
+
 ## When a push doesn't trigger anything
 
 GitHub's standard mitigation for an Actions incident is to **throttle webhook triggers**, which

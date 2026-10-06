@@ -78,7 +78,11 @@ import {
 } from './dispatch'
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
-import { cleanupStaleUpdateArtifacts, missingComponents } from './github-updater'
+import {
+  cleanupStaleUpdateArtifacts,
+  ensureBunBeforeRelaunch,
+  missingComponents,
+} from './github-updater'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { app } from './http-app'
 import {
@@ -134,7 +138,7 @@ import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
-import { relaunchWithHandoff, writeRelaunchAck } from './relaunch-handoff'
+import { relaunchWithHandoff, takeOverFromPredecessor, writeRelaunchAck } from './relaunch-handoff'
 import { planRelaunchSuccessor, relaunchRefusal } from './relaunch-identity'
 import {
   acknowledgeResetEvents,
@@ -1116,6 +1120,19 @@ if (isRelaunchSuccessor()) {
     `[agenthydra] relaunch successor pid ${process.pid} reported in; waiting for port ${PORT}`,
   )
   await waitForPortFree(PORT, 8000)
+  // The predecessor stays up when this build took longer than its ack deadline to start (the
+  // launcher downloads first): end it rather than hop to another port or run beside it.
+  await takeOverFromPredecessor({
+    port: PORT,
+    isHeld: () => isPortListening(PORT, HOST),
+    waitFree: (ms) => waitForPortFree(PORT, ms),
+    owner: await findPointerOwner(),
+    isPredecessor: (o) =>
+      relaunchRefusal({ argv: process.argv, selfPid: process.pid, owner: o }) === null,
+    endProcess: (pid, force) => {
+      process.kill(pid, force ? 'SIGKILL' : 'SIGTERM')
+    },
+  })
 }
 // Probe the SAME interface the server binds (HOST); the wildcard probe misses a
 // squatter that holds only 127.0.0.1 (e.g. wrangler dev's workerd on 8787).
@@ -1353,22 +1370,31 @@ initConnections()
 // is waiting gets the same answer rather than spawning a second successor.
 let relaunchInFlight: Promise<boolean> | null = null
 function relaunchDaemon(): Promise<boolean> {
-  relaunchInFlight ??= relaunchWithHandoff({
-    spawnSuccessor: spawnRelaunchSuccessor,
-    ackDir: POINTER_DIR,
-    selfPid: process.pid,
-    shutdown: () => {
-      // The successor is up and waiting for our port. The short delay only lets a
-      // /api/daemon/restart response flush before the socket carrying it closes.
-      setTimeout(async () => {
-        await stopHSwarm()
-        await flushConnectionsBeforeExit()
-        clearInstanceInfo()
-        stopAutoUpdate()
-        process.exit(0)
-      }, 800)
-    },
-  }).then((handedOver) => {
+  relaunchInFlight ??= (async () => {
+    // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
+    // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
+    if (IS_RELEASE) {
+      const r = await ensureBunBeforeRelaunch(LAUNCHER_PATH)
+      if (r.ok) console.log('[agenthydra] relaunch: the launcher confirmed its runtime is on disk')
+      else console.error(`[agenthydra] relaunch: launcher --ensure-bun failed: ${r.reason}`)
+    }
+    return relaunchWithHandoff({
+      spawnSuccessor: spawnRelaunchSuccessor,
+      ackDir: POINTER_DIR,
+      selfPid: process.pid,
+      shutdown: () => {
+        // The successor is up and waiting for our port. The short delay only lets a
+        // /api/daemon/restart response flush before the socket carrying it closes.
+        setTimeout(async () => {
+          await stopHSwarm()
+          await flushConnectionsBeforeExit()
+          clearInstanceInfo()
+          stopAutoUpdate()
+          process.exit(0)
+        }, 800)
+      },
+    })
+  })().then((handedOver) => {
     if (!handedOver) relaunchInFlight = null
     return handedOver
   })

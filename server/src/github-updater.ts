@@ -40,7 +40,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import { basename, dirname, join } from 'node:path'
-import { APP_ROOT, appEnv, IS_RELEASE, SERVICE_NAME, VERSION } from './config'
+import { APP_ROOT, appEnv, IS_RELEASE, LAUNCHER_PATH, SERVICE_NAME, VERSION } from './config'
 import { getSetting, setSetting } from './db'
 import { desk2 } from './desk2'
 import { orchestratorBusy } from './orchestrator'
@@ -1310,6 +1310,52 @@ function startDeskAgain(desk: DeskSeam, window: boolean): void {
   } catch (e) {
     failed(e instanceof Error ? e.message : String(e))
   }
+}
+
+/** How long the new launcher gets to fetch its bun: about 37 MB, on a slow link. */
+export const ENSURE_BUN_TIMEOUT_MS = 6 * 60_000
+
+/**
+ * Run the (new) launcher with `--ensure-bun`, hidden, so the bun that app/bun-version pins is on
+ * disk before the successor is spawned. Checks the exit code and keeps the stderr tail as the
+ * reason. Never throws: the caller reports a failure and relaunches anyway.
+ */
+export function ensureBunBeforeRelaunch(
+  launcherPath: string,
+  timeoutMs = ENSURE_BUN_TIMEOUT_MS,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  return new Promise((resolve) => {
+    let err = ''
+    let done = false
+    const finish = (r: { ok: true } | { ok: false; reason: string }) => {
+      if (done) return
+      done = true
+      resolve(r)
+    }
+    try {
+      const child = spawn(launcherPath, ['--ensure-bun'], {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        windowsHide: true,
+      })
+      const timer = setTimeout(() => {
+        child.kill()
+        finish({ ok: false, reason: `no answer within ${Math.round(timeoutMs / 1000)}s` })
+      }, timeoutMs)
+      child.stderr?.on('data', (d) => {
+        err = (err + String(d)).slice(-2000)
+      })
+      child.on('error', (e) => {
+        clearTimeout(timer)
+        finish({ ok: false, reason: e.message })
+      })
+      child.on('exit', (code) => {
+        clearTimeout(timer)
+        finish(code === 0 ? { ok: true } : { ok: false, reason: `exit ${code}: ${err.trim()}` })
+      })
+    } catch (e) {
+      finish({ ok: false, reason: e instanceof Error ? e.message : String(e) })
+    }
+  })
 }
 
 export async function applyUpdate(deps: ApplyUpdateDeps = {}): Promise<UpdateApplyResult> {

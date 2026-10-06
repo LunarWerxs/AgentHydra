@@ -138,3 +138,65 @@ export async function relaunchWithHandoff(deps: RelaunchHandoffDeps): Promise<bo
   )
   return false
 }
+
+export type TakeoverOutcome = 'port-free' | 'took-over' | 'left-alone' | 'failed'
+
+export interface TakeoverDeps {
+  port: number
+  /** Whether something still listens on `port`. */
+  isHeld: () => Promise<boolean>
+  /** Wait up to `ms` for `port` to be released. */
+  waitFree: (ms: number) => Promise<void>
+  /** The daemon the pointer names and /api/health confirmed, or null. */
+  owner: { pid: number; port: number } | null
+  /** Whether `owner` is the daemon this successor was relaunched from (relaunch-identity.ts). */
+  isPredecessor: (owner: { pid: number; port: number }) => boolean
+  /** Ask the pid to exit (or force it). Throws when the signal could not be sent. */
+  endProcess: (pid: number, force: boolean) => Promise<void> | void
+  releaseWaitMs?: number
+  log?: (message: string) => void
+}
+
+/**
+ * Successor side, after its normal wait for the port. A predecessor still holding it then is one
+ * whose ack deadline passed while the new launcher was downloading before this daemon could start,
+ * so it stayed up. It is ended here, and only it; any other holder is left alone and the caller
+ * carries on as it always did.
+ *
+ * Ending is by pid, never through the old daemon's /api/shutdown: that route needs the tray's
+ * session token, and without it drops the sentinel that makes the tray tear the whole app down.
+ */
+export async function takeOverFromPredecessor(deps: TakeoverDeps): Promise<TakeoverOutcome> {
+  const log = deps.log ?? ((m: string) => console.log(m))
+  const releaseWaitMs = deps.releaseWaitMs ?? 8000
+  if (!(await deps.isHeld())) return 'port-free'
+  const owner = deps.owner
+  if (!owner || owner.port !== deps.port || !deps.isPredecessor(owner)) {
+    log(
+      `[agenthydra] relaunch: port ${deps.port} is still held and the holder is not the daemon this one was relaunched from; leaving it alone`,
+    )
+    return 'left-alone'
+  }
+  log(
+    `[agenthydra] relaunch: predecessor pid ${owner.pid} still holds port ${deps.port} (its ack deadline passed while this build was being downloaded); ending it`,
+  )
+  for (const force of [false, true]) {
+    try {
+      await deps.endProcess(owner.pid, force)
+    } catch (e) {
+      log(
+        `[agenthydra] relaunch: could not end predecessor pid ${owner.pid}: ${e instanceof Error ? e.message : String(e)}`,
+      )
+      if (force) return 'failed'
+      continue
+    }
+    await deps.waitFree(releaseWaitMs)
+    if (!(await deps.isHeld())) {
+      log(`[agenthydra] relaunch: predecessor pid ${owner.pid} is gone; taking port ${deps.port}`)
+      return 'took-over'
+    }
+    if (!force) log(`[agenthydra] relaunch: predecessor pid ${owner.pid} is still up; forcing it`)
+  }
+  log(`[agenthydra] relaunch: predecessor pid ${owner.pid} did not release port ${deps.port}`)
+  return 'failed'
+}
