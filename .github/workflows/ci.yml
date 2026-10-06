@@ -302,11 +302,20 @@ jobs:
       - name: Typecheck (desk2)
         run: bun run typecheck
 
+      # The runner's TEMP is the 8.3 short form (C:\Users\RUNNER~1\...) while git, RepoYeti and the folder
+      # picker answer the long form, so the suite's temp-folder paths never matched what came back (ten
+      # failures on this job's first run, 2026-10-06). A PC's TEMP is the long form; runner.temp is too.
       - name: Test (desk2 server + web)
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: bun test ./server/test ./web/test
 
       - name: Test (desk2 hydra)
         working-directory: desk2/hydra
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: bun test ./src
 
       - name: Build (desk2)
