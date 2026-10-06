@@ -60,6 +60,12 @@ export function otherRunning(projects: DevWebProject[] | null, current: DevWebPr
     .sort((a, b) => a.proc.name.localeCompare(b.proc.name))
 }
 
+/** Servers the browser can show right now, for its empty page: this folder's that answer at an address, then the other folders'. */
+export function openable(projects: DevWebProject[] | null, current: DevWebProject | null): DevWebProcess[] {
+  const own = (current?.processes ?? []).filter((p) => p.status === 'running' && processAddress(p))
+  return [...own, ...otherRunning(projects, current).map((r) => r.proc)]
+}
+
 export type Dot = 'run' | 'wait' | 'bad' | 'off'
 
 export function statusDot(s: DevWebProcessStatus): Dot {

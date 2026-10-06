@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { clampPane, isUp, loadPaneWidth, needsSetup, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, statusDot, tailLines } from '../../src/components/servers/logic'
+import { clampPane, isUp, loadPaneWidth, needsSetup, openable, otherRunning, PANE_DEFAULT, PANE_KEY, PANE_MAX, PANE_MIN, paneView, parseAddress, statusDot, tailLines } from '../../src/components/servers/logic'
 
 const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
@@ -61,6 +61,14 @@ describe('servers running elsewhere', () => {
     expect(otherRunning([here, there], here).map((r) => `${r.project.id}/${r.proc.id}`)).toEqual(['there/api', 'there/web'])
     expect(otherRunning([here], here)).toEqual([])
     expect(otherRunning(null, null)).toEqual([])
+  })
+  it("offers the browser's empty page this folder's answering servers first, then the others'", () => {
+    const proc = (id: string, status: 'running' | 'stopped' | 'starting', port?: number) => ({ id, name: id, command: 'npm run dev', cwd: '', port, status, exitCode: null, projectId: '' })
+    const here = { ...project('here', 'C:/Users/me/Code/Here/.devwebui'), processes: [proc('off', 'stopped', 3001), proc('mine', 'running', 3000), proc('coming', 'starting', 3002), proc('worker', 'running')] }
+    const there = { ...project('there', 'C:/Users/me/Code/There/.devwebui'), processes: [proc('web', 'running', 5173)] }
+    expect(openable([here, there], here).map((p) => p.id)).toEqual(['mine', 'web'])
+    expect(openable([here, there], null).map((p) => p.id)).toEqual(['mine', 'web'])
+    expect(openable(null, null)).toEqual([])
   })
 })
 

@@ -1,17 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ArrowLeft, ArrowRight, ExternalLink, Globe, Play, RefreshCw, RotateCw, Square, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { processAddress, type DevWebProcess, type DevWebProject, type DevWebStatus } from '@shared/devwebui'
 import { devwebStart, devwebStatus, listProjects, processAction, processLogs, projectAction, RouteMissing, setUpFolder } from './api'
-import { clampPane, type FolderSetup, isUp, needsSetup, otherRunning, paneView, parseAddress, proxyAddress, statusDot, statusWord, tailLines, type Dot } from './logic'
+import { clampPane, type FolderSetup, isUp, needsSetup, openable, otherRunning, paneView, parseAddress, proxyAddress, statusDot, statusWord, tailLines, type Dot } from './logic'
 
-// The right-hand servers pane (title bar's Browser button), like Claude Code Desktop's: first the list of this
-// chat's localhost servers from DevWebUI (Start / Stop / Restart, Open for one that runs), and the browser only once
-// a server is opened; starting one opens it as soon as it answers. A folder that is not a project yet is set up by
-// itself (POST /dw/folder): from Claude Code's .claude/launch.json or package.json's dev scripts, every server
-// stopped. Opening the pane starts the server manager when it is not running; status is polled while the pane is
-// open and the window is on screen.
+// The right-hand servers pane (title bar's Browser button), like Claude Code Desktop's: a Servers | Browser switch
+// in its header, always there. Servers is the list of this chat's localhost servers from DevWebUI (Start / Stop /
+// Restart, Open for one that runs), centred in the pane; Browser is the page, with its address bar even before
+// anything is opened. Opening a server shows the browser, and starting one opens it as soon as it answers. A folder
+// that is not a project yet is set up by itself (POST /dw/folder): from Claude Code's .claude/launch.json or
+// package.json's dev scripts, every server stopped. Opening the pane starts the server manager when it is not
+// running; status is polled while the pane is open and the window is on screen.
 const props = defineProps<{ cwd: string; width: number }>()
 const emit = defineEmits<{ close: []; resize: [width: number] }>()
 
@@ -164,8 +165,15 @@ async function tryAgain() {
   if (status.value === pending) status.value = null
 }
 
-// ---- the browser: hidden until a server (or an address) is opened ----
+// ---- the browser: one click away on the header's switch, and shown when a server (or an address) is opened ----
 const mode = ref<'list' | 'browser'>('list')
+const addressInput = ref<HTMLInputElement | null>(null)
+/** With no page open yet, the switch lands in the address bar. */
+function showBrowser() {
+  mode.value = 'browser'
+  if (!current.value) void nextTick(() => addressInput.value?.focus())
+}
+const ready = computed(() => openable(projects.value, project.value))
 const openId = ref<string | null>(null)
 /** The server just started from the list: it opens once it answers. */
 const pendingOpen = ref<string | null>(null)
@@ -273,6 +281,9 @@ const TEXT_BTN =
   'flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[12px] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40'
 const INPUT =
   'h-6 min-w-0 flex-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[12px] text-[var(--text)] placeholder:text-[var(--text-muted)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
+const TAB =
+  'flex h-6 shrink-0 cursor-default items-center gap-1 rounded-[var(--radius-6)] px-2 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
+const tab = (on: boolean) => [TAB, on ? 'bg-[var(--fill-selected)] font-medium text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]']
 </script>
 
 <template>
@@ -288,117 +299,23 @@ const INPUT =
       @keydown="onResizeKey"
     />
 
-    <template v-if="mode === 'list'">
-      <div class="flex h-8 shrink-0 items-center gap-1 pl-3 pr-2">
-        <span class="font-medium">Servers</span>
+    <div class="flex h-8 shrink-0 items-center gap-1 px-2">
+      <div role="tablist" aria-label="Servers or browser" class="flex shrink-0 items-center gap-0.5">
+        <button type="button" role="tab" :aria-selected="mode === 'list'" :class="tab(mode === 'list')" @click="mode = 'list'">Servers</button>
+        <button type="button" role="tab" :aria-selected="mode === 'browser'" :class="tab(mode === 'browser')" @click="showBrowser"><Globe class="size-3.5" />Browser</button>
+      </div>
+      <template v-if="mode === 'list'">
         <span v-if="project" class="ml-1 truncate text-[12px] text-[var(--text-muted)]">{{ project.name }}</span>
         <span class="flex-1" />
         <template v-if="project && project.processes.length > 1">
           <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="all('start')"><Play class="size-3" />Start all</button>
           <button type="button" :class="TEXT_BTN" :disabled="busy.has('all')" @click="all('stop')"><Square class="size-3" />Stop all</button>
         </template>
-        <Tip v-if="current" label="Back to the browser">
-          <button type="button" :class="ICON_BTN" aria-label="Back to the browser" @click="mode = 'browser'"><Globe class="size-4" /></button>
-        </Tip>
         <Tip label="Refresh">
           <button type="button" :class="ICON_BTN" aria-label="Refresh servers" @click="refresh"><RefreshCw class="size-4" /></button>
         </Tip>
-        <Tip label="Close">
-          <button type="button" :class="ICON_BTN" aria-label="Close servers" @click="emit('close')"><X class="size-4" /></button>
-        </Tip>
-      </div>
-
-      <div role="status" aria-live="polite" class="shrink-0 px-3">
-        <template v-if="view.kind === 'loading'"><span class="text-[var(--text-muted)]">Loading…</span></template>
-        <template v-else-if="view.kind === 'starting'"><span class="text-[var(--text-muted)]">Starting the server manager</span></template>
-        <template v-else-if="view.kind === 'looking'"><span class="text-[var(--text-muted)]">Looking for servers in this folder</span></template>
-      </div>
-
-      <div class="min-h-0 flex-1 overflow-y-auto">
-        <div v-if="view.kind === 'restart-desk'" class="mx-3 mt-1 rounded-[var(--radius-10)] bg-[var(--warning-bg)] px-3 py-2 text-[var(--warning-text)]">
-          Restart Hydra Desk 2 to turn on servers.
-        </div>
-
-        <div v-else-if="view.kind === 'failed'" class="mx-3 mt-1 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">
-          <div>The server manager did not start.</div>
-          <div class="break-words font-mono text-[12px]">{{ view.reason }}</div>
-          <button type="button" :class="TEXT_BTN" class="self-start" @click="tryAgain">Try again</button>
-        </div>
-
-        <div v-else-if="view.kind === 'stopped'" class="mx-3 mt-1 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2">
-          <div>The server manager stopped.</div>
-          <button type="button" :class="TEXT_BTN" class="self-start" @click="tryAgain">Start it</button>
-        </div>
-
-        <div v-else-if="view.kind === 'unreachable'" class="mx-3 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">
-          The server manager is running but did not answer: {{ view.reason }}
-        </div>
-
-        <div v-else-if="view.kind === 'looking'" class="break-all px-3 pt-1 text-[var(--text-muted)]">{{ cwd }}</div>
-
-        <div v-else-if="view.kind === 'nothing'" class="flex flex-col gap-2 px-3 pt-2">
-          <div class="font-medium">No servers in this folder</div>
-          <div class="break-all text-[var(--text-muted)]">{{ cwd }}</div>
-          <div class="rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2" role="status">{{ view.reason }}</div>
-          <div class="text-[12px] text-[var(--text-muted)]">Servers come from Claude Code's .claude/launch.json, or the dev scripts in package.json.</div>
-          <button type="button" :class="TEXT_BTN" class="self-start" @click="lookAgain">Look again</button>
-        </div>
-
-        <div v-else-if="project" class="px-2 pb-1">
-          <div v-if="project.processes.length === 0" class="px-1 py-2 text-[var(--text-muted)]">This project has no servers.</div>
-          <ul v-else class="flex flex-col gap-0.5" aria-label="This folder's servers">
-            <li v-for="p in project.processes" :key="p.id" class="flex flex-col rounded-[var(--radius-6)] px-1 py-0.5 hover:bg-[var(--fill-hover)]">
-              <div class="flex min-h-[28px] items-center gap-1.5">
-                <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(p.status)]" aria-hidden="true" />
-                <span class="truncate font-medium">{{ p.name }}</span>
-                <span v-if="p.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ p.port }}</span>
-                <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ pendingOpen === p.id && (p.status === 'starting' || p.status === 'waiting') ? 'starting, opens when it answers' : statusWord(p) }}</span>
-                <span class="flex-1" />
-                <button v-if="p.status === 'running' && processAddress(p)" type="button" :class="TEXT_BTN" :aria-label="`Open ${p.name}`" @click="open(p)">Open</button>
-                <Tip :label="isUp(p.status) ? 'Stop' : 'Start'">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start'} ${p.name}`" @click="toggle(p)">
-                    <Square v-if="isUp(p.status)" class="size-3.5" />
-                    <Play v-else class="size-3.5" />
-                  </button>
-                </Tip>
-                <Tip label="Restart">
-                  <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`Restart ${p.name}`" @click="restart(p)"><RotateCw class="size-3.5" /></button>
-                </Tip>
-              </div>
-              <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 py-1 font-mono text-[11px] leading-4 text-[var(--text-2)]" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
-            </li>
-          </ul>
-        </div>
-
-        <div v-if="elsewhere.length" class="px-2 pb-1 pt-2">
-          <div class="px-1 pb-0.5 text-[12px] font-medium text-[var(--text-muted)]">Also running</div>
-          <ul class="flex flex-col gap-0.5" aria-label="Servers running for other folders">
-            <li v-for="r in elsewhere" :key="r.proc.id" class="flex min-h-[28px] items-center gap-1.5 rounded-[var(--radius-6)] px-1 hover:bg-[var(--fill-hover)]">
-              <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(r.proc.status)]" aria-hidden="true" />
-              <span class="truncate font-medium">{{ r.proc.name }}</span>
-              <span class="truncate text-[12px] text-[var(--text-muted)]">{{ r.project.name }}</span>
-              <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ r.proc.port }}</span>
-              <span class="flex-1" />
-              <button type="button" :class="TEXT_BTN" :aria-label="`Open ${r.proc.name}`" @click="open(r.proc)">Open</button>
-              <Tip label="Stop">
-                <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="toggle(r.proc)"><Square class="size-3.5" /></button>
-              </Tip>
-            </li>
-          </ul>
-        </div>
-
-        <div v-if="actionError" class="mx-2 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ actionError }}</div>
-      </div>
-
-      <form class="flex h-9 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="openAddress">
-        <input v-model="goTo" type="text" spellcheck="false" aria-label="Open an address" placeholder="Open an address, or a port" :class="INPUT" />
-      </form>
-    </template>
-
-    <!-- Kept mounted while the list shows, so going back to the list does not reload the page. -->
-    <div v-show="mode === 'browser'" class="flex min-h-0 flex-1 flex-col">
-      <div class="flex h-8 shrink-0 items-center gap-1 pl-1 pr-2">
-        <button type="button" :class="TEXT_BTN" class="bg-transparent" aria-label="Back to the servers" @click="mode = 'list'"><ArrowLeft class="size-3.5" />Servers</button>
+      </template>
+      <template v-else>
         <template v-if="selected">
           <span class="ml-1 size-2 shrink-0 rounded-full" :class="DOT[statusDot(selected.status)]" aria-hidden="true" />
           <span class="truncate font-medium">{{ selected.name }}</span>
@@ -408,21 +325,116 @@ const INPUT =
         <Tip v-if="selected && isUp(selected.status)" label="Stop">
           <button type="button" :class="ICON_BTN" :disabled="busy.has(selected.id)" :aria-label="`Stop ${selected.name}`" @click="toggle(selected)"><Square class="size-3.5" /></button>
         </Tip>
-        <Tip label="Close">
-          <button type="button" :class="ICON_BTN" aria-label="Close servers" @click="emit('close')"><X class="size-4" /></button>
-        </Tip>
+      </template>
+      <Tip label="Close">
+        <button type="button" :class="ICON_BTN" aria-label="Close servers" @click="emit('close')"><X class="size-4" /></button>
+      </Tip>
+    </div>
+
+    <template v-if="mode === 'list'">
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <!-- Centred in the pane, both ways; a list taller than the pane starts at the top and scrolls. -->
+        <div class="mx-auto flex min-h-full w-full max-w-[480px] flex-col justify-center py-2">
+          <div role="status" aria-live="polite" class="px-3 text-center">
+            <template v-if="view.kind === 'loading'"><span class="text-[var(--text-muted)]">Loading…</span></template>
+            <template v-else-if="view.kind === 'starting'"><span class="text-[var(--text-muted)]">Starting the server manager</span></template>
+            <template v-else-if="view.kind === 'looking'"><span class="text-[var(--text-muted)]">Looking for servers in this folder</span></template>
+          </div>
+
+          <div v-if="view.kind === 'restart-desk'" class="mx-3 rounded-[var(--radius-10)] bg-[var(--warning-bg)] px-3 py-2 text-center text-[var(--warning-text)]">
+            Restart Hydra Desk 2 to turn on servers.
+          </div>
+
+          <div v-else-if="view.kind === 'failed'" class="mx-3 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-center text-[var(--danger-text)]" role="alert">
+            <div>The server manager did not start.</div>
+            <div class="break-words font-mono text-[12px]">{{ view.reason }}</div>
+            <button type="button" :class="TEXT_BTN" class="self-center" @click="tryAgain">Try again</button>
+          </div>
+
+          <div v-else-if="view.kind === 'stopped'" class="mx-3 flex flex-col gap-2 rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2 text-center">
+            <div>The server manager stopped.</div>
+            <button type="button" :class="TEXT_BTN" class="self-center" @click="tryAgain">Start it</button>
+          </div>
+
+          <div v-else-if="view.kind === 'unreachable'" class="mx-3 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-center text-[var(--danger-text)]" role="alert">
+            The server manager is running but did not answer: {{ view.reason }}
+          </div>
+
+          <div v-else-if="view.kind === 'looking'" class="break-all px-3 pt-1 text-center text-[var(--text-muted)]">{{ cwd }}</div>
+
+          <div v-else-if="view.kind === 'nothing'" class="flex flex-col gap-2 px-3 text-center">
+            <div class="font-medium">No servers in this folder</div>
+            <div class="break-all text-[var(--text-muted)]">{{ cwd }}</div>
+            <div class="rounded-[var(--radius-10)] bg-[var(--fill-secondary)] px-3 py-2" role="status">{{ view.reason }}</div>
+            <div class="text-[12px] text-[var(--text-muted)]">Servers come from Claude Code's .claude/launch.json, or the dev scripts in package.json.</div>
+            <button type="button" :class="TEXT_BTN" class="self-center" @click="lookAgain">Look again</button>
+          </div>
+
+          <div v-else-if="project" class="px-2 pb-1">
+            <div v-if="project.processes.length === 0" class="px-1 py-2 text-center text-[var(--text-muted)]">This project has no servers.</div>
+            <ul v-else class="flex flex-col gap-0.5" aria-label="This folder's servers">
+              <li v-for="p in project.processes" :key="p.id" class="flex flex-col rounded-[var(--radius-6)] px-1 py-0.5 hover:bg-[var(--fill-hover)]">
+                <div class="flex min-h-[28px] items-center gap-1.5">
+                  <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(p.status)]" aria-hidden="true" />
+                  <span class="truncate font-medium">{{ p.name }}</span>
+                  <span v-if="p.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ p.port }}</span>
+                  <span class="shrink-0 text-[12px] text-[var(--text-muted)]">{{ pendingOpen === p.id && (p.status === 'starting' || p.status === 'waiting') ? 'starting, opens when it answers' : statusWord(p) }}</span>
+                  <span class="flex-1" />
+                  <button v-if="p.status === 'running' && processAddress(p)" type="button" :class="TEXT_BTN" :aria-label="`Open ${p.name}`" @click="open(p)">Open</button>
+                  <Tip :label="isUp(p.status) ? 'Stop' : 'Start'">
+                    <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start'} ${p.name}`" @click="toggle(p)">
+                      <Square v-if="isUp(p.status)" class="size-3.5" />
+                      <Play v-else class="size-3.5" />
+                    </button>
+                  </Tip>
+                  <Tip label="Restart">
+                    <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id)" :aria-label="`Restart ${p.name}`" @click="restart(p)"><RotateCw class="size-3.5" /></button>
+                  </Tip>
+                </div>
+                <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 py-1 font-mono text-[11px] leading-4 text-[var(--text-2)]" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="elsewhere.length" class="px-2 pb-1 pt-2">
+            <div class="px-1 pb-0.5 text-[12px] font-medium text-[var(--text-muted)]">Also running</div>
+            <ul class="flex flex-col gap-0.5" aria-label="Servers running for other folders">
+              <li v-for="r in elsewhere" :key="r.proc.id" class="flex min-h-[28px] items-center gap-1.5 rounded-[var(--radius-6)] px-1 hover:bg-[var(--fill-hover)]">
+                <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(r.proc.status)]" aria-hidden="true" />
+                <span class="truncate font-medium">{{ r.proc.name }}</span>
+                <span class="truncate text-[12px] text-[var(--text-muted)]">{{ r.project.name }}</span>
+                <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-[var(--text-muted)]">:{{ r.proc.port }}</span>
+                <span class="flex-1" />
+                <button type="button" :class="TEXT_BTN" :aria-label="`Open ${r.proc.name}`" @click="open(r.proc)">Open</button>
+                <Tip label="Stop">
+                  <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="toggle(r.proc)"><Square class="size-3.5" /></button>
+                </Tip>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="actionError" class="mx-2 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ actionError }}</div>
+        </div>
       </div>
+
+      <form class="flex h-9 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="openAddress">
+        <input v-model="goTo" type="text" spellcheck="false" aria-label="Open an address" placeholder="Open an address, or a port" :class="INPUT" />
+      </form>
+    </template>
+
+    <!-- Kept mounted while the list shows, so going back to the list does not reload the page. -->
+    <div v-show="mode === 'browser'" class="flex min-h-0 flex-1 flex-col">
       <form class="flex h-8 shrink-0 items-center gap-1 border-t border-border px-2" @submit.prevent="submitAddress">
         <Tip label="Back"><button type="button" :class="ICON_BTN" aria-label="Back" :disabled="at <= 0" @click="back"><ArrowLeft class="size-4" /></button></Tip>
         <Tip label="Forward"><button type="button" :class="ICON_BTN" aria-label="Forward" :disabled="at >= history.length - 1" @click="forward"><ArrowRight class="size-4" /></button></Tip>
         <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" :disabled="!current" @click="reloads++"><RotateCw class="size-4" /></button></Tip>
-        <input v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="http://localhost:3000" :class="INPUT" />
+        <input ref="addressInput" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address, or a port" :class="INPUT" />
         <Tip label="Open in the system browser">
           <a v-if="current" :href="current" target="_blank" rel="noopener noreferrer" :class="ICON_BTN" aria-label="Open in the system browser"><ExternalLink class="size-4" /></a>
           <span v-else :class="ICON_BTN" class="opacity-40" aria-hidden="true"><ExternalLink class="size-4" /></span>
         </Tip>
       </form>
-      <div class="relative min-h-0 flex-1 border-t border-border bg-white">
+      <div class="relative min-h-0 flex-1 border-t border-border bg-white bg-clip-padding">
         <iframe
           v-if="frameSrc"
           :key="`${frameSrc}#${reloads}`"
@@ -431,7 +443,16 @@ const INPUT =
           class="size-full border-0"
           referrerpolicy="no-referrer"
         />
-        <div v-if="selected && !isUp(selected.status)" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
+        <div v-if="!current" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
+          <div class="font-medium">No page open</div>
+          <div class="text-[var(--text-muted)]">{{ ready.length ? 'Open a running server, or type an address or a port above.' : 'Type an address or a port above, or start a server under Servers.' }}</div>
+          <div v-if="ready.length" class="flex flex-wrap justify-center gap-1">
+            <button v-for="p in ready" :key="p.id" type="button" :class="TEXT_BTN" :aria-label="`Open ${p.name}`" @click="open(p)">
+              <span class="size-2 shrink-0 rounded-full" :class="DOT.run" aria-hidden="true" />{{ p.name }}<span v-if="p.port" class="tnum text-[var(--text-muted)]">:{{ p.port }}</span>
+            </button>
+          </div>
+        </div>
+        <div v-else-if="selected && !isUp(selected.status)" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
           <div class="text-[var(--text-muted)]">{{ selected.name }} is {{ statusWord(selected) }}.</div>
           <button type="button" :class="TEXT_BTN" :disabled="busy.has(selected.id)" @click="toggle(selected)"><Play class="size-3" />Start</button>
         </div>
