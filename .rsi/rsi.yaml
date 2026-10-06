@@ -25,3 +25,12 @@ metrics:
     file: desk2/tmp/stream-frames.json
     pick: 'json:$.layoutsPerChunk'
     gate: exact
+  # Claude Code keeps 2,048 characters of a server's instructions and every chat pays them on every
+  # request: past the cut, the last rules are never read.
+  - id: mcp.instructions_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: 'bun -e "const m = await import(''./server/src/mcp.ts''); console.log(JSON.stringify({chars: m.SERVER_INSTRUCTIONS.length}))"'
+    pick: 'json:$.chars'
+    light: true
