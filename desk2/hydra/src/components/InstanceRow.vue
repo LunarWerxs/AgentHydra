@@ -208,7 +208,7 @@ function onContextMenu(e: MouseEvent): void {
             :title="$t('codexInstances.noSessionLimit')"
           >{{ $t('codexInstances.noSessionLimitShort') }}</span>
         </div>
-        <span v-else class="text-muted-foreground" :title="row.noQuota">—</span>
+        <span v-else class="text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>
       <TableCell v-else-if="col.key === 'weekly'">
         <div v-if="row.usage" class="flex items-center gap-1.5">
@@ -227,7 +227,7 @@ function onContextMenu(e: MouseEvent): void {
             />
           </CopyResetDate>
         </div>
-        <span v-else class="text-muted-foreground" :title="row.noQuota">—</span>
+        <span v-else class="text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>
 
       <TableCell v-else-if="col.key === 'usage'">
@@ -238,7 +238,7 @@ function onContextMenu(e: MouseEvent): void {
           :usage-key="row.usage.key"
           @check="row.usage.onCheck()"
         />
-        <span v-else class="text-xs text-muted-foreground" :title="row.noQuota">—</span>
+        <span v-else class="text-xs text-muted-foreground" :title="row.noQuota">{{ row.noQuotaLabel ?? '—' }}</span>
       </TableCell>
 
       <TableCell v-else-if="col.key === 'plan'">

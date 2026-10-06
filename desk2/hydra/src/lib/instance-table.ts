@@ -257,6 +257,8 @@ export interface InstanceRowModel {
     onCheck: () => void
   }
   noQuota?: string
+  /** Said in the quota cells instead of the dash, when there is no window by design ("Unlimited"). */
+  noQuotaLabel?: string
   plan?: { label: string; plain?: boolean; title?: string } | null
   /** The Last active cell: "Now" while running, else how long ago. */
   lastRunning?: { label: string; running: boolean; title?: string } | null
