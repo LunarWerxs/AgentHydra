@@ -11,6 +11,7 @@ import {
   Pencil,
   RefreshCw,
   SearchCheck,
+  Trash2,
   TriangleAlert,
   X,
 } from '@lucide/vue'
@@ -25,6 +26,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
+import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import InstanceCard from '@/components/InstanceCard.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
@@ -45,7 +47,7 @@ import { type InstanceRowModel, instanceColumns } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
-const { instances, jobs, errors, loaded, loading, loadError, busy, run, logout, recover, refreshFree } =
+const { instances, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, recover, refreshFree } =
   useFreeInstances()
 /** Whether the table is unfolded, kept in this browser, as on the CLI tab. */
 const accountsOpen = useStorage('agenthydra.free.accountsOpen', true)
@@ -111,7 +113,15 @@ function rowModel(i: FreeInstance): InstanceRowModel {
     status: {
       on: i.loggedIn,
       pulse: working,
-      title: t(working ? 'freeInstances.working' : i.loggedIn ? 'freeInstances.connected' : 'freeInstances.unchecked'),
+      title: t(
+        working
+          ? 'freeInstances.working'
+          : i.loggedIn
+            ? 'freeInstances.connected'
+            : i.checkedAt
+              ? 'freeInstances.signedOut'
+              : 'freeInstances.unchecked',
+      ),
     },
     name: {
       shown,
@@ -140,7 +150,14 @@ function rowModel(i: FreeInstance): InstanceRowModel {
               : t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
           noQuotaLabel: t('freeInstances.unlimited'),
         }
-      : {
+      : i.provider === 'claude' && i.usage && !usageFor(i)
+        ? // Claude answers a free account's usage with empty windows until it sends a message (seen
+          // 2026-10-06), which the cell used to call "Not checked yet.".
+          {
+            noQuota: t('freeInstances.noReadingHint'),
+            noQuotaLabel: t('freeInstances.noReading'),
+          }
+        : {
           usage: {
             snapshot: usageFor(i),
             checking: runningOf(i, 'auth', 'usage'),
@@ -190,6 +207,14 @@ function menuActionsFor(i: FreeInstance): MenuIconAction[] {
       closes: true,
       run: () => openLogout(i),
       disabled: !i.loggedIn || busy(i.id),
+    },
+    {
+      key: 'delete',
+      icon: Trash2,
+      label: t('freeInstances.delete'),
+      closes: true,
+      run: () => openDelete(i),
+      disabled: busy(i.id),
     },
   ]
 }
@@ -255,6 +280,32 @@ async function onLogoutConfirm() {
     loggingOut.value = false
     logoutOpen.value = false
     logoutTarget.value = null
+  }
+}
+
+// --- delete: removes the account here and on the owner's other PCs; its chats stay at the provider ---
+const deleteOpen = ref(false)
+const deleteTarget = ref<FreeInstance | null>(null)
+const deleting = ref(false)
+const deleteError = ref<string | null>(null)
+function openDelete(i: FreeInstance) {
+  deleteTarget.value = i
+  deleteError.value = null
+  deleteOpen.value = true
+}
+async function onDeleteConfirm() {
+  const i = deleteTarget.value
+  if (!i) return
+  deleting.value = true
+  deleteError.value = null
+  try {
+    if (await remove(i)) {
+      toast.success(t('freeInstances.toastDeleted', { name: i.name }))
+      deleteOpen.value = false
+      deleteTarget.value = null
+    } else deleteError.value = errors[i.id] || t('freeInstances.deleteFailed')
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -386,6 +437,14 @@ async function onRenameSubmit(name: string) {
       :description="$t('freeInstances.logoutDialogDescription')"
       :submitting="loggingOut"
       @confirm="onLogoutConfirm"
+    />
+    <DeleteInstanceDialog
+      v-model:open="deleteOpen"
+      namespace="freeInstances"
+      :instance-name="deleteTarget?.name ?? null"
+      :submitting="deleting"
+      :error-message="deleteError"
+      @confirm="onDeleteConfirm"
     />
     <CliInstanceNameDialog
       v-model:open="renameOpen"

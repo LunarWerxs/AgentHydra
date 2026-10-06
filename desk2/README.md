@@ -492,11 +492,25 @@ up and on: the same store, key and token, read from the AgentHydra daemon on thi
 row, sealed with the sync key; only its cookies travel (they are the sign-in), sealed again on each PC
 for its own Windows user. The newer sign-in wins (the one whose sign-in cookie expires later); an account
 another PC added appears here with its number and name and is checked at once; a log out reaches every
-PC still on that login. A pass runs 15 s after start, every 2 minutes, and right after a sign-in or a
+PC still on that login, and a delete reaches every PC (its row becomes a sealed marker no PC adopts
+again). A pass runs 15 s after start, every 2 minutes, and right after a sign-in or a
 log out; `GET /api/free/sync` says when it last ran and its last error. A PC takes part once it runs
 Desk 2 with this feature and its AgentHydra is joined to the same Login sync.
 
-The table provides login checks, usage, renaming and New private chat. Conversations live under
+The table provides login checks, usage, renaming, New private chat and Delete (the account, its chat
+handles and its saved login, here and on the other PCs; its chats stay at the provider). Opening it
+checks, once per page session, each account never checked or whose reading is over 15 minutes old.
+Claude reports no usage for a free account until it sends a message, so such a row says "No reading yet".
+
+**Keep windows running** (owner, 2026-10-06; `server/src/free-instances/keepalive.ts`) mirrors
+AgentHydra's CLI keepalive for Free Claude logins: every 10 minutes, a signed-in account whose 5-hour
+window is not running gets one temporary chat ("Reply with the single word: ok", the `nudge` command) on
+the cheapest model it offers, then a usage check. It is skipped at or above the weekly floor, when the
+reading is unknown, within 5 hours of a nudge and within an hour of a failed one; the nudge is never
+recorded as a chat. Off by default, saved in `free/accounts.json`: `GET /api/free/settings`, and
+`PATCH /api/free/settings` with `{keepWindows, weeklyFloorPct}` (a whole 1-100, default 85).
+
+Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
 **Sign in** opens the installed Chrome or Edge on a throwaway profile through zendriver (the CLI sign-in window's engine); normal messaging uses HTTP, without a browser fallback. Desk's Free runtime no longer installs Playwright or Camoufox (an older runtime is rebuilt once).
@@ -512,9 +526,9 @@ is a plan policy, not a measured remaining-message count; unverified accounts st
 
 For local automation, `GET /api/free/status` reports instances and jobs; `POST /api/free/instances`
 accepts `{provider, name}` and returns the instance UUID. `PATCH /api/free/instances/{instanceId}`
-renames it with `{name}`. `GET /api/free/threads` lists chat metadata including instance, local and
+renames it with `{name}`; `DELETE` there deletes it (409 while one of its operations runs). `GET /api/free/threads` lists chat metadata including instance, local and
 server UUIDs. `POST /api/free/jobs` accepts a unique `requestId` UUID, `instanceId`, matching `provider`
-(`claude` or `chatgpt`) and `command` (`auth`, `usage`, `chats`, `read`, `chat`, `resume`, `track`, `login`). Messages
+(`claude` or `chatgpt`) and `command` (`auth`, `usage`, `chats`, `read`, `chat`, `resume`, `track`, `login`, and `nudge` for Claude). Messages
 use `prompt`; `read`, `resume` and `track` require an explicit `chatId` UUID. `name` is optional for new
 chats and required for tracking. Claude messages also accept `webSearch`. Poll
 `GET /api/free/jobs/{requestId}` until `state` is `done`, then inspect `result.ok` and `result.error`.
