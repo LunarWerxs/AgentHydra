@@ -196,6 +196,18 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return manager.send(c.req.param('id'), text, images, { now: true })
     }),
   )
+  // AgentHydra's CliMayte ping to the chat that dispatched workers, by its Claude session id: a turn starts (a closed
+  // chat is resumed), or the note queues behind a running one. 404 when no chat here owns the session, so AgentHydra
+  // falls back to the CLI's own pipe.
+  app.post('/api/sessions/:sessionId/ping', (c) =>
+    answer(c, async () => {
+      const { text } = parseSend(await body(c))
+      const chatId = manager.chatForSession(c.req.param('sessionId'))
+      if (!chatId) throw new ChatError(404, 'no chat here owns that session')
+      const { queued } = await manager.send(chatId, text, undefined, { noTitle: true })
+      return { ok: true, chatId, queued }
+    }),
+  )
   app.post('/api/chats/:id/send-now', (c) =>
     answer(c, async () => {
       const id = c.req.param('id')

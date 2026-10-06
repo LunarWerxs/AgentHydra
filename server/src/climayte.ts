@@ -3951,6 +3951,33 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
   },
 }
 
+/** Desk 2's own route for a chat it runs (desk2 plugins/20-engine.ts POST /api/sessions/:id/ping): a
+ *  real turn, with a closed chat resumed. 404 or no server there means the chat is not one of its. */
+const desk: NonNullable<CliMaytePingDeps['desk']> = {
+  async send(sessionId, text) {
+    const { DESK2_URL } = await import('./config')
+    if (!DESK2_URL) return { ok: false, reason: 'no Desk 2 here', notDesk: true }
+    try {
+      const res = await fetch(`${DESK2_URL}/api/sessions/${encodeURIComponent(sessionId)}/ping`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (res.status === 404) return { ok: false, reason: 'not a Desk 2 chat', notDesk: true }
+      return { ok: res.ok, reason: res.ok ? 'sent' : `desk ${res.status}` }
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      const code = (err as { code?: string }).code ?? ''
+      return {
+        ok: false,
+        reason: why,
+        notDesk: /ECONNREFUSED|Unable to connect/i.test(`${why} ${code}`),
+      }
+    }
+  },
+}
+
 function startPing(): void {
   if (ping) return
   mkdirSync(PING_DIR, { recursive: true })
@@ -3960,6 +3987,7 @@ function startPing(): void {
     subscribe: onCliMayteChange,
     climayteSend: (id, text) => climayteSend(id, text),
     composer,
+    desk,
     ...pingOverrides,
   })
 }

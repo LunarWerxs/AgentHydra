@@ -174,6 +174,7 @@ function harness(
     workers?: PingWorker[]
     peer?: (n: number) => { ok: boolean; reason: string }
     composer?: { eligible: boolean; ok: boolean }
+    desk?: { ok: boolean; reason: string; notDesk?: boolean }
     send?: (id: string, text: string) => { ok: boolean; message: string }
     start?: number
   } = {},
@@ -184,6 +185,7 @@ function harness(
   let nextId = 1
   const sent: Sent[] = []
   const composerSent: string[] = []
+  const deskSent: Sent[] = []
   const toasts: string[] = []
   const workerSends: Array<[string, string]> = []
   const journal: Array<Record<string, unknown>> = []
@@ -226,6 +228,15 @@ function harness(
           },
         }
       : undefined,
+    desk: opts.desk
+      ? {
+          send: async (sessionId, text) => {
+            const r = opts.desk as { ok: boolean; reason: string; notDesk?: boolean }
+            if (r.ok) deskSent.push({ sessionId, text, home: '' })
+            return r
+          },
+        }
+      : undefined,
     toast: async (n) => {
       toasts.push(`${n.title}\n${n.body}`)
     },
@@ -263,6 +274,7 @@ function harness(
     at,
     sent,
     composerSent,
+    deskSent,
     toasts,
     workerSends,
     journal,
@@ -601,6 +613,44 @@ describe('the outbox', () => {
     expect(h.toasts).toHaveLength(0)
     expect(h.ping.unreadPings(SID).count).toBe(0)
     expect(h.journal.filter((j) => j.event === 'ping-failed')).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('a Desk 2 chat is pinged through Desk 2 and the peer pipe is never touched', async () => {
+    const a = running('w-a')
+    const h = harness({ workers: [a], desk: { ok: true, reason: 'sent' } })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.deskSent).toHaveLength(1)
+    expect(h.deskSent[0].sessionId).toBe(SID)
+    expect(h.peerCalls()).toBe(0)
+    await h.at(3_600_000)
+    expect(h.deskSent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('not a Desk 2 chat (notDesk): the peer pipe goes as before, with no journal line', async () => {
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.deskSent).toHaveLength(0)
+    expect(h.peerCalls()).toBe(1)
+    expect(h.sent).toHaveLength(1)
+    expect(h.journal.filter((j) => j.event === 'ping-failed')).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('a Desk 2 failure other than notDesk is journalled, then the peer pipe goes', async () => {
+    const a = running('w-a')
+    const h = harness({ workers: [a], desk: { ok: false, reason: 'desk 500' } })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.journal.filter((j) => j.event === 'ping-failed' && j.step === 'desk')).toHaveLength(1)
+    expect(h.sent).toHaveLength(1)
     h.ping.stop()
   })
 

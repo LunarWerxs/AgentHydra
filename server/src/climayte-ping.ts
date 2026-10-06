@@ -13,7 +13,10 @@
 // written there as pending before the send and marked delivered only once the send is confirmed, so
 // a daemon restart replays what was not delivered and never what was.
 //
-// DELIVERY, in order: the chat's own peer pipe (peer-message.ts; it queues behind a running turn).
+// DELIVERY, in order: a chat Hydra Desk 2 runs gets it from Desk 2 (POST /api/sessions/:id/ping),
+// which resumes a closed chat and starts a turn, or queues behind a running one; the peer pipe only
+// queues a note in an idle chat, so it never woke one (owner, 2026-10-06). Any other chat, or Desk 2
+// unreachable: the chat's own peer pipe (peer-message.ts; it queues behind a running turn).
 // A write the pipe accepted is delivered, once, even when the transcript has not grown yet (a busy
 // chat shows it when its turn ends); only a chat with no pipe, or a refused write, is retried every
 // 2 minutes for 2 hours; then, only for a failed or settled group on a desktop chat whose instance
@@ -428,6 +431,14 @@ export interface CliMaytePingDeps {
     eligible(origin: ChatOrigin): Promise<boolean>
     send(sessionId: string, text: string): Promise<{ ok: boolean; reason: string }>
   }
+  /** Hydra Desk 2's ping route, tried first for a chat: where Desk 2 runs the chat it starts a real turn
+   *  (resuming a closed chat). `notDesk`: no Desk 2 chat owns the session (404) or Desk 2 is not up. */
+  desk?: {
+    send(
+      sessionId: string,
+      text: string,
+    ): Promise<{ ok: boolean; reason: string; notDesk?: boolean }>
+  }
   /** One OS notification (notify-os sendOsNotification by default). */
   toast?(n: { title: string; body: string }): Promise<unknown>
   /** One line per failed delivery; appended to `<dir>/pings-journal.jsonl` by default. */
@@ -635,6 +646,14 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   }
 
   const sendChat = async (box: OriginBox, o: ChatOrigin, batch: QueuedPing[], text: string) => {
+    // A Desk 2 chat first: its route starts a turn (the peer pipe only queues the note in an idle chat).
+    if (deps.desk) {
+      const d = await deps.desk
+        .send(o.sessionId, text)
+        .catch((err) => ({ ok: false, reason: String(err), notDesk: false }))
+      if (d.ok) return settle(box, batch)
+      if (!d.notDesk) fail(box, batch, 'desk', d.reason)
+    }
     // Without a transcript nothing can grow, so there is nothing to wait 45 s for.
     const confirmMs = o.transcript ? PEER_CONFIRM_MS : 0
     const r = await deliverPeer(o.sessionId, o.transcript, text, confirmMs, o.home).catch(

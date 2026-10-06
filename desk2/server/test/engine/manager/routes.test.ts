@@ -479,6 +479,67 @@ describe('chat routes', () => {
   })
 })
 
+describe('POST /api/sessions/:sessionId/ping (AgentHydra\'s CliMayte note to the dispatching chat)', () => {
+  const stored = (id: string, over: Record<string, unknown>) => ({
+    id,
+    sessionId: null,
+    title: 'Orchestrator',
+    cwd: '/',
+    account: { id: 'default', label: 'Default', configDir: null },
+    accountAuto: false,
+    model: null,
+    effort: null,
+    permissionMode: 'default',
+    delegateToCliMayte: false,
+    lastError: null,
+    limitResetsAt: null,
+    unread: false,
+    pinned: false,
+    archived: false,
+    createdAt: 1,
+    updatedAt: 2,
+    costUsd: 0,
+    contextPct: null,
+    ranIn: null,
+    ...over,
+  })
+
+  async function bootWith(rows: Record<string, unknown>[]) {
+    const home = temp('desk-ping-home-')
+    writeFileSync(join(home, 'chats.json'), JSON.stringify(rows))
+    return boot({ home })
+  }
+
+  test('finds the chat by its current or a past session, resumes the closed chat and sends the note without naming it', async () => {
+    const cwd = temp('desk-cwd-')
+    const t = await bootWith([
+      stored('c-current', { sessionId: 'sess-now', cwd, title: 'New session' }),
+      stored('c-past', { sessionId: 'sess-new', pastSessions: ['sess-old'], cwd }),
+    ])
+    const note = '[AgentHydra · CliMayte] Not from the user. Automatic status note, nobody typed this.'
+    const now = await call(t.desk, 'POST', '/api/sessions/sess-now/ping', { text: note })
+    expect(now.status).toBe(200)
+    expect(now.body).toMatchObject({ ok: true, chatId: 'c-current' })
+    await waitFor(() => t.all.length === 1)
+    expect(t.last().options.resume).toBe('sess-now')
+    await waitFor(() => t.last().sent.length === 1)
+    expect((await call<ChatSummary>(t.desk, 'GET', '/api/chats/c-current')).body.title).toBe('New session')
+
+    const past = await call(t.desk, 'POST', '/api/sessions/sess-old/ping', { text: note })
+    expect(past.body).toMatchObject({ ok: true, chatId: 'c-past' })
+  })
+
+  test('404 for an unknown session, an archived chat and a CliMayte worker chat', async () => {
+    const t = await bootWith([stored('c-arch', { sessionId: 'sess-arch', archived: true }), stored('c-work', { sessionId: 'sess-work', workerId: 'w1' })])
+    for (const sid of ['sess-unknown', 'sess-arch', 'sess-work']) {
+      const res = await call(t.desk, 'POST', `/api/sessions/${sid}/ping`, { text: 'hello' })
+      expect(res.status).toBe(404)
+      expect(res.body.error).toMatch(/no chat here/)
+    }
+    expect(t.all).toHaveLength(0)
+  })
+})
+
 describe('the row menu routes', () => {
   test('fork: a closed copy with the history; its first message resumes the session forked', async () => {
     const t = await boot()

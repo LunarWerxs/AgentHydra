@@ -113,6 +113,8 @@ export interface SendOptions {
    * running turn anyway.
    */
   now?: boolean
+  /** An automatic note (AgentHydra's CliMayte ping), not the owner's words: it never names a chat that has no title yet. */
+  noTitle?: boolean
 }
 
 /** createFromQueue's answer: the chat and how its first message went (its error, or null). `waiting` is
@@ -397,6 +399,15 @@ export class ChatManager {
     return [...this.chats.values()].flatMap((e) => [...(e.pastSessions ?? []), ...(e.chat.sessionId ? [e.chat.sessionId] : [])])
   }
 
+  /** The id of the live chat (not archived, not a CliMayte worker's) whose current or past session is `sessionId`, else null. */
+  chatForSession(sessionId: string): string | null {
+    for (const e of this.chats.values()) {
+      if (e.chat.archived || e.chat.workerId !== undefined) continue
+      if (e.chat.sessionId === sessionId || e.pastSessions?.includes(sessionId)) return e.chat.id
+    }
+    return null
+  }
+
   async commands(id: string): Promise<SlashCommandInfo[]> {
     const e = this.entry(id)
     if (!e.runtime?.running || !e.query) return STATIC_COMMANDS
@@ -584,7 +595,7 @@ export class ChatManager {
     if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
     e.lastAsk = text
     // A chat opened empty is named by its first message, as one opened with it is.
-    if (!e.titled && e.chat.title === NEW_TITLE && text.trim()) {
+    if (!opts.noTitle && !e.titled && e.chat.title === NEW_TITLE && text.trim()) {
       e.chat.title = titleFrom(text)
       this.changed(e.chat)
       this.autoTitle(e, text)

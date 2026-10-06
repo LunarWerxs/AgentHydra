@@ -996,7 +996,12 @@ Next: climayte_status {group:"g-1f2e3d", report:true}, then climayte_verdict.
 
 At most 15 bullets (`+N more` after that), one tally line per group.
 
-**Delivery, in order.** (1) The chat's own peer pipe (`peer-message.ts`, found through `home`'s live
+**Delivery, in order.** (0) A chat Hydra Desk 2 runs (its current or a past session): `POST
+${DESK2_URL}/api/sessions/:id/ping`, which resumes a closed chat and starts a turn, or queues behind a
+running one, and never titles the chat. The peer pipe only queues a note in an idle chat (no turn,
+so it was seen at the next tool call), and a closed chat has no pipe at all. A 404 (not a Desk 2
+chat) or Desk 2 being down goes on to step 1; any other failure is journalled (`step: desk`) and
+goes on too. (1) The chat's own peer pipe (`peer-message.ts`, found through `home`'s live
 session registry; it queues behind a running turn). A write the pipe accepted is delivered, once:
 a chat mid-turn (inside a long `climayte_status` wait, say) shows it when the turn ends, so its
 transcript not growing within 45 s is journalled as `ping-unconfirmed` and never sent again (each
