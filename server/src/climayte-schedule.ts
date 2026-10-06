@@ -33,7 +33,14 @@ import {
   WIND_DOWN_SESSION_PCT,
   weekStopPct,
 } from './climayte-lib'
-import { type MachineMemory, memoryShort, RAMP_MS } from './climayte-memory'
+import {
+  DEFAULT_GROWN_BYTES,
+  type Growth,
+  growthOf,
+  type MachineMemory,
+  memoryShort,
+  type RunningWorker,
+} from './climayte-memory'
 import { takeLaunchSlot } from './climayte-pacing'
 import {
   type CliMaytePlacement,
@@ -67,8 +74,8 @@ interface TickState {
   finishedSince: Map<string, number>
   /** The machine's free memory at the start of the tick (null: not read, nothing waits for it). */
   memory: MachineMemory | null
-  /** Workers started within RAMP_MS, this tick's starts included: not yet in `memory`. */
-  growing: number
+  /** Workers started within RAMP_MS, this tick's starts included: not yet fully in `memory`. */
+  growing: Growth
 }
 
 export function tickAccounts(): CliMayteAccount[] {
@@ -97,17 +104,22 @@ export function tickState(accounts: CliMayteAccount[], now: number): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
   const byGroup = new Map<string, Map<string, number>>()
-  let growing = 0
+  const live: RunningWorker[] = []
   for (const w of workers.values())
     if (w.status === 'running' && w.accountId) {
       bumpCount(active, w.accountId)
       bumpCount(groupCounts(byGroup, w.group), w.accountId)
-      if ((w.attempts.at(-1)?.startedAt ?? 0) > now - RAMP_MS) growing++
+      const last = w.attempts.at(-1)
+      live.push({ runnerPid: last?.runner?.pid ?? null, startedAt: last?.startedAt ?? 0 })
     }
   // What the other PC has running on an account counts here too (climayte-remote): not its groups.
   for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
   const memory = memoryReader?.() ?? null
+  // Process trees are read only when the gate is on.
+  const growing: Growth = memory
+    ? growthOf(live, now)
+    : { expectedBytes: DEFAULT_GROWN_BYTES, sets: [] }
   return {
     now,
     accounts,
@@ -527,7 +539,7 @@ function startOn(
     retryLaunch(w, acct, err)
   }
   if (w.status === 'running') {
-    s.growing++
+    s.growing.sets.push(null) // just started: reserves its full expected size
     bumpCount(s.active, acct.id)
     bumpCount(groupActive, acct.id)
     s.running.set(acct.id, [
