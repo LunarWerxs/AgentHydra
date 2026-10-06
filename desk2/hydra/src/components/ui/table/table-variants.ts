@@ -13,13 +13,14 @@ export const tableVariants = cva('w-full caption-bottom text-xs', {
   },
 })
 
-export const tableRowVariants = cva('hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors has-aria-expanded:bg-muted/50', {
+// The hover is --accent: tables sit on cards, and in the dark theme --muted IS the card colour (style.css).
+export const tableRowVariants = cva('hover:bg-accent data-[state=selected]:bg-muted border-b transition-colors has-aria-expanded:bg-accent', {
   variants: {
     variant: {
       default: '',
-      tinted: 'bg-muted/40 hover:bg-muted/40',
+      tinted: 'bg-muted/40 hover:bg-accent/70 has-aria-expanded:bg-accent/70',
       dimmed: 'opacity-60',
-      faded: 'opacity-25 hover:bg-transparent transition-opacity',
+      faded: 'opacity-25 hover:bg-transparent has-aria-expanded:bg-transparent transition-opacity',
     },
   },
   defaultVariants: {

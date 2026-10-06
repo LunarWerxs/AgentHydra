@@ -53,6 +53,15 @@ function closeRow() {
   clearQuickAddTarget()
 }
 const qaEmail = ref('')
+// A row's "Log in again" brings the account's old address, so one press of the button starts the
+// email sign-in. Only a target change fills it: typing afterwards is left alone. A row with no known
+// address empties a box that still holds another row's address, which would sign this one in as that.
+let prefilled = ''
+watch(target, (next) => {
+  if (!next) return
+  if (next.email) qaEmail.value = prefilled = next.email
+  else if (prefilled && qaEmail.value === prefilled) qaEmail.value = prefilled = ''
+})
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
 const qaStarting = ref(false)
 const qaFlows = ref<QuickAddFlow[]>([])
@@ -249,8 +258,9 @@ onUnmounted(() => {
       />
       <Button type="submit" :disabled="qaStarting || !qaEmail.trim()">
         <LoaderCircle v-if="qaStarting" class="animate-spin" />
+        <LogIn v-else-if="target" />
         <Plus v-else />
-        {{ $t('climayte.qaAdd') }}
+        {{ target ? $t('cliInstances.quickAddLogin') : $t('climayte.qaAdd') }}
       </Button>
       <InfoHint :text="$t('climayte.qaHint')" />
       <IconTooltip :label="$t('cliInstances.quickAddClose')">

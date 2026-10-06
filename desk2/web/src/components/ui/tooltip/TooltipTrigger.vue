@@ -2,7 +2,7 @@
 import type { TooltipTriggerProps } from "reka-ui"
 import { reactiveOmit } from "@vueuse/core"
 import { TooltipTrigger } from "reka-ui"
-import { computed, inject, onBeforeUnmount } from "vue"
+import { computed, inject, onBeforeUnmount, ref, watch } from "vue"
 import type { TooltipTouchMode } from "./touch"
 import {
   LONG_PRESS_MS,
@@ -29,6 +29,14 @@ const props = withDefaults(
 )
 
 const touchCtx = inject(TOOLTIP_TOUCH_KEY, null)
+// Tell the tooltip which element is ITS trigger (its open-tooltip watchdog compares against it).
+const root = ref<{ $el: unknown } | null>(null)
+watch(
+  () => root.value?.$el,
+  (el) => touchCtx?.setTrigger(el instanceof HTMLElement ? el : null),
+  { immediate: true, flush: "post" },
+)
+onBeforeUnmount(() => touchCtx?.setTrigger(null))
 const providerDisabled = inject(TOOLTIP_DISABLED_KEY, null)
 
 // A touchscreen laptop keeps full hover behaviour — every gesture below is gated on the event's own
@@ -132,6 +140,7 @@ const forwarded = reactiveOmit(props, "touch")
 
 <template>
   <TooltipTrigger
+    ref="root"
     data-slot="tooltip-trigger"
     v-bind="forwarded"
     :class="{ 'select-none [-webkit-touch-callout:none]': suppressNativeHold }"

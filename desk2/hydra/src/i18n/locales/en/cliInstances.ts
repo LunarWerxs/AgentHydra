@@ -47,6 +47,9 @@ export default {
     '{n} Claude session running on this account, CliMayte’s included | {n} Claude sessions running on this account, CliMayte’s included',
   launch: 'Launch',
   login: 'Log in',
+  loginAgain: 'Log in again',
+  // Quick add's submit button while a row's "Log in" has pointed it at that instance.
+  quickAddLogin: 'Log in',
   // "Log in" on a row points Quick add at that instance (CliQuickAdd.vue, useQuickAddTarget.ts).
   quickAddTarget:
     'Signing in #{num} {name} again: the account you sign in with replaces its current login.',

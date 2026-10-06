@@ -228,18 +228,24 @@ function lastActiveLabel(at: number): string {
   return timeAgo(at)
 }
 
+/** The CLI login has no email field, but quick add names it after the address: that name, else the
+ *  linked account's label when it is one, else none (owner, 2026-10-06). It is also what "Log in
+ *  again" puts back in Quick add's email box. */
+function previousEmailOf(inst: CliInstance): string | null {
+  const name = withoutPlanSuffix(inst.name, planFor(inst))
+  return name.includes('@')
+    ? name
+    : inst.associatedAccountLabel?.includes('@')
+      ? inst.associatedAccountLabel
+      : null
+}
+
 /** What the shared row draws for one CLI login (components/InstanceRow.vue). */
 function rowModel(inst: CliInstance): InstanceRowModel {
   const plan = planFor(inst)
   // The plan has its own column, so it stays out of the name.
   const name = withoutPlanSuffix(inst.name, plan)
-  // The CLI login has no email field, but quick add names it after the address: that name, else the
-  // linked account's label when it is one, else none (owner, 2026-10-06).
-  const email = name.includes('@')
-    ? name
-    : inst.associatedAccountLabel?.includes('@')
-      ? inst.associatedAccountLabel
-      : null
+  const email = previousEmailOf(inst)
   return {
     id: inst.id,
     num: inst.num,
@@ -482,7 +488,12 @@ async function onLaunch(inst: CliInstance) {
 // (owner, 2026-10-02), and it replaced the dialog that created an instance by name.
 const quickAdd = ref<{ focusEmail: () => void } | null>(null)
 async function onLogin(inst: CliInstance) {
-  setQuickAddTarget({ id: inst.id, num: inst.num, name: inst.name })
+  setQuickAddTarget({
+    id: inst.id,
+    num: inst.num,
+    name: inst.name,
+    email: previousEmailOf(inst),
+  })
   await nextTick()
   quickAdd.value?.focusEmail()
 }
@@ -853,8 +864,8 @@ onUnmounted(() => {
                 <DropdownMenuItem :disabled="isBusy(inst)" @click="onLaunch(inst)">
                   <Play /> {{ $t('cliInstances.launch') }}
                 </DropdownMenuItem>
-                <DropdownMenuItem :disabled="isBusy(inst)" @click="onLogin(inst)">
-                  <LogIn /> {{ $t('cliInstances.login') }}
+                <DropdownMenuItem v-if="!inst.loggedIn" :disabled="isBusy(inst)" @click="onLogin(inst)">
+                  <LogIn /> {{ previousEmailOf(inst) ? $t('cliInstances.loginAgain') : $t('cliInstances.login') }}
                 </DropdownMenuItem>
                 <DropdownMenuItem :disabled="isBusy(inst)" @click="openLinkDialog(inst)">
                   <Monitor /> {{ $t('cliInstances.linkDesktop') }}

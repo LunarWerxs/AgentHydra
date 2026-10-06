@@ -672,7 +672,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
         <Terminal /> {{ $t('codexInstances.launchCli') }}
       </DropdownMenuItem>
       <DropdownMenuItem
-        v-if="cliEnabled"
+        v-if="cliEnabled && !instance.loggedIn"
         :disabled="isBusy(instance)"
         @click="onLogin(instance)"
       >

@@ -3,7 +3,7 @@ import type { TooltipTriggerProps } from "reka-ui"
 import { reactiveOmit } from "@vueuse/core"
 import { TooltipTrigger } from "reka-ui"
 import { Primitive } from "reka-ui"
-import { computed, inject, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { createLazyArming, replay } from "@/lib/lazy-arm"
 import { TOOLTIP_LAZY_KEY } from "./lazy"
 import type { TooltipTouchMode } from "./touch"
@@ -50,6 +50,13 @@ onMounted(() => {
 })
 
 const touchCtx = inject(TOOLTIP_TOUCH_KEY, null)
+// Tell the tooltip which element is ITS trigger (its open-tooltip watchdog compares against it).
+watch(
+  () => root.value?.$el,
+  (el) => touchCtx?.setTrigger(el instanceof HTMLElement ? el : null),
+  { immediate: true, flush: "post" },
+)
+onBeforeUnmount(() => touchCtx?.setTrigger(null))
 const providerDisabled = inject(TOOLTIP_DISABLED_KEY, null)
 
 // A touchscreen laptop keeps full hover behaviour — every gesture below is gated on the event's own
