@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { BROWSER, deskAppend } from '../../src/engine/desk-prompt'
+import { BROWSER, deskAppend, MEDIA } from '../../src/engine/desk-prompt'
 import { historyToItems } from '../../src/engine/normalize'
 import { createMediaCache } from '../../src/media/cache'
 
@@ -74,7 +74,9 @@ describe('the browser paragraph', () => {
       const text = deskAppend(delegate)
       expect(text).toContain(BROWSER)
       expect(text).toContain('browser_profile_find')
-      expect(text).toContain('![what it shows](C:/absolute/path.gif)')
+      expect(text).toContain(MEDIA)
+      expect(MEDIA).toContain('![what it shows](C:/absolute/path.mp4)')
+      for (const ext of ['png', 'gif', 'mp4', 'mov', 'webm']) expect(MEDIA).toContain(ext)
     }
   })
 })

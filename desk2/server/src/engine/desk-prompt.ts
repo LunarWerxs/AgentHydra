@@ -11,7 +11,11 @@ const DELEGATE = [
   '`climayte_verdict`, report. Do yourself only what is faster than writing the brief.',
 ].join(' ')
 
-/** Appended in every mode: the real browser, saved browsers and inline pictures. */
+/** How to put a picture, GIF or video in the reply itself: the window plays it in place (normalize.ts rewriteLocalImages). */
+export const MEDIA =
+  'To show the person a picture, GIF or video, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov or webm (videos up to 200 MB) appear and play right in the chat, so never only name the path of a screenshot, GIF or recording you made or found.'
+
+/** Appended in every mode: the real browser, saved browsers and inline pictures and videos. */
 export const BROWSER = [
   'You have a real browser through the connections MCP; use it whenever a live page answers better than memory (a live site, docs, checking a deploy, a UI you built).',
   "Every browser tool is `connections_execute { local: true, tool_name: 'browser_...', params: { ... } }`.",
@@ -19,7 +23,7 @@ export const BROWSER = [
   'The person sees each call as a Browser card and can click it to watch that browser live in the side pane, so say what you open and why.',
   "Saved browsers belong to this workspace ('browser_profiles' lists each with what it is signed into).",
   "For a login only the person has: 'browser_profile_login' { profile: '<identity, e.g. stripe-acme>', url }, tell them a Chrome window opened to sign in (or they open it from the Browser pane); when they say done, 'browser_profile_login' { profile, url, verify: true }, then 'browser_profile_note' { profile, note: '<site, account (never a password), purpose>' }. Reuse that profile name afterwards.",
-  'Show a picture or GIF inline with ![what it shows](C:/absolute/path.gif): screenshots, images or GIFs you made or found.',
+  MEDIA,
 ].join(' ')
 
 /** The full orchestrator text, used when delegateToCliMayte is on. */

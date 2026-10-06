@@ -311,6 +311,19 @@
   border-radius: 5px;
   cursor: zoom-in;
 }
+/* Videos: the picture's box (at most 360 high, r5, 1px ring), black behind the frame while it loads. */
+.md-video,
+.tx-inline-video {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: #000;
+}
+.tx-inline-video {
+  align-self: flex-start;
+}
 .md-file-chip {
   display: inline-flex;
   align-items: center;

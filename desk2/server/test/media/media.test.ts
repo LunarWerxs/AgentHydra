@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -7,8 +7,8 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TranscriptItem } from '@shared/protocol'
 import type { ServerContext } from '../../src/context'
 import { createNormalizer, historyToItems } from '../../src/engine/normalize'
-import { createMediaCache, MAX_MEDIA_BYTES, mediaCache, toStoredImage } from '../../src/media/cache'
-import plugin from '../../src/plugins/35-media'
+import { createMediaCache, MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, mediaCache, sniffVideo, toStoredImage } from '../../src/media/cache'
+import plugin, { byteRange } from '../../src/plugins/35-media'
 
 const temps: string[] = []
 const temp = (tag: string) => {
@@ -24,6 +24,13 @@ afterAll(() => {
 const PNG_B64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
 const PNG = new Uint8Array(Buffer.from(PNG_B64, 'base64'))
 const ID_RE = /^\/api\/media\/[0-9a-f]{64}\.png$/
+
+// The first bytes of an MP4 (an ftyp box), a QuickTime MOV (ftyp, brand qt) and a WebM (EBML header), then filler.
+const box = (brand: string) => Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from(`ftyp${brand}`), Buffer.alloc(4), Buffer.from(brand)])
+const MP4 = Buffer.concat([box('isom'), Buffer.alloc(4000, 7)])
+const MOV = Buffer.concat([box('qt  '), Buffer.alloc(2000, 3)])
+const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(3000, 5)])
+const VIDEO_RE = (ext: string) => new RegExp(`^/api/media/[0-9a-f]{64}\\.${ext}$`)
 
 type Tool = Extract<TranscriptItem, { kind: 'tool_use' }>
 type User = Extract<TranscriptItem, { kind: 'user' }>
@@ -80,6 +87,75 @@ describe('media cache', () => {
   })
 })
 
+describe('videos', () => {
+  test('first bytes: an ISO media box or an EBML header, nothing else', () => {
+    expect(sniffVideo(MP4)).toBe('mp4')
+    expect(sniffVideo(MOV)).toBe('mp4')
+    expect(sniffVideo(WEBM)).toBe('webm')
+    expect(sniffVideo(PNG)).toBeNull()
+    expect(sniffVideo(new TextEncoder().encode('<html><body>not a video</body></html>'))).toBeNull()
+  })
+
+  test('an mp4, mov or webm a transcript names is copied in and served by id; a fake one is a card', () => {
+    const root = temp('video')
+    const dir = join(root, 'media')
+    const c = createMediaCache(dir)
+    writeFileSync(join(root, 'run.mp4'), MP4)
+    writeFileSync(join(root, 'Screen Recording.mov'), MOV)
+    writeFileSync(join(root, 'clip.webm'), WEBM)
+    writeFileSync(join(root, 'fake.mp4'), 'not a video at all')
+    const mp4 = c.fileRef(join(root, 'run.mp4'))!
+    expect(mp4).toMatchObject({ mediaType: 'video/mp4', name: 'run.mp4', bytes: MP4.length })
+    expect(mp4.url).toMatch(VIDEO_RE('mp4'))
+    expect(c.fileRef(join(root, 'Screen Recording.mov'))).toMatchObject({ mediaType: 'video/mp4', url: expect.stringMatching(VIDEO_RE('mp4')) })
+    expect(c.fileRef(join(root, 'clip.webm'))).toMatchObject({ mediaType: 'video/webm', url: expect.stringMatching(VIDEO_RE('webm')) })
+    expect(c.fileRef(join(root, 'fake.mp4'))).toEqual({ mediaType: 'video/mp4', name: 'fake.mp4', bytes: 18 })
+    expect(c.lookup(mp4.url!.slice('/api/media/'.length))).toMatchObject({ contentType: 'video/mp4' })
+    expect(readdirSync(dir)).toHaveLength(3)
+  })
+
+  test('named again it is the same copy; a changed file is a new one', () => {
+    const root = temp('video-again')
+    const dir = join(root, 'media')
+    const c = createMediaCache(dir)
+    const p = join(root, 'run.mp4')
+    writeFileSync(p, MP4)
+    const first = c.fileRef(p)!.url
+    expect(createMediaCache(dir).fileRef(p)!.url).toBe(first!)
+    writeFileSync(p, Buffer.concat([MP4, Buffer.alloc(10)]))
+    utimesSync(p, new Date(), new Date(Date.now() + 5000))
+    const second = c.fileRef(p)!.url
+    expect(second).toMatch(VIDEO_RE('mp4'))
+    expect(second).not.toBe(first!)
+    expect(readdirSync(dir)).toHaveLength(2)
+  })
+
+  test('a video over the cap stays a card and is never copied', () => {
+    const root = temp('video-big')
+    const dir = join(root, 'media')
+    const p = join(root, 'huge.mp4')
+    writeFileSync(p, MP4)
+    truncateSync(p, MAX_VIDEO_BYTES + 1)
+    expect(createMediaCache(dir).fileRef(p)).toEqual({ mediaType: 'video/mp4', name: 'huge.mp4', bytes: MAX_VIDEO_BYTES + 1 })
+    expect(() => readdirSync(dir)).toThrow()
+  })
+})
+
+describe('byteRange', () => {
+  test('reads one bytes= range and refuses one past the end', () => {
+    expect(byteRange(undefined, 100)).toBeNull()
+    expect(byteRange('bytes=0-', 100)).toEqual({ start: 0, end: 99 })
+    expect(byteRange('bytes=10-19', 100)).toEqual({ start: 10, end: 19 })
+    expect(byteRange('bytes=90-500', 100)).toEqual({ start: 90, end: 99 })
+    expect(byteRange('bytes=-30', 100)).toEqual({ start: 70, end: 99 })
+    expect(byteRange('bytes=-300', 100)).toEqual({ start: 0, end: 99 })
+    expect(byteRange('bytes=100-', 100)).toBe('unsatisfiable')
+    expect(byteRange('bytes=20-10', 100)).toBe('unsatisfiable')
+    expect(byteRange('bytes=0-1,5-6', 100)).toBeNull()
+    expect(byteRange('items=0-1', 100)).toBeNull()
+  })
+})
+
 describe('GET /api/media/:id', () => {
   const home = temp('route')
   const app = new Hono()
@@ -95,8 +171,29 @@ describe('GET /api/media/:id', () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(PNG)
   })
 
+  test('a video is served whole or by range, so the player can seek', async () => {
+    const root = temp('route-video')
+    writeFileSync(join(root, 'run.mp4'), MP4)
+    const url = mediaCache(home)!.fileRef(join(root, 'run.mp4'))!.url!
+    const whole = await app.request(url)
+    expect(whole.status).toBe(200)
+    expect(whole.headers.get('content-type')).toBe('video/mp4')
+    expect(whole.headers.get('accept-ranges')).toBe('bytes')
+    expect(new Uint8Array(await whole.arrayBuffer())).toEqual(new Uint8Array(MP4))
+    const part = await app.request(url, { headers: { range: 'bytes=100-199' } })
+    expect(part.status).toBe(206)
+    expect(part.headers.get('content-range')).toBe(`bytes 100-199/${MP4.length}`)
+    expect(new Uint8Array(await part.arrayBuffer())).toEqual(new Uint8Array(MP4.subarray(100, 200)))
+    const tail = await app.request(url, { headers: { range: 'bytes=-16' } })
+    expect(tail.status).toBe(206)
+    expect((await tail.arrayBuffer()).byteLength).toBe(16)
+    const past = await app.request(url, { headers: { range: `bytes=${MP4.length}-` } })
+    expect(past.status).toBe(416)
+    expect(past.headers.get('content-range')).toBe(`bytes */${MP4.length}`)
+  })
+
   test('refuses anything that is not a hash id', async () => {
-    for (const bad of ['/api/media/..%2F..%2Fsettings.json', '/api/media/%2E%2E%5Csettings.json', '/api/media/settings.json', '/api/media/' + 'a'.repeat(64) + '.png']) {
+    for (const bad of ['/api/media/..%2F..%2Fsettings.json', '/api/media/%2E%2E%5Csettings.json', '/api/media/settings.json', '/api/media/' + 'a'.repeat(64) + '.png', '/api/media/' + 'a'.repeat(64) + '.mov']) {
       const res = await app.request(bad)
       expect(res.status).toBe(404)
     }
@@ -178,6 +275,27 @@ describe('normalizer pictures', () => {
     const text = (items.find((i) => i.kind === 'assistant_text') as { text: string }).text
     expect(text).toMatch(/!\[after\]\(\/api\/media\/[0-9a-f]{64}\.png\)/)
     expect(text).toMatch(/!\[nope\]\(\/api\/media\/[0-9a-f]{64}\.png\)/)
+  })
+
+  test('(e) a markdown video and a SendUserFile video get a url; a missing one stays as written', () => {
+    const root = temp('e')
+    const media = createMediaCache(join(root, 'media'))
+    const clip = join(root, 'after-fix.mp4')
+    writeFileSync(clip, MP4)
+    const gone = join(root, 'gone.webm')
+    const items = historyToItems(
+      [
+        rec('assistant', [{ type: 'text', text: `Here is the run:\n\n![the run](${clip})\n\n![old](${gone})` }]),
+        rec('assistant', [{ type: 'tool_use', id: 's2', name: 'SendUserFile', input: { files: [clip], display: 'render' } }]),
+        rec('user', [{ type: 'tool_result', tool_use_id: 's2', content: 'Sent 1 file' }]),
+      ],
+      { media },
+    )
+    const text = (items.find((i) => i.kind === 'assistant_text') as { text: string }).text
+    expect(text).toMatch(/!\[the run\]\(\/api\/media\/[0-9a-f]{64}\.mp4\)/)
+    expect(text).toContain(`![old](${gone})`)
+    const sent = items.find((i) => i.kind === 'tool_use') as Tool
+    expect(sent.result!.images![0]).toMatchObject({ mediaType: 'video/mp4', name: 'after-fix.mp4', url: expect.stringMatching(VIDEO_RE('mp4')) })
   })
 
   test('without a cache, pictures are left out, never inlined', () => {

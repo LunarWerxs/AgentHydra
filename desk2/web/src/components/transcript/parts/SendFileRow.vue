@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // Files the assistant hands over (SendUserFile), as the real app draws them: with display 'render' a
-// picture inline (at most 360 high, r5, 1px ring, zoom on click), the caption as prose, then a file card
-// per file. Until the result lands the files are not known; the caption shows alone.
+// picture inline (at most 360 high, r5, 1px ring, zoom on click) and a video playing in place, the caption
+// as prose, then a file card per file. Until the result lands the files are not known; the caption shows alone.
 import { computed } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
-import { imageSrc, openLightbox, tileKey } from '../lib/media'
+import { imageSrc, openLightbox, tileKey, videoSrc } from '../lib/media'
 import FileCard from './FileCard.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 
@@ -15,6 +15,7 @@ const caption = computed(() => (typeof props.item.input.caption === 'string' ? p
 const render = computed(() => props.item.input.display !== 'attach')
 const pictures = computed(() => (render.value ? files.value.filter((f) => imageSrc(f)) : []))
 const group = computed(() => pictures.value.map((f) => ({ src: imageSrc(f)!, alt: f.name ?? '' })))
+const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc(f)) : []))
 </script>
 
 <template>
@@ -31,6 +32,20 @@ const group = computed(() => pictures.value.map((f) => ({ src: imageSrc(f)!, alt
     >
       <img :src="imageSrc(f)!" :alt="f.name || 'picture'" loading="lazy" />
     </button>
+    <video
+      v-for="(f, i) in videos"
+      :key="`v${i}`"
+      class="tx-inline-video"
+      :src="videoSrc(f)!"
+      :aria-label="f.name || 'video'"
+      :title="f.name || 'video'"
+      controls
+      autoplay
+      muted
+      loop
+      playsinline
+      preload="metadata"
+    />
     <MarkdownBlock v-if="caption" :text="caption" />
     <div v-if="files.length" class="flex flex-wrap gap-2 pl-0">
       <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" />

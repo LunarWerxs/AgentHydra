@@ -11,8 +11,9 @@ export function escapeHtml(s: string): string {
 /** A code block longer than this many lines is capped with "Show more", like a long user message. */
 export const CODE_CAP_LINES = 24
 
-/** Pictures the server serves from its cache; the only image targets the window loads. */
+/** Pictures and videos the server serves from its cache; the only image targets the window loads. */
 export const MEDIA_PREFIX = '/api/media/'
+const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm)$/
 
 // lucide Copy, Check and File (stroke 1.5), inline because markdown-it emits a string, not components.
 const svg = (body: string, size = 14) =>
@@ -80,13 +81,18 @@ export function createMarkdown(getHighlight: () => Highlight | null = () => null
   md.renderer.rules.table_open = (tokens, idx, options, _env, self) => `<div class="md-table">${self.renderToken(tokens, idx, options)}`
   md.renderer.rules.table_close = (tokens, idx, options, _env, self) => `${self.renderToken(tokens, idx, options)}</div>`
 
-  // A picture from the server's cache opens in the lightbox; any other target (a local path the
-  // transcript never named, a remote URL) is a file chip and is never loaded.
+  // A picture from the server's cache opens in the lightbox; a video from it plays in place, muted and
+  // looping like a GIF, with its own controls (sound, seek, full screen). Any other target (a local path the
+  // server did not cache, a remote URL) is a file chip and is never loaded.
   md.renderer.rules.image = (tokens, idx) => {
     const t = tokens[idx]
     const src = t.attrGet('src') ?? ''
     const alt = t.content || fileName(src)
-    if (src.startsWith(MEDIA_PREFIX) && /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp)$/.test(src)) {
+    const kind = MEDIA_ID.exec(src)?.[1]
+    if (kind === 'mp4' || kind === 'webm') {
+      return `<video class="md-video" src="${escapeHtml(src)}" aria-label="${escapeHtml(alt)}" title="${escapeHtml(alt)}" controls autoplay muted loop playsinline preload="metadata"></video>`
+    }
+    if (kind) {
       return `<button type="button" class="md-img" data-zoom="${escapeHtml(src)}" aria-label="Open ${escapeHtml(alt)}"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy"></button>`
     }
     return `<span class="md-file-chip" title="${escapeHtml(fileName(src))}">${FILE_ICON}<span>${escapeHtml(alt)}</span></span>`

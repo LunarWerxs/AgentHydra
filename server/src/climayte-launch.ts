@@ -507,11 +507,13 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md'))] }
 }
 
-/** What a chat is told on top of the CLI's own prompt: it runs headless, and its process (every
- *  background command with it) ends with the turn. */
+/** What a chat is told on top of the CLI's own prompt: it runs headless, its process (every
+ *  background command with it) ends with the turn, and the window it is read in (AgentHydra's,
+ *  desk2/) plays a markdown image of a local picture or video in place (desk2 media cache). */
 export const CHAT_NOTE =
   'This session runs headless through AgentHydra: no one sees a terminal, so nothing that waits for an interactive prompt or a permission dialog can be answered.' +
-  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
+  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.' +
+  ' To show the person a picture, GIF or video, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov or webm (videos up to 200 MB) appear and play right in the chat, so never only name the path of a screenshot, GIF or recording you made or found.'
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */

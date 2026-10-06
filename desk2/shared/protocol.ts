@@ -68,7 +68,7 @@ export interface ChatSummary {
 // Transcript items: the normalized form of the SDK's message stream (and of AgentHydra transcripts)
 
 export interface ImageRef {
-  mediaType: string // image/png, image/jpeg, image/gif, image/webp
+  mediaType: string // image/png, image/jpeg, image/gif, image/webp; video/mp4 or video/webm for a video (url only)
   dataBase64?: string // present when the client sent it and for small images; omitted in history
   name?: string
   /** Where the window loads the picture from when dataBase64 is absent: a server route of this chat. */

@@ -1,29 +1,40 @@
-// A content-addressed picture cache under the data home (<home>/media/<sha256>.<ext>). Transcripts
-// carry ImageRef.url = /api/media/<sha256>.<ext> instead of base64, so large pictures never travel
-// over /ws or in /api transcripts, and the route serves only what is in here, looked up by hash.
+// A content-addressed picture and video cache under the data home (<home>/media/<sha256>.<ext>).
+// Transcripts carry ImageRef.url = /api/media/<sha256>.<ext> instead of base64, so large pictures never
+// travel over /ws or in /api transcripts, and the route serves only what is in here, looked up by hash.
 //
 // Nothing outside the cache is ever served: a file reaches it only when a transcript names it (a Read,
-// Write or SendUserFile input, a tool result) and normalize.ts copies it in, after checking its
-// extension, its size and its first bytes.
+// Write or SendUserFile input, a tool result, a markdown image in a reply) and normalize.ts copies it in,
+// after checking its extension, its size and its first bytes.
 
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
-import { basename, extname, join } from 'node:path'
+import { closeSync, copyFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, extname, join, resolve } from 'node:path'
 import type { ImageRef } from '@shared/protocol'
 import { ctx } from '../context'
 
 export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 /** GIFs (screen recordings, demos) may be bigger than other pictures. */
 export const MAX_GIF_BYTES = 30 * 1024 * 1024
+/** Videos (screen recordings, test runs) are copied in, never read whole: they may be far bigger. */
+export const MAX_VIDEO_BYTES = 200 * 1024 * 1024
 export const MEDIA_ROUTE = '/api/media/'
 
-type Ext = 'png' | 'jpg' | 'gif' | 'webp'
+type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm'
 
-const CONTENT_TYPE: Record<Ext, string> = { png: 'image/png', jpg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' }
-const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp)$/
+const CONTENT_TYPE: Record<Ext, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+}
+const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp|mp4|webm)$/
 
+/** Video extensions copied into the cache (a .mov is QuickTime's MP4 family and plays as one). */
+export const VIDEO = /\.(mp4|m4v|mov|webm)$/i
 /** File extensions read into the cache; svg and everything else only ever get a file card. */
-export const RENDERABLE = /\.(png|jpe?g|gif|webp)$/i
+export const RENDERABLE = /\.(png|jpe?g|gif|webp|mp4|m4v|mov|webm)$/i
 
 /** What a file card says a non-picture is (name and size come from the file). */
 const CARD_TYPE: Record<string, string> = {
@@ -36,6 +47,10 @@ const CARD_TYPE: Record<string, string> = {
   html: 'text/html',
   zip: 'application/zip',
   bmp: 'image/bmp',
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  mov: 'video/quicktime',
+  webm: 'video/webm',
 }
 
 /** The picture type from its first bytes; null when they are not a png, jpeg, gif or webp. */
@@ -48,12 +63,22 @@ export function sniff(b: Uint8Array): Ext | null {
   return null
 }
 
+/** The video type from its first bytes: an ISO media box (MP4, M4V, MOV) or an EBML header (WebM); else null. */
+export function sniffVideo(b: Uint8Array): 'mp4' | 'webm' | null {
+  if (b.length >= 4 && b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3) return 'webm'
+  if (b.length >= 8) {
+    const box = String.fromCharCode(b[4]!, b[5]!, b[6]!, b[7]!)
+    if (box === 'ftyp' || box === 'moov' || box === 'wide') return 'mp4'
+  }
+  return null
+}
+
 export interface MediaCache {
   dir: string
   /** Stores picture bytes; null when they are not a picture or are over the cap. */
   put(bytes: Uint8Array, name?: string): ImageRef | null
   putBase64(data: string, name?: string): ImageRef | null
-  /** A file a transcript names: pictures cached with a url, anything else a card (name, size, type) only. */
+  /** A file a transcript names: pictures and videos cached with a url, anything else a card (name, size, type) only. */
   fileRef(path: string): ImageRef | null
   /** The cached file for a route id `<sha256>.<ext>`; null for anything else, a path-looking id included. */
   lookup(id: string): { path: string; contentType: string } | null
@@ -78,6 +103,39 @@ export function createMediaCache(dir: string): MediaCache {
     const ref: ImageRef = { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: bytes.length }
     if (name) ref.name = name
     return ref
+  }
+
+  /**
+   * A video file, copied in by the filesystem. Its id hashes where it is and which version (path, size,
+   * mtime) instead of every byte, so a long recording costs one stat and 64 bytes read each time a
+   * transcript names it; a changed file is a new version and a new copy, so an id still means one set of bytes.
+   */
+  const putVideo = (path: string, size: number, mtimeMs: number, name: string): ImageRef | null => {
+    const head = new Uint8Array(64)
+    const fd = openSync(path, 'r')
+    try {
+      readSync(fd, head, 0, head.length, 0)
+    } finally {
+      closeSync(fd)
+    }
+    const ext = sniffVideo(head)
+    if (!ext) return null
+    const where = process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
+    const hash = createHash('sha256').update(`video|${where}|${size}|${mtimeMs}`).digest('hex')
+    const id = `${hash}.${ext}`
+    const file = join(dir, id)
+    if (!existsSync(file)) {
+      mkdirSync(dir, { recursive: true })
+      const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+      copyFileSync(path, tmp)
+      // Written to while it was copied: no cache entry that is not the version its id names.
+      if (statSync(tmp).size !== size) {
+        rmSync(tmp, { force: true })
+        return null
+      }
+      renameSync(tmp, file)
+    }
+    return { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: size, name }
   }
 
   return {
@@ -105,7 +163,16 @@ export function createMediaCache(dir: string): MediaCache {
       }
       const name = basename(path)
       const ext = extname(name).slice(1).toLowerCase()
-      if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) {
+      if (VIDEO.test(name)) {
+        if (size && size <= MAX_VIDEO_BYTES) {
+          try {
+            const ref = putVideo(path, size, mtimeMs, name)
+            if (ref) return ref
+          } catch {
+            // unreadable: a card like any other file
+          }
+        }
+      } else if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) {
         const hit = seen.get(path)
         if (hit && hit.size === size && hit.mtimeMs === mtimeMs && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
         try {

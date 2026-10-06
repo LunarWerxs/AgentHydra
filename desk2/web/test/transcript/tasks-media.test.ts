@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, tasksLine, toolSummary, workflowDots, workflowElapsed, type TaskItem, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { CODE_CAP_LINES, createMarkdown, markDiffLines, renderMarkdown } from '../../src/components/transcript/lib/markdown'
-import { fileBadge, formatSize, imageSrc } from '../../src/components/transcript/lib/media'
+import { fileBadge, formatSize, imageSrc, videoSrc } from '../../src/components/transcript/lib/media'
 
 const tool = (id: string, name = 'Bash'): ToolItem => ({ id, ts: 1, kind: 'tool_use', name, input: {}, status: 'done', startedAt: 1 })
 const user = (id: string): TranscriptItem => ({ id, ts: 1, kind: 'user', text: 'hi' })
@@ -138,5 +138,30 @@ describe('markdown as Claude Code draws it', () => {
     const remote = renderMarkdown('![x](https://example.com/x.png)')
     expect(remote).not.toContain('<img')
     expect(renderMarkdown(`![x](/api/media/../../settings.json)`)).not.toContain('<img')
+  })
+
+  test('a cached video plays in place, muted and looping with its controls; anything else never loads', () => {
+    const url = `/api/media/${'c'.repeat(64)}.mp4`
+    const html = renderMarkdown(`Here is the run:\n\n![the run](${url})`)
+    expect(html).toContain(`<video class="md-video" src="${url}" aria-label="the run"`)
+    for (const attr of ['controls', 'autoplay', 'muted', 'loop', 'playsinline', 'preload="metadata"']) expect(html).toContain(` ${attr}`)
+    expect(html).not.toContain('<img')
+    expect(renderMarkdown(`![w](/api/media/${'d'.repeat(64)}.webm)`)).toContain('<video class="md-video"')
+    const local = renderMarkdown('![run](C:/Users/me/videos/run.mp4)')
+    expect(local).toContain('class="md-file-chip"')
+    expect(local).not.toContain('<video')
+    expect(renderMarkdown('![x](https://example.com/x.mp4)')).not.toContain('<video')
+    expect(renderMarkdown(`![x](/api/media/${'c'.repeat(64)}.mov)`)).not.toContain('<video')
+    expect(renderMarkdown(`![x](/api/media/../${'c'.repeat(64)}.mp4)`)).not.toContain('<video')
+  })
+
+  test('a video ref is a video, never a picture', () => {
+    const url = `/api/media/${'c'.repeat(64)}.mp4`
+    const ref = { mediaType: 'video/mp4', url, name: 'run.mp4', bytes: 2048 }
+    expect(videoSrc(ref)).toBe(url)
+    expect(imageSrc(ref)).toBeNull()
+    expect(fileBadge(ref)).toBe('MP4')
+    expect(videoSrc({ mediaType: 'image/png', url: `/api/media/${'c'.repeat(64)}.png` })).toBeNull()
+    expect(videoSrc({ mediaType: 'video/mp4', name: 'card-only.mp4', bytes: 1 })).toBeNull()
   })
 })

@@ -162,9 +162,10 @@ function localTarget(raw: string): string | null {
 const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g
 
 /**
- * Markdown images in assistant text whose target is an absolute local picture (png, jpeg, gif, webp: the
- * cache checks the file exists, its first bytes and its size) become the cached picture's url, named
- * earlier in the transcript or not; any other target is left as written (a file chip, never loaded).
+ * Markdown images in assistant text whose target is an absolute local picture or video (png, jpeg, gif,
+ * webp, mp4, m4v, mov, webm: the cache checks the file exists, its first bytes and its size) become the
+ * cached file's url, named earlier in the transcript or not; any other target is left as written (a file
+ * chip, never loaded).
  */
 export function rewriteLocalImages(text: string, _named: ReadonlySet<string>, media: MediaCache | null): string {
   if (!media || !text.includes('![')) return text
