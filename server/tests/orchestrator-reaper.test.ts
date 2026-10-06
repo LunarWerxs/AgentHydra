@@ -116,7 +116,9 @@ test.skipIf(!hasPython)(
       'sys.stderr.write("stderr before the wall\\n")',
       'time.sleep(120)',
     ])
-    const r = await runOrchestrator({ script: 'chats', timeoutMs: 3_000 }, { dir })
+    // The child has to print before the wall: on 2026-10-06 the full gate under load gave Python no
+    // first print within 3 s, and the test failed on an empty stdout that was no loss.
+    const r = await runOrchestrator({ script: 'chats', timeoutMs: 8_000 }, { dir })
     if (!('stdout' in r)) throw new Error(`unexpected: ${JSON.stringify(r)}`)
     expect(r.timedOut).toBe(true)
     expect(r.ok).toBe(false)
