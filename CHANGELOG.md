@@ -3622,624 +3622,216 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Added
 
-- **A log-out button on each instance row** (`server/src/core/instance-logout.ts`, three-dot menu).
-  An instance's whole login lives in its own `config.json`: `lastKnownAccountUuid` names the
-  account and `oauth:tokenCacheV2` (older builds: `oauth:tokenCache`) holds the encrypted grants.
-  Log out removes exactly those and nothing else, so chats, settings and the folder survive and the
-  profile asks for a sign-in next start. It confirms first, naming the account, because signing
-  back in costs the "Browser Dance".
-
-  ⛔ It REFUSES while the instance is running, and so does the menu item. Claude Desktop holds
-  config.json open and re-saves it, so a logout written underneath is either clobbered seconds
-  later (the button lied) or interleaved with the app's own write (the profile is corrupt and still
-  signed in). Neither announces itself. A process scan that FAILS also refuses, because "I could
-  not tell" is not permission.
+- **Log out of an instance from its row.** The three-dot menu signs the account out of that one
+  instance and leaves its chats, settings and folder alone, so it asks for a sign-in on its next
+  start. It names the account and asks first, and it refuses while the instance is running,
+  because the app would overwrite the change or corrupt the profile.
 
 
 ## [0.39.0] - 2026-09-06
 
+**TL;DR**
+
+- **Analytics keeps every chat's totals for good, even after Claude Code deletes old transcripts**
+- **Analytics can show tokens instead of money, adds a calendar view and slices time periods fairly**
+- **Each chat and instance row shows which account it is really signed into**
+- **The orchestrator is back inside AgentHydra, with undo for its chat actions and safer prompt approval**
+- **Hermes Agent chats can be listed, searched and exported**
+- **Repeated failures are grouped into incidents, and runs are only "completed" once their reply is seen**
+- **Redeem a banked Codex reset credit, and optionally keep an idle account's 5-hour window running**
+- **A long list of reliability fixes: safer updates, deletes, moves, locks and outage messages**
+
+**Everything in 0.39.0**
+
 ### Added
 
-- **A permanent record for every chat, which outlives the chat** (`server/src/db.ts`
-  `session_stats`, `server/src/analytics.ts`). Claude Code deletes transcripts on its own schedule
-  (`cleanupPeriodDays`, 30 days by default) and the scan cache was pruned along with them, so a
-  conversation's entire history (tokens, cost, how long it ran, which account paid for it)
-  evaporated a month after it finished, and the Analytics tab's "all time" quietly meant "the last
-  month". Measured on the machine this was written for: 35,943 transcripts on disk totalling 233.5B
-  tokens, with nothing older than 30 June, against a year of real use. Every scan now writes a row
-  that is NEVER pruned: tokens by kind, cost, first/last activity, turns, engaged time, tool calls
-  and errors, compactions, files touched, lines added and removed, size, and the instance that ran
-  it. When a transcript disappears the row is stamped `gone_at` instead of deleted, and the spend
-  report folds those rows back in, so a total stops shrinking when a file is cleaned up.
-
-- **Money or tokens, across the whole Analytics tab** (`web/src/components/AnalyticsView.vue`,
-  `composables/useAnalyticsPrefs.ts`). Several panels could only ever answer in dollars, so "how
-  many tokens went where" was unanswerable on a tab named Analytics. One switch changes the unit
-  everywhere; per-day, per-project and per-account token splits were added server-side to make that
-  possible. A panel with no token figures says so rather than drawing an empty chart, because blank
-  bars and "you spent nothing" look identical.
-
-- **A calendar grain for "when the work happens"** (`web/src/components/charts/CalendarGrid.vue`).
-  The hour-of-week heatmap collapses every date into a 7x24 rhythm and throws the calendar away, so
-  it could not answer "which weeks was I actually working" over a window of months. One square per
-  day, months across the top; the hour grid is one click away.
-
-- **Keep the 5-hour window running** (`server/src/session-keepalive.ts`). The rolling 5-hour quota
-  window only starts when an account is used, so an idle account makes you wait the full five hours
-  from the moment you need it. Opt-in, OFF by default, and it declines on its own terms: an account
-  whose window is already running is skipped, one at or above a weekly-percentage floor is skipped,
-  and an unreadable quota reading is a skip rather than a guess. Not a headless chat: it is the
-  same shape as the `/usage` probe that `headless-policy.ts` explicitly carves out, being one
-  throwaway prompt, the answer read, the transcript deleted.
-
-- **Click an account, get its address** (Instances tab, Codex table and the quick-instances window).
-  The column shows the email handle because that is what fits; clicking copies the full address,
-  which is the only form that identifies a login outside the app.
-
-- **Which account a chat is talking to**, on the open transcript (`useSessionAccount.ts`). A chip
-  under the title, and an account section at the top of the three-dot menu with "Open this account"
-  and "Copy the account address". Every instance runs a different login and the transcript pane
-  named none of them.
+- **A permanent record for every chat.** Claude Code deletes old transcripts after about a month,
+  and Analytics lost their tokens, cost and time with them. Each chat's totals are now kept for
+  good, so "all time" means all time and a total no longer shrinks when a file is cleaned up.
+- **Money or tokens across Analytics.** One switch changes every panel between dollars and tokens,
+  with token splits per day, project and account. A panel with no token figures says so.
+- **A calendar view of when the work happens.** One square per day, months across the top, with
+  the hour-of-week grid one click away.
+- **Keep the 5-hour window running.** An opt-in setting, off by default, that starts an idle
+  account's 5-hour quota window so it is already counting down when you need it. It skips accounts
+  whose window is running, accounts near their weekly limit, and any account it cannot read.
+- **See which account a chat uses.** The open transcript shows the account under its title, and its
+  menu can open that account or copy its address. Clicking an account in the Instances, Codex and
+  quick-instances lists copies the full address.
+- **Hermes Agent chats.** AgentHydra now lists, follows, searches and exports Hermes Agent sessions,
+  including named profiles, and prices them from its own catalog. It only reads them.
+- **Incidents for failed runs.** Runs that fail the same way are grouped into one incident with a
+  count, so twenty overnight failures read as one problem. You are notified on the first failure
+  and when a resolved incident comes back, and an Incidents panel above the queue can acknowledge
+  or resolve them.
+- **Runs are checked before they count as completed.** A run that exits cleanly but left no reply
+  in its transcript now shows as "unverified" instead of "completed", and a run whose outcome is
+  unknown is never retried without saying so.
+- **The orchestrator is part of AgentHydra again.** The Python toolbox ships as a folder beside the
+  app in the Windows zip, the daemon runs its scripts, and the MCP server can list, run, loop and
+  switch them. The `/orchestrate` command is back.
+- **Undo for the orchestrator's chat actions.** Archiving, renaming, moving, holding and compacting
+  a chat now record what it looked like before and after. You can list those actions and undo one
+  through the same guarded script, except compaction, which cannot be reversed.
+- **Safer approval of stuck permission prompts.** The orchestrator approves clearly safe commands,
+  refuses destructive ones, and puts everything else in a queue for a person to decide. Unattended
+  runs only press the safe ones.
+- **The orchestrator's own incident list.** Repeated orchestrator failures with one cause become a
+  single incident, and three in a row stop that lane for the pass instead of repeating the failure
+  chat by chat.
+- **The orchestrator can deliver staged replies.** A decided reply is typed into the right chat
+  through the app's own composer, only after the chat is confirmed and idle, and the delivery is
+  checked afterwards.
+- **Redeem a banked Codex reset credit.** A Codex row's menu can spend a saved reset credit to
+  restore the full 5-hour and weekly windows. It refuses until the window is used up unless you
+  force it, and says why when it is disabled.
+- **A daemon that hangs while starting restarts itself.** If start-up stalls, it logs the step it
+  was stuck on and exits so the tray restarts it, instead of sitting idle with nothing logged.
 
 ### Changed
 
-- **Instance rows follow the login, not the profile's display name**
-  (`web/src/lib/instance-appearance.ts`). The Anthropic profile's `full_name` is whatever someone
-  typed into claude.ai, so a fleet named that way read "Alex", "Morgan", "Example Owner":
-  friendly words that do not say which login each row is. Rows now use the email handle, and a
-  stored name that no longer matches the account it is signed into is flagged, with a one-click
-  "Name it after the account" in the three-dot menu.
-
-- **A time period on Analytics now means what it says** (`server/src/analytics.ts` `windowShare`).
-  The window was applied per SESSION on `last_ts`, so a session whose last turn landed inside it
-  contributed its ENTIRE life and one that ended a day earlier contributed nothing, not even the
-  part that was inside. Every panel now takes the same day-proportioned slice, so the headline, the
-  per-model split and the day chart cannot disagree. A sub-day window is answered at day
-  granularity, which is the resolution a stored row actually has.
-
-- **The settings dot explains itself.** Clicking the header's gear while an update is waiting
-  scrolls to the Updates card and pulses it, and the dot goes quiet for the rest of the session,
-  returning on the next launch because the update is still there.
-
-- **The Focus button carries the running dot** the status column already shows, on both the Claude
-  and Codex tables.
+- **Instance rows are named after their login.** Rows show the account's email handle instead of
+  the profile's display name, and a name that no longer matches its account is flagged with a
+  one-click rename. The Focus button shows the running dot on both the Claude and Codex tables.
+- **Analytics time periods mean what they say.** Every panel takes the same day-by-day share of
+  each chat, so a chat that only partly overlaps the period counts only for that part.
+- **The settings dot explains itself.** With an update waiting, the gear scrolls to the Updates card
+  and highlights it, then the dot stays quiet until the next launch.
+- **The release notes say what the single Windows download lacks.** The standalone executable has
+  no tray icon and no orchestrator, and the downloads table now says so instead of calling the two
+  files otherwise identical.
 
 ### Fixed
 
-- **`default` and `other` are refused as instance names** (`server/src/core/lifecycle.ts`). Both are
-  words the app already uses to mean something other than a folder: `default` is the regular
-  non-isolated Claude Desktop, `other` is the sessions filter's no-instance scope. An instance
-  taking either could not be told apart from it, and nothing failed loudly: a chat in a folder
-  called `default` was indistinguishable from one in the real default install.
+- **A compacted desktop chat no longer shows up two or three times.** The desktop app gives a chat
+  a new id when it compacts; the sessions list now folds those ids back into one chat, so its
+  instance, archive and queue links keep working.
+- **"default" and "other" are refused as instance names**, since both already mean something else
+  in AgentHydra. The regular Claude Desktop install is now recognised everywhere, and on Linux and
+  macOS a folder with different capitals no longer looks like it.
+- **Updates are checked before they run.** A download must match the release's published checksum
+  before anything is extracted, and a release without one is refused. An update now replaces the
+  orchestrator and tray files together with the app and rolls all of them back on failure, without
+  losing the orchestrator's saved state.
+- **A failed self-update from source keeps your edits.** Changes made while it ran are stashed
+  before the checkout is reset, and the message says how to get them back.
+- **A damaged instance list is never silently replaced.** A corrupt or unreadable list is left as
+  it was and changes are refused, instead of one new instance wiping every saved login.
+- **Deletes no longer claim more than they did.** If AgentHydra cannot tell whether an instance is
+  running, it refuses to delete it, and a delete whose folder could not be removed keeps its row
+  and shows the real error.
+- **Moving a chat creates it once**, even when two requests import it together. Delete and undo of
+  one chat can no longer interleave and lose the undo, and twin cleanup re-checks that a chat is
+  not live right before it acts.
+- **Shared orchestrator files no longer lose each other's changes**, and its locks no longer crash
+  on Windows when several lanes wait on the same one.
+- **An outage no longer looks like an empty account.** When the server cannot be reached, sessions,
+  the scheduler and the queue show "unavailable" with a Retry, or keep the last good data marked
+  stale, and the incidents panel no longer reads a failure as "no incidents". Failed queue actions
+  and sends show the server's real reason and keep your prompt.
+- **The remote app recovers and explains itself.** It retries a failed start, tells a sign-in
+  refusal from an unreachable gateway, reports a failed sign-out, and shows a tunnel that died
+  with its reason.
+- **Old responses no longer overwrite new ones.** A slow reply can no longer bring back a deleted
+  queue row or show the previous filter's transcript.
+- **The queue cannot be given a false history.** Only the runner can set a run's status and
+  results, and a running row cannot be deleted. The web no longer offers queue controls the server
+  always refuses, and the scheduler panel says plainly when unattended runs are unavailable.
+- **Very large transcript exports are refused up front**, pointing to the raw download instead.
+- **Only AgentHydra's own pages can drive it**, not any page on another local port.
+- **Cancelling a run on Linux or macOS stops everything it started**, not just the first process.
+  Linux also no longer needs the ps tool to find running apps.
+- **Kilo, MiMo Code and IcodeMate chats open, search and count correctly** from their own stores,
+  and stores or Hermes profiles sharing a session id no longer mix up their chats. Hermes Agent,
+  OpenClaw and aider chats are looked for where those tools really keep them.
+- **Token budgets include delegated work.** Subagent and workflow transcripts now count toward an
+  account's quota window.
+- **Orchestrator fixes.** Long runs can be retried, polled and cancelled without doing the work
+  twice, and other MCP calls are no longer stuck behind them. It finds the daemon on the port it
+  really uses, a chat that ended on `/compact` or stopped at a usage limit is no longer treated as
+  busy, and each script's help shows that script's own manual.
 
-- **The regular Claude Desktop is identifiable** (`CMInstance.isDefault`). A session records its
-  instance as a folder name or the literal `default`, and nothing on the instance row could match
-  the second, so the app had no honest way to name that account. One shared helper now answers "is
-  this the regular install?" for the row, the quit guard and the delete guard, which each kept their
-  own copy, and it folds case only on Windows, matching `normalizePath`. The old copies folded it
-  everywhere, which on Linux and macOS made a differently-cased folder look like the default
-  profile.
-
-
-### Added
-
-- **The courier lane, entered here late** (`orchestrator/scripts/courier.py`, `stage_reply.py`,
-  `lib/deliverylib.py`; landed 2026-09-03 with the orchestrator's move back into this repo, after
-  v0.38.3 was tagged, and left out of this file at the time). It is the last manual lane closed:
-  an AI stages a decided reply, and the courier delivers it into the chat through the app's own
-  composer (or the peer channel for a live session), proving the chat moved afterwards. Rails in
-  order: held? breaker? resolves to exactly one chat? never mid-turn on the composer route? the
-  pane shows a snippet of this chat's own last words? Then send, then confirm. `sweep.py --deliver`
-  runs it as part of an acting pass.
-
-- **A provenance ratchet on the agent catalog** (`scripts/checks/catalog-row-provenance.mjs`, wired
-  into CI). The 58 rows in `server/src/agent-catalog.ts` say where each coding agent keeps its
-  conversations, and their paths were compiled from a third-party registry rather than read from
-  each tool's own source. A wrong path there is invisible by construction: a row pointing at a
-  directory that does not exist produces exactly what a correct row produces on a machine where
-  that tool is not installed, so it can never be told from "not installed" and lives forever. Three
-  rows were checked against upstream source on 2026-09-04 and all three were wrong - Hermes Agent
-  and OpenClaw both pointed at directories their projects do not have (fixed), and `aider` carried
-  an empty `dirs`, unmatched on any machine without `AIDER_DIR` set (given `~/.aider`, which its
-  own `main.py` writes to). Rows now carry an optional `verified: '<repo> <file> (<date>)'`, and
-  the guardrail ratchets on the count so verification can only grow, fails a marker that names no
-  file or date, fails a row that cannot match at all, and fails if its own parser reads fewer rows
-  than the table declares.
-
-- **`orchestrator/scripts/lib/incidentlib.py` - THE INCIDENT LEDGER**, ported from
-  NousResearch/hermes-agent's `cron/incidents.py` (MIT) and adapted to this toolbox's
-  JSON-rows-in-state style (no SQLite). Groups repeated failures by a normalized cause
-  signature instead of leaving them as anonymous rows in the attempt ledger: the same chat
-  failing the same way, or several unrelated chats failing for one shared reason, collapses
-  into ONE incident (lifecycle `open` -> `acked` -> `resolved`) with a repeat count and last
-  error. `ledgerlib.note()`/`annotate()` now file an incident for every deterministic or
-  explicitly-flagged failure and stamp the ledger row with the incident id, so the two can be
-  joined. `sweep.py` gained a SHARED-CAUSE BREAKER: 3+ consecutive same-signature failures in
-  one lane halt the rest of that lane for the pass (`--breaker-threshold` to tune) instead of
-  repeating a cause that will not clear chat by chat, and file one incident naming every chat
-  left behind. New `python orch.py incidents` (list open/acked, `--ack`/`--resolve`, `--all`)
-  surfaces it; the dashboard's `/data/incidents` route and `/data/suppressed`'s
-  `incidentsOpen` count expose it there too.
-- **Orchestrator: the unblock lane now classifies a stuck permission prompt before pressing
-  it, tri-state (APPROVE / DENY / ESCALATE)** - our own classifier; the tri-state idea came from
-  reading NousResearch/hermes-agent's `approval.py` (MIT), none of its code. Previously `unblock_prompts.py` pressed Allow on any chat whose
-  configured mode was `bypassPermissions`, whatever the pending command actually was.
-  It now also classifies the command against `orchestrator/scripts/lib/approvallib.py`'s
-  policy (`state/approval_policy.json`, created with a WHY-comment on first run, hand-edited
-  only - never inferred from a chat's own transcript text): hardline-destructive commands
-  (`rm -rf`, a shared-branch hard reset, a credential path, ...) DENY and are recorded, never
-  pressed; clearly safe ones (read-only inspection, build, typecheck, test, lint, git
-  status/log/diff) APPROVE exactly as before; everything else ESCALATEs into a new judgment
-  queue (`state/approval_escalations.json`) that `interview.py --ask` now also surfaces, so a
-  person or the `/orchestrate` AI decides instead of it being pressed on a guess. The
-  scheduled UNATTENDED run presses only APPROVE; an INTERACTIVE run (`--force`, a person at
-  `orch.py`) may also press an ESCALATE row, after the command has been shown.
-- **A mutation ledger with undo, for every act the orchestrator performs on a Desktop chat**
-  (a plain before/after ledger; unrelated to any external checkpoint tooling). Until now `archive_chat.py`, `rename_chat.py`, `migrate_chat.py`,
-  `hold_chat.py` and `compact_chat.py` left no before-image of what they touched, so a wrong
-  archive or rename (the orchestrator's README documents 6 of 29 chats archived wrongly in one
-  day under v2) could not be undone from here - only by hand, on a screen, from memory. Each of
-  those five scripts now writes down what its target looked like immediately before it acted
-  and immediately after (`orchestrator/scripts/lib/mutationlib.py`, same locked-JSON discipline
-  as the attempt ledger and the holds file); `python orch.py mutations` lists every entry newest
-  first with an `undoable` flag, and `python orch.py undo <id>` reverses one through the exact
-  same rail-guarded script that performed it (unarchive, rename back, migrate back to the source
-  instance, or release/re-hold), verified by that script's own fresh mutation row rather than
-  trusted on exit code alone. Compaction is recorded but never undoable - it is lossy by design,
-  so no inverse exists, and the reason is stated rather than guessed.
-- **Startup-liveness watchdog** so a daemon that hangs during boot (a locked sqlite file, a port
-  probe that never returns, an updater step that stalls) crashes and gets restarted instead of
-  sitting there indistinguishable from a slow one - tray icon idle, nothing logged, until someone
-  restarts it by hand an hour later. Armed at process entry (`server/src/main.ts`, before importing
-  the daemon or `--instances` entrypoint), renewed at each boot phase as it's reached (db open,
-  migrations, scheduler start, queue recovery, listen), and disarmed the moment the port is actually
-  bound. If the deadline elapses with no renewal, it logs the last-known phase and pid to both
-  stderr and `daemon.log`, then exits with a distinct code (`87`) so the tray/service supervisor
-  restarts it rather than a silent hang. Deadline is `AGENTHYDRA_BOOT_DEADLINE_MS`, generous by
-  default (120s full daemon, 30s `--instances`); inert under `bun test`. Idea ported in shape from
-  NousResearch/hermes-agent's startup watchdog (MIT) - see `server/src/boot-watchdog.ts`.
-- **Hermes Agent joins the readable session sources** (PLAN.md's DEFERRED list named it first: 241k
-  GitHub stars, larger than every other deferred source combined). Hermes keeps everything in one
-  SQLite file, `state.db`, at the root of `HERMES_HOME` (`~/.hermes` on POSIX, `%LOCALAPPDATA%\hermes`
-  on native Windows), plus a separate `state.db` per named profile under `profiles/<name>/`. AgentHydra
-  now lists, tails, exports and body-searches Hermes sessions the same way it already does OpenCode's
-  shared SQLite store, with a profile standing in as the "project" grouping. Usage is priced through
-  AgentHydra's own catalog by model name rather than trusting Hermes' own cost columns, so a model the
-  catalog has no price for costs $0 and is flagged unpriced instead of silently taken on faith. Purely
-  a reader: the queue, composer and resume-in-terminal stay Claude-only, and nothing here writes to a
-  Hermes store. New: `server/src/hermes-sessions.ts`.
-- **Failed queue runs are now grouped into incidents, so twenty overnight runs failing the same
-  way read as one problem instead of twenty.** Ported from NousResearch/hermes-agent's cron
-  incident tracker (MIT). A `failed` run (via `finalize()` or a pre-launch refusal in
-  `dispatch.ts`) is recorded against `(scope, key, error signature)` - the signature survives
-  timestamps, pids, and paths changing between runs of the same project, so a repeat only bumps a
-  counter rather than minting a new alert. Lifecycle is `open -> acked -> resolved`; a resolved
-  incident whose error recurs reopens rather than staying silently closed, and a genuinely
-  different error on the same project opens a new one. Desktop/email notifications (reusing the
-  existing reset-notification channels) fire on the first occurrence and on a reopen, and are
-  suppressed for every repeat in between - the count still increments. The one pre-launch refusal
-  that is permanent by policy (headless dispatch is currently disabled outright) is excluded from
-  incident tracking entirely, so it cannot page on every dispatch attempt. New: `server/src/incidents.ts`
-  (the model), an `incidents` table (`server/src/db.ts`), `GET /api/incidents`, `POST
-  /api/incidents/:id/ack`, `POST /api/incidents/:id/resolve` (`server/src/routes/incidents.ts`),
-  MCP tools `list_incidents` / `ack_incident` / `resolve_incident`, and a collapsed "Incidents"
-  panel above the run queue with an open-count badge and ack/resolve buttons
-  (`web/src/components/IncidentsPanel.vue`).
-- **"Never claim an act landed without checking" - now enforced, not just documented.** This
-  repo's own orchestrator rule 4, finally applied to the run queue as well. The never-retry-on-
-  UNKNOWN half (a provably-never-attempted row may be re-queued; one whose outcome is unknown
-  never is) is a discipline NousResearch/hermes-agent's `cron/delivery_queue.py` documents for its
-  own queue; reading it prompted this, no code is shared. Two halves:
-  - **The run queue.** A finished run's exit 0 no longer means `completed` by itself: the
-    daemon now re-reads the run's own transcript and requires an assistant turn timestamped
-    after the run started. Missing that, the run reads `unverified` - a new, distinct queue
-    status shown everywhere `completed`/`failed`/etc. already are (`QueueItemCard`, the run
-    viewer, `list_queue`/`get_run_events`), logged at WARN with what was missing, and never
-    silently delivered to a migrated run's desktop target. A run whose failure is genuinely
-    UNKNOWN (the process/pid vanished with no exit code - not a real code `claude` reported) is
-    recorded as such and is never auto-retried without saying so.
-  - **The orchestrator's ledger.** `ledgerlib.verify(kind, session_id, verified)` attaches a
-    `true`/`false`/`None` read-back verdict to an attempt row (`unverified()` surfaces the
-    `false`/unknown ones for the judgment queue). `archive_chat.py`, `rename_chat.py` and
-    `migrate_chat.py` - which already re-read the target's state after acting - now record that
-    verdict on the ledger instead of only reporting it; `rename_chat.py` also had a real bug this
-    closed, where a failed verify READ silently collapsed to the same outcome as a verify that
-    succeeded and disagreed (`unknown` was reading as `false`).
-
-- **THE ORCHESTRATOR IS BACK IN THIS REPO - as a folder, not a rewrite** (owner order, Michael,
-  2026-09-03: "migrate the orchestrator into AgentHydra so I don't have to explain that you have
-  to use both"). `orchestrator/` is the v3 Python toolbox exactly as it stood in its own repo
-  (`Lunarwerx/orchestrator`, now an archive): `orch.py`, `scripts/`, its 647 unit tests, and its
-  remote front-end (`orchestrator/server` + `orchestrator/web`, now root workspaces). The
-  2026-08-31 boundary survives - the scripts still only ever talk to the daemon over HTTP - but
-  there is one surface: the daemon runs them (`server/src/orchestrator.ts`; `GET
-  /api/orchestrator`, `POST /api/orchestrator/run`) and the MCP server exposes
-  `orchestrator_menu`, `orchestrator_run`, `orchestrator_loop` and `orchestrator_switch`. Script
-  names are validated against the menu grammar and arguments travel as an argv array, never a
-  shell. Nothing there acts without the tray icon, as before. The retired v1/v2 reference trees
-  (`old/`) and the duplicate `src/` + `tests/` copies did not come along: they stay reachable in
-  the archived repo, and the README's postmortem paragraphs carry the lessons. Release bundles
-  stage the python half beside the executable (`orchestrator/`), where the compiled daemon looks
-  for it; the spawn forces UTF-8 and normalises CRLF so the second machine reads the same bytes.
-  A machine that ran the standalone checkout has a written one-time cut-over (scheduled tasks,
-  tray shortcut, `state/`) in orchestrator/README.md. The `/orchestrate` command that 0.37.0
-  removed is back (canonical copy in `.claude/commands/`, beside `/hydra-status`), rewritten onto
-  the four MCP tools instead of a path to a second repo.
-- **Redeem a banked Codex reset credit from the Instances view.** A ChatGPT-account Codex login
-  can bank `/usage reset` credits, each restoring the FULL 5h + weekly rate-limit windows in one
-  shot - previously AgentHydra could only read the count (`rate_limit_reset_credits`), never spend
-  one. The Codex row's menu now has "Redeem reset credit" (`server/src/core/codex-account.ts`'s
-  `redeemCodexResetCredit`, `POST /api/codex-instances/:id/redeem-reset-credit`, MCP's
-  `redeem_codex_reset_credit`), guarded the way the Codex CLI's own picker is: it refuses unless
-  the busiest window is already fully used (100%) or the caller passes `force`, since redeeming
-  early wastes most of a credit's value. The button disables itself with the reason when the
-  already-cached quota chip shows the guard would refuse. Ported from
-  `NousResearch/hermes-agent`'s `account_usage.py` (MIT, Copyright (c) Nous Research); the access
-  token is read into a local binding only and never logged or returned.
-
-### Fixed
-
-- **Every closure of the 42-item audit was re-checked against its own acceptance criteria, and 12
-  of them were overstated** (2026-09-06). Two independent reviewers read the committed code and the
-  named regression test for each item, with a third deciding wherever they disagreed. 30 held. The
-  suite had been green throughout and said nothing about the other 12, which is the point: a green
-  suite proves the tests that exist pass, not that any of them asserts what the item required.
-
-  Three were real defects rather than overclaims, and all three were the same shape, a fix applied
-  at one call site while the finding named a class of sites:
-
-  - The transactional installer **destroyed the data it exists to protect.** It moved
-    `orchestrator/state/`, the scheduler's ledger, out of the rollback copy before the step that can
-    fail, and the cleanup deletes the staging directory unconditionally, so any mid-install failure
-    rolled back a toolbox whose ledger had gone with it. It is copied now, and the rollback copy is
-    discarded only once everything has landed. The rollback test that existed could not have caught
-    it: it injected its failure one component too early. The new one was confirmed to fail against
-    the old code.
-  - **The instances window accepted any loopback origin.** The exact-origin allowlist landed on the
-    daemon and not on the second local server, which serves instance create, open and quit, so a page
-    on any other localhost port could drive it from a browser. Both build the allowlist from one
-    module now, and a new guardrail fails the build if a local server ever binds a port without it.
-  - **Cancelling a run on Linux or macOS killed one process, not the tree,** under a comment
-    promising otherwise, so everything the agent had spawned kept running. There is one tree-kill
-    implementation now instead of two, of which only one had been fixed.
-
-  The rest were coverage gaps, each now closed: session search read only the default database for
-  OpenCode-format stores (Kilo, MiMo Code and IcodeMate sessions listed and opened but could not be
-  found), and its index keyed without the store, so two stores sharing a session id overwrote each
-  other; the incidents panel still rendered "no incidents" when the read had actually failed; the
-  updater's own apply path had no test at all behind its extracted helpers, and the daemon could not
-  report which component versions had landed; the toolbox menu never showed which actions the tray
-  icon gates and which run directly; the release smoke test never asked the booted binary about its
-  toolbox; and the tunnel-readiness fix and the kit-sync hook were both unguarded. The full linter
-  now runs clean, and the one dead translation key is gone.
-
-- **Linux enumeration no longer depends on `ps`/`pgrep`, and two identity keys follow the store**
-  (2026-09-05, found by running the repo's own ubuntu CI leg in its container after the audit
-  closed; GitHub's runner ships procps and had hidden all of it). On Linux the process table is
-  read from /proc for Claude and Codex discovery alike, and the orchestrator's tree kill walks
-  /proc too. In the CI image, which has neither `ps` nor `pgrep`, every Unix enumeration used to
-  answer "could not look": the delete guard rightly refused every instance removal, and a
-  timed-out toolbox run killed only the interpreter while its grandchild held the pipes and the
-  route never answered. The drain after a kill is now bounded as well: a pipe still open five
-  seconds after the tree kill is abandoned with what arrived. Done-marks and subagent ownership
-  key on the session's store (database path for OpenCode-format and Hermes stores), so two Hermes
-  profiles or two OpenCode-format databases sharing a session id no longer share a mark or steal
-  each other's children; marks set under the old key are still found. And Settings' scheduler
-  panel now says plainly that this build cannot dispatch unattended runs, instead of offering a
-  switch that does nothing.
-
-- **The last twelve audit findings** (audit AH-07/08/09/10/11/12/16/25/30/35/40/42, 2026-09-05),
-  which closes the 42-item orchestrator audit. A compiled update now brings `orchestrator/` and
-  `misc/` to the release's exact content as one unit with the executable: the toolbox is swapped
-  with its `state/` carried across and a `.release-version` stamp, retired files go, a failure
-  rolls every part back, a bare-executable install acquires the toolbox, and the swap refuses to
-  run while a toolbox script is executing through the daemon. The manual `install.ps1` is
-  transactional the same way (stage, canary the staged exe, refuse under a running instance,
-  rename-aside per component, restore on any failure) and a test pins its component list to the
-  updater's. A long toolbox run is a durable operation: an idempotency key makes a retry after a
-  dropped connection return the original outcome rather than start a second act, `async` returns
-  an id to poll, and a running operation can be cancelled (its whole process tree is killed).
-  MCP requests over stdio dispatch concurrently with per-request cancellation, so a pause or
-  status call is no longer stuck behind a 30-minute act. The daemon's guard and CORS accept an
-  exact origin allowlist instead of any loopback port. The web no longer offers queue creation or
-  Run controls that the server refuses unconditionally: the composer sends through the working
-  delivery path and shows the server's real reason, and the README describes what works. Every
-  toolbox script carries one explicit capability contract (kind, invocation, guard, availability)
-  that the menu, `--catalog` and the arm check all read, replacing classification by docstring
-  prose. Scheduled lanes hold a proof-of-death job lock (owner pid + creation time, heartbeat,
-  reclaim only when the owner is provably gone) instead of an age-only directory. The doctrine
-  picker's confirmation ledger is written under a lock, so a concurrent drop can no longer erase
-  a fresh confirmation. Fleet-wide enumeration pages the session list to the end and raises on a
-  bad page instead of treating the first 500 rows as the fleet. Sessions carry a locator that
-  includes the store they came from, so Kilo, MiMo Code, IcodeMate and multi-profile Hermes rows
-  stop colliding. And a collection guard fails the Python suite when any `test_*.py` collects as
-  zero cases; it fired at once on the chatwatch checks, which had been a bare script off the gate
-  since they were written. Finally, the desktop-record mutation guard compares the record's BYTES
-  before it writes, not its timestamp and size: a same-size rewrite by the app inside one
-  filesystem timestamp tick was invisible to the old check and a stale copy went straight over it.
-
-- **A damaged instance registry is never silently replaced, and a delete never claims more than it
-  did** (audit AH-01/02/03, 2026-09-05). Three related holes in how the CLI and Codex instance
-  registries and the profile deletes handled failure, each reproduced against the real functions
-  before it was closed. (1) Both registries read a malformed or unreadable `cli-instances.json` /
-  `codex-instances.json` as an EMPTY store and their next write overwrote it, so one create after a
-  corrupt read came back `ok: true` with a fresh file holding only the new record - every managed
-  login identity in the old file gone, with a success message. Every read and write now goes
-  through one `core/json-store.ts`: missing, corrupt and unreadable are told apart, every mutation
-  refuses on a damaged file and leaves its bytes exactly as found, writes are temp-file + rename,
-  and mutations hold an interprocess lock, because the quick-instance daemon writes the same files
-  as the main daemon and last-writer-wins between two processes silently dropped whichever record
-  landed first. Boot logs what the disk and the registry disagree about (a login dir no record
-  claims, a record whose dir is gone) instead of leaving that to be discovered by hand. (2) The
-  process scan behind the desktop-profile delete folded "could not enumerate" into "nothing
-  running", so a transient PowerShell/CIM failure during a confirmed delete authorized removing a
-  profile a running app was still writing into - its own fail-closed catch never fired because the
-  scanner had swallowed the error first. The scan now says which of the two it is, and both the
-  Claude and Codex deletes refuse on unknown. (3) A delete whose directory removal FAILED (a
-  locked profile) dropped the registry record anyway and reported success, leaving the login on
-  disk with no row to manage it from; the record now stays and the real error comes back.
-
-- **Shared journals no longer lose each other's writes, stale UI responses are discarded, and the
-  queue API cannot forge history** (audit AH-13/17/18/21/22/29/31/37, 2026-09-05). Four journals
-  the toolbox's lanes share - the workspace trust file, the chip handoff list, the standing
-  manager's role claim, and every chat's metadata record - were each read whole, changed, and
-  replaced with no lock between lanes, so the last writer silently discarded the other's change
-  (reproduced for chips: a newly seen chip vanished and a dismissed one came back). Each now
-  holds a named lock around read-modify-replace and re-checks the file's revision right before
-  the replace; a record the desktop app rewrote underneath is re-read and re-applied, and one that
-  keeps changing is left alone with an error rather than overwritten from a stale copy. In the
-  browser, queue and scheduler refreshes and the transcript tail carry request generations, so an
-  old slow response can no longer resurrect a deleted row or paint the previous filter's
-  transcript under new controls; the remote app's "refresh every reading" now refreshes the Rules
-  and Scripts it had loaded. The queue API splits what a person may edit (title, position, start
-  time) from what only the runner may write (status, pids, timestamps, exit codes, import state):
-  a client can no longer mark an item running or completed, edit an active row's identity, or
-  delete a row still marked running. And the session export, which by contract renders one whole
-  document, now refuses a transcript over 64 MB up front with a 413 that names both sizes and
-  points at the raw download, instead of claiming to stream while holding it all.
-
-- **An outage no longer looks like an empty account, and every failed action says why** (audit
-  AH-20/23/26, 2026-09-05). With every API read failing, the main app used to show "No sessions
-  found", "Scheduler off" and an empty queue. Each resource now carries its own loading, error,
-  stale and unavailable state: a first-load failure shows "unavailable" with a Retry, a later one
-  keeps the last good data and marks it stale, and one resource's error never touches another.
-  Queue run/cancel/delete and the composer's send now show the server's real error text instead
-  of a bare count, and the prompt survives an unconfirmed send. The remote app retries a failed
-  startup with a bounded backoff and a Retry button, tells an authentication refusal apart from an
-  unreachable gateway (the former goes to login, never a reconnect loop), reports a failed
-  sign-out, and shows a tunnel that died with its reason rather than as "off"; a login whose
-  identity-provider discovery fails gets the gateway's retry page instead of a raw server error.
-
-- **The toolbox's locks no longer crash under contention on Windows** (found while landing the
-  above, 2026-09-05). Every lane's lock - ledgers, holds, the delivery queue, the new journal
-  locks, the naming pass - is an exclusive-create of a lock file, and both helpers tolerated only
-  "already exists". On Windows the previous holder's unlink leaves the file's name pending-delete
-  for a few microseconds, and a create landing in that window answers "permission denied"
-  instead, so a lane that owed a wait crashed: measured 42 crashes in 1,800 contended
-  acquisitions across six threads. The permission-denied answer is now treated as contention
-  (wait, or for the non-blocking lock, defer), and a contention test pins it. The timed-out
-  toolbox run on Linux and macOS now also kills the interpreter's descendants (an actuator it
-  was blocking on), not just the interpreter; Windows already did through taskkill.
-
-- **Updates are verified before they run, long scripts cannot exhaust the daemon, and a dead
-  tunnel says so** (audit AH-14/19/24/27/38/41, 2026-09-05). The compiled updater now checks a
-  downloaded archive against the release's published SHA-256 manifest before extracting it or
-  running anything out of it, and refuses a release that publishes no manifest; until now its
-  only gate was running the download to see if it printed the right version, which is a
-  compatibility check, not an integrity one. (What it proves: the bytes are the ones the release
-  published. What it does not: who published them; a signed manifest is still open.) The
-  orchestrator adapter bounds a script's output while reading it, keeping the last 200k
-  characters of each stream and counting what it let go, instead of holding a runaway script's
-  entire output in memory and trimming afterwards. The remote gateway now reports an outage when
-  its tunnel connector dies after it was ready, clears the advertised URL, and cannot be talked
-  back into "ready" by a late message from the dead connector. The local kit-drift check and the
-  pre-commit guard cover both vendored kit targets, not just the main web root. Release smoke
-  asserts the orchestrator payload is inside every archive and that test and runtime-state
-  directories are not. And the README screenshot fixture matches the session DTO again, with a
-  test that keeps it that way.
-
-- **Fleet actions land once and read the right store** (audit AH-04/05/06/33/34/36, 2026-09-05).
-  Six more findings, each reproduced before it was closed. The Python toolbox now finds the daemon
-  the way the MCP server does (explicit URL, explicit port, then the port the daemon ACTUALLY
-  bound, then 7787) and the daemon pins its own bound URL into every toolbox child it spawns - a
-  daemon that had hopped off a busy 7787 used to leave its toolbox talking to whatever answered
-  there. Importing a session into a desktop app now holds one claim per session across every
-  entry point (direct route, migration, batch, the message route's heal): a concurrent same-target
-  request waits and coalesces onto the row the first one made instead of spawning a second import
-  and a second identically named row, which made every later title-aimed action on that chat
-  refuse as ambiguous. Automatic reply staging checks for an existing pending reply inside the
-  same lock it appends under, so two lanes planning the same wake in one window produce one row.
-  The quota budget's token count walks nested subagent and workflow transcripts, which the
-  transcript index already counted as separate spend; a window in which the work was delegated
-  used to report no activity at all. Kilo, MiMo Code and IcodeMate sessions are read from their
-  own databases in tail, list metadata, export and analytics, not from the default OpenCode one
-  (they listed fine and then opened as "transcript not found"). And the in-memory metadata cache
-  treats a revision as mtime AND size, as the persisted cache always did, so an append that lands
-  inside the same timestamp tick is re-parsed rather than served stale.
-
-- **Delete and undo of one chat can no longer interleave, twin cleanup re-checks liveness at the
-  moment it acts, and a failed self-update no longer erases edits made while it ran** (audit
-  AH-28/32/39, 2026-09-05). Three more places a decision was older than the act it authorized.
-  `delete_chat` and its `--undo` now hold one per-chat lock for the whole transaction, because an
-  undo that landed between the trash copy and the unlink loop was itself unlinked - both sides
-  reported success and the chat was gone (reproduced with the production functions). Whichever
-  arrives second now defers, refused-class exit 3, and a later undo restores everything.
-  `audit_twins --fix` decided "not live" once per pass and then waited up to 60s for a window
-  mutex and drove a 240s actuator on that stale answer; it now takes the same per-chat archive
-  lock `archive_chat` holds, asks liveness and engine host again once the window is its own,
-  defers a copy that went live meanwhile, and treats a daemon that cannot report liveness as
-  unknown (refuse) rather than as an empty room. The shared source updater (kit
-  `updater-engine.mjs`, synced) proved the tree clean BEFORE the pull and then, on a failed
-  install/build minutes later, ran `git reset --hard` - deleting anything typed into the checkout
-  meanwhile. It now re-reads the tree first: changes made during the update go into a named git
-  stash before the reset and the message says so (`git stash pop` restores them); if the tree
-  cannot be inspected or stashed, it does not reset and says the checkout needs a hand instead.
-
-- **A compacted desktop chat no longer shows up as two or three chats** (owner, Michael,
-  2026-09-03: "I have a feeling compacted chats or something, become multiple entries"). He was
-  right, and the mechanism is specific. The desktop app rolls a chat onto a new transcript id when
-  it compacts, and it does so by REPLAYING the retained history into the new file before writing
-  the compaction marker - so the marker the continuation detector looks for among a transcript's
-  first records sits hundreds of records deep and was never found. Measured on one chat: three
-  transcripts, the marker at record 1,501 of the newest, three rows under two titles. The app
-  records every retired id in its own metadata (`priorCliSessionIds`); the session list now lays
-  those links over the index (`withDesktopContinuations` in `server/src/sessions.ts`, fed by
-  `retiredSessionIds()` in `server/src/instance-sessions.ts`) and folds them exactly as it folds a
-  detected continuation, crediting the retired ids to the survivor so instance, archive and queue
-  lookups keep working. A claim made only by an ARCHIVED tombstone counts too, because after a
-  migration the tombstone left behind is the only record that still remembers the lineage. On this
-  machine: 28 of 2,118 chats had rolled, 37 phantom rows.
-- **The orchestrator's own tests stop depending on Claude Code being installed.** Their first run
-  on GitHub went red on four tests, and all four had one cause: the runner has no `claude` binary.
-  `compact_chat.main` resolved the CLI *before* choosing its runner, so an injected test runner was
-  never reached and the `runner=` seam only looked injectable - the executable is the real runner's
-  dependency, and it is now resolved as one. The one test that genuinely asserts an installed
-  binary skips loudly, naming the machine fact, and a new test pins the fallback so the
-  bare-name branch is covered everywhere. These never surfaced before because the CI step that
-  runs them arrived with the orchestrator and had never been pushed.
-- **The release notes stop promising the two Windows downloads are otherwise identical.** The
-  orchestrator ships as a FOLDER beside the executable, so like the tray toolkit it can only ride
-  in the zip - an `.exe` install answers `GET /api/orchestrator` with `present:false` and its four
-  MCP tools do nothing. The asset table said "Everything else is identical", which turned a silent
-  omission into a written promise; it now has an orchestrator column and says what the single file
-  is. The table's own comment already made this rule for the tray icon ("costs real users, who
-  reasonably read a missing icon as a bug"); it now states the general form, so the next payload
-  staged beside the binary cannot become a third quiet exception.
-- **The orchestrator's gate no longer reads a `/compact`ed chat as "may be working" for ever.** A
-  chat that finished its turn and was then compacted ends on a `<local-command-stdout>Compacted`
-  record - user-role, and no model ever answers it - and the idle test accepted only a completed
-  assistant turn as the newest record, so nothing could move or archive such a chat until a person
-  killed its engine by hand (two chats, 2026-09-03). Local plumbing a transcript ENDS on - a slash
-  command the app answered itself, its printed output, the caveat banner, a compaction summary - is
-  now stripped before the tail is judged (`strip_local_tail` in `orchestrator/scripts/lib/gatelib.py`).
-  A slash command still awaiting the model, and anything in flight under an auto-compaction
-  summary, still read as mid-turn.
-- **A chat parked at a usage wall no longer reads as "may be working".** An account out of
-  budget until its reset cannot write, so its chat is stopped, waiting - the plainest case
-  there is. But the wall arrives as an api_error record, which the gate's completed-turn test
-  excludes, so such a chat was unmovable for as long as its engine lived, and moving it OFF the
-  exhausted account is the one thing that would have helped. Quota walls only: a transient
-  overload is one the engine may retry on its own, and moving a chat that is about to resume
-  would rewrite a live transcript.
-- **`python orch.py <script> --help` prints that script's manual.** It printed the driver's own
-  docstring for every subcommand, so the menu's promise ("`orch.py <script> --help` for any of
-  them") was false for all of them. The manual is read with `ast`, never by running the script, so
-  the branch stays incapable of acting.
 ## [0.38.3] - 2026-09-03
 
 ### Added
 
-- **A moved chat keeps what it was set to.** Model, effort, the ultracode toggle, the Chrome
-  permission mode and the chat's own permission grants travel with it. Measured before the change
-  on 16 moved chats: effort reset on 13, ultracode reset on 13, Chrome mode reset on 14, every one
-  arriving as "manual / extra / ultracode off" for the owner to fix by hand. Not carried, on purpose:
-  the permission mode (every migrated chat is bypass, the standing rule) and the enabled MCP tools
-  (those ids belong to the source account's connectors).
-- **Move chats to a CLOSED account without starting it.** The chat's record is written straight
-  into that instance's store, a near-copy of the original, and the app finds it there, settings
-  intact, when it next starts. This is the landing that needs no restart afterwards, and the flyouts
-  say so: a closed target reads "Move to X" under "Not running - lands in its store, ready when it
-  starts". The old "Start X and move there" step is gone with the refusal it worked around.
-- For a **running** target the app still creates the record, the carried settings are merged onto it
-  with the title and the bypass stamp, and the minute-by-minute sweep puts them back whenever the
-  running app re-saves over them, until that app's next start makes them permanent (the same shape
-  as the bypass stamp). The migrate response says which landing happened (`landing: hot | cold`)
-  and which settings were carried.
+- **A moved chat keeps its settings.** Model, effort, ultracode, the Chrome permission mode and the
+  chat's own permission grants now travel with it. On a running account they are put back whenever
+  the app overwrites them, until its next start makes them stick.
+- **Move chats to a closed account without starting it.** The chat is written into that account's
+  store and is there, settings intact, when the app next starts. The menus label a closed target
+  as "Not running - lands in its store, ready when it starts".
 
 ## [0.38.2] - 2026-09-03
 
+**TL;DR**
+
+- **The move dialogs group chats by project**
+- **Click a chat in a move dialog to open it**
+- **Moving chats from the web UI works again**
+- **A failed move says why**
+
+**Everything in 0.38.2**
+
 ### Added
 
-- **The move dialogs group chats by project.** Both "Move all chats to another account" (Instances)
-  and the bulk "Migrate N chats" (Sessions) list what is about to move under a header per project
-  folder (the same name the sessions list shows), largest group first, with a count - so eighteen
-  titles read as "eleven Connections, five Agent Hydra, two TavernBag" before the click, not after.
-- **Click a chat in either list to open it.** The Sessions view switches in (from Instances), the
-  search box takes that session's id so the list shows exactly that one row, and it is selected.
-  A chat outside the current time window widens the window to everything and selects it the
-  moment the list carries it.
+- **The move dialogs group chats by project.** "Move all chats to another account" and "Migrate N
+  chats" list the chats under a header per project, largest first, with a count.
+- **Click a chat in either list to open it.** Sessions opens with that chat alone in the list and
+  selected, widening the time window if it needs to.
 
 ### Fixed
 
-- **Migrating a chat from the web UI works again.** Since the naming law landed on 2026-08-29 the
-  migrate route has required a title decision - a real new `title`, or `confirm_title` restating
-  the chat's current title exactly - and the web client sent neither, so every migrate started
-  from the UI, one chat or sixteen, was refused with 400 before it touched anything. The UI now
-  restates each row's own title. A chat whose current title is generic ("General coding session")
-  is still refused, by design: the toast names the reason, and giving that chat a real name in the
-  app is the way through.
-- **A failed move says why.** The bulk toasts carried "details are in the browser console"; they
-  now carry the server's first reason too, and read as an error rather than a warning when nothing
-  moved at all.
+- **Moving a chat from the web UI works again.** Every move started from the UI had been refused
+  because it did not confirm the chat's title. A chat with a generic title is still refused on
+  purpose, and the message says so: give it a real name first.
+- **A failed move says why.** The bulk messages now carry the server's first reason, and show as an
+  error when nothing moved at all.
 
 ## [0.38.1] - 2026-09-03
 
 ### Fixed
 
-- **Migrate destinations carry the name the Instances table shows.** The Move-all submenu, the
-  migrate flyouts and their confirmation dialogs offered folder names (`5claude`, `arama`) where the
-  table shows apebrain and Martin; they used `label ?? name` and skipped the account-name step the
-  table's own helper takes. Found by exercising 0.38.0 in the browser.
-- **The daemon says why it did not start the tray host.** A skip for "already running" or "hidden
-  by setting" is logged by reason now. On the first live relaunch under 0.38.0 the skip was correct
-  and its silence still read as a missing tray to the person checking the log.
+- **Move destinations use the names the Instances table shows**, not the folder names.
+- **The daemon says why it did not start the tray**, such as the tray already running or being
+  hidden in settings.
 
 ## [0.38.0] - 2026-09-03
 
+**TL;DR**
+
+- **Move many chats at once, from Sessions or from an account's row**
+- **Move a chat from the right-click menu, including to an account that is not running**
+- **Starting AgentHydra from the zip now shows the tray icon**
+- **Moved chats stay in bypass permissions mode for good**
+- **Check for updates really checks every time**
+
+**Everything in 0.38.0**
+
 ### Added
 
-- **Move chats in bulk.** In Sessions, Ctrl/Cmd-click or Shift-click rows to pick several (this
-  turns select mode on by itself), then right-click one of them: the menu leads with *Copy N
-  session ids* and *Migrate N chats to another account*, behind a confirmation that names the count
-  and the destination and lists the chats. In Instances, every row's menu has *Move all chats to
-  another account*: every active chat on that account (not archived, not marked done), one hop to
-  another, again behind a confirmation. Both move chats one at a time on purpose, because each
-  migrate may stop a live run and the desktop app takes imports serially anyway; a summary toast
-  says how many landed, and anything that did not is named in the browser console.
-- **Migrate from the right-click menu.** A session row's context menu now carries the same *Migrate
-  to another account* flyout the open chat's ⋯ menu had, so moving one chat no longer means opening
-  its transcript first.
-- **Right-click an instance row** to get its ⋮ menu, same items, same position.
-- **Closed accounts appear in the migrate flyout.** Targets are in two groups, *Running* and *Not
-  running*. A running one takes the chat as it stands; a closed one reads *Start X and move there*:
-  the click opens that instance the ordinary way, waits for it to come up, then migrates. The server
-  still refuses to import into a closed app on its own (the import spawn would boot it, and nothing
-  opens an account without being asked); the click is the asking.
-- **The daemon starts the tray host.** A release ZIP has the whole tray toolkit in `misc\`, and
-  nothing started it unless you knew to run `misc\Create-Shortcut.ps1` first: double-clicking
-  `AgentHydra.exe` ran the daemon, opened the UI, and never showed a tray icon, on a machine that
-  did exactly what the release notes said. Now a compiled daemon that finds `misc\lunarwerx-tray.exe`
-  beside itself, with the tray not hidden by setting and no host already running, starts the host,
-  which attaches to the daemon (its shipped `onStrayDaemon: attach` behaviour) and shows the icon.
-  The decision is a pure function with its own tests; a source checkout never gets a tray it did not
-  ask for. `install.ps1`'s Start Menu shortcut now launches through the tray host too, using the kit's
-  own shortcut recipe instead of a second copy that had drifted to point at the bare exe.
+- **Move chats in bulk.** In Sessions, Ctrl/Cmd-click or Shift-click several rows and right-click
+  to copy their ids or move them to another account. In Instances, each row's menu can move all of
+  that account's active chats. Both ask first, move one chat at a time, and report how many landed.
+- **Move a chat from the right-click menu.** A session row's menu has the same move option as the
+  open chat's menu, so you no longer have to open the chat first.
+- **Right-click an instance row** to get its menu.
+- **Move to an account that is not running.** Targets are grouped as Running and Not running; a
+  closed one offers "Start X and move there", which opens that account and then moves the chat.
+- **The tray icon starts with the app.** Starting AgentHydra from the Windows zip now starts the
+  tray too, unless it is hidden in settings or already running, and the Start Menu shortcut
+  launches through the tray as well.
 
 ### Fixed
 
-- **Migrated chats stay on `bypassPermissions`.** The stamp was always written on import, and the
-  running app always re-saved `acceptEdits` over it on the chat's first wake; a bounded watcher
-  fought that for ten minutes and eight restores, and a chat opened eleven minutes after migrating
-  reverted for life. `reassertAutomationStamps`, which re-stamps every import-shaped chat in a
-  profile and was called from nowhere but its own test, now runs every minute over every RUNNING
-  instance for as long as the daemon does. Only imported chats (`local_<cliSessionId>.json`) are
-  touched, never one a person created in the app. The migrate route also hands back its notice
-  prompt with the `ultracode` keyword when the new-chat default is on; a first message you type
-  yourself in the desktop app is yours to arm, nothing here can reach into that composer.
-- **A manual *Check for updates* always asks GitHub.** The result was cached for five minutes and
-  the background tick kept that cache warm, so the one click that exists to ask "right now" was the
-  click most likely to be told a stale "up to date". HTTP 429 (GitHub's secondary rate limit) now
-  reads as the rate limit it is rather than "couldn't reach the Releases API".
-- **The single-file `.exe` says once that it has no tray icon**, by OS toast (the build hides its
-  console, so nothing else lands). The flag is never synced: it is a fact about that copy's packaging.
-- **Quick Instances' success notice can be dismissed**, like the error banner beside it always could.
-- **A run's live output says *Reconnecting…*** when its stream drops, instead of freezing in a way
-  indistinguishable from a quiet run. Not shown for a finished run, whose stream the server closes.
-
-### Changed
-
-- The root-level `AgentHydra.exe` and `FINDINGS-*.md` write-ups are gitignored: on a public repo an
-  untracked 100 MB binary is one careless add away from being published for good.
+- **Moved chats stay in bypass permissions mode.** The desktop app used to switch a moved chat back
+  to accept-edits when it first woke; AgentHydra now puts it back every minute for as long as it
+  runs. Chats you created in the app yourself are never touched.
+- **Check for updates always asks GitHub** instead of answering from a cached result, and a
+  GitHub rate limit is reported as one.
+- **The single-file download says once that it has no tray icon.**
+- **Quick Instances' success notice can be dismissed.**
+- **A run's live output says "Reconnecting…"** when its stream drops, instead of looking frozen.
 
 ## [0.37.0] - 2026-09-02
 
