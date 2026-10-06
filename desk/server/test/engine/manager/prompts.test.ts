@@ -37,7 +37,7 @@ async function boot(home = temp('desk-prompts-home-')) {
     port: 0,
     home,
     pluginsDir: plugins,
-    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1 },
+    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: fakeBridge().bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, claudeHome: home },
   })
   servers.push(desk)
   return { desk, home, ...q }

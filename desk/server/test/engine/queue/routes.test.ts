@@ -44,7 +44,7 @@ async function boot(o: { home?: string } = {}) {
     port: 0,
     home,
     pluginsDir: plugins,
-    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: b.bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, climaytePollMs: 20, queueSettleMs: 20 },
+    deps: { newChats: 'sdk', queryImpl: q.queryImpl, bridge: b.bridge, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, climaytePollMs: 20, queueSettleMs: 20, claudeHome: home },
   })
   servers.push(desk)
   return { desk, home, ...q }

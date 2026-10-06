@@ -77,7 +77,7 @@ async function setup(o: { sessionLine?: string; handoffTokens?: number } = {}) {
   writeFileSync(file, `{"type":"user"}\n${o.sessionLine ?? ''}`)
   const q = fakeQueries()
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts: async () => [a, c, b] }
-  const m = new ChatManager({ home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', handoffTokens: o.handoffTokens, deskUrl: 'http://127.0.0.1:7795' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', handoffTokens: o.handoffTokens, deskUrl: 'http://127.0.0.1:7795' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: SID, cwd, title: 'Outside', configDir: a.configDir })
   return { m, q, a, b, chat }

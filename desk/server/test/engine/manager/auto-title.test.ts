@@ -23,7 +23,7 @@ function setup(gen: TitleGenerator) {
   temps.push(home)
   process.env.HYDRA_DESK_HOME = home
   const events: unknown[] = []
-  const m = new ChatManager({ home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: gen })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, titleGenerator: gen })
   managers.push(m)
   return { home, m, events }
 }

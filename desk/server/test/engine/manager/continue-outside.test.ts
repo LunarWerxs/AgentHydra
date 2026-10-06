@@ -5,7 +5,7 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo, DeskSettings, ExternalSession, TranscriptItem } from '@shared/protocol'
@@ -60,6 +60,7 @@ function boot(w: World, o: { external?: ExternalSession[]; older?: ExternalSessi
   }
   const m = new ChatManager({
     home: w.home,
+    claudeHome: w.home,
     emit: () => {},
     settings: () => ({ ...DEFAULT_SETTINGS, defaultAccountId: w.a.id, ...o.settings }),
     bridge,
@@ -217,6 +218,18 @@ test('a fork of an outside session is copied into its account folder with its si
   expect(t.last().options).toMatchObject({ resume: id, forkSession: true, resumeSessionAt: 'u-1', env: { CLAUDE_CONFIG_DIR: w.b.configDir } })
   expect(existsSync(join(projects(w.b), encodeProjectDir(w.cwd), `${id}.jsonl`))).toBe(true)
   expect(readFileSync(join(projects(w.b), encodeProjectDir(w.cwd), id, 'subagents', 'agent-a1.jsonl'), 'utf8')).toBe('{"type":"assistant"}\n')
+})
+
+test("a session continued on the default login is seeded under the manager's Claude home, never the real ~/.claude", async () => {
+  const w = world()
+  const t = boot(w)
+  const id = '8b8b8b8b-1111-4222-8333-444455556666'
+  transcript(w.elsewhere, w, id, '{"type":"user"}\n')
+  const chat = await t.m.importSession({ sessionId: id, cwd: w.cwd, title: 'Default login', configDir: null })
+  await t.m.send(chat.id, 'carry on')
+  expect(t.last().options).toMatchObject({ resume: id })
+  expect(existsSync(join(w.home, '.claude', 'projects', encodeProjectDir(w.cwd), `${id}.jsonl`))).toBe(true)
+  expect(existsSync(join(homedir(), '.claude', 'projects', encodeProjectDir(w.cwd)))).toBe(false)
 })
 
 test('after a restart a chat switched to another account resumes from the folder it last ran in, not the newest copy', async () => {
