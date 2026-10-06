@@ -512,7 +512,7 @@ function sendableState(
 ): ChatState | null {
   const st = state.chats[c.id]
   if (row) {
-    // Only a chat this PC has in step with the store: someone else's change is taken first.
+    // Only a chat this PC has in step with the store; a read older than its last write waits a pass.
     if (!st || st.version !== row.version || row.meta?.b !== st.bytes) return null
     if (st.state === 'diverged' || st.state === 'waiting') return null
     return st
@@ -541,6 +541,35 @@ function stillWriting(st: ChatState, row: StoreRow, c: LocalChat, now: number): 
   )
 }
 
+/** Whether the store's copy of a chat this PC started is not what this PC last wrote: the two-way sync
+ *  let another PC go on in it (diverged), a PC still on that version wrote to it, or this PC lost its
+ *  note of it. A read older than this PC's last write is none of those. */
+function writtenElsewhere(st: ChatState | undefined, row: StoreRow): boolean {
+  if (!st) return true
+  if (st.state === 'diverged' || st.state === 'waiting') return true
+  return row.version > st.version || (row.version === st.version && row.meta?.b !== st.bytes)
+}
+
+/** Only the PC a chat started on writes it, so a copy written elsewhere starts over: every row of the
+ *  session goes (and the transcript with the last of them), and the chat goes up again from byte 0.
+ *  False when a row moved meanwhile; the next pass looks again. */
+async function startOver(
+  io: ChatIo,
+  state: StateFile,
+  rows: Map<string, StoreRow>,
+  c: LocalChat,
+): Promise<boolean> {
+  for (const row of [...rows.values()]) {
+    if (row.id !== c.id && row.meta?.s !== c.sessionId) continue
+    const r = await io.call('DELETE', `/v1/chats/${row.id}?version=${row.version}`)
+    if (r.status === 409) return false
+    if (r.status !== 200) throw chatFailure('Starting a chat’s shared copy over', r)
+    rows.delete(row.id)
+  }
+  state.chats[c.id] = newState(io, c)
+  return true
+}
+
 /** Send one local chat's new bytes and record. Returns what is left of the pass's read budget. */
 async function sendChat(
   io: ChatIo,
@@ -550,7 +579,11 @@ async function sendChat(
   budget: number,
   now: number,
 ): Promise<number> {
-  const row = rows.get(c.id)
+  let row = rows.get(c.id)
+  if (row && !c.archived && c.project && writtenElsewhere(state.chats[c.id], row)) {
+    if (!(await startOver(io, state, rows, c))) return budget
+    row = undefined
+  }
   const st = sendableState(io, state, row, c)
   if (!st) return budget
   if (row && stillWriting(st, row, c, now)) return budget

@@ -85,7 +85,8 @@ export interface ChatSyncRow {
   bytes: number
   /** synced: both sides agree. sending / receiving: bytes still on their way. waiting: a chat an
    *  earlier version landed here is not out of this PC's chat list yet (`note` says why). diverged:
-   *  under the two-way sync before 2026-10-05 it was continued on two PCs at once; it stays as it was. */
+   *  under the two-way sync before 2026-10-05 it was continued on two PCs at once; the PC it started
+   *  on sends it again from the start, and another PC's stays as it was. */
   state: 'synced' | 'sending' | 'receiving' | 'waiting' | 'diverged'
   note: string | null
   /** When it last changed in the store (epoch ms). */

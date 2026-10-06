@@ -4,8 +4,9 @@
 // The contract: a visible chat one PC started reaches the other's viewer with its transcript byte for
 // byte and its origin, and never its chat list; later turns travel as new chunks only; a chat archived
 // before it was ever shared is never uploaded, and archiving a shared one reaches the other PC; a copy
-// of another PC's chat never goes up, however it grows; a chat an earlier version took into ~/.claude
-// is taken back out once; an unfinished last line waits for its newline; a PC with another key writes
+// of another PC's chat never goes up, however it grows; a chat another PC wrote into goes up again from
+// the transcript of the PC it started on; a chat an earlier version took into ~/.claude is taken back
+// out once; an unfinished last line waits for its newline; a PC with another key writes
 // nothing. The store is the real Worker on bun:sqlite (login-sync-store.ts); each PC is a fake
 // ChatLocal over a temp folder with its own state file.
 
@@ -253,6 +254,37 @@ test('a copy of A’s chat in B’s chat list never goes up from B, however it g
   await syncChats(a.io, pastHold())
   expect(a.text(chat)).toBe('{"n":1}\n')
   expect(a.writes.some(([s]) => s === chat.sessionId)).toBe(false)
+})
+
+test('A’s chat another PC wrote into under the two-way sync goes up again from A’s transcript', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const diverged = a.add({}, '{"d":1}\n')
+  const written = a.add({}, '{"w":1}\n')
+  await syncChats(a.io)
+
+  // `diverged` was continued on both PCs, and a PC still on that version appended its own turn to
+  // `written` and moved its row on.
+  const s = JSON.parse(readFileSync(a.io.statePath, 'utf8'))
+  s.chats[diverged.id].state = 'diverged'
+  writeFileSync(a.io.statePath, JSON.stringify(s))
+  const row = (await store('GET', `/v1/chats/${written.id}`)).json
+  await store('PUT', `/v1/chats/${written.sessionId}/chunks/1`, { blob: 'x', by: 'elsewhere' })
+  await store('PUT', `/v1/chats/${written.id}`, {
+    version: row.version,
+    blob: row.blob,
+    meta: { ...row.meta, b: 99 },
+  })
+
+  a.extend(diverged, '{"d":2}\n')
+  a.extend(written, '{"w":2}\n')
+  await syncChats(a.io, pastHold())
+  await syncChats(b.io)
+  for (const c of [diverged, written]) {
+    expect(b.view(c)).toBe(a.text(c))
+    expect((await rowFor(c.id)).meta.b).toBe(16)
+    expect(chatSyncRows(a.io.statePath).find((r) => r.id === c.id)?.state).toBe('synced')
+  }
 })
 
 test('chats an earlier version took into B’s ~/.claude are taken out once, and the viewer holds them', async () => {
