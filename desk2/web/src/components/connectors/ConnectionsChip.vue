@@ -5,7 +5,7 @@
 // this chat and every chat in the folder, and "Sign in to Connections" while this machine is signed out. Shown only
 // while the Connections connector is on and on this machine (GET /api/connectors); the server side is
 // server/src/plugins/56-connections.ts, the decisions are in connections-logic.ts.
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ConnectionsCompany, ConnectionsWorkspace } from '@shared/connectors'
 import type { ChatSummary } from '@shared/protocol'
 import { icons, settingsIcons } from '@/lib/icons'
@@ -13,7 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { connectorList, readCompanies, readWorkspace, refreshConnectorList, startSignin, switchWorkspace } from './connections-api'
-import { canClear, chatScopeAllowed, chipText, effectiveScope, isCurrent, pageShouldOpen, showConnectionsChip, type SwitchScope } from './connections-logic'
+import { CONNECTIONS_LOGO_URL, canClear, chatScopeAllowed, chipText, effectiveScope, isCurrent, pageShouldOpen, showConnectionsChip, type SwitchScope } from './connections-logic'
 
 const props = defineProps<{ chat: ChatSummary }>()
 
@@ -22,6 +22,8 @@ const companies = ref<ConnectionsCompany[]>([])
 const picked = ref<SwitchScope>('chat')
 const note = ref('')
 const busy = ref(false)
+const logoFailed = ref(false)
+const list = ref<HTMLElement | null>(null)
 
 const shown = computed(() => showConnectionsChip(connectorList.value))
 const text = computed(() => chipText(ws.value))
@@ -42,6 +44,8 @@ async function onOpen(open: boolean) {
   void load()
   try {
     companies.value = await readCompanies(props.chat.id)
+    await nextTick()
+    list.value?.querySelector('[data-current=true]')?.scrollIntoView({ block: 'center' })
   } catch (e) {
     note.value = e instanceof Error ? e.message : String(e)
   }
@@ -95,22 +99,25 @@ watch(
           :class="text.muted ? 'text-text-muted' : 'text-text-2'"
           :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
         >
-          <component :is="settingsIcons.connections" class="size-3.5 shrink-0" />
+          <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
+          <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
           <span class="truncate">{{ text.text }}</span>
           <span v-if="text.pinned" class="shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] leading-[14px] text-text-muted">this chat</span>
         </button>
       </DropdownMenuTrigger>
     </Tip>
-    <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+    <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex max-h-[var(--reka-dropdown-menu-content-available-height)] flex-col']" @open-auto-focus="focusFirstItem">
       <template v-if="ws && !ws.signedIn">
         <DropdownMenuItem :class="MENU_ITEM" @select="signIn">Sign in to Connections</DropdownMenuItem>
       </template>
       <template v-else>
         <DropdownMenuLabel class="px-2 py-0.5 text-[12px] font-normal leading-4 text-text-muted">Workspace</DropdownMenuLabel>
-        <DropdownMenuItem v-for="c in companies" :key="c.companyId" :class="MENU_ITEM" :disabled="busy" @select="pick(c.companyId)">
+        <div ref="list" class="min-h-0 max-h-[50vh] overflow-y-auto">
+        <DropdownMenuItem v-for="c in companies" :key="c.companyId" :class="MENU_ITEM" :data-current="isCurrent(ws, c)" :disabled="busy" @select="pick(c.companyId)">
           <span class="flex-1 truncate">{{ c.name }}</span>
           <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
         </DropdownMenuItem>
+        </div>
         <DropdownMenuItem
           :class="MENU_ITEM"
           :disabled="busy || !canClear(scope)"

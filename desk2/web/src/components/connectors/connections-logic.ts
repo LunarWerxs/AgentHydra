@@ -4,6 +4,9 @@ import type { ConnectionsCompany, ConnectionsWorkspace, ConnectorView } from '@s
 
 export type SwitchScope = 'chat' | 'folder'
 
+/** The Connections mark, loaded at run time (never copied into this repo); the chip falls back to an icon when it fails. */
+export const CONNECTIONS_LOGO_URL = 'https://studio.connections.icu/favicon-32x32.png'
+
 /** The chip shows on a chat's title bar when the Connections connector is enabled and on this machine. */
 export const showConnectionsChip = (list: readonly ConnectorView[] | null): boolean => {
   const c = list?.find((x) => x.id === 'connections')
