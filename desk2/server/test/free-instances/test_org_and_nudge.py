@@ -164,8 +164,15 @@ def test_a_refused_nudge_retries_once_on_the_chat_model(tmp_path, monkeypatch):
     assert [m for _, _, m, _ in sent] == ["claude-haiku-9", "claude-sonnet-9"]
 
 
-def test_a_nudge_that_may_have_been_sent_is_never_retried(tmp_path, monkeypatch):
-    lost = http.HttpError("The HTTP request failed.", code="network_error")
+@pytest.mark.parametrize(
+    "lost",
+    [
+        http.HttpError("The HTTP request failed.", code="network_error"),
+        # A gateway timeout comes after the request reached Claude.
+        http.HttpError("Claude rejected the HTTP request (504).", code="http_rejected", status=504),
+    ],
+)
+def test_a_nudge_that_may_have_been_sent_is_never_retried(tmp_path, monkeypatch, lost):
     error, sent = nudge(tmp_path, monkeypatch, {}, fail=lost)
 
     assert error is lost

@@ -194,7 +194,11 @@ def execute(args, *, api, on_text=None) -> dict:
                     )
                     break
                 except ClaudeError as error:
-                    if error.code not in ("http_rejected", "model_not_available") or i == len(tried) - 1:
+                    # A 4xx is a refusal before anything ran; a 5xx (a gateway timeout) may follow a send.
+                    refused = error.code == "model_not_available" or (
+                        error.code == "http_rejected" and 400 <= (error.status or 0) < 500
+                    )
+                    if not refused or i == len(tried) - 1:
                         raise
             return {"nudged": True, "organization_id": org}
         if args.command == "usage":
