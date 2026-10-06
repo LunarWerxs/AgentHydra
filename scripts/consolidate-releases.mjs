@@ -23,7 +23,8 @@
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { execSync } from 'node:child_process'
+import { execSync, execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
 import { formatReleaseBody, formatLineBody, compareVersions, changelogSection } from './release-notes.mjs'
 
 const REPO = 'LunarWerxs/AgentHydra'
@@ -117,7 +118,7 @@ async function consolidate(options = {}) {
   }
 
   // Write dry-run output
-  const outDir = out || (apply ? null : `/tmp/consolidate-${Date.now()}`)
+  const outDir = out || (apply ? null : join(tmpdir(), `consolidate-${Date.now()}`))
   if (!apply && outDir) {
     mkdirSync(outDir, { recursive: true })
     mkdirSync(join(outDir, 'bodies'), { recursive: true })
@@ -140,10 +141,10 @@ async function apply(plan, bodies, repo) {
       continue
     }
     // Write body to temp file
-    const tmpFile = `/tmp/${tag}-body.md`
+    const tmpFile = join(tmpdir(), `${tag}-body.md`)
     writeFileSync(tmpFile, body)
     try {
-      execSync(`gh release edit v${tag} --notes-file ${tmpFile} --repo ${repo}`)
+      execFileSync('gh', ['release', 'edit', `v${tag}`, '--notes-file', tmpFile, '--repo', repo])
       console.log(`✓ Edited v${tag}`)
     } catch (err) {
       console.error(`✗ Failed to edit v${tag}: ${err.message}`)
@@ -152,7 +153,7 @@ async function apply(plan, bodies, repo) {
 
   for (const tag of plan.delete) {
     try {
-      execSync(`gh release delete v${tag} --yes --repo ${repo}`)
+      execFileSync('gh', ['release', 'delete', `v${tag}`, '--yes', '--repo', repo])
       console.log(`✓ Deleted v${tag}`)
     } catch (err) {
       console.error(`✗ Failed to delete v${tag}: ${err.message}`)

@@ -126,90 +126,9 @@ function missingTldr(section, name, version) {
   return null
 }
 
-/** Format a line body (folded patches under a kept release) with tldr, details, and downloads.
- *  The tldr is a dedup of bullets from the kept version and each folded version. Details holds
- *  each version's section under its own `#### x.y.z` heading, oldest first. downloads is the
- *  kept release's asset names. */
-export function formatLineBody(changelog, keptVersion, patchVersions, options = {}) {
-  const { history = false } = options
-  // Collect TL;DR and details for each version
-  const sections = [keptVersion, ...patchVersions].map((v) => {
-    const section = changelogSection(changelog, v)
-    if (!section) return { version: v, tldr: [], details: '' }
-    const { tldr, rest } = splitTldr(section)
-    return { version: v, tldr, details: rest.trim() }
-  })
-
-  // Deduplicate TL;DR across all versions
-  const seenTldr = new Set()
-  const tldr = []
-  for (const sec of sections) {
-    for (const line of sec.tldr) {
-      const t = line.trim()
-      if (!seenTldr.has(t)) {
-        seenTldr.add(t)
-        tldr.push(line)
-      }
-    }
-  }
-
-  // Build details with version headings
-  const details = []
-  for (const sec of sections) {
-    if (sec.details) {
-      details.push(`#### ${sec.version}`, '', sec.details)
-    }
-  }
-
-  // Format the body
-  const out = [
-    '<div align="center">',
-    `<img src="https://raw.githubusercontent.com/${REPO}/v${keptVersion}/misc/AgentHydra-icon.png" width="96" alt="AgentHydra logo">`,
-    '</div>',
-    '',
-  ]
-
-  if (tldr.length) {
-    out.push('## TL;DR', '', ...tldr, '', '<details>')
-    out.push(
-      `<summary><b>Read more: everything from ${patchVersions.length ? `${patchVersions[patchVersions.length - 1]} to ` : ''}${keptVersion}</b></summary>`,
-      '',
-      details.join('\n\n'),
-      '',
-      '</details>',
-    )
-  } else {
-    out.push("## What's changed", '', details.join('\n\n'))
-  }
-
-  out.push(
-    '',
-    '## Downloads',
-    '',
-    `- **Windows:** \`AgentHydra-${keptVersion}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
-    '- **Linux and macOS:** the `.tar.gz` for your system.',
-    '- `SHA256SUMS.txt` lets you check that a download is the one published here.',
-    '',
-    '---',
-    '',
-    `💬 Questions, ideas, or a hello: the [LunarWerx Discord](${DISCORD}).`,
-  )
-
-  return out.join('\n')
-}
-
-/** The release page: the icon, the TL;DR, every line of the section under "Read more", the downloads. */
-export function formatReleaseBody(changelog, version, options = {}) {
-  const { history = false } = options
-  const why = history ? null : refusal(changelog, version)
-  if (why) throw new Error(why)
-  const section = changelogSection(changelog, version)
-  const { tldr, rest } = splitTldr(section)
-  const lines = rest.split(/\r?\n/)
-
-  // GitHub renders a release body with hard line breaks, so a CHANGELOG bullet wrapped for an editor
-  // would come out as a ragged staircase on a phone (SageThumbs, 2026-09-20). Each bullet is folded
-  // back onto one line here; the file itself stays as written.
+/** Render a CHANGELOG section's details: fold wrapped bullets onto one line, convert headings to
+ *  emoji form, collapse multiple blank lines. Handles fenced code blocks. */
+export function renderSectionDetails(lines) {
   const body = []
   let pending = null
   let fenced = false
@@ -246,7 +165,123 @@ export function formatReleaseBody(changelog, version, options = {}) {
     else body.push(line)
   }
   flush()
-  const details = body.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  return body.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/** Extract bold headline from a bullet point (the text between ** markers). */
+function extractHeadline(bullet) {
+  const match = /^\s*-\s+\*\*([^*]+)\*\*/.exec(bullet)
+  return match ? match[1] : null
+}
+
+/** Synthesize TL;DR bullets from a section's headlines when it has no explicit TL;DR.
+ *  A section of 1-2 changes contributes all its headlines; longer ones are refused by refusal(). */
+function synthesizeTldr(section) {
+  const { rest } = splitTldr(section)
+  const bullets = rest.split(/\r?\n/).filter((l) => BULLET.test(l))
+  const tldr = []
+  for (const bullet of bullets) {
+    const headline = extractHeadline(bullet)
+    if (headline && !headline.endsWith('.')) {
+      tldr.push(`- **${headline}**`)
+    } else if (headline) {
+      tldr.push(`- **${headline.slice(0, -1)}**`)
+    }
+  }
+  return tldr
+}
+
+/** Format a line body (folded patches under a kept release) with tldr, details, and downloads.
+ *  The tldr is a dedup of bullets from the kept version and each folded version (synthesized
+ *  from headlines when missing). Details holds each version's section under its own `#### x.y.z`
+ *  heading, oldest first. */
+export function formatLineBody(changelog, keptVersion, patchVersions, options = {}) {
+  const { history = false } = options
+  // Collect TL;DR and details for each version
+  const sections = [keptVersion, ...patchVersions].map((v) => {
+    const section = changelogSection(changelog, v)
+    if (!section) return { version: v, tldr: [], details: '' }
+    const { tldr, rest } = splitTldr(section)
+    const tldrBullets = tldr.length ? tldr : synthesizeTldr(section)
+    const details = renderSectionDetails(rest.split(/\r?\n/))
+    return { version: v, tldr: tldrBullets, details }
+  })
+
+  // Deduplicate TL;DR across all versions
+  const seenTldr = new Set()
+  const tldr = []
+  for (const sec of sections) {
+    for (const line of sec.tldr) {
+      const t = line.trim()
+      if (!seenTldr.has(t)) {
+        seenTldr.add(t)
+        tldr.push(line)
+      }
+    }
+  }
+
+  // Build details with version headings
+  const detailLines = []
+  for (const sec of sections) {
+    if (sec.details) {
+      detailLines.push(`#### ${sec.version}`)
+      detailLines.push('')
+      detailLines.push(...sec.details.split('\n'))
+      if (sec !== sections[sections.length - 1]) {
+        detailLines.push('')
+      }
+    }
+  }
+  const detailsContent = detailLines.join('\n').replace(/\n{3,}/g, '\n\n')
+
+  // Format the body
+  const out = [
+    '<div align="center">',
+    `<img src="https://raw.githubusercontent.com/${REPO}/v${keptVersion}/misc/AgentHydra-icon.png" width="96" alt="AgentHydra logo">`,
+    '</div>',
+    '',
+  ]
+
+  if (tldr.length) {
+    out.push('## TL;DR', '', ...tldr, '', '<details>')
+    const oldest = keptVersion
+    const newest = patchVersions.length > 0 ? patchVersions[patchVersions.length - 1] : keptVersion
+    out.push(
+      `<summary><b>Read more: everything in ${oldest} to ${newest}</b></summary>`,
+      '',
+      detailsContent,
+      '',
+      '</details>',
+    )
+  } else {
+    out.push("## What's changed", '', detailsContent)
+  }
+
+  out.push(
+    '',
+    '## Downloads',
+    '',
+    `- **Windows:** \`AgentHydra-${keptVersion}-windows-x64.zip\` is the app with its tray icon and the orchestrator tools. The \`.exe\` is the same app as one file, without the orchestrator tools.`,
+    '- **Linux and macOS:** the `.tar.gz` for your system.',
+    '- `SHA256SUMS.txt` lets you check that a download is the one published here.',
+    '',
+    '---',
+    '',
+    `💬 Questions, ideas, or a hello: the [LunarWerx Discord](${DISCORD}).`,
+  )
+
+  return out.join('\n')
+}
+
+/** The release page: the icon, the TL;DR, every line of the section under "Read more", the downloads. */
+export function formatReleaseBody(changelog, version, options = {}) {
+  const { history = false } = options
+  const why = history ? null : refusal(changelog, version)
+  if (why) throw new Error(why)
+  const section = changelogSection(changelog, version)
+  const { tldr, rest } = splitTldr(section)
+  const lines = rest.split(/\r?\n/)
+  const details = renderSectionDetails(lines)
 
   const out = [
     '<div align="center">',
