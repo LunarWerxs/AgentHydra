@@ -61,6 +61,9 @@ const props = defineProps<{
   tasks: CliMayteWorkerView[]
   /** True while the selected task's events have not arrived yet. */
   eventsLoading: boolean
+  /** A just-opened task whose detail is a beat away: the brief, attempts, reports and result wait for it
+   *  rather than drawing the list row's short copy and then jumping. The header, events and journal draw now. */
+  hold?: boolean
   now: number
 }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -551,6 +554,7 @@ async function onStop() {
            journal share what is left, each scrolling in its own box. Only a window too short for
            their minimums scrolls this body. -->
       <div class="flex flex-col gap-4 px-4 py-3 lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
+        <template v-if="!hold">
         <!-- The whole brief it was sent: a title is often only the brief's first words. The detail
              asks for it in full (lib/api.ts getCliMayteWorker); the list's rows carry 300 characters. -->
         <div v-if="worker.prompt" class="flex flex-col gap-1.5">
@@ -658,6 +662,8 @@ async function onStop() {
             :class="failed ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground'"
           >{{ $pii(worker.error) }}</pre>
         </div>
+
+        </template>
 
         <div class="flex flex-col gap-1.5 lg:min-h-20 lg:flex-1">
           <h4 class="text-xs font-medium">{{ $t('climayte.events') }}</h4>

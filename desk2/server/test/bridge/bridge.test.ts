@@ -9,7 +9,7 @@ import { BridgeError, createBridge } from '../../src/bridge'
 import { createClient } from '../../src/bridge/client'
 import { createPoller } from '../../src/bridge/poller'
 import { encodeProjectDir } from '../../src/bridge/session-jsonl'
-import { deadUrl, type FakeHydra, NOW, startFakeHydra } from './fake-hydra'
+import { deadUrl, type FakeHydra, NOW, remoteAnswer, startFakeHydra } from './fake-hydra'
 
 const sid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const fakes: FakeHydra[] = []
@@ -261,6 +261,32 @@ describe('poller', () => {
     t += 30_000
     await poller.tick()
     expect(reads('/api/corch/remote')).toBe(2)
+  })
+
+  test('a remote read that keeps failing is asked again after a wait that doubles, not on every tick', async () => {
+    const f = await fake()
+    f.state.remote = 'remote queues broke'
+    let t = NOW
+    const poller = createPoller({
+      bridge: createBridge({ url: f.url, now: () => t }),
+      broadcast: () => {},
+      wsClientCount: () => 1,
+      now: () => t,
+    })
+    const reads = () => f.gets.filter((g) => g.startsWith('/api/corch/remote')).length
+    // Nine ticks 3 s apart: asked at 0, then 3 s, 6 s and 12 s after each failure (0, 3, 9 and 21 s).
+    for (let at = 0; at <= 24_000; at += 3000) {
+      t = NOW + at
+      await poller.tick()
+    }
+    expect(reads()).toBe(4)
+    // It answers again: the next read after the wait is kept for the usual 30 s.
+    f.state.remote = remoteAnswer()
+    t = NOW + 45_000
+    await poller.tick()
+    t = NOW + 48_000
+    await poller.tick()
+    expect(reads()).toBe(5)
   })
 
   test('AgentHydra going down then up: status flips, lists empty then refill', async () => {

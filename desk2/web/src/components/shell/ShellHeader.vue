@@ -37,8 +37,10 @@ const props = withDefaults(
     /** The Background tasks panel is open for this session, and how many tasks run in it. */
     tasksOpen?: boolean
     tasksRunning?: number
+    /** A failed action to say in the title bar, left of its buttons; empty when there is none. */
+    alert?: string
   }>(),
-  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [], tasksOpen: false, tasksRunning: 0 }
+  { title: '', pane: null, accounts: () => [], external: null, standIn: null, showThinking: false, groups: () => [], tasksOpen: false, tasksRunning: 0, alert: '' }
 )
 const emit = defineEmits<{
   action: [item: RowMenuItem]
@@ -206,7 +208,10 @@ const PANE_BTN =
     <span v-else-if="title" class="truncate px-1 font-medium text-text">{{ title }}</span>
     </div>
 
-    <div v-if="chat" class="col-start-3 flex shrink-0 items-center gap-1 justify-self-end">
+    <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
+    <div v-if="chat || external || alert" class="col-start-3 flex min-w-0 items-center justify-end gap-1">
+    <p v-if="alert" role="alert" class="min-w-0 truncate pr-1 text-[12px] leading-4 text-danger-text" :title="alert">{{ alert }}</p>
+    <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
           <ListChecks class="size-4" />
@@ -246,7 +251,7 @@ const PANE_BTN =
         </span>
       </Tip>
     </div>
-    <div v-else-if="external" class="col-start-3 flex shrink-0 items-center gap-1 justify-self-end">
+    <div v-else-if="external" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
           <ListChecks class="size-4" />
@@ -258,6 +263,7 @@ const PANE_BTN =
           <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
         </button>
       </Tip>
+    </div>
     </div>
   </header>
 </template>

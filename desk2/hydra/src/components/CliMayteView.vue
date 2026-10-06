@@ -145,7 +145,9 @@ function freshDetail(id: string): (CliMayteWorkerView & { events: string[] }) | 
   const hit = detailCache.get(id)
   return hit && Date.now() - hit.at < DETAIL_FRESH_MS ? hit.d : null
 }
-const detailReading = new Set<string>()
+type Detail = CliMayteWorkerView & { events: string[] }
+/** Read-aheads still on their way, by task id: an opening or a refresh waits for one rather than asking again. */
+const detailReading = new Map<string, Promise<Detail | null>>()
 /** A just-opened task whose detail is not here yet: its Result, notice and reports are held a short beat
  *  rather than drawn absent and popped in. */
 const HOLD_MS = 250
@@ -241,7 +243,7 @@ async function loadDetail() {
   const id = selectedId.value
   if (!id || selectedRemote.value) return
   try {
-    const d = await getCliMayteWorker(id)
+    const d = await (detailReading.get(id) ?? getCliMayteWorker(id))
     // An unchanged detail keeps the old reference, so a poll with nothing new redraws nothing.
     if (selectedId.value === id && !sameData(detail.value, d)) detail.value = d
     if (d) remember(id, d)
@@ -252,8 +254,10 @@ async function loadDetail() {
   }
 }
 
-function remember(id: string, d: CliMayteWorkerView & { events: string[] }) {
+function remember(id: string, d: Detail) {
   const old = detailCache.get(id)?.d
+  // A read that answers late (a read-ahead overtaken by the opening's own read) never replaces a newer one.
+  if (old && old.updatedAt > d.updatedAt) return
   detailCache.delete(id)
   detailCache.set(id, { d: old && sameData(old, d) ? old : d, at: Date.now() })
   for (const k of detailCache.keys()) {
@@ -262,16 +266,29 @@ function remember(id: string, d: CliMayteWorkerView & { events: string[] }) {
   }
 }
 
-/** The first sign of interest in a local row (hover, focus, press): read its detail so opening it paints whole. */
+/** The first sign of interest in a local row (a press, or a hover or focus that rests): read its detail so
+ *  opening it paints whole. A copy older than the row is read again. */
 function prefetch(w: ListRow) {
+  clearTimeout(restTimer)
   if (w.remote) return
   const id = rowKey(w)
-  if (detailReading.has(id) || freshDetail(id)) return
-  detailReading.add(id)
-  getCliMayteWorker(id)
+  if (detailReading.has(id) || (freshDetail(id)?.updatedAt ?? -1) >= w.updatedAt) return
+  const read = getCliMayteWorker(id)
+  detailReading.set(id, read)
+  read
     .then((d) => d && remember(id, d))
     .catch(() => {}) // floor-ok: a read-ahead only; opening the task reads again through loadDetail, and `unreachable` speaks for a daemon that is down
     .finally(() => detailReading.delete(id))
+}
+/** A pointer or the keyboard passing over rows reads only the one it stops on, not every row on its way. */
+const REST_MS = 120
+let restTimer: ReturnType<typeof setTimeout> | undefined
+function prefetchOnRest(w: ListRow) {
+  clearTimeout(restTimer)
+  restTimer = setTimeout(() => prefetch(w), REST_MS)
+}
+function cancelRest() {
+  clearTimeout(restTimer)
 }
 
 /** The row's verdict mark (lib/climayte-status.ts) with its hover: who judged it, and what they said. */
@@ -339,7 +356,9 @@ function select(w: ListRow) {
     detail.value = null
     return
   }
-  detail.value = freshDetail(key)
+  // A read-ahead older than the row the list shows would paint an older state first: read it again instead.
+  const hit = freshDetail(key)
+  detail.value = hit && hit.updatedAt >= w.updatedAt ? hit : null
   if (!detail.value) {
     holding.value = true
     holdTimer = setTimeout(endHold, HOLD_MS)
@@ -567,6 +586,8 @@ onUnmounted(() => {
   window.removeEventListener('focus', onVisible)
   clock?.()
   clock = null
+  clearTimeout(restTimer)
+  clearTimeout(holdTimer)
   unmountFloat()
   closeFloat()
 })
@@ -730,11 +751,12 @@ onUnmounted(() => {
         <p class="text-2xs text-muted-foreground">{{ $t('climayte.remoteNote') }}</p>
       </section>
       <CliMayteWorkerDetail
-        v-else-if="!holding"
+        v-else
         class="lg:min-h-0 lg:flex-1"
         :worker="selected"
         :tasks="workers"
         :events-loading="!detail"
+        :hold="holding"
         :now="now"
         @changed="load({ silent: true, side: true })"
       />
@@ -780,8 +802,10 @@ onUnmounted(() => {
             :class="w.remote?.stale ? 'opacity-60' : ''"
             :title="rowView(w).hint"
             @click="select(w)"
-            @pointerenter="prefetch(w)"
-            @focus="prefetch(w)"
+            @pointerenter="prefetchOnRest(w)"
+            @pointerleave="cancelRest"
+            @focus="prefetchOnRest(w)"
+            @blur="cancelRest"
             @pointerdown="prefetch(w)"
           >
             <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
