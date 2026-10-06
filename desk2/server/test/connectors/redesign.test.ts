@@ -127,11 +127,12 @@ describe('redesign connector', () => {
     expect(list.result.tools.map((t) => t.name)).toEqual(['design_options', 'design_pick'])
 
     const res = await mcp.handle(rpc(2, 'tools/call', { name: 'design_options', arguments: { brief: 'a settings page', screenshot: shot, count: 4 } }))
-    const out = JSON.parse(text(res).split('\n\n').slice(1).join('\n\n')) as { run: string; options: { option: number; image: string; markdown: string; description: string }[] }
+    const out = JSON.parse(text(res).split('\n\n').slice(1).join('\n\n')) as { run: string; options: { option: number; image: string; markdown: string; description: string; name: string }[] }
     expect(out.run).toBe('run-1')
     expect(out.options).toHaveLength(4)
     expect(JSON.parse(readFileSync(join(outDir, 'run-1', 'options.json'), 'utf8'))).toHaveLength(4)
-    expect(out.options[1]).toMatchObject({ option: 2, description: 'A calm two-column layout' })
+    expect(out.options[1]).toMatchObject({ option: 2, description: 'A calm two-column layout', name: 'Fresh layout' })
+    expect(out.options[0]?.name).toBe('Calm two-column layout')
     expect(out.options[1]?.markdown).toBe(`![Option 2: Model A](${out.options[1]?.image})`)
     for (const o of out.options) expect(readFileSync(o.image).equals(PNG)).toBe(true)
     expect(fake.uploads[0]).toEqual({ name: 'current.png', bytes: PNG.length })

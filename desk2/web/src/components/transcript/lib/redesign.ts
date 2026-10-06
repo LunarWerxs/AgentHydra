@@ -13,7 +13,8 @@ export const designImageUrl = (run: string, n: number): string => `/api/redesign
 
 export interface DesignOption {
   n: number
-  description: string
+  /** A short 1-3 word name; '' when ReDesign gave none (the card then says "Option N"). */
+  name: string
   src: string | null
 }
 
@@ -48,9 +49,17 @@ export function parseDesignOptions(item: ToolItem): DesignOptionsView {
   if (!run || !Array.isArray(data?.options)) return { ...base, state: 'error', error: text.trim().slice(0, 400) || 'ReDesign gave no options' }
   const options = (data.options as Record<string, unknown>[]).map((o, i) => {
     const n = Number(o.option) >= 1 ? Math.round(Number(o.option)) : i + 1
-    return { n, description: str(o.description), src: str(o.image) ? designImageUrl(run, n) : null }
+    return { n, name: str(o.name).trim().slice(0, 40), src: str(o.image) ? designImageUrl(run, n) : null }
   })
   return { ...base, state: 'done', error: '', run, options }
+}
+
+/** What an option is called on screen: its name, else "Option N". */
+export const optionLabel = (o: { n: number; name: string }): string => o.name || `Option ${o.n}`
+
+/** The names of the options that have landed, read off a running call's progress line ("Option 2 of 4 is ready · Card stack · Minimal list"). */
+export function landedNames(progress: string | undefined): string[] {
+  return (progress ?? '').split(' · ').slice(1).map((s) => s.trim()).filter(Boolean)
 }
 
 export interface RedesignSetup {
@@ -102,8 +111,8 @@ export function redesignState(items: TranscriptItem[]): RedesignState {
 export interface RedesignReply {
   /** The chosen option number, or null. */
   pick: number | null
-  /** Option number -> note. */
-  notes: Record<number, string>
+  /** The chosen option's name, when it has one. */
+  name: string
   more: boolean
   /** "Other" is the choice: `text` is what the person typed. */
   other: boolean
@@ -113,29 +122,52 @@ export interface RedesignReply {
 /** The choice the card shows selected: an option number, "other", or nothing. */
 export type RedesignChoice = number | 'other' | null
 
-/** The reply the card sends for a choice: free text counts only under Other, a note only under its own option. */
-export function replyFor(choice: RedesignChoice, notes: Record<number, string>, text: string, more = false): RedesignReply {
-  if (more) return { pick: null, notes: {}, more: true, other: false, text: '' }
-  if (choice === 'other') return { pick: null, notes: {}, more: false, other: true, text }
-  if (choice === null) return { pick: null, notes: {}, more: false, other: false, text: '' }
-  return { pick: choice, notes: { [choice]: notes[choice] ?? '' }, more: false, other: false, text: '' }
+/** The reply the card sends for a choice: free text counts only under Other. */
+export function replyFor(choice: RedesignChoice, name: string, text: string, more = false): RedesignReply {
+  const none = { pick: null, name: '', more: false, other: false, text: '' }
+  if (more) return { ...none, more: true }
+  if (choice === 'other') return { ...none, other: true, text }
+  if (choice === null) return none
+  return { ...none, pick: choice, name }
 }
 
 /** Something to send: an option, a request for more, or (under Other) words. */
 export const canSendReply = (r: RedesignReply): boolean => r.more || r.pick !== null || (r.other && r.text.trim() !== '')
 
-/** The one message the card posts: `ReDesign: I pick option 2. Notes: option 2: "tighter spacing".`, `ReDesign: more options please.`, or the typed words. */
+/** The one message the card posts: `ReDesign: I pick option 2, Card stack.`, `ReDesign: more options please.`, or the typed words. */
 export function composeRedesignReply(r: RedesignReply): string {
   const text = r.text.trim()
-  const parts: string[] = []
-  if (r.more) parts.push('more options please.')
-  else if (r.pick !== null) parts.push(`I pick option ${r.pick}.`)
-  const notes = Object.entries(r.notes)
-    .map(([n, v]) => [Number(n), v.trim().replace(/"/g, "'")] as const)
-    .filter(([, v]) => v)
-    .sort((a, b) => a[0] - b[0])
-    .map(([n, v]) => `option ${n}: "${v}"`)
-  if (notes.length) parts.push(`Notes: ${notes.join('; ')}.`)
-  if (text) parts.push(text)
-  return `${REDESIGN_PREFIX} ${parts.join(' ')}`.trim()
+  if (r.more) return `${REDESIGN_PREFIX} more options please.`
+  if (r.pick !== null) {
+    const name = r.name.trim().replace(/[.\n]+$/g, '')
+    return `${REDESIGN_PREFIX} I pick option ${r.pick}${name ? `, ${name}` : ''}.`
+  }
+  return `${REDESIGN_PREFIX} ${text}`.trim()
+}
+
+/** How a "ReDesign:" message reads as a chip, and the quiet line under the card. */
+export interface ReplyChip {
+  kind: 'more' | 'pick' | 'other' | 'retry'
+  /** The option number of a pick. */
+  n?: number
+  /** The short chip text: "More options", "Picked Card stack", "Keys added", or the typed words. */
+  label: string
+  /** The card footer: "Asked for 4 more designs", "Picked: Card stack", "Keys added", or the typed words. */
+  line: (more?: number) => string
+}
+
+export function parseReplyChip(text: string): ReplyChip | null {
+  const t = text.trim()
+  if (!t.startsWith(REDESIGN_PREFIX)) return null
+  const body = t.slice(REDESIGN_PREFIX.length).trim()
+  if (/^more options please\.?$/i.test(body)) {
+    return { kind: 'more', label: 'More options', line: (n) => (n ? `Asked for ${n} more designs` : 'Asked for more designs') }
+  }
+  const m = /^I pick option (\d+)(?:,\s*(.+?))?\.?$/.exec(body)
+  if (m) {
+    const label = m[2] || `option ${m[1]}`
+    return { kind: 'pick', n: Number(m[1]), label: `Picked ${label}`, line: () => `Picked: ${label}` }
+  }
+  if (body === RETRY_MESSAGE.slice(REDESIGN_PREFIX.length).trim()) return { kind: 'retry', label: 'Keys added, try again', line: () => 'Keys added, asked to try again' }
+  return { kind: 'other', label: body, line: () => `Asked: ${body}` }
 }

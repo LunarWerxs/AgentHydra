@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRedesignMcp } from '../../src/connectors/redesign-mcp'
-import { failureKind, listsToRefill, planJobs, poolCutOff, rankModels, styledBrief, workingNow, type Health, type KeyEntry, type KeyPool, type ModelInfo } from '../../src/connectors/redesign-plan'
+import { designName, failureKind, listsToRefill, planJobs, poolCutOff, rankModels, styledBrief, workingNow, type Health, type KeyEntry, type KeyPool, type ModelInfo } from '../../src/connectors/redesign-plan'
 
 const NOW = 1_800_000_000_000
 const good = (n: number, extra: Partial<KeyEntry> = {}): KeyEntry[] => Array.from({ length: n }, () => ({ lastError: null, lastUsedAt: NOW - 1000, lastSuccessAt: NOW - 500, ...extra }))
@@ -194,5 +194,20 @@ describe('design_options returns `count` options', () => {
     servers.push(f2.server)
     await call(createRedesignMcp({ baseUrl: f2.url, outDir: outDir(), pollMs: 2, refill }), { brief: 'x', count: 3 })
     expect(asked).toHaveLength(1)
+  })
+})
+
+describe('designName', () => {
+  test('a style-hint instance is named by its direction, whatever the caption says', () => {
+    expect(designName('# Overall A desktop app', 3)).toBe('Calm and airy')
+  })
+  test('instance 0 is named from the caption: heading first, filler dropped, at most three words', () => {
+    expect(designName(['# Overall', '', '## Card stack layout', 'lots of text'].join(String.fromCharCode(10)), 0)).toBe('Card stack layout')
+    expect(designName('A calm two-column layout, with a wide sidebar.', 0)).toBe('Calm two-column layout')
+    expect(designName('Minimal list of the items for the whole settings page', 0)).toBe('Minimal list of')
+  })
+  test('nothing usable gives an empty name, never the raw text', () => {
+    expect(designName(null, 0)).toBe('')
+    expect(designName('# Overall', 0)).toBe('')
   })
 })

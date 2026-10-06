@@ -13,6 +13,8 @@ import SubAgentCard from './parts/SubAgentCard.vue'
 import CliMayteCard from './parts/CliMayteCard.vue'
 import BrowserCard from './parts/BrowserCard.vue'
 import RedesignCard from './parts/RedesignCard.vue'
+import RedesignReplyChip from './parts/RedesignReplyChip.vue'
+import { parseReplyChip } from './lib/redesign'
 import TodoList from './parts/TodoList.vue'
 import TaskCard from './parts/TaskCard.vue'
 import WorkflowCard from './parts/WorkflowCard.vue'
@@ -30,6 +32,8 @@ const props = defineProps<{ item: TranscriptItem; nested?: boolean; endOfTurn?: 
 
 const ctx = useTranscript()
 const family = computed(() => (props.item.kind === 'tool_use' ? toolFamily(props.item.name, props.item.input) : null))
+// A message the ReDesign card sent shows as a small chip, not as a raw text bubble.
+const chip = computed(() => (props.item.kind === 'user' && !props.item.queued ? parseReplyChip(props.item.text) : null))
 const resultLine = computed(() => {
   const it = props.item
   if (it.kind !== 'result') return ''
@@ -49,7 +53,9 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 </script>
 
 <template>
-  <UserMessage v-if="item.kind === 'user'" :id="item.id" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
+  <RedesignReplyChip v-if="chip" :chip="chip" :ts="item.ts" />
+
+  <UserMessage v-else-if="item.kind === 'user'" :id="item.id" :text="item.text" :ts="item.ts" :images="item.images" :queued="item.queued" />
 
   <NoteRow v-else-if="item.kind === 'note'" :item="item" />
 

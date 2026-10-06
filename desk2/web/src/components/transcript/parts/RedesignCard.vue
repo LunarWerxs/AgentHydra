@@ -1,13 +1,13 @@
 <script setup lang="ts">
-// A design_options call: the ReDesign run's options as a grid of large pictures. With ask_owner the person chooses here
-// (one option with an optional note, "Other" with words, or "More options") and Send posts ONE normal message into this
-// chat; without it the card only shows the options and, once design_pick ran, which one the AI took.
-import { computed, reactive, ref } from 'vue'
+// A design_options call: the ReDesign run's options as a grid of large pictures, each with its name on it. With ask_owner the
+// person chooses here (an option by its name, "Other" with words, or "More options") and Send posts ONE normal message into
+// this chat; without it the card only shows the options and, once design_pick ran, which one the AI took.
+import { computed, ref } from 'vue'
 import { Check, KeyRound, LayoutGrid, LoaderCircle, Maximize2 } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
-import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
+import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
 import { listConnectors } from '@/components/connectors/api'
 import { openLightbox } from '../lib/media'
 
@@ -56,9 +56,8 @@ async function useHswarmKeys() {
   }
 }
 
-// Like a question with choices: the pictures are the choices and "Other" is the last one. Only Other has a text box.
+// Like a question with choices: the names are the choices; Other (a button by More options) reveals the one text box.
 const choice = ref<RedesignChoice>(null)
-const notes = reactive<Record<number, string>>({})
 const text = ref('')
 const busy = ref(false)
 const err = ref('')
@@ -67,15 +66,22 @@ const sentNow = ref('')
 // What the person already sent for this call (this session, or read back from the transcript).
 const sent = computed(() => sentNow.value || ctx.redesign?.value.replies.get(props.item.id) || '')
 const editable = computed(() => view.value.askOwner && view.value.state === 'done' && !sent.value && !ctx.readOnly.value)
-const reply = computed(() => replyFor(choice.value, notes, text.value))
+const chosenName = computed(() => {
+  const o = view.value.options.find((x) => x.n === choice.value)
+  return o ? o.name : ''
+})
+const reply = computed(() => replyFor(choice.value, chosenName.value, text.value))
+const sentChip = computed(() => (sent.value ? parseReplyChip(sent.value) : null))
 const ready = computed(() => canSendReply(reply.value))
-const shown = (n: number) => (editable.value ? choice.value === n : aiPick.value === n)
+const shown = (n: number) => (editable.value ? choice.value === n : aiPick.value === n || (sentChip.value?.kind === 'pick' && sentChip.value.n === n))
 const title = computed(() => (view.value.askOwner ? 'Pick a design' : 'Design options'))
 // Tiles while a run is still going: the count the call asked for, else four.
 const expected = computed(() => {
   const n = Number(props.item.input.count ?? props.item.input.options)
   return Number.isInteger(n) && n >= 1 && n <= 8 ? n : 4
 })
+// Names of the options already landed while the run is going: they appear as pills on the tiles.
+const landed = computed(() => landedNames(props.item.progress))
 const countLabel = computed(() => {
   const n = view.value.state === 'running' ? expected.value : view.value.state === 'done' ? view.value.options.length : 0
   return n ? `${n} option${n === 1 ? '' : 's'}` : ''
@@ -85,7 +91,7 @@ function choose(n: number | 'other') {
   choice.value = choice.value === n ? null : n
 }
 function open(o: DesignOption) {
-  if (o.src) openLightbox(o.src, `Option ${o.n}`, view.value.options.filter((x) => x.src).map((x) => ({ src: x.src!, alt: `Option ${x.n}` })))
+  if (o.src) openLightbox(o.src, optionLabel(o), view.value.options.filter((x) => x.src).map((x) => ({ src: x.src!, alt: optionLabel(x) })))
 }
 async function post(message: string) {
   if (busy.value) return
@@ -101,7 +107,8 @@ async function post(message: string) {
   }
 }
 const send = () => ready.value && post(composeRedesignReply(reply.value))
-const sendMore = () => post(composeRedesignReply(replyFor(null, {}, '', true)))
+const sendMore = () => post(composeRedesignReply(replyFor(null, '', '', true)))
+const moreCount = computed(() => view.value.options.length || expected.value)
 </script>
 
 <template>
@@ -120,13 +127,14 @@ const sendMore = () => post(composeRedesignReply(replyFor(null, {}, '', true)))
     <template v-if="view.state === 'running'">
       <ul class="grid grid-cols-1 gap-2.5 px-3 pb-2 @[420px]:grid-cols-2" aria-hidden="true">
         <li v-for="n in expected" :key="n" class="min-w-0">
-          <div class="flex aspect-[16/10] w-full animate-pulse items-center justify-center rounded-[8px] bg-fill-hover shadow-[inset_0_0_0_1px_var(--border)]">
+          <div class="relative flex aspect-[16/10] w-full items-center justify-center rounded-[8px] bg-fill-hover shadow-[inset_0_0_0_1px_var(--border)]" :class="!landed[n - 1] && 'animate-pulse'">
             <LoaderCircle class="size-5 animate-spin text-text-muted" />
+            <span v-if="landed[n - 1]" class="absolute bottom-2 left-2 max-w-[80%] truncate rounded-full bg-black/70 px-2.5 py-1 text-[12px] font-medium text-white">{{ landed[n - 1] }}</span>
           </div>
           <p class="mt-1 text-[12px] font-medium text-text-muted">Option {{ n }}</p>
         </li>
       </ul>
-      <p class="px-3 pb-3 text-[12px] text-text-muted" role="status">{{ item.progress || 'ReDesign is making options…' }}</p>
+      <p class="px-3 pb-3 text-[12px] text-text-muted" role="status">{{ (!landed.length && item.progress) || 'ReDesign is making options…' }}</p>
     </template>
     <div v-else-if="setup" class="grid gap-2 px-3 pb-3" role="status">
       <p class="flex items-center gap-1.5 text-[13px] font-medium text-text"><KeyRound class="size-3.5 text-text-muted" aria-hidden="true" />{{ setup.title }}</p>
@@ -143,7 +151,7 @@ const sendMore = () => post(composeRedesignReply(replyFor(null, {}, '', true)))
     <p v-else-if="view.state === 'error'" class="whitespace-pre-wrap break-words px-3 pb-3 text-[13px] text-danger-text">{{ view.error }}</p>
 
     <template v-else>
-      <ul class="grid grid-cols-1 gap-2.5 px-3 pb-2.5 @[420px]:grid-cols-2" :role="editable ? 'radiogroup' : undefined" aria-label="Design options">
+      <ul class="grid grid-cols-1 gap-2.5 px-3 pb-2.5 @[420px]:grid-cols-2" aria-label="Design options">
         <li v-for="o in view.options" :key="o.n" class="min-w-0">
           <div
             class="group/opt relative overflow-hidden rounded-[8px] bg-(--bg-picture) transition-shadow"
@@ -153,66 +161,43 @@ const sendMore = () => post(composeRedesignReply(replyFor(null, {}, '', true)))
               v-if="o.src"
               type="button"
               class="block aspect-[16/10] w-full outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
-              :role="editable ? 'radio' : undefined"
-              :aria-checked="editable ? choice === o.n : undefined"
-              :aria-label="`Option ${o.n}`"
-              :title="editable ? `Choose option ${o.n}` : `View option ${o.n} large`"
-              @click="editable ? choose(o.n) : open(o)"
+              :aria-label="`View ${optionLabel(o)} large`"
+              @click="open(o)"
             >
-              <img :src="o.src" :alt="`Option ${o.n}`" class="size-full object-cover object-top" draggable="false" />
+              <img :src="o.src" :alt="optionLabel(o)" class="size-full object-cover object-top" draggable="false" />
             </button>
             <span v-else class="flex aspect-[16/10] w-full items-center justify-center text-[12px] text-text-muted">No picture</span>
-            <span
-              v-if="shown(o.n)"
-              class="pointer-events-none absolute left-2 top-2 flex size-6 items-center justify-center rounded-full bg-accent text-white shadow"
-              aria-hidden="true"
+            <component
+              :is="editable ? 'button' : 'span'"
+              :type="editable ? 'button' : undefined"
+              :role="editable ? 'radio' : undefined"
+              :aria-checked="editable ? choice === o.n : undefined"
+              :title="editable ? `Choose ${optionLabel(o)}` : undefined"
+              class="absolute bottom-2 left-2 flex max-w-[75%] items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium shadow outline-none focus-visible:ring-2 focus-visible:ring-brand"
+              :class="[
+                shown(o.n) ? 'bg-accent text-white' : 'bg-black/70 text-white backdrop-blur-sm',
+                editable && !shown(o.n) && 'hover:bg-black/85'
+              ]"
+              @click="editable && choose(o.n)"
             >
-              <Check class="size-4" />
-            </span>
+              <Check v-if="shown(o.n)" class="size-3.5 shrink-0" aria-hidden="true" />
+              <span class="truncate">{{ optionLabel(o) }}</span>
+            </component>
             <button
               v-if="o.src"
               type="button"
               class="absolute right-2 top-2 flex size-7 items-center justify-center rounded-6 bg-black/60 text-white outline-none hover:bg-black/80 focus-visible:ring-2 focus-visible:ring-brand"
-              :aria-label="`View option ${o.n} full size`"
+              :aria-label="`View ${optionLabel(o)} full size`"
               title="Full size"
               @click="open(o)"
             >
               <Maximize2 class="size-4" aria-hidden="true" />
             </button>
           </div>
-          <div class="mt-1 flex min-w-0 items-baseline gap-1.5 text-[12px]">
-            <span class="shrink-0 font-medium" :class="shown(o.n) ? 'text-text' : 'text-text-muted'">Option {{ o.n }}</span>
-            <span v-if="!editable && aiPick === o.n" class="shrink-0 text-brand">{{ view.askOwner ? 'Chosen' : 'AI picked' }}</span>
-            <span v-if="o.description" class="min-w-0 truncate text-[11px] text-text-muted opacity-70" :title="o.description">{{ o.description }}</span>
-          </div>
         </li>
       </ul>
 
       <div v-if="editable" class="grid gap-2 border-t border-border px-3 pb-3 pt-2.5">
-        <input
-          v-if="typeof choice === 'number'"
-          :key="choice"
-          v-model="notes[choice]"
-          type="text"
-          class="tx-input w-full"
-          placeholder="Add a note (optional)"
-          :aria-label="`Note on option ${choice}`"
-          maxlength="300"
-          @keydown.enter.prevent="send"
-        />
-        <button
-          type="button"
-          role="radio"
-          :aria-checked="choice === 'other'"
-          class="flex h-9 w-full items-center gap-2 rounded-md border px-2.5 text-left text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-brand"
-          :class="choice === 'other' ? 'border-accent bg-accent/10 text-text' : 'border-border text-text-muted hover:bg-fill-hover hover:text-text'"
-          @click="choose('other')"
-        >
-          <span class="flex size-4 shrink-0 items-center justify-center rounded-full" :class="choice === 'other' ? 'bg-accent text-white' : 'shadow-[inset_0_0_0_1px_var(--border)]'">
-            <Check v-if="choice === 'other'" class="size-3" aria-hidden="true" />
-          </span>
-          <span class="font-medium">Other</span>
-        </button>
         <textarea
           v-if="choice === 'other'"
           v-model="text"
@@ -224,14 +209,17 @@ const sendMore = () => post(composeRedesignReply(replyFor(null, {}, '', true)))
           @keydown.enter.exact.prevent="send"
         />
         <div class="flex items-center gap-2">
-          <button type="button" class="tx-btn" :disabled="busy" @click="sendMore">More options</button>
+          <button type="button" class="tx-btn" :disabled="busy" :title="`${moreCount} new designs, different directions`" @click="sendMore">
+            More options <span class="text-text-muted">· {{ moreCount }} new</span>
+          </button>
+          <button type="button" class="tx-btn" :class="choice === 'other' && 'border-accent text-text'" :aria-pressed="choice === 'other'" @click="choose('other')">Other</button>
           <span v-if="err" class="min-w-0 truncate text-[12px] text-danger-text">{{ err }}</span>
           <button type="button" class="tx-btn tx-btn-primary ml-auto" :disabled="!ready || busy" @click="send">Send</button>
         </div>
       </div>
-      <div v-else-if="sent" class="border-t border-border px-3 py-2 text-[12px] text-text-muted">
-        <span class="font-medium text-text">Sent:</span> <span class="whitespace-pre-wrap break-words">{{ sent }}</span>
-      </div>
+      <p v-else-if="sent" class="flex items-center gap-1.5 border-t border-border px-3 py-2 text-[12px] text-text-muted">
+        <Check class="size-3.5 shrink-0" aria-hidden="true" /><span class="min-w-0 truncate">{{ sentChip?.line(view.options.length) ?? sent }}</span>
+      </p>
       <p v-else-if="view.askOwner && ctx.readOnly.value" class="border-t border-border px-3 py-2 text-[12px] text-text-muted">Waiting for the person's choice.</p>
     </template>
   </div>

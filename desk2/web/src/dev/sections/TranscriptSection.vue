@@ -58,7 +58,7 @@ const call = (id: string, tool: string, params: Record<string, unknown>, result:
   ({ id, ts: Date.now(), kind: 'tool_use', name: 'mcp__connections__connections_execute', input: { local: true, tool_name: tool, params }, status: 'done', startedAt: Date.now(), result: { text: result, isError: false }, ...extra }) as TranscriptItem
 // A ReDesign card: four options of an invented brief. The pictures are /api/redesign/image/gallery-run/option-N.png (served
 // by the Desk server from its design-options folder).
-const redesignOptions = [1, 2, 3, 4].map((option) => ({ option, description: `Layout ${option}`, image: `option-${option}.png` }))
+const redesignOptions = [1, 2, 3, 4].map((option) => ({ option, name: ['Card stack', 'Minimal list', 'Split panel', 'Hero banner'][option - 1], image: `option-${option}.png` }))
 const redesignItems: TranscriptItem[] = [
   { id: 'rdu', ts: Date.now(), kind: 'user', text: 'Make a landing page for the example shop.' },
   {
@@ -73,6 +73,13 @@ const redesignItems: TranscriptItem[] = [
 ${JSON.stringify({ run: 'gallery-run', options: redesignOptions })}`, isError: false },
   } as TranscriptItem,
 ]
+const redesignBrief = 'A landing page for an example shop that sells handmade mugs, with a calm look and one clear call to action.'
+// The same call while it runs (two of four options landed) and after the person asked for more.
+const redesignRunning: TranscriptItem[] = [
+  { id: 'rdr', ts: Date.now(), kind: 'user', text: 'Make a landing page for the example shop.' },
+  { id: 'rd2', ts: Date.now(), kind: 'tool_use', name: 'mcp__desk_redesign__design_options', input: { brief: redesignBrief, ask_owner: true }, status: 'running', startedAt: Date.now(), progress: 'Option 2 of 4 is ready · Card stack · Minimal list' } as TranscriptItem,
+]
+const redesignMore: TranscriptItem[] = [...redesignItems, { id: 'rdm', ts: Date.now(), kind: 'user', text: 'ReDesign: more options please.' }]
 const browserItems: TranscriptItem[] = [
   { id: 'bu', ts: Date.now(), kind: 'user', text: 'Check the shop admin for unpaid orders.' },
   call('bn1', 'browser_navigate', { url: 'https://example.com/admin', profile: BROWSER_PROFILE }, 'Opened https://example.com/admin'),
@@ -147,6 +154,15 @@ onMounted(async () => {
       <h3 class="mb-2 text-[13px] text-text-muted">A ReDesign card asking the owner to pick (4 options)</h3>
       <div class="h-[900px] overflow-hidden rounded-lg border border-border" data-gallery-redesign>
         <TranscriptView chat-id="gallery-redesign" :items="redesignItems" :chat="null" />
+      </div>
+    </div>
+    <div>
+      <h3 class="mb-2 text-[13px] text-text-muted">The same card while it runs, and after More options was sent</h3>
+      <div class="h-[560px] overflow-hidden rounded-lg border border-border" data-gallery-redesign-running>
+        <TranscriptView chat-id="gallery-redesign-running" :items="redesignRunning" :chat="null" />
+      </div>
+      <div class="mt-2 h-[900px] overflow-hidden rounded-lg border border-border" data-gallery-redesign-more>
+        <TranscriptView chat-id="gallery-redesign-more" :items="redesignMore" :chat="null" />
       </div>
     </div>
     <div>

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { toolFamily } from '../../src/components/transcript/lib/tools'
-import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, redesignState, replyFor, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
+import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, redesignSetup, redesignState, replyFor, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
 
 const OPT = 'mcp__desk_redesign__design_options'
 const PICK = 'mcp__desk_redesign__design_pick'
@@ -21,30 +21,23 @@ const result = (data: unknown) => ({ text: `The options are shown.\n${JSON.strin
 const DONE = {
   run: 'run-1',
   options: [
-    { option: 1, description: 'Calm and airy', image: 'C:/Users/me/design-options/run-1/option-1.png' },
+    { option: 1, name: 'Card stack', description: 'Calm and airy', image: 'C:/Users/me/design-options/run-1/option-1.png' },
     { option: 2, description: 'Dense dashboard', image: null },
   ],
 }
 
 describe('composeRedesignReply', () => {
-  const base = { pick: null, notes: {}, more: false, other: false, text: '' }
-  test('a pick with notes, sorted by option, blanks dropped, quotes softened, free text last', () => {
-    expect(composeRedesignReply({ ...base, pick: 2, notes: { 2: ' tighter spacing ', 1: 'bigger "logo"', 3: '  ' }, text: 'Thanks.' })).toBe(
-      `ReDesign: I pick option 2. Notes: option 1: "bigger 'logo'"; option 2: "tighter spacing". Thanks.`,
-    )
-  })
-  test('a pick alone', () => {
+  const base = { pick: null, name: '', more: false, other: false, text: '' }
+  test('a pick carries its number and name', () => {
+    expect(composeRedesignReply({ ...base, pick: 2, name: 'Card stack' })).toBe('ReDesign: I pick option 2, Card stack.')
     expect(composeRedesignReply({ ...base, pick: 3 })).toBe('ReDesign: I pick option 3.')
   })
-  test('more options wins over a pick and keeps the free text', () => {
-    expect(composeRedesignReply({ ...base, pick: 2, more: true, text: 'Try darker ones.' })).toBe('ReDesign: more options please. Try darker ones.')
-  })
-  test('free text alone', () => {
-    expect(composeRedesignReply({ ...base, text: ' none of these ' })).toBe('ReDesign: none of these')
+  test('more options and free text', () => {
+    expect(composeRedesignReply({ ...base, more: true })).toBe('ReDesign: more options please.')
+    expect(composeRedesignReply({ ...base, other: true, text: ' none of these ' })).toBe('ReDesign: none of these')
   })
   test('nothing to send until there is a pick, more, or words under Other', () => {
     expect(canSendReply(base)).toBe(false)
-    expect(canSendReply({ ...base, notes: { 1: 'x' } })).toBe(false)
     expect(canSendReply({ ...base, pick: 1 })).toBe(true)
     expect(canSendReply({ ...base, more: true })).toBe(true)
     expect(canSendReply({ ...base, other: true })).toBe(false)
@@ -60,20 +53,48 @@ describe('replyFor: the card choice state', () => {
     return canSendReply(r) ? composeRedesignReply(r) : null
   }
   test('nothing chosen: nothing to send, whatever was typed', () => {
-    expect(send(null, {}, 'stale words')).toBeNull()
+    expect(send(null, '', 'stale words')).toBeNull()
   })
-  test('an option sends its number; only its own note rides along', () => {
-    expect(send(2, { 2: 'tighter', 1: 'ignored' }, 'stale words')).toBe('ReDesign: I pick option 2. Notes: option 2: "tighter".')
-    expect(send(3, {}, '')).toBe('ReDesign: I pick option 3.')
+  test('an option sends its number and name; stale Other words are dropped', () => {
+    expect(send(2, 'Minimal list', 'stale words')).toBe('ReDesign: I pick option 2, Minimal list.')
   })
   test('Other needs typed words, then sends just them', () => {
-    expect(send('other', { 1: 'x' }, '')).toBeNull()
-    expect(send('other', {}, '  ')).toBeNull()
-    expect(send('other', { 1: 'x' }, ' a warmer palette ')).toBe('ReDesign: a warmer palette')
+    expect(send('other', '', '  ')).toBeNull()
+    expect(send('other', 'x', ' a warmer palette ')).toBe('ReDesign: a warmer palette')
   })
   test('More options is always sendable and carries nothing else', () => {
-    expect(send('other', { 1: 'x' }, 'words', true)).toBe('ReDesign: more options please.')
-    expect(send(null, {}, '', true)).toBe('ReDesign: more options please.')
+    expect(send('other', 'x', 'words', true)).toBe('ReDesign: more options please.')
+  })
+})
+
+describe('parseReplyChip: the transcript chip and the card footer', () => {
+  test('more options', () => {
+    const c = parseReplyChip('ReDesign: more options please.')
+    expect(c?.label).toBe('More options')
+    expect(c?.line(4)).toBe('Asked for 4 more designs')
+  })
+  test('a pick, with and without a name', () => {
+    const c = parseReplyChip('ReDesign: I pick option 2, Card stack.')
+    expect(c).toMatchObject({ kind: 'pick', n: 2, label: 'Picked Card stack' })
+    expect(c?.line()).toBe('Picked: Card stack')
+    expect(parseReplyChip('ReDesign: I pick option 3.')?.label).toBe('Picked option 3')
+  })
+  test('own words, the retry message, and a plain message', () => {
+    expect(parseReplyChip('ReDesign: a warmer palette')).toMatchObject({ kind: 'other', label: 'a warmer palette' })
+    expect(parseReplyChip(RETRY_MESSAGE)?.kind).toBe('retry')
+    expect(parseReplyChip('hello')).toBeNull()
+  })
+})
+
+describe('option names', () => {
+  test('a name, else Option N', () => {
+    expect(optionLabel({ n: 2, name: 'Card stack' })).toBe('Card stack')
+    expect(optionLabel({ n: 2, name: '' })).toBe('Option 2')
+  })
+  test('landed names are read off the progress line', () => {
+    expect(landedNames('Option 2 of 4 is ready · Card stack · Minimal list')).toEqual(['Card stack', 'Minimal list'])
+    expect(landedNames('ReDesign is making options (0/4)')).toEqual([])
+    expect(landedNames(undefined)).toEqual([])
   })
 })
 
@@ -94,7 +115,7 @@ describe('parseDesignOptions', () => {
   test('a finished run: brief, mode, image urls through the Desk route', () => {
     const v = parseDesignOptions(tool('t', OPT, { brief: ' A pricing page ', ask_owner: true }, { result: result(DONE) }))
     expect(v).toMatchObject({ state: 'done', brief: 'A pricing page', askOwner: true, run: 'run-1' })
-    expect(v.options[0]).toEqual({ n: 1, description: 'Calm and airy', src: '/api/redesign/image/run-1/option-1.png' })
+    expect(v.options[0]).toEqual({ n: 1, name: 'Card stack', src: '/api/redesign/image/run-1/option-1.png' })
     expect(v.options[1].src).toBeNull()
   })
   test('ask_owner is off unless exactly true', () => {
@@ -113,12 +134,12 @@ describe('redesignState', () => {
       user('u0', 'ReDesign: unrelated, before any call'),
       tool('a', OPT, { brief: 'x', ask_owner: true }),
       user('u1', 'looks fine'),
-      user('u2', 'ReDesign: I pick option 2.'),
+      user('u2', 'ReDesign: I pick option 2, Card stack.'),
       user('u3', 'ReDesign: a second message'),
       tool('b', PICK, { run: 'run-1', option: 2 }),
     ]
     const s = redesignState(items)
-    expect(s.replies.get('a')).toBe('ReDesign: I pick option 2.')
+    expect(s.replies.get('a')).toBe('ReDesign: I pick option 2, Card stack.')
     expect(s.replies.size).toBe(1)
     expect(s.picks.get('run-1')).toBe(2)
   })
