@@ -26,6 +26,8 @@ export interface CliMayteEta {
   doneAt?: number
   /** The whole `ETA:` line as it was written (trimmed, at most ETA_LINE_MAX chars). */
   line?: string
+  /** The ETA_PROMPT_VERSION in the brief when it said it; absent means 1. */
+  prompt?: number
   /** When the worker was asked why its estimate missed (the Stop hook, stopDecision). Once per message. */
   reviewAskedAt?: number
   /** Its answer to that question (parseReview). */
@@ -51,7 +53,24 @@ export interface EtaReview {
   cause: string
   /** The word it wrote when that was not one of ETA_CAUSES. */
   raw?: string
+  /** The change to the estimating instruction it said would have made the estimate closer. */
+  promptIdea?: string
 }
+
+/** The version of the estimating instruction in the worker brief. Bump it with every rewrite of
+ *  ETA_INSTRUCTION (docs/CLIMAYTE.md "Prompt versions"); each estimate records the version it was
+ *  said under, and the scorecard measures each version apart. */
+export const ETA_PROMPT_VERSION = 2
+
+/** The estimating sentences of the worker brief (WORKER_BRIEF, climayte-lib.ts). Version 1's text
+ *  is quoted in docs/CLIMAYTE.md "Prompt versions". */
+export const ETA_INSTRUCTION =
+  'Before your first tool call, write one line on its own, `ETA: <n> min`: the working time this whole task will take YOU, checks included. ' +
+  'You are an AI agent: reading a file, writing an edit or running a quick command takes you seconds, not the minutes a person needs, so estimate at your own pace. ' +
+  'Build the number: count the tool calls you expect at about 10 seconds each, then add the real run time of each slow command you will wait on (a test suite, a build, a deploy). ' +
+  'Write the number that sum gives, unrounded (3, 7, 14). ' +
+  'Write a new ETA line for each later message you are sent, not when told to continue. ' +
+  'The owner reads it to decide whether to wait, and AgentHydra compares it with the time it really took.'
 
 export const ETA_LINE_MAX = 300
 export const ETA_TEXT_MAX = 2000
@@ -134,10 +153,12 @@ export function etaFullOfEvent(
 const REVIEW_LINE =
   /^[ \t]*(?:[*_>#`-]+[ \t]*)*ETA-REVIEW\b[*_`]*[ \t]*[:=–—-][ \t]*[*_`]*[ \t]*(.*)$/im
 const CAUSE_LINE = /^[ \t]*(?:[*_>#`-]+[ \t]*)*CAUSE\b[*_`]*[ \t]*[:=–—-][ \t]*[*_`]*[ \t]*(.*)$/im
+const PROMPT_LINE =
+  /^[ \t]*(?:[*_>#`-]+[ \t]*)*ETA-PROMPT\b[*_`]*[ \t]*[:=–—-][ \t]*[*_`]*[ \t]*(.*)$/im
 const REVIEW_LINES =
-  /^[ \t]*(?:[*_>#`-]+[ \t]*)*(?:ETA-REVIEW|CAUSE)\b[*_`]*[ \t]*[:=–—-][ \t]*[*_`]*[ \t]*.*(?:\r?\n|$)/gim
+  /^[ \t]*(?:[*_>#`-]+[ \t]*)*(?:ETA-REVIEW|CAUSE|ETA-PROMPT)\b[*_`]*[ \t]*[:=–—-][ \t]*[*_`]*[ \t]*.*(?:\r?\n|$)/gim
 
-/** The review a text block holds (`ETA-REVIEW:` and `CAUSE:` lines), or null without the first. */
+/** The review a text block holds (`ETA-REVIEW:`, `CAUSE:` and `ETA-PROMPT:` lines), or null without the first. */
 export function parseReview(text: string): EtaReview | null {
   const why = REVIEW_LINE.exec(text)?.[1]
     ?.replace(/[*_`]+$/, '')
@@ -149,14 +170,16 @@ export function parseReview(text: string): EtaReview | null {
     .toLowerCase()
   const first = word.split(/\s+/)[0] ?? ''
   const known = (ETA_CAUSES as readonly string[]).includes(first)
+  const idea = (PROMPT_LINE.exec(text)?.[1] ?? '').replace(/[*_`]+$/, '').trim()
   return {
     why: why.slice(0, 600),
     cause: known ? first : 'other',
     ...(!known && word ? { raw: word.slice(0, 60) } : {}),
+    ...(idea && !/^none\b\.?$/i.test(idea) ? { promptIdea: idea.slice(0, 400) } : {}),
   }
 }
 
-/** `text` without its `ETA-REVIEW:` and `CAUSE:` lines, trimmed: what a review message leaves of a
+/** `text` without its `ETA-REVIEW:`, `CAUSE:` and `ETA-PROMPT:` lines, trimmed: what a review message leaves of a
  *  report (nothing when it is only those lines). */
 export function stripReview(text: string): string {
   return text.replace(REVIEW_LINES, '').trim()
@@ -216,6 +239,8 @@ export interface EtaSample {
   line?: string
   /** What the owner waited, in seconds (doneAt - at). */
   wallS?: number
+  /** The ETA_PROMPT_VERSION it was said under; absent means 1. */
+  promptVersion?: number
   bucket?: EtaBucket
   review?: EtaReview
 }
@@ -254,6 +279,7 @@ export function etaSamples(
           model: w.model ?? null,
           effort: w.effort ?? null,
           ...(e.line ? { line: e.line } : {}),
+          promptVersion: e.prompt ?? 1,
           wallS: Math.max(0, Math.round((e.doneAt - e.at) / 1000)),
           bucket: etaBucket(etaRatio(e.minutes, e.tookS)),
           ...(e.review ? { review: e.review } : {}),
@@ -298,12 +324,22 @@ const quantile = (sorted: number[], q: number): number => {
 
 const round2 = (n: number): number => Math.round(n * 100) / 100
 
+/** The version a sample was said under (1 when it was not recorded). */
+export const versionOf = (s: Pick<EtaSample, 'promptVersion'>): number => s.promptVersion ?? 1
+
+/** `samples` of the current prompt version when there are ETA_MIN_SAMPLES of them, else all of
+ *  them: a better prompt is not corrected again for the error of the old one. */
+function currentVersionOnce(samples: EtaSample[]): EtaSample[] {
+  const now = samples.filter((s) => versionOf(s) === ETA_PROMPT_VERSION)
+  return now.length >= ETA_MIN_SAMPLES ? now : samples
+}
+
 /** The calibration for a task of `kind`: its kind's own newest samples when there are enough, else
  *  every kind's; null under ETA_MIN_SAMPLES. `samples` is newest first (etaSamples). */
 export function etaCalibration(samples: EtaSample[], kind: string | null): EtaCalibration | null {
   const own = kind ? samples.filter((s) => s.kind === kind) : []
   const useOwn = own.length >= ETA_MIN_SAMPLES
-  const pick = (useOwn ? own : samples).slice(0, ETA_SAMPLES)
+  const pick = currentVersionOnce(useOwn ? own : samples).slice(0, ETA_SAMPLES)
   if (pick.length < ETA_MIN_SAMPLES) return null
   const ratios = pick.map((s) => s.tookS / 60 / s.minutes).sort((a, b) => a - b)
   return {
@@ -345,8 +381,7 @@ export function etaBandCalibrations(samples: EtaSample[]): EtaBandCalibration[] 
   const pick = samples.slice(0, ETA_BAND_SAMPLES)
   const out: EtaBandCalibration[] = []
   for (const b of ETA_BANDS) {
-    const ratios = pick
-      .filter((s) => s.minutes >= b.from && s.minutes < b.to)
+    const ratios = currentVersionOnce(pick.filter((s) => s.minutes >= b.from && s.minutes < b.to))
       .map((s) => s.tookS / 60 / s.minutes)
       .sort((x, y) => x - y)
     if (ratios.length < ETA_MIN_SAMPLES) continue
@@ -428,9 +463,10 @@ export function reviewQuestion(eta: Pick<CliMayteEta, 'minutes' | 'line'>, tookS
   return (
     `Your estimate for this message was "${eta.line ?? `ETA: ${eta.minutes} min`}" (${eta.minutes} min). ` +
     `The working time it took was ${took} min, ${times(ratio)} the estimate. ` +
-    'Reply with exactly two lines and nothing else:\n' +
+    'Reply with exactly three lines and nothing else:\n' +
     'ETA-REVIEW: <why the estimate was off, and what you would estimate for a task like this next time>\n' +
     `CAUSE: <one of ${ETA_CAUSES.join(', ')}>\n` +
+    'ETA-PROMPT: <one change to the estimating instruction that would have made your estimate closer, or none>\n' +
     'Your report above stands; do not repeat it and do no more work.'
   )
 }
@@ -451,4 +487,65 @@ export function stopDecision(opts: {
   const ratio = tookS / 60 / eta.minutes
   if (ratio <= REVIEW_BAND && ratio >= 1 / REVIEW_BAND) return null
   return reviewQuestion(eta, tookS)
+}
+
+/** A prompt version is judged on this many settled samples before a rewrite is due. */
+export const ETA_REWRITE_MIN_SAMPLES = 20
+/** A rewrite is due when fewer than this share of the current version's estimates were close. */
+export const ETA_REWRITE_CLOSE_SHARE = 0.5
+/** The newest prompt ideas listed per version. */
+export const ETA_PROMPT_IDEAS = 5
+
+/** How one version of the estimating instruction has done. */
+export interface EtaPromptStats {
+  version: number
+  samples: number
+  /** Median of took / estimated. */
+  ratio: number
+  /** Share of samples whose ratio was close (etaBucket), 0-1, two places. */
+  closeShare: number
+  /** The most common review cause, null without reviews. */
+  topCause: string | null
+  /** The newest `ETA-PROMPT:` ideas, newest first. */
+  ideas: string[]
+}
+
+/** One entry per version seen (the current one always), newest version first. `samples` is newest
+ *  first. */
+export function etaPromptStats(samples: EtaSample[]): EtaPromptStats[] {
+  const by = new Map<number, EtaSample[]>([[ETA_PROMPT_VERSION, []]])
+  for (const s of samples) by.set(versionOf(s), [...(by.get(versionOf(s)) ?? []), s])
+  return [...by]
+    .sort((a, b) => b[0] - a[0])
+    .map(([version, list]) => {
+      const ratios = list.map((s) => s.tookS / 60 / s.minutes).sort((a, b) => a - b)
+      const close = list.filter((s) => etaBucket(etaRatio(s.minutes, s.tookS)) === 'close').length
+      const counts = new Map<string, number>()
+      for (const s of list)
+        if (s.review) counts.set(s.review.cause, (counts.get(s.review.cause) ?? 0) + 1)
+      let top: string | null = null
+      for (const [cause, n] of counts) if (top === null || n > counts.get(top)!) top = cause
+      return {
+        version,
+        samples: list.length,
+        ratio: list.length ? round2(quantile(ratios, 0.5)) : 0,
+        closeShare: list.length ? round2(close / list.length) : 0,
+        topCause: top,
+        ideas: list
+          .flatMap((s) => (s.review?.promptIdea ? [s.review.promptIdea] : []))
+          .slice(0, ETA_PROMPT_IDEAS),
+      }
+    })
+}
+
+/** `{ version, why }` when the current version has ETA_REWRITE_MIN_SAMPLES settled samples and fewer
+ *  than ETA_REWRITE_CLOSE_SHARE of them were close: the instruction is due a rewrite. */
+export function etaRewriteDue(stats: EtaPromptStats[]): { version: number; why: string } | null {
+  const cur = stats.find((p) => p.version === ETA_PROMPT_VERSION)
+  if (!cur || cur.samples < ETA_REWRITE_MIN_SAMPLES || cur.closeShare >= ETA_REWRITE_CLOSE_SHARE)
+    return null
+  return {
+    version: cur.version,
+    why: `${cur.samples} samples, ${Math.round(cur.closeShare * 100)}% close, median ratio ${cur.ratio}x, top cause ${cur.topCause ?? 'none named'}`,
+  }
 }

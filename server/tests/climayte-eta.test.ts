@@ -28,13 +28,20 @@ import { workers } from '../src/climayte-core'
 import {
   type CliMayteEta,
   ETA_BANDS,
+  ETA_INSTRUCTION,
   ETA_MIN_SAMPLES,
+  ETA_PROMPT_VERSION,
+  ETA_REWRITE_CLOSE_SHARE,
+  ETA_REWRITE_MIN_SAMPLES,
+  type EtaReview,
   type EtaSample,
   etaBandCalibrations,
   etaCalibration,
   etaFullOfEvent,
   etaNote,
   etaOfEvent,
+  etaPromptStats,
+  etaRewriteDue,
   etaSamples,
   etaTookSeconds,
   parseEta,
@@ -50,6 +57,8 @@ import {
   etaReport,
   readEtaRows,
   resetEtaLedgerCache,
+  reviewRow,
+  saidRow,
   samplesOfRows,
   settledRow,
 } from '../src/climayte-eta-ledger'
@@ -664,5 +673,121 @@ describe('the Stop hook wiring', () => {
       (await app.request(`/api/corch/stop/${id}`, { method: 'POST', body })).json()
     expect(await post('nobody', '{"stop_hook_active":false}')).toEqual({})
     expect(await post('nobody', 'not json')).toEqual({})
+  })
+})
+
+describe('prompt versions', () => {
+  const facts = { id: 'w1', title: 't', prompt: 'p', attempts: [{ account: { id: 'a' } }] }
+  const at = (v: number | undefined, minutes: number, tookMin: number, doneAt: number) => ({
+    ...sample('code', minutes, tookMin, doneAt),
+    ...(v === undefined ? {} : { promptVersion: v }),
+  })
+  const cur = ETA_PROMPT_VERSION
+
+  test('the worker brief carries ETA_INSTRUCTION', () => {
+    expect(WORKER_BRIEF).toContain(ETA_INSTRUCTION)
+    expect(ETA_INSTRUCTION).toContain('`ETA: <n> min`')
+  })
+
+  test('the version is recorded on said and settled rows and on samples; missing is 1', () => {
+    const eta = { minutes: 4, at: 1000, attempt: 0, tookS: 120, doneAt: 5000 }
+    expect(saidRow(facts, { ...eta, prompt: cur }, 'x')).toMatchObject({ promptVersion: cur })
+    expect(saidRow(facts, eta, 'x')).toMatchObject({ promptVersion: 1 })
+    expect(settledRow(facts, { ...eta, prompt: cur })).toMatchObject({ promptVersion: cur })
+    expect(settledRow(facts, eta)).toMatchObject({ promptVersion: 1 })
+    expect(
+      etaSamples([
+        { id: 'a', eta: { ...eta, prompt: cur } },
+        { id: 'b', eta },
+      ]).map((s) => s.promptVersion),
+    ).toEqual([cur, 1])
+    const rows = [
+      { ...settledRow(facts, { ...eta, prompt: cur }) },
+      { ...settledRow({ ...facts, id: 'old' }, eta), promptVersion: undefined },
+    ]
+    expect(
+      samplesOfRows(rows)
+        .map((s) => [s.id, s.promptVersion])
+        .sort(),
+    ).toEqual([
+      ['old', 1],
+      ['w1', cur],
+    ])
+  })
+
+  test('byPrompt numbers, and rewriteDue set and null', () => {
+    // v1: 4 close (ratio 1), 1 under; current: 20 samples, 4 close and 16 at ratio 0.4
+    const v1 = Array.from({ length: 5 }, (_, i) => at(1, 10, i === 0 ? 30 : 10, 10 + i))
+    const now = (close: number) =>
+      Array.from({ length: 20 }, (_, i) => ({
+        ...at(cur, 10, i < close ? 10 : 4, 100 + i),
+        review: i === 0 ? { why: 'w', cause: 'padding', promptIdea: 'say seconds' } : undefined,
+      }))
+    const stats = etaPromptStats([...now(4), ...v1].sort((a, b) => b.doneAt - a.doneAt))
+    expect(stats.map((p) => p.version)).toEqual([cur, 1])
+    expect(stats[0]).toMatchObject({
+      samples: 20,
+      ratio: 0.4,
+      closeShare: 0.2,
+      topCause: 'padding',
+      ideas: ['say seconds'],
+    })
+    expect(stats[1]).toMatchObject({ samples: 5, ratio: 1, closeShare: 0.8, topCause: null })
+    expect(ETA_REWRITE_MIN_SAMPLES).toBe(20)
+    expect(ETA_REWRITE_CLOSE_SHARE).toBe(0.5)
+    const due = etaRewriteDue(stats)
+    expect(due?.version).toBe(cur)
+    expect(due?.why).toBe('20 samples, 20% close, median ratio 0.4x, top cause padding')
+    // enough close, or too few samples, or only an old version: null
+    expect(etaRewriteDue(etaPromptStats(now(15)))).toBeNull()
+    expect(etaRewriteDue(etaPromptStats(now(4).slice(0, 19)))).toBeNull()
+    expect(etaRewriteDue(etaPromptStats(v1))).toBeNull()
+  })
+
+  test('a band uses only current-version samples once there are ETA_MIN_SAMPLES of them', () => {
+    const old = Array.from({ length: 6 }, (_, i) => at(undefined, 5, 10, 10 + i)) // ratio 2
+    const few = Array.from({ length: ETA_MIN_SAMPLES - 1 }, (_, i) => at(cur, 5, 5, 100 + i))
+    expect(etaBandCalibrations([...few, ...old])[0]?.ratio).toBe(2)
+    expect(etaCalibration([...few, ...old], null)?.ratio).toBe(2)
+    const enough = [...few, at(cur, 5, 5, 200)]
+    expect(etaBandCalibrations([...enough, ...old])[0]).toMatchObject({
+      samples: ETA_MIN_SAMPLES,
+      ratio: 1,
+    })
+    expect(etaCalibration([...enough, ...old], null)).toMatchObject({
+      samples: ETA_MIN_SAMPLES,
+      ratio: 1,
+    })
+  })
+
+  test('ETA-PROMPT is parsed, none is dropped, and the line is stripped', () => {
+    const text =
+      'ETA-REVIEW: slow tests\nCAUSE: slow-commands\nETA-PROMPT: ask for the test time first'
+    expect(parseReview(text)).toEqual({
+      why: 'slow tests',
+      cause: 'slow-commands',
+      promptIdea: 'ask for the test time first',
+    })
+    expect(parseReview('ETA-REVIEW: x\nCAUSE: other\nETA-PROMPT: none')).toEqual({
+      why: 'x',
+      cause: 'other',
+    })
+    expect(parseReview('ETA-REVIEW: x\nCAUSE: other\nETA-PROMPT:  ')).toEqual({
+      why: 'x',
+      cause: 'other',
+    })
+    expect(stripReview(text)).toBe('')
+    expect(stripReview(`Done.\n\n${text}`)).toBe('Done.')
+    expect(reviewQuestion({ minutes: 5 }, 1800)).toContain('ETA-PROMPT: <one change')
+    // the ledger keeps the idea on the review row and the sample
+    const row = reviewRow(
+      'w1',
+      { minutes: 5, at: 7, attempt: 0 },
+      parseReview(text) as EtaReview,
+      9,
+    )
+    expect(row).toMatchObject({ promptIdea: 'ask for the test time first' })
+    const rows = [settledRow(facts, { minutes: 5, at: 7, attempt: 0, tookS: 1800, doneAt: 8 }), row]
+    expect(samplesOfRows(rows)[0]?.review?.promptIdea).toBe('ask for the test time first')
   })
 })

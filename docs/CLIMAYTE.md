@@ -706,6 +706,39 @@ sub-agents for estimating time until they can actually estimate time properly."
   samples) and `causes` (`{cause, n, medianRatio}` over the newest 100 reviews). From 3 reviews,
   `etaNote` adds the most common cause with its count and a quote (at most 160 characters) of the
   newest review of it, within about 450 characters in all.
+- **Prompt versions (owner, 2026-10-06: "a loop that measures each prompt version so it keeps getting
+  better").** The estimating sentences of `WORKER_BRIEF` are `ETA_INSTRUCTION` in `climayte-eta.ts`,
+  numbered by `ETA_PROMPT_VERSION`. Every estimate records the version it was said under (`eta.prompt`,
+  `promptVersion` on the ledger's said and settled rows and on `EtaSample`); one without it counts as
+  version 1. Calibration (`etaCalibration`, `etaBandCalibrations`) reads only the current version's
+  samples once there are `ETA_MIN_SAMPLES` of them for that kind or band, else all versions, so a better
+  prompt is not corrected again for the old prompt's error. The review question has a third line,
+  `ETA-PROMPT: <one change to the estimating instruction that would have made your estimate closer, or
+  none>`, kept as `promptIdea` on the review. `climayteScorecard().estimates.byPrompt` has one entry per
+  version: `samples`, median `ratio`, `closeShare` (ratio 0.8-1.25), `topCause` and the newest 5
+  `ideas`. `estimates.rewriteDue` is `{ version, why }` when the current version has at least
+  `ETA_REWRITE_MIN_SAMPLES` = 20 settled samples and a close share under `ETA_REWRITE_CLOSE_SHARE` = 0.5
+  (the why names the samples, close share, median ratio and top cause), else null.
+  - **When `rewriteDue` is set:** rewrite `ETA_INSTRUCTION` from the top cause and the `ETA-PROMPT`
+    ideas, bump `ETA_PROMPT_VERSION`, and add the old text below to this history.
+  - **v1** (until 2026-10-06): "Before your first tool call, write one line on its own, `ETA: <n> min`:
+    your honest estimate of the working time the whole task will take you, checks included (write a
+    new one for each later message you are sent, not when told to continue). The owner reads it to
+    decide whether to wait, and AgentHydra compares it with the time it really took."
+  - **v2** (2026-10-06): "Before your first tool call, write one line on its own, `ETA: <n> min`: the
+    working time this whole task will take YOU, checks included. You are an AI agent: reading a file,
+    writing an edit or running a quick command takes you seconds, not the minutes a person needs, so
+    estimate at your own pace. Build the number: count the tool calls you expect at about 10 seconds
+    each, then add the real run time of each slow command you will wait on (a test suite, a build, a
+    deploy). Write the number that sum gives, unrounded (3, 7, 14). Write a new ETA line for each later
+    message you are sent, not when told to continue. The owner reads it to decide whether to wait, and
+    AgentHydra compares it with the time it really took."
+  - **Why v2.** Over 10 days of transcripts, 315 ETA lines ran a median 0.61x of the real time (under 10
+    min 1.01x, 10-19 min 0.58x, 20-39 min 0.60x, 40 min or more 0.22x) and 112 of them were exactly
+    `ETA: 10 min`, a round default. Across 857 finished single-attempt workers the median pace was 10.7
+    seconds per turn (quartiles 7.3 / 10.7 / 14.9) and a median task was 37 turns and 6.4 minutes. The
+    workers complied but estimated at a human's pace and rounded to 10; v2 tells them their own pace
+    and how to build the number.
 - **Where it shows.** `climayte_status` rows carry `etaMin`, `etaLeftMin` (while live; negative is
   over) and `tookMin`; `climayteScorecard().estimates` has `all`, `byKind` and the current `note`.
   Desk 2's running-tasks row says "about N min left" from the latest estimate of a running worker,

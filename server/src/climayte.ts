@@ -85,11 +85,15 @@ import {
 } from './climayte-core'
 import { validateCwd } from './climayte-cwd'
 import {
+  ETA_PROMPT_VERSION,
   type EtaBandCalibration,
   type EtaCalibration,
+  type EtaPromptStats,
   etaBandCalibrations,
   etaCalibration,
   etaNote,
+  etaPromptStats,
+  etaRewriteDue,
   etaTookSeconds,
   stopDecision,
 } from './climayte-eta'
@@ -1406,6 +1410,7 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
       at: r.eta.at,
       attempt: w.attempts.length - 1,
       line: r.eta.line,
+      prompt: ETA_PROMPT_VERSION,
     }
     appendEtaRow(saidRow(w, w.eta, r.eta.text))
     changed(w)
@@ -3647,6 +3652,8 @@ export function climayteScorecard(): {
     all: EtaCalibration | null
     byKind: EtaCalibration[]
     byBand: EtaBandCalibration[]
+    byPrompt: EtaPromptStats[]
+    rewriteDue: { version: number; why: string } | null
     note: string | null
   } & ReturnType<typeof etaReport>
 } {
@@ -3655,6 +3662,7 @@ export function climayteScorecard(): {
   const samples = allEtaSamples(workers.values())
   const all = etaCalibration(samples, null)
   const byBand = etaBandCalibrations(samples)
+  const byPrompt = etaPromptStats(samples)
   const byKind = [...new Set(samples.map((s) => s.kind).filter((k): k is string => !!k))]
     .map((k) => etaCalibration(samples, k))
     .filter((c): c is EtaCalibration => c?.kind != null)
@@ -3694,6 +3702,8 @@ export function climayteScorecard(): {
       all,
       byKind,
       byBand,
+      byPrompt,
+      rewriteDue: etaRewriteDue(byPrompt),
       note: etaNote(all, samples, byBand),
       ...etaReport(samples),
     },

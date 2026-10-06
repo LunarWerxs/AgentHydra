@@ -50,6 +50,7 @@ export type EtaRow =
       line: string
       text: string
       at: number
+      promptVersion?: number
     }
   | {
       t: 'settled'
@@ -70,6 +71,7 @@ export type EtaRow =
       moves: number
       ratio: number
       bucket: EtaBucket
+      promptVersion?: number
     }
   | ({ t: 'review'; id: string; saidAt: number; at: number } & EtaReview)
 
@@ -131,6 +133,7 @@ export function samplesOfRows(rows: EtaRow[]): EtaSample[] {
         why: r.why,
         cause: r.cause,
         ...(r.raw ? { raw: r.raw } : {}),
+        ...(r.promptIdea ? { promptIdea: r.promptIdea } : {}),
       })
   const out = new Map<string, EtaSample>()
   for (const r of rows) {
@@ -150,6 +153,7 @@ export function samplesOfRows(rows: EtaRow[]): EtaSample[] {
       line: r.line,
       wallS: r.wallS,
       bucket: r.bucket,
+      promptVersion: r.promptVersion ?? 1,
       ...(review ? { review } : {}),
     })
   }
@@ -192,6 +196,7 @@ export function saidRow(w: EtaWorkerFacts, eta: CliMayteEta, text: string): EtaR
     line: eta.line ?? `ETA: ${eta.minutes} min`,
     text,
     at: eta.at,
+    promptVersion: eta.prompt ?? 1,
   }
 }
 
@@ -222,6 +227,7 @@ export function settledRow(
     moves,
     ratio,
     bucket: etaBucket(ratio),
+    promptVersion: eta.prompt ?? 1,
   }
 }
 
