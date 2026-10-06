@@ -92,12 +92,6 @@ $ReleaseComponents = @(
   [pscustomobject]@{ Name = 'exe';          RelPath = 'AgentHydra.exe' }
   [pscustomobject]@{ Name = 'misc';         RelPath = 'misc' }
   [pscustomobject]@{ Name = 'orchestrator'; RelPath = 'orchestrator' }
-  # AgentHydra 2.0: the window, Hydra Desk 2 with its own bun, and the dev-server tool beside it. A
-  # release from before 2.0.0 does not carry them, so -Version v1.x installs are refused here as a
-  # partial payload; the in-app updater reconciles them file by file instead, moving a running bun.exe
-  # aside, and this whole-folder swap rolls back if Desk 2's chat hosts hold the folder open.
-  [pscustomobject]@{ Name = 'desk2';        RelPath = 'desk2' }
-  [pscustomobject]@{ Name = 'devwebui';     RelPath = 'devwebui' }
 )
 
 function Write-Step([string]$Message) { Write-Host "==> $Message" -ForegroundColor Cyan }

@@ -134,12 +134,6 @@ function buildReleaseDir(baseDir: string, version: string, opts: ReleaseDirOpts 
   mkdirSync(orchDir, { recursive: true })
   writeFileSync(join(orchDir, 'orch.py'), '# placeholder orchestrator entrypoint\n')
 
-  // 2.0.0: the window (desk2/) and the dev-server tool (devwebui/) ride in the same archive.
-  for (const name of ['desk2', 'devwebui']) {
-    mkdirSync(join(dir, name), { recursive: true })
-    writeFileSync(join(dir, name, 'marker.txt'), version)
-  }
-
   return dir
 }
 

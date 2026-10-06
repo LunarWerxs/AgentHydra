@@ -41,8 +41,7 @@ import os from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { APP_ROOT, appEnv, IS_COMPILED, SERVICE_NAME, VERSION } from './config'
 import { getSetting, setSetting } from './db'
-import { desk2 } from './desk2'
-import { type Desk2InstallNotice, setDesk2InstallNotice } from './desk2-install'
+import { type Desk2InstallNotice, desk2, setDesk2InstallNotice } from './desk2'
 import { orchestratorBusy } from './orchestrator'
 import {
   beginUpdateProgress,
@@ -1404,7 +1403,7 @@ export function cleanupStaleUpdateArtifacts(installDir: string = APP_ROOT): void
 // them - and this runs it once at boot, without a click, instead of waiting for someone to find it.
 //
 // Compiled daemons only (a checkout builds desk2/ itself). Once per boot, never a loop: a failure is
-// logged and shown on the daemon's "Starting AgentHydra" page (desk2-install.ts), with what to do. With
+// logged and shown on the daemon's "Starting AgentHydra" page (desk2.ts setDesk2InstallNotice), with what to do. With
 // the update-check opt-out set (AGENTHYDRA_NO_PING, see the README's "Update check") nothing is
 // downloaded on its own; the page says how to get the window instead.
 

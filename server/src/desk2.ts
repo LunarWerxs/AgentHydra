@@ -19,7 +19,6 @@ import {
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { APP_ROOT, IS_COMPILED, PORT } from './config'
-import { type Desk2InstallNotice, desk2InstallNotice } from './desk2-install'
 import { openUi } from './open-ui'
 
 export interface StartPlan {
@@ -57,7 +56,7 @@ export interface Desk2Deps {
   startTimeoutMs: number
   /** How long a health answer is reused, so a burst of page loads costs one probe. */
   healthTtlMs: number
-  /** The updater's note while desk2/ is being installed, or could not be (desk2-install.ts). */
+  /** The updater's note while desk2/ is being installed, or could not be (setDesk2InstallNotice). */
   installNotice: () => Desk2InstallNotice | null
 }
 
@@ -81,6 +80,25 @@ export interface Desk2Status {
 }
 
 export const DESK2_START_TIMEOUT_MS = 30_000
+
+/** What the daemon tells a person while the updater installs desk2/, or could not (github-updater.ts
+ *  repairDesk2AtBoot sets it; the starting page and /api/desk2/status read it). */
+export interface Desk2InstallNotice {
+  /** installing: the repair is downloading it. failed / opted-out: nothing more will happen on its own. */
+  state: 'installing' | 'failed' | 'opted-out'
+  /** One or two plain sentences for a person, saying what to do when it is not going to fix itself. */
+  message: string
+}
+
+let installNotice: Desk2InstallNotice | null = null
+
+export function desk2InstallNotice(): Desk2InstallNotice | null {
+  return installNotice
+}
+
+export function setDesk2InstallNotice(next: Desk2InstallNotice | null): void {
+  installNotice = next
+}
 const DEFAULT_DESK_PORT = 7798
 
 const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
