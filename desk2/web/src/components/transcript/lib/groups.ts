@@ -22,17 +22,19 @@ export type DisplayRow =
   | { id: string; kind: 'item'; item: TranscriptItem; endOfTurn: boolean; prompt?: TurnPrompt | null }
   /** A tool run; `tasks` are background tasks that settled inside it ("finished 2 background tasks"). */
   | { id: string; kind: 'tools'; items: ToolItem[]; tasks?: TaskItem[] }
+  /** A run of the AI's browser calls: one Browser card showing the latest (its own card, never folded into a tool run). */
+  | { id: string; kind: 'browser'; items: ToolItem[] }
   /** Settled background tasks in a row: "18 background commands completed". */
   | { id: string; kind: 'tasks'; items: TaskItem[] }
 
 /** Sub-agent calls keep their own card and handed-over files their own row; every other tool call, MCP ones included, folds into a status row. */
 function folds(it: TranscriptItem): it is ToolItem {
-  return it.kind === 'tool_use' && toolFamily(it.name) !== 'agent' && !isSendFileTool(it.name)
+  return it.kind === 'tool_use' && toolFamily(it.name) !== 'agent' && !isSendFileTool(it.name) && toolFamily(it.name, it.input) !== 'browser'
 }
 
 /** Status rows: a folded tool run, settled tasks, a thinking block, a finished-turn line. They sit tighter than prose. */
 export function isStatusRow(r: DisplayRow): boolean {
-  return r.kind === 'tools' || r.kind === 'tasks' || r.item.kind === 'thinking' || r.item.kind === 'result' || r.item.kind === 'system'
+  return r.kind === 'tools' || r.kind === 'tasks' || (r.kind === 'item' && (r.item.kind === 'thinking' || r.item.kind === 'result' || r.item.kind === 'system'))
 }
 
 /**
@@ -84,7 +86,10 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     // A handoff's continuation right after CliMayte's move line says nothing that line has not (owner,
     // 2026-10-05: only the move line). The move line's id is `moved:<ts>` (server chat-manager systemLine).
     if (it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')) return
-    if (folds(it)) {
+    if (it.kind === 'tool_use' && toolFamily(it.name, it.input) === 'browser') {
+      if (last?.kind === 'browser') last.items.push(it)
+      else out.push({ id: `browser:${it.id}`, kind: 'browser', items: [it] })
+    } else if (folds(it)) {
       if (last?.kind === 'tools') last.items.push(it)
       else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
     } else if (it.kind === 'task') {

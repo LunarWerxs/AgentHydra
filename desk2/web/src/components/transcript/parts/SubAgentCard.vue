@@ -5,6 +5,7 @@ import { useTranscript } from '../context'
 import ToolHeader from './ToolHeader.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 import ToolGroup from './ToolGroup.vue'
+import BrowserCard from './BrowserCard.vue'
 import { groupRows } from '../lib/groups'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
@@ -39,6 +40,7 @@ const latest = computed(() => {
       <div v-if="kids.length" class="flex flex-col gap-2 border-l border-border pl-3">
         <template v-for="r in kidRows" :key="r.id">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" />
+          <BrowserCard v-else-if="r.kind === 'browser'" :item="r.items[r.items.length - 1]" :run="r.items" />
           <!-- A nested row is drawn by the TranscriptRow that holds this card, so the two do not import each other. -->
           <slot v-else-if="r.kind === 'item'" name="row" :item="r.item" />
         </template>

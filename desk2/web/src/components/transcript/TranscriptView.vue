@@ -17,6 +17,7 @@ import TranscriptRow from './TranscriptRow.vue'
 import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
 import TaskGroup from './parts/TaskGroup.vue'
+import BrowserCard from './parts/BrowserCard.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
 import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
@@ -107,6 +108,7 @@ const padBottom = computed(() => {
 /** A first guess at a row's height until it is measured; messages add their 28px actions toolbar. */
 function estimateRow(r: DisplayRow): number {
   if (r.kind === 'tools' || r.kind === 'tasks') return 24
+  if (r.kind === 'browser') return 40
   const it = r.item
   return estimateHeight(it) + (it.kind === 'user' || r.endOfTurn ? 28 : 0)
 }
@@ -392,6 +394,7 @@ watch(
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />
           <TaskGroup v-else-if="r.kind === 'tasks'" :id="r.id" :items="r.items" />
+          <BrowserCard v-else-if="r.kind === 'browser'" :item="r.items[r.items.length - 1]" :run="r.items" />
           <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :prompt="r.prompt" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
         </div>
         <div :style="{ height: `${padBottom}px` }" />

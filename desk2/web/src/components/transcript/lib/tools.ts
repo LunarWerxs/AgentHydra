@@ -1,4 +1,5 @@
 // What a tool row's one-line header says. Pure: no Vue, no DOM.
+import type { BrowserOpenRequest } from '@shared/browser'
 
 export type ToolFamily =
   | 'bash'
@@ -10,13 +11,14 @@ export type ToolFamily =
   | 'todo'
   | 'agent'
   | 'climayte'
+  | 'browser'
   | 'mcp'
   | 'other'
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 
 /** The family decides the icon and the body layout. */
-export function toolFamily(name: string): ToolFamily {
+export function toolFamily(name: string, input?: Record<string, unknown>): ToolFamily {
   switch (name) {
     case 'Bash':
     case 'BashOutput':
@@ -46,6 +48,7 @@ export function toolFamily(name: string): ToolFamily {
       return 'agent'
   }
   if (isCliMayteTool(name)) return 'climayte'
+  if (input && isBrowserCall(name, input)) return 'browser'
   if (name.startsWith('mcp__')) return 'mcp'
   return 'other'
 }
@@ -57,6 +60,54 @@ export function isSendFileTool(name: string): boolean {
 
 export function isCliMayteTool(name: string): boolean {
   return name.startsWith('mcp__agenthydra__climayte_')
+}
+
+/** The AI's browser: a Connections MCP call (any server prefix) that runs a local browser_* tool. */
+export function isBrowserCall(name: string, input: Record<string, unknown>): boolean {
+  return (
+    /^mcp__.+__connections_execute$/.test(name) &&
+    input.local === true &&
+    typeof input.tool_name === 'string' &&
+    input.tool_name.startsWith('browser_')
+  )
+}
+
+const BROWSER_VERBS: Record<string, string> = {
+  navigate: 'Opened',
+  click: 'Clicked',
+  type: 'Typed into',
+  snapshot: 'Read',
+  read: 'Read',
+  get_text: 'Read',
+  take_screenshot: 'Screenshot of',
+  profile_login: 'Sign-in window for',
+  profile_find: 'Looked for a saved browser for',
+  profiles: 'Listed saved browsers',
+  live: 'Showed live',
+}
+
+export const DEFAULT_BROWSER = 'default browser'
+
+/**
+ * What a Browser card shows. `name` is the browser tool ("browser_navigate") or the whole MCP call name (then the
+ * tool is input.tool_name). The url is params.url, else the first http(s) address in the result; the profile is
+ * params.profile, else the default browser.
+ */
+export function parseBrowserCall(
+  name: string,
+  input: Record<string, unknown>,
+  resultText?: string,
+): { verb: string; url: string; profile: string } {
+  const tool = (name.startsWith('mcp__') ? str(input.tool_name) : name).replace(/^browser_/, '')
+  const verb = BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser')
+  const params = input.params && typeof input.params === 'object' ? (input.params as Record<string, unknown>) : {}
+  const fromResult = resultText ? (/https?:\/\/[^\s"'<>)\]}\\]+/.exec(resultText)?.[0] ?? '') : ''
+  return { verb, url: str(params.url) || fromResult, profile: str(params.profile) || DEFAULT_BROWSER }
+}
+
+/** What a click on a Browser card asks the pane to show: no profile for the person's own (default) browser. */
+export function browserOpenRequest(info: { url: string; profile: string }): BrowserOpenRequest {
+  return { profile: info.profile === DEFAULT_BROWSER ? undefined : info.profile, url: info.url || undefined }
 }
 
 /** mcp__server__tool -> { server, tool }; null for built-in tools. */

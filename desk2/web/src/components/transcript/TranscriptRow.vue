@@ -11,6 +11,7 @@ import ThinkingRow from './parts/ThinkingRow.vue'
 import ToolRow from './parts/ToolRow.vue'
 import SubAgentCard from './parts/SubAgentCard.vue'
 import CliMayteCard from './parts/CliMayteCard.vue'
+import BrowserCard from './parts/BrowserCard.vue'
 import TodoList from './parts/TodoList.vue'
 import TaskCard from './parts/TaskCard.vue'
 import WorkflowCard from './parts/WorkflowCard.vue'
@@ -27,7 +28,7 @@ import { useTranscript } from './context'
 const props = defineProps<{ item: TranscriptItem; nested?: boolean; endOfTurn?: boolean; overlayActions?: boolean; prompt?: TurnPrompt | null }>()
 
 const ctx = useTranscript()
-const family = computed(() => (props.item.kind === 'tool_use' ? toolFamily(props.item.name) : null))
+const family = computed(() => (props.item.kind === 'tool_use' ? toolFamily(props.item.name, props.item.input) : null))
 const resultLine = computed(() => {
   const it = props.item
   if (it.kind !== 'result') return ''
@@ -71,6 +72,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
       <template #row="{ item: kid }"><TranscriptRow :item="kid" nested /></template>
     </SubAgentCard>
     <CliMayteCard v-else-if="family === 'climayte'" :item="item" />
+    <BrowserCard v-else-if="family === 'browser'" :item="item" />
     <ToolRow v-else :item="item" />
   </template>
 
