@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { toolFamily } from '../../src/components/transcript/lib/tools'
-import { canSendReply, composeRedesignReply, parseDesignOptions, redesignState } from '../../src/components/transcript/lib/redesign'
+import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, redesignState, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
 
 const OPT = 'mcp__desk_redesign__design_options'
 const PICK = 'mcp__desk_redesign__design_pick'
@@ -98,5 +98,22 @@ describe('redesignState', () => {
   })
   test('an AI-picks call never waits for a reply', () => {
     expect(redesignState([tool('a', OPT, { brief: 'x' }), user('u', 'ReDesign: hi')]).replies.size).toBe(0)
+  })
+})
+
+describe('redesignSetup', () => {
+  test('the no-key text becomes the calm needs-a-key state', () => {
+    const s = redesignSetup('ReDesign has no working provider key yet. Tell the person to add one in ReDesign: Settings → Connectors → ReDesign → Open, then the Keys page.')
+    expect(s?.kind).toBe('no-key')
+    expect(s?.title).toBe('ReDesign needs an AI key')
+  })
+  test('ReDesign not running is its own setup state', () => {
+    expect(redesignSetup('ReDesign is not running')?.kind).toBe('not-running')
+  })
+  test('an ordinary failure stays the raw error', () => {
+    expect(redesignSetup('The run failed: model refused the brief')).toBeNull()
+  })
+  test('the retry message is a ReDesign: reply the transcript recognises', () => {
+    expect(RETRY_MESSAGE.startsWith('ReDesign:')).toBe(true)
   })
 })

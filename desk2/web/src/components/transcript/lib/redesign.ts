@@ -53,6 +53,26 @@ export function parseDesignOptions(item: ToolItem): DesignOptionsView {
   return { ...base, state: 'done', error: '', run, options }
 }
 
+export interface RedesignSetup {
+  kind: 'no-key' | 'not-running'
+  title: string
+  line: string
+}
+
+/** A failure that is ReDesign's setup rather than a bad run: no provider key yet, or ReDesign not running. null = show the raw error. */
+export function redesignSetup(error: string): RedesignSetup | null {
+  if (/no working provider key|add one in ReDesign|Keys page/i.test(error)) {
+    return { kind: 'no-key', title: 'ReDesign needs an AI key', line: 'Add one in ReDesign (Settings → Models & keys), or borrow a few from HSwarm, then ask the AI to try again.' }
+  }
+  if (/ReDesign is not (running|installed|answering)|ECONNREFUSED|fetch failed/i.test(error)) {
+    return { kind: 'not-running', title: 'ReDesign is not running', line: 'Start it in Settings → Connectors → ReDesign, then ask the AI to try again.' }
+  }
+  return null
+}
+
+/** The message the card posts after the keys were copied, so the AI retries the call. */
+export const RETRY_MESSAGE = `${REDESIGN_PREFIX} the keys are in now, please run design_options again.`
+
 export interface RedesignState {
   /** run id -> the option design_pick was called with (the last call wins). */
   picks: Map<string, number>

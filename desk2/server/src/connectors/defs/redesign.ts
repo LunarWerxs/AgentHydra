@@ -58,6 +58,12 @@ async function answers(url: string): Promise<boolean> {
   }
 }
 
+/** The address ReDesign answers at right now, or null. */
+export async function runningRedesignUrl(): Promise<string | null> {
+  for (const url of candidates()) if (await answers(url)) return url
+  return null
+}
+
 const factory: ConnectorFactory = ({ home }): ConnectorDef => {
   const dest = join(home, 'apps', 'redesign')
   const log = join(home, 'logs', 'redesign.log')

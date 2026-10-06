@@ -3,11 +3,12 @@
 // option, a note on any, "More options", or words) and Send posts ONE normal message into this chat; without it the
 // card only shows the options and, once design_pick ran, which one the AI took.
 import { computed, reactive, ref } from 'vue'
-import { Check, LayoutGrid, LoaderCircle, Maximize2, Send } from '@lucide/vue'
+import { Check, KeyRound, LayoutGrid, LoaderCircle, Maximize2, Send } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
-import { canSendReply, composeRedesignReply, parseDesignOptions } from '../lib/redesign'
+import { canSendReply, composeRedesignReply, parseDesignOptions, redesignSetup, RETRY_MESSAGE } from '../lib/redesign'
+import { listConnectors } from '@/components/connectors/api'
 import { openLightbox } from '../lib/media'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
@@ -17,6 +18,43 @@ const desk = useDesk()
 
 const view = computed(() => parseDesignOptions(props.item))
 const aiPick = computed(() => ctx.redesign?.value.picks.get(view.value.run) ?? null)
+
+const setup = computed(() => (view.value.state === 'error' ? redesignSetup(view.value.error) : null))
+const keyBusy = ref(false)
+const keyNote = ref('')
+const keyOk = ref(false)
+
+// ReDesign itself (its keys live in a dialog, Settings → Models & keys, with no URL of their own), at wherever the connector says it runs.
+async function openKeys() {
+  keyNote.value = ''
+  try {
+    const url = (await listConnectors()).find((c) => c.id === 'redesign')?.url
+    if (!url) throw new Error('ReDesign is not running')
+    window.open(url, '_blank', 'noopener')
+  } catch (e) {
+    keyNote.value = e instanceof Error ? e.message : 'Could not open ReDesign'
+  }
+}
+// Copies a few of HSwarm's working keys into ReDesign (the server moves them; none comes back here), then asks the AI to retry.
+async function useHswarmKeys() {
+  if (keyBusy.value) return
+  keyBusy.value = true
+  keyNote.value = ''
+  try {
+    const res = await fetch('/api/redesign/keys/hswarm', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+    const body = (await res.json().catch(() => ({}))) as { error?: string; pools?: { added: number; before: number }[] }
+    if (!res.ok) throw new Error(body.error || `${res.status} ${res.statusText}`)
+    const have = (body.pools ?? []).reduce((n, p) => n + p.added + p.before, 0)
+    if (!have) throw new Error("HSwarm has no working key to lend")
+    keyOk.value = true
+    keyNote.value = 'Keys added.'
+    if (!ctx.readOnly.value) await desk.send(ctx.chatId.value, { text: RETRY_MESSAGE })
+  } catch (e) {
+    keyNote.value = e instanceof Error ? e.message : 'Could not add keys'
+  } finally {
+    keyBusy.value = false
+  }
+}
 
 const pick = ref<number | null>(null)
 const notes = reactive<Record<number, string>>({})
@@ -69,6 +107,29 @@ async function send() {
       <LoaderCircle class="size-4 animate-spin" aria-hidden="true" />
       <span>{{ item.progress || 'ReDesign is making options…' }}</span>
     </p>
+    <div v-else-if="setup" class="grid gap-2 px-3 pb-3" role="status">
+      <p class="flex items-center gap-1.5 text-[13px] font-medium text-text"><KeyRound class="size-3.5 text-text-muted" aria-hidden="true" />{{ setup.title }}</p>
+      <p class="text-[13px] text-text-muted">{{ setup.line }}</p>
+      <div v-if="setup.kind === 'no-key'" class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="inline-flex h-7 items-center rounded-6 bg-fill-hover px-2.5 text-[13px] text-text outline-none hover:bg-fill-active focus-visible:ring-2 focus-visible:ring-brand"
+          @click="openKeys"
+        >
+          Open ReDesign to add a key
+        </button>
+        <button
+          type="button"
+          class="inline-flex h-7 items-center gap-1 rounded-6 bg-brand px-2.5 text-[13px] font-medium text-white outline-none focus-visible:ring-2 focus-visible:ring-brand disabled:opacity-40"
+          :disabled="keyBusy || keyOk"
+          @click="useHswarmKeys"
+        >
+          <LoaderCircle v-if="keyBusy" class="size-3.5 animate-spin" aria-hidden="true" />Use HSwarm's keys
+        </button>
+        <span v-if="keyNote" class="min-w-0 truncate text-[12px]" :class="keyOk ? 'text-text-muted' : 'text-danger-text'">{{ keyNote }}</span>
+      </div>
+      <p v-if="view.error" class="whitespace-pre-wrap break-words text-[12px] text-text-muted opacity-80">{{ view.error }}</p>
+    </div>
     <p v-else-if="view.state === 'error'" class="whitespace-pre-wrap break-words px-3 pb-3 text-[13px] text-danger-text">{{ view.error }}</p>
 
     <template v-else>
