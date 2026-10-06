@@ -264,12 +264,48 @@ export function continuationOf(text: string): { messages: string | null; line: s
 }
 
 /**
- * A user item as the transcript shows it: a note when a program sent it; a handoff's continuation as the
- * messages it carries, or one muted line when it carries none; else the person's, each
+ * The prompts AgentHydra goes on with a CliMayte worker's own session by (server/src/climayte-lib.ts HANDOFF_PROMPT,
+ * PAUSED_PROMPT, INTERRUPTED_PROMPT, TRANSIENT_PROMPT), each with the muted line it is shown as. A move has none:
+ * CliMayte's move line ("CliMayte moved this chat from #88 to #83.") already says it. 2026-10-05, owner: "Why am I
+ * ever seeing ... 'This session was moved to another account ...' like I sent those words?"
+ */
+const RESUMED = new Map<string, string | null>([
+  [
+    'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.',
+    null,
+  ],
+  [
+    'This session was paused because its account reached its usage limit or was signed out, and it can continue now on the same account. Continue the task exactly where you left off. Do not redo steps that are already finished.',
+    'Continued on the same account once it could run again.',
+  ],
+  [
+    'This session was interrupted before it finished: its process was stopped (AgentHydra restarted), not by anything you did. Continue the task exactly where you left off. Do not redo steps that are already finished; run a command again only if its result is missing.',
+    'Continued after AgentHydra restarted.',
+  ],
+  ['The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.', 'Continued after the API was overloaded.'],
+])
+/** A failed verdict sent back to the worker (server/src/climayte.ts SENT_BACK and sendBack). */
+const SENT_BACK = /^The orchestrator checked your result and it did not pass\. What was wrong: [\s\S]*\n\nFix it, prove the fix with a command and what it printed, and report again\.$/
+
+/**
+ * A user item as the transcript shows it, or null when it is not shown: a note when a program sent it; a
+ * handoff's continuation as the messages it carries, or one muted line when it carries none; CliMayte's
+ * resume prompts as a muted line, or nothing after a move; else the person's, each
  * `[Image: source: <path>]` line whose file is a picture shown as that picture instead of the line.
  * A line naming a missing file or a non-picture stays as text.
  */
-export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem {
+export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem | SystemItem | null {
+  const plain = raw.text.trim()
+  if (RESUMED.has(plain)) {
+    const line = RESUMED.get(plain)
+    if (!line) return null
+    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = raw
+    return { ...rest, kind: 'system', level: 'info', text: line }
+  }
+  if (SENT_BACK.test(plain)) {
+    const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = raw
+    return { ...rest, kind: 'note', from: 'AgentHydra · CliMayte', text: plain }
+  }
   const continued = continuationOf(raw.text)
   if (continued && !continued.messages) {
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = raw

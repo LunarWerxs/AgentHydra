@@ -150,11 +150,13 @@ export class ChatStore {
     // Parsed afresh on every call: callers keep and change the items they get, so a shared object would leak between them.
     const out = new Map(cached.lines)
     for (const [id, line] of cached.tail) out.set(id, line)
-    // A user item saved before notes and picture lines were read is shown as it reads now (same id).
+    // A user item saved before notes and picture lines were read is shown as it reads now (same id), or not at all.
     const media = mediaCache(this.home)
-    return [...out.values()].map((line) => {
+    return [...out.values()].flatMap((line): TranscriptItem[] => {
       const item = JSON.parse(line) as TranscriptItem
-      return item.kind === 'user' ? userTurn(item, media) : item
+      if (item.kind !== 'user') return [item]
+      const turn = userTurn(item, media)
+      return turn ? [turn] : []
     })
   }
 

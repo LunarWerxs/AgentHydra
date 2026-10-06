@@ -187,8 +187,10 @@ type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 /** A user-role text through the classifier: the person's words, a task notice (one item per task id) or muted lines. */
 function userParts(items: TranscriptItem[], tasks: Map<string, TaskItem>, id: string, ts: number, text: string): void {
   classifyUserText(text).forEach((p, i) => {
-    if (p.kind === 'user') items.push(userTurn({ id: i ? `${id}:${i}` : id, ts, kind: 'user', text: p.text }, mediaCache()))
-    else if (p.kind === 'system') items.push({ id: `${id}:${i}`, ts, kind: 'system', level: 'info', text: p.text })
+    if (p.kind === 'user') {
+      const turn = userTurn({ id: i ? `${id}:${i}` : id, ts, kind: 'user', text: p.text }, mediaCache())
+      if (turn) items.push(turn)
+    } else if (p.kind === 'system') items.push({ id: `${id}:${i}`, ts, kind: 'system', level: 'info', text: p.text })
     else {
       const prev = tasks.get(p.task.taskId)
       const next = taskItemFrom(p.task, prev, ts)

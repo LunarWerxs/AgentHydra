@@ -266,7 +266,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   "CliMayte moved this chat from #164 to #153." and nothing else for it: the prompt the new session was
   started with (the task again, a note to it and the whole handoff) is never shown as your message. A
   handoff with no move (same account) is one muted "Continued in a fresh session" line; messages you sent
-  that the earlier session never got to stay as yours. Chats already saved read the same way.
+  that the earlier session never got to stay as yours. The prompt a moved session goes on with ("This
+  session was moved to another account ...") is not shown either; one that went on after a pause, a
+  restart or an overloaded API is one muted line ("Continued after AgentHydra restarted."), and a result
+  sent back by a failed verdict is CliMayte's note, never your message. Chats already saved read the same way.
 - **A chat moving off a signed-out or full account says so, and sends once.** The sign-in or limit line
   is a warning that says the chat is moving to another account and your message goes again by itself,
   instead of a red dead end. The session copy no longer stops the server while it runs (a 555 MB session

@@ -422,8 +422,8 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
       const item: Extract<TranscriptItem, { kind: 'user' }> = { kind: 'user', id: uuid, ts: now(), text: userText.join('\n\n') }
       if (images.length) item.images = images
       // Live, a program's note still shows (the runtime writes only the person's own prompts).
-      if (opts.echoUserText) out.push({ type: 'upsert', item: userTurn(item, media) })
-      else if (noteOf(item.text)) out.push({ type: 'upsert', item: userTurn(item, null) })
+      const turn = opts.echoUserText ? userTurn(item, media) : noteOf(item.text) ? userTurn(item, null) : null
+      if (turn) out.push({ type: 'upsert', item: turn })
     }
     let finishedMain = false
     for (const b of content) {

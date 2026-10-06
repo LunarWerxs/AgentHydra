@@ -355,7 +355,7 @@ describe('notes and picture lines', () => {
   test('a picture line becomes the picture once, a missing file stays as text, plain text is the same item', () => {
     const { media, file } = png()
     const turn = userTurn(user(`look at this\n[Image: source: ${file}]\n[Image: source: ${file}]\n[Image: source: C:/Users/me/gone.png]`), media)
-    expect(turn.kind).toBe('user')
+    expect(turn?.kind).toBe('user')
     const u = turn as Extract<TranscriptItem, { kind: 'user' }>
     expect(u.text).toBe('look at this\n[Image: source: C:/Users/me/gone.png]')
     expect(u.images).toHaveLength(1)
@@ -428,5 +428,46 @@ describe("a handoff's continuation prompt", () => {
     expect(lib).toContain('\\n\\n--- HANDOFF ---\\n${handoff}')
     for (const ended of ['handed off because its conversation had grown large', 'handed off when the orchestrator asked it to', 'wound down before its usage limit'])
       expect(lib).toContain(`'${ended}'`)
+  })
+})
+
+describe("CliMayte's resume prompts", () => {
+  // AgentHydra's words (server/src/climayte-lib.ts), exactly as a resumed session's JSONL holds them.
+  const MOVED =
+    'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+  const PAUSED =
+    'This session was paused because its account reached its usage limit or was signed out, and it can continue now on the same account. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+  const INTERRUPTED =
+    'This session was interrupted before it finished: its process was stopped (AgentHydra restarted), not by anything you did. Continue the task exactly where you left off. Do not redo steps that are already finished; run a command again only if its result is missing.'
+  const TRANSIENT = 'The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.'
+  const user = (text: string): Extract<TranscriptItem, { kind: 'user' }> => ({ kind: 'user', id: 'u5', ts: 3, text, parentToolUseId: null })
+
+  test("a move is not shown (CliMayte's move line says it); the others are one muted line, never the person's message", () => {
+    expect(userTurn(user(MOVED), null)).toBeNull()
+    expect(userTurn(user(`${MOVED}\n`), null)).toBeNull()
+    expect(userTurn(user(PAUSED), null)).toEqual({ kind: 'system', id: 'u5', ts: 3, parentToolUseId: null, level: 'info', text: 'Continued on the same account once it could run again.' })
+    expect(userTurn(user(INTERRUPTED), null)).toMatchObject({ kind: 'system', text: 'Continued after AgentHydra restarted.' })
+    expect(userTurn(user(TRANSIENT), null)).toMatchObject({ kind: 'system', text: 'Continued after the API was overloaded.' })
+    const history = historyToItems([rec('user', 'tidy the example garden plan'), rec('user', MOVED), rec('user', INTERRUPTED)])
+    expect(history.map((i) => i.kind)).toEqual(['user', 'system'])
+  })
+
+  test("a message that quotes the words is the person's as it stands", () => {
+    const quoted = `why did I see "${MOVED}"?`
+    expect(userTurn(user(quoted), null)).toEqual(user(quoted))
+  })
+
+  test("a result sent back by a failed verdict is CliMayte's note, not the person's message", () => {
+    const back = 'The orchestrator checked your result and it did not pass. What was wrong: the example list is still unsorted.\n\nFix it, prove the fix with a command and what it printed, and report again.'
+    expect(userTurn(user(back), null)).toMatchObject({ kind: 'note', from: 'AgentHydra · CliMayte', text: back })
+  })
+
+  test('AgentHydra still writes the words this reads', () => {
+    const lib = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-lib.ts'), 'utf8')
+    for (const prompt of [MOVED, PAUSED, INTERRUPTED, TRANSIENT]) expect(lib).toContain(`'${prompt}'`)
+    const climayte = readFileSync(join(import.meta.dir, '../../../../server/src/climayte.ts'), 'utf8')
+    expect(climayte).toContain("const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'")
+    // Source text: each `\\n` is the backslash and n its template literal holds.
+    expect(climayte).toContain('`${SENT_BACK} ${note}\\n\\nFix it, prove the fix with a command and what it printed, and report again.`')
   })
 })
