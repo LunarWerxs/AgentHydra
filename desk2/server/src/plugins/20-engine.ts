@@ -328,6 +328,18 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
   )
 
+  // Claude Code binary status: package > cache > download-needed (for smoke tests, release validation).
+  app.get('/api/claude-code', async (c) => {
+    try {
+      const { getClaudeCodeBinaryStatus } = await import('../engine/claude-code-binary')
+      const status = getClaudeCodeBinaryStatus(join(ctx.home, '..'))
+      return c.json(status)
+    } catch (err) {
+      console.error('[claude-code] status check failed:', err)
+      return c.json({ error: 'could not check Claude Code binary status' }, 500)
+    }
+  })
+
   // The launcher's stop and restart (SPEC "Launcher"): the server stops the way SIGTERM stops it, the chats running
   // on in their hosts for the next server; `chats: true` ends them first.
   const shutdown = (deps.shutdown as (() => void) | undefined) ?? (() => void process.emit('SIGTERM'))

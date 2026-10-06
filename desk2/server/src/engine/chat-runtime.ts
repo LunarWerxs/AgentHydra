@@ -20,6 +20,7 @@ import {
   type SDKMessage,
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
+import { resolveClaudeCodeBinary, tryResolveClaudeCodeBinary } from './claude-code-binary'
 import type {
   AccountRef,
   AskQuestion,
@@ -287,6 +288,9 @@ export class ChatRuntime {
   private replayed: Map<string, TranscriptItem> | null = null
   /** Set while adopt() re-opens the host's open requests: their cards keep their time; `shown` ones were notified before. */
   private reopened: { stored: Map<string, TranscriptItem>; shown: Set<string> } | null = null
+  /** Resolved Claude Code binary path, cached after first resolution. */
+  private resolvedBinaryPath: string | null = null
+  private resolveBinaryPromise: Promise<string | null> | null = null
 
   constructor(deps: ChatRuntimeDeps) {
     this.chat = deps.chat
@@ -325,6 +329,25 @@ export class ChatRuntime {
     return join(this.store.home, 'logs', `${this.chat.id}.log`)
   }
 
+  /** Resolve Claude Code binary path; cached after first resolution. */
+  private resolveBinary(): void {
+    if (this.resolvedBinaryPath !== null || this.resolveBinaryPromise) {
+      return
+    }
+    const home = join(this.store.home, '..')
+    this.resolveBinaryPromise = resolveClaudeCodeBinary(home).then(
+      (path) => {
+        this.resolvedBinaryPath = path
+        return path
+      },
+      (err) => {
+        console.warn(`Failed to resolve Claude Code binary: ${err instanceof Error ? err.message : err}`)
+        this.resolvedBinaryPath = ''
+        return null
+      }
+    )
+  }
+
   /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
   buildOptions(): Options {
     const chat = this.chat
@@ -344,6 +367,17 @@ export class ChatRuntime {
       // Without it the SDK declines every MCP form, sign-in link or other request for input unseen.
       onElicitation: this.onElicitation,
       stderr: (data: string) => this.onStderr(data),
+    }
+    // Try synchronous resolution first; async resolution happens in background
+    const home = join(this.store.home, '..')
+    if (!this.resolvedBinaryPath) {
+      const sync = tryResolveClaudeCodeBinary(home)
+      if (sync) {
+        this.resolvedBinaryPath = sync
+      }
+    }
+    if (this.resolvedBinaryPath) {
+      options.pathToClaudeCodeExecutable = this.resolvedBinaryPath
     }
     // A Bypass chat in plan mode goes back to Bypass when the plan is approved, and the CLI refuses Bypass
     // to a process not launched for it (a process restarted mid-plan included).
@@ -412,6 +446,8 @@ ${swap.real}` }
     this.input = new InputQueue()
     this.dispatch({ type: 'runtimeStarting' })
     if (!attach) this.publishChat()
+    // Resolve binary asynchronously in background; buildOptions() uses sync check first
+    this.resolveBinary()
     const q = this.queryImpl({ prompt: this.input, options: this.buildOptions(), chatId: this.chat.id, account: this.ranAs, attach, carry: this.carry(null) })
     this.q = q
     if (attach) this.adopt(q, attach, carry)
