@@ -183,8 +183,14 @@ function close(id: string) {
   for (const [proc, tab] of next) if (tab === id) next.delete(proc)
   pending.value = next
   const gone = state.value.tabs.find((t) => t.id === id)
+  const only = !!gone && state.value.tabs.length === 1
   state.value = closeTab(state.value, id)
   if (gone?.kind === 'saved' && gone.target) void closeSaved(gone.target)
+  if (!only) return
+  // Closing the only tab closes the browser, like a browser window's last tab; it opens again on a New tab. Saved here:
+  // the pane unmounts before the deep watch would write it.
+  saveTabs(props.chatId, state.value)
+  emit('close')
 }
 /** Closing a saved browser's tab closes its Chrome (not only the tab), so the transcript's Browser cards read it as closed. */
 async function closeSaved(profile: string) {

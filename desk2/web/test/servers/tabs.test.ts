@@ -29,6 +29,13 @@ describe('the tab list', () => {
     expect(s.tabs).toEqual([{ id: 'n', kind: 'new', target: null, proc: null }])
     expect(s.active).toBe('n')
   })
+  it('closing the only tab closes the browser pane, remembered as one New tab for its next open', () => {
+    const pane = readFileSync(join(import.meta.dir, '../../src/components/servers/ServersPane.vue'), 'utf8')
+    const close = pane.slice(pane.indexOf('function close(id: string)'), pane.indexOf('async function closeSaved'))
+    expect(close).toContain('const only = !!gone && state.value.tabs.length === 1')
+    expect(close.indexOf('saveTabs(props.chatId, state.value)')).toBeLessThan(close.indexOf("emit('close')"))
+    expect(close.indexOf('if (!only) return')).toBeLessThan(close.indexOf("emit('close')"))
+  })
   it('retargeting keeps the tab in place', () => {
     const s = retargetTab(openTab(freshTabs('a'), undefined, 'b'), 'a', { kind: 'page', target: 'http://localhost:3000/', proc: 'p1' })
     expect(s.tabs[0]).toEqual({ id: 'a', kind: 'page', target: 'http://localhost:3000/', proc: 'p1' })
