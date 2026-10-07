@@ -243,3 +243,17 @@ export const splitChat = (want: number, stage: number): number => Math.round(Mat
 
 /** splitChat as the stage's grid columns, so the split is right before anything is measured and as the window resizes. */
 export const splitColumns = (want: number): string => `max(${CHAT_MIN}px, min(${Math.round(want)}px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`
+
+// ---- the archived notice at the bottom of the chat on screen ----
+export type ArchivedNotice = { kind: 'chat' | 'external'; id: string; patch: { archived: false } }
+
+/** The notice an archived chat or outside session shows at its bottom, and what clicking it patches; none otherwise. */
+export function archivedNotice(
+  view: View,
+  chat: Pick<ChatSummary, 'id' | 'archived'> | null,
+  external: { id: string; archived?: boolean } | null
+): ArchivedNotice | null {
+  if (view.kind === 'chat' && chat?.archived) return { kind: 'chat', id: chat.id, patch: { archived: false } }
+  if (view.kind === 'external' && external?.archived) return { kind: 'external', id: external.id, patch: { archived: false } }
+  return null
+}

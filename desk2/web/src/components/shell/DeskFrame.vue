@@ -32,7 +32,7 @@ import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { CHAT_DEFAULT, CHAT_MIN, NavHistory, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
+import { CHAT_DEFAULT, CHAT_MIN, NavHistory, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
@@ -509,6 +509,15 @@ const external = computed(() => {
   const v = view.value
   return v.kind === 'external' ? (src.external.value.find((s) => s.id === v.id) ?? null) : null
 })
+// An archived chat or outside session says so at its bottom, with a link that unarchives it.
+const notice = computed(() => archivedNotice(view.value, chat.value, external.value))
+function unarchive() {
+  const n = notice.value
+  if (!n) return
+  actionError.value = null
+  const run = n.kind === 'chat' ? src.updateChat(n.id, n.patch) : src.updateSessionMeta(n.id, n.patch)
+  void run.catch((err: unknown) => (actionError.value = `The change failed: ${err instanceof Error ? err.message : String(err)}`))
+}
 const standIn = computed(() => (external.value && src.standInOf?.(external.value.id)) || null)
 
 // The title bar's Account menu: a chat's next start, or where a stand-in continues.
@@ -706,6 +715,13 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" />
+              </div>
+
+              <div v-if="notice" role="status" data-testid="archived-notice" class="shrink-0 bg-[var(--bg-page)] px-4 pb-1.5 pt-1">
+                <p class="mx-auto w-full max-w-[768px] text-center text-[13px] leading-[19px] text-text-muted">
+                  This chat was archived.
+                  <button type="button" class="rounded-[var(--radius-6)] text-text-2 underline-offset-2 transition-colors duration-[60ms] hover:text-[var(--accent-text)] hover:underline focus-visible:underline" @click="unarchive">Click here to unarchive.</button>
+                </p>
               </div>
 
               <Composer
