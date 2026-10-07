@@ -1,4 +1,10 @@
 {
+  "hswarm.read_task.prefix_chars": {
+    "at": "2026-10-07T06:50:35+00:00",
+    "commit": "f30cf8c6326dfc1e91b36158f92400abd6fdf2fb",
+    "trial": "20261007-hswarm-read-task-prefix-chars-aef7",
+    "value": 4130
+  },
   "mcp.instructions_chars": {
     "at": "2026-10-06T03:53:05+00:00",
     "commit": "cb3fe35449c89dd4c5a1747e30f00c38c3a3a566",
