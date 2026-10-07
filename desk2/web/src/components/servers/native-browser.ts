@@ -111,6 +111,12 @@ export class HostView {
     listen()
   }
 
+  /** A page tab takes the view over (it was kept in the background): its events go to the new handler. */
+  listen(onEvent: (e: HostBrowserOut) => void) {
+    listeners.set(this.id, onEvent)
+    listen()
+  }
+
   get isOpen(): boolean {
     return this.opened
   }

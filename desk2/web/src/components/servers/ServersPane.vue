@@ -8,6 +8,7 @@ import { browserClose, browserProfiles, localhostServers, processLogs, setUpFold
 import { activateTab, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, REUSED_NOTE, saveTabs, startBlock, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
+import { backgroundViews } from './background-views'
 import NewTab from './NewTab.vue'
 import PageTab from './PageTab.vue'
 import SavedBrowsers from './SavedBrowsers.vue'
@@ -178,7 +179,13 @@ function dropPending(procId: string) {
 }
 const newTab = () => (state.value = openTab(state.value))
 const pick = (id: string) => (state.value = activateTab(state.value, id))
+/** A page tab is closed or pointed elsewhere: its view must not outlive it in the background. */
+function forget(id: string) {
+  const t = state.value.tabs.find((x) => x.id === id)
+  if (t?.kind === 'page' && t.target) backgroundViews.tabClosing(props.chatId, t.target)
+}
 function close(id: string) {
+  forget(id)
   const next = new Map(pending.value)
   for (const [proc, tab] of next) if (tab === id) next.delete(proc)
   pending.value = next
@@ -201,7 +208,11 @@ async function closeSaved(profile: string) {
     // floor-ok: the browser stays as it was; the cards keep reading its real state
   }
 }
-const aim = (id: string, spec: TabSpec) => (state.value = retargetTab(state.value, id, spec))
+const aim = (id: string, spec: TabSpec) => {
+  // A page tab pointed at a saved browser or a New tab unmounts its PageTab; one pointed at another page stays (its address bar moves it).
+  if (spec.kind !== 'page') forget(id)
+  state.value = retargetTab(state.value, id, spec)
+}
 function openAddress(id: string, url: string) {
   aim(id, { kind: 'page', target: url, proc: null })
 }

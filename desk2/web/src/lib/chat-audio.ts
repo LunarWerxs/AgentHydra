@@ -114,6 +114,9 @@ export function registerView(chatId: string, viewId: string, mute: (muted: boole
   }
 }
 
+/** The host says this page view plays sound. */
+export const viewPlaying = (viewId: string): boolean => !!state.playing[viewId]
+
 /** The host's `audio` event for a page view. */
 export function viewAudio(viewId: string, playing: boolean) {
   if (viewId in state.viewChat) state.playing[viewId] = playing

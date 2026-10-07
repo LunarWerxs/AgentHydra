@@ -21,6 +21,7 @@ import HydraPane from '@/components/hydra/HydraPane.vue'
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { useDevServers } from '@/components/servers/store'
+import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
@@ -91,6 +92,16 @@ const focusSettingsNav = async (e: Event) => {
     await new Promise<void>((r) => requestAnimationFrame(() => r()))
   }
 }
+// A browser tab that kept playing in the background of another chat closes when that chat is archived or deleted.
+watch(
+  () => [src.chats.value, src.external.value] as const,
+  ([chats, outside]) =>
+    setChatLive((id) => {
+      if (id.startsWith('external:')) return !outside.find((s) => s.id === id.slice('external:'.length))?.archived
+      return chats.length === 0 || !!chats.find((c) => c.id === id && !c.archived)
+    }),
+  { immediate: true }
+)
 const chat = computed<ChatSummary | null>(() => {
   const v = view.value
   return v.kind === 'chat' ? (src.chats.value.find((c) => c.id === v.id) ?? null) : null

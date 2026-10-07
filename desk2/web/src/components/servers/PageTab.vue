@@ -6,6 +6,8 @@ import type { DevWebProcess } from '@shared/devwebui'
 import { addressOrSearch, isUp, proxyAddress, statusWord } from './logic'
 import { coveredByPage, hasHostBrowser, type HostBrowserOut, type HostRect, HostView, hostRect } from './native-browser'
 import { registerView, viewAudio } from '@/lib/chat-audio'
+import { audioKey } from './background-policy'
+import { backgroundViews } from './background-views'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A page tab: a dev server or an address, with back / forward / reload and the address bar on top. In AgentHydra's own
@@ -70,16 +72,20 @@ watch(
 )
 
 // ---- the host's view: open once wanted, kept over the tab's box, hidden while the tab is hidden or covered ----
-const view = native
-  ? new HostView((e: HostBrowserOut) => {
-      if (e.type === 'audio') return viewAudio(e.id, e.playing)
-      live.value = e.url || live.value
-      if (e.url && document.activeElement !== addressEl.value) address.value = e.url
-    })
-  : null
+const onHostEvent = (e: HostBrowserOut) => {
+  if (e.type === 'audio') return viewAudio(e.id, e.playing)
+  live.value = e.url || live.value
+  if (e.url && document.activeElement !== addressEl.value) address.value = e.url
+}
+// A view that kept playing in the background after the person left this chat is taken back, same page and position.
+const adopted = native ? backgroundViews.adopt(props.chatId, props.url) : null
+const view = native ? (adopted ?? new HostView(onHostEvent)) : null
+adopted?.listen(onHostEvent)
+/** The address the view was opened at: how a later visit to this chat finds it. */
+const openedAt = props.url
 
 // The chat's mute reaches this view through the store; a view of a muted chat is muted as it opens (HostView.mute).
-const unregister = view ? registerView(props.chatId, view.id, (m) => view.mute(m)) : null
+const unregister = view ? registerView(audioKey(props.chatId), view.id, (m) => view.mute(m)) : null
 
 function measure(): HostRect | null {
   const el = slot.value
@@ -125,6 +131,8 @@ if (view) {
     window.removeEventListener('resize', soon)
     window.clearInterval(slow)
     if (frame) cancelAnimationFrame(frame)
+    // A view that plays sound stays, hidden, while its chat is off screen (background-views.ts); else it closes with the tab.
+    if (backgroundViews.leave(props.chatId, openedAt, view, unregister)) return
     unregister?.()
     view.close()
   })
