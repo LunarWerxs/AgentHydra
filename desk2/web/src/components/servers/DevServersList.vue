@@ -13,6 +13,7 @@ import { ignoreFolder, loadProject, localhostServers, scanProjects, startAllServ
 import { actionDisabled, allKey, filterLocal, groupActions, isUp, listView, matchesFilter, OUTSIDE_TIP, outsideNote, serverActions, serverPort, sortServers, startBlock, statusDot, statusWord, type ServerAction } from './logic'
 import { sameSelection, type DevSelection } from './info/selection'
 import { useDevServers } from './store'
+import CountBadge from './info/kit/CountBadge.vue'
 import { DOT, INPUT } from './styles'
 
 // The sidebar's Dev servers list (the title bar's Dev servers button). A toolbar (filter, Scan, Add project, Start all /
@@ -280,8 +281,14 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             >
               <span class="flex size-6 shrink-0 items-center justify-center"><span class="size-1.5 rounded-full" :class="DOT[statusDot(p.status)]" aria-hidden="true" /></span>
               <span class="min-w-0 flex-1 truncate">{{ p.name }}</span>
-              <Star v-if="p.starred" class="size-3 shrink-0 fill-current text-text-muted" aria-label="Starred" />
-              <span v-if="p.errorCount" class="shrink-0 rounded-full bg-[var(--danger)] px-1 text-[10px] leading-4 text-white tnum" :title="`${p.errorCount} errors`">{{ p.errorCount }}</span>
+              <span class="shrink-0" :class="p.starred ? 'flex' : 'hidden group-hover/row:flex group-focus-within/row:flex'">
+                <Tip :label="p.starred ? 'Unstar' : 'Star'">
+                  <button type="button" :class="ROW_BTN" :aria-label="`${p.starred ? 'Unstar' : 'Star'} ${p.name}`" @click.stop="servers.star(p.id, !p.starred)">
+                    <Star class="size-3.5" :class="p.starred && 'fill-current text-warning'" />
+                  </button>
+                </Tip>
+              </span>
+              <CountBadge v-if="p.errorCount" :count="p.errorCount" :title="`${p.errorCount} errors`" />
               <AlertTriangle v-if="p.alertsFiring" class="size-3 shrink-0 text-warning-text" aria-label="An alert is firing" />
               <span v-if="outsideNote(p)" class="shrink-0 text-[11px] leading-4 text-text-muted" :title="OUTSIDE_TIP">{{ outsideNote(p) }}</span>
               <span v-if="p.port" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">{{ serverPort(p) }}</span>

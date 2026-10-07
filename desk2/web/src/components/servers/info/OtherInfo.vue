@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch } from 'vue'
-import { Copy, ExternalLink } from '@lucide/vue'
+import { Check, Copy, Cpu, ExternalLink, Globe, Hash, Loader2, PlugZap } from '@lucide/vue'
 import type { LocalServers } from '@shared/devwebui'
-import { Tip } from '@/components/ui/tooltip'
 import { localhostServers } from '../api'
 import { useDevServers } from '../store'
-import { TEXT_BTN } from '../styles'
+import { BTN, BTN_PRIMARY, CHIP, MONO } from './kit/kit'
+import EmptyState from './kit/EmptyState.vue'
+import Notice from './kit/Notice.vue'
+import StatTile from './kit/StatTile.vue'
 
-// A server no project lists: what the machine knows of the port. It is open-only; AgentHydra never starts or stops it.
+// A server no project lists: what the machine knows of the port, as a hero and fact tiles (owner, 2026-10-07: "a nice,
+// like, card display", never a table). It is open-only; AgentHydra never starts or stops it.
 const props = defineProps<{ port: number }>()
 const servers = useDevServers()
 const list = shallowRef<LocalServers | null>(null)
@@ -34,40 +37,41 @@ async function copy() {
   copied.value = true
   setTimeout(() => (copied.value = false), 1500)
 }
-const rows = computed(() => {
-  const x = s.value
-  return x
-    ? ([
-        ['Port', String(x.port)],
-        ['Address', x.address],
-        ['Process id', String(x.pid)],
-        ['Program', x.process ?? 'unknown'],
-        ['Page title', x.title ?? '–'],
-        ['Answers with', x.http === null ? 'no web page' : `HTTP ${x.http}`]
-      ] as const)
-    : []
+// "HTTP 200" in success for a 2xx; "No web page" when it did not answer HTTP.
+const answer = computed(() => {
+  const h = s.value?.http ?? null
+  return h === null ? { value: 'No web page', ok: false } : { value: `HTTP ${h}`, ok: h >= 200 && h < 300 }
 })
 </script>
 
 <template>
-  <div class="flex flex-col gap-3">
-    <p v-if="error" role="alert" class="text-danger-text">{{ error }}</p>
-    <p v-else-if="!list" class="text-text-muted">Loading…</p>
-    <p v-else-if="!s" class="text-text-muted">Nothing is listening on port {{ port }} any more.</p>
+  <div class="flex flex-col gap-4 p-4">
+    <Notice v-if="error" tone="danger" title="Could not read the ports on this PC">{{ error }}</Notice>
+    <EmptyState v-else-if="!list" :icon="Loader2" title="Loading…" text="Reading what listens on this port." />
+    <EmptyState v-else-if="!s" :icon="PlugZap" title="Nothing listening" :text="`Nothing is listening on port ${port} any more.`" />
     <template v-else>
-      <p class="text-text-2">No project lists this server. AgentHydra did not start it and does not manage it.</p>
-      <div class="flex gap-1.5">
-        <a :href="s.url" target="_blank" rel="noopener" :class="TEXT_BTN" aria-label="Open in browser"><ExternalLink class="size-3.5" />Open in browser</a>
-        <Tip :label="copied ? 'Copied' : 'Copy the address'">
-          <button type="button" :class="TEXT_BTN" aria-label="Copy address" @click="copy"><Copy class="size-3.5" />{{ copied ? 'Copied' : 'Copy address' }}</button>
-        </Tip>
+      <section class="flex flex-col gap-2">
+        <h2 class="break-words text-[16px] font-semibold leading-6 text-text">{{ s.title ?? `Port ${s.port}` }}</h2>
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <a :href="s.url" target="_blank" rel="noopener" :class="MONO" class="min-w-0 truncate text-accent-text hover:underline">{{ s.url }}</a>
+          <span :class="CHIP">Not managed by AgentHydra</span>
+        </div>
+        <p class="text-[12px] leading-[18px] text-text-muted">No project lists this server. AgentHydra did not start it and never starts or stops it.</p>
+        <div class="mt-1 flex flex-wrap gap-1.5">
+          <a :href="s.url" target="_blank" rel="noopener" :class="BTN_PRIMARY" aria-label="Open in browser"><ExternalLink class="size-3.5" />Open in browser</a>
+          <button type="button" :class="BTN" aria-label="Copy address" @click="copy">
+            <component :is="copied ? Check : Copy" class="size-3.5" />{{ copied ? 'Copied' : 'Copy address' }}
+          </button>
+        </div>
+      </section>
+      <div class="grid grid-cols-2 gap-2.5 @lg:grid-cols-3">
+        <StatTile label="Port" :value="String(s.port)" :icon="Hash" />
+        <StatTile label="Program" :value="s.process ?? 'unknown'" :sub="`process ${s.pid}`" :icon="Cpu" />
+        <StatTile label="Answers with" :value="answer.value" :tone="answer.ok ? 'success' : undefined" :icon="Globe" />
+        <StatTile label="Address" :title="s.address">
+          <span :class="MONO" class="truncate font-normal">{{ s.address }}</span>
+        </StatTile>
       </div>
-      <dl class="grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1.5">
-        <template v-for="[k, v] in rows" :key="k">
-          <dt class="text-text-muted">{{ k }}</dt>
-          <dd class="min-w-0 break-words">{{ v }}</dd>
-        </template>
-      </dl>
     </template>
   </div>
 </template>

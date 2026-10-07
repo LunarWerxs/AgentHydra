@@ -1,68 +1,91 @@
-<script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { Trash2 } from '@lucide/vue'
-import type { DevWebAlertEvent, DevWebAlertRule, DevWebProcess, DevWebProject } from '@shared/devwebui'
-import { ago, bytes, cpu } from '@/components/servers/info/format'
-import { alertList, addAlert, updateAlert, removeAlert, clearAlertEvents, listProjects } from '@/components/servers/api'
-import { Tip } from '@/components/ui/tooltip'
-import { BUTTON } from '@/components/panes/settings-styles'
-import { useDevServers } from '@/components/servers/store'
+<script lang="ts">
+import type { DevWebAlerts } from '@shared/devwebui'
+// Module level, so a remount (another tab and back) shows the last answer at once while it asks again.
+let last: DevWebAlerts | null = null
+</script>
 
+<script setup lang="ts">
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Bell, Pencil, Plus, Trash2 } from '@lucide/vue'
+import type { DevWebAlertEvent, DevWebAlertRule } from '@shared/devwebui'
+import { ago, bytes, clockTime, cpu, duration, toMb } from '@/components/servers/info/format'
+import { alertList, updateAlert, removeAlert, clearAlertEvents } from '@/components/servers/api'
+import { Tip } from '@/components/ui/tooltip'
+import PaneSwitch from '@/components/panes/PaneSwitch.vue'
+import { useDevServers } from '@/components/servers/store'
+import { BTN, BTN_DANGER_SM, BTN_GHOST, BTN_GHOST_SM, ICON_BTN_SM, ICON_BTN_SM_DANGER, SECTION_TITLE, chip } from './kit/kit'
+import Card from './kit/Card.vue'
+import CountBadge from './kit/CountBadge.vue'
+import EmptyState from './kit/EmptyState.vue'
+import RuleForm from './RuleForm.vue'
+
+// Alert rules: "alert if this server's CPU or memory stays over a limit for a while", each a sentence with a switch, and
+// the history of when they fired. Used as a server's Alerts tab (processId: only that server's rules and events, and the
+// form's server is fixed) and in Settings -> Dev servers (no processId: every server's).
 const props = defineProps<{ processId?: string }>()
 
 const dev = useDevServers()
-const alerts = ref<{ rules: DevWebAlertRule[]; events: DevWebAlertEvent[] } | null>(null)
-const projects = ref<DevWebProject[]>([])
+const alerts = ref<{ rules: DevWebAlertRule[]; events: DevWebAlertEvent[] } | null>(last)
 const error = ref<string | null>(null)
 let releaseStore: (() => void) | null = null
 
-const events = computed(() => [...(alerts.value?.events ?? [])].sort((a, b) => b.firedAt - a.firedAt))
+/** null: no form; 'new': the New rule form; a rule id: that row is being edited. */
+const editing = ref<string | null>(null)
+const confirmRemove = ref<string | null>(null)
+/** Clear history asks first: the service keeps one history for every server, so a server's tab clears them all. */
+const confirmClear = ref(false)
+const showAll = ref(false)
+const SHOWN = 8
+
+const rules = computed(() => (alerts.value?.rules ?? []).filter((r) => !props.processId || r.processId === props.processId))
+const events = computed(() =>
+  [...(alerts.value?.events ?? [])].filter((e) => !props.processId || e.processId === props.processId).sort((a, b) => b.firedAt - a.firedAt)
+)
+const shownEvents = computed(() => (showAll.value ? events.value : events.value.slice(0, SHOWN)))
+
 const liveProcess = (id: string) => (dev.projects.value ?? []).flatMap((p) => p.processes).find((p) => p.id === id)
+const liveValue = (id: string, metric: 'cpu' | 'memory') => liveProcess(id)?.[metric === 'cpu' ? 'cpu' : 'memory'] ?? null
 const serverName = (ev: DevWebAlertEvent) => liveProcess(ev.processId)?.name ?? ev.processName
-const amount = (ev: DevWebAlertEvent, n: number) => (ev.metric === 'cpu' ? cpu(n) : bytes(n))
-// The service keeps no resolved marker, so an event reads as firing while it is the rule's latest and the server's live sample is still over the threshold.
+const amount = (metric: 'cpu' | 'memory', n: number) => (metric === 'cpu' ? cpu(n) : bytes(n))
+const limit = (r: DevWebAlertRule) => (r.metric === 'cpu' ? `${r.threshold}%` : `${toMb(r.threshold)} MB`)
+
+// The service keeps no resolved marker, so an event reads as firing while it is the rule's latest and the server's live
+// sample is still over the threshold.
 const stillFiring = (ev: DevWebAlertEvent) => {
   if (events.value.find((e) => e.ruleId === ev.ruleId)?.id !== ev.id) return false
-  const now = liveProcess(ev.processId)?.[ev.metric === 'cpu' ? 'cpu' : 'memory']
+  const now = liveValue(ev.processId, ev.metric)
   return now != null && now > ev.threshold
 }
+const ruleFiring = (r: DevWebAlertRule) => {
+  const latest = events.value.find((e) => e.ruleId === r.id)
+  return !!latest && stillFiring(latest)
+}
 
-const selectedProcess = ref(props.processId || '')
-const selectedMetric = ref<'cpu' | 'memory'>('cpu')
-const selectedThreshold = ref('80')
-const selectedDuration = ref('30')
+const servers = computed(() => {
+  const list: { id: string; name: string; projectName: string }[] = []
+  for (const proj of dev.projects.value ?? []) for (const proc of proj.processes) list.push({ id: proc.id, name: proc.name, projectName: proj.name })
+  return list.sort((a, b) => a.name.localeCompare(b.name))
+})
+const serverOf = (id: string) => servers.value.find((s) => s.id === id)
 
+let loadedAt = 0
 async function load() {
+  loadedAt = Date.now()
   try {
-    ;[alerts.value, projects.value] = await Promise.all([alertList({ start: false }), listProjects({ start: false }).catch(() => [])])
+    alerts.value = last = await alertList({ start: false })
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
 }
 
-const allProcesses = computed(() => {
-  const procs: (DevWebProcess & { projectName: string })[] = []
-  for (const proj of projects.value) {
-    for (const proc of proj.processes) {
-      procs.push({ ...proc, projectName: proj.name })
-    }
+function saved(rule: DevWebAlertRule) {
+  if (alerts.value) {
+    const idx = alerts.value.rules.findIndex((r) => r.id === rule.id)
+    if (idx >= 0) alerts.value.rules[idx] = rule
+    else alerts.value.rules.push(rule)
   }
-  return procs.sort((a, b) => a.name.localeCompare(b.name))
-})
-
-async function addNewAlert() {
-  if (!selectedProcess.value) return
-  const threshold = selectedMetric.value === 'cpu' ? Math.round(Number(selectedThreshold.value)) : Math.round(Number(selectedThreshold.value) * 1024 * 1024)
-  const forMs = Math.round(Number(selectedDuration.value) * 1000)
-  try {
-    const rule = await addAlert({ processId: selectedProcess.value, metric: selectedMetric.value, threshold, forMs })
-    if (alerts.value) alerts.value.rules.push(rule)
-    selectedThreshold.value = selectedMetric.value === 'cpu' ? '80' : '500'
-    selectedDuration.value = '30'
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
-  }
+  editing.value = null
 }
 
 async function toggleRule(rule: DevWebAlertRule) {
@@ -78,6 +101,7 @@ async function toggleRule(rule: DevWebAlertRule) {
 }
 
 async function deleteRule(rule: DevWebAlertRule) {
+  confirmRemove.value = null
   try {
     await removeAlert(rule.id)
     if (alerts.value) alerts.value.rules = alerts.value.rules.filter((r) => r.id !== rule.id)
@@ -86,7 +110,9 @@ async function deleteRule(rule: DevWebAlertRule) {
   }
 }
 
+// The service clears the whole history at once (there is no per-server clear).
 async function clearEvents() {
+  confirmClear.value = false
   try {
     await clearAlertEvents()
     if (alerts.value) alerts.value.events = []
@@ -95,6 +121,10 @@ async function clearEvents() {
   }
 }
 
+// Asked again with the list's poll (at most every 3 s), so a rule that fires while this is open shows it, and its history.
+watch(dev.answered, () => {
+  if (Date.now() - loadedAt >= 3000) void load()
+})
 onMounted(() => {
   releaseStore = dev.use({ quiet: true })
   void load()
@@ -105,68 +135,102 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="min-w-[400px] space-y-4">
-    <div v-if="error" class="text-[13px] leading-[19px] text-danger-text">{{ error }}</div>
-    <div v-if="!alerts" class="text-[13px] leading-[19px] text-text-muted">Loading…</div>
+  <div class="flex min-w-0 flex-col gap-4">
+    <p v-if="error" role="alert" class="text-[13px] leading-[19px] text-danger-text">{{ error }}</p>
+    <div v-if="!alerts" role="status" class="flex flex-col gap-3" aria-busy="true">
+      <span class="sr-only">Reading the alert rules…</span>
+      <div class="h-8 w-40 animate-pulse rounded-[var(--radius-6)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-[104px] animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+    </div>
     <template v-else>
-      <div>
-        <h4 class="mb-2 text-[12px] font-semibold leading-4 text-text-muted">Rules</h4>
-        <div v-if="!alerts.rules.length" class="text-[12px] leading-[18px] text-text-muted">No rules yet.</div>
-        <div v-else class="space-y-2">
-          <div v-for="rule in alerts.rules" :key="rule.id" class="flex items-center gap-2 text-[12px] leading-[18px]">
-            <input type="checkbox" :checked="rule.enabled" :aria-label="`Enable alert rule ${rule.id}`" @change="toggleRule(rule)" />
-            <span class="flex-1 text-text-2">
-              {{ allProcesses.find((p) => p.id === rule.processId)?.name || rule.processId }} · {{ rule.metric === 'cpu' ? 'CPU' : 'Memory' }} >
-              {{ rule.metric === 'cpu' ? rule.threshold : Math.round(rule.threshold / 1024 / 1024) }}{{ rule.metric === 'cpu' ? '%' : ' MB' }} for
-              {{ Math.round(rule.forMs / 1000) }}s
-            </span>
-            <Tip label="Delete rule">
-              <button type="button" class="flex items-center justify-center rounded hover:text-danger-text" @click="deleteRule(rule)">
-                <Trash2 class="size-3.5" />
-              </button>
-            </Tip>
-          </div>
-        </div>
+      <div class="flex min-h-8 items-center gap-2">
+        <h3 :class="SECTION_TITLE">Alert rules</h3>
+        <CountBadge :count="rules.length" tone="neutral" />
+        <span class="flex-1" />
+        <button v-if="editing !== 'new' && rules.length" type="button" :class="BTN" @click="editing = 'new'">
+          <Plus class="size-3.5" aria-hidden="true" />New rule
+        </button>
       </div>
 
-      <div>
-        <h4 class="mb-2 text-[12px] font-semibold leading-4 text-text-muted">Add rule</h4>
-        <div class="space-y-2">
-          <select v-model="selectedProcess" class="w-full rounded bg-fill-5 px-2 py-1 text-[12px] text-text">
-            <option value="">Select a server</option>
-            <option v-for="proc in allProcesses" :key="proc.id" :value="proc.id">{{ proc.projectName }} · {{ proc.name }}</option>
-          </select>
-          <div class="flex gap-2">
-            <label class="flex items-center gap-1 text-[12px]">
-              <input v-model="selectedMetric" type="radio" value="cpu" />
-              CPU %
-            </label>
-            <label class="flex items-center gap-1 text-[12px]">
-              <input v-model="selectedMetric" type="radio" value="memory" />
-              Memory MB
-            </label>
-          </div>
-          <input v-model="selectedThreshold" type="number" :placeholder="selectedMetric === 'cpu' ? '80' : '500'" class="w-full rounded bg-fill-5 px-2 py-1 text-[12px]" />
-          <div class="flex items-center gap-2 text-[12px]">
-            <input v-model="selectedDuration" type="number" placeholder="30" class="w-16 rounded bg-fill-5 px-2 py-1" /> seconds
-          </div>
-          <button type="button" :class="BUTTON" :disabled="!selectedProcess" @click="addNewAlert">Add</button>
-        </div>
-      </div>
+      <RuleForm v-if="editing === 'new'" :process-id="processId" :servers="servers" @saved="saved" @cancel="editing = null" />
 
-      <div v-if="alerts.events.length">
-        <h4 class="mb-2 flex items-center justify-between text-[12px] font-semibold leading-4 text-text-muted">
-          Events
-          <button type="button" :class="BUTTON" @click="clearEvents">Clear</button>
-        </h4>
-        <div class="space-y-1 text-[12px] leading-[18px] text-text-muted">
-          <div v-for="ev in events.slice(0, 10)" :key="ev.id">
-            <span class="text-text-2">{{ serverName(ev) }}</span> · {{ ev.metric === 'cpu' ? 'CPU' : 'Memory' }} {{ amount(ev, ev.value) }} over {{ amount(ev, ev.threshold) }} ·
-            {{ ago(ev.firedAt) }} · {{ stillFiring(ev) ? 'still firing' : 'resolved' }}
-          </div>
-          <div v-if="events.length > 10" class="text-[11px]">… and {{ events.length - 10 }} more</div>
-        </div>
-      </div>
+      <Card v-if="!rules.length && editing !== 'new'">
+        <EmptyState :icon="Bell" title="No alert rules" text="Get a notice when this server's CPU or memory stays high.">
+          <button type="button" :class="BTN" @click="editing = 'new'"><Plus class="size-3.5" aria-hidden="true" />New rule</button>
+        </EmptyState>
+      </Card>
+
+      <Card v-else-if="rules.length" flush>
+        <ul class="divide-y divide-border">
+          <li v-for="rule in rules" :key="rule.id">
+            <div v-if="editing === rule.id" class="p-2">
+              <RuleForm :rule="rule" :process-id="processId" :servers="servers" @saved="saved" @cancel="editing = null" />
+            </div>
+            <div v-else class="flex min-h-[52px] items-center gap-3 px-4 py-3">
+              <PaneSwitch :model-value="rule.enabled" label="Turn alert rule on/off" @update:model-value="toggleRule(rule)" />
+              <div class="min-w-0 flex-1" :class="!rule.enabled && 'opacity-60'">
+                <p class="text-[13px] leading-5 text-text-2">
+                  Alert if <span class="font-medium text-text">{{ rule.metric === 'cpu' ? 'CPU' : 'memory' }}</span> stays over
+                  <span class="font-medium text-text tnum">{{ limit(rule) }}</span> for
+                  <span class="font-medium text-text tnum">{{ duration(rule.forMs) }}</span>
+                </p>
+                <p class="flex flex-wrap items-center gap-x-2 text-[12px] leading-[18px] text-text-muted">
+                  <span v-if="!processId" class="truncate">
+                    {{ liveProcess(rule.processId)?.name ?? serverOf(rule.processId)?.name ?? rule.processId }}<template v-if="serverOf(rule.processId)"> · {{ serverOf(rule.processId)?.projectName }}</template>
+                  </span>
+                  <span v-if="liveValue(rule.processId, rule.metric) != null" class="tnum">now {{ amount(rule.metric, liveValue(rule.processId, rule.metric)!) }}</span>
+                </p>
+              </div>
+              <span v-if="ruleFiring(rule)" :class="chip('warning')">
+                <span class="size-1.5 animate-pulse rounded-full bg-warning motion-reduce:animate-none" aria-hidden="true" />Firing
+              </span>
+              <template v-if="confirmRemove === rule.id">
+                <button type="button" :class="BTN_DANGER_SM" @click="deleteRule(rule)">Remove</button>
+                <button type="button" :class="BTN_GHOST_SM" @click="confirmRemove = null">Keep</button>
+              </template>
+              <template v-else>
+                <Tip label="Edit rule">
+                  <button type="button" :class="ICON_BTN_SM" aria-label="Edit rule" @click="editing = rule.id"><Pencil class="size-3.5" /></button>
+                </Tip>
+                <Tip label="Remove rule">
+                  <button type="button" :class="ICON_BTN_SM_DANGER" aria-label="Remove rule" @click="confirmRemove = rule.id"><Trash2 class="size-3.5" /></button>
+                </Tip>
+              </template>
+            </div>
+          </li>
+        </ul>
+      </Card>
+
+      <Card v-if="events.length" title="History">
+        <template #actions>
+          <template v-if="confirmClear">
+            <span class="text-[12px] leading-4 text-text-2">{{ processId ? "Clear every server's alert history?" : 'Clear all alert history?' }}</span>
+            <button type="button" :class="BTN_DANGER_SM" @click="clearEvents">Clear</button>
+            <button type="button" :class="BTN_GHOST_SM" @click="confirmClear = false">Keep</button>
+          </template>
+          <button v-else type="button" :class="BTN_GHOST" @click="confirmClear = true">Clear history</button>
+        </template>
+        <ol class="relative ml-1 flex flex-col gap-3 border-l border-border pl-4">
+          <li v-for="ev in shownEvents" :key="ev.id" class="relative flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span
+              class="absolute top-[7px] -left-[21px] size-2 rounded-full ring-2 ring-bg-panel"
+              :class="stillFiring(ev) ? 'bg-warning' : 'bg-text-muted'"
+              aria-hidden="true"
+            />
+            <p class="min-w-0 flex-1 text-[13px] leading-5 text-text-2">
+              {{ ev.metric === 'cpu' ? 'CPU' : 'Memory' }} reached <span class="font-medium text-text tnum">{{ amount(ev.metric, ev.value) }}</span>
+              (over {{ amount(ev.metric, ev.threshold) }})
+              <span class="block text-[12px] leading-[18px] text-text-muted">
+                <template v-if="!processId">{{ serverName(ev) }} · </template><span :title="clockTime(ev.firedAt)">{{ ago(ev.firedAt) }}</span>
+              </span>
+            </p>
+            <span :class="chip(stillFiring(ev) ? 'warning' : 'neutral')">{{ stillFiring(ev) ? 'Firing' : 'Resolved' }}</span>
+          </li>
+        </ol>
+        <button v-if="events.length > SHOWN" type="button" :class="BTN_GHOST" class="mt-3" @click="showAll = !showAll">
+          {{ showAll ? 'Show fewer' : `Show all ${events.length}` }}
+        </button>
+      </Card>
     </template>
   </div>
 </template>

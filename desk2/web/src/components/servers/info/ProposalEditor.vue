@@ -1,14 +1,20 @@
 <script setup lang="ts">
 import type { DevWebProposal } from '@shared/devwebui'
 import { ref, watch } from 'vue'
-import { INPUT } from '../styles'
+import PaneSwitch from '@/components/panes/PaneSwitch.vue'
+import Field from './kit/Field.vue'
+import Notice from './kit/Notice.vue'
+import SwitchRow from './kit/SwitchRow.vue'
+import { CARD, CHIP, INPUT, INPUT_MONO } from './kit/kit'
 
+// The .devwebui a found folder would get, editable before it is written: the project's name, then one card per dev
+// script it found. A server switched off stays on screen as a dimmed header (so it can be switched on again) but
+// leaves the emitted proposal, which is what gets written.
 type Row = DevWebProposal['processes'][number] & { include: boolean }
 
 const props = defineProps<{ modelValue: DevWebProposal }>()
 const emit = defineEmits<{ 'update:modelValue': [value: DevWebProposal] }>()
 
-// Unticked servers stay on screen (so they can be ticked again) but leave the emitted proposal, which is what gets written.
 const name = ref('')
 const rows = ref<Row[]>([])
 // What each row's port field holds as typed; `port` changes only when it is valid or emptied.
@@ -19,7 +25,12 @@ const validPort = (v: string): number | undefined => {
   const n = Number(v)
   return v.trim() && Number.isInteger(n) && n > 0 && n < 65536 ? n : undefined
 }
+const portError = (i: number): string | null => {
+  const t = portText.value[i] ?? ''
+  return t.trim() && validPort(t) === undefined ? 'Port must be 1 to 65535' : null
+}
 
+// Our own emit comes back as the new modelValue: skip it so the rows (and unticked ones) are not reset.
 watch(
   () => props.modelValue,
   (v) => {
@@ -50,51 +61,88 @@ function setPort(r: Row, i: number, v: string): void {
   }
   push()
 }
+
+function setInclude(r: Row, v: boolean): void {
+  r.include = v
+  push()
+}
 </script>
 
 <template>
-  <div class="flex flex-col gap-2 text-[12px]">
-    <label class="flex items-center gap-2">
-      <span class="w-16 shrink-0 text-[var(--text-2)]">Name</span>
-      <input v-model="name" :class="INPUT" aria-label="Project name" @input="push" />
-    </label>
-    <p v-if="modelValue.framework" class="text-[var(--text-muted)]">Looks like {{ modelValue.framework }}.</p>
-    <p v-if="!rows.length" class="text-[var(--text-muted)]">No dev scripts were found. Add servers after the file is written.</p>
-    <div v-for="(r, i) in rows" :key="i" class="flex flex-col gap-1 rounded-[var(--radius-6)] p-2 shadow-[inset_0_0_0_1px_var(--border)]" :class="r.include ? '' : 'opacity-50'">
-      <label class="flex items-center gap-2">
-        <input v-model="r.include" type="checkbox" :aria-label="`Include ${r.name}`" @change="push" />
-        <input v-model="r.name" :class="INPUT" aria-label="Server name" :disabled="!r.include" @input="push" />
-      </label>
-      <template v-if="r.include">
-        <label class="flex items-center gap-2">
-          <span class="w-16 shrink-0 text-[var(--text-2)]">Id</span>
-          <input v-model="r.id" :class="INPUT" aria-label="Server id" @input="push" />
-        </label>
-        <label class="flex items-center gap-2">
-          <span class="w-16 shrink-0 text-[var(--text-2)]">Command</span>
-          <input v-model="r.command" :class="[INPUT, 'font-mono']" aria-label="Command" @input="push" />
-        </label>
-        <label class="flex items-center gap-2">
-          <span class="w-16 shrink-0 text-[var(--text-2)]">Port</span>
-          <input :value="portText[i] ?? ''" :class="INPUT" inputmode="numeric" aria-label="Port" placeholder="None" @input="setPort(r, i, ($event.target as HTMLInputElement).value)" />
-        </label>
-        <p v-if="(portText[i] ?? '').trim() && validPort(portText[i]) === undefined" class="pl-18 text-[var(--danger-text)]">Port must be 1 to 65535</p>
-        <label class="flex items-center gap-2">
-          <span class="w-16 shrink-0 text-[var(--text-2)]">Folder</span>
-          <input
-            :value="r.cwd ?? ''"
-            :class="[INPUT, 'font-mono']"
-            aria-label="Folder, relative to the project"
-            placeholder="The project folder"
-            @input="r.cwd = ($event.target as HTMLInputElement).value || undefined; push()"
-          />
-        </label>
-        <label class="flex items-center gap-2 text-[var(--text-2)]">
-          <input :checked="!!r.autostart" type="checkbox" @change="r.autostart = ($event.target as HTMLInputElement).checked; push()" />
-          Start it automatically
-        </label>
-      </template>
+  <div class="flex flex-col gap-4">
+    <div class="flex flex-col gap-2">
+      <Field label="Project name" class="max-w-[360px]">
+        <template #default="{ id, describedBy, invalid }">
+          <input :id="id" v-model="name" :class="INPUT" :aria-describedby="describedBy" :aria-invalid="invalid" @input="push" />
+        </template>
+      </Field>
+      <div v-if="modelValue.framework"><span :class="CHIP">Looks like {{ modelValue.framework }}</span></div>
     </div>
-    <p v-if="modelValue.truncated" class="text-[var(--text-muted)]">{{ modelValue.truncated }} more dev scripts were left out to keep the list short.</p>
+
+    <Notice v-if="!rows.length" tone="neutral" title="No dev scripts were found">Add servers after the file is written.</Notice>
+
+    <section v-for="(r, i) in rows" :key="i" :class="[CARD, 'flex flex-col gap-4 p-4', r.include ? '' : 'opacity-60']">
+      <div class="flex min-h-8 items-center gap-3">
+        <PaneSwitch :label="`Include ${r.name}`" :model-value="r.include" @update:model-value="(v: boolean) => setInclude(r, v)" />
+        <input
+          v-model="r.name"
+          :class="[INPUT, 'font-medium']"
+          aria-label="Server name"
+          :disabled="!r.include"
+          @input="push"
+        />
+      </div>
+      <template v-if="r.include">
+        <div class="grid gap-3 @md:grid-cols-[1fr_160px]">
+          <Field label="Id">
+            <template #default="{ id, describedBy, invalid }">
+              <input :id="id" v-model="r.id" :class="INPUT_MONO" :aria-describedby="describedBy" :aria-invalid="invalid" @input="push" />
+            </template>
+          </Field>
+          <Field label="Port" :error="portError(i)">
+            <template #default="{ id, describedBy, invalid }">
+              <input
+                :id="id"
+                :value="portText[i] ?? ''"
+                :class="[INPUT, 'tnum']"
+                inputmode="numeric"
+                placeholder="None"
+                :aria-describedby="describedBy"
+                :aria-invalid="invalid"
+                @input="setPort(r, i, ($event.target as HTMLInputElement).value)"
+              />
+            </template>
+          </Field>
+        </div>
+        <Field label="Command">
+          <template #default="{ id, describedBy, invalid }">
+            <input :id="id" v-model="r.command" :class="INPUT_MONO" :aria-describedby="describedBy" :aria-invalid="invalid" @input="push" />
+          </template>
+        </Field>
+        <Field label="Folder" help="Relative to the project; empty means the project folder." optional>
+          <template #default="{ id, describedBy, invalid }">
+            <input
+              :id="id"
+              :value="r.cwd ?? ''"
+              :class="INPUT_MONO"
+              placeholder="The project folder"
+              :aria-describedby="describedBy"
+              :aria-invalid="invalid"
+              @input="r.cwd = ($event.target as HTMLInputElement).value || undefined; push()"
+            />
+          </template>
+        </Field>
+        <SwitchRow
+          label="Start automatically"
+          description="Start it when the project is loaded."
+          :model-value="!!r.autostart"
+          @update:model-value="(v: boolean) => { r.autostart = v; push() }"
+        />
+      </template>
+    </section>
+
+    <p v-if="modelValue.truncated" class="text-[12px] leading-4 text-text-muted">
+      {{ modelValue.truncated }} more dev scripts were left out to keep the list short.
+    </p>
   </div>
 </template>

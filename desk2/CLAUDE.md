@@ -39,10 +39,12 @@ between server/ and web/.
   anything (owner 2026-10-07; `store.select`, `servers/info/`); its Open in browser hands the servers pane the
   project's folder and the server (`store.show`, DeskFrame's `serversCwd`). Everything DevWebUI did is here: scanning
   and the found list, adding, editing and removing projects and servers, take-over, logs history, errors, free port,
-  metrics and alerts, and its settings in Settings -> Dev servers. The info pane's LOOK is a rejected first draft
-  (owner 2026-10-07: "fucking ugly table when it should be in a nice, like, card display"): it must slide in and out,
-  be cards with charts and stats (never tables), keep the errors, alert rules and edit form roomy, have a back button
-  and a visible star, and open over any view, AgentHydra's tabs included (README, "Dev servers in the sidebar").
+  metrics and alerts, and its settings in Settings -> Dev servers. The info pane is cards, never tables (owner
+  2026-10-07: "fucking ugly table when it should be in a nice, like, card display"): it slides in and out over any view,
+  AgentHydra's tabs included (DeskFrame's stage aside, outside the sliding track), with CPU and memory charts and stats
+  (the service's ten-minute ring, `GET /dw/api/processes/:id/metrics`), roomy errors, alert rules and forms, a back
+  button and a visible star. Build on its kit (`servers/info/kit/`), whose class strings never set one property twice
+  (README, "Dev servers in the sidebar").
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from

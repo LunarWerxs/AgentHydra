@@ -9,7 +9,7 @@
 import { ref, shallowRef } from 'vue'
 import type { DevWebFound, DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
 import { projectDir } from '@shared/devwebui'
-import { devwebService, devwebStatus, foundList, listProjects, processAction, projectAction, RouteMissing } from './api'
+import { devwebService, devwebStatus, foundList, listProjects, processAction, projectAction, RouteMissing, setStarred } from './api'
 import type { DevSelection } from './info/selection'
 import { allKey, isUp, startReused } from './logic'
 
@@ -213,6 +213,12 @@ function createDevServers() {
     })
   }
   const actAll = (project: Pick<DevWebProject, 'id'>, action: 'start' | 'stop') => run(allKey(project), () => projectAction(project.id, action))
+  /** Stars or unstars a server (the pane's star, the list row's): it reads as changed at once, and the service's answer settles it. */
+  function star(id: string, on: boolean): Promise<void> {
+    const list = projects.value
+    if (list) projects.value = list.map((pr) => ({ ...pr, processes: pr.processes.map((x) => (x.id === id ? { ...x, starred: on } : x)) }))
+    return run(`star:${id}`, () => setStarred(id, on))
+  }
 
   /** The list's click: ask the pane to show this server. */
   let seq = 0
@@ -226,7 +232,7 @@ function createDevServers() {
     selection.value = sel
   }
 
-  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, selection, select, refresh, use, tryAgain, service, run, act, actAll, show }
+  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, selection, select, refresh, use, tryAgain, service, run, act, actAll, star, show }
 }
 
 let servers: ReturnType<typeof createDevServers> | null = null

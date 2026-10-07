@@ -20,7 +20,7 @@ import { isMuted, toggleMuted } from '@/lib/chat-audio'
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
 // title bar has one, the session header's fold (components/session-header).
-export type RightPane = 'diff' | 'climayte' | 'servers' | 'connections' | 'devinfo'
+export type RightPane = 'diff' | 'climayte' | 'servers' | 'connections'
 
 const props = withDefaults(
   defineProps<{

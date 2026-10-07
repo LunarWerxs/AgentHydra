@@ -17,6 +17,7 @@ import {
   type DevWebFound,
   type DevWebFreePort,
   type DevWebLogLine,
+  type DevWebMetricsHistory,
   type DevWebOpenInEditor,
   type DevWebPreview,
   type DevWebProcess,
@@ -119,6 +120,8 @@ export const takeOver = (projectId: string): Promise<DevWebTakeOverResult> => ca
 export const restoreTakeover = (projectId: string): Promise<{ ok: true; restored: string[] }> => call(dw(DW_ROUTES.takeoverRestore(projectId)), post())
 
 export const processConfig = (id: string): Promise<DevWebProcessSpec> => call(dw(DW_ROUTES.processConfig(id)))
+/** Its CPU and memory samples of the last ~10 minutes, oldest first (the info pane's charts). */
+export const processMetrics = (id: string, o: { start?: boolean } = {}): Promise<DevWebMetricsHistory> => call(dw(DW_ROUTES.processMetrics(id)), quiet(o))
 export const updateProcess = (id: string, spec: DevWebProcessSpec): Promise<DevWebProject> => call(dw(DW_ROUTES.process(id)), send('PUT', { spec }))
 export const removeProcess = (id: string): Promise<DevWebProject> => call(dw(DW_ROUTES.process(id)), send('DELETE'))
 export const setStarred = (id: string, on: boolean): Promise<DevWebProcess> => call(dw(DW_ROUTES.processStarred(id)), post({ on }))

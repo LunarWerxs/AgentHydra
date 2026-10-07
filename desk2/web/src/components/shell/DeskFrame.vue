@@ -14,6 +14,7 @@ const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue
 const InfoPane = lazyPanel(() => import('@/components/servers/info/InfoPane.vue'))
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
 import type { ServerFocus } from '@/components/servers/store'
+import type { DevSelection } from '@/components/servers/info/selection'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
 const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -413,6 +414,7 @@ watch(
     serversCwd.value = f.cwd
     serversFocus.value = f
     tasks.value = null
+    devServers.select(null)
     pane.value = 'servers'
   }
 )
@@ -423,29 +425,72 @@ watch(
 watch(pane, (p) => {
   if (p !== 'servers') serversCwd.value = null
 })
-// A selection in the Dev servers list opens the info pane for the view on screen, even with no chat open. The selection
-// is the window's one, so a view that had the pane open shows it too; closing the pane (or replacing it) in the view on
-// screen clears it, and with no selection no view keeps the pane. Moving to another view leaves the selection.
-watch(
-  () => devServers.selection.value,
-  (sel) => {
-    if (!sel) {
-      if ([...paneByView.value.values()].includes('devinfo')) paneByView.value = new Map([...paneByView.value].filter(([, p]) => p !== 'devinfo'))
-      return
-    }
-    tasks.value = null
-    pane.value = 'devinfo'
-  }
-)
-watch([pane, viewKey], ([p, key], [was, wasKey]) => {
-  if (key === wasKey && was === 'devinfo' && p !== 'devinfo') devServers.select(null)
+// A selection in the Dev servers list opens the info pane over whatever is on screen, a chat, the new-chat page or any
+// AgentHydra tab (owner, 2026-10-07: "the sidebar ... should open anywhere"): it is the stage's own aside, outside the
+// sliding track, so it shows on either side of the push. It slides in and out (a Transition on its width, the window's
+// slow snap) and keeps the last selection while it slides out, so it never empties on its way. The selection is the
+// window's one: moving to another view keeps it. The view's own right pane steps aside while it shows and is back after;
+// opening a right pane or Background tasks in the view on screen closes it.
+const devSel = computed(() => devServers.selection.value)
+const devOpen = computed(() => !!devSel.value)
+const devShown = ref<DevSelection | null>(null)
+watch(devSel, (sel) => {
+  if (!sel) return
+  devShown.value = sel
+  tasks.value = null
 })
+watch([pane, viewKey], ([p, key], [was, wasKey]) => {
+  if (key === wasKey && p && p !== was) devServers.select(null)
+})
+// Its width is the person's (dragged on its left edge, remembered), kept between DEV_MIN and what leaves the chat or
+// AgentHydra DEV_ROOM.
+const DEV_KEY = 'hydra-desk.devinfo.width'
+const DEV_DEFAULT = 600
+const DEV_MIN = 400
+const DEV_ROOM = 360
+const stageEl = ref<HTMLElement | null>(null)
+const { width: stageOuter } = useElementSize(stageEl)
+const devWant = ref((typeof localStorage === 'undefined' ? 0 : Number(localStorage.getItem(DEV_KEY))) || DEV_DEFAULT)
+const devWidth = computed(() => {
+  const room = stageOuter.value || 1200
+  return Math.round(Math.max(Math.min(DEV_MIN, room), Math.min(devWant.value, room - DEV_ROOM)))
+})
+function setDevWidth(want: number) {
+  devWant.value = Math.round(Math.max(DEV_MIN, want))
+  try {
+    localStorage.setItem(DEV_KEY, String(devWidth.value))
+  } catch {
+    // floor-ok: a full or blocked store: the width is just not remembered
+  }
+}
+function onDevDown(e: PointerEvent) {
+  const el = e.currentTarget as HTMLElement
+  el.setPointerCapture(e.pointerId)
+  const right = stageEl.value?.getBoundingClientRect().right ?? window.innerWidth
+  const move = (ev: PointerEvent) => setDevWidth(right - ev.clientX)
+  const up = () => {
+    el.removeEventListener('pointermove', move)
+    el.removeEventListener('pointerup', up)
+  }
+  el.addEventListener('pointermove', move)
+  el.addEventListener('pointerup', up)
+}
+function onDevKey(e: KeyboardEvent) {
+  if (e.key === 'ArrowLeft') setDevWidth(devWidth.value + 16)
+  else if (e.key === 'ArrowRight') setDevWidth(devWidth.value - 16)
+}
 // Changes with RepoYeti selected is as wide as the servers pane (it is a whole page in a frame).
-const wide = computed(() => pane.value === 'servers' || pane.value === 'devinfo' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
+const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
 function togglePane(p: RightPane) {
+  // The view's pane is hidden under the info pane: its button opens it, whatever it was.
+  if (devOpen.value) {
+    devServers.select(null)
+    pane.value = p
+    return
+  }
   pane.value = pane.value === p ? null : p
 }
-const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value) || pane.value === 'devinfo'))
+const asideOpen = computed(() => !devOpen.value && !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
 // A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
 // window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
 // chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
@@ -512,10 +557,12 @@ function toggleTasksPanel() {
     return
   }
   pane.value = null
+  devServers.select(null)
   tasks.value = { focus: null, expanded: false }
 }
 function onOpenTasks(e: Event) {
   pane.value = null
+  devServers.select(null)
   tasks.value = { focus: (e as CustomEvent<OpenTasksDetail>).detail?.taskId ?? null, expanded: tasks.value?.expanded ?? false }
 }
 watch(pane, (p) => {
@@ -687,7 +734,9 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
     <!-- Hydra Desk 2: the chat side and AgentHydra side by side on one track; the AgentHydra button slides it
          (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
     <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
-    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
+    <!-- The Dev servers list's info pane is beside the track, not on it, so it shows over the desk and AgentHydra alike. -->
+    <div ref="stageEl" class="relative col-start-2 row-span-2 row-start-1 flex min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
+      <div class="relative h-full min-w-0 flex-1 overflow-hidden" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
       <div
         class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
         :style="{ transform: hydraOpen ? 'translateX(-50%)' : 'translateX(0)' }"
@@ -758,7 +807,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             v-if="asideOpen"
             class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-l border-border"
             :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
-            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'devinfo' ? 'Server details' : pane === 'connections' ? 'Connections' : 'CliMayte'"
+            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <div
               v-if="split"
@@ -774,7 +823,6 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             />
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
             <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" @close="pane = null" />
-            <InfoPane v-else-if="pane === 'devinfo'" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
@@ -810,6 +858,32 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           />
         </div>
       </div>
+      </div>
+
+      <Transition
+        enter-from-class="w-0!"
+        leave-to-class="w-0!"
+        enter-active-class="transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none"
+        leave-active-class="transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none"
+      >
+        <aside v-if="devOpen" class="relative h-full shrink-0 overflow-hidden border-l border-border bg-bg-page" :style="{ width: `${devWidth}px` }" aria-label="Server details">
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize the server details"
+            tabindex="0"
+            :aria-valuenow="devWidth"
+            :aria-valuemin="DEV_MIN"
+            class="absolute left-0 top-0 z-[22] h-full w-1.5 cursor-col-resize touch-none focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+            @pointerdown.prevent="onDevDown"
+            @keydown="onDevKey"
+          />
+          <!-- The content keeps its width as the aside grows from 0, so it slides in from the right instead of squeezing. -->
+          <div class="flex h-full" :style="{ width: `${devWidth}px` }">
+            <InfoPane :sel="devShown" @close="devServers.select(null)" />
+          </div>
+        </aside>
+      </Transition>
     </div>
 
     <Dialog :open="settingsOpen" @update:open="(o: boolean) => !o && closeSettings()">

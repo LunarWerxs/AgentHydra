@@ -4,9 +4,13 @@ import { FileCode, Folder } from '@lucide/vue'
 import { ref, watch } from 'vue'
 import { ignoreFolder, loadProject, previewFound, scaffoldProject, unignoreFolder } from '../api'
 import { useDevServers } from '../store'
-import { TEXT_BTN } from '../styles'
+import Card from './kit/Card.vue'
+import Notice from './kit/Notice.vue'
+import { BTN, BTN_GHOST, BTN_PRIMARY, CARD, CHIP, MONO } from './kit/kit'
 import ProposalEditor from './ProposalEditor.vue'
 
+// A scan's find that is not added yet: a .devwebui file (add it as it is) or a project folder with dev scripts and no
+// file (review the proposed file, then write it and add). Either can be ignored so scans stop offering it.
 const props = defineProps<{ item: DevWebFoundItem }>()
 const servers = useDevServers()
 
@@ -16,6 +20,7 @@ const ignored = ref(false)
 const busy = ref(false)
 const error = ref<string | null>(null)
 
+// Read what adding it would add, without writing; a reply for a find no longer selected is dropped.
 watch(
   () => props.item.path,
   async (path) => {
@@ -47,6 +52,7 @@ async function act(fn: () => Promise<void>): Promise<void> {
   }
 }
 
+// Added: refresh the list and select the new project.
 async function added(res: DevWebAddResult): Promise<void> {
   if (res.error || !res.project) throw new Error(res.error || 'It could not be added.')
   await servers.refresh()
@@ -64,43 +70,64 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
 </script>
 
 <template>
-  <div class="flex flex-col gap-3 p-3 text-[12px]">
-    <div class="flex items-center gap-2">
-      <component :is="item.kind === 'file' ? FileCode : Folder" class="size-4 shrink-0 text-[var(--text-2)]" aria-hidden="true" />
-      <h2 class="truncate text-[13px] font-medium text-[var(--text)]">{{ item.name }}</h2>
-    </div>
-    <p class="break-all font-mono text-[11px] text-[var(--text-muted)]">{{ item.path }}</p>
-    <p class="text-[var(--text-2)]">
-      {{ item.kind === 'file' ? 'A .devwebui file that is not added yet.' : 'A project folder with dev scripts and no .devwebui file yet.' }}
-      <template v-if="item.framework"> Looks like {{ item.framework }}.</template>
-    </p>
+  <div class="flex min-h-full flex-col gap-4 p-4">
+    <section :class="[CARD, 'flex items-start gap-3 p-4']">
+      <span class="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-10)] bg-fill-5 text-text-2">
+        <component :is="item.kind === 'file' ? FileCode : Folder" class="size-5" aria-hidden="true" />
+      </span>
+      <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+        <h2 class="truncate text-[16px] font-semibold leading-6 text-text">{{ item.name }}</h2>
+        <div class="flex flex-wrap gap-1.5">
+          <span :class="CHIP">{{ item.kind === 'file' ? '.devwebui file' : 'Project folder' }}</span>
+          <span v-if="item.framework" :class="CHIP">{{ item.framework }}</span>
+        </div>
+        <p :class="[MONO, 'break-all leading-4 text-text-muted']">{{ item.path }}</p>
+      </div>
+    </section>
 
-    <p v-if="!preview && !error" class="text-[var(--text-muted)]">Reading it...</p>
+    <Notice v-if="ignored" tone="neutral" title="Ignored: scans will not offer it again.">
+      <template #actions><button type="button" :class="BTN" :disabled="busy" @click="unignore">Unignore</button></template>
+    </Notice>
+    <Notice v-if="error" tone="danger" title="Something went wrong">{{ error }}</Notice>
+
+    <div v-if="!preview && !error" role="status" class="flex flex-col gap-2" aria-busy="true">
+      <span class="sr-only">Reading it…</span>
+      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+    </div>
+
     <template v-else-if="preview?.kind === 'file'">
-      <p v-if="preview.error" class="text-[var(--danger-text)]">{{ preview.error }}</p>
-      <ul v-else class="flex flex-col gap-1">
-        <li v-for="p in preview.processes" :key="p.id" class="flex items-baseline gap-2">
-          <span class="text-[var(--text)]">{{ p.name }}</span>
-          <span v-if="p.port" class="text-[var(--text-muted)]">port {{ p.port }}</span>
-          <span class="min-w-0 truncate font-mono text-[11px] text-[var(--text-muted)]" :title="p.command">{{ p.command }}</span>
-        </li>
-      </ul>
-      <div><button type="button" :class="TEXT_BTN" :disabled="busy || !!preview.error || ignored" @click="add">Add</button></div>
+      <Notice v-if="preview.error" tone="danger" title="This file cannot be read">{{ preview.error }}</Notice>
+      <Card v-else flush :title="`${preview.processes.length} ${preview.processes.length === 1 ? 'server' : 'servers'} in this file`">
+        <ul class="divide-y divide-border border-t border-border">
+          <li v-for="p in preview.processes" :key="p.id" class="flex min-h-11 items-center gap-2 px-4 py-2">
+            <span class="shrink-0 text-[13px] text-text">{{ p.name }}</span>
+            <span v-if="p.port" :class="[CHIP, 'tnum']">:{{ p.port }}</span>
+            <span :class="[MONO, 'min-w-0 flex-1 truncate text-right text-text-muted']" :title="p.command">{{ p.command }}</span>
+          </li>
+        </ul>
+      </Card>
+      <div class="flex flex-wrap items-center gap-2">
+        <button type="button" :class="BTN_PRIMARY" :disabled="busy || !!preview.error || ignored" @click="add">Add project</button>
+        <button v-if="!ignored" type="button" :class="BTN" :disabled="busy" @click="ignore">Ignore</button>
+      </div>
     </template>
-    <template v-else-if="preview?.kind === 'detected' && proposal">
-      <p class="text-[var(--text-2)]">Review what goes into its .devwebui file.</p>
-      <ProposalEditor v-model="proposal" />
-      <div><button type="button" :class="TEXT_BTN" :disabled="busy || ignored || !proposal.processes.length" @click="create">Create .devwebui and add</button></div>
-    </template>
-    <p v-else-if="preview?.kind === 'none'" class="text-[var(--danger-text)]">{{ preview.error }}</p>
 
-    <p v-if="error" class="text-[var(--danger-text)]">{{ error }}</p>
-    <div class="flex items-center gap-2">
-      <template v-if="ignored">
-        <span class="text-[var(--text-2)]">Ignored: scans will not offer it again.</span>
-        <button type="button" :class="TEXT_BTN" :disabled="busy" @click="unignore">Unignore</button>
-      </template>
-      <button v-else type="button" :class="TEXT_BTN" :disabled="busy" @click="ignore">Ignore</button>
-    </div>
+    <template v-else-if="preview?.kind === 'detected' && proposal">
+      <p class="text-[13px] leading-5 text-text-2">No .devwebui file yet: review what goes into it.</p>
+      <ProposalEditor v-model="proposal" />
+      <div class="sticky bottom-0 -mx-4 -mb-4 mt-auto flex items-center justify-end gap-2 border-t border-border bg-bg-page/95 px-4 py-3 backdrop-blur">
+        <button v-if="!ignored" type="button" :class="BTN_GHOST" :disabled="busy" @click="ignore">Ignore</button>
+        <button type="button" :class="BTN_PRIMARY" :disabled="busy || ignored || !proposal.processes.length" @click="create">Create .devwebui and add</button>
+      </div>
+    </template>
+
+    <template v-else-if="preview?.kind === 'none'">
+      <Notice tone="danger" title="Nothing to add here">{{ preview.error }}</Notice>
+      <div v-if="!ignored"><button type="button" :class="BTN" :disabled="busy" @click="ignore">Ignore</button></div>
+    </template>
+
+    <div v-else-if="error && !ignored"><button type="button" :class="BTN" :disabled="busy" @click="ignore">Ignore</button></div>
   </div>
 </template>
