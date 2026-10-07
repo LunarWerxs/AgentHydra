@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import { Cloud } from '@lucide/vue'
-import { isAddedRow } from './tasks'
+import { isAddedRow, isTaskRow } from './tasks'
 import type { ExternalSession } from '@shared/protocol'
-import { shellGlyphs } from '@/lib/icons'
+import { shellGlyphs, shellIcons } from '@/lib/icons'
 import { ahSource, appLead, fromPcLabel } from '@/components/cloud/logic'
 import { appMark } from '@/components/cloud/appMarks'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -106,6 +106,8 @@ function run(item: RowMenuItem) {
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
           <!-- A chat of another app on this PC: its muted mark beside the dot, never in its place, so working and needs-you still show. -->
           <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" :title="app.label" class="size-3.5 shrink-0 text-text-muted" />
+          <!-- A CliMayte task drawn as a row of its own (nothing says which chat started it): the CliMayte toggle's mark, so it never reads as a chat (owner, 2026-10-07). -->
+          <component :is="shellIcons.climayte" v-if="isTaskRow(session.id)" role="img" aria-label="CliMayte task" title="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
           <input
             v-if="renaming"
             ref="input"

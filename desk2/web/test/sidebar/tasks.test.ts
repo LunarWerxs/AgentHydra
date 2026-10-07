@@ -321,6 +321,29 @@ test('a job and a task of the same unlisted chat share one row, whether the job 
   expect(nested.added.map((a) => [a.nodes.length, a.jobs.map((j) => j.id)])).toEqual([[1, ['j-full', 'j-prefix']]])
 })
 
+test("a task HSwarm sent to CliMayte sits under the chat that called its job, on its own PC; one whose job is not listed is a row of its own", () => {
+  const sid = '11111111-2222-4333-8444-555555555555'
+  const remote = '22222222-3333-4444-8555-666666666666'
+  const workers = [
+    worker('w-routed', 1, { group: 'hswarm-20261007-084102-1c59-t1' }),
+    worker('w-prefix', 2, { group: 'hswarm-20261007-090000-aaaa-t2' }),
+    worker('w-remote', 3, { group: 'hswarm-20261007-084102-1c59-t1', pc: 'PC-B' }),
+    worker('w-unknown', 4, { group: 'hswarm-20261007-999999-ffff-t1' })
+  ]
+  const jobs = [
+    swarmJob('20261007-084102-1c59', { callerSessionId: sid }),
+    swarmJob('20261007-090000-aaaa', { callerSessionId: '11111111', startedAt: 2 }),
+    // The other PC's job of the same id: its task goes under its own caller there, never under this PC's.
+    swarmJob('20261007-084102-1c59', { callerSessionId: remote, callerTitle: 'Example remote chat', pc: 'PC-B' })
+  ]
+  const nested = nestTasks([{ key: 'chat:a', sessionIds: [sid] }], workers, jobs)
+  expect(listOf(nested.byRow.get('chat:a'))).toEqual(['1:here:w-routed', '1:here:w-prefix'])
+  expect(nested.added.map((a) => [a.title, a.pc, a.worker?.id ?? null, a.nodes.map((n) => n.worker.id), a.jobs.map((j) => j.pc)])).toEqual([
+    ['Example remote chat', 'PC-B', null, ['w-remote'], ['PC-B']],
+    ['w-unknown', null, 'w-unknown', [], []]
+  ])
+})
+
 test('an 8-character prefix that two rows share adds a row for the job, not a guess between the two', () => {
   const rows = [
     { key: 'chat:a', sessionIds: ['abcdef12-0000-4000-8000-000000000001'] },

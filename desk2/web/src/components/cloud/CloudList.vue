@@ -2,14 +2,14 @@
 import { computed, ref, type Component } from 'vue'
 import { Cloud, EyeOff } from '@lucide/vue'
 import type { CliMayteWorker, CloudSession, SwarmJob } from '@shared/protocol'
-import { shellGlyphs } from '@/lib/icons'
+import { shellGlyphs, shellIcons } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterestSet } from '@/lib/first-interest'
 import RowAge from '@/lib/RowAge.vue'
 import TaskRows from '@/components/sidebar/TaskRows.vue'
 import RunningBadge from '@/components/sidebar/RunningBadge.vue'
-import { isAddedRow, runningJobsIn, runningTasksIn, type TaskNode } from '@/components/sidebar/tasks'
+import { isAddedRow, isTaskRow, runningJobsIn, runningTasksIn, type TaskNode } from '@/components/sidebar/tasks'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
@@ -180,6 +180,8 @@ const ROW = LIST_ROW
             </span>
             <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->
             <component :is="appIcon(r)!" v-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 shrink-0 text-text-muted" />
+            <!-- A CliMayte task drawn as a row of its own: the CliMayte toggle's mark, as the desk list draws it (owner, 2026-10-07). -->
+            <component :is="shellIcons.climayte" v-if="isTaskRow(r.id)" role="img" aria-label="CliMayte task" title="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
             <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
@@ -228,7 +230,6 @@ const ROW = LIST_ROW
             <component :is="shellGlyphs.groupNew" class="size-4" />
           </button>
         </Tip>
-        <span class="tnum">{{ g.rows.length }}</span>
         <slot v-if="gi === 0" name="tools" />
       </header>
       </ContextMenuTrigger>

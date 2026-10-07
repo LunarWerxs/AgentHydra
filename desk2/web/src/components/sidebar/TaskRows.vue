@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, type Component, type FunctionalComponent } from 'vue'
-import { CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, Network } from '@lucide/vue'
+import { Bot, CircleCheck, CircleX, Clock, Cloud, Hourglass, ListChecks, Network } from '@lucide/vue'
 import type { CliMayteWorker, SwarmJob } from '@shared/protocol'
 import { modelName } from '@/components/cloud/logic'
 import { useClock } from '@/lib/clock'
@@ -39,6 +39,7 @@ const STATUS: Record<string, { icon: Component; tone: string; label: string }> =
   failed: { icon: CircleX, tone: 'text-danger-text', label: 'Failed' }
 }
 const statusOf = (w: CliMayteWorker) => STATUS[w.status] ?? { icon: Clock, tone: 'text-text-muted', label: w.status }
+const isManager = (w: CliMayteWorker) => w.kind === 'manage'
 const onPc = (pc: string) => `On ${pc}`
 // Another PC's task may share its id with one of this PC's.
 const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
@@ -46,6 +47,7 @@ const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
 function tip(w: CliMayteWorker, status: { label: string }, now: number | null): string {
   return [
     w.title,
+    isManager(w) ? 'CliMayte manager' : null,
     w.pc ? onPc(w.pc) : null,
     [status.label, w.account, [modelName(w.model), w.effort].filter(Boolean).join(' · ')].filter(Boolean).join(' · '),
     w.startedAt && now !== null ? `Started ${elapsedLabel(w.startedAt, now)} ago` : null,
@@ -88,7 +90,10 @@ const hot = ref<string | null>(null)
     >
       <component :is="status.icon" class="size-3 shrink-0" :class="status.tone" aria-hidden="true" />
       <span class="sr-only">{{ status.label }}:</span>
-      <span class="min-w-0 flex-1 truncate">{{ n.worker.title }}</span>
+      <!-- A manager (an orchestrator with a wave under it) carries the CliMayte mark and a brighter title, so it stands
+           out from the tasks under it (owner, 2026-10-07: "a special icon or something, or a slightly different color"). -->
+      <Bot v-if="isManager(n.worker)" role="img" aria-label="CliMayte manager" class="size-3 shrink-0 text-text-muted" />
+      <span class="min-w-0 flex-1 truncate" :class="{ 'text-text': isManager(n.worker) && !(own && selectedId === own) }">{{ n.worker.title }}</span>
       <!-- Another PC's task: a little cloud, its PC in the tooltip, so the title keeps the room (owner,
            2026-10-02, of CliMayte's list: "it just shows ones from my other computer with a little cloud icon"). -->
       <span v-if="n.worker.pc" class="flex shrink-0 items-center" :title="onPc(n.worker.pc)">

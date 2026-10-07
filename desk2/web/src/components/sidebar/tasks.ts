@@ -89,6 +89,34 @@ export const isAddedRow = (id: string): boolean => id.startsWith(ADDED)
 /** The deepest indent: a task further down is still listed, at this one. */
 const MAX_DEPTH = 3
 
+/** A row the sidebar added for a CliMayte task nothing says which chat started: it carries the CliMayte mark in both lists. */
+export const isTaskRow = (id: string): boolean => /^added:[^:]*:task:/.test(id)
+
+/**
+ * A task HSwarm sent to CliMayte (its group `hswarm-<job>-<task>`, hswarm/climayte_route.py) carries no origin, so the
+ * chat is not pinged for every one; it takes its job's caller as its origin, so it sits under the chat that called the
+ * job, beside the job (owner, 2026-10-07: "they should probably be under the chat that spawned them"). The caller is
+ * the drawn row's session the job's ids name (an 8-character prefix only when one row has it), else the ids the job
+ * itself is placed by (homeOf).
+ */
+function viaJobs(workers: readonly CliMayteWorker[], jobs: readonly SwarmJob[], rows: readonly NestRow[]): CliMayteWorker[] {
+  if (!jobs.length) return [...workers]
+  const sessions = new Set(rows.flatMap((r) => r.sessionIds))
+  const drawnAs = (id: string | null): string | undefined => {
+    if (!id) return undefined
+    if (id.length > 8) return sessions.has(id) ? id : undefined
+    const found = rows.filter((r) => r.sessionIds.some((s) => s.startsWith(id)))
+    return found.length === 1 ? found[0]!.sessionIds.find((s) => s.startsWith(id)) : undefined
+  }
+  return workers.map((w) => {
+    if (w.originSessionId || w.originWorkerId || !w.group?.startsWith('hswarm-')) return w
+    const j = jobs.find((x) => (x.pc ?? null) === (w.pc ?? null) && w.group!.startsWith(`hswarm-${x.id}-`))
+    if (!j) return w
+    const sid = drawnAs(j.callerSessionId) ?? drawnAs(j.callerHostSessionId) ?? j.callerSessionId ?? j.callerHostSessionId
+    return sid ? { ...w, originSessionId: sid, originTitle: w.originTitle ?? j.callerTitle } : w
+  })
+}
+
 /**
  * Each row's tasks, flattened in order, for the rows the sidebar draws. A task is under a row when the
  * row's session dispatched it, or when the task's dispatcher is the worker that row's session belongs to
@@ -104,14 +132,16 @@ const MAX_DEPTH = 3
  * goes in `added` under the topmost of its dispatchers no row lists either, so every running task is shown
  * once: under the row of the chat that dispatcher came from, titled and placed as `known` (what the window
  * knows of each session) has that chat, else as its PC titles it, else after its first task; or, when
- * nothing says which chat, under the dispatcher's own row (a Desk chat run as a worker is one).
+ * nothing says which chat, under the dispatcher's own row (a Desk chat run as a worker is one). A task HSwarm sent
+ * to CliMayte counts as dispatched by the chat that called its job (viaJobs).
  */
 export function nestTasks(
   rows: readonly NestRow[],
-  workers: readonly CliMayteWorker[],
+  given: readonly CliMayteWorker[],
   jobs: readonly SwarmJob[] = [],
   known: ReadonlyMap<string, KnownChat> = new Map()
 ): NestedTasks {
+  const workers = viaJobs(given, jobs, rows)
   const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
   /** The worker that dispatched it, on its own PC. */
   const parentKey = (w: CliMayteWorker) => (w.originWorkerId ? (w.pc ? `${w.pc}:${w.originWorkerId}` : w.originWorkerId) : null)
