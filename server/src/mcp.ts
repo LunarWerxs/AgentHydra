@@ -782,7 +782,7 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 5.5 medium up to Opus 5.5 max; every kind tries Haiku 5.5 first while it is still learning, every 4th pick tries another cheaper setting still learning, every 2nd while the kind's pick is Opus). Haiku 4.5 is refused. Leave `model` out. A `modelWhy` holds only a setting CHEAPER than the kind's pick; a setting at or above it is held only with `ownerWords`, otherwise it is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
+                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 5.5 medium up to Opus 5.5 max; every kind tries Haiku 5.5 first while it is still learning, every 4th pick tries another cheaper setting still learning, every 2nd while the kind's pick is Opus). Haiku 4.5 is refused. Leave `model` out. A `modelWhy` holds only a setting CHEAPER than the kind's pick; a setting at or above it is held only with `ownerWords`, otherwise it is left to the scorecard. A `sealed` task holds whatever it names. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
               },
               effort: {
                 type: 'string',
@@ -832,7 +832,7 @@ export const TOOLS: McpEngineTool[] = [
               sealed: {
                 type: 'object',
                 description:
-                  'Launch this task sealed: the CLI gets `systemPromptFile` in place of its own system prompt and ONLY the MCP servers in `mcpConfig`; no built-in tool, no CLAUDE.md, hook, skill or owner MCP server, no worker brief, and an empty temp folder as its folder (`cwd` is not read). For a worker that needs one prompt and one MCP server, such as a simulated visitor: an ordinary worker carries about 38,000 tokens before its first move. Its report is its final text. Account choice, usage stops, pings, verdicts and status are as for any worker. Refused when a file is missing or `allowedTools` is empty.',
+                  'Launch this task sealed: the CLI gets `systemPromptFile` in place of its own system prompt and ONLY the MCP servers in `mcpConfig`; no built-in tool, no CLAUDE.md, hook, skill or owner MCP server, no worker brief, and an empty temp folder as its folder (`cwd` is not read). For a worker that needs one prompt and one MCP server, such as a simulated visitor: an ordinary worker carries about 38,000 tokens before its first move. Its report is its final text. The `model`/`effort` it names is held at any rung (it is a measurement, never a scorecard trial), and with no `kind` it feeds no scorecard row. Account choice, usage stops, pings, verdicts and status are as for any worker. Refused when a file is missing or `allowedTools` is empty.',
                 properties: {
                   systemPromptFile: { type: 'string', description: 'Absolute path.' },
                   mcpConfig: {

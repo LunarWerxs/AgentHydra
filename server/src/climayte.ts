@@ -2186,9 +2186,9 @@ function deskProblem(d: unknown, chat: boolean): string | null {
 }
 
 /** One task's model, effort, kind and priority. A named model or effort is held only when the task
- *  (or its run) gives `ownerWords`, or gives a `modelWhy` AND the named setting sits on a cheaper
- *  rung than the kind's best; otherwise the task is auto: the scorecard's pick for its kind, and
- *  `autoSoFar` counts it.
+ *  (or its run) gives `ownerWords`, or the task is sealed, or it gives a `modelWhy` AND the named
+ *  setting sits on a cheaper rung than the kind's best; otherwise the task is auto: the scorecard's
+ *  pick for its kind, and `autoSoFar` counts it.
  *  Owner, 2026-10-02: tasks are to go to "the cheapest/fastest model capable of reliably completing"
  *  them, yet in a day 194 of about 440 arrived pinned to Opus high or above by the chats that sent
  *  them, and a task naming nothing ran on the CLI's default, Opus high.
@@ -2229,6 +2229,19 @@ export function runSetting(
       kind,
       auto: false,
       reason: `named by the owner: "${words.slice(0, 120)}"`,
+      priority,
+    }
+  // A sealed task is a measurement (a simulated visitor: one prompt, one MCP server, no repo), never a
+  // trial: the setting it names holds at any rung, so its brain does not change under it mid-series,
+  // and with no kind of its own it is no kind's sample (scoreRows skips it). 2026-10-07: 624 sealed
+  // visits named Sonnet 5.5 and ran on code's pick instead, 469 at Sonnet low and 155 on Haiku.
+  if ((model || effort) && t.sealed)
+    return {
+      model,
+      effort,
+      kind,
+      auto: false,
+      reason: `named by a sealed task${why ? `: ${why}` : ''}`,
       priority,
     }
   if ((model || effort) && why) {
@@ -2418,7 +2431,8 @@ function assertKnownAccounts(accounts: string[] | undefined): void {
  *  pass it reliably the one whose passed task costs least; Haiku 5.5 on every pick while it is still
  *  learning for the kind, else a cheaper one still learning on every 4th pick, every 2nd while the
  *  kind's pick is Opus (pickConfig). A named model or effort holds
- *  only with `ownerWords`, or a `modelWhy` on a rung cheaper than the pick (runSetting).
+ *  only with `ownerWords`, on a sealed task, or with a `modelWhy` on a rung cheaper than the pick
+ *  (runSetting).
  *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
  *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
 export function climayteRun(input: {

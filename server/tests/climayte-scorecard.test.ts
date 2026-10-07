@@ -205,6 +205,25 @@ describe('runSetting: what a named model holds', () => {
     expect(own).toMatchObject({ auto: true, model: SONNET, effort: 'medium' })
   })
 
+  test('a sealed task holds the setting it names, through a Haiku trial too, and is no kind sample', () => {
+    const sealed = {
+      systemPromptFile: 'C:/Users/me/visit/system.md',
+      mcpConfig: 'C:/Users/me/visit/mcp.json',
+      allowedTools: ['mcp__visit-hands__*'],
+    }
+    const visit = (t: Record<string, unknown>, onRows = rows) =>
+      runSetting({ prompt: 'x', cwd: '.', sealed, ...t }, defaults, onRows, new Map())
+    // Sonnet (at the CLI's high) is above code's Sonnet medium pick: a modelWhy alone held nothing.
+    const held = visit({ model: 'sonnet', modelWhy: 'visitors run on Sonnet' })
+    expect(held).toMatchObject({ auto: false, model: SONNET, effort: null, kind: null })
+    expect(held.reason).toBe('named by a sealed task: visitors run on Sonnet')
+    // With no verdicts at all, code's pick is a Haiku trial; the sealed task still runs what it named.
+    expect(visit({ model: 'sonnet' }, scoreRows([]))).toMatchObject({ auto: false, model: SONNET })
+    // A sealed task that names nothing is still the scorecard's, and an ordinary task is unchanged.
+    expect(visit({}).auto).toBe(true)
+    expect(set({ model: 'sonnet', modelWhy: 'visitors run on Sonnet' }).auto).toBe(true)
+  })
+
   test('ownerWords is trimmed, quoted to 120 characters and refused past 2000, on a chat too', () => {
     const long = set({ model: 'opus', ownerWords: `  ${'w'.repeat(500)}  ` })
     expect(long.reason).toBe(`named by the owner: "${'w'.repeat(120)}"`)

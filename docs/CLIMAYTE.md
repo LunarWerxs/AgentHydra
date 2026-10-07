@@ -578,9 +578,18 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 | Usage stops | the wind-down ask at the stop line, then the ceiling | the ceiling only: it has no Write tool for a handoff note, so it is never asked for one (`climayte_handoff` refuses it); stopped at the ceiling, its session moves to another account and resumes from its transcript |
 | Report | its final text, after the worker contract's steps | its final text; it has no Connections MCP, and nothing in the daemon asks it for the contract's `prompt_get` or rating (those come from the account's CLAUDE.md, which it never loads) |
 
+**The model and effort a sealed task names are held** (`runSetting`), at any rung and with no
+`ownerWords`: a sealed task is a measurement (a simulated visitor in a series), so the scorecard
+never trials a cheaper setting on it, and with no `kind` it is no kind's sample (`scoreRows` skips a
+kindless task). Its reason reads `named by a sealed task: <modelWhy>`. Why (2026-10-07): 624 SUE
+visits that day were sent sealed naming Sonnet 5.5 with a `modelWhy`; none held, every one was scored
+as `code`, and they ran on code's pick, 469 at Sonnet low, 150 on Haiku 4.5 and 5 on a Haiku 5.5 trial,
+while SUE recorded Sonnet 5.5 for all of them. A Haiku visit beside a Sonnet one is a second variable
+in the A/B the series exists for, and a visit says nothing about code work. A sealed task that names
+nothing is still the scorecard's. An ordinary worker has every tool, so its holds are unchanged.
+
 Everything else is as for any worker: the account is picked by quota and placement, RAM gating,
-the scorecard's model pick unless one is named, usage accounting, pings, checks, verdicts and
-status. Its `--settings` file is still written and read (a `--settings` flag is not a settings
+usage accounting, pings, checks, verdicts and status. Its `--settings` file is still written and read (a `--settings` flag is not a settings
 source), without the edit-claims hook and without the ordinary worker's `deniedMcpServers`: four
 sealed test chats of the Free tools named AgentHydra's server and started with no tool at all, the
 CLI's only sign a "blocked by enterprise policy" line in the err log (2026-10-06). `--allowedTools`
@@ -690,7 +699,8 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   auto, and its reason says so. A named setting is ranked with `ladderIndex`: Haiku alone counts
   as Haiku medium; any other model alone counts as that model at `high` (the CLI's default effort);
   an effort alone counts as Opus at that effort (the CLI's default model); a setting off the ladder
-  (Haiku low, Opus low) is never held by a `modelWhy`. Chat tasks are unchanged.
+  (Haiku low, Opus low) is never held by a `modelWhy`. Chat tasks are unchanged, and a sealed
+  task holds whatever it names (Sealed tasks, above).
 - **While a kind's pick is an Opus rung, every 2nd auto pick** (`EXPLORE_EVERY_ON_OPUS`) tries the
   cheaper rung still learning, not every 4th: review sat on Opus high because Sonnet had 2 review
   verdicts and a try came too rarely to earn the third.
