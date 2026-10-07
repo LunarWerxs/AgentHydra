@@ -126,7 +126,7 @@ function fake(opts: { pools: KeyPool[]; models: ModelInfo[]; bad?: Record<string
 const call = async (mcp: ReturnType<typeof createRedesignMcp>, args: Record<string, unknown>) => {
   const res = (await mcp.handle({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'design_options', arguments: args } })) as { result: { isError?: boolean; content: { text: string }[] } }
   const text = res.result.content[0]?.text ?? ''
-  return { isError: res.result.isError === true, text, data: text.includes('{') ? (JSON.parse(text.slice(text.indexOf('\n\n') + 2)) as { run: string; note?: string; options: { model: string; image: string }[] }) : null }
+  return { isError: res.result.isError === true, text, data: text.includes('{') ? (JSON.parse(text.slice(text.indexOf('\n\n') + 2)) as { run: string; note?: string; options: { model: string; image: string; name: string; description: string }[] }) : null }
 }
 
 describe('design_options returns `count` options', () => {
