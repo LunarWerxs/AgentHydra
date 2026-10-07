@@ -29,6 +29,7 @@ import type {
   EditEntry,
   EffortLevel,
   ExtraUsageOffResult,
+  FleetUsageHistory,
   Incident,
   IncidentState,
   InstanceColorKey,
@@ -204,6 +205,9 @@ export const getSpend = (period: SessionPeriod = '30d', source?: string, pc?: 's
   j<SpendReport>(
     `/api/analytics/spend?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}${pc ? `&pc=${pc}` : ''}`,
   )
+/** The fleet's pooled Claude usage per hour, oldest first; a null week or 5-hour figure is a gap. */
+export const getFleetUsageHistory = (hours = 168) =>
+  j<FleetUsageHistory>(`/api/usage/history?hours=${hours}`)
 export const getActivity = (period: SessionPeriod = '30d') =>
   j<ActivityReport>(`/api/analytics/activity?period=${period}`)
 /** Where the tokens went and why: dead skill/MCP load, deep context, subagents, cache writes. */

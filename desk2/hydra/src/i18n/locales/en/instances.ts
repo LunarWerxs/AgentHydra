@@ -483,13 +483,23 @@ export default {
     modelDefault: 'Default',
     modelOther: 'Other',
   },
-  // The micro summary above the Instances table (InstancesSummary), owner, 2026-10-07.
+  // The usage-history card above the Instances table (InstancesSummary), owner, 2026-10-07: historical
+  // charts only, in place of the account counts and the nearest-their-limit list.
   summary: {
-    expand: 'Show account details',
-    collapse: 'Hide account details',
-    usableOf: 'of {total} accounts usable now',
-    freeTitle: 'Free accounts',
-    freeUsable: 'of {total} free accounts usable now',
-    limitRow: '{name}: 5-hour {session} used, week {week} used',
+    title: 'Usage history',
+    sparklineLabel: 'Fleet weekly usage over the last 7 days',
+    fleetTitle: 'Fleet usage, last 7 days',
+    fleetWeek: 'Weekly',
+    fleetSession: '5-hour',
+    tokensTitle: 'Tokens per day, last 14 days',
+    sourceDesktop: 'Desktop',
+    sourceCli: 'CLI',
+    sourceClimayte: 'CliMayte',
+    sourceHswarm: 'HSwarm',
+    tipPoint: '{time}: weekly {week}, 5-hour {session}',
+    noSample: 'no sample',
+    loading: 'Loading usage history',
+    unavailable: 'Usage history is unavailable right now',
+    noData: 'No usage recorded in this window yet',
   },
 }
