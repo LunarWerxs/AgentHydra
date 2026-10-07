@@ -23,7 +23,7 @@ import {
 } from '@shared/protocol'
 import { cut, describeToolActivity } from './describe'
 import { resetsAtMs, type NotifyReason } from './status'
-import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurn } from './system-text'
+import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurns } from './system-text'
 import { MEDIA_ROUTE, mediaCache, RENDERABLE, type MediaCache } from '../media/cache'
 
 export type Emission =
@@ -481,8 +481,8 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
       const item: Extract<TranscriptItem, { kind: 'user' }> = { kind: 'user', id: uuid, ts: now(), text: userText.join('\n\n') }
       if (images.length) item.images = images
       // Live, a program's note still shows (the runtime writes only the person's own prompts).
-      const turn = opts.echoUserText ? userTurn(item, media) : noteOf(item.text) ? userTurn(item, null) : null
-      if (turn) out.push({ type: 'upsert', item: turn })
+      const turns = opts.echoUserText ? userTurns(item, media) : noteOf(item.text) ? userTurns(item, null) : []
+      for (const turn of turns) out.push({ type: 'upsert', item: turn })
     }
     let finishedMain = false
     for (const b of content) {

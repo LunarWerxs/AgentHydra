@@ -5,7 +5,7 @@
 import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readSync, closeSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
-import { userTurn } from './system-text'
+import { userTurns } from './system-text'
 import { mediaCache } from '../media/cache'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
@@ -154,9 +154,7 @@ export class ChatStore {
     const media = mediaCache(this.home)
     return [...out.values()].flatMap((line): TranscriptItem[] => {
       const item = JSON.parse(line) as TranscriptItem
-      if (item.kind !== 'user') return [item]
-      const turn = userTurn(item, media)
-      return turn ? [turn] : []
+      return item.kind === 'user' ? userTurns(item, media) : [item]
     })
   }
 

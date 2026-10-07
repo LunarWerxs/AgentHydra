@@ -6,7 +6,7 @@ import type { TranscriptItem } from '@shared/protocol'
 import { createMediaCache, type MediaCache } from '../../src/media/cache'
 import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
-import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, type InjectedPart } from '../../src/engine/system-text'
+import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, userTurns, type InjectedPart } from '../../src/engine/system-text'
 
 // Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
@@ -427,6 +427,25 @@ describe("a handoff's continuation prompt", () => {
     )
     expect(continuationOf(chat)?.line).toBe('Continued in a fresh session: the conversation had grown long.')
     expect(userTurn(user(chat), null)).toMatchObject({ kind: 'user', text: 'why did it stop?' })
+  })
+
+  test("pings it carries are AgentHydra's notes, each its own, and only the person's messages between them are theirs", () => {
+    const later = '[AgentHydra · CliMayte] Not from the user. Ping 5, 1 update since 09:10:\n• worker 14 finished: done'
+    expect(userTurns(user(continued({ messages: [PING, later] })), null)).toEqual([
+      { kind: 'note', id: 'u9', ts: 7, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: PING.slice(PING.indexOf('Ping 3-4')) },
+      { kind: 'note', id: 'u9:carried:1', ts: 7, parentToolUseId: null, from: 'AgentHydra · CliMayte', text: later.slice(later.indexOf('Ping 5')) },
+    ])
+    const mixed = userTurns(user(continued({ messages: ['first ask', 'second ask\n- with a list', PING, 'third ask'] })), null)
+    expect(mixed.map((i) => [i.kind, i.id, 'text' in i ? i.text : ''])).toEqual([
+      ['user', 'u9', '- first ask\n- second ask\n- with a list'],
+      ['note', 'u9:carried:1', PING.slice(PING.indexOf('Ping 3-4'))],
+      ['user', 'u9:carried:2', 'third ask'],
+    ])
+    // The person's list alone is unchanged, and userTurns of any other turn is userTurn's.
+    const asks = user(continued({ messages: ['first ask', 'second ask'] }))
+    expect(userTurns(asks, null)).toEqual([userTurn(asks, null)!])
+    expect(userTurns(user(continued()), null)).toEqual([userTurn(user(continued()), null)!])
+    expect(userTurns(user('- a list\n- of mine'), null)).toEqual([user('- a list\n- of mine')])
   })
 
   test('AgentHydra still writes the words this reads', () => {

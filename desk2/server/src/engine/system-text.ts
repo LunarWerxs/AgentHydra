@@ -331,3 +331,47 @@ export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | nul
   if (images.length === (item.images?.length ?? 0) && text === item.text) return item
   return { ...item, text: text.trim(), ...(images.length ? { images } : {}) }
 }
+
+/**
+ * A handoff's carried messages (`- <message>` each) holding AgentHydra notes, in order: each note, or the person's
+ * messages between two notes (several stay the list they were sent as, one is shown as written). Null when the list
+ * holds no note. A ping squashes everything it quotes to one line, so no note holds `\n- ` and the list splits there.
+ */
+function carriedEntries(text: string): Array<{ from: string; text: string } | string> | null {
+  if (!text.startsWith('- ')) return null
+  const out: Array<{ from: string; text: string } | string[]> = []
+  for (const piece of text.slice(2).split('\n- ')) {
+    const note = noteOf(piece)
+    const last = out.at(-1)
+    if (note) out.push(note)
+    else if (Array.isArray(last)) last.push(piece)
+    else out.push([piece])
+  }
+  if (out.every(Array.isArray)) return null
+  return out.map((e) => (!Array.isArray(e) ? e : e.length === 1 ? e[0] : `- ${e.join('\n- ')}`))
+}
+
+/**
+ * The items a user turn shows as: userTurn's, except that the notes a handoff carried (pings that reached a chat
+ * while it handed off) are each a note, and only the person's own messages stay their bubble. The first keeps the
+ * turn's id. 2026-10-07, owner: "Why the heck do my agents keep getting sent physical texts? As if I sent them but
+ * I didn't."
+ */
+export function userTurns(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+  const turn = userTurn(raw, media)
+  if (turn?.kind !== 'user') return turn ? [turn] : []
+  const entries = carriedEntries(turn.text)
+  if (!entries) return [turn]
+  const { kind: _k, text: _t, images, queued: _q, ...rest } = turn
+  let pictures = images
+  return entries.map((e, i): UserItem | NoteItem => {
+    const id = i ? `${turn.id}:carried:${i}` : turn.id
+    if (typeof e !== 'string') return { ...rest, id, kind: 'note', from: e.from, text: e.text }
+    const said: UserItem = { ...turn, id, text: e }
+    // The pictures named in the person's messages go with the first of them.
+    if (pictures?.length) said.images = pictures
+    else delete said.images
+    pictures = undefined
+    return said
+  })
+}

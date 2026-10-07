@@ -148,6 +148,16 @@ describe('ChatStore items', () => {
     ])
   })
 
+  test("pings a handoff carried, saved as the person's list, load as AgentHydra's notes", () => {
+    const store = new ChatStore(home())
+    const ping = (n: number) => `[AgentHydra · CliMayte] Not from the user. Ping ${n}, 1 update since 09:00:\n• worker ${n} finished`
+    store.appendItem('c1', { kind: 'user', id: 'u1', ts: 1, text: `- ${ping(7)}\n- ${ping(8)}` })
+    expect(store.loadItems('c1')).toEqual([
+      { kind: 'note', id: 'u1', ts: 1, from: 'AgentHydra · CliMayte', text: 'Ping 7, 1 update since 09:00:\n• worker 7 finished' },
+      { kind: 'note', id: 'u1:carried:1', ts: 1, from: 'AgentHydra · CliMayte', text: 'Ping 8, 1 update since 09:00:\n• worker 8 finished' },
+    ])
+  })
+
   test('chat ids cannot escape the folder', () => {
     expect(() => new ChatStore(home()).appendItem('../x', text('a', 'x'))).toThrow()
   })

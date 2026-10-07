@@ -26,7 +26,7 @@ import { MAX_TOOL_RESULT_CHARS } from '@shared/protocol'
 import type { AhAgentStatus, AhChatRow, AhLiveSession, AhSessionRow, AhTail, AhWorker, AhWorkerDetail } from './client'
 import { isActiveWorkerStatus, workerAccountLabel } from './climayte'
 import { canResume, configRootOf, type ResumeQuery } from './resume'
-import { classifyUserText, taskItemFrom, userTurn } from '../engine/system-text'
+import { classifyUserText, taskItemFrom, userTurns } from '../engine/system-text'
 import { mediaCache } from '../media/cache'
 
 /** A transcript written this recently is working (when no hook says otherwise). */
@@ -189,8 +189,7 @@ type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 function userParts(items: TranscriptItem[], tasks: Map<string, TaskItem>, id: string, ts: number, text: string): void {
   classifyUserText(text).forEach((p, i) => {
     if (p.kind === 'user') {
-      const turn = userTurn({ id: i ? `${id}:${i}` : id, ts, kind: 'user', text: p.text }, mediaCache())
-      if (turn) items.push(turn)
+      items.push(...userTurns({ id: i ? `${id}:${i}` : id, ts, kind: 'user', text: p.text }, mediaCache()))
     } else if (p.kind === 'system') items.push({ id: `${id}:${i}`, ts, kind: 'system', level: 'info', text: p.text })
     else {
       const prev = tasks.get(p.task.taskId)
