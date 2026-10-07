@@ -12,3 +12,58 @@ options = ["reasoning_effort"]
 max_tokens_field = "max_completion_tokens"
 anthropic_url = "facade"
 # The catalog includes non-chat models. Choose a Chat Completions-capable model explicitly.
+
+# Ranked routes (owner, 2026-10-07): the benchmarked GPT-6 models on OpenAI's own API. Prices and the 1,050,000-token
+# context are from OpenAI's pricing page (developers.openai.com/api/docs/pricing). tools = false: that page says Chat
+# Completions supports function calling only at reasoning_effort "none". The -high routes run the same model at
+# reasoning_effort "high", as openrouter.toml registers them.
+[models."rank:gpt-6-astra:openai"]
+api_id = "gpt-6-astra"
+benchmark_slug = "gpt-6-astra"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-astra:openai"
+cc_effort = false
+
+[models."rank:gpt-6-astra-high:openai"]
+api_id = "gpt-6-astra"
+benchmark_slug = "gpt-6-astra-high"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-astra-high:openai"
+default_reasoning_effort = "high"
+cc_effort = false
+
+[models."rank:gpt-6-luna:openai"]
+api_id = "gpt-6-luna"
+benchmark_slug = "gpt-6-luna"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-luna:openai"
+cc_effort = false
+
+[models."rank:gpt-6-luna-high:openai"]
+api_id = "gpt-6-luna"
+benchmark_slug = "gpt-6-luna-high"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-luna-high:openai"
+default_reasoning_effort = "high"
+cc_effort = false
+
+[models."rank:gpt-6-sol:openai"]
+api_id = "gpt-6-sol"
+benchmark_slug = "gpt-6-sol"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-sol:openai"
+cc_effort = false
+
+[models."rank:gpt-6-sol-high:openai"]
+api_id = "gpt-6-sol"
+benchmark_slug = "gpt-6-sol-high"
+ctx = 1050000
+tools = false
+price_ref = "openai/rank:gpt-6-sol-high:openai"
+default_reasoning_effort = "high"
+cc_effort = false

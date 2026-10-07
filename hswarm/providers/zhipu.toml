@@ -6,6 +6,7 @@ key_url = "https://z.ai/manage-apikey/apikey-list"  # where a person makes an AP
 website = "https://z.ai"  # the company's site; the console shows its favicon
 models_path = "/models"
 docs = "https://docs.z.ai/guides/llm/glm-4.6"
+options = ["reasoning_effort"]  # the client drops reasoning_effort unless listed (owner, 2026-10-07)
 
 # Paid per call; retired from routing 2026-09-23. Reached by name only.
 [models."glm-4.5-air"]
@@ -13,3 +14,21 @@ api_id = "glm-4.5-air"
 ctx = 131072
 price_ref = "zhipu/glm-4.5-air"
 fallback = true
+
+# Ranked routes (owner, 2026-10-07). z.ai's pricing page gives the prices only. The 1,048,576-token context is the one
+# Baseten and Novita list for these models. tools stays false until z.ai's docs name tool support for them.
+[models."rank:glm-5-3:zhipu"]
+api_id = "glm-5.3"
+benchmark_slug = "glm-5-3"
+ctx = 1048576
+tools = false
+price_ref = "zhipu/rank:glm-5-3:zhipu"
+cc_effort = false
+
+[models."rank:glm-5-3-flash:zhipu"]
+api_id = "glm-5.3-flash"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1048576
+tools = false
+price_ref = "zhipu/rank:glm-5-3-flash:zhipu"
+cc_effort = false

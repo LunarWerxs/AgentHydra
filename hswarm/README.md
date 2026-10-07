@@ -122,6 +122,8 @@ key. It never automatically retries a POST. Chat endpoints accept explicit live 
 such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:` and `inworld:`; these models become candidates
 for automatic routing only after evaluation.
 
+Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius has none yet: no per-token price was on its pricing pages.
+
 ### Configuration Directory
 
 Default: `~/.hswarm`

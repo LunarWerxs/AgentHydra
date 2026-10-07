@@ -11,3 +11,59 @@ models_path = "/models"
 passthrough = ["baseten:"]
 options = ["reasoning_effort"]
 anthropic_url = "facade"
+
+# Ranked routes (owner, 2026-10-07). Context, output limit, tool support and per-token prices come from Baseten's own
+# model list (inference.baseten.co/v1/models).
+[models."rank:deepseek-v4-1-flash:baseten"]
+api_id = "deepseek-ai/DeepSeek-V4.1-Flash"
+benchmark_slug = "deepseek-v4-1-flash"
+ctx = 1048576
+max_out = 262144
+tools = true
+price_ref = "baseten/rank:deepseek-v4-1-flash:baseten"
+cc_effort = false
+
+[models."rank:kimi-k3:baseten"]
+api_id = "moonshotai/Kimi-K3"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+max_out = 262144
+tools = true
+price_ref = "baseten/rank:kimi-k3:baseten"
+cc_effort = false
+
+[models."rank:nvidia-nemotron-3-ultra-550b-a55b:baseten"]
+api_id = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B"
+benchmark_slug = "nvidia-nemotron-3-ultra-550b-a55b"
+ctx = 202800
+max_out = 202800
+tools = true
+price_ref = "baseten/rank:nvidia-nemotron-3-ultra-550b-a55b:baseten"
+cc_effort = false
+
+[models."rank:gpt-oss-120b:baseten"]
+api_id = "openai/gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+ctx = 128072
+max_out = 128072
+tools = true
+price_ref = "baseten/rank:gpt-oss-120b:baseten"
+cc_effort = false
+
+[models."rank:glm-5-3:baseten"]
+api_id = "zai-org/GLM-5.3"
+benchmark_slug = "glm-5-3"
+ctx = 1048576
+max_out = 262144
+tools = true
+price_ref = "baseten/rank:glm-5-3:baseten"
+cc_effort = false
+
+[models."rank:glm-5-3-flash:baseten"]
+api_id = "zai-org/GLM-5.3-Flash"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1048576
+max_out = 131072
+tools = true
+price_ref = "baseten/rank:glm-5-3-flash:baseten"
+cc_effort = false

@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import config  # noqa: E402
+from hswarm import config, prices  # noqa: E402
 from hswarm.client import ChatClient, DeepSeekClient  # noqa: E402
 from hswarm.jobs import JobManager  # noqa: E402
 from hswarm.spec import Task  # noqa: E402
@@ -51,7 +51,7 @@ def test_without_the_overlay_the_builtins_stand():
     #   which left this count at 39 and the assertion red)
     # + Cohere's Aya Expanse 32B (d94af6a): no `rank:` route, so it is in the list below and not in this count
     # + Haiku 5.5 direct at five efforts (2026-10-07)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 54
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 87
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",
@@ -158,3 +158,49 @@ def test_a_free_calls_provider_charges_nothing():
     free = [m for m, e in config.MODELS.items() if config.PROVIDERS[e["provider"]].get("free_calls")]
     assert free
     assert {m: config.cost_usd(m, 10**6, 10**6, 10**6) for m in free} == {m: 0.0 for m in free}
+
+
+H1_PROVIDERS = {"openai", "zhipu", "huggingface", "baseten", "chutes", "together"}
+DATA = Path(__file__).resolve().parent.parent / "data"
+
+
+def _index_slugs() -> set[str]:
+    found: set[str] = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if isinstance(node.get("slug"), str):
+                found.add(node["slug"])
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for child in node:
+                walk(child)
+
+    walk(json.loads((DATA / "published-models.json").read_text(encoding="utf-8")))
+    return found
+
+
+# Owner, 2026-10-07: a ranked route must name a slug the benchmark index scores and a price its provider published,
+# so AUTO ranks it on a real number.
+def test_each_h1_ranked_route_names_an_indexed_slug_and_a_sourced_price():
+    routes = [m for m in config.MODELS if m.startswith("rank:") and m.rsplit(":", 1)[1] in H1_PROVIDERS]
+    assert len(routes) == 33
+    slugs = _index_slugs()
+    sourced = json.loads((DATA / "prices.json").read_text(encoding="utf-8"))
+    for name in routes:
+        provider = name.rsplit(":", 1)[1]
+        assert config.MODELS[name]["benchmark_slug"] in slugs, name
+        row = sourced[f"{provider}/{name}"]
+        assert row["source"].startswith("https://") and row["verified_at"], name
+        assert prices.price_for(f"{provider}/{name}") is not None, name
+
+
+# Owner, 2026-10-07: Together answers its model list as a bare JSON array; models() read only {"data": [...]}.
+def test_a_bare_model_list_is_read_as_the_models_it_names():
+    def handler(req: httpx.Request):
+        return httpx.Response(200, json=[{"id": "moonshotai/Kimi-K3"}, {"id": "zai-org/GLM-5.3"}])
+
+    c = ChatClient(provider="together", api_keys=["sk-together-test-0001"])
+    c._http = httpx.AsyncClient(base_url=config.PROVIDERS["together"]["base_url"], transport=httpx.MockTransport(handler))
+    assert asyncio.run(c.models()) == ["moonshotai/Kimi-K3", "zai-org/GLM-5.3"]

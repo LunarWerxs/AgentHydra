@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 
 from . import config, zdr
-from .client import ChatClient
+from .client import ChatClient, model_rows
 
 PER_M = 1_000_000.0
 
@@ -74,7 +74,7 @@ async def refresh(provider: str = "openrouter") -> dict:
         raise SystemExit(f"hswarm models: {provider} has no passthrough catalogue to refresh; add its models under [models.<name>] in {config.user_file(provider)}")
     async with ChatClient(provider=provider) as c:
         body = await c.get_json(config.PROVIDERS[provider]["models_path"])
-    rows = [m for m in (body.get("data") or []) if isinstance(m, dict)]
+    rows = [m for m in model_rows(body) if isinstance(m, dict)]
     doc = build(rows, provider)
     config.CATALOGUE_FILE.parent.mkdir(parents=True, exist_ok=True)
     config.CATALOGUE_FILE.write_text(json.dumps(doc, indent=1, ensure_ascii=False), encoding="utf-8")

@@ -12,3 +12,23 @@ passthrough = ["chutes:"]
 options = ["reasoning_effort"]
 anthropic_url = "facade"
 # /models is public: listing models does not validate a key.
+
+# Ranked routes (owner, 2026-10-07). Context, output limit, tool support and per-token prices come from Chutes' own
+# model list (llm.chutes.ai/v1/models). The -TEE ids are the builds that list serves.
+[models."rank:qwen3-8-27b:chutes"]
+api_id = "Qwen/Qwen3.8-27B-TEE"
+benchmark_slug = "qwen3-8-27b"
+ctx = 262144
+max_out = 65536
+tools = true
+price_ref = "chutes/rank:qwen3-8-27b:chutes"
+cc_effort = false
+
+[models."rank:kimi-k3:chutes"]
+api_id = "moonshotai/Kimi-K3-TEE"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+max_out = 65535
+tools = true
+price_ref = "chutes/rank:kimi-k3:chutes"
+cc_effort = false

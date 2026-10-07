@@ -28,3 +28,87 @@ max_out = 384000
 price = {hit = 0.006, miss = 0.2, out = 0.6}
 concurrency_limit = 2500
 fallback = true
+
+# Ranked routes (owner, 2026-10-07): each benchmarked model pinned to one Hugging Face host with the id suffix, as
+# deepseek-flash-hf is. The host is the lowest listed output rate among the live hosts that support tools in the router's
+# model list (router.huggingface.co/v1/models); on a tie the first listed host wins. price_ref carries that rate. The
+# router lists no cache rate, so none is written.
+[models."rank:glm-5-3:huggingface"]
+api_id = "zai-org/GLM-5.3:deepinfra"
+benchmark_slug = "glm-5-3"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:glm-5-3:huggingface"
+cc_effort = false
+
+[models."rank:glm-5-3-flash:huggingface"]
+api_id = "zai-org/GLM-5.3-Flash:novita"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:glm-5-3-flash:huggingface"
+cc_effort = false
+
+[models."rank:kimi-k3:huggingface"]
+api_id = "moonshotai/Kimi-K3:together"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:kimi-k3:huggingface"
+cc_effort = false
+
+[models."rank:deepseek-v4-pro:huggingface"]
+api_id = "deepseek-ai/DeepSeek-V4-Pro-0813:deepinfra"
+benchmark_slug = "deepseek-v4-pro"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:deepseek-v4-pro:huggingface"
+cc_effort = false
+
+[models."rank:deepseek-v4-1-flash:huggingface"]
+api_id = "deepseek-ai/DeepSeek-V4.1-Flash:deepinfra"
+benchmark_slug = "deepseek-v4-1-flash"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:deepseek-v4-1-flash:huggingface"
+cc_effort = false
+
+[models."rank:minimax-m3:huggingface"]
+api_id = "MiniMaxAI/MiniMax-M3:deepinfra"
+benchmark_slug = "minimax-m3"
+ctx = 524288
+tools = true
+price_ref = "huggingface/rank:minimax-m3:huggingface"
+cc_effort = false
+
+[models."rank:qwen3-8-27b:huggingface"]
+api_id = "Qwen/Qwen3.8-27B:deepinfra"
+benchmark_slug = "qwen3-8-27b"
+ctx = 262144
+tools = true
+price_ref = "huggingface/rank:qwen3-8-27b:huggingface"
+cc_effort = false
+
+[models."rank:gpt-oss-120b:huggingface"]
+api_id = "openai/gpt-oss-120b:deepinfra"
+benchmark_slug = "gpt-oss-120b"
+ctx = 131072
+tools = true
+price_ref = "huggingface/rank:gpt-oss-120b:huggingface"
+cc_effort = false
+
+[models."rank:mimo-v2-6-pro:huggingface"]
+api_id = "XiaomiMiMo/MiMo-V2.6-Pro-RL:novita"
+benchmark_slug = "mimo-v2-6-pro"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:mimo-v2-6-pro:huggingface"
+cc_effort = false
+
+[models."rank:nvidia-nemotron-3-ultra-550b-a55b:huggingface"]
+api_id = "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16:deepinfra"
+benchmark_slug = "nvidia-nemotron-3-ultra-550b-a55b"
+ctx = 262144
+tools = true
+price_ref = "huggingface/rank:nvidia-nemotron-3-ultra-550b-a55b:huggingface"
+cc_effort = false

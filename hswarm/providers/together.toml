@@ -10,3 +10,61 @@ models_path = "/models"
 passthrough = ["together:"]
 options = ["reasoning_effort"]
 anthropic_url = "facade"
+
+# Ranked routes (owner, 2026-10-07). Per-token prices are from together.ai/pricing. Its docs
+# (docs.together.ai/docs/function-calling) name no model as supporting tools, so tools is false on each.
+[models."rank:kimi-k3:together"]
+api_id = "moonshotai/Kimi-K3"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+tools = false
+price_ref = "together/rank:kimi-k3:together"
+cc_effort = false
+
+[models."rank:glm-5-3:together"]
+api_id = "zai-org/GLM-5.3"
+benchmark_slug = "glm-5-3"
+ctx = 1048575
+tools = false
+price_ref = "together/rank:glm-5-3:together"
+cc_effort = false
+
+[models."rank:glm-5-3-flash:together"]
+api_id = "zai-org/GLM-5.3-Flash"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1048575
+tools = false
+price_ref = "together/rank:glm-5-3-flash:together"
+cc_effort = false
+
+[models."rank:deepseek-v4-pro:together"]
+api_id = "deepseek-ai/DeepSeek-V4-Pro-0813"
+benchmark_slug = "deepseek-v4-pro"
+ctx = 1048576
+tools = false
+price_ref = "together/rank:deepseek-v4-pro:together"
+cc_effort = false
+
+[models."rank:deepseek-v4-1-flash:together"]
+api_id = "deepseek-ai/DeepSeek-V4.1-Flash"
+benchmark_slug = "deepseek-v4-1-flash"
+ctx = 1048576
+tools = false
+price_ref = "together/rank:deepseek-v4-1-flash:together"
+cc_effort = false
+
+[models."rank:minimax-m3:together"]
+api_id = "MiniMaxAI/MiniMax-M3"
+benchmark_slug = "minimax-m3"
+ctx = 524288
+tools = false
+price_ref = "together/rank:minimax-m3:together"
+cc_effort = false
+
+[models."rank:gpt-oss-120b:together"]
+api_id = "openai/gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+ctx = 131072
+tools = false
+price_ref = "together/rank:gpt-oss-120b:together"
+cc_effort = false

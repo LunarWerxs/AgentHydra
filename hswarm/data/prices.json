@@ -342,6 +342,48 @@
   }
  },
  "providers": {
+  "baseten/rank:deepseek-v4-1-flash:baseten": {
+   "input": 0.3,
+   "output": 1.2,
+   "cache_read": 0.007,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:kimi-k3:baseten": {
+   "input": 3,
+   "output": 15,
+   "cache_read": 0.3,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:nvidia-nemotron-3-ultra-550b-a55b:baseten": {
+   "input": 0.6,
+   "output": 2.4,
+   "cache_read": 0.12,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:gpt-oss-120b:baseten": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.1,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:glm-5-3:baseten": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.14,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:glm-5-3-flash:baseten": {
+   "input": 0.15,
+   "output": 0.5,
+   "cache_read": 0.03,
+   "source": "https://inference.baseten.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
   "cerebras/cerebras-gpt-oss-120b": {
    "input": 0.35,
    "output": 0.75,
@@ -355,6 +397,20 @@
    "cache_read": 0.99,
    "source": "https://www.cerebras.ai/pricing (Developer tier; no cache discount published)",
    "verified_at": "2026-10-03"
+  },
+  "chutes/rank:qwen3-8-27b:chutes": {
+   "input": 0.24,
+   "output": 2.2,
+   "cache_read": 0.024,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:kimi-k3:chutes": {
+   "input": 3,
+   "output": 15,
+   "cache_read": 0.3,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
   },
   "gemini/gemini-3.1-flash-lite": {
    "input": 0.25,
@@ -412,6 +468,66 @@
    "source": "https://console.groq.com/docs/models (no prompt caching on this model, so hit = miss)",
    "verified_at": "2026-10-03"
   },
+  "huggingface/rank:glm-5-3:huggingface": {
+   "input": 0.9,
+   "output": 4.0,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:glm-5-3-flash:huggingface": {
+   "input": 0.15,
+   "output": 0.5,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:kimi-k3:huggingface": {
+   "input": 2.7,
+   "output": 13.5,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:deepseek-v4-pro:huggingface": {
+   "input": 1.3,
+   "output": 2.6,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:deepseek-v4-1-flash:huggingface": {
+   "input": 0.2,
+   "output": 0.6,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:minimax-m3:huggingface": {
+   "input": 0.28,
+   "output": 1.1,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:qwen3-8-27b:huggingface": {
+   "input": 0.2,
+   "output": 2.5,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:gpt-oss-120b:huggingface": {
+   "input": 0.037,
+   "output": 0.17,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:mimo-v2-6-pro:huggingface": {
+   "input": 0.435,
+   "output": 0.87,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "huggingface/rank:nvidia-nemotron-3-ultra-550b-a55b:huggingface": {
+   "input": 1.0,
+   "output": 5.0,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-07"
+  },
   "mistral/ministral-8b": {
    "input": 0.15,
    "output": 0.15,
@@ -425,6 +541,48 @@
    "cache_read": 0.15,
    "source": "https://mistral.ai/pricing/api",
    "verified_at": "2026-10-03"
+  },
+  "openai/rank:gpt-6-astra:openai": {
+   "input": 10,
+   "output": 50,
+   "cache_read": 1.0,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-astra-high:openai": {
+   "input": 10,
+   "output": 50,
+   "cache_read": 1.0,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-luna:openai": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-luna-high:openai": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-sol:openai": {
+   "input": 2,
+   "output": 10,
+   "cache_read": 0.2,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-sol-high:openai": {
+   "input": 2,
+   "output": 10,
+   "cache_read": 0.2,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
   },
   "openrouter/rank:claude-fable-5-1": {
    "input": 10.0,
@@ -633,6 +791,68 @@
    "cache_read": 0.085,
    "source": "https://openrouter.ai/api/v1/models",
    "verified_at": "2026-10-03"
+  },
+  "together/rank:kimi-k3:together": {
+   "input": 2.7,
+   "output": 13.5,
+   "cache_read": 0.27,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:glm-5-3:together": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.26,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:glm-5-3-flash:together": {
+   "input": 0.15,
+   "output": 0.5,
+   "cache_read": 0.03,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:deepseek-v4-pro:together": {
+   "input": 1.32,
+   "output": 3.96,
+   "cache_read": 0.13,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:deepseek-v4-1-flash:together": {
+   "input": 0.3,
+   "output": 1.2,
+   "cache_read": 0.006,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:minimax-m3:together": {
+   "input": 0.3,
+   "output": 1.2,
+   "cache_read": 0.06,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:gpt-oss-120b:together": {
+   "input": 0.15,
+   "output": 0.6,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "zhipu/rank:glm-5-3:zhipu": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.26,
+   "source": "https://docs.z.ai/guides/overview/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "zhipu/rank:glm-5-3-flash:zhipu": {
+   "input": 0.15,
+   "output": 0.5,
+   "cache_read": 0.03,
+   "source": "https://docs.z.ai/guides/overview/pricing",
+   "verified_at": "2026-10-07"
   },
   "zhipu/glm-4.5-air": {
    "input": 0.2,

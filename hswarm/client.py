@@ -1043,6 +1043,11 @@ def _native_result(r: httpx.Response, attempts: int, model: str, t0: float) -> C
     )
 
 
+# Together answers a bare JSON list; the other providers answer {"data": [...]} (owner, 2026-10-07)
+def model_rows(body: dict | list) -> list:
+    return body if isinstance(body, list) else (body.get("data") or [])
+
+
 class ChatClient:
     """One provider's chat endpoint. `DeepSeekClient` is the same class under its older name."""
 
@@ -1135,7 +1140,7 @@ class ChatClient:
     async def models(self) -> list[str]:
         if not self.spec.get("models_path"):
             return []
-        return [m["id"] for m in (await self.get_json(self.spec["models_path"])).get("data", [])]
+        return [m["id"] for m in model_rows(await self.get_json(self.spec["models_path"]))]
 
     async def balance(self) -> dict:
         if not self.spec.get("balance_path"):
