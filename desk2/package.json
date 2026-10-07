@@ -15,7 +15,8 @@
     "e2e:engine": "bun e2e/engine.e2e.ts",
     "e2e:hosts": "bun e2e/hosts.e2e.ts",
     "e2e:gestures": "bun e2e/gestures.e2e.ts",
-    "e2e:scroll": "bun e2e/scroll-follow.e2e.ts"
+    "e2e:scroll": "bun e2e/scroll-follow.e2e.ts",
+    "e2e:host-audio": "bun e2e/host-audio.e2e.ts"
   },
   "devDependencies": {
     "puppeteer": "^25.12.0"
