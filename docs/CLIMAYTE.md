@@ -1408,6 +1408,16 @@ desktop? ... to save me from having to do both individually."
   linked (the route answers `signedInFromDesktop` and the menu skips the sign-in terminal), and
   every minute after (`startDesktopCliFeed`), so a renewed desktop grant follows. A credential with
   a refresh token is a CLI sign-in of its own and is never touched.
+- Automatic pairing (owner, 2026-10-07, `core/desktop-cli-pairing.ts`, setting
+  `desktop_cli_pairing`, on by default): every signed-in desktop profile (the instances root plus the
+  default install) with no CLI instance linked gets one, on the feed's minute pass and before it
+  feeds. An unlinked CLI instance logged in as the same account is linked first (lowest number);
+  otherwise `<label> (CLI)` is created. A desktop is handled once (`desktop_cli_paired`, which also
+  records desktops that already had a link), so a CLI instance the person deletes or unlinks stays
+  gone. Only turning the setting on, after a confirm (`POST /api/desktop-cli-pairing`), clears that
+  list and pairs everything again; its answer waits at most 7 s (`running: true` after that, and the
+  run finishes on its own). A desktop whose pairing failed is left alone by the minute pass for 30
+  minutes. One run at a time; Claude only, no Codex; neither key syncs.
 - Only the Claude Code grant is used (the path proven with the real CLI). A desktop login whose
   Code tab was never used, or not within the grant's weeks, has none: the link route answers
   `desktopHasNoCodeLogin` and the menu opens the usual sign-in, saying why. On 2026-10-01, 9 of the

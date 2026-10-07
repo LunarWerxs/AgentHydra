@@ -15,6 +15,7 @@ import type { FreeSettings } from '@shared/free-instances'
 import type { PaneApi } from './api'
 import type { AgentHydraSettings } from './agenthydra'
 import type { SettingsRowId } from './settings'
+import { tellHydra } from '@/components/hydra/api'
 
 /** The pane's column-mode keys (hydra/src/composables/useUsageMode.ts USAGE_MODE_KEYS): true draws the
  *  quota columns, false the process ones. The CLI and Free tables start from the desktop table's. */
@@ -85,6 +86,37 @@ export function automaticNativeConfig(settings: NativeSettings, profile: string,
     port = port === LAST_PORT ? FIRST_PORT : port + 1
   }
   throw Error('No unused debugger port is available')
+}
+
+/** GET/POST /desktop-cli-pairing (the daemon): a Desktop account with no CLI login, and what turning the setting on does. */
+export interface PairingCandidate {
+  desktopDir: string
+  desktopNum: number
+  desktopLabel: string
+  action: 'create' | 'link'
+  cliId: string | null
+  cliNum: number | null
+}
+export interface Pairing {
+  desktopNum: number
+  desktopLabel: string
+  cliId: string
+  cliNum: number
+  signedIn: boolean
+}
+export interface PairingResult {
+  created: Pairing[]
+  linked: Pairing[]
+  failed: Array<{ desktopNum: number; desktopLabel: string; error: string }>
+}
+
+/** The note lines after the setting was turned on: what was added, who signs in later, each failure. */
+export function pairingSummary(r: PairingResult, privacy = false): string[] {
+  const lines = [`Added ${r.created.length}, linked ${r.linked.length} existing.`]
+  const later = [...r.created, ...r.linked].filter((p) => !p.signedIn).length
+  if (later) lines.push(`${later} sign in once that account opens Claude Code in Desktop.`)
+  for (const f of r.failed) lines.push(`#${f.desktopNum}${privacy ? '' : ` ${f.desktopLabel}`}: ${f.error}`)
+  return lines
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -198,8 +230,72 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
     }
   }
 
+  // --- a CLI login for each Desktop account ---
+  const pairing = ref<{ enabled: boolean; candidates: PairingCandidate[] } | null>(null)
+  const pairingBusy = ref(false)
+  const pairingConfirm = ref(false)
+  const pairingError = ref<string | null>(null)
+  const pairingNotes = ref<string[]>([])
+  async function loadPairing() {
+    try {
+      pairing.value = await api.agentHydra('/desktop-cli-pairing')
+      pairingError.value = null
+    } catch (e) {
+      pairingError.value = message(e)
+    }
+  }
+  /** The switch: off saves at once, on asks first (confirmPairing / cancelPairing). */
+  function setPairing(enabled: boolean) {
+    if (pairingBusy.value) return
+    pairingNotes.value = []
+    if (enabled) {
+      pairingConfirm.value = true
+      return
+    }
+    void savePairing(false)
+  }
+  function cancelPairing() {
+    pairingConfirm.value = false
+  }
+  async function savePairing(enabled: boolean) {
+    pairingConfirm.value = false
+    pairingBusy.value = true
+    pairingError.value = null
+    try {
+      const r = await api.agentHydra<{ enabled: boolean; result: PairingResult | null; running?: boolean; candidates: PairingCandidate[] }>(
+        '/desktop-cli-pairing',
+        { method: 'POST', body: JSON.stringify({ enabled }) }
+      )
+      pairing.value = { enabled: r.enabled, candidates: r.candidates }
+      pairingNotes.value = !r.enabled
+        ? ['Off. Existing CLI logins stay.']
+        : r.result
+          ? pairingSummary(r.result, ah.privacy.value)
+          : r.running
+            ? ['Adding them now. They appear in the CLI table as each is made.']
+            : []
+      ah.savedAt.value = Date.now()
+      tellHydra({ type: 'desk:settings-changed' })
+    } catch (e) {
+      pairingError.value = message(e)
+      // The daemon may have saved the setting before the answer was lost: show what it holds now.
+      const shown = pairingError.value
+      await loadPairing()
+      pairingError.value = shown
+    } finally {
+      pairingBusy.value = false
+    }
+  }
+  const candidateLine = (c: PairingCandidate) =>
+    `#${c.desktopNum}${ah.privacy.value ? '' : ` ${c.desktopLabel}`}${c.action === 'link' && c.cliNum !== null ? ` (links existing CLI #${c.cliNum})` : ''}`
+  const pairingQuestion = computed(() => {
+    const n = pairing.value?.candidates.length ?? 0
+    return n ? `Add a Claude CLI login for ${n} account${n === 1 ? '' : 's'} signed in to Desktop?` : 'No Desktop account needs one right now. New ones get one when they sign in.'
+  })
+
   /** The muted lines under a native control or Free keepalive row's description. */
   function rowNotes(id: SettingsRowId): string[] {
+    if (id === 'ahDesktopCliPair') return pairingError.value ? [pairingError.value] : pairingNotes.value
     if (id === 'ahFreeKeepalive') return freeError.value ? [freeError.value] : []
     if (id === 'ahNativeAccount') {
       if (nativeError.value) return [nativeError.value]
@@ -215,7 +311,7 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   }
 
   return {
-    owns: (id: SettingsRowId) => !!PROCESS_ROWS[id] || NATIVE_ROWS.includes(id) || FREE_ROWS.includes(id),
+    owns: (id: SettingsRowId) => !!PROCESS_ROWS[id] || NATIVE_ROWS.includes(id) || FREE_ROWS.includes(id) || id === 'ahDesktopCliPair',
     processTable,
     processColumns,
     setProcessColumns,
@@ -231,6 +327,15 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
     free,
     loadFree,
     saveFree,
+    pairing,
+    pairingBusy,
+    pairingConfirm,
+    pairingQuestion,
+    candidateLine,
+    loadPairing,
+    setPairing,
+    cancelPairing,
+    savePairing,
     rowNotes
   }
 }

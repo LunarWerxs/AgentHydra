@@ -66,6 +66,14 @@ function saveFloor(e: Event) {
   <button v-else-if="id === 'ahNativeReset'" type="button" :class="BUTTON" :disabled="inst.nativeBusy.value" @click="inst.saveNative(null)">Reset</button>
 
   <PaneSwitch
+    v-else-if="id === 'ahDesktopCliPair'"
+    :label="label"
+    :disabled="!inst.pairing.value || inst.pairingBusy.value"
+    :model-value="!!inst.pairing.value?.enabled && !inst.pairingConfirm.value"
+    @update:model-value="(v: boolean) => inst.setPairing(v)"
+  />
+
+  <PaneSwitch
     v-else-if="id === 'ahFreeKeepalive'"
     :label="label"
     :disabled="!inst.free.value"

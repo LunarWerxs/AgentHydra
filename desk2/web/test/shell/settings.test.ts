@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'bun:test'
 import type { DeskSettings } from '@shared/protocol'
 import { SETTINGS_SECTIONS, matchRows, settingsGroups, stepSection, switchPatch } from '@/components/panes/settings'
+import { pairingSummary } from '@/components/panes/instances'
 import { NavHistory, viewUnder, type View } from '@/components/shell/logic'
 
 describe('settings search', () => {
@@ -71,5 +72,19 @@ describe('closing settings', () => {
     h.visit(chat)
     h.visit(viewUnder(settings, chat))
     expect(h.canBack).toBe(false)
+  })
+})
+
+describe('CLI login pairing', () => {
+  it('is found by the search on the Desktop page', () => {
+    expect(matchRows('cli login').map((r) => r.id)).toContain('ahDesktopCliPair')
+    expect(settingsGroups('desktop', '').map((g) => g.heading)).toContain('CLI logins')
+  })
+
+  it('summarises what was added, who signs in later and each failure', () => {
+    const p = (n: number, signedIn: boolean) => ({ desktopNum: n, desktopLabel: `Example ${n}`, cliId: `c${n}`, cliNum: n, signedIn })
+    const r = { created: [p(1, true)], linked: [p(2, false)], failed: [{ desktopNum: 3, desktopLabel: 'Example 3', error: 'no space' }] }
+    expect(pairingSummary(r)).toEqual(['Added 1, linked 1 existing.', '1 sign in once that account opens Claude Code in Desktop.', '#3 Example 3: no space'])
+    expect(pairingSummary(r, true)[2]).toBe('#3: no space')
   })
 })

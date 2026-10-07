@@ -76,6 +76,7 @@ export type SettingsRowId =
   | 'ahNativeAccount'
   | 'ahNativeAuto'
   | 'ahNativeReset'
+  | 'ahDesktopCliPair'
   | 'ahFreeProcess'
   | 'ahFreeKeepalive'
   | 'ahFreeFloor'
@@ -348,6 +349,13 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Tables',
     label: 'Show process columns',
     description: 'PID, uptime, memory and usage in place of the quota bars.'
+  },
+  {
+    id: 'ahDesktopCliPair',
+    section: 'desktop',
+    group: 'CLI logins',
+    label: 'Give each account a CLI login',
+    description: 'On by default. Every Claude account signed in to Desktop on this PC gets a linked CLI login that signs in from Desktop. Delete one and it stays deleted.'
   },
   {
     id: 'ahExtraUsage',

@@ -575,6 +575,7 @@ app.post('/api/update/settings', async (c) => {
 const appSettings = () => ({
   portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
+  desktopCliPairing: getSetting('desktop_cli_pairing') === '1',
   transcriptEditor: getSetting('transcript_editor'),
   transcriptEditorResolved: resolveEditor(
     process.platform,

@@ -47,6 +47,7 @@ import {
 } from '../core/codex-instances'
 import { logoutCodexInstance } from '../core/codex-logout'
 import { feedCliFromDesktop } from '../core/desktop-cli-feed'
+import { type PairingResult, pairingPlan, runPairing } from '../core/desktop-cli-pairing'
 import { allInstanceNumbers, parseInstanceRef } from '../core/instance-numbers'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
@@ -56,7 +57,7 @@ import {
   launchOptionError,
 } from '../core/launch-options'
 import { readLoginUuid } from '../core/login-state'
-import { db } from '../db'
+import { db, getSetting, setSetting } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { deepseekBalance } from '../hswarm-cost'
 import { app } from '../http-app'
@@ -745,6 +746,52 @@ app.post('/api/cli-instances/:id/link-desktop', async (c) => {
         }
       : result,
   )
+})
+
+// Automatic pairing of every signed-in desktop account with a CLI instance (core/desktop-cli-pairing.ts).
+app.get('/api/desktop-cli-pairing', async (c) =>
+  c.json({
+    enabled: getSetting('desktop_cli_pairing') === '1',
+    candidates: await pairingPlan(),
+  }),
+)
+// Turning it on pairs every account; the answer waits at most PAIRING_WAIT_MS for that (Desk 2's proxy
+// gives up after 10 s), and a longer run finishes on its own with `running: true` in the answer.
+const PAIRING_WAIT_MS = 7_000
+app.post('/api/desktop-cli-pairing', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.enabled !== 'boolean') return c.json({ error: 'enabled must be a boolean' }, 400)
+  setSetting('desktop_cli_pairing', body.enabled ? '1' : '0')
+  let result: PairingResult | null = null
+  let running = false
+  if (body.enabled) {
+    const run = runPairing({ all: true })
+    run.catch((err) =>
+      console.error(
+        '[desktop-cli-pairing] turn-on pass failed:',
+        err instanceof Error ? err.message : err,
+      ),
+    )
+    const late = Symbol('late')
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      const first = await Promise.race([
+        run,
+        new Promise<typeof late>((r) => {
+          timer = setTimeout(() => r(late), PAIRING_WAIT_MS)
+        }),
+      ])
+      if (first === late) running = true
+      else result = first
+    } catch (err) {
+      // The setting is saved: say so with the reason, so Settings shows it on and why nothing was added.
+      const error = err instanceof Error ? err.message : String(err)
+      return c.json({ enabled: true, error: `Turned on, but pairing failed: ${error}` }, 500)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return c.json({ enabled: body.enabled, result, running, candidates: await pairingPlan() })
 })
 
 app.get('/api/cli-instances/:id/usage', async (c) => {

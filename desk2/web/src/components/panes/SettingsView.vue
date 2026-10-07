@@ -251,6 +251,15 @@ watch(
   },
   { immediate: true }
 )
+// The CLI login setting reads its state when its row is first on screen.
+const showsPairing = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahDesktopCliPair')))
+watch(
+  showsPairing,
+  (on) => {
+    if (on) void inst.loadPairing()
+  },
+  { immediate: true }
+)
 // The Free keepalive reads Desk's own settings when its rows are first on screen.
 const showsFree = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahFreeKeepalive')))
 watch(
@@ -379,6 +388,14 @@ onBeforeUnmount(() => {
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-[19px] text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 break-words text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
+                <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
+                  <div class="text-[13px] leading-[19px] text-text">{{ inst.pairingQuestion.value }}</div>
+                  <div v-for="c in inst.pairing.value?.candidates ?? []" :key="c.desktopDir" class="text-[12px] leading-[18px] text-text-muted">{{ inst.candidateLine(c) }}</div>
+                  <div class="mt-1.5 flex gap-2">
+                    <button type="button" :class="BUTTON" @click="inst.savePairing(true)">Yes, add them</button>
+                    <button type="button" :class="BUTTON" @click="inst.cancelPairing()">Cancel</button>
+                  </div>
+                </div>
               </div>
 
               <InstancesControl v-if="inst.owns(r.id)" :id="r.id" :label="r.label" :inst="inst" />

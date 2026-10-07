@@ -189,6 +189,13 @@ export const NEVER_SYNCED = [
   // (usage-history.ts). A fact about one disk: synced, a second PC would believe its file already
   // imported and never read it.
   'usage_history_imported',
+  // Whether THIS PC pairs every signed-in Claude Desktop account with a CLI instance
+  // (core/desktop-cli-pairing.ts). It acts on this PC's accounts, so a synced value would make
+  // another PC create CLI instances its owner never asked for.
+  'desktop_cli_pairing',
+  // The desktop folders that pairing has already handled on THIS PC: folder paths of one disk, and
+  // what keeps a CLI instance the person deleted deleted.
+  'desktop_cli_paired',
 ] as const
 
 // ── persisted state (db.ts settings table, key = 'connections_sync', JSON-serialized) ──────────

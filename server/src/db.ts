@@ -714,6 +714,12 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   // Seeded like the rest, so an install that never chose gets it on its first start of this build;
   // one turned off in Settings keeps its '0'.
   auto_update_enabled: '1',
+  // Owner, 2026-10-07: every Claude Desktop account signed in on this PC also gets a Claude Code CLI
+  // instance linked to it, on by default (core/desktop-cli-pairing.ts). Turning it on in Settings
+  // pairs every account at once; a CLI instance the person deletes stays deleted.
+  desktop_cli_pairing: '1',
+  // JSON array of the desktop folders the pairing has already handled (never paired twice).
+  desktop_cli_paired: '[]',
 }
 
 export function getSetting(key: string): string {
