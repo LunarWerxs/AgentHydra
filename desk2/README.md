@@ -441,9 +441,10 @@ The full design is in [SPEC.md](SPEC.md). The contract between the server and th
 <details>
 <summary><b>Read more: starting it, the launcher and the window</b></summary>
 
-**In a release download** (from 2.0) this folder ships beside the daemon with its own bun in `runtime/`.
-On Windows the tray's Open runs the launcher below; on Linux and macOS the daemon starts the server on
-that bun and opens your browser. Either way the daemon starts it when it is down.
+**In a release download** (from 2.0) this folder ships beside the daemon without a bun of its own: it runs
+on the bun AgentHydra's launcher downloads into the install's `runtime/` on first run. On Windows the tray's
+Open runs the launcher below; on Linux and macOS the daemon starts the server on that bun and opens your
+browser. Either way the daemon starts it when it is down.
 
 **The shortcut.** Run `launcher\install-shortcuts.ps1` once. It puts an "AgentHydra" shortcut on the
 Desktop and in the Start Menu. Clicking it starts the server in the background if it is not running,

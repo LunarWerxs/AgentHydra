@@ -30,8 +30,9 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   `scripts/package-release.ts` stages it and `scripts/smoke-release.ts` boots it, the same in `release.yml` and on a
   PC (see [RELEASING.md](RELEASING.md)); a tag build whose Windows zip has no `desk2/` does not publish. CI runs
   Desk 2's own suite (the `desk2` job in `ci.yml`). The updater treats `desk2/` as a release component (stops Desk 2
-  before the swap, starts it after), and a compiled install with no `desk2/` (one updated by a 1.x updater, or the
-  lone `.exe`) installs it from its own version's archive at boot.
+  before the swap, starts it after), and on an install with no `desk2/` (one updated by a 1.x updater, or the
+  lone `.exe`) the launcher restores it, with any other missing part, from its own version's archive before it
+  starts the daemon.
 - **The daemon's openers lead to Desk 2 (Order step 2, 2026-10-06).** `server/src/desk2.ts` is the one place that
   knows Desk 2: present, URL, health, which bun, start, stop, open. A page asked of the daemon, the Connections
   sign-in's return included, goes on to Desk 2 when it answers; when it does not, the daemon starts it and shows a
@@ -51,7 +52,7 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
 | Where | What it does | At cutover |
 | --- | --- | --- |
 | `server/src/config.ts:354` `WEB_DIST_CANDIDATES` | where the built old window is | drop |
-| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the compiled exe's embedded copy or from `web/dist`, only where `desk2/` is missing, and the quick-instances page `/instances` | drop the static serving; `/api/*` stays |
+| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the release bundle's embedded copy (`app/server.js`) or from `web/dist`, only where `desk2/` is missing, and the quick-instances page `/instances` | drop the static serving; `/api/*` stays |
 | `server/src/index.ts:839` `/api/portable-window`, `:232-235` `portable_mode` | the chromeless "portable" window of the old UI | drop with the setting (Desk 2 left portable mode behind) |
 | `server/src/instance-mode-window.ts:7`, `server/src/instance-mode.ts:296` | the quick-instances window (`/instances`) and the light daemon that serves it | retarget to Desk 2's copy (`desk2/hydra/src/QuickInstancesApp.vue`) or retire. Desk 2's copy is built for base `/ah/` and picks the quick app only on the exact path `/instances`, which Desk 2 does not route yet |
 | `server/src/core/instance-mode-shortcut.ts:50`, `server/src/routes/instances.ts:173` | creates the quick-instances shortcut (`--instances`) | retire with the window, or retarget |
@@ -59,8 +60,9 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
 ### Build, packaging and release
 
 - `package.json:8` workspace `web`, scripts `dev:web`, `build`, `check` and `typecheck` (lines 16-33).
-- `scripts/build.ts:140` embeds `web/dist` in the exe; `:278` builds `web` unless `--skip-web`.
-- `.github/workflows/release.yml` still builds `web` ("Build web SPA"), and the compiled exe embeds it for an
+- `scripts/build.ts` embeds `web/dist` in `app/server.js` (`__AGENTHYDRA_EMBEDDED_WEB__`) and builds `web`
+  unless `--skip-web`.
+- `.github/workflows/release.yml` still builds `web` ("Build web SPA"), and the release bundle embeds it for an
   install with no `desk2/`.
 - `.github/workflows/ci.yml:103` `check:i18n` on `web`, `:207` builds it.
 - The tray's first run builds `web\dist` (`misc/AgentHydra-Tray.json:44`; the legacy host

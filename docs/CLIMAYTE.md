@@ -192,7 +192,7 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   files, writes `<log>.pid.json` (`{ runner, child }`), waits, and writes `<log>.exit.json`.
 - On Windows the runner is `misc/climayte-runner.exe`, a native program with no dependencies (Rust,
   source in `misc/climayte-runner-native/`, built and checked for machine paths by its `build.ps1`;
-  the exe is committed, and a single-file build embeds it as one of `RUNTIME_MISC_FILES` in
+  the exe is committed, and a release build embeds it as one of `RUNTIME_MISC_FILES` in
   `misc-assets.ts`). It is a console program started hidden,
   so its console host is born before its job and the CLI shares that console, as under the Bun
   runner; a CLI given its own console left that console's host in the job for a moment after it

@@ -54,7 +54,9 @@ archive and is never replaced by the updater. Run on its own, the lone `.exe` fi
 installs everything from its own version's archive first. `release.yml` resolves the newest Bun
 release once and passes it to the packager as `--bun-version`, and builds and smokes on that same
 Bun; a PC build pins the running `Bun.version`. The packager fails the Windows archive when it is
-over 30 MB (about 15 to 20 MB expected, against 198 MB before). The smoke seeds `runtime/` with its
+over 30 MB (11.7 MB on 2026-10-06, and 8.2 MB for linux-x64, against 198 MB before). A POSIX
+target must be packaged on Linux or macOS: Windows cannot put the launcher's execute bit in the tar,
+so the packager refuses one there. The smoke seeds `runtime/` with its
 own Bun and points both download bases (`AGENTHYDRA_RELEASE_BASE`, `AGENTHYDRA_BUN_BASE`) at a
 refusing address, so a bundle that tries to download anything fails it.
 
@@ -241,7 +243,7 @@ leave `misc/`, `orchestrator/`, and the exe at silently different versions. `-Fr
 `tests/install-transactional.test.ts`) without touching a real install, the real daemon, or the
 real tray; none of them change the default (no-arguments) behaviour a real user gets.
 
-**The compiled self-updater owns the same three components (AH-08).** `server/src/github-updater.ts`
+**The release self-updater owns the same components (AH-08).** `server/src/github-updater.ts`
 carries `RELEASE_COMPONENTS`, and a manual install and an in-app update can no longer disagree about
 what a release IS: `orchestrator/` is swapped (renamed aside, the release copy moved in, the
 user-owned `state/` carried across, a `.release-version` stamp written, retired files gone by
@@ -255,9 +257,10 @@ first update. `server/tests/github-updater-components.test.ts` pins `install.ps1
 
 **From 2.0.0 the self-updater also owns `desk2/`.** It stops Desk 2 before replacing `desk2/` and
 starts it again after. Desk 2 includes its own dev-servers service that manages development servers
-without requiring a separate daemon. `install.ps1` installs the new layout and leaves Bun to the launcher's first run; a release daemon
-that finds no `desk2/` beside it (that install, a 1.x updater's, or the lone `.exe`) installs it from
-its own version's release archive at boot, without a click.
+without requiring a separate daemon. `install.ps1` installs the new layout and leaves Bun to the launcher's first run. Whatever part is
+missing (`app/`, `desk2/`, `orchestrator/`, `misc/`: a 1.x updater's install, or the lone `.exe`),
+the launcher restores it from its own version's release archive before it starts the daemon,
+without a click.
 
 ## The 2.0 update mechanism and the 1.x→2.0 migration
 
@@ -326,16 +329,17 @@ buys nothing a dispatch doesn't already give you.
 
 ## What the tag push triggers
 
-Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`. It builds one
-self-contained executable for every supported OS (Windows x64, Linux x64/arm64, macOS x64/arm64),
-boots every platform bundle **except darwin-x64**, verifies the health endpoint and an embedded
-frontend asset, then publishes the GitHub Release automatically from the matching changelog
-section. Windows exposes a direct icon-bearing GUI executable for people plus a one-executable ZIP
-for the updater; Unix targets expose one-executable archives. `SHA256SUMS.txt` covers every asset.
-`workflow_dispatch` runs the same build and smoke matrix without publishing a release.
+Pushing a tag matching `v*.*.*` triggers `.github/workflows/release.yml`. It packages one bundle
+for every supported OS (Windows x64, Linux x64/arm64, macOS x64/arm64; see "What a 2.0 bundle
+holds"), boots every bundle **except darwin-x64** with `scripts/smoke-release.ts`, then publishes
+the GitHub Release automatically from the matching changelog section. Windows exposes the lone
+launcher `.exe` for people plus the zip the installer and the updater take; the other targets
+expose a `.tar.gz`. `SHA256SUMS.txt` covers every asset (its lines name `out/<asset>`; both
+launchers match on the file name). `workflow_dispatch` runs the same build and smoke matrix without
+publishing a release.
 
 **darwin-x64 (Intel mac) is build-only.** GitHub retired its Intel macOS runners, so the smoke job
-has no honest way to boot that target: it is compiled and archived like every other target, but
+has no honest way to boot that target: it is packaged and archived like every other target, but
 never booted, and every other smoke assertion (tray inventory, orchestrator inventory,
 `/api/health`) skips it too. This is a documented, deliberate gap until a native or self-hosted
 Intel-mac runner exists, not a silent one.
@@ -344,7 +348,7 @@ Intel-mac runner exists, not a silent one.
 
 `orchestrator/` is the Python toolbox that decides what should happen to a chat (see
 REFERENCE.md, "The orchestrator"). The release job stages its python half - `orch.py`,
-`scripts/`, `docs/` - beside the executable as `orchestrator/`, which is where a compiled daemon
+`scripts/`, `docs/` - beside the launcher as `orchestrator/`, which is where a release daemon
 looks for it (`APP_ROOT/orchestrator`). Not staged: `state/` (runtime), `scripts/tests/`, and the
 remote front-end (`orchestrator/server` + `orchestrator/web`), which need bun and are a source
 checkout's business. Python 3 is the user's own; the daemon does not bundle it, and

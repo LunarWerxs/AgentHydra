@@ -673,11 +673,11 @@ orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should ha
 tests/         launcher.test.ts (the tray guard, Windows-gated) + server/instance unit tests
 misc/          the Windows launcher toolkit (tray .ps1 / .vbs / .ico / Create-Shortcut / Make-Icon / rebuild_agenthydra.bat)
                plus the files the RUNNING daemon opens by path, listed in
-               server/src/misc-assets.ts as RUNTIME_MISC_FILES. The single-file build embeds
+               server/src/misc-assets.ts as RUNTIME_MISC_FILES. The release build embeds
                exactly that list and FAILS when one is missing, and resolveMiscAsset hands
-               back a real path at runtime: misc\ when there is one, else written out of the
-               binary once. Adding a runtime dependency on a misc\ file without adding it to
-               that list ships a compiled build where the feature is simply gone.
+               back a real path at runtime: misc\ when there is one, else written out of
+               app/server.js once. Adding a runtime dependency on a misc\ file without adding
+               it to that list ships a release where the feature is simply gone.
 scripts/       repo tooling (screenshots/: regenerate the README images)
 ```
 
@@ -719,8 +719,8 @@ somewhere else; `AGENTHYDRA_PYTHON` names the interpreter (default `python` on W
 `python3` elsewhere; the spawn forces UTF-8 output and normalises CRLF). Its own tests: `bun run
 test:orchestrator` (~650 unit tests, stub daemon, no fleet needed).
 
-In a compiled release the python half (`orch.py`, `scripts/`, `docs/`) is staged beside the
-executable as `orchestrator/`, which is exactly where `APP_ROOT/orchestrator` resolves; the
+In a release the python half (`orch.py`, `scripts/`, `docs/`) is staged beside the launcher
+and `app/` as `orchestrator/`, which is exactly where `APP_ROOT/orchestrator` resolves; the
 remote front-end (`orchestrator/server` + `web`) needs bun and is source-checkout only. Python
 is not bundled - `GET /api/orchestrator` reports whether it answers. A machine that ran the
 standalone checkout has a one-time cut-over (scheduled tasks, tray shortcut, `state/`):

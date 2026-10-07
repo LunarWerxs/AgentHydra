@@ -50,7 +50,7 @@ All storage sizes are on this PC.
 | P13 | `hswarm-cost.ts` (was `zswarm-cost.ts`) | Sums `~/.hswarm/ledger.jsonl` cost by day/model. `deepseekBalance`. | memory | Per request | `deepseekBalance` in `/api/usage/survey` | **`summarizeHSwarmCost` has no caller (dead)** |
 | P14 | HSwarm `ledger.py` + `jobs.py` | One line per worker task: model, provider, backend, status, calls, `in_hit/in_miss/out/reasoning` (+`in_write`), `cost_usd` (billed), seconds, caller instance/session/cwd/model. **No account field.** | `~/.hswarm/ledger.jsonl` (143 MB, starts 2026-09-15) | Append when a task finishes | `GET /api/hswarm/api/usage` (`ledger.daily`, a cached tail reader) | HSwarmOverview |
 | P15 | HSwarm `model_stats.py` | Per model: tasks, ok, failed, cost, seconds, tokens, success rate, cost per ok, 1-day edit survival | reads `ledger.jsonl` + `survival.jsonl` (0.9 MB) | Per request, cached on file (size, mtime) | `GET /api/hswarm/api/model-stats` | HSwarmModelResults |
-| P16 | HSwarm `utilization.py` | One row per job or ask: tasks, ok, failed, `worker_usd`, `worker_tokens`, counterfactual `est_usd`/`saved_usd`, caller account (hashed). Also `claude_days` and `claude_accounts` (Claude $ and tokens per machine and day). | `~/.hswarm/hswarm.sqlite` (25.7 MB): `utilizations` 51,841, `claude_days` 77, `claude_accounts` 568, `profiles` 36. Sync shards on a git branch. | Append on job end. Claude days are written by the savings record. | via `/api/hswarm/api/stats` | — |
+| P16 | HSwarm `utilization.py` | One row per job or ask: tasks, ok, failed, `worker_usd`, `worker_tokens`, counterfactual `est_usd`/`saved_usd`, caller account (hashed). Also `claude_days` and `claude_accounts` (Claude $ and tokens per machine and day). | `~/.hswarm/hswarm.sqlite` (25.7 MB): `utilizations` 51,841, `claude_days` 77, `claude_accounts` 568, `profiles` 36. Sync shards on a git branch. | Append on job end. Claude days are written by the savings record. | via `/api/hswarm/api/stats` | - |
 | P17 | HSwarm `savings.py` + `claude_usage.py` | **A second Claude transcript scanner and pricer** (global `requestId` dedupe, local-day buckets), the median sub-agent profile, and the day savings range | `~/.hswarm/savings-daily.jsonl` (7.2 MB) | Daily scheduled `hswarm savings --record`. Today is scanned live. | MCP `hswarm_savings`, CLI | via stats |
 | P18 | HSwarm `stats.py` | Aggregates P16: total, plan rates, by machine, days, accounts, rule check, recent, today | reads `hswarm.sqlite` | Per request, cached 120 s | `GET /api/hswarm/api/stats` (TS proxy `app.all('/api/hswarm/*')`, `routes/hswarm.ts:138`) | SwarmStatsCard, OffloadStatsCard tiles, HSwarmSavings, InstancesHomeView accounts table |
 
@@ -280,7 +280,7 @@ usageQuery({
 - **File:** `hswarm/data/prices.json`.
   - It lives in the HSwarm package because that package is installed standalone (its
     `pyproject.toml` ships only `hswarm/`).
-  - TypeScript imports it at build time (`server/src/pricing.ts`; `bun build --compile` bundles a
+  - TypeScript imports it at build time (`server/src/pricing.ts`; the release build, `bun build`, bundles a
     JSON import).
 - **Shape:** the superset of today's tables, so the TS model wins:
   - per model, absolute `input`, `output`, `cache_read`, `cache_write_5m`, `cache_write_1h`

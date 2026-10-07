@@ -69,8 +69,10 @@ diagnostics/history, not instructions to repeat the old menu activation process.
 
 ## Repository work
 
-Keep unrelated working-tree changes intact. Build and check the main UI in
-`web/`; `orchestrator/web/` is a separate interface. Configuration/API details and
+Keep unrelated working-tree changes intact. The main UI is AgentHydra 2.0's window in
+`desk2/` (`desk2/web`, with AgentHydra's own pages in `desk2/hydra`); build and check it there.
+`web/` is the old window, served only where `desk2/` is missing; `orchestrator/web/` is a
+separate interface. Configuration/API details and
 the current compiler compatibility note are in the native-control runbook.
 
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)

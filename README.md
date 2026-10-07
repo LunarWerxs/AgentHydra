@@ -136,12 +136,13 @@ bun run build && bun run start
 <details>
 <summary><b>Read more: downloads, requirements, what reaches the network</b></summary>
 
-- **Windows downloads:** the `.zip` carries the tray icon and the orchestrator tools; the single
-  `.exe` has the tray icon (written out on first run) but not the orchestrator. Both self-update. The
-  installer above takes the zip and adds a Start Menu shortcut. Linux and macOS get a `.tar.gz`. From
-  2.0 every download also carries the new window, and the `.exe` is a small launcher: it downloads
-  Bun (and, for a lone `.exe`, the rest of the app) the first time you run it, so you install no Bun
-  yourself and the zip stays small.
+- **Windows downloads:** the `.zip` (about 12 MB) holds the whole app: the new window, the tray icon
+  and the orchestrator tools. The single `.exe` is a small launcher that fetches the rest of the app
+  from the same release the first time you run it. Both self-update. The installer above takes the
+  zip and adds a Start Menu shortcut. Linux and macOS get a `.tar.gz` (about 8 MB). No download packs
+  Bun or Claude Code: the launcher fetches the Bun the release was built with on first run (checked
+  against Bun's published checksums), and the new window fetches Claude Code when a chat first needs
+  it, so you install neither yourself.
 - **Requirements:** Bun only for a source checkout. The `claude` CLI and/or Claude Desktop for the
   Claude features. Optional: Codex Desktop/CLI, OpenCode, Hermes Agent, the DeepSeek Harness
   (`~/.dsh`), whose sessions show up when their stores exist. Windows for the tray; macOS and Linux

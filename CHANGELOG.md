@@ -16,7 +16,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A Dev servers button lists your projects and their servers in the sidebar**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
-- **The download is about a tenth of its old size**
+- **The download is about 12 MB instead of about 200 MB**
 
 **Everything in 2.0.0**
 
@@ -40,9 +40,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
-- **The download is about a tenth of its old size.** AgentHydra no longer packs Bun or Claude Code inside the
+- **The download is about 12 MB instead of about 200 MB.** AgentHydra no longer packs Bun or Claude Code inside the
   download: the small `AgentHydra.exe` fetches Bun the first time you run it (and keeps it up to date), and the new
-  window fetches Claude Code when it needs it. Updates are quicker too.
+  window fetches Claude Code when it needs it. Updates are quicker too, and an install on 1.13 updates itself to
+  2.0 the usual way.
 - **Opening AgentHydra always leads to the new window.** The tray, the shortcut and every AgentHydra page open
   it. When it is not running, AgentHydra starts it and shows a short "Starting AgentHydra" page that moves on by
   itself, instead of a page that never loads.
@@ -1310,12 +1311,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
-- **Orchestrator moved to a separate program—AgentHydra is back to being a pure fleet daemon**
+- **Orchestrator moved to a separate program: AgentHydra is back to being a pure fleet daemon**
 - **Chats stay held off automation one at a time, never auto-archived when waiting for a person**
 - **The daemon can put a message in a dormant chat, press Send, and get the answer, end to end**
 - **Delivery ledger tracks every staged prompt through delivery or expiry, nothing vanishes silent**
 - **Pre-start check reports all instances, chats, and next step in one read-only call**
-- **Fleet shows one verdict per account—whether it can work—instead of one surprise per failure**
+- **Fleet shows one verdict per account, whether it can work, instead of one surprise per failure**
 
 **Everything in 0.37.0**
 
