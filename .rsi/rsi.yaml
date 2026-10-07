@@ -43,6 +43,25 @@ metrics:
     measure: "python scripts/rsi/hswarm-prefix.py"
     pick: 'json:$.chars'
     light: true
+  # Free accounts cost nothing but are the first route (owner, 2026-10-07): every free call pays this wrapper
+  # around its prompt, so a shorter one is a saving on every call.
+  - id: free.route.wrapper_chars
+    kind: size
+    better: lower
+    unit: chars
+    measure: "python scripts/rsi/free-route-wrapper.py"
+    pick: 'json:$.chars'
+    light: true
+  # Every free_chat task opens a new private claude.ai chat and pays these requests (the organization lookup, the
+  # account reads, the completion and its persistence read), each one spending the account's rate budget; a new
+  # chat should take as few as the protocol allows.
+  - id: free.claude.calls_per_new_chat
+    kind: count
+    better: lower
+    unit: requests
+    measure: "python scripts/rsi/free-claude-calls.py"
+    pick: 'json:$.requests'
+    gate: exact
   # Every CliMayte worker carries this brief on every turn of its session.
   - id: climayte.worker_brief_chars
     kind: size

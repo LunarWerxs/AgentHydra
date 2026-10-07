@@ -47,6 +47,9 @@ between server/ and web/.
   ring, `GET /dw/api/processes/:id/metrics`), roomy errors, alert rules and forms, a breadcrumb from the overview, a
   back button and a visible star. Build on its kit (`servers/info/kit/`), whose class strings never set one property twice
   (README, "Dev servers in the sidebar").
+- Work that touches free accounts leaves them measurably better (owner, 2026-10-07: "free instances should always
+  have a mild imperative for RSI"): the RSI metrics `free.route.wrapper_chars` and `free.claude.calls_per_new_chat`
+  (`.rsi/rsi.yaml`) are the ones to move, and `python <hydra>/ph.py rsi next --here` picks among them.
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
