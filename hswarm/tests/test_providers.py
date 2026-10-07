@@ -187,13 +187,13 @@ def test_each_h1_ranked_route_names_an_indexed_slug_and_a_sourced_price():
     routes = [m for m in config.MODELS if m.startswith("rank:") and m.rsplit(":", 1)[1] in H1_PROVIDERS]
     assert len(routes) == 33
     slugs = _index_slugs()
-    sourced = json.loads((DATA / "prices.json").read_text(encoding="utf-8"))
+    sourced = json.loads((DATA / "prices.json").read_text(encoding="utf-8"))["providers"]
     for name in routes:
         provider = name.rsplit(":", 1)[1]
         assert config.MODELS[name]["benchmark_slug"] in slugs, name
         row = sourced[f"{provider}/{name}"]
         assert row["source"].startswith("https://") and row["verified_at"], name
-        assert prices.price_for(f"{provider}/{name}") is not None, name
+        assert prices.registry_price(f"{provider}/{name}") is not None, name
 
 
 # Owner, 2026-10-07: Together answers its model list as a bare JSON array; models() read only {"data": [...]}.
