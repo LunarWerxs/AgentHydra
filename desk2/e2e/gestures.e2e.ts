@@ -14,7 +14,7 @@
 // never a control's text (a row's text is a chat title, a name cell's an account). GESTURE_ONLY=pane|desk and GESTURE_WHAT=<text>
 // pick cases; GESTURE_TRACE=1 prints each case's pointer, mouse, focus and click events (target tag, data-slot, data-state).
 
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -112,8 +112,11 @@ const TRACE = `(() => { window.__log = []; const d = (e) => { const t = e.target
   for (const k of ['pointerover', 'pointerenter', 'pointerdown', 'mousedown', 'focusin', 'focusout', 'pointerup', 'mouseup', 'click', 'touchstart', 'touchend']) window.addEventListener(k, d, true); return 1 })()`
 
 if (await fetch(`http://127.0.0.1:${PORT}/api/health`).then(() => true, () => false)) throw new Error(`port ${PORT} is already in use`)
+// Both thrown away when the run ends.
+const home = mkdtempSync(join(tmpdir(), 'desk2-gestures-home-'))
+const profile = mkdtempSync(join(tmpdir(), 'desk2-gestures-edge-'))
 const server = Bun.spawn([process.execPath, 'server/src/index.ts'], {
-  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: mkdtempSync(join(tmpdir(), 'desk2-gestures-home-')) },
+  cwd: DESK, env: { ...process.env, HYDRA_DESK_PORT: String(PORT), HYDRA_DESK_HOME: home },
   stdout: 'ignore', stderr: 'ignore', windowsHide: true,
 })
 let edge: ReturnType<typeof Bun.spawn> | null = null
@@ -126,7 +129,7 @@ try {
     if (!up) await sleep(500)
   }
   if (!up) throw new Error(`server did not come up on ${PORT}`)
-  edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'desk2-gestures-edge-'))}`,
+  edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--window-size=1500,950', '--disable-features=CalculateNativeWinOcclusion',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
   let list: { type: string; webSocketDebuggerUrl: string }[] = []
@@ -257,6 +260,9 @@ try {
 } finally {
   edge?.kill()
   server.kill()
+  await Promise.all([edge?.exited, server.exited])
+  // A folder Edge's helpers still hold a moment longer is left to the temp cleaner.
+  for (const dir of [home, profile]) try { rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
 }
 const failed = lines.filter((l) => !l.ok).length
 console.log(`${lines.length - failed} of ${lines.length} first gestures did their job`)

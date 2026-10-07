@@ -5,7 +5,7 @@ import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
 import { failure, parseResult } from './results'
 import { runFree, type FreeRunner } from './runner'
-import { ManagedFreeRuntime, type FreeRuntime } from './runtime'
+import { ManagedFreeRuntime, SetupRefused, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
 import type { FreeSyncHost } from './sync'
 import { addTokens, estimateTokens, tokenWindows } from './tokens'
@@ -98,7 +98,7 @@ export class FreeInstances {
     this.forgetting.add(id)
     try {
       try { await this.runtime.ensure(instance.provider) }
-      catch { throw new FreeError('Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.', 503) }
+      catch (e) { throw new FreeError(e instanceof SetupRefused ? e.message : 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.', 503) }
       const done = await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000)).catch(() => null)
       if (done?.code !== 0) throw new FreeError('The saved login could not be removed. Try again.', 503)
     } finally { this.forgetting.delete(id) }
@@ -284,7 +284,7 @@ export class FreeInstances {
       if (before) await Promise.race([before, new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }))])
       controller.signal.throwIfAborted()
       try { await this.runtime.ensure(r.provider) }
-      catch { job.result = failure('setup_failed', 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
+      catch (e) { job.result = failure('setup_failed', e instanceof SetupRefused ? e.message : 'Automatic setup could not finish. Check that Python 3.11 or later, Bun and Node.js are installed, then try again.'); return }
       controller.signal.throwIfAborted()
       job.phase = 'working'
       const config = this.runtime.config(r.instanceId)

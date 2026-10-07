@@ -505,7 +505,8 @@ rebuild the host (`cargo build --release` in `launcher/host`, then copy the exe 
 
 ## Where data lives
 
-- `~/.hydra-desk-2/` (set `HYDRA_DESK_HOME` to move it; every test points it at a temp folder):
+- `~/.hydra-desk-2/`, the real home (`HYDRA_DESK_HOME` runs a Desk on another folder, as every test, e2e script
+  and probe does; that Desk is a throwaway: it never joins Login sync and sets up no Free accounts):
   - `settings.json` your settings
   - `chats.json` the chat list, and `chats/<chatId>.jsonl` each chat's transcript
   - `logs/server.log` the server's output, `logs/launcher.log` what the launcher did,
@@ -566,7 +567,9 @@ another PC added appears here with its number and name and is checked at once; a
 PC still on that login, and a delete reaches every PC (its row becomes a sealed marker no PC adopts
 again). A pass runs 15 s after start, every 2 minutes, and right after a sign-in or a
 log out; `GET /api/free/sync` says when it last ran and its last error. A PC takes part once it runs
-Desk 2 with this feature and its AgentHydra is joined to the same Login sync.
+Desk 2 with this feature and its AgentHydra is joined to the same Login sync. Only the Desk on the real
+home (`~/.hydra-desk-2`) takes part: one on any other folder (a test's, a probe's) never syncs, so it can
+neither copy the logins into a folder that is thrown away nor log every PC out (`server/src/real-home.ts`).
 
 The table provides login checks, usage, Tokens, renaming, New private chat and Delete (the account, its chat
 handles and its saved login, here and on the other PCs; its chats stay at the provider).

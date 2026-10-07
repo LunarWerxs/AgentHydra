@@ -15,7 +15,8 @@
 // logged out turns its row into a signed-out marker naming that login; a PC still on that same login
 // logs out of it, and one signed in since sends its own up instead. Nothing is read or written while an
 // operation runs on the instance. A DELETE REACHES EVERY PC: the row becomes a deleted marker, and every PC
-// removes that account and never adopts it again.
+// removes that account and never adopts it again. So only the real home's Desk is a peer (real-home.ts): one on a
+// test's or a probe's folder never syncs.
 
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'

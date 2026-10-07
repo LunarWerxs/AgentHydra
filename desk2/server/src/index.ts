@@ -1,13 +1,13 @@
 // Hydra Desk server: Hono routes, the /ws hub, plugins, and the built window in production.
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
 import type { ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
 import { type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
+import { REAL_HOME } from './real-home'
 import { createSettingsStore, SettingsError } from './settings'
 import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
@@ -254,7 +254,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
 
 if (import.meta.main) {
   const port = Number(process.env.HYDRA_DESK_PORT) || 7798
-  const home = process.env.HYDRA_DESK_HOME || join(homedir(), '.hydra-desk-2')
+  const home = process.env.HYDRA_DESK_HOME || REAL_HOME
   const desk = await createServer({ port, home })
   console.log(`AgentHydra ${VERSION} on ${desk.url} (home ${home})`)
   const shutdown = async () => {

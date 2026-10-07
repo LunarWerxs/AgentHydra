@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSyn
 import { dirname, isAbsolute, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { FreeConfig, FreeProvider } from '@shared/free-instances'
+import { isRealHome } from '../real-home'
 
 export interface FreeRuntime {
   ready(): boolean
@@ -45,6 +46,9 @@ function setup(exe: string, args: string[], cwd: string, env: NodeJS.ProcessEnv 
   })
 }
 
+/** Setup refused on purpose, with the reason a person reads (any other setup error is a broken install). */
+export class SetupRefused extends Error {}
+
 /** Source is bundled with Desk; dependencies and state belong to Desk's data home. */
 export class ManagedFreeRuntime implements FreeRuntime {
   private root: string
@@ -65,6 +69,8 @@ export class ManagedFreeRuntime implements FreeRuntime {
     return { harnessDir: this.harnessDir, python: this.python, stateDir: join(this.home, 'free', 'instances', instanceId), cacheDir: join(this.root, 'cache') }
   }
   async ensure(provider: FreeProvider): Promise<void> {
+    // Only the real home's Desk sets it up (real-home.ts): a test's or a probe's would build it in a folder that is thrown away.
+    if (!isRealHome(this.home)) throw new SetupRefused('Free accounts run only in AgentHydra’s real home (~/.hydra-desk-2); this AgentHydra runs on another folder.')
     // Concurrent accounts share one dependency installation, never their cookies or locks.
     while (this.preparing) await this.preparing
     if (this.prepared.has(provider)) return

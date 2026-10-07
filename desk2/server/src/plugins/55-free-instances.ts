@@ -4,17 +4,16 @@ import { bridge } from '../bridge'
 import type { ServerContext } from '../context'
 import { FreeError, FreeInstances } from '../free-instances/service'
 import { daemonCreds, FreeSync } from '../free-instances/sync'
+import { isRealHome } from '../real-home'
 
 /** Root /api, independent of the upstream AgentHydra daemon and its CLI/Desktop accounts. */
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const service = (ctx.deps.freeInstances as FreeInstances | undefined) ?? new FreeInstances(ctx.home)
   ctx.onStop(() => service.stop())
-  // The logins go to the other PCs through AgentHydra's Login sync store, in the real app only: a test's
-  // instances never reach the owner's store.
-  const sync =
-    (ctx.deps.freeSync as FreeSync | undefined) ??
-    (ctx.deps.freeInstances || process.env.NODE_ENV === 'test' ? undefined : new FreeSync(ctx.home, service.syncHost(), () => daemonCreds(bridge().url)))
-  if (sync && !ctx.deps.freeSync) {
+  // The logins go to the other PCs through AgentHydra's Login sync store, from the real home only (real-home.ts): a
+  // test's, an e2e script's or a probe's Desk never reaches the owner's store.
+  const sync = isRealHome(ctx.home) ? new FreeSync(ctx.home, service.syncHost(), () => daemonCreds(bridge().url)) : undefined
+  if (sync) {
     service.onLoginChange = () => sync.nudge()
     sync.start()
     ctx.onStop(() => sync.stop())

@@ -2,11 +2,13 @@
 // temp home, the store a stand-in for the login-sync Worker's /v1/free (the Worker's own tests own its
 // compare-and-swap; this one keeps that contract and nothing else). DPAPI is real, so Windows only.
 
-import { afterEach, expect, test } from 'bun:test'
-import { randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { afterEach, expect, jest, test } from 'bun:test'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { FreeInstance, FreeJob } from '@shared/free-instances'
+import { createServer, type DeskServer } from '../src/index'
 import type { FreeRunner, RunOutput } from '../src/free-instances/runner'
 import type { FreeRuntime } from '../src/free-instances/runtime'
 import { FreeInstances } from '../src/free-instances/service'
@@ -145,5 +147,55 @@ test.skipIf(process.platform !== 'win32')('a Free login reaches the other PC, th
     expect(b.service.status().instances[0]!.loggedIn).toBe(false)
   } finally {
     store.stop()
+  }
+})
+
+// A Desk on a home that is not the real one (an e2e script's or a probe's, started outside bun test, so NODE_ENV
+// says nothing) is no sync peer: through its first pass it asks AgentHydra nothing about the Login sync, and a Free
+// operation there sets up no runtime in a folder that is thrown away.
+test('a Desk on a home that is not the real one never asks for the Login sync and sets up no Free runtime', async () => {
+  const asked: string[] = []
+  const daemon = Bun.serve({
+    port: 0,
+    fetch(req) {
+      const path = new URL(req.url).pathname
+      asked.push(path)
+      return path === '/api/cli-instances/sync' ? Response.json({ configured: true, enabled: true }) : Response.json({ error: 'not here' }, { status: 404 })
+    }
+  })
+  const home = mkdtempSync(join(tmpdir(), 'desk-free-throwaway-'))
+  const plugins = mkdtempSync(join(tmpdir(), 'desk-free-plugins-'))
+  dirs.push(home, plugins)
+  for (const name of ['10-bridge.ts', '55-free-instances.ts']) writeFileSync(join(plugins, name), `export { default } from ${JSON.stringify(join(import.meta.dir, '../src/plugins', name))}\n`)
+  const nodeEnv = process.env.NODE_ENV
+  delete process.env.NODE_ENV
+  jest.useFakeTimers()
+  let desk: DeskServer | undefined
+  try {
+    desk = await createServer({ port: 0, home, pluginsDir: plugins, deps: { hydraUrl: `http://127.0.0.1:${daemon.port}` } })
+    // Past the sync's first pass, 15 s after start.
+    jest.advanceTimersByTime(20_000)
+  } finally {
+    jest.useRealTimers()
+    if (nodeEnv === undefined) delete process.env.NODE_ENV
+    else process.env.NODE_ENV = nodeEnv
+  }
+  try {
+    await Bun.sleep(300)
+    expect(asked.filter(p => p.startsWith('/api/cli-instances/sync'))).toEqual([])
+    expect(existsSync(join(home, 'free', 'sync.json'))).toBe(false)
+
+    const post = (path: string, body: unknown) => fetch(`${desk!.url}/api/free${path}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json())
+    const account = (await post('/instances', { provider: 'claude' })) as FreeInstance
+    let job = (await post('/jobs', { requestId: randomUUID(), instanceId: account.id, provider: 'claude', command: 'auth' })) as FreeJob
+    for (let i = 0; i < 100 && job.state !== 'done'; i++) {
+      await Bun.sleep(10)
+      job = (await fetch(`${desk!.url}/api/free/jobs/${job.id}`).then(r => r.json())) as FreeJob
+    }
+    expect(job.result?.error?.code).toBe('setup_failed')
+    expect(existsSync(join(home, 'free', 'runtime'))).toBe(false)
+  } finally {
+    await desk?.stop()
+    daemon.stop(true)
   }
 })

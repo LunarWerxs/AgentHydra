@@ -27,7 +27,7 @@ Desktop ... I'm tired of not being able to see if a chat's working, stopping or 
   owner family) into `web/src/components/ui/` rather than writing new ones.
 - **Ports:** server `7798` (serves the built window and the API), Vite dev `4798` (proxies `/api` and
   `/ws` to 7798). Data home: `~/.hydra-desk-2/` (override with `HYDRA_DESK_HOME`, which every test sets
-  to a temp folder).
+  to a temp folder; a Desk on any folder but the real one never joins Login sync or sets up Free accounts).
 - **Claude Agent SDK** `@anthropic-ai/claude-agent-sdk@0.3.288`. Read its own types
   (`node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts`, `sdk-tools.d.ts`) before using any part of
   it. Never guess a field.
