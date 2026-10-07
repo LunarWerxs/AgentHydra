@@ -105,6 +105,22 @@ export interface DevWebProcess {
   waitingOnPort?: number | null
   projectId: string
   projectName: string
+  /** Its .devwebui entry's own runtime pin; without one the Settings default applies (DevWebSettings.runtime). */
+  runtime?: 'node' | 'bun'
+  /** Start after this port (or this sibling server's port) answers. */
+  waitForPort?: number | string
+  /** Sibling local ids it runs with as one unit: starting or stopping one starts or stops them all. */
+  links?: string[]
+  /** Starts whenever another server of its project is started by hand (a shared database). */
+  companion?: boolean
+  /** CPU of its process tree, percent of one core; null while it is down or resource monitoring is off. */
+  cpu?: number | null
+  /** Memory of its process tree in bytes; null while it is down or resource monitoring is off. */
+  memory?: number | null
+  /** De-duplicated errors recorded for it and not yet dismissed (GET /errors?process=). */
+  errorCount?: number
+  /** Alert rules of it that are over their threshold now. */
+  alertsFiring?: number
 }
 
 export interface DevWebProject {
@@ -125,6 +141,8 @@ export interface DevWebLogLine {
   stream: 'stdout' | 'stderr'
   line: string
   ts: number
+  /** Its place in the server's on-disk log (the log vault), counting up across runs: `before` pages back from it. */
+  seq?: number
 }
 
 /** POST /dw/api/processes/:id/start: `reused` when it was already up (Desk's or outside) and nothing was started. */
@@ -181,9 +199,328 @@ export function projectForCwd(projects: DevWebProject[], cwd: string): DevWebPro
   return best
 }
 
-/** The address a running server answers on, or null when it has no port or url. */
-export function processAddress(proc: Pick<DevWebProcess, 'port' | 'url'>): string | null {
+/**
+ * The address a running server answers on, or null when it has no port or url. `host` is Settings' link host
+ * (DevWebSettings.linkHost, e.g. a LAN name); blank or absent means localhost.
+ */
+export function processAddress(proc: Pick<DevWebProcess, 'port' | 'url'>, host?: string): string | null {
   if (proc.url && /^https?:\/\//i.test(proc.url)) return proc.url
-  if (proc.port) return `http://localhost:${proc.port}${proc.url?.startsWith('/') ? proc.url : ''}`
+  const h = host?.trim() || 'localhost'
+  if (proc.port) return `http://${h}:${proc.port}${proc.url?.startsWith('/') ? proc.url : ''}`
   return null
+}
+
+/**
+ * The service's routes for what DevWebUI had beyond starting and stopping (owner, 2026-10-07: "use all the
+ * functionality that originally existed in dev web UI for scanning and stuff like that"). Each is the service's
+ * /api/<route> and the page's /dw/api/<route> (Desk passes /dw/api/* on one to one); `:id` is a project or server id.
+ */
+export const DW_ROUTES = {
+  /** GET -> DevWebFound: what scans found that is not added and not ignored. */
+  found: 'found',
+  /** POST {preset, roots?} -> DevWebScanResult, also merged into `found`; one scan at a time. */
+  scan: 'scan',
+  /** POST -> {ok}: empties the found list (the next scan fills it again). */
+  forgetFound: 'found/forget',
+  /** GET ?path= -> DevWebPreview of a found .devwebui file or folder; writes nothing. */
+  preview: 'preview',
+  /** GET -> {paths}; POST {path}; DELETE ?path=: folders a scan no longer offers. */
+  ignored: 'ignored',
+  /** GET ?url= -> {dest}: a suggested folder for a clone. */
+  cloneDest: 'projects/clone-dest',
+  /** POST {url, dest} -> DevWebAddResult. */
+  clone: 'projects/clone',
+  /** PATCH {name?, color?} -> DevWebProject (rewrites its .devwebui); DELETE -> {ok}: stops what AgentHydra runs of it, forgets it, keeps the file. */
+  project: (id: string) => `projects/${encodeURIComponent(id)}`,
+  /** POST {on} -> DevWebProject: the master switch (autostart only). */
+  projectEnabled: (id: string) => `projects/${encodeURIComponent(id)}/enabled`,
+  /** POST {spec: DevWebProcessSpec} -> DevWebProject: adds a server to its .devwebui. */
+  projectProcesses: (id: string) => `projects/${encodeURIComponent(id)}/processes`,
+  /** GET -> DevWebTakeover; POST -> DevWebTakeOverResult (turns the triggers off, backups kept). */
+  takeover: (id: string) => `projects/${encodeURIComponent(id)}/takeover`,
+  /** POST -> {ok, restored}: puts a take-over's backups back. */
+  takeoverRestore: (id: string) => `projects/${encodeURIComponent(id)}/takeover/restore`,
+  /** PUT {spec} -> DevWebProject (a changed id renames it); DELETE -> DevWebProject (stopped first if AgentHydra runs it). */
+  process: (id: string) => `processes/${encodeURIComponent(id)}`,
+  /** GET -> DevWebProcessSpec: its entry as written in the file. */
+  processConfig: (id: string) => `processes/${encodeURIComponent(id)}/config`,
+  /** POST {on} -> DevWebProcess. */
+  processStarred: (id: string) => `processes/${encodeURIComponent(id)}/starred`,
+  /** POST {on} -> DevWebProcess: its own autostart toggle. */
+  processEnabled: (id: string) => `processes/${encodeURIComponent(id)}/enabled`,
+  /** GET ?before=<seq>&limit= -> {id, lines, more}: the newest `limit` lines before `before` (none: the newest). */
+  processLogs: (id: string) => `processes/${encodeURIComponent(id)}/logs`,
+  /** POST {confirm?} -> DevWebFreePort. */
+  freePort: (id: string) => `processes/${encodeURIComponent(id)}/free-port`,
+  /** POST -> {ok, started}: every enabled server of every enabled project. */
+  startAll: 'start-all',
+  /** POST -> {ok, stopped}: every server that is up, whoever started it. */
+  stopAll: 'stop-all',
+  /** GET ?process= -> DevWebErrorEntry[], newest first. */
+  errors: 'errors',
+  /** POST {fingerprint} -> {ok}. */
+  dismissError: 'errors/dismiss',
+  /** POST {process?} -> {ok}. */
+  clearErrors: 'errors/clear',
+  /** POST {file, line?, column?, processId?} -> DevWebOpenInEditor. */
+  openInEditor: 'open-in-editor',
+  /** GET -> DevWebSettings; PATCH Partial<DevWebSettings> -> DevWebSettings. */
+  settings: 'settings',
+  /** POST -> {ok, restarted}: restarts what AgentHydra runs so a changed runtime applies. */
+  restartRunning: 'settings/restart-running',
+  /** GET -> DevWebAlerts; POST DevWebAlertRuleInput -> DevWebAlertRule. */
+  alerts: 'alerts',
+  /** PATCH Partial<DevWebAlertRuleInput> -> DevWebAlertRule; DELETE -> {ok}. */
+  alert: (id: string) => `alerts/${encodeURIComponent(id)}`,
+  /** POST -> {ok}. */
+  clearAlertEvents: 'alerts/events/clear'
+} as const
+
+export type DevWebRuntimePref = 'auto' | 'node' | 'bun'
+export type DevWebSkipOs = 'windows' | 'mac' | 'linux'
+
+/** The dev servers' settings: <home>/devservers/settings.json, imported once from DevWebUI's ~/.devwebui/settings.json. */
+export interface DevWebSettings {
+  /** How a `bun …` / `node …` / package-script command is run when its entry has no runtime pin: auto follows the lockfile. */
+  runtime: DevWebRuntimePref
+  /** A start whose port is held by a program that is not a dev server ends that program first (never AgentHydra's own, an OS service or a tool daemon). */
+  freePortOnStart: boolean
+  /** When the dev-servers service starts (and, with this on, Desk starts it with itself), it starts every enabled server. */
+  autoStartOnLaunch: boolean
+  /** Sample CPU and memory of every running server (shown in the list and the info pane, and what alerts watch). */
+  monitorResources: boolean
+  /** The host a server's link opens on (a LAN name or IP); blank is localhost. */
+  linkHost: string
+  /** Scan for projects each time the dev-servers service starts (the first start always scans once). */
+  autoScan: boolean
+  /** Folder names (matched anywhere) or absolute paths a scan skips. */
+  scanExclude: string[]
+  skipWindows: boolean
+  skipMac: boolean
+  skipLinux: boolean
+  /** The system folder names each skip switch adds. */
+  osSkip: Record<DevWebSkipOs, string[]>
+}
+
+export type DevWebScanPreset = 'startup' | 'quick' | 'deep' | 'scoped'
+
+/** A .devwebui file a scan found. */
+export interface DevWebFoundFile {
+  path: string
+  name: string
+  processes: number
+  /** It parses as a project with at least one server. */
+  valid: boolean
+}
+
+/** A folder whose package scripts (or .claude/launch.json) could make a .devwebui. */
+export interface DevWebDetectedProject {
+  path: string
+  name: string
+  framework?: string
+  processes: number
+}
+
+export interface DevWebScanResult {
+  files: DevWebFoundFile[]
+  detected: DevWebDetectedProject[]
+  scannedDirs: number
+  /** Stopped at the result limit. */
+  truncated: boolean
+  /** Stopped at the time budget. */
+  timedOut: boolean
+  ms: number
+  roots: string[]
+}
+
+/** One entry of the found list: a .devwebui file (`file`, path is the file) or a folder (`detected`, path is the folder). */
+export interface DevWebFoundItem {
+  kind: 'file' | 'detected'
+  path: string
+  name: string
+  processes: number
+  framework?: string
+  /** For `file`: it parses as a project. */
+  valid?: boolean
+  /** When a scan first found it (ms epoch). */
+  foundAt: number
+}
+
+export interface DevWebFound {
+  /** Not added, not ignored, still on disk; files first, then most servers. */
+  items: DevWebFoundItem[]
+  /** A scan running now. */
+  scanning: { preset: DevWebScanPreset; startedAt: number } | null
+  lastScan: { at: number; preset: DevWebScanPreset; ms: number; scannedDirs: number; truncated: boolean; timedOut: boolean } | null
+}
+
+/** What adding a found item would add, read without writing anything. */
+export type DevWebPreview =
+  | { kind: 'file'; path: string; name: string; color?: string; processes: { id: string; name: string; command: string; port?: number }[]; error?: string }
+  | { kind: 'detected'; dir: string; fileName: '.devwebui'; proposal: DevWebProposal }
+  | { kind: 'none'; error: string }
+
+/** A .devwebui body proposed from a folder's dev scripts, editable before it is written (POST projects/scaffold). */
+export interface DevWebProposal {
+  name: string
+  framework?: string
+  processes: { id: string; name: string; command: string; cwd?: string; port?: number; url?: string; color?: string; runtime?: 'node' | 'bun'; env?: Record<string, string>; autostart?: boolean }[]
+  /** Dev scripts left out to keep the list short. */
+  truncated?: number
+}
+
+/** A server's entry as its .devwebui writes it (cwd relative to the file's folder, as written). */
+export interface DevWebProcessSpec {
+  id: string
+  name: string
+  command: string
+  cwd?: string
+  color?: string
+  env?: Record<string, string>
+  autostart?: boolean
+  starred?: boolean
+  port?: number
+  url?: string
+  runtime?: 'node' | 'bun'
+  waitForPort?: number | string
+  links?: string[]
+  companion?: boolean
+  /** docker compose services brought up before it starts; kept as written. */
+  compose?: unknown
+  /** expect/send rules typed into its stdin at a prompt; kept as written. */
+  answers?: { expect: string; send: string; once?: boolean }[]
+}
+
+export type DevWebAutostartKind = 'vscode-task' | 'vite-extension'
+
+/** Something that starts a project's dev server outside AgentHydra (VS Code tasks.json on folder open, the Vite extension). */
+export interface DevWebTrigger {
+  kind: DevWebAutostartKind
+  /** The config file holding it. */
+  file: string
+  label: string
+  detail: string
+}
+
+export interface DevWebTakeover {
+  triggers: DevWebTrigger[]
+  /** Backups a take-over wrote that can be put back. */
+  backups: string[]
+}
+
+export interface DevWebTakeOverResult {
+  ok: boolean
+  disabled: DevWebTrigger[]
+  backups: string[]
+  skipped: { file: string; reason: string }[]
+}
+
+/** Every "add a project" path answers this. */
+export interface DevWebAddResult {
+  ok?: boolean
+  error?: string
+  /** The folder a clone made. */
+  cloned?: string
+  project?: DevWebProject
+  /** The .devwebui written for it. */
+  created?: string
+  /** Added for the first time: nothing was started, `autostart` servers included. */
+  firstLoad?: boolean
+  /** No .devwebui there: this proposal can be reviewed and written (POST projects/scaffold). */
+  needsScaffold?: boolean
+  dir?: string
+  fileName?: '.devwebui'
+  proposal?: DevWebProposal
+  /** The folder also starts its server outside AgentHydra (offer the take-over). */
+  autostartTriggers?: DevWebTrigger[]
+}
+
+/** A program holding a port. */
+export interface DevWebPortOwner {
+  pid: number
+  name: string
+  cmdline?: string
+  uptime?: string
+}
+
+export interface DevWebFreePort {
+  ok?: boolean
+  /** Programs AgentHydra did not start hold it: confirm=true ends them. */
+  needsConfirm?: boolean
+  owners?: DevWebPortOwner[]
+  /** Servers AgentHydra runs that held it and were stopped cleanly. */
+  stoppedManaged?: string[]
+  /** Why it will not be freed (AgentHydra's own port, an OS service, a tool daemon). */
+  refused?: string
+}
+
+export type DevWebErrorSource = 'stderr' | 'stdout' | 'crash'
+
+/** A `file:line[:column]` an error names, for jumping to it in the editor. */
+export interface DevWebSourceFrame {
+  file: string
+  line: number
+  column?: number
+}
+
+/** A de-duplicated error a server printed (or its crash), kept across restarts in <home>/devservers/errors.ndjson. */
+export interface DevWebErrorEntry {
+  fingerprint: string
+  processId: string
+  localId: string
+  processName: string
+  projectId: string
+  projectName: string
+  source: DevWebErrorSource
+  /** The text as printed (ANSI removed), cut to a few KB. */
+  sample: string
+  frames: DevWebSourceFrame[]
+  count: number
+  firstSeen: number
+  lastSeen: number
+}
+
+export type DevWebOpenInEditor =
+  | { ok: true; editor: string; file: string; line: number; column: number }
+  | { ok: false; reason: 'bad-input' | 'not-found' | 'no-editor' | 'unsupported-editor' | 'launch-failed'; detail?: string }
+
+export type DevWebAlertMetric = 'cpu' | 'memory'
+
+/** "Alert if this server stays over <threshold> for <forMs>": cpu in percent of one core, memory in bytes. */
+export interface DevWebAlertRule {
+  id: string
+  processId: string
+  metric: DevWebAlertMetric
+  threshold: number
+  forMs: number
+  enabled: boolean
+  createdAt: number
+}
+
+export interface DevWebAlertRuleInput {
+  processId: string
+  metric: DevWebAlertMetric
+  threshold: number
+  forMs: number
+  enabled?: boolean
+}
+
+export interface DevWebAlertEvent {
+  id: string
+  ruleId: string
+  processId: string
+  processName: string
+  projectId: string
+  projectName: string
+  metric: DevWebAlertMetric
+  threshold: number
+  /** The sample that tripped it. */
+  value: number
+  firedAt: number
+}
+
+export interface DevWebAlerts {
+  rules: DevWebAlertRule[]
+  /** Newest first. */
+  events: DevWebAlertEvent[]
 }

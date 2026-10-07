@@ -619,6 +619,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
     <ChromeBar
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
+      :sliding="sliding"
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
       :tasks-on="showTasks"

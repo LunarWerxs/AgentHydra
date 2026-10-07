@@ -14,11 +14,12 @@ import type { UpdateOffer } from '@/lib/server-update'
 // sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue)
 // and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
 // Each shows when it is on: AgentHydra pressed, the other four blue. AgentHydra and Dev servers sit at the right
-// end, after a thin divider: with the sidebar open, at its right edge; hidden, right after Clean sidebar.
+// end, after a thin divider: with the sidebar open, at its right edge; hidden, right after Clean sidebar. The bar's
+// width follows the sidebar's slide (`sliding`, DeskFrame's 300 ms snap), so the two glide left and right with it.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
-defineProps<{ sidebarOpen: boolean; width: number; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
+defineProps<{ sidebarOpen: boolean; width: number; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
 const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; cloud: []; tasks: []; dev: []; clean: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
@@ -26,13 +27,15 @@ const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: 
 const BTN_SHAPE =
   'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text`
+/** Hidden, the bar is just its buttons: 12 + 7 buttons of 28 + 7 gaps of 4 + the 1px divider + 4 = 241. */
+const COLLAPSED_WIDTH = 241
 </script>
 
 <template>
   <div
     class="absolute left-0 top-0 z-[21] flex h-9 items-center gap-1 pl-3"
-    :class="sidebarOpen ? 'pr-2' : 'pr-1'"
-    :style="sidebarOpen ? { width: `${width}px` } : undefined"
+    :class="[sidebarOpen ? 'pr-2' : 'pr-1', sliding ? 'transition-[width,padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none' : '']"
+    :style="{ width: `${sidebarOpen ? width : COLLAPSED_WIDTH}px` }"
     data-peek-zone="keep"
   >
     <Tip label="Menu">
