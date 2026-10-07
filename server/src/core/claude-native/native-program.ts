@@ -162,13 +162,13 @@ function nativeFindManager(env: any, pin: any): any {
     'getSessionList',
     'archiveCascadeClosureOf',
     'losableWorkKind',
-    'hasPendingUserInput',
     'archiveSession',
     'localLineageIds',
   ]
   for (const name of methods) {
     if (typeof manager[name] !== 'function') nativeRefuse(`native method unavailable: ${name}`)
   }
+  nativePendingInput(manager)
   return { manager, filename, loaded, hash, exportName: pin.managerExport }
 }
 
@@ -215,6 +215,20 @@ function nativeStartingIds(manager: any): { has(id: string): boolean } {
   return starting
 }
 
+/**
+ * The pending-input check. Older builds keep it on the manager; 2.26454.0 moved it to
+ * `manager.heldInputChecks`, and asking the manager for it refused every archive with
+ * "native method unavailable: hasPendingUserInput" (2026-10-07).
+ */
+function nativePendingInput(manager: any): (session: any) => boolean {
+  if (typeof manager.hasPendingUserInput === 'function')
+    return (session) => manager.hasPendingUserInput(session)
+  const checks = manager.heldInputChecks
+  if (typeof checks?.hasPendingUserInput === 'function')
+    return (session) => checks.hasPendingUserInput(session)
+  nativeRefuse('native method unavailable: hasPendingUserInput')
+}
+
 function nativeSnapshot(manager: any, session: any): any {
   return JSON.parse(
     JSON.stringify({
@@ -228,7 +242,7 @@ function nativeSnapshot(manager: any, session: any): any {
       hasQuery: session.query != null,
       starting: nativeStartingIds(manager).has(session.sessionId),
       losableWork: manager.losableWorkKind(session.sessionId) ?? null,
-      pendingInput: manager.hasPendingUserInput(session),
+      pendingInput: nativePendingInput(manager)(session),
       pendingPermission: manager.permissionBroker.hasPendingFor(session.sessionId),
       pendingDialog: manager.userDialogBroker.hasPendingFor(session.sessionId),
       cascade: manager.archiveCascadeClosureOf(session).map((child: any) => child.sessionId),
@@ -777,6 +791,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeFindManager,
     nativeCheckIdentity,
     nativeStartingIds,
+    nativePendingInput,
     nativeSnapshot,
     nativeSelect,
     nativeIdentity,
