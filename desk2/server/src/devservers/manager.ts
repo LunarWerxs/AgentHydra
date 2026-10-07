@@ -25,6 +25,8 @@ import {
   type DevWebEnsure,
   type DevWebFound,
   type DevWebLogLine,
+  type DevWebMetricPoint,
+  type DevWebMetricsHistory,
   type DevWebPreview,
   type DevWebProcess,
   type DevWebProcessSpec,
@@ -92,6 +94,8 @@ const OUTSIDE_STOP_WAIT_MS = 4000
 const ENSURE_WAIT_MS = 45_000
 const ENSURE_POLL_MS = 250
 const SAMPLE_MS = 3000
+/** How far back each server's samples are kept for the info pane's charts: 10 minutes, 200 samples at SAMPLE_MS. */
+const METRICS_WINDOW_MS = 10 * 60_000
 
 interface Outside {
   pid: number
@@ -199,6 +203,8 @@ class Manager implements DevServers {
   private sampler: ReturnType<typeof setInterval> | null = null
   private sampling = false
   private lastMetrics = new Map<string, { cpu: number | null; memory: number | null }>()
+  /** Each server's samples of the last METRICS_WINDOW_MS, oldest first, for the info pane's charts (metricsHistory). */
+  private metricsRing = new Map<string, DevWebMetricPoint[]>()
   private composeHolds = new Map<string, ComposeHold>()
   private composeStops = new Set<Promise<void>>()
   /** Compose bring-ups still running `up`; stopAll waits for them so a cancelled one queues its stop first. */
@@ -600,6 +606,28 @@ class Manager implements DevServers {
     return { ok: true }
   }
 
+  /** A server's CPU and memory samples of the last METRICS_WINDOW_MS, oldest first (empty while monitoring is off or it never ran). */
+  async metricsHistory(id: string): Promise<DevWebMetricsHistory> {
+    await this.ready
+    this.must(id)
+    const since = this.now() - METRICS_WINDOW_MS
+    const points = (this.metricsRing.get(id) ?? []).filter((p) => p.t >= since)
+    return { id, sampleMs: SAMPLE_MS, windowMs: METRICS_WINDOW_MS, points }
+  }
+
+  /** Adds a sample to a server's ring and drops what fell out of the window (the ring never holds more than the window's worth). */
+  private remember(id: string, point: DevWebMetricPoint, at: number): void {
+    const ring = this.metricsRing.get(id) ?? []
+    ring.push(point)
+    const since = at - METRICS_WINDOW_MS
+    let drop = 0
+    while (drop < ring.length && ring[drop].t < since) drop++
+    const cap = Math.ceil(METRICS_WINDOW_MS / SAMPLE_MS) + 1
+    if (ring.length - drop > cap) drop = ring.length - cap
+    if (drop) ring.splice(0, drop)
+    this.metricsRing.set(id, ring)
+  }
+
   // The sampler runs only while resource monitoring is on and something runs; a start and each list look re-check that.
   syncSampler(): void {
     const up = [...this.entries.values()].some((e) => e.child || e.outside)
@@ -623,10 +651,14 @@ class Manager implements DevServers {
       const got = await sampleMetrics(pids)
       if (this.closed) return
       this.lastMetrics.clear()
+      const at = this.now()
       const samples = [...this.entries.values()].map((e) => {
         const pid = pidOf(e)
         const m = pid ? got[pid] : undefined
-        if (m) this.lastMetrics.set(e.def.id, { cpu: m.cpu, memory: m.memory })
+        if (m) {
+          this.lastMetrics.set(e.def.id, { cpu: m.cpu, memory: m.memory })
+          this.remember(e.def.id, { t: at, cpu: m.cpu, memory: m.memory }, at)
+        }
         const d = e.def
         return { processId: d.id, processName: d.name, projectId: d.projectId, projectName: d.projectName, cpu: m?.cpu ?? null, memory: m?.memory ?? null }
       })
@@ -1566,6 +1598,7 @@ class Manager implements DevServers {
     this.vault.delete(id)
     this.errorStore.clear(id)
     this.alertStore.removeForProcess(id)
+    this.metricsRing.delete(id)
     // Reconcile ends the server's own child and drops its toggle.
     this.applyFile(p.path)
     return this.projectView(p)

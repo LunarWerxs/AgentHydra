@@ -25,6 +25,7 @@ import type {
   DevWebFound,
   DevWebFreePort,
   DevWebLogLine,
+  DevWebMetricsHistory,
   DevWebOpenInEditor,
   DevWebPreview,
   DevWebProcess,
@@ -148,6 +149,8 @@ export interface DevServers {
   setProjectEnabled(id: string, on: boolean): Promise<DevWebProject>
   addProcess(projectId: string, spec: DevWebProcessSpec): Promise<DevWebProject>
   processConfig(id: string): Promise<DevWebProcessSpec>
+  /** Its CPU and memory samples of the last ~10 minutes, oldest first, for the info pane's charts. */
+  metricsHistory(id: string): Promise<DevWebMetricsHistory>
   updateProcess(id: string, spec: DevWebProcessSpec): Promise<DevWebProject>
   removeProcess(id: string): Promise<DevWebProject>
   setStarred(id: string, on: boolean): Promise<DevWebProcess>

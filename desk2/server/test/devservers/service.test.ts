@@ -60,6 +60,7 @@ function fakeDevServers(over: Partial<DevServers> = {}): DevServers & { stopped:
     setProjectEnabled: async () => project,
     addProcess: async () => project,
     processConfig: async () => ({ id: 'web', name: 'Web', command: 'bun dev' }),
+    metricsHistory: async (id: string) => ({ id, sampleMs: 3000, windowMs: 600_000, points: [] }),
     updateProcess: async () => project,
     removeProcess: async () => project,
     setStarred: async () => ({}) as never,

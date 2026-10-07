@@ -251,6 +251,7 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
   app.put('/api/processes/:id', async (c) => c.json(await dev.updateProcess(c.req.param('id'), specOf(await body(c)))))
   app.delete('/api/processes/:id', async (c) => c.json(await dev.removeProcess(c.req.param('id'))))
   app.get('/api/processes/:id/config', async (c) => c.json(await dev.processConfig(c.req.param('id'))))
+  app.get('/api/processes/:id/metrics', async (c) => c.json(await dev.metricsHistory(c.req.param('id'))))
   app.post('/api/processes/:id/starred', async (c) => c.json(await dev.setStarred(c.req.param('id'), flagOn(await body(c)))))
   app.post('/api/processes/:id/enabled', async (c) => c.json(await dev.setProcessEnabled(c.req.param('id'), flagOn(await body(c)))))
   app.post('/api/start-all', async (c) => c.json(await dev.startAllServers()))

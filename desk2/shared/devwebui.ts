@@ -250,6 +250,8 @@ export const DW_ROUTES = {
   processEnabled: (id: string) => `processes/${encodeURIComponent(id)}/enabled`,
   /** GET ?before=<seq>&limit= -> {id, lines, more}: the newest `limit` lines before `before` (none: the newest). */
   processLogs: (id: string) => `processes/${encodeURIComponent(id)}/logs`,
+  /** GET -> DevWebMetricsHistory: its CPU and memory samples of the last ~10 minutes, oldest first. */
+  processMetrics: (id: string) => `processes/${encodeURIComponent(id)}/metrics`,
   /**
    * POST {pids?: number[]} -> DevWebFreePort. No pids: when programs AgentHydra did not start hold the port, answers
    * needsConfirm with them and changes nothing. With pids: stops this app's own holders and ends only the listed
@@ -527,4 +529,24 @@ export interface DevWebAlerts {
   rules: DevWebAlertRule[]
   /** Newest first. */
   events: DevWebAlertEvent[]
+}
+
+/** One resource sample of a server's process tree: CPU in percent of one core, memory in resident bytes. */
+export interface DevWebMetricPoint {
+  t: number
+  cpu: number | null
+  memory: number | null
+}
+
+/**
+ * GET /dw/api/processes/:id/metrics: the service's last ~10 minutes of samples of a server, oldest first, so the info
+ * pane's CPU and memory charts have data the moment they open. Empty while resource monitoring is off or it never ran.
+ */
+export interface DevWebMetricsHistory {
+  id: string
+  /** How often the service samples, ms. */
+  sampleMs: number
+  /** How far back it keeps samples, ms. */
+  windowMs: number
+  points: DevWebMetricPoint[]
 }

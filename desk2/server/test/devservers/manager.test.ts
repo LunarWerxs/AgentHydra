@@ -1,6 +1,7 @@
 // The manager on fake ports and a fake scan (no real port is read, no home folder touched): one copy per server, a
 // conflict is refused and never killed, ids and the import from the old DevWebUI folder, one spawn per concurrent
-// start (a real short-lived bun child), starts racing waits, stops and restarts, and autostart only on a later load.
+// start (a real short-lived bun child), starts racing waits, stops and restarts, autostart only on a later load, and the
+// resource history the info pane's charts read.
 
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
@@ -335,4 +336,31 @@ describe('autostart', () => {
     await until(() => ds.runningIds().includes(autoId))
     expect(ds.runningIds()).toEqual([autoId]) // the other server has no autostart
   })
+})
+
+describe('resource history', () => {
+  test("a running server's samples of the last ten minutes are kept, oldest first, for the info pane's charts", async () => {
+    const w = new World()
+    const dir = tmp()
+    project(dir, [{ id: 'job', name: 'Job', command: LONG }])
+    const ds = w.make(tmp())
+    const { project: p } = await loaded(ds, dir)
+    const id = p.processes[0]!.id
+    await ds.start(id)
+
+    // The sampler measures the real child every few seconds; its first sample is there to read.
+    await until(async () => (await ds.metricsHistory(id)).points.length > 0, 20_000)
+    const first = await ds.metricsHistory(id)
+    expect(first).toMatchObject({ id, sampleMs: 3000, windowMs: 600_000 })
+    expect(first.points.every((x) => x.t === w.t)).toBe(true)
+    expect(first.points[0]!.memory).toBeGreaterThan(0)
+
+    // Eleven minutes on, what was sampled before has left the window: only the new samples are answered.
+    w.t += 11 * 60_000
+    await until(async () => (await ds.metricsHistory(id)).points.some((x) => x.t === w.t), 20_000)
+    const later = (await ds.metricsHistory(id)).points
+    expect(later.length).toBeGreaterThan(0)
+    expect(later.every((x) => x.t === w.t)).toBe(true)
+    await ds.stop(id)
+  }, 60_000)
 })
