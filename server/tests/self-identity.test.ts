@@ -78,6 +78,7 @@ function fakeChat(over: Partial<import('../src/core/chat-store-scan').DossierCha
     cwd: null,
     createdAt: null,
     lastActivityAt: null,
+    unread: false,
     archived: false,
     isArchived: false,
     permissionMode: null,
