@@ -61,8 +61,8 @@ identity mismatch is refused; do not weaken those guards to make one launch.
 
 ## AgentHydra settings
 
-Open **Settings → Instances → Desktop → Claude native control** (the Desktop table's gear opens it; in the
-old window of a release build, **Instances tab → gear**), choose the desktop account,
+Open **Settings → Instances → Desktop → Claude native control** (the Desktop table's gear opens it; in a
+1.x release's old window, **Instances tab → gear**), choose the desktop account,
 and enable **Start debugger automatically**. Settings are saved per profile; the
 panel lists all accounts with automatic startup enabled. The panel and the settings API
 are authoritative for current configuration; the account examples below record past proofs.

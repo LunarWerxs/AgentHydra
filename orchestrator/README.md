@@ -714,9 +714,9 @@ program needs:
 | `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
 
 The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;
-verified native archive skips those helpers entirely. A compiled build embeds
+verified native archive skips those helpers entirely. A release's `app/server.js` bundle embeds
 `Deliver-DesktopChat.ps1` and `Manage-DesktopChat.ps1` (`RUNTIME_MISC_FILES` in
-`server/src/misc-assets.ts`) and writes them out of the binary; before 2026-09-13 both were
+`server/src/misc-assets.ts`) and writes them out of the bundle; before 2026-09-13 both were
 located by hopping `..` off `import.meta.dir`, which inside a compiled exe points at the virtual
 embedded root, so all three routes were silently dead there and rename still answered `ok: true`.
 

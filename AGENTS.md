@@ -28,8 +28,8 @@ right-click menus, pop-ups or developer-menu toggles.
   need a developer-menu click at every launch. A direct Claude shortcut bypasses
   this launch setting.
 - The user-facing control is **Settings → Instances → Desktop → Claude native
-  control → Start debugger automatically**, per account (the old window of a
-  release build: Instances tab → gear). Preserve existing port and routing
+  control → Start debugger automatically**, per account (in a 1.x release's old
+  window: Instances tab → gear). Preserve existing port and routing
   mode; each profile must have a distinct debugger port. New profiles are not
   automatically opted in. Check saved settings instead of assuming a fleet-wide
   default.
