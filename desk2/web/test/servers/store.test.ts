@@ -47,7 +47,7 @@ beforeAll(() => {
         return new Response(JSON.stringify({ error: 'the dev-servers service is not running, or did not answer within 2 s' }), { status: 503, headers: { 'content-type': 'application/json' } })
       }
     } else state = 'running'
-    return json([{ id: 'p1', name: 'Example', path: 'C:/Users/me/Code/example/.devwebui', enabled: true, processes: [] }])
+    return json([{ id: 'p1', name: 'Example', path: 'C:/Users/me/Code/example/.devwebui', enabled: true, company: { name: 'Code', dir: 'C:/Users/me/Code' }, processes: [] }])
   }) as typeof fetch
 })
 afterAll(() => {

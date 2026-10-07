@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
-import { actionDisabled, allKey, findServer, focusPlan, groupActions, groupServers, isUp, listView, needsSetup, openable, openPlan, OUTSIDE_NOTE, otherRunning, outsideNote, paneView, parseAddress, type PaneTab, proxyAddress, serverActions, serverPort, serviceLine, sortServers, startBlock, startReused, statusDot, tailLines } from '../../src/components/servers/logic'
+import { type DevWebCompany, type DevWebFoundRow, type DevWebProcess, type DevWebProject, folderContains, processAddress, projectForCwd } from '@shared/devwebui'
+import { actionDisabled, allKey, companyGroups, findServer, focusPlan, foundTree, groupActions, groupServers, isUp, listView, otherGroups, otherLabel, shownServers, needsSetup, openable, openPlan, OUTSIDE_NOTE, otherRunning, outsideNote, paneView, parseAddress, type PaneTab, proxyAddress, serverActions, serverPort, serviceLine, sortServers, startBlock, startReused, statusDot, tailLines } from '../../src/components/servers/logic'
 
-const project = (id: string, file: string): DevWebProject => ({ id, name: id, path: file, enabled: true, processes: [] })
+const project = (id: string, file: string, company: DevWebCompany = { name: 'Code', dir: 'C:/Users/me/Code' }): DevWebProject => ({ id, name: id, path: file, enabled: true, company, processes: [] })
 const projects = [project('app', 'C:\\Users\\me\\Code\\App\\.devwebui'), project('inner', 'C:/Users/me/Code/App/packages/inner/.devwebui')]
 
 describe('which project a chat folder belongs to', () => {
@@ -139,6 +139,79 @@ describe('the Dev servers list', () => {
     expect(groups.map((g) => g.project.name)).toEqual(['Charlie', 'Mike', 'Alpha', 'Bravo', 'Zulu'])
     expect(groups.map((g) => g.running)).toEqual([1, 1, 0, 0, 0])
     expect(groups[1]?.servers.map((p) => p.id)).toEqual(['b', 'c'])
+  })
+
+  // Owner, 2026-10-07: groups "default collapsed if they have none running. If they do have any running, it should show
+  // the one running unless I expand", by "their main parent company".
+  it('a closed project still lists its servers that are up, and the selected one; an open one lists them all', () => {
+    const procs = [proc('a', 'running'), proc('b', 'stopped'), proc('c', 'starting'), proc('d', 'crashed'), proc('e', 'stopping')]
+    expect(shownServers(procs, false, null).map((p) => p.id)).toEqual(['a', 'c', 'e'])
+    expect(shownServers(procs, false, 'd').map((p) => p.id)).toEqual(['a', 'c', 'd', 'e'])
+    expect(shownServers(procs, true, null).map((p) => p.id)).toEqual(['a', 'b', 'c', 'd', 'e'])
+  })
+
+  it('groups projects by company, companies with a server up first, counting every server of theirs', () => {
+    const shop: DevWebCompany = { name: 'Shop', dir: 'C:/Users/me/Code/Shop' }
+    const zoo: DevWebCompany = { name: 'Zoo', dir: 'C:/Users/me/Code/Zoo' }
+    const at = (id: string, company: DevWebCompany, processes: DevWebProcess[]): DevWebProject => ({ ...project(id, `${company.dir}/${id}/.devwebui`, company), processes })
+    const groups = groupServers([at('admin', shop, [proc('x', 'stopped')]), at('web', zoo, [proc('y', 'running'), proc('z', 'stopped')]), at('site', shop, [proc('w', 'stopped')])])
+    const companies = companyGroups(groups)
+    expect(companies.map((c) => [c.company.name, c.groups.map((g) => g.project.id), c.up, c.total])).toEqual([
+      ['Zoo', ['web'], 1, 2],
+      ['Shop', ['admin', 'site'], 0, 2]
+    ])
+  })
+
+  it("files found folders by company (a leading + left out of the order), then the folder below it (the company's own first), then name", () => {
+    const app: DevWebCompany = { name: 'App', dir: 'D:/Code/App' }
+    const row = (kind: 'file' | 'detected', path: string, name: string, company = app): DevWebFoundRow => ({ kind, path, name, processes: 1, foundAt: 0, company })
+    const tree = foundTree([
+      row('file', 'D:\\Code\\App\\copy-2\\examples\\extra.devwebui', 'Extra'),
+      row('detected', 'D:/Code/App/copy-2/web', 'Web'),
+      row('detected', 'D:/Code/App/copy-2/admin/web', 'Web'),
+      row('detected', 'D:/Code/App', 'App'),
+      row('detected', 'D:/Code/App/copy-1', 'App copy'),
+      row('detected', 'D:/Code/+Notes', 'Notes', { name: '+Notes', dir: 'D:/Code/+Notes' }),
+      row('detected', 'D:/Code/Blog', 'Blog', { name: 'Blog', dir: 'D:/Code/Blog' })
+    ])
+    expect(tree.map((c) => [c.company.name, c.count, c.projects.map((p) => [p.name, p.items.map((i) => i.name)])])).toEqual([
+      ['App', 5, [['App', ['App']], ['copy-1', ['App copy']], ['copy-2', ['Extra', 'Web', 'Web']]]],
+      ['Blog', 1, [['Blog', ['Blog']]]],
+      ['+Notes', 1, [['+Notes', ['Notes']]]]
+    ])
+  })
+
+  it('tells found items that share a name apart by where each is below its project folder', () => {
+    const app: DevWebCompany = { name: 'App', dir: 'D:/Code/App' }
+    const row = (kind: 'file' | 'detected', path: string, name: string): DevWebFoundRow => ({ kind, path, name, processes: 1, foundAt: 0, company: app })
+    const [copy] = foundTree([
+      row('detected', 'D:/Code/App/copy-2/web', 'Web'),
+      row('file', 'D:/Code/App/copy-2/admin/web/.devwebui', 'web'),
+      row('detected', 'D:/Code/App/copy-2/api', 'API')
+    ])[0]!.projects
+    expect([...copy!.where]).toEqual([
+      ['D:/Code/App/copy-2/admin/web/.devwebui', 'admin/web'],
+      ['D:/Code/App/copy-2/web', 'web']
+    ])
+  })
+
+  it('names an untitled other server by the folder it runs from below its company', () => {
+    const hydra = { name: 'Hydra', dir: 'D:/Code/Hydra' }
+    expect(otherLabel({ title: 'Example shop', process: 'node', dir: 'D:/Code/Hydra/web', company: hydra })).toEqual({ name: 'Example shop', where: null })
+    expect(otherLabel({ title: null, process: 'bun', dir: 'D:/Code/Hydra/app/server', company: hydra })).toEqual({ name: 'bun', where: 'app/server' })
+    expect(otherLabel({ title: null, process: 'node', dir: 'D:/Code/Hydra', company: hydra })).toEqual({ name: 'node', where: null })
+    expect(otherLabel({ title: null, process: null, dir: null, company: null })).toEqual({ name: 'Server', where: null })
+  })
+
+  it('files other servers by the company of their folder, by name, the ones with no folder last, by port inside', () => {
+    const s = (port: number, company: DevWebCompany | null) => ({ port, company })
+    const hydra = { name: 'Hydra', dir: 'D:/Code/Hydra' }
+    const groups = otherGroups([s(9000, null), s(8790, hydra), s(7799, hydra), s(8137, { name: 'Alpha', dir: 'D:/Code/Alpha' })])
+    expect(groups.map((g) => [g.company?.name ?? null, g.servers.map((x) => x.port)])).toEqual([
+      ['Alpha', [8137]],
+      ['Hydra', [7799, 8790]],
+      [null, [9000]]
+    ])
   })
 
   it('offers each row the buttons its status allows', () => {

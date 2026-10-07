@@ -13,7 +13,7 @@
 // the chat's folder. No dependency on @modelcontextprotocol/sdk: newline-delimited JSON-RPC 2.0 over stdio, written
 // by hand like connectors/redesign-mcp.ts, whose stdio loop it shares.
 
-import { type DevWebAddResult, type DevWebEnsure, type DevWebLogLine, type DevWebProcess, type DevWebProject, type DevWebServers, DW_ROUTES, type LocalServer, processAddress } from '@shared/devwebui'
+import { type DevWebAddResult, type DevWebEnsure, type DevWebFound, type DevWebLogLine, type DevWebProcess, type DevWebProject, type DevWebServers, DW_ROUTES, type LocalServer, processAddress } from '@shared/devwebui'
 import { serveStdio } from '../connectors/redesign-mcp'
 
 export interface DevServersMcpOptions {
@@ -317,8 +317,12 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
         return route(`processes/${encodeURIComponent(await sid())}/restart`, 'POST', {})
       case 'dev_servers_scan':
         return route(DW_ROUTES.scan, 'POST', { preset: a.preset === 'deep' ? 'deep' : 'quick', ...(Array.isArray(a.roots) ? { roots: a.roots } : {}) })
-      case 'dev_servers_found':
-        return route(DW_ROUTES.found)
+      case 'dev_servers_found': {
+        // Each found row carries its company for the sidebar's grouping; a chat has the path, so the hundreds of
+        // repeated company objects stay out of its context.
+        const body = answerOf<DevWebFound>(await desk(`/${DW_ROUTES.found}`))
+        return ok(JSON.stringify({ ...body, items: (body.items ?? []).map(({ company: _company, ...item }) => item) }, null, 2))
+      }
       case 'dev_project_add':
         return projectAdd(a)
       case 'dev_project_remove':

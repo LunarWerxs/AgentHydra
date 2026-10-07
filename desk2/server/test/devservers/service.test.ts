@@ -24,7 +24,7 @@ const home = (): string => {
   return d
 }
 
-const project = { id: 'p1', name: 'Site', path: 'C:/Users/me/site/.devwebui', enabled: true, processes: [] }
+const project = { id: 'p1', name: 'Site', path: 'C:/Users/me/site/.devwebui', enabled: true, company: { name: 'site', dir: 'C:/Users/me/site' }, processes: [] }
 
 function fakeDevServers(over: Partial<DevServers> = {}): DevServers & { stopped: number } {
   const dev = {

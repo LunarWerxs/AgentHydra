@@ -45,6 +45,7 @@ import { killHostTree } from '../host/launch'
 import { type Scan, scanPorts } from '../localhost/ports'
 import { type AdoptContext, findByFolder, judgePort } from './adopt'
 import { stripAnsi } from './ansi'
+import { companyOf } from './company'
 import type { CreateDevServers, DevServers, DevServersDeps, LoadAnswer, ScaffoldProposal } from './contract'
 import { DevServerError } from './contract'
 import { setUpFolder } from './folder'
@@ -62,7 +63,7 @@ import { sampleMetrics } from './metrics'
 import { openInEditor } from './open-in-editor'
 import { cloneRepo, repoNameFromUrl, suggestCloneParent } from './clone'
 import { addSpec, editProject, readSpec, removeSpec, replaceSpec, setStarredInFile } from './edit'
-import { addIgnored, forgetFound, listFound, mergeScan, readFound, readIgnored, removeIgnored } from './found'
+import { addIgnored, forgetFound, itemDir, listFound, mergeScan, readFound, readIgnored, removeIgnored } from './found'
 import { detectProjectRuntime, effectiveRuntime, withRuntime } from './runtime'
 import { scanExcludes, scanProjects } from './scan'
 import { defaultSettings, cleanSettingsPatch, readSettings, writeSettings } from './settings'
@@ -498,6 +499,7 @@ class Manager implements DevServers {
       ...(p.color ? { color: p.color } : {}),
       path: p.path,
       enabled: this.projectEnabled(p.id),
+      company: companyOf(path.dirname(p.path)),
       processes: p.processIds.map((id) => this.view(this.entries.get(id)!)),
     }
   }
@@ -1429,7 +1431,8 @@ class Manager implements DevServers {
 
   async found(): Promise<DevWebFound> {
     await this.ready
-    return { items: listFound(this.home, this.registry, readIgnored(this.home, this.importFrom())), scanning: this.scanRunning, lastScan: readFound(this.home).lastScan }
+    const items = listFound(this.home, this.registry, readIgnored(this.home, this.importFrom())).map((i) => ({ ...i, company: companyOf(itemDir(i)) }))
+    return { items, scanning: this.scanRunning, lastScan: readFound(this.home).lastScan }
   }
 
   async scan(opts: { preset: DevWebScanPreset; roots?: string[] }): Promise<DevWebScanResult> {

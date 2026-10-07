@@ -32,13 +32,13 @@ const proc = (over: Partial<DevWebProcess>): DevWebProcess => ({
 const web = proc({ status: 'running', owner: 'outside', pid: 77 })
 const api = proc({ id: 'p1.api', localId: 'api', name: 'Api', port: 4300, status: 'stopped', conflict: 'port 4300 is in use by example-app (pid 9)' })
 const docs = proc({ id: 'p1.docs', localId: 'docs', name: 'Docs', port: 4400, status: 'starting', owner: 'desk', pid: 66 })
-const project = { id: 'p1', name: 'Site', path: `${CWD}/.devwebui`, enabled: true, processes: [web, api, docs] }
+const project = { id: 'p1', name: 'Site', path: `${CWD}/.devwebui`, enabled: true, company: { name: 'Site', dir: CWD }, processes: [web, api, docs] }
 const worker = proc({ id: 'p2.worker', localId: 'worker', name: 'Worker', cwd: 'C:/Users/me/other', status: 'running', owner: 'desk', pid: 88, projectId: 'p2', projectName: 'Other' })
-const other = { id: 'p2', name: 'Other', path: 'C:/Users/me/other/.devwebui', enabled: true, processes: [worker] }
+const other = { id: 'p2', name: 'Other', path: 'C:/Users/me/other/.devwebui', enabled: true, company: { name: 'other', dir: 'C:/Users/me/other' }, processes: [worker] }
 const servers: DevWebServers = {
   project,
   projects: [project, other],
-  others: [{ port: 5173, address: '127.0.0.1', pid: 100, process: 'node', kind: 'dev', url: 'http://localhost:5173/', title: 'Example', http: 200 }]
+  others: [{ port: 5173, address: '127.0.0.1', pid: 100, process: 'node', dir: null, company: null, kind: 'dev', url: 'http://localhost:5173/', title: 'Example', http: 200 }]
 }
 
 interface Call {

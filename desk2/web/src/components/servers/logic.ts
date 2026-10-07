@@ -2,7 +2,7 @@
 // dev-servers service's status and the project list, when it sets the chat's folder up, a server's dot, the address bar's
 // input, and the pane's width.
 import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles, type BrowserTab, isRealPage } from '@shared/browser'
-import { DW_PROXY, type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
+import { DW_PROXY, type DevWebCompany, type DevWebFoundRow, type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
 import { shortName } from './names'
 
 /** What the pane draws. */
@@ -488,8 +488,8 @@ export function matchesFilter(text: string, filter: string): boolean {
 export const filterServers = <T extends Pick<DevWebProcess, 'name' | 'port' | 'status'>>(procs: T[], filter: string): T[] =>
   procs.filter((p) => matchesFilter(`${p.name} ${p.port ? `:${p.port} ${p.port}` : ''} ${p.status}`, filter))
 
-export const filterLocal = <T extends Pick<LocalServer, 'port' | 'process' | 'title'>>(rows: T[], filter: string): T[] =>
-  rows.filter((r) => matchesFilter(`:${r.port} ${r.port} ${r.process ?? ''} ${r.title ?? ''}`, filter))
+export const filterLocal = <T extends Pick<LocalServer, 'port' | 'process' | 'title' | 'company' | 'dir'>>(rows: T[], filter: string): T[] =>
+  rows.filter((r) => matchesFilter(`:${r.port} ${r.port} ${r.process ?? ''} ${r.title ?? ''} ${r.company?.name ?? ''} ${r.dir ?? ''}`, filter))
 
 export const filterProfiles =(rows: ProfileRow[], filter: string): ProfileRow[] => rows.filter((r) => matchesFilter(`${r.name} ${r.label ?? ''} ${r.note ?? ''} ${r.hosts.join(' ')}`, filter))
 
@@ -582,6 +582,129 @@ export function groupServers(projects: readonly DevWebProject[]): ServerGroup[] 
   return projects
     .map((project) => ({ project, servers: sortServers(project.processes), running: project.processes.filter((p) => p.status === 'running').length }))
     .sort((a, b) => Number(b.running > 0) - Number(a.running > 0) || a.project.name.localeCompare(b.project.name))
+}
+
+// ---- the list's grouping (owner, 2026-10-07: "sorted by ... their main parent company", groups "collapsible ... default
+// collapsed if they have none running. If they do have any running, it should show the one running unless I expand",
+// the found ones "by their company, project, name") ----
+
+const byName = (a: string, b: string): number => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true })
+/** Companies by name, a leading "+" or "_" left out (a folder named "+Notes" sorts under N, not before A). */
+const byCompany = (a: DevWebCompany | null, b: DevWebCompany | null): number => {
+  const bare = (c: DevWebCompany | null) => c?.name.replace(/^[^\p{L}\p{N}]+/u, '') || c?.name || ''
+  return byName(bare(a), bare(b))
+}
+const slashed = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+/** Where `dir` is below `parent`, as a relative path; null when it is not below it (or is it). */
+const below = (dir: string, parent: string): string | null => {
+  const d = slashed(dir)
+  const p = slashed(parent)
+  return d.toLowerCase().startsWith(`${p.toLowerCase()}/`) ? d.slice(p.length + 1) : null
+}
+
+/** A company's projects in the list, with how many of their servers are up and how many there are (whatever a filter shows). */
+export interface CompanyGroup<G extends Pick<ServerGroup, 'project'> = ServerGroup> {
+  company: DevWebCompany
+  groups: G[]
+  up: number
+  total: number
+}
+
+/** The project groups by company: companies with a server up first, then by name; inside, the groups' own order. */
+export function companyGroups<G extends Pick<ServerGroup, 'project'>>(groups: readonly G[]): CompanyGroup<G>[] {
+  const by = new Map<string, CompanyGroup<G>>()
+  for (const g of groups) {
+    const k = g.project.company.dir.toLowerCase()
+    let c = by.get(k)
+    if (!c) by.set(k, (c = { company: g.project.company, groups: [], up: 0, total: 0 }))
+    c.groups.push(g)
+    c.up += g.project.processes.filter((p) => isUp(p.status)).length
+    c.total += g.project.processes.length
+  }
+  return [...by.values()].sort((a, b) => Number(b.up > 0) - Number(a.up > 0) || byCompany(a.company, b.company))
+}
+
+/**
+ * A project group's rows: open, every server; closed, the ones that are up or still stopping and the one selected, so
+ * nothing running hides (and a Stop from a closed group keeps its row until the server is down).
+ */
+export function shownServers<T extends Pick<DevWebProcess, 'id' | 'status'>>(servers: readonly T[], open: boolean, selectedId: string | null): T[] {
+  return open ? [...servers] : servers.filter((p) => isUp(p.status) || p.status === 'stopping' || p.id === selectedId)
+}
+
+/** A project folder in the found list: the folder below its company that the items are in. */
+export interface FoundProject<T> {
+  dir: string
+  name: string
+  items: T[]
+  /** Where an item is below this folder, for the items whose name another item here shares (four "Web"s say which). */
+  where: Map<string, string>
+}
+
+export interface FoundCompany<T> {
+  company: DevWebCompany
+  projects: FoundProject<T>[]
+  count: number
+}
+
+/**
+ * The found list by company, then by the folder just below the company's (each copy or app of it; the company's own
+ * folder is a project too, named for the company, and comes first), then by name; companies by name.
+ */
+export function foundTree<T extends Pick<DevWebFoundRow, 'kind' | 'path' | 'name' | 'company'>>(items: readonly T[]): FoundCompany<T>[] {
+  const companies = new Map<string, { company: DevWebCompany; projects: Map<string, FoundProject<T>> }>()
+  for (const i of items) {
+    const own = slashed(i.path)
+    const dir = i.kind === 'file' ? own.slice(0, Math.max(own.lastIndexOf('/'), 0)) : own
+    const cdir = slashed(i.company.dir)
+    const top = below(dir, cdir)?.split('/')[0] ?? ''
+    const ck = cdir.toLowerCase()
+    let c = companies.get(ck)
+    if (!c) companies.set(ck, (c = { company: i.company, projects: new Map() }))
+    const pdir = top ? `${cdir}/${top}` : cdir
+    let pr = c.projects.get(pdir.toLowerCase())
+    if (!pr) c.projects.set(pdir.toLowerCase(), (pr = { dir: pdir, name: top || i.company.name, items: [], where: new Map() }))
+    pr.items.push(i)
+  }
+  return [...companies.values()]
+    .map(({ company, projects }) => {
+      const list = [...projects.values()].sort((a, b) => Number(b.dir === slashed(company.dir)) - Number(a.dir === slashed(company.dir)) || byName(a.name, b.name))
+      for (const pr of list) {
+        pr.items.sort((a, b) => byName(a.name, b.name) || byName(a.path, b.path))
+        const named = new Map<string, number>()
+        for (const i of pr.items) named.set(i.name.toLowerCase(), (named.get(i.name.toLowerCase()) ?? 0) + 1)
+        for (const i of pr.items) {
+          if ((named.get(i.name.toLowerCase()) ?? 0) < 2) continue
+          const own = slashed(i.path)
+          const at = below(i.kind === 'file' ? own.slice(0, Math.max(own.lastIndexOf('/'), 0)) : own, pr.dir)
+          if (at) pr.where.set(i.path, at)
+        }
+      }
+      return { company, projects: list, count: list.reduce((n, pr) => n + pr.items.length, 0) }
+    })
+    .sort((a, b) => byCompany(a.company, b.company))
+}
+
+/** Other servers by the company of the folder they run from, companies by name and the ones with no folder last; by port inside. */
+export function otherGroups<T extends Pick<LocalServer, 'company' | 'port'>>(rows: readonly T[]): { company: DevWebCompany | null; servers: T[] }[] {
+  const by = new Map<string, { company: DevWebCompany | null; servers: T[] }>()
+  for (const r of rows) {
+    const k = r.company ? r.company.dir.toLowerCase() : ''
+    let g = by.get(k)
+    if (!g) by.set(k, (g = { company: r.company, servers: [] }))
+    g.servers.push(r)
+  }
+  for (const g of by.values()) g.servers.sort((a, b) => a.port - b.port)
+  return [...by.values()].sort((a, b) => Number(!a.company) - Number(!b.company) || byCompany(a.company, b.company))
+}
+
+/**
+ * An other server's row: its page title, else its program's name with the folder it runs from below its company (a bare
+ * "node" or "bun" says nothing; "bun  app/desk2/server" does), else "Server".
+ */
+export function otherLabel(o: Pick<LocalServer, 'title' | 'process' | 'dir' | 'company'>): { name: string; where: string | null } {
+  if (o.title) return { name: o.title, where: null }
+  return { name: o.process || 'Server', where: o.dir && o.company ? below(o.dir, o.company.dir) : null }
 }
 
 /** The key the shared state's `busy` holds while a project's Start all / Stop all runs. */

@@ -36,7 +36,10 @@ between server/ and web/.
   owner 2026-10-06): `web/src/components/servers/DevServersList.vue`, and slides in the Dev servers page on its
   overview. It, the page and `ServersPane` read the one client state, `servers/store.ts` (on `api.ts` and `logic.ts`;
   one polling loop, only while one is on screen), never a second client. A click selects a server, project or found
-  folder and the page describes it, never starting anything (owner 2026-10-07; `store.select`, `servers/info/`); its Open in browser hands the servers pane the
+  folder and the page describes it, never starting anything (owner 2026-10-07; `store.select`, `servers/info/`). The list
+  is grouped by company (`server/src/devservers/company.ts`, the README's rule), every group closed by default yet
+  showing what runs (owner 2026-10-07: "default collapsed if they have none running ... show the one running unless I
+  expand"): study how DevWebUI did a thing before porting it, never only its surface. Its Open in browser hands the servers pane the
   project's folder and the server (`store.show`, DeskFrame's `serversCwd`). Everything DevWebUI did is here: scanning
   and the found list, adding, editing and removing projects and servers, take-over, logs history, errors, free port,
   metrics and alerts, and its settings in Settings -> Dev servers. The Dev servers page is its own page, never a

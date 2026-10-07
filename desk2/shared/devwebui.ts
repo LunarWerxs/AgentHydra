@@ -39,12 +39,23 @@ export const DW_LOCALHOST = `${DW_BASE}/localhost`
 /** What a listening port is: this window or a chat's host, AgentHydra's daemon, an OS service, a tool daemon, a dev runtime, or any other program. */
 export type LocalServerKind = 'desk' | 'agenthydra' | 'system' | 'service' | 'dev' | 'app'
 
+/** The company a folder belongs to (server/src/devservers/company.ts), which the sidebar's Dev servers list groups by. */
+export interface DevWebCompany {
+  name: string
+  /** Its folder, absolute, with forward slashes. */
+  dir: string
+}
+
 export interface LocalServer {
   port: number
   address: string
   pid: number
   /** The owning process's name, without .exe; null when it could not be read. */
   process: string | null
+  /** The project folder its command line names (company.ts `commandDir`); null when it names none. */
+  dir: string | null
+  /** The company of `dir`. */
+  company: DevWebCompany | null
   kind: LocalServerKind
   /** Where a click opens it. */
   url: string
@@ -131,6 +142,8 @@ export interface DevWebProject {
   path: string
   /** The project's master switch (state.json): off leaves every server out of autostart. */
   enabled: boolean
+  /** The company of its folder. */
+  company: DevWebCompany
   processes: DevWebProcess[]
 }
 
@@ -352,9 +365,14 @@ export interface DevWebFoundItem {
   foundAt: number
 }
 
+/** A found list entry as the service lists it: with the company of its folder. */
+export interface DevWebFoundRow extends DevWebFoundItem {
+  company: DevWebCompany
+}
+
 export interface DevWebFound {
   /** Not added, not ignored, still on disk; files first, then most servers. */
-  items: DevWebFoundItem[]
+  items: DevWebFoundRow[]
   /** A scan running now. */
   scanning: { preset: DevWebScanPreset; startedAt: number } | null
   lastScan: { at: number; preset: DevWebScanPreset; ms: number; scannedDirs: number; truncated: boolean; timedOut: boolean } | null

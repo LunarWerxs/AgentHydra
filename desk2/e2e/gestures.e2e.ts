@@ -77,12 +77,13 @@ const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t)
 // servers page in on its overview, and a click on the row shows the server's details there and starts nothing (owner,
 // 2026-10-07; a page, not a right-hand pane, since later that day).
 const DEV = 'button[aria-label="Dev servers"]'
-const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="api details"]')])`
+// The running server's row: a project's group starts closed, and a closed one lists only what is up (owner, 2026-10-07).
+const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="web details"]')])`
 const DETAILS_PANE = `!!document.querySelector('[data-testid="dev-page"] section[aria-label="Server details"]')`
 // What Desk answers to the window here for the dev servers (shared/devwebui.ts): one invented project with a running and a stopped server.
 const DW_FIXTURE: Record<string, unknown> = {
   '/dw/status': { state: 'running', pid: 1, running: 1 },
-  '/dw/api/projects': [{ id: 'p1', name: 'example-app', path: 'C:/Users/me/code/example-app/.devwebui', processes: [
+  '/dw/api/projects': [{ id: 'p1', name: 'example-app', path: 'C:/Users/me/code/example-app/.devwebui', company: { name: 'example-app', dir: 'C:/Users/me/code/example-app' }, processes: [
     { id: 'p1-web', name: 'web', command: 'npm run dev', cwd: '', port: 5173, status: 'running', exitCode: null, projectId: 'p1' },
     { id: 'p1-api', name: 'api', command: 'npm run api', cwd: '', port: 8787, status: 'stopped', exitCode: null, projectId: 'p1' },
   ] }],

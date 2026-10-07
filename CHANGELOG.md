@@ -14,6 +14,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Updates install, update and repair the new window, and an install without it fixes itself**
 - **Dev servers run once for every chat: AgentHydra reuses one that runs instead of starting a second**
 - **A Dev servers button lists your projects and their servers in the sidebar, with a page of their own**
+- **The Dev servers list is grouped by company, folded until you open it, and shows what runs**
 - **Chats in the sidebar show their account number and when they were last active**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
@@ -32,6 +33,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A Dev servers button in the title bar.** It lists your projects and their servers in the sidebar, where you can
   start, stop and open them. A click on one opens the Dev servers page, which slides in the way AgentHydra's pages
   do, with its status, CPU and memory charts, errors, alerts and logs.
+- **The Dev servers list is grouped by company and starts folded.** A project shows only its running servers until
+  you open it, and Expand all opens everything. Other servers and the folders a scan found are grouped by company
+  too, and the list remembers what you opened.
 - **Chats in the sidebar show their account number and when they were last active**, as the Cloud list does,
   without turning Cloud on. Clean sidebar hides them, for titles only.
 - **Chats share dev servers instead of starting their own.** Every chat, and every other Claude session on the PC,

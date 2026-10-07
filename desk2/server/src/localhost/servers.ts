@@ -2,7 +2,8 @@
 // for, e.g. a dev server run from a terminal. Read only. The dev-servers service itself, the servers it lists as up
 // and anything they started are left out (the pane already shows those with Start and Stop), and so is this window.
 
-import type { LocalServer, LocalServers } from '@shared/devwebui'
+import type { DevWebCompany, LocalServer, LocalServers } from '@shared/devwebui'
+import { commandDir, companyOf } from '../devservers/company'
 import { classify, type ClassifyContext, isDescendant, type Listener, probeHttp, type ProcInfo, type Scan, scanPorts } from './ports'
 
 /** What the dev-servers service accounts for right now: the port and pid of every server it lists as up (and its own). */
@@ -18,6 +19,9 @@ export interface LocalhostDeps {
   owned?: () => Promise<DevWebOwned | null>
   deskPid?: number
   deskPort?: number
+  /** The project folder a command line names, and that folder's company (company.ts; the tests' own tree). */
+  dirOf?: (command: string | null) => string | null
+  companyOf?: (dir: string) => DevWebCompany
 }
 
 export class Localhost {
@@ -25,12 +29,16 @@ export class Localhost {
   private readonly probe: typeof probeHttp
   private readonly owned: () => Promise<DevWebOwned | null>
   private readonly cls: ClassifyContext
+  private readonly dirOf: (command: string | null) => string | null
+  private readonly companyOf: (dir: string) => DevWebCompany
   private inflight: Promise<Scan> | null = null
 
   constructor(deps: LocalhostDeps = {}) {
     this.scan = deps.scan ?? scanPorts
     this.probe = deps.probe ?? probeHttp
     this.owned = deps.owned ?? (async () => null)
+    this.dirOf = deps.dirOf ?? ((command) => commandDir(command))
+    this.companyOf = deps.companyOf ?? companyOf
     this.cls = { deskPid: deps.deskPid ?? process.pid, deskPort: deps.deskPort ?? (Number(process.env.HYDRA_DESK_PORT) || 7798) }
   }
 
@@ -62,7 +70,9 @@ export class Localhost {
       .sort((a, b) => a.port - b.port)
       .map((l) => {
         const p: ProcInfo | undefined = scan.procs.get(l.pid)
-        return { port: l.port, address: l.address, pid: l.pid, process: p?.name || null, kind: classify(l, p, this.cls), url: `http://localhost:${l.port}/`, title: null, http: null }
+        // The folder its command line names is what the sidebar's list groups it by (its company).
+        const dir = this.dirOf(p?.command ?? null)
+        return { port: l.port, address: l.address, pid: l.pid, process: p?.name || null, dir, company: dir ? this.companyOf(dir) : null, kind: classify(l, p, this.cls), url: `http://localhost:${l.port}/`, title: null, http: null }
       })
 
     // Probe what will be shown (with all, everything but system services: those are never asked over HTTP).
