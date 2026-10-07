@@ -269,25 +269,29 @@ The in-app update for a 2.0 release install works as follows:
 2. The updater detects that this is a release build (`IS_RELEASE` = true) and defaults `exePath` to `LAUNCHER_PATH`.
 3. It downloads the 2.0.x zip, extracts it, swaps the launcher aside, and moves the new one in place.
 4. It swaps `app/`, `orchestrator/`, and reconciles `desk2/` and `misc/` the same way.
-5. It never touches `runtime/` — the launcher owns it and will download Bun on next start if needed.
+5. It never touches `runtime/`: the launcher owns it and will download Bun on next start if needed.
 6. The relaunch is handled by the launcher: if `app/bun-version` differs from `runtime/bun.version`, it downloads the new Bun.
 
-**The 1.x→2.0 migration path:** An install on 1.13.0 (the last 1.x release) receives an update to 2.0.0 from the old updater. That old updater:
+**The 1.x→2.0 migration path** (run end to end by `scripts/upgrade-e2e-1x.ts`, below): an install on 1.13.0 (the last 1.x release) receives 2.0.0 from its old updater. That old updater:
 
-1. Defaults `exePath` to `process.execPath` (the daemon's running 1.x .exe).
-2. Finds AgentHydra.exe in the 2.0 zip and swaps it: renames the old 1.x exe aside, moves 2.0's launcher in place.
-3. Reconciles `misc/` (the only component it knows about).
-4. Does NOT move `app/`, `orchestrator/`, or `desk2/` — they come with the new launcher's repair at boot.
+1. Downloads the 2.0 zip, checks that its `AgentHydra.exe --version` prints 2.0.0, and swaps the exe (`process.execPath`): the 1.x exe goes aside and 2.0's launcher takes its place.
+2. Swaps `orchestrator/` and reconciles `misc/`, the only components it knows. It does not move `app/` or `desk2/`.
+3. Relaunches the new exe through WMI, so no environment variable of the old daemon reaches the launcher, and waits 60 s for the relaunch ack.
 
-After the old updater relaunches, the 2.0 launcher runs:
-
-1. It looks for `app/`, `orchestrator/`, `desk2/` — all are present (brought by the zip).
-2. It looks for `runtime/bun` and creates it, downloading Bun if needed.
-3. It runs the daemon normally.
+The 2.0 launcher then finds `app/` and `desk2/` missing, downloads the release zip again and checks it against `SHA256SUMS.txt` (the list `release.yml` writes names `out/<asset>`, so the launcher matches on the file name), downloads Bun into `runtime/`, and starts the daemon.
 
 So the 1.x updater successfully installs 2.0. The 2.0 updater adds `runtime/*.old-*` cleanup (in `cleanupStaleUpdateArtifacts`, since the launcher, not the updater, owns runtime/) and corrects the exe path for 2.0's release layout.
 
 A 2.x update whose launcher pins a new bun runs the new launcher with `--ensure-bun` (hidden, several minutes allowed) before it relaunches, so the successor starts in seconds; if that fails it is logged and the relaunch goes ahead anyway. A 1.x install cannot do that: its old updater relaunches straight into the 2.0 launcher, which downloads the release zip and bun first, so the old daemon's 60 s ack deadline can pass and it stays up on the port. The 2.0 daemon that finally starts waits for the port, and if its own predecessor (the pointer owner it was relaunched from, answering /api/health on that port) still holds it, ends that process by pid and binds the same port; any other holder is left alone.
+
+**Run the 1.x upgrade before 2.0.0 ships:** `bun scripts/upgrade-e2e-1x.ts` (Windows; needs git, csc.exe
+and openssl, which Git for Windows has). It builds 1.13.0 from its tag, packages this checkout, and
+serves a fake GitHub release locally without changing any system setting: a CONNECT proxy for
+api.github.com on the 1.13 process, and a .NET config shim beside the launcher for its two download
+hosts. It runs two scenarios: a plain first run, where the ack arrives and 1.13 exits itself (about 75 s
+on 2026-10-06), and one with Bun held back 90 s, where the ack deadline passes and the 2.0 daemon takes
+over (about 167 s). It exits 0 only when both end with 2.0.0 healthy on the same port, the full layout on
+disk, no 1.13 process left and Desk 2 answering. Its first run found the checksum-list bug above.
 
 ## When a push doesn't trigger anything
 
