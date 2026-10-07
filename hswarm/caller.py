@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 from . import shared
 
@@ -73,6 +74,41 @@ def _instance_of(execpath: str) -> str:
     return m.group(1) if m else ("default" if execpath else "")
 
 
+_CHAT_ID_RX = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
+_CHATS: dict[str, dict] = {}  # chat id -> what its Desktop record says (only records found; a new chat is looked up again)
+
+
+def desktop_chat(chat_id: str) -> dict:
+    """{"instance", "session", "cwd"} of a Claude Desktop chat, from the record its account folder keeps
+    (<profile>/claude-code-sessions/<account>/<org>/<chat id>.json: cliSessionId and cwd); {} when none is found.
+
+    Desktop runs the shared server's headersHelper outside the chat's engine: its environment has the chat id
+    (CLAUDE_CODE_HOST_SESSION_ID) but no CLAUDE_CODE_SESSION_ID, CLAUDE_CODE_EXECPATH or CLAUDE_PROJECT_DIR, and its
+    folder is ~/.claude. Measured 2026-10-07: 133 of 212 Desktop jobs on 10-06 reached the ledger as "no account,
+    folder ~/.claude", so the per-account views showed the owner's Desktop accounts using a fraction of the swarm
+    they really used ("using WAAAAY less Hswarm"). The record names all three."""
+    if not chat_id or not _CHAT_ID_RX.match(chat_id):
+        return {}
+    if chat_id in _CHATS:
+        return _CHATS[chat_id]
+    roots = [(p.name, p / "claude-code-sessions") for p in sorted((Path.home() / ".claude-instances").glob("*"))]
+    if os.name == "nt":
+        roaming = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+        roots.append(("default", roaming / "Claude" / "claude-code-sessions"))
+    for instance, sessions in roots:
+        for path in sessions.glob(f"*/*/{chat_id}.json"):
+            try:
+                rec = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            found = {"instance": instance, "session": str(rec.get("cliSessionId") or ""), "cwd": str(rec.get("cwd") or "")}
+            _CHATS[chat_id] = found
+            return found
+    return {}
+
+
 def _entry_of(env, argv: list[str] | None) -> tuple[str, str]:
     """(entrypoint, argv): a Claude session names its own entrypoint; a plain CLI run is stamped by its argv."""
     if env.get("CLAUDECODE") or env.get("CLAUDE_CODE_SESSION_ID"):
@@ -83,7 +119,11 @@ def _entry_of(env, argv: list[str] | None) -> tuple[str, str]:
 def detect(label: str = "", argv: list[str] | None = None) -> dict:
     """The stamp for a job submitted from this process. Cheap: environment, cwd and one transcript tail."""
     if shared.ACTIVE:  # one server for every chat: its own env and cwd are whoever started it, so read the request
-        r = shared.REQUEST.get() or {}
+        r = dict(shared.REQUEST.get() or {})
+        if r.get("chat") and not r.get("session"):  # stamped by a helper run outside the chat's engine (desktop_chat)
+            rec = desktop_chat(r["chat"])
+            if rec:
+                r.update(instance=r.get("instance") or rec["instance"], session=rec["session"], cwd=rec["cwd"] or r.get("cwd"))
         session_id = r.get("session") or ""
         return {"instance": r.get("instance") or "", "session_id": session_id, "chat_id": r.get("chat") or "", "entrypoint": "mcp-http",
                 "cwd": r.get("cwd") or "", "parent_pid": 0, "argv": "", "label": label or "", "model": session_model(session_id),

@@ -493,7 +493,7 @@ def connect(port: int = PORT) -> int:
     writes the entry's headersHelper from config.launcher(), a command that starts from any folder (a bare
     `python -m hswarm connect` only works from the AgentHydra root).
     """
-    from .caller import _instance_of
+    from .caller import _instance_of, desktop_chat
 
     out = ensure(port, wait_s=8.0)  # Claude Code gives a headersHelper 10 s
     if not out["ok"]:
@@ -503,6 +503,11 @@ def connect(port: int = PORT) -> int:
     values = {"cwd": env.get("CLAUDE_PROJECT_DIR") or os.getcwd(), "session": env.get("CLAUDE_CODE_SESSION_ID") or "",
               "chat": env.get("CLAUDE_CODE_HOST_SESSION_ID") or "",
               "instance": _instance_of(env.get("CLAUDE_CODE_EXECPATH") or env.get("CLAUDE_CONFIG_DIR") or "")}
+    if values["chat"] and not values["session"]:  # Desktop ran this outside the chat's engine: its record says who and where
+        rec = desktop_chat(values["chat"])
+        if rec:
+            values.update(instance=values["instance"] or rec["instance"], session=rec["session"],
+                          cwd=env.get("CLAUDE_PROJECT_DIR") or rec["cwd"] or values["cwd"])
     if env.get("AGENTHYDRA_CLIMAYTE_WORKER"):
         values["climayte_worker"] = "1"
     print(json.dumps({HEADERS[k]: quote(v, safe="") for k, v in values.items() if v}))

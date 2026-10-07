@@ -82,6 +82,38 @@ def test_connect_prints_the_chats_own_headers(monkeypatch, capsys):
     assert seen["cwd"] == "D:\\Proj ects\\é" and seen["session"].startswith("starter0")
 
 
+# Contract: a Claude Desktop chat is stamped with its own account, session and folder even though Desktop runs the
+# headersHelper outside the chat's engine (only CLAUDE_CODE_HOST_SESSION_ID set, folder ~/.claude): both the helper and
+# a server holding such headers from an older connection take them from the chat's Desktop record. Regression: 133 of
+# 212 Desktop jobs on 2026-10-06 were booked to no account in ~/.claude, and the accounts looked idle.
+def test_a_desktop_chat_without_its_engine_env_is_stamped_from_its_desktop_record(monkeypatch, capsys, tmp_path):
+    for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_EXECPATH", "CLAUDE_CONFIG_DIR", "CLAUDE_PROJECT_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CLAUDE_CODE_HOST_SESSION_ID", "local_chat_desktop")
+    for var in ("USERPROFILE", "HOME"):
+        monkeypatch.setenv(var, str(tmp_path))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setattr(caller, "_CHATS", {})
+    monkeypatch.chdir(tmp_path)
+    record = tmp_path / ".claude-instances" / "work" / "claude-code-sessions" / "acct" / "org" / "local_chat_desktop.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"cliSessionId": "chat0000-0000-4000-8000-000000000000", "cwd": "D:\\Example"}), encoding="utf-8")
+    monkeypatch.setattr(shared, "ensure", lambda port, wait_s=0: {"ok": True, "state": "running"})
+
+    assert shared.connect(7793) == 0
+    headers = json.loads(capsys.readouterr().out)
+    assert headers["x-hswarm-instance"] == "work" and headers["x-hswarm-session"].startswith("chat0000")
+    assert headers["x-hswarm-cwd"] == "D%3A%5CExample"
+
+    monkeypatch.setattr(shared, "ACTIVE", True)  # a connection made before the fix: chat id only, folder ~/.claude
+    token = shared.REQUEST.set({"chat": "local_chat_desktop", "cwd": str(tmp_path / ".claude")})
+    try:
+        c = caller.detect()
+    finally:
+        shared.REQUEST.reset(token)
+    assert c["instance"] == "work" and c["session_id"].startswith("chat0000") and c["cwd"] == "D:\\Example"
+
+
 def test_connect_fails_the_connection_with_the_reason(monkeypatch, capsys):
     monkeypatch.setattr(shared, "ensure", lambda port, wait_s=0: {"ok": False, "error": "port 7793 answers but it is not hswarm"})
     assert shared.connect(7793) == 1
