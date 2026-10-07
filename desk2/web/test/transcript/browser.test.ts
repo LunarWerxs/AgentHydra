@@ -136,6 +136,15 @@ describe('parseBrowserCall', () => {
       expect(browserRunAddress([nav('1', 'https://example.com/page'), ev('2', fn)])).toEqual({ url: 'https://example.com/page', left: false })
     })
 
+    test('a site-relative iframe src resolves against the page the script ran on; with no page before it, it is no address', () => {
+      const fn = `() => { document.documentElement.innerHTML = '<body><iframe id=f src="/embed/checkout?slug=a&page=event"></iframe></body>' }`
+      const run = [nav('1', 'https://shop.example.com/robots.txt'), ev('2', fn), item('3', A, call('browser_take_screenshot'))]
+      const page = 'https://shop.example.com/embed/checkout?slug=a&page=event'
+      expect(browserRunAddress(run)).toEqual({ url: page, left: false })
+      expect(lastBrowserRequest(run)).toEqual({ profile: undefined, url: page })
+      expect(browserRunAddress([ev('1', fn)])).toEqual({ url: '', left: false })
+    })
+
     test('a steps list gives the address of its newest step with a url or a script', () => {
       const steps = [{ url: 'https://example.com/one' }, { click: '#a' }, { url: 'https://example.com/two' }, { click: '#b' }]
       expect(parseBrowserCall(A, call('browser_script', { steps })).url).toBe('https://example.com/two')

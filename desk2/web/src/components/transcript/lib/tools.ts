@@ -125,7 +125,8 @@ export function scriptAddress(code: string): string | null {
   let best: { at: number; url: string } | null = null
   const take = (at: number, raw: string) => {
     const url = raw.split('${')[0].trim()
-    if (!SCHEMED.test(url)) return
+    // A site-relative page (src="/embed/x") counts too; browserRunAddress resolves it against the page it was set on.
+    if (!SCHEMED.test(url) && !/^\/(?!\/)/.test(url)) return
     if (!best || at >= best.at) best = { at, url }
   }
   for (const re of [LOCATION_SET, LOCATION_CALL, DOT_SRC]) {
@@ -159,23 +160,38 @@ export function isRealAddress(url: string): boolean {
   return /^(https?|file):/i.test(url.trim())
 }
 
+type BrowserCallLike = { name: string; input: Record<string, unknown>; result?: { text?: string } }
+
+/** Call i's address; a site-relative one resolves against the newest real address of the same browser before it, else ''. */
+function callAddress(calls: readonly BrowserCallLike[], i: number): string {
+  const own = parseBrowserCall(calls[i].name, calls[i].input, calls[i].result?.text)
+  if (!own.url.startsWith('/')) return own.url
+  for (let j = i - 1; j >= 0; j--) {
+    if (parseBrowserCall(calls[j].name, calls[j].input).profile !== own.profile) continue
+    const base = callAddress(calls, j)
+    if (!isRealAddress(base)) continue
+    try {
+      return new URL(own.url, base).href
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
 /**
  * The latest real address in a run of browser calls, and whether the browser LEFT the page: the newest call that
  * carries an address of its own carries a blank one (the AI ended on about:blank).
  */
-export function browserRunAddress(calls: readonly { name: string; input: Record<string, unknown>; result?: { text?: string } }[]): { url: string; left: boolean } {
-  let url = ''
+export function browserRunAddress(calls: readonly BrowserCallLike[]): { url: string; left: boolean } {
   let left: boolean | null = null
   for (let i = calls.length - 1; i >= 0; i--) {
-    const u = parseBrowserCall(calls[i].name, calls[i].input, calls[i].result?.text).url
+    const u = callAddress(calls, i)
     if (!u) continue
     if (left === null) left = !isRealAddress(u)
-    if (isRealAddress(u)) {
-      url = u
-      break
-    }
+    if (isRealAddress(u)) return { url: u, left }
   }
-  return { url, left: left ?? false }
+  return { url: '', left: left ?? false }
 }
 
 /** What a click on a Browser card asks the pane to show: no profile for the person's own (default) browser, never a blank address. */
@@ -185,10 +201,10 @@ export function browserOpenRequest(info: { url: string; profile: string }): Brow
 
 /** The browser a chat's AI last used, as its Browser card would ask the pane for it; null when it used none. */
 export function lastBrowserRequest(items: TranscriptItem[]): BrowserOpenRequest | null {
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i]
-    if (it.kind !== 'tool_use' || !isBrowserCall(it.name, it.input)) continue
-    const r = browserOpenRequest(parseBrowserCall(it.name, it.input, it.result?.text))
+  const calls = items.filter((it): it is Extract<TranscriptItem, { kind: 'tool_use' }> => it.kind === 'tool_use' && isBrowserCall(it.name, it.input))
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const c = calls[i]
+    const r = browserOpenRequest({ ...parseBrowserCall(c.name, c.input, c.result?.text), url: callAddress(calls, i) })
     if (r.profile || r.url) return r
   }
   return null
