@@ -17,7 +17,7 @@ import { sameSelection, type DevSelection } from './selection'
 import ServerInfo from './ServerInfo.vue'
 import TakeoverCard from './TakeoverCard.vue'
 
-// The Dev servers page (owner, 2026-10-08: "just be its own page ... cap the width ... have it slide in like Hydra
+// The Dev servers page (owner, 2026-10-07: "just be its own page ... cap the width ... have it slide in like Hydra
 // slides in"): DeskFrame slides it in on AgentHydra's track, in the chat's place. A 41px strip with Back, where it is
 // (Dev servers, a server's project, then the server), the server's star and Close, then the body, which scrolls, its
 // content one centered column of at most 960px. `sel` is what it shows, null being the overview of every project

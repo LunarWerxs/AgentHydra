@@ -40,7 +40,7 @@ between server/ and web/.
   project's folder and the server (`store.show`, DeskFrame's `serversCwd`). Everything DevWebUI did is here: scanning
   and the found list, adding, editing and removing projects and servers, take-over, logs history, errors, free port,
   metrics and alerts, and its settings in Settings -> Dev servers. The Dev servers page is its own page, never a
-  right-hand sidebar (owner 2026-10-08: "just be its own page ... like Hydra slides in"): it shares AgentHydra's half
+  right-hand sidebar (owner 2026-10-07: "just be its own page ... like Hydra slides in"): it shares AgentHydra's half
   of DeskFrame's sliding track, so it pushes the chat out as AgentHydra does and opening one closes the other, and its
   content is one centered column capped at 960px. It is cards, never tables (owner 2026-10-07: "fucking ugly table
   when it should be in a nice, like, card display"), with CPU and memory charts and stats (the service's ten-minute

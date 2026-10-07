@@ -63,7 +63,7 @@ const tooltip = computed(() =>
 const app = computed(() => (props.session.fromPc || isAddedRow(props.session.id) ? null : appLead(ahSource(props.session.source))))
 const dotClass = computed(() => glyphDotClass(glyph.value))
 // The account number (an instance named "#38") and the age since its last activity, as the cloud list draws them;
-// Clean sidebar (clean.ts) hides both (owner, 2026-10-08).
+// Clean sidebar (clean.ts) hides both (owner, 2026-10-07).
 const account = computed(() => {
   const num = cleanSidebar.value ? null : props.session.instance?.match(/^#(\d+)$/)
   return num ? Number(num[1]) : null

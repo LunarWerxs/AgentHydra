@@ -45,7 +45,7 @@ const elapsed = computed(() =>
   !cleanSidebar.value && (props.chat.status === 'working' || props.chat.status === 'starting') ? elapsedLabel(props.chat.turnStartedAt, clock.value) : ''
 )
 const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, clock.value) : ''))
-// The account number and the age since its last activity, as the cloud list draws them (owner, 2026-10-08: they show
+// The account number and the age since its last activity, as the cloud list draws them (owner, 2026-10-07: they show
 // without Cloud on, and Clean sidebar hides them). A working chat's elapsed time takes the age's place, and a limited
 // one's reset time does.
 const account = computed(() => (cleanSidebar.value ? null : (props.chat.account.number ?? null)))

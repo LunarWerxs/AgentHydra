@@ -360,7 +360,7 @@ function toggleCloud() {
   if (cloud.on.value) toggleSidebar(true)
 }
 // The Dev servers button: the sidebar lists the projects and servers (components/servers) and the Dev servers page
-// slides in, in the chat's place, as AgentHydra does (owner, 2026-10-08: "just be its own page ... have it slide in like
+// slides in, in the chat's place, as AgentHydra does (owner, 2026-10-07: "just be its own page ... have it slide in like
 // Hydra slides in"): its overview, until a row is picked. One list at a time: it and the cloud list turn each other off,
 // and AgentHydra, which borrows the cloud list, does too. Pressed with the list on and the page closed (its X, Esc, a
 // chat picked), it brings the page back; pressed with both, both go. A reload with the page open opens it again.
@@ -444,7 +444,7 @@ watch(
 watch(pane, (p) => {
   if (p !== 'servers') serversCwd.value = null
 })
-// The page side of the track (owner, 2026-10-08: the right-hand info pane "kind of ugly ... just be in the center of the
+// The page side of the track (owner, 2026-10-07: the right-hand info pane "kind of ugly ... just be in the center of the
 // page ... like Hydra slides in"): AgentHydra and the Dev servers page are its two layers. Opened from the desk, the
 // track pushes the chat out and the page in; one page opened over the other pushes that one out within the side, the
 // same 420ms push. The Dev servers page is mounted while it is open and through its slide out (it polls while mounted),

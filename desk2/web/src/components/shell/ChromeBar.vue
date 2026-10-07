@@ -72,7 +72,7 @@ const COLLAPSED_WIDTH = 246
         <component :is="shellGlyphs.sidebarToggle" class="size-4" />
       </button>
     </Tip>
-    <!-- A divider before Cloud with the bar's own 4px each side (owner, 2026-10-08: "a little normal amount", not pushed
+    <!-- A divider before Cloud with the bar's own 4px each side (owner, 2026-10-07: "a little normal amount", not pushed
          off to the right as AgentHydra and Dev servers are). -->
     <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">

@@ -75,7 +75,7 @@ const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t)
 
 // The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): the button slides the Dev
 // servers page in on its overview, and a click on the row shows the server's details there and starts nothing (owner,
-// 2026-10-07; a page since 2026-10-08).
+// 2026-10-07; a page, not a right-hand pane, since later that day).
 const DEV = 'button[aria-label="Dev servers"]'
 const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="api details"]')])`
 const DETAILS_PANE = `!!document.querySelector('[data-testid="dev-page"] section[aria-label="Server details"]')`

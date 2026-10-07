@@ -13,7 +13,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Opening AgentHydra always reaches the new window, and starts it when it is down**
 - **Updates install, update and repair the new window, and an install without it fixes itself**
 - **Dev servers run once for every chat: AgentHydra reuses one that runs instead of starting a second**
-- **A Dev servers button lists your projects and their servers in the sidebar**
+- **A Dev servers button lists your projects and their servers in the sidebar, with a page of their own**
+- **Chats in the sidebar show their account number and when they were last active**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
 - **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5**
@@ -29,7 +30,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   CliMayte, HSwarm and Analytics pages beside the chat with one Settings dialog, dev servers and a small browser,
   Free claude.ai and ChatGPT accounts, and pictures and videos in the chat.
 - **A Dev servers button in the title bar.** It lists your projects and their servers in the sidebar, where you can
-  start, stop and open them.
+  start, stop and open them. A click on one opens the Dev servers page, which slides in the way AgentHydra's pages
+  do, with its status, CPU and memory charts, errors, alerts and logs.
+- **Chats in the sidebar show their account number and when they were last active**, as the Cloud list does,
+  without turning Cloud on. Clean sidebar hides them, for titles only.
 - **Chats share dev servers instead of starting their own.** Every chat, and every other Claude session on the PC,
   gets tools to start a project's dev server through AgentHydra: when that server already runs, whoever started it,
   they get its address instead of a second copy fighting the first for its port.

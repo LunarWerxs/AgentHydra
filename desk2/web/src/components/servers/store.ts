@@ -227,7 +227,7 @@ function createDevServers() {
   }
 
   /**
-   * The Dev servers page (owner, 2026-10-08: "just be its own page ... have it slide in like Hydra slides in"): whether
+   * The Dev servers page (owner, 2026-10-07: "just be its own page ... have it slide in like Hydra slides in"): whether
    * it is on screen, and what it shows, null being its overview of every project. A selection opens it; DeskFrame slides
    * it in and out. Closing it clears the selection, so the list highlights nothing.
    */

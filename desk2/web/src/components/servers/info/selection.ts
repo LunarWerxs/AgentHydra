@@ -1,4 +1,4 @@
-// What the Dev servers page shows (owner, 2026-10-07; a page since 2026-10-08): a click in the sidebar's Dev servers
+// What the Dev servers page shows (owner, 2026-10-07; a page since later that day): a click in the sidebar's Dev servers
 // list selects a thing and the page describes it, instead of starting or opening it; none is the page's overview. The
 // store keeps the one selection (store.ts `select`).
 export type DevSelection =
