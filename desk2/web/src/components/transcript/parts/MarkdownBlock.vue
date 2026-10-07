@@ -1,11 +1,33 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { markdown, shikiReady } from '../lib/highlight'
 import { openLightbox, tileKey } from '../lib/media'
 
 const props = defineProps<{ text: string; streaming?: boolean }>()
 
 const html = ref(markdown.render(props.text))
+const root = ref<HTMLElement | null>(null)
+
+// The markup is set here, not with v-html: a re-render (the reply streams on, shiki arrives) must not recreate a
+// <video> the person is watching. A video whose address is still in the new markup keeps its element, so its
+// playback and the sound the person gave it survive; the new markup's twin is dropped.
+function paint() {
+  const el = root.value
+  if (!el) return
+  const old = new Map<string, HTMLVideoElement[]>()
+  for (const v of el.querySelectorAll<HTMLVideoElement>('video.md-video')) {
+    const src = v.getAttribute('src') ?? ''
+    old.set(src, [...(old.get(src) ?? []), v])
+  }
+  // Taken out and put back in this one task, so the browser (which pauses a video left out of the document) never sees it out.
+  el.innerHTML = html.value
+  for (const fresh of el.querySelectorAll('video.md-video')) {
+    const keep = old.get(fresh.getAttribute('src') ?? '')?.shift()
+    if (keep) fresh.replaceWith(keep)
+  }
+}
+onMounted(paint)
+watch(html, paint, { flush: 'post' })
 
 // While the reply streams its text is parsed again at most once per frame, however many chunks arrived; a
 // settled message (and the end of a stream) renders at once, so the final markup is the one it always was.
@@ -65,6 +87,6 @@ function onKey(e: KeyboardEvent) {
 </script>
 
 <template>
-  <!-- markdown-it runs with html disabled, so v-html only ever holds markdown-it's own markup -->
-  <div class="md" :class="streaming && 'md-streaming'" @click="onClick" @keydown="onKey" @keyup="onKey" v-html="html" />
+  <!-- markdown-it runs with html disabled, so the markup set in paint() is only markdown-it's own -->
+  <div ref="root" class="md" :class="streaming && 'md-streaming'" @click="onClick" @keydown="onKey" @keyup="onKey" />
 </template>

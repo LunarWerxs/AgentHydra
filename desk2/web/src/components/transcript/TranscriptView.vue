@@ -9,6 +9,7 @@ import { icons } from '@/lib/icons'
 const ArrowDown = icons.scrollToBottom
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
+import { watchTranscript } from '@/lib/chat-audio'
 import { buildRows, estimateHeight } from './lib/rows'
 import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
@@ -186,7 +187,17 @@ const vMeasure: Directive<HTMLElement> = {
   beforeUnmount: (el) => rowObserver?.unobserve(el),
 }
 
+// The chat's videos make the chat audible in the sidebar, and its mute reaches them (lib/chat-audio.ts).
+let stopAudio: (() => void) | null = null
+const followAudio = () => {
+  stopAudio?.()
+  stopAudio = scroller.value && props.chatId ? watchTranscript(scroller.value, props.chatId) : null
+}
+watch(() => props.chatId, followAudio)
+onBeforeUnmount(() => stopAudio?.())
+
 onMounted(() => {
+  followAudio()
   rowObserver = new ResizeObserver((entries) => {
     const el = scroller.value
     let changed = false

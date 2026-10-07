@@ -10,6 +10,8 @@ import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
 import RowMenuList from './RowMenuList.vue'
+import AudioButton from './AudioButton.vue'
+import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { cleanSidebar } from './clean'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
@@ -22,7 +24,8 @@ const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; 
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
 
 const glyph = computed(() => statusGlyph(props.chat))
-const menu = computed(() => rowMenu(chatRow(props.chat), props.groups))
+const speaker = computed(() => isMuted(props.chat.id) || isAudible(props.chat.id))
+const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups))
 // The clock is read only while the row shows a time that moves (a working chat's elapsed time, a limited
 // one's reset), so an idle row never redraws on the tick.
 const clock = useClock()
@@ -61,6 +64,7 @@ function commitRename() {
   if (title && title !== props.chat.title) emit('rename', title)
 }
 function run(item: RowMenuItem) {
+  if (item.action === 'mute' || item.action === 'unmute') return toggleMuted(props.chat.id)
   if (item.action === 'rename') {
     // After the menu has closed and given focus back, or the input loses it at once.
     setTimeout(startRename, 0)
@@ -93,11 +97,11 @@ defineExpose({ startRename })
             @keydown.escape.stop="renaming = false"
             @blur="commitRename"
           />
-          <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen }">{{ chat.title }}</span>
+          <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
 
           <!-- Hydra Desk extras: elapsed time, limit reset, CliMayte count -->
           <!-- The elapsed counter gives its place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }">
+          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
@@ -127,6 +131,7 @@ defineExpose({ startRename })
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
+          <AudioButton v-if="!renaming" :chat-id="chat.id" :open="menuOpen" />
           <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
             <DropdownMenuTrigger as-child>
               <button
@@ -166,6 +171,7 @@ defineExpose({ startRename })
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
+          <AudioButton v-if="!renaming" :chat-id="chat.id" :open="menuOpen" />
           <button
             v-if="!renaming"
             type="button"
@@ -192,5 +198,13 @@ defineExpose({ startRename })
 .group\/row:hover .row-title,
 .row-title-open {
   mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+/* The speaker (AudioButton.vue) sits at the right end, and left of the three dots while those show: the title fades earlier. */
+.row-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+.group\/row:hover .row-title-audio,
+.row-title-open.row-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 40px));
 }
 </style>

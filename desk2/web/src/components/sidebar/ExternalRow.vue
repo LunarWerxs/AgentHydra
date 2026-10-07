@@ -13,6 +13,8 @@ import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
 import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from './logic'
 import RowMenuList from './RowMenuList.vue'
+import AudioButton from './AudioButton.vue'
+import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // A session running outside Hydra Desk, in the same list as our chats: the same 26px row, dot, title
@@ -40,7 +42,8 @@ const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: ba
 
 const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
-const menu = computed(() => props.entries ?? rowMenu(externalRow(props.session), props.groups))
+const speaker = computed(() => isMuted(props.session.id) || isAudible(props.session.id))
+const menu = computed(() => props.entries ?? rowMenu({ ...externalRow(props.session), muted: isMuted(props.session.id) }, props.groups))
 const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))
 const menuOpen = ref(false)
 // A row nobody touched draws its content and its trigger buttons only; its context menu and dropdown menu mount on the
@@ -79,6 +82,7 @@ function commitRename() {
   if (title !== undefined) emit('rename', title)
 }
 function run(item: RowMenuItem) {
+  if (item.action === 'mute' || item.action === 'unmute') return toggleMuted(props.session.id)
   if (item.action === 'rename') {
     // After the menu has closed and given focus back, or the input loses it at once.
     setTimeout(startRename, 0)
@@ -113,10 +117,10 @@ function run(item: RowMenuItem) {
             @keydown.escape.stop="renaming = false"
             @blur="commitRename"
           />
-          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen }">{{ session.title }}</span>
+          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.title }}</span>
 
           <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts; they make room for the three dots on hover. -->
-          <span v-if="!renaming && $slots.default" class="ml-1 flex shrink-0 items-center pr-1 group-hover/row:pr-6" :class="{ 'pr-6': menuOpen }"><slot /></span>
+          <span v-if="!renaming && $slots.default" class="ml-1 flex shrink-0 items-center pr-1 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }"><slot /></span>
 
       </DefineBody>
       <ContextMenu v-if="seen">
@@ -137,6 +141,7 @@ function run(item: RowMenuItem) {
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
+          <AudioButton v-if="!renaming" :chat-id="session.id" :open="menuOpen" />
           <DropdownMenu v-if="!renaming" v-model:open="menuOpen">
             <DropdownMenuTrigger as-child>
               <button
@@ -177,6 +182,7 @@ function run(item: RowMenuItem) {
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
+          <AudioButton v-if="!renaming" :chat-id="session.id" :open="menuOpen" />
           <button
             v-if="!renaming"
             type="button"
@@ -203,5 +209,13 @@ function run(item: RowMenuItem) {
 .group\/row:hover .ext-title,
 .ext-title-open {
   mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+/* The speaker (AudioButton.vue) sits at the right end, and left of the three dots while those show: the title fades earlier. */
+.ext-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+.group\/row:hover .ext-title-audio,
+.ext-title-open.ext-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 40px));
 }
 </style>

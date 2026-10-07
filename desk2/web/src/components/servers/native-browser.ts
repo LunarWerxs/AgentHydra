@@ -17,18 +17,27 @@ export type HostBrowserIn =
   | { kind: 'browser'; op: 'open'; id: string; url: string; rect: HostRect | null }
   | { kind: 'browser'; op: 'place'; id: string; rect: HostRect | null }
   | { kind: 'browser'; op: 'back' | 'forward' | 'reload' | 'close'; id: string }
+  | { kind: 'browser'; op: 'mute'; id: string; muted: boolean }
 
 /** Host -> page (PageOut): the detail of an `agenthydra:browser` window event. */
-export type HostBrowserOut = { id: string; type: 'url'; url: string; loading: boolean } | { id: string; type: 'title'; title: string; url: string }
+export type HostBrowserOut =
+  | { id: string; type: 'url'; url: string; loading: boolean }
+  | { id: string; type: 'title'; title: string; url: string }
+  | { id: string; type: 'audio'; playing: boolean; muted: boolean }
 
 export const HOST_BROWSER_EVENT = 'agenthydra:browser'
 
-type HostWindow = { agentHydraHost?: { browser?: number }; ipc?: { postMessage(text: string): void } }
+type HostWindow = { agentHydraHost?: { browser?: number; audio?: number }; ipc?: { postMessage(text: string): void } }
 
 /** True inside AgentHydra's own window, whose host can show a page tab in a view of its own. */
 export function hasHostBrowser(w: unknown = globalThis): boolean {
   const h = w as HostWindow
   return h.agentHydraHost?.browser === 1 && typeof h.ipc?.postMessage === 'function'
+}
+
+/** True when the host also reports a view's sound and can mute it (`audio`); an older host cannot. */
+export function hasHostAudio(w: unknown = globalThis): boolean {
+  return hasHostBrowser(w) && (w as HostWindow).agentHydraHost?.audio === 1
 }
 
 /** The host's box for one the page measured, in whole pixels; null when it has no area (a hidden tab). */
@@ -91,10 +100,12 @@ export class HostView {
   readonly id = `page-${++seq}-${Date.now().toString(36)}`
   private rect: HostRect | null = null
   private opened = false
+  private muted = false
 
   constructor(
     onEvent: (e: HostBrowserOut) => void,
-    private readonly send: (msg: HostBrowserIn) => void = post
+    private readonly send: (msg: HostBrowserIn) => void = post,
+    private readonly audio: boolean = hasHostAudio()
   ) {
     listeners.set(this.id, onEvent)
     listen()
@@ -108,6 +119,13 @@ export class HostView {
     this.opened = true
     this.rect = rect
     this.send({ kind: 'browser', op: 'open', id: this.id, url, rect })
+    if (this.muted && this.audio) this.send({ kind: 'browser', op: 'mute', id: this.id, muted: true })
+  }
+
+  /** Mutes or unmutes the view's sound (kept for a view not open yet, muted as it opens); nothing is sent to a host without `audio`. */
+  mute(muted: boolean) {
+    this.muted = muted
+    if (this.opened && this.audio) this.send({ kind: 'browser', op: 'mute', id: this.id, muted })
   }
 
   place(rect: HostRect | null) {

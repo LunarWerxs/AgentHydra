@@ -5,13 +5,14 @@ import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess } from '@shared/devwebui'
 import { addressOrSearch, isUp, proxyAddress, statusWord } from './logic'
 import { coveredByPage, hasHostBrowser, type HostBrowserOut, type HostRect, HostView, hostRect } from './native-browser'
+import { registerView, viewAudio } from '@/lib/chat-audio'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A page tab: a dev server or an address, with back / forward / reload and the address bar on top. In AgentHydra's own
 // window the page is a browser view of the window's, placed over the tab (native-browser.ts), so a site that refuses to
 // be framed still shows; in a plain browser it is a frame (the 'through AgentHydra' view is Desk's own same-origin
 // /dw/proxy). Every page tab stays mounted while another is shown, so switching tabs does not reload a page.
-const props = defineProps<{ url: string; proc: DevWebProcess | null; busy: boolean; justStarted: boolean }>()
+const props = defineProps<{ chatId: string; url: string; proc: DevWebProcess | null; busy: boolean; justStarted: boolean }>()
 const emit = defineEmits<{ navigated: [url: string]; toggle: [proc: DevWebProcess] }>()
 
 const native = hasHostBrowser()
@@ -71,10 +72,14 @@ watch(
 // ---- the host's view: open once wanted, kept over the tab's box, hidden while the tab is hidden or covered ----
 const view = native
   ? new HostView((e: HostBrowserOut) => {
+      if (e.type === 'audio') return viewAudio(e.id, e.playing)
       live.value = e.url || live.value
       if (e.url && document.activeElement !== addressEl.value) address.value = e.url
     })
   : null
+
+// The chat's mute reaches this view through the store; a view of a muted chat is muted as it opens (HostView.mute).
+const unregister = view ? registerView(props.chatId, view.id, (m) => view.mute(m)) : null
 
 function measure(): HostRect | null {
   const el = slot.value
@@ -120,6 +125,7 @@ if (view) {
     window.removeEventListener('resize', soon)
     window.clearInterval(slow)
     if (frame) cancelAnimationFrame(frame)
+    unregister?.()
     view.close()
   })
 }

@@ -519,6 +519,8 @@ export interface RowState {
   sessionId: string | null // null until the chat's session exists
   claudeSession: boolean // `claude --resume` can open it
   forkable: boolean
+  /** Whether the person muted this chat's sound (lib/chat-audio.ts); left out, the menu has no Mute entry (a row that cannot mute). */
+  muted?: boolean
 }
 
 export function chatRow(chat: ChatSummary): RowState {
@@ -567,6 +569,8 @@ export type RowAction =
   | 'unpin'
   | 'markUnread'
   | 'markRead'
+  | 'mute'
+  | 'unmute'
   | 'rename'
   | 'fork'
   | 'moveTo'
@@ -609,6 +613,7 @@ export function rowMenu(row: RowState, groups: string[] = []): RowMenuEntry[] {
   if (row.stoppable) out.push({ action: 'stop', label: 'Stop' })
   out.push(row.pinned ? { action: 'unpin', label: 'Unpin', shortcut: 'P' } : { action: 'pin', label: 'Pin', shortcut: 'P' })
   out.push(row.unread ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
+  if (row.muted !== undefined) out.push(row.muted ? { action: 'unmute', label: 'Unmute chat', shortcut: 'M' } : { action: 'mute', label: 'Mute chat', shortcut: 'M' })
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
   out.push('separator', { label: 'Move to group', items: moveTo }, 'separator')

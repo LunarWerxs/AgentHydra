@@ -400,6 +400,7 @@ watch(
       <PageTab
         v-else-if="t.kind === 'page' && t.target"
         v-show="t.id === activeTab.id"
+        :chat-id="chatId"
         :url="t.target"
         :proc="procOf(t)"
         :busy="!!procOf(t) && busy.has(procOf(t)!.id)"

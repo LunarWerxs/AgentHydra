@@ -15,6 +15,7 @@ import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connecto
 import { ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
+import { isMuted, toggleMuted } from '@/lib/chat-audio'
 
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
@@ -54,7 +55,7 @@ const emit = defineEmits<{
   'toggle-tasks': []
 }>()
 
-const menu = computed(() => (props.chat ? rowMenu(chatRow(props.chat), props.groups) : []))
+const menu = computed(() => (props.chat ? rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups) : []))
 
 // Hydra Desk status cue: only states the real app hides (idle and stopped show nothing). Only a working or
 // limited chat's cue reads the clock, so the bar redraws on the tick only while its time moves.
@@ -106,7 +107,9 @@ function commitRename() {
   if (t && props.chat && t !== props.chat.title) emit('rename', t)
 }
 function run(item: RowMenuItem) {
-  if (item.action === 'rename') setTimeout(startRename, 0)
+  if (item.action === 'mute' || item.action === 'unmute') {
+    if (props.chat) toggleMuted(props.chat.id)
+  } else if (item.action === 'rename') setTimeout(startRename, 0)
   else emit('action', item)
 }
 
