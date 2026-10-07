@@ -222,7 +222,7 @@ const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
 // Shut down either: the daemon is Desk's engine.
 useTheme()
 
-// Top-level tabs. Instances is one tab: its kinds (Desktop, CLI, Free) are toggles inside it.
+// Top-level tabs. Instances is one tab: its kind choice (All, Desktop, CLI, Free) sits inside it.
 const nav: { id: AppView; labelKey: string; icon: typeof Boxes }[] = [
   { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },

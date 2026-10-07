@@ -230,8 +230,8 @@ export default {
   filterAllHidden: 'Every instance is filtered out.',
   filterAllHiddenHint:
     'Loosen the filter in the toolbar, or turn it off. The button says what it is filtering on.',
-  // "x of y" for a heading whose table is showing fewer rows than it has.
-  countOfTotal: '{shown} of {total}',
+  // The kind choice's first segment: every kind's rows (Desktop, CLI and Free are app.tab*).
+  kindAll: 'All',
   // Small-caps heading over the auto-refresh rows inside the usage flyout.
   usageDataTitle: 'Usage data',
   refreshAllUsage: 'Refresh all usage',

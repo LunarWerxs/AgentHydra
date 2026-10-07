@@ -30,9 +30,9 @@
 // master switch. Behind the switch, turning the filter off would bring back a provider you chose
 // not to see.
 //
-// Beside the provider choice sits the KIND choice (owner, 2026-10-07: one Instances table with
-// Desktop, CLI and Free toggles). It works the same way: it decides which kinds' rows the table draws
-// and which columns it needs, and the last kind shown stays.
+// Beside the provider choice sits the KIND choice (owner, 2026-10-07: one Instances table, and "Desktop",
+// "CLI" and "Free" read as toggles on and off, not as a choice of what to show). It is one choice of four,
+// All, Desktop, CLI or Free, and it decides which kinds' rows the table draws and which columns it needs.
 //
 // Module-scope singleton + useStorage, matching useUsageMode.ts: the Instances table, the toolbar
 // flyout and the compact quick window all read this, and a per-component ref would let them disagree.
@@ -102,16 +102,16 @@ function decodeProviders(raw: string): Provider[] {
   return INSTANCE_PROVIDERS.filter((p) => raw.split(',').includes(p))
 }
 
-/** The kinds the Instances table draws, in the order its toggles and columns follow. */
+/** The kinds the Instances table draws, in the order its columns follow. */
 export const INSTANCE_KINDS = ['desktop', 'cli', 'free'] as const
 
-/** The kinds the table leaves out, comma-joined; empty is every kind (the same reasoning as the
- *  providers above). */
-const hiddenKindsRaw = useStorage(`${KEY}.hiddenKinds`, '')
+/** The Instances table's one choice: every kind, or only one. */
+export const KIND_VIEWS = ['all', 'desktop', 'cli', 'free'] as const
+export type KindView = (typeof KIND_VIEWS)[number]
 
-function decodeKinds(raw: string): InstanceTableKind[] {
-  return INSTANCE_KINDS.filter((k) => raw.split(',').includes(k))
-}
+/** A segmented control, not toggles (owner, 2026-10-07): on and off read as a filter you could switch off,
+ *  and "Instances" read as the one that was on. */
+const kindView = useStorage<KindView>(`${KEY}.kindView`, 'all')
 
 // Every switch, threshold and selection above is ALSO mirrored through the daemon, because the
 // quick-instances window can be served from a different PORT and browser storage is scoped per
@@ -127,7 +127,7 @@ registerSharedPref(`${KEY}.threshold`, weekThreshold)
 registerSharedPref(`${KEY}.session`, sessionEnabled)
 registerSharedPref(`${KEY}.sessionThreshold`, sessionThreshold)
 registerSharedPref(`${KEY}.hiddenProviders`, hiddenProvidersRaw)
-registerSharedPref(`${KEY}.hiddenKinds`, hiddenKindsRaw)
+registerSharedPref(`${KEY}.kindView`, kindView, KIND_VIEWS)
 
 export function useInstanceFilter() {
   // No clock needed: nothing here counts down, it only compares percentages.
@@ -205,16 +205,14 @@ export function useInstanceFilter() {
     hiddenProvidersRaw.value = next.join(',')
   }
 
-  const hiddenKinds = computed(() => decodeKinds(hiddenKindsRaw.value))
-  /** The kinds whose rows the table draws, in INSTANCE_KINDS order. */
-  const kinds = computed(() => INSTANCE_KINDS.filter((k) => !hiddenKinds.value.includes(k)))
+  /** The kinds whose rows the table draws: every kind for 'all', else the one chosen. */
+  const kinds = computed<readonly InstanceTableKind[]>(() => {
+    const view = kindView.value
+    return view === 'all' ? INSTANCE_KINDS : [view]
+  })
 
   function kindShown(kind: InstanceTableKind): boolean {
-    return !hiddenKinds.value.includes(kind)
-  }
-
-  function setHiddenKinds(next: readonly InstanceTableKind[]): void {
-    hiddenKindsRaw.value = next.join(',')
+    return kindView.value === 'all' || kindView.value === kind
   }
 
   /** Drop the hidden rows from a list. Sort first, then filter — the filter removes rows, it
@@ -259,19 +257,16 @@ export function useInstanceFilter() {
       const hiddenNow = hiddenProviders.value
       if (hiddenNow.includes(provider)) setHiddenProviders(hiddenNow.filter((p) => p !== provider))
     },
+    kindView,
     kinds,
     kindShown,
-    /** Show or leave out one kind of row (Desktop, CLI, Free). The last one shown stays, as for
-     *  providers: a table with no kind on is empty with nothing to say why. */
-    toggleKind: (kind: InstanceTableKind) => {
-      const hiddenNow = hiddenKinds.value
-      if (hiddenNow.includes(kind)) setHiddenKinds(hiddenNow.filter((k) => k !== kind))
-      else if (kinds.value.length > 1) setHiddenKinds([...hiddenNow, kind])
+    setKindView: (view: KindView) => {
+      kindView.value = view
     },
-    /** Draw this kind's rows again, if it was left out (creating one of its instances does this). */
+    /** Show this kind's rows (creating one of its instances does this). The view moves to the kind
+     *  unless it already shows it, so 'All' is left as it is. */
     showKind: (kind: InstanceTableKind) => {
-      const hiddenNow = hiddenKinds.value
-      if (hiddenNow.includes(kind)) setHiddenKinds(hiddenNow.filter((k) => k !== kind))
+      if (!kindShown(kind)) kindView.value = kind
     },
     /** Add or remove one plan from the selection. A toggle, not an append: the selection is a set,
      *  and every control that writes it is a two-state button. */

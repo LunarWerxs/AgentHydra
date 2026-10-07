@@ -4,10 +4,11 @@
 // tools, Refresh and the create button. Four hand-built copies of this had drifted apart (owner,
 // 2026-09-30: DeepSeek's create button was a full-width label, and its collapse was not kept).
 //
-// `meta` sits inside the toggle after the count (a "hidden by filter" note); `summary` sits beside
-// the toggle, outside its button, so it may hold a tooltip trigger (the CLI table's pooled gauges
-// while it is folded); `tools` sits before Refresh (the desktop table's usage-mode switch and filter
-// menus).
+// `meta` sits inside the toggle after the count (a "hidden by filter" note); with no `title` there is
+// no toggle, and `meta` sits after `summary` instead. `summary` sits beside the toggle, outside its
+// button, so it may hold a tooltip trigger (the CLI table's pooled gauges while it is folded), or the
+// Instances table's kind choice, which takes the title's place (owner, 2026-10-07); `tools` sits before
+// Refresh (the desktop table's usage-mode switch and filter menus).
 //
 // A table that mixes providers (desktop, Free) passes `createOptions`: the plus then opens one item
 // per provider, its logo and label, and `create` carries the chosen option's id.
@@ -28,6 +29,7 @@ withDefaults(
   defineProps<{
     /** The provider's logo beside the title; omitted for a table that mixes providers. */
     provider?: LogoProvider
+    /** Empty draws no toggle, for a table whose summary slot holds its own choice in the title's place. */
     title: string
     /** In brackets after the title ("4", "4 of 6"); null or omitted shows none. */
     count?: string | number | null
@@ -63,6 +65,7 @@ defineEmits<{ refresh: []; create: [id?: string] }>()
   <div class="flex flex-wrap items-center justify-between gap-2 p-3">
     <div class="flex flex-wrap items-center gap-3">
     <button
+      v-if="title"
       type="button"
       class="flex items-center gap-2 rounded-md text-sm font-semibold transition-colors hover:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
       :aria-expanded="collapsible ? open : undefined"
@@ -81,6 +84,7 @@ defineEmits<{ refresh: []; create: [id?: string] }>()
       />
     </button>
     <slot name="summary" />
+    <slot v-if="!title" name="meta" />
     </div>
     <div class="flex flex-wrap items-center gap-1.5">
       <slot name="tools" />

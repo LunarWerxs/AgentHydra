@@ -74,7 +74,7 @@ import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
-import { INSTANCE_KINDS, useInstanceFilter } from '@/composables/useInstanceFilter'
+import { KIND_VIEWS, type KindView, useInstanceFilter } from '@/composables/useInstanceFilter'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { useInstances } from '@/composables/useInstances'
@@ -107,7 +107,6 @@ import type { InstanceFacts } from '@/lib/instance-filter'
 import {
   type InstanceColumnKey,
   type InstanceRowModel,
-  type InstanceTableKind,
   instanceColumns,
   nameTooltipFor,
 } from '@/lib/instance-table'
@@ -195,9 +194,10 @@ const {
   providerShown,
   showProvider,
   visible: filterVisible,
+  kindView,
   kinds: shownKinds,
   kindShown,
-  toggleKind,
+  setKindView,
   showKind,
 } = useInstanceFilter()
 
@@ -452,8 +452,8 @@ onMounted(loadAppSettings)
 
 // --- which kinds and providers the table draws --------------------------------------------------
 // One table, three kinds (owner, 2026-10-07): Desktop (the Claude rows, then the Codex and DeepSeek
-// rows, which are their own components), CLI and Free, each a toggle in the header. A kind's rows
-// are drawn when its toggle is on; Desktop's provider rows also need Settings → Providers and the
+// rows, which are their own components), CLI and Free. The header's choice (All, Desktop, CLI, Free)
+// decides which kinds' rows are drawn; Desktop's provider rows also need Settings → Providers and the
 // filter's provider choice, and CLI needs its Settings switch.
 const { instances: dshInstances, refresh: refreshDsh } = useDshInstances()
 const codexEnabled = computed(() => codexDesktopEnabled.value || codexCliEnabled.value)
@@ -579,10 +579,27 @@ const dshRows = ref<ProviderRowsHandle | null>(null)
 const cliRows = ref<InstanceType<typeof CliInstanceRows> | null>(null)
 const freeRows = ref<InstanceType<typeof FreeInstanceRows> | null>(null)
 const quickAdd = ref<InstanceType<typeof CliQuickAdd> | null>(null)
-const KIND_LABEL_KEY: Record<InstanceTableKind, string> = {
+const KIND_VIEW_LABEL_KEY: Record<KindView, string> = {
+  all: 'instances.kindAll',
   desktop: 'app.tabDesktop',
   cli: 'app.tabCli',
   free: 'app.tabFree',
+}
+const KIND_VIEW_STEP: Record<string, number | undefined> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+}
+/** Arrow keys move the choice along the group, as in a radio group; Enter and Space click it. */
+function onKindViewKey(event: KeyboardEvent, view: KindView) {
+  const step = KIND_VIEW_STEP[event.key]
+  if (!step) return
+  event.preventDefault()
+  const next = KIND_VIEWS[(KIND_VIEWS.indexOf(view) + step + KIND_VIEWS.length) % KIND_VIEWS.length]
+  setKindView(next)
+  const group = (event.currentTarget as HTMLElement).closest('[role="radiogroup"]')
+  group?.querySelector<HTMLElement>(`[data-kind="${next}"]`)?.focus()
 }
 
 /** A row component's own refresh while it is mounted, else the bare list, so a provider the filter
@@ -630,12 +647,13 @@ const totalRows = computed(
     (kindShown('cli') ? cliTotal.value : 0) +
     (kindShown('free') ? freeTotal.value : 0),
 )
-/** The toggles' counts: every row each kind has, whether its toggle is on or not. */
-const kindCounts = computed<Record<InstanceTableKind, number>>(() => ({
-  desktop: desktopTotal.value,
-  cli: cliInstances.value.length,
-  free: freeTotal.value,
-}))
+/** The choice's counts: every row each choice has, whether it is the one shown or not. */
+const kindCounts = computed<Record<KindView, number>>(() => {
+  const desktop = desktopTotal.value
+  const cli = cliInstances.value.length
+  const free = freeTotal.value
+  return { all: desktop + cli + free, desktop, cli, free }
+})
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
@@ -1410,20 +1428,11 @@ onUnmounted(() => {
   <div class="flex min-h-full flex-col pb-16">
     <InstanceCard>
       <!-- The card's header bar (InstanceCard): the table's column headings right below draw the
-           line under it. One card for every kind of instance: the title is not a collapse toggle, and
-           the kind toggles sit in its summary slot. The count covers the shown kinds and reads "x of
-           y" once the filter is hiding rows, so it never silently disagrees with the instances that
-           exist. No count while the skeleton stands in: it read "(0)" and then jumped to the real
-           number. -->
+           line under it. One card for every kind of instance, so it has no title of its own: the nav
+           tab already says Instances, and the kind choice (All, Desktop, CLI, Free, each with its row
+           count) takes the title's place in its summary slot (owner, 2026-10-07). -->
       <InstanceSectionHeader
-        :title="$t('instances.title')"
-        :count="
-          claudeSkeleton
-            ? null
-            : hiddenByFilter > 0
-              ? $t('instances.countOfTotal', { shown: shownRows, total: totalRows })
-              : totalRows
-        "
+        title=""
         :refresh-label="$t('instances.refresh')"
         :refresh-hint="$t('instances.refreshHint')"
         :refreshing="loading || cliLoading || freeLoading"
@@ -1434,30 +1443,34 @@ onUnmounted(() => {
         @create="(id) => onCreateFor(id as string)"
       >
         <template #summary>
-          <!-- A bordered segmented control, so the kinds read as switches at a glance (owner,
-               2026-10-07: "really easy to click toggles on the top"): on is filled, off is muted. -->
+          <!-- One choice of four, as a segmented control (owner, 2026-10-07: Desktop, CLI and Free as
+               toggles read as switches to turn on and off, not as a choice of what to show). The chosen
+               one is filled and ringed, the others muted; arrow keys move between them. -->
           <div
             class="inline-flex items-center gap-0.5 rounded-md border bg-background/40 p-0.5"
-            role="group"
+            role="radiogroup"
             :aria-label="$t('instances.title')"
           >
             <Button
-              v-for="kind in INSTANCE_KINDS"
-              :key="kind"
+              v-for="view in KIND_VIEWS"
+              :key="view"
               size="sm"
               variant="ghost"
+              role="radio"
               class="h-7 gap-1.5 rounded-[5px] px-2.5"
               :class="
-                kindShown(kind)
+                kindView === view
                   ? 'bg-primary/15 text-foreground ring-1 ring-primary/40 hover:bg-primary/20'
                   : 'text-muted-foreground hover:text-foreground'
               "
-              :aria-pressed="kindShown(kind)"
-              :data-kind="kind"
-              @click="toggleKind(kind)"
+              :aria-checked="kindView === view"
+              :tabindex="kindView === view ? 0 : -1"
+              :data-kind="view"
+              @click="setKindView(view)"
+              @keydown="onKindViewKey($event, view)"
             >
-              {{ $t(KIND_LABEL_KEY[kind]) }}
-              <span class="tabular-nums text-muted-foreground">{{ kindCounts[kind] }}</span>
+              {{ $t(KIND_VIEW_LABEL_KEY[view]) }}
+              <span class="tabular-nums text-muted-foreground">{{ kindCounts[view] }}</span>
             </Button>
           </div>
         </template>
