@@ -517,6 +517,35 @@ test('a complete install on the current version is still refused as up to date',
   }
 })
 
+// These tests run from a checkout, where process.execPath is the bun running them. The exe the
+// update replaces used to default to it, so a caller that named no exePath would have moved this
+// bun aside and put the release download in its place.
+test('applyUpdate in a source checkout with no exePath refuses before any download or swap', async () => {
+  const { root, bundle, install } = applyFixture()
+  const calls: string[] = []
+  try {
+    const { exePath: _named, ...unnamed } = applyDeps(install, bundle, {
+      // Fails the apply if reached, so code that gets this far still stops short of the swap.
+      downloadAndVerifyUpdate: async () => {
+        calls.push('download')
+        throw new Error('download reached')
+      },
+      rename: () => {
+        calls.push('rename')
+      },
+      move: () => {
+        calls.push('move')
+      },
+    })
+    const result = await applyUpdate(unnamed)
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('source checkout')
+    expect(calls).toEqual([])
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 // install.ps1 (the manual install, audit AH-40) carries its own component list in PowerShell. It
 // must name exactly what the self-updater swaps, or a manual install and an in-app update would
 // disagree about what a release IS. Parsed from the script rather than declared twice by hand.

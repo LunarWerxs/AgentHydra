@@ -951,7 +951,8 @@ async function downloadAndVerifyUpdate(
 export interface ApplyUpdateDeps {
   /** Root of the install being updated. Defaults to APP_ROOT. */
   installDir?: string
-  /** Path of the running executable being replaced. Defaults to process.execPath. */
+  /** Path of the executable being replaced. Defaults to LAUNCHER_PATH in a release; a source
+   *  checkout has none, so there applyUpdate refuses unless one is passed. */
   exePath?: string
   checkForUpdate?: (opts?: { fresh?: boolean }) => Promise<UpdateStatus>
   /** Re-fetch used to read the asset list (checkForUpdate intentionally doesn't carry it). */
@@ -1368,8 +1369,13 @@ export async function applyUpdate(deps: ApplyUpdateDeps = {}): Promise<UpdateApp
 
   const installDir = deps.installDir ?? APP_ROOT
   // In a release, the daemon runs through the launcher and process.execPath is runtime/bun(.exe),
-  // not the launcher. The exe being replaced is LAUNCHER_PATH. In a checkout, neither exists.
-  const exePath = deps.exePath ?? (IS_RELEASE ? LAUNCHER_PATH : process.execPath)
+  // not the launcher. The exe being replaced is LAUNCHER_PATH. A checkout has no exe of its own:
+  // process.execPath there is the bun running it, and swapping that would put a release download
+  // in place of the machine's bun. So a checkout updates through git, and this refuses unless the
+  // caller names the exe (a test's scratch install).
+  const exePath = deps.exePath ?? (IS_RELEASE ? LAUNCHER_PATH : null)
+  if (exePath === null)
+    return fail('this is a source checkout, which updates through git, not a release download')
   const resolved = await resolveUpdateToApply(doCheckForUpdate, doFetchLatestRelease, installDir)
   // A refusal is already a finished result; only a ResolvedUpdate carries a version to install.
   if (!('remoteVersion' in resolved)) return resolved
