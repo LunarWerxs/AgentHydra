@@ -1,5 +1,6 @@
 // Markdown for assistant text and plans. Pure: markdown-it only, highlighting passed in.
 import MarkdownIt from 'markdown-it'
+import { pathLike } from './reveal'
 
 /** Returns highlighted HTML for a code block (a whole <pre>), or null to fall back to plain text. */
 export type Highlight = (code: string, lang: string) => string | null
@@ -95,7 +96,8 @@ export function createMarkdown(getHighlight: () => Highlight | null = () => null
     if (kind) {
       return `<button type="button" class="md-img" data-zoom="${escapeHtml(src)}" aria-label="Open ${escapeHtml(alt)}"><img src="${escapeHtml(src)}" alt="${escapeHtml(alt)}" loading="lazy"></button>`
     }
-    return `<span class="md-file-chip" title="${escapeHtml(fileName(src))}">${FILE_ICON}<span>${escapeHtml(alt)}</span></span>`
+    const where = pathLike(src)
+    return `<span class="md-file-chip"${where ? ` data-reveal-path="${escapeHtml(where)}"` : ''} title="${escapeHtml(fileName(src))}">${FILE_ICON}<span>${escapeHtml(alt)}</span></span>`
   }
 
   md.renderer.rules.fence = (tokens, idx) => {

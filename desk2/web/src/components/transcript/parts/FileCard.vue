@@ -18,6 +18,7 @@ function open() {
     :is="imageSrc(file) ? 'button' : 'div'"
     :type="imageSrc(file) ? 'button' : undefined"
     class="tx-file-card"
+    :data-reveal-path="file.path"
     :aria-label="imageSrc(file) ? `Open ${file.name || 'file'}` : undefined"
     @click="open"
   >

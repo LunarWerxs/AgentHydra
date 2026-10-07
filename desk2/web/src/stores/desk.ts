@@ -928,6 +928,15 @@ export function useDesk() {
       })
     },
 
+    /** Open in Explorer for a file a chat shows: `{ path, cwd? }` or `{ media: '/api/media/<id>' }`; the folder opens with the file selected. */
+    async revealFile(body: { path?: string; cwd?: string; media?: string }): Promise<{ path: string; folder: boolean }> {
+      return fetchJson('/files/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      })
+    },
+
     /**
      * AgentHydra's transcript search; a 503 means AgentHydra is not answering. Each call cancels the one
      * still in flight, whose promise rejects with an AbortError; a query too short to search only cancels.

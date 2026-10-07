@@ -82,6 +82,8 @@ export interface ImageRef {
   /** Where the window loads the picture from when dataBase64 is absent: a server route of this chat. */
   url?: string
   bytes?: number // file size, for the file card ("PNG, live.png, 67.2KB")
+  /** The local file this ref was made from (absolute), so the window can offer "Open in Explorer"; absent for a pasted or generated picture. */
+  path?: string
 }
 
 export interface ToolResult {

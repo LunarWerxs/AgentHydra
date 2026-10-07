@@ -58,6 +58,7 @@ onBeforeUnmount(() => observer?.disconnect())
         v-if="imageSrc(img)"
         type="button"
         class="tx-tile"
+        :data-reveal-path="img.path"
         :style="sizeOf.get(i) ? { width: `${sizeOf.get(i)!.width}px`, height: `${sizeOf.get(i)!.height}px` } : undefined"
         :aria-label="`Open ${img.name || 'picture'}`"
         @click="open(imageSrc(img)!, img.name ?? '')"

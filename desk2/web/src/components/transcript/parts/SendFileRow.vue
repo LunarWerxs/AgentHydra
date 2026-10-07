@@ -25,6 +25,7 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
       :key="`p${i}`"
       type="button"
       class="tx-inline-picture"
+      :data-reveal-path="f.path"
       :aria-label="`Open ${f.name || 'picture'}`"
       @click="openLightbox(imageSrc(f)!, f.name ?? '', group)"
       @keydown="tileKey($event, () => openLightbox(imageSrc(f)!, f.name ?? '', group))"
@@ -37,6 +38,7 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
       :key="`v${i}`"
       class="tx-inline-video"
       :src="videoSrc(f)!"
+      :data-reveal-path="f.path"
       :aria-label="f.name || 'video'"
       :title="f.name || 'video'"
       controls

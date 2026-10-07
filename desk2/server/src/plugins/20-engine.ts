@@ -35,7 +35,8 @@ import {
   parseSessionMeta,
 } from '../engine/chat-manager'
 import { diagnosticsRoute, sinceParam } from '../engine/diagnostics'
-import { checkLocalPath, isRemotePath, localFolder, type OpenFolder, revealFolder } from '../engine/reveal'
+import { checkLocalPath, isRemotePath, localFolder, type OpenFile, type OpenFolder, revealFile, revealFolder } from '../engine/reveal'
+import { MEDIA_ROUTE, mediaCache } from '../media/cache'
 import { nativeFolderPicker, PickError, type PickFolder } from '../folders/pick'
 import { RecentFolders } from '../folders/recent'
 
@@ -308,6 +309,12 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   )
   const openFolder = deps.openFolder as OpenFolder | undefined
   app.post('/api/folders/reveal', (c) => answer(c, async () => revealFolder(await body(c), openFolder)))
+  const openFile = deps.openFile as OpenFile | undefined
+  app.post('/api/files/reveal', (c) =>
+    answer(c, async () =>
+      revealFile(await body(c), MEDIA_ROUTE, { file: openFile, folder: openFolder, sourceOf: (id) => mediaCache(manager.store.home)?.sourceOf(id) ?? null }),
+    ),
+  )
   app.get('/api/mcp-servers', (c) =>
     answer(c, () => {
       const cwd = c.req.query('cwd') ?? ''

@@ -3,6 +3,8 @@
 // one argument, never through a shell.
 
 import { spawn } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { isAbsolute, resolve } from 'node:path'
 import { checkCwd, ChatError } from './chat-manager'
 
 export type OpenFolder = (dir: string) => void
@@ -48,4 +50,59 @@ export function revealFolder(body: unknown, open: OpenFolder = openInExplorer): 
   const dir = localFolder(body)
   open(dir)
   return { path: dir }
+}
+
+export type OpenFile = (file: string) => void
+
+/** explorer.exe's command line for "show this file selected in its folder": `/select,"C:\a\b.mp4"` (backslashes, as /select needs them). */
+export function selectArg(file: string): string {
+  return `/select,${explorerArg(file.replace(/\//g, '\\'))}`
+}
+
+export function selectInExplorer(file: string): void {
+  const child = spawn('explorer.exe', [selectArg(file)], { detached: true, stdio: 'ignore', windowsVerbatimArguments: true })
+  child.on('error', (err) => console.warn(`[desk] could not show ${file} in Explorer: ${err.message}`))
+  child.unref()
+}
+
+export interface FileOpeners {
+  file?: OpenFile
+  folder?: OpenFolder
+  /** The local file a cached /api/media/<id> came from. */
+  sourceOf?: (id: string) => string | null
+}
+
+/**
+ * "Open in Explorer" for a file the chat shows. The body is `{ path, cwd? }` (absolute, or relative to cwd) or
+ * `{ media: '/api/media/<id>' }`. A network or device path is refused before disk is touched; a missing path is a
+ * 404; a folder just opens, a file opens its folder with the file selected. Answers the path shown.
+ */
+export function revealFile(body: unknown, mediaRoute: string, opens: FileOpeners = {}): { path: string; folder: boolean } {
+  const b = body && typeof body === 'object' && !Array.isArray(body) ? (body as { path?: unknown; cwd?: unknown; media?: unknown }) : {}
+  let path: string
+  if (typeof b.media === 'string') {
+    if (!b.media.startsWith(mediaRoute)) throw new ChatError(400, 'media must be a /api/media/ url')
+    const source = opens.sourceOf?.(b.media.slice(mediaRoute.length)) ?? null
+    if (!source) throw new ChatError(404, 'the original file of this picture or video is not known to this server')
+    path = source
+  } else {
+    if (typeof b.path !== 'string' || !b.path.trim()) throw new ChatError(400, 'path or media is required')
+    path = b.path.trim()
+    if (typeof b.cwd === 'string' && b.cwd) {
+      checkLocalPath(b.cwd, 'cwd')
+      if (!isAbsolute(path) && !/^[\\/]/.test(path)) path = resolve(b.cwd, path)
+    }
+  }
+  checkLocalPath(path, 'path')
+  if (!isAbsolute(path)) throw new ChatError(400, 'path must be absolute, or relative to a cwd')
+  path = resolve(path)
+  let st: ReturnType<typeof statSync>
+  try {
+    st = statSync(path)
+  } catch {
+    throw new ChatError(404, 'that file or folder no longer exists')
+  }
+  if (st.isDirectory()) (opens.folder ?? openInExplorer)(path)
+  else (opens.file ?? selectInExplorer)(path)
+  return { path, folder: st.isDirectory() }
 }

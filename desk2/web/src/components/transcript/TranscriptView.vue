@@ -16,6 +16,9 @@ import { redesignState } from './lib/redesign'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { provideTranscript } from './context'
+import { revealTarget, type RevealTarget } from './lib/reveal'
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { MENU_CONTENT, MENU_ITEM } from '@/components/sidebar/menuClasses'
 import TranscriptRow from './TranscriptRow.vue'
 import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
@@ -45,6 +48,38 @@ const props = defineProps<{
 }>()
 
 const desk = useDesk()
+
+// Right-click on a local file's video/picture or a file path in a reply: Desk's own small menu. Shift keeps the WebView's
+// (Loop, Save video as, Picture in picture). The capture listener decides before the menu's own handler runs: for
+// anything else it stops the event there, so the native menu shows.
+const reveal = ref<RevealTarget | null>(null)
+const revealNote = ref<string | null>(null)
+let noteTimer: ReturnType<typeof setTimeout> | undefined
+function onContextCapture(e: MouseEvent) {
+  const target = e.shiftKey ? null : revealTarget(e.target as Element | null)
+  reveal.value = target
+  if (!target) e.stopPropagation()
+}
+function say(text: string) {
+  revealNote.value = text
+  clearTimeout(noteTimer)
+  noteTimer = setTimeout(() => (revealNote.value = null), 5000)
+}
+function openInExplorer() {
+  const t = reveal.value
+  if (!t) return
+  const body = t.path ? { path: t.path, cwd: chat.value?.cwd ?? undefined } : { media: t.media! }
+  desk.revealFile(body).catch((err: unknown) => {
+    // A media item with no known path: try the cached id once more as the fallback the server knows.
+    if (t.path && t.media) return desk.revealFile({ media: t.media }).catch(() => say(`Could not open it in Explorer: ${err instanceof Error ? err.message : String(err)}`))
+    say(`Could not open it in Explorer: ${err instanceof Error ? err.message : String(err)}`)
+  })
+}
+function copyPath() {
+  const p = reveal.value?.path
+  if (p) void navigator.clipboard.writeText(p).catch(() => say('Could not copy the path'))
+}
+onBeforeUnmount(() => clearTimeout(noteTimer))
 const chat = computed<ChatSummary | null>(() =>
   props.chat !== undefined ? props.chat : ((desk.chats.value as ChatSummary[]).find((c) => c.id === props.chatId) ?? null),
 )
@@ -393,6 +428,8 @@ watch(
 
 <template>
   <div class="relative h-full min-h-0 bg-bg-page">
+    <ContextMenu>
+    <ContextMenuTrigger as-child>
     <div
       ref="scroller"
       class="@container h-full overflow-y-auto overflow-x-hidden [overflow-anchor:none] [scrollbar-gutter:stable_both-edges]"
@@ -401,6 +438,7 @@ watch(
       data-transcript-scroller
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
+      @contextmenu.capture="onContextCapture"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
       <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
@@ -417,6 +455,24 @@ watch(
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
       </div>
     </div>
+    </ContextMenuTrigger>
+    <ContextMenuContent :class="MENU_CONTENT">
+      <ContextMenuItem :class="MENU_ITEM" @select="openInExplorer">
+        <icons.folder />Open in Explorer
+      </ContextMenuItem>
+      <ContextMenuItem :class="MENU_ITEM" :disabled="!reveal?.path" @select="copyPath">
+        <icons.copy />Copy path
+      </ContextMenuItem>
+      <ContextMenuLabel v-if="reveal?.media" class="px-2 py-1 text-[12px] font-normal leading-4 text-text-muted">
+        Shift + right-click for the browser menu (Loop, Save video as, Picture in picture)
+      </ContextMenuLabel>
+    </ContextMenuContent>
+    </ContextMenu>
+    <div
+      v-if="revealNote"
+      role="status"
+      class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-[var(--radius-10)] bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
+    >{{ revealNote }}</div>
     <Transition
       enter-from-class="opacity-0 translate-y-1"
       leave-to-class="opacity-0 translate-y-1"

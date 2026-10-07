@@ -20,6 +20,7 @@ const pictures = computed(() => props.media.filter((f) => imageSrc(f)))
       :key="`v${i}`"
       class="tx-inline-video"
       :src="videoSrc(f)!"
+      :data-reveal-path="f.path"
       :aria-label="f.name || 'video'"
       :title="f.name || 'video'"
       controls
