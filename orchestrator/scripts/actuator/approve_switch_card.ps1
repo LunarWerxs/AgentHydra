@@ -456,6 +456,19 @@ try {
       }
     } catch {
       Write-Log "scan error: $($_.Exception.Message)"
+      # The window is cached at start. When the instance quits (an app restart gives it a new pid), every
+      # scan fails on the dead window forever, and while this runs the supervisor counts the instance as
+      # watched, so no fresh watcher starts (six of eight, 2026-10-04 to 10-07). Exit instead; the
+      # supervisor's next run starts one on the new process. A recreated window is followed in place.
+      $live = Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue
+      if (-not $live) {
+        Write-Log "instance pid $($proc.ProcId) is gone - exiting so the supervisor starts a fresh watcher"
+        break
+      }
+      if ($live.MainWindowHandle -ne [IntPtr]::Zero -and $live.MainWindowHandle -ne $hwnd) {
+        Write-Log "window changed: $hwnd -> $($live.MainWindowHandle)"
+        $hwnd = $live.MainWindowHandle
+      }
     }
     if ($Once) { break }
     # The UIA wrappers are tiny managed objects pinning native ones, so the GC never feels the
