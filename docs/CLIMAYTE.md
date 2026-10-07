@@ -1338,6 +1338,17 @@ then imported), where someone could go on in them and send turns back. Now:
   On MPC-HELL that took out Jacob's 3 chats (4 transcript files: one he had moved between folders had
   been written under both).
 
+**Hydra Desk's chats too (owner, 2026-10-07):** turning on the cloud in Desk 2's sidebar "should show me
+... all chats between both of our computers". Only Claude Desktop chats were shared, so a PC whose owner
+works in Hydra Desk shared almost nothing: on 2026-10-07 the other PC's 23 chats that started CliMayte work
+in three days had none in the store, against its 6 desktop chats. `core/desktop-chat-local.ts` now lists
+the chats of Jacob's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
+`~/.hydra-desk-2`, never a throwaway Desk's home) beside the desktop records, view only like them. A
+chat's transcript is read from its account's own folder (`account.configDir`, else `~/.claude`); a
+session a desktop record already lists goes once, as that record; one idle over a week that was never
+shared is held back (`holdBack`, `DESK_IDLE_MS`), so the store's room goes to what runs. A PC shares its
+Desk chats once it runs this version; the PC that views them needs nothing new.
+
 Tests: `server/tests/desktop-chat-sync.test.ts`, `server/tests/desktop-chat-local.test.ts`.
 
 The store stays small (2026-10-03): a chat archived three days ago leaves it, row and transcript, and is

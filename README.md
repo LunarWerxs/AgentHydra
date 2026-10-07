@@ -67,7 +67,7 @@ The old run queue stays as a read-only record. Starting a new headless run is re
   view, and its transcript is a normal session.
 - **Quick add:** type an email, sign in in the window it opens, and the account is ready.
 - **Two PCs:** with Login sync, each PC sees the other's CliMayte tasks and never crowds the same
-  account. Desktop chats can be shared too, view only.
+  account. Desktop and Hydra Desk chats can be shared too, view only.
 - Over MCP: `climayte_run`, `climayte_status`, `climayte_send`, `climayte_cancel`, `cli_limit_reset`.
   Details: [docs/CLIMAYTE.md](docs/CLIMAYTE.md).
 

@@ -2,13 +2,19 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createChatLocal } from '../src/core/desktop-chat-local'
+import { createChatLocal, DESK_IDLE_MS } from '../src/core/desktop-chat-local'
 
 const ACCT = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const OTHER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ORG = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const SESSION = '11111111-1111-4111-8111-111111111111'
 const STALE = '22222222-2222-4222-8222-222222222222'
+const DESK_ID = '33333333-3333-4333-8333-333333333333'
+const DESK_SESSION = '44444444-4444-4444-8444-444444444444'
+const SAME_ID = '55555555-5555-4555-8555-555555555555'
+const IDLE_ID = '66666666-6666-4666-8666-666666666666'
+const IDLE_SESSION = '77777777-7777-4777-8777-777777777777'
+const NEW_ID = '88888888-8888-4888-8888-888888888888'
 
 let root: string
 let profile: string
@@ -41,7 +47,11 @@ describe('list', () => {
     record(profile, OTHER, STALE)
     mkdirSync(join(projects, 'proj'))
     writeFileSync(join(projects, 'proj', `${SESSION}.jsonl`), 'hello\n')
-    const chats = createChatLocal({ profileRoots: () => [profile], projectsDir: projects }).list()
+    const chats = createChatLocal({
+      profileRoots: () => [profile],
+      projectsDir: projects,
+      deskHomes: [],
+    }).list()
     expect(chats).toHaveLength(1)
     expect(chats[0]).toMatchObject({
       id: SESSION,
@@ -53,6 +63,62 @@ describe('list', () => {
       size: 6,
     })
     expect(chats[0].record.title).toBe('A chat')
+  })
+
+  test("lists Hydra Desk's chats with the transcript in their account's folder, each session once, and holds back one idle over a week", () => {
+    record(profile, ACCT, SESSION)
+    mkdirSync(join(projects, 'proj'))
+    writeFileSync(join(projects, 'proj', `${SESSION}.jsonl`), 'hello\n')
+    const account = join(root, 'cli-account')
+    mkdirSync(join(account, 'projects', 'X--work'), { recursive: true })
+    writeFileSync(join(account, 'projects', 'X--work', `${DESK_SESSION}.jsonl`), 'desk turn\n')
+    mkdirSync(join(projects, 'X--work'))
+    writeFileSync(join(projects, 'X--work', `${IDLE_SESSION}.jsonl`), 'old\n')
+    const desk = join(root, 'desk')
+    mkdirSync(desk)
+    const now = Date.now()
+    const chat = (
+      id: string,
+      sessionId: string | null,
+      configDir: string | null,
+      updatedAt = now,
+    ) => ({
+      id,
+      sessionId,
+      title: 'A Desk chat',
+      cwd: 'X:\\work',
+      archived: false,
+      updatedAt,
+      account: { id: configDir ? 'cli-1' : 'default', configDir },
+    })
+    writeFileSync(
+      join(desk, 'chats.json'),
+      JSON.stringify([
+        chat(DESK_ID, DESK_SESSION, account),
+        // The desktop record's session: listed once, as the record.
+        chat(SAME_ID, SESSION, null),
+        chat(IDLE_ID, IDLE_SESSION, null, now - DESK_IDLE_MS - 60_000),
+        // Not started yet: it has no session.
+        chat(NEW_ID, null, null),
+      ]),
+    )
+    const local = createChatLocal({
+      profileRoots: () => [profile],
+      projectsDir: projects,
+      deskHomes: [desk],
+    })
+    const chats = local.list()
+    expect(chats.map((c) => [c.id, c.project, c.size, c.holdBack === true])).toEqual([
+      [SESSION, 'proj', 6, false],
+      [DESK_ID, 'X--work', 10, false],
+      [IDLE_ID, 'X--work', 4, true],
+    ])
+    expect(chats[1].record).toMatchObject({
+      title: 'A Desk chat',
+      cwd: 'X:\\work',
+      isArchived: false,
+    })
+    expect(Buffer.from(local.read('X--work', DESK_SESSION, 0, 100)).toString()).toBe('desk turn\n')
   })
 })
 

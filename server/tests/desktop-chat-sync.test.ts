@@ -237,6 +237,26 @@ test('a chat archived before it was shared never goes up; archiving a shared one
   expect(await rowFor(live.id)).toBeUndefined()
 })
 
+test('a chat held back (a Hydra Desk chat idle over a week) never goes up first; a shared one it marks still sends its rename', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const idle = a.add({ holdBack: true }, '{"n":1}\n')
+  const live = a.add({}, '{"n":1}\n')
+  await syncChats(a.io)
+  await syncChats(b.io)
+  expect(await rowFor(idle.id)).toBeUndefined()
+  expect(chatsFromElsewhere(b.io.statePath).has(idle.sessionId)).toBe(false)
+  expect(chatsFromElsewhere(b.io.statePath).get(live.sessionId)?.title).toBe('A chat')
+
+  Object.assign(a.chats.find((c) => c.id === live.id) as LocalChat, {
+    holdBack: true,
+    record: { title: 'Renamed' },
+  })
+  await syncChats(a.io, pastHold())
+  await syncChats(b.io)
+  expect(chatsFromElsewhere(b.io.statePath).get(live.sessionId)?.title).toBe('Renamed')
+})
+
 test('a copy of A’s chat in B’s chat list never goes up from B, however it grows', async () => {
   const a = pc('PC-A')
   const b = pc('PC-B')

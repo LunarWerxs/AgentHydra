@@ -30,6 +30,9 @@ export interface LocalChat {
   archived: boolean
   /** The transcript's size in bytes now; 0 when there is none. */
   size: number
+  /** Never sent for the first time: a Hydra Desk chat idle over DESK_IDLE_MS (desktop-chat-local.ts). One
+   *  already shared goes on as any other, its archive included. */
+  holdBack?: boolean
 }
 
 /** What became of a chat an earlier version landed in this PC's chat list. `kept`: someone here

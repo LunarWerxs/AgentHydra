@@ -20,6 +20,11 @@
 // out: its desktop copies archived and its transcript moved into the viewer (kept where it is if
 // someone here went on in it).
 //
+// HYDRA DESK'S CHATS ride along (owner, 2026-10-07: the cloud list should show "all chats between both of
+// our computers"; a PC whose owner works in Hydra Desk shared almost nothing, since its chats have no
+// desktop record). desktop-chat-local.ts lists them beside the desktop records, view only like them; one
+// idle over a week that was never shared is held back (`holdBack`), so the store's room goes to what runs.
+//
 // A PASS sends what this PC started that the store lacks, then takes what the other PCs started that
 // this PC lacks. Chats archived before they were ever shared are never sent (the owner's PC holds
 // thousands of archived chats, about 17 GB). A transcript is only ever read in windows ending at a
@@ -517,7 +522,7 @@ function sendableState(
     if (st.state === 'diverged' || st.state === 'waiting') return null
     return st
   }
-  if (c.archived || !c.project) return null
+  if (c.archived || c.holdBack || !c.project) return null
   if (st && st.version > 0) return null
   return st ?? newState(io, c)
 }
