@@ -86,7 +86,7 @@ token, never the token.
 | `DELETE /v1/chats/:id?version=n` | removes the chat row when `n` is current, else 409; its transcript (the chunks under its session) goes too once no other row shares that session |
 | `PUT /v1/chats/:id/chunks/:seq` | `{blob, by}`: an append-only transcript piece (up to 1,048,576 characters), written once; 409 `{error:'taken', next}` if that seq exists; 507 `{error, used, room}` if it would take chats past their room |
 | `GET /v1/chats/:id/chunks?from=n` | `{chunks, next, more}`: chunks from seq `n` in order, one page of about 8,000,000 characters |
-| `GET /v1/free` | each Hydra Desk 2 Free web login (claude.ai, chatgpt.com): id, version, meta (`signedOut` only) |
+| `GET /v1/free` | each Hydra Desk 2 Free web login (claude.ai, chatgpt.com): id, version, meta (`signedOut` only); only a Desk on its real home (`~/.hydra-desk-2`) reads or writes them |
 | `GET /v1/free/:id` | one Free login's encrypted blob (up to 64 KB) |
 | `PUT /v1/free/:id` | `{version, blob, meta}`, written like a login (compare-and-swap on the version) |
 | `DELETE /v1/free/:id?version=n` | removes it at that version |

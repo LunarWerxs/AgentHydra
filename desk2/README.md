@@ -480,7 +480,7 @@ which the server on 7798 serves; the launcher's window needs that build. `bun te
 `bun e2e/stream-frames.e2e.ts` streams a long reply (an em dash, a 240-line TypeScript block) into the transcript in headless chrome-headless-shell and writes `tmp/stream-frames.json`: frames over the 8.33 ms budget, style recalcs, layouts and DOM mutations per chunk (needs `bun add -d puppeteer`).
 
 `bun run e2e:gestures` (after `bun run build`) starts the built window as a hidden server on 7819 with a
-throwaway home and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
+throwaway home (removed, with its Edge profile, when the run ends) and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
 long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
 sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 31
 cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and

@@ -49,6 +49,9 @@ between server/ and web/.
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.
+- A Desk on any home but `~/.hydra-desk-2` (a test's, an e2e script's, a probe's) is a throwaway: it never joins
+  Login sync and sets up no Free runtime (`server/src/real-home.ts`, 2026-10-07: before, one pulled every Free login
+  into %TEMP%). Never gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.
 - Never read or print a secret: the agenthydra MCP entry copied from `~/.claude.json` and any
   `.credentials.json` stay out of logs and output.
 - Never open a visible console window: detached processes use `Start-Process -WindowStyle Hidden` with
