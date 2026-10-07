@@ -59,6 +59,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Moving chats off an account archives the old copies again on Claude Desktop 2.26454.0.** That build moved an
+  internal check AgentHydra relies on, so every archive was refused and the moved chats' old copies stayed in
+  the source account's sidebar.
 - **A Free account no longer shows as signed out after a check that merely failed.** Only the site saying the login
   is gone signs it out; being offline for a moment does not.
 - **Tooltips and usage popups no longer pile up while the window is not focused.** Hovering AgentHydra while another

@@ -128,7 +128,17 @@ by export name and method shape, never imports or initializes a bundle module, a
 closed before any mutation if a match is missing or ambiguous. Before an archive it also reads
 the loaded code for the two behaviours its guards model (archive forwards `cleanupWorktree`,
 and preview cleanup matches worktrees by prefix) and refuses a build that changed either. It
-records the matched bundle members and their SHA-256 as evidence. A native live proof on **another_meh
+records the matched bundle members and their SHA-256 as evidence.
+
+Helpers do move between builds, and the program reads each one from every place a live build
+keeps it. 2.9939.4 moved the starting-session set to `manager.inFlightStarts.startingSessionIds`;
+2.26454.0 moved `hasPendingUserInput` to `manager.heldInputChecks`. Before that second change was
+handled, every archive on 2.26454.0 refused with `native method unavailable: hasPendingUserInput`,
+and a move's source copies stayed visible (2026-10-07). When an archive refuses with
+`native method unavailable: <name>`, search the new build's `app.asar` for `<name>` to see where
+it moved.
+
+A native live proof on **another_meh
 (#8)** imported a disposable chat, restored its settings and archived it. See the
 [results](CLAUDE-DESKTOP-POC-RESULTS.md) for timings and preservation checks.
 
