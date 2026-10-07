@@ -26,9 +26,10 @@ import { createLoopbackGuard } from './loopback-guard.mjs'
 export const SIGNAL_HOOK_TIMEOUT_S = 3
 
 /** Python that runs the script named in argv[1] as `__main__` when the file exists, and does nothing
- *  when it does not. */
+ *  when it does not. Its folder goes first on sys.path, so a sibling module it imports resolves
+ *  (under `python -S -c`, sys.path[0] is the worker's cwd, not the script's folder). */
 export const RUN_IF_PRESENT =
-  "import os,runpy,sys;p=sys.argv[1];os.path.isfile(p) and runpy.run_path(p,run_name='__main__')"
+  "import os,runpy,sys;p=sys.argv[1];sys.path[0:0]=[os.path.dirname(p)];os.path.isfile(p) and runpy.run_path(p,run_name='__main__')"
 
 type Hook =
   | { type: 'command'; command: string; args?: string[]; timeout?: number }
@@ -58,6 +59,11 @@ export const STOP_HOOK_TIMEOUT_S = 10
  *    edit: the shell form's `|| true` absorbed that, so the launcher below runs the script only if
  *    it is still there (proven against the real CLI 2.1.286: a missing script blocked every Write).
  *    `-S` skips the site import (the script reads only the standard library).
+ *  - PreToolUse on Bash and PowerShell, for each of `guards` given: the owner's destructive_guard and
+ *    push_force_guard, which refuse a `git clean -f` or a force push. Workers carry none of the
+ *    owner's hooks, and a worker running with permissions skipped ran `git clean -fd` in a shared
+ *    checkout (2026-10-07). Same exec form and launcher as edit_claims, so a missing script does
+ *    nothing and an exit 2 from a guard denies the call.
  *  - Stop, when `stopUrl` is given (an ordinary worker, not a chat or a sealed one): an http hook the
  *    DAEMON answers, unlike the signal. It asks a worker whose estimate missed by more than
  *    REVIEW_BAND why, in the same turn (climayte-eta.ts stopDecision, climayteStopHook). It must be
@@ -66,8 +72,40 @@ export const STOP_HOOK_TIMEOUT_S = 10
 export function workerHooks(opts: {
   signalFile: string
   claims: string | null
+  guards?: string[]
   stopUrl?: string | null
 }): WorkerHooks {
+  const guards = opts.guards ?? []
+  const preToolUse: HookGroup[] = [
+    ...(opts.claims
+      ? [
+          {
+            matcher: 'Edit|Write|MultiEdit|NotebookEdit',
+            hooks: [
+              {
+                type: 'command' as const,
+                command: 'python',
+                args: ['-S', '-c', RUN_IF_PRESENT, opts.claims],
+                timeout: 10,
+              },
+            ],
+          },
+        ]
+      : []),
+    ...(guards.length
+      ? [
+          {
+            matcher: 'Bash|PowerShell',
+            hooks: guards.map((g) => ({
+              type: 'command' as const,
+              command: 'python',
+              args: ['-S', '-c', RUN_IF_PRESENT, g],
+              timeout: 10,
+            })),
+          },
+        ]
+      : []),
+  ]
   return {
     ...(opts.stopUrl
       ? {
@@ -76,23 +114,7 @@ export function workerHooks(opts: {
           ],
         }
       : {}),
-    ...(opts.claims
-      ? {
-          PreToolUse: [
-            {
-              matcher: 'Edit|Write|MultiEdit|NotebookEdit',
-              hooks: [
-                {
-                  type: 'command',
-                  command: 'python',
-                  args: ['-S', '-c', RUN_IF_PRESENT, opts.claims],
-                  timeout: 10,
-                },
-              ],
-            },
-          ],
-        }
-      : {}),
+    ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
     PostToolUse: [
       {
         matcher: '*',

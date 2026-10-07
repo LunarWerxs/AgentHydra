@@ -455,6 +455,8 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  through --settings hides them
  *  for this run only and moves nothing in the account's folder (the CLI's own settings schema,
  *  2.1.286). The owner's skills, synced into the account by syncOwnerClaude, still load.
+ *  The owner's Bash guards (destructive_guard, push_force_guard) run on Bash and PowerShell calls for
+ *  every worker and chat that is not sealed, the same as edit_claims: the owner's chats have them.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
 function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   mkdirSync(HOOKS, { recursive: true })
@@ -465,6 +467,15 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   // editing a chat's files was the collision it was built for (2026-10-01).
   const claims =
     ownerClaudeDir && !w.sealed ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
+  // The owner's Bash guards, for the same reason: a worker with permissions skipped had no guard
+  // against a `git clean -f` or a force push in a shared checkout (2026-10-07).
+  const hooksDir = ownerClaudeDir && !w.sealed ? join(ownerClaudeDir, 'hooks') : null
+  const guards = hooksDir
+    ? ['destructive_guard.py', 'push_force_guard.py']
+        .map((f) => join(hooksDir, f))
+        .filter((f) => existsSync(f))
+        .map(slashed)
+    : []
   writeFileSync(
     hookFile,
     JSON.stringify({
@@ -474,6 +485,7 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
       hooks: workerHooks({
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
+        guards,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed

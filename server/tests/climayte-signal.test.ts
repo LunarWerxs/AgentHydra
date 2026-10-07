@@ -62,6 +62,32 @@ describe('workerHooks', () => {
     ])
   })
 
+  test('the owner guards run on Bash and PowerShell in exec form, beside edit_claims', () => {
+    const guards = [
+      'C:/u/.claude/hooks/destructive_guard.py',
+      'C:/u/.claude/hooks/push_force_guard.py',
+    ]
+    const bash = {
+      matcher: 'Bash|PowerShell',
+      hooks: guards.map((g) => ({
+        type: 'command' as const,
+        command: 'python',
+        args: ['-S', '-c', RUN_IF_PRESENT, g],
+        timeout: 10,
+      })),
+    }
+    const edit = workerHooks({ signalFile: 'C:/x/s.json', claims: 'C:/c.py' }).PreToolUse![0]
+    expect(workerHooks({ signalFile: 'C:/x/s.json', claims: null, guards }).PreToolUse).toEqual([
+      bash,
+    ])
+    expect(
+      workerHooks({ signalFile: 'C:/x/s.json', claims: 'C:/c.py', guards }).PreToolUse,
+    ).toEqual([edit, bash])
+    expect(workerHooks({ signalFile: 'C:/x/s.json', claims: null, guards: [] })).not.toHaveProperty(
+      'PreToolUse',
+    )
+  })
+
   // The interpreter exits 2 for a script it cannot open, and a PreToolUse exit 2 denies the edit: the
   // shell form's `|| true` used to absorb it (the claims file deleted mid-attempt blocked every edit).
   test('the launcher runs the claims script when present, and exits 0 quietly when it is gone', () => {
@@ -80,6 +106,29 @@ describe('workerHooks', () => {
     expect(gone.exitCode).toBe(0)
     expect(gone.stdout.toString()).toBe('')
     expect(gone.stderr.toString()).toBe('')
+  }, 30_000)
+
+  // A guard imports its sibling module (destructive_guard imports push_force_guard). The launcher runs
+  // from the worker's cwd, so the script's own folder must be put on sys.path first, or the import
+  // fails and the guard silently does nothing.
+  test('a guard finds its sibling module when run from another folder, and its deny exit reaches the CLI', () => {
+    const dir = tmp()
+    const cwd = tmp()
+    writeFileSync(join(dir, 'sib.py'), "VALUE = 'ok'\n")
+    const guard = join(dir, 'guard.py')
+    writeFileSync(guard, 'import sys\nfrom sib import VALUE\nsys.exit(2)\n')
+    const denied = Bun.spawnSync(['python', '-S', '-c', RUN_IF_PRESENT, guard], {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    expect(denied.exitCode).toBe(2)
+    const gone = Bun.spawnSync(['python', '-S', '-c', RUN_IF_PRESENT, join(dir, 'missing.py')], {
+      cwd,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    expect(gone.exitCode).toBe(0)
   }, 30_000)
 })
 
