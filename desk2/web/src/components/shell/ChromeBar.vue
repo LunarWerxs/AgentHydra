@@ -72,6 +72,9 @@ const COLLAPSED_WIDTH = 241
         <component :is="shellGlyphs.sidebarToggle" class="size-4" />
       </button>
     </Tip>
+    <!-- A divider before Cloud, inside the 4px gap already there (owner, 2026-10-08: "just a separator, not ... additional
+         spacing"): its margins take back its width and the gap it adds, and it sits on a whole pixel, so it stays sharp. -->
+    <span class="-ml-[2px] -mr-[3px] h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
       <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
       <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
