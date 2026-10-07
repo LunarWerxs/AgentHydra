@@ -13,7 +13,8 @@ import type { UpdateOffer } from '@/lib/server-update'
 // every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
 // sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue)
 // and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
-// Each shows when it is on: AgentHydra pressed, the other four blue.
+// Each shows when it is on: AgentHydra pressed, the other four blue. AgentHydra and Dev servers sit at the right
+// end, after a thin divider: with the sidebar open, at its right edge; hidden, right after Clean sidebar.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
@@ -68,11 +69,6 @@ const BTN = `${BTN_SHAPE} text-text`
         <component :is="shellGlyphs.sidebarToggle" class="size-4" />
       </button>
     </Tip>
-    <Tip :label="hydraOpen ? 'Back to chats' : 'AgentHydra: accounts, instances and HSwarm'">
-      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
-        <component :is="agentHydraIcon" class="size-4" />
-      </button>
-    </Tip>
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
       <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
       <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
@@ -84,14 +80,21 @@ const BTN = `${BTN_SHAPE} text-text`
         <component :is="shellIcons.climayte" class="size-4" />
       </button>
     </Tip>
-    <Tip :label="devOn ? 'Back to the desk list' : 'Dev servers: the projects and servers AgentHydra runs'">
-      <button type="button" :class="[BTN_SHAPE, devOn ? 'text-accent-text' : 'text-text']" aria-label="Dev servers" :aria-pressed="!!devOn" @click="emit('dev')">
-        <Server class="size-4" />
-      </button>
-    </Tip>
     <Tip :label="cleanOn ? 'Show account numbers and times in the sidebar' : 'Clean sidebar: titles only, no account numbers or times'">
       <button type="button" :class="[BTN_SHAPE, cleanOn ? 'text-accent-text' : 'text-text']" aria-label="Clean sidebar" :aria-pressed="!!cleanOn" @click="emit('clean')">
         <component :is="shellGlyphs.cleanSidebar" class="size-4" />
+      </button>
+    </Tip>
+    <!-- AgentHydra and Dev servers sit at the bar's right end, after a thin divider (owner, 2026-10-07). -->
+    <span class="ml-auto h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+    <Tip :label="hydraOpen ? 'Back to chats' : 'AgentHydra: accounts, instances and HSwarm'">
+      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
+        <component :is="agentHydraIcon" class="size-4" />
+      </button>
+    </Tip>
+    <Tip :label="devOn ? 'Back to the desk list' : 'Dev servers: the projects and servers AgentHydra runs'">
+      <button type="button" :class="[BTN_SHAPE, devOn ? 'text-accent-text' : 'text-text']" aria-label="Dev servers" :aria-pressed="!!devOn" @click="emit('dev')">
+        <Server class="size-4" />
       </button>
     </Tip>
   </div>
