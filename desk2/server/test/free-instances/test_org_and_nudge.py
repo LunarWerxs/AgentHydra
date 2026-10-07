@@ -113,6 +113,8 @@ def execute(tmp_path, monkeypatch, config, args, offered=OFFERED, refuse=(), fai
             return {"uuid": ORG_A}
 
         model_for = http.ClaudeHttp.model_for
+        _account = http.ClaudeHttp._account
+        _account_body = None
 
         def _json(self, method, path, **kwargs):
             return account(None, offered)

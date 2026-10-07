@@ -116,6 +116,7 @@ class ClaudeHttp:
         }
         self.timeout = timeout
         self.last_usage: dict[str, Any] | None = None
+        self._account_body: Any = None
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/new"}
         )
@@ -269,11 +270,19 @@ class ClaudeHttp:
             raise HttpError("The login has no accessible Claude organization.")
         raise HttpError("Several organizations are available. Choose one with --org-id.")
 
+    def _account(self) -> Any:
+        """GET /api/account once per client: a new chat reads it for its model and both fallbacks (free.claude.calls_per_new_chat).
+
+        A failed read is not kept, so the next caller tries again."""
+        if self._account_body is None:
+            self._account_body = self._json("GET", "/api/account")
+        return self._account_body
+
     def account_label_for(self, org: dict[str, Any]) -> str | None:
         """A short display name for the signed-in account; never raises."""
         try:
             try:
-                body = self._json("GET", "/api/account")
+                body = self._account()
             except Exception:
                 body = None
             name = email = None
@@ -304,7 +313,7 @@ class ClaudeHttp:
         an org that offers no newer Haiku gets its default instead.
         """
         try:
-            body = self._json("GET", "/api/account")
+            body = self._account()
             if not isinstance(body, dict):
                 return None
             own = (body.get("settings") or {}).get("default_model")
