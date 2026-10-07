@@ -44,6 +44,8 @@ def ask_row(res, caller: dict | None) -> dict:
 
 
 def _provider(model: str) -> str:
+    if model.startswith("free:"):  # an ask a Free web account answered (free_route.py)
+        return "free"
     try:
         return config.provider_of(model)
     except (ValueError, KeyError):

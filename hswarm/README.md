@@ -119,6 +119,15 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 - `AGENTHYDRA_HSWARM_DIR` names the folder holding `hswarm/` when it is not beside the app (a wrong folder is reported in the tab, not replaced).
 - `AGENTHYDRA_PYTHON` names the interpreter (default `python`, `python3` off Windows).
 
+## Free accounts first
+
+A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `routine`, `general`, `research` or
+`decision`, purpose not `evaluation`, at most 100,000 characters) may run on the owner's signed-in Free claude.ai and
+ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
+leg, at no cost. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
+failed, slow or unparseable reply keeps the API route. `selection.route` shows it (`via: free`), the ledger line says
+provider `free`. Settings: `route_via_free` (default on), `route_via_free_max` (default 6), `route_via_free_profiles`.
+
 ## One tool with CliMayte
 
 Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default

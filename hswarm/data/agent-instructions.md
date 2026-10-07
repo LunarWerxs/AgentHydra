@@ -8,8 +8,7 @@ mechanical edits, second opinions. Keep the plan, the hard calls and the final a
 
 - **Batch the questions, not the calls.** A worker answers 50 short questions in about the time it answers one,
   so a task carries 20-100 small items, numbered in the prompt, with a `schema` whose answer is an array keyed
-  by item id. One task per item only when each needs its own tools,
-  folder or heavy reading.
+  by item id. One task per item only when each needs its own tools, folder or heavy reading.
 - `hswarm_run`: a batch of such tasks. Give every task an ABSOLUTE `cwd`, the `tools` it needs (`none` to
   reason, `read` to look, `edit` to change files, `all` adds a shell; web pages need `web` plus `web_hosts`),
   and a JSON `schema` whenever the answer is data.
@@ -18,7 +17,6 @@ mechanical edits, second opinions. Keep the plan, the hard calls and the final a
   command it quotes, and drop anything whose quote is not there.
 - Leave `model` on `auto` (the cheapest model that meets the task's bar); `profile` (`code`, `decision`,
   `research`, `critical`) raises the bar.
-- Keys and providers are the user's, in the console (`hswarm ui`); `hswarm_doctor` shows what is ready. Never
-  ask the user to paste a key into chat.
-- A task with tools and an absolute `cwd` may run on the owner's Claude subscription (CliMayte) when
-  AgentHydra's cost model says so (`selection.route` shows it); the caller changes nothing.
+- Keys are the user's, set in `hswarm ui`; `hswarm_doctor` shows what is ready. Never ask the user to paste a key.
+- On `auto`, a task with tools and an absolute `cwd` may run on the owner's Claude subscription (CliMayte), and a
+  tool-free one on the owner's Free claude.ai or ChatGPT accounts at no cost; `selection.route` shows which.

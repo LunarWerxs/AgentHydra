@@ -25,7 +25,7 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
-from . import archive, batching, blobs, config, dispatch, health, mcp_policy, proposals, review, shared, utilization, verdict
+from . import archive, batching, blobs, config, dispatch, free_route, health, mcp_policy, proposals, review, shared, utilization, verdict
 from .caller import detect as detect_caller
 from .jobs import JobManager
 from .ledger import append_row, ask_row, usage_report
@@ -426,6 +426,12 @@ async def hswarm_ask(prompt: str, system: str | None = None, model: str = "auto"
     # this door took no budget: with NVIDIA crawling, two Lift boards sat for nothing on 2026-09-29.
     if profile and timeout_s:
         options["timeout_s"] = float(timeout_s)
+    if profile and not images:  # on auto, the owner's Free web accounts answer first when one is idle (free_route.py)
+        free = Task(prompt=prompt, id="ask", system=system, schema=schema, tools="none", profile=profile, purpose=purpose,
+                    timeout_s=int(timeout_s or 120))
+        served, _ = await free_route.consult("ask", free)
+        if served is not None:
+            return served.as_dict(brief=True) | await _book_asks([served], "ask")
     r = await manager().ask_routed(prompt, model, system=system, schema=schema, thinking=thinking, reasoning_effort=reasoning_effort, max_tokens=max_tokens, images=images or None, **options)
     out = r.as_dict(brief=True) | await _book_asks([r], "ask")
     try:

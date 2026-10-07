@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import blobs, breaker, climayte_route, config, escalation, input_limit, ledgerstore, review, scripted, survival, utilization, verify
+from . import blobs, breaker, climayte_route, config, escalation, free_route, input_limit, ledgerstore, review, scripted, survival, utilization, verify
 from .agent import LIVE_ROW, LIVE_SPEND, run_api_task
 from .budget import Budget
 from .caller import detect as detect_caller
@@ -394,9 +394,15 @@ def _via_climayte(res: Result) -> bool:
     return ((res.selection or {}).get("route") or {}).get("via") == "climayte"
 
 
+def _via_free(res: Result) -> bool:
+    return ((res.selection or {}).get("route") or {}).get("via") == "free"
+
+
 def _route_fields(res: Result) -> dict:
     """Ledger columns for a task CliMayte served: its worker, why it went there, and that nothing was billed per token."""
     route = (res.selection or {}).get("route") or {}
+    if route.get("via") == "free":
+        return {"route_why": route.get("why"), "free_account": route.get("account"), "billed": False}
     if route.get("via") != "climayte":
         return {}
     return {"climayte_worker": route.get("worker"), "route_why": route.get("why"), "billed": False}
@@ -686,6 +692,11 @@ class JobManager:
         served, route_note = await climayte_route.consult(job.id, task)
         if served is not None:
             return served, None
+        # then the owner's Free web accounts, for a tool-free task (free_route.py)
+        served, free_note = await free_route.consult(job.id, task)
+        if served is not None:
+            return served, None
+        route_note = route_note or free_note
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
         if route_note and isinstance(res, Result):
             res.selection = {**(res.selection or {}), "route": route_note}
@@ -1402,7 +1413,7 @@ class JobManager:
                 packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
                 (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
             row = {
-                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else _provider(res.model),
+                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model),
                 "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
                 "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
                 "failover": ",".join(res.failover) or None,

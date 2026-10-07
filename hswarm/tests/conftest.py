@@ -63,6 +63,11 @@ def _isolated_home(tmp_path, monkeypatch, request):
     # No test asks the real AgentHydra daemon (7787) where a task should run (climayte_route.py); test_climayte_route.py points this at a fake.
     monkeypatch.setenv("AGENTHYDRA_URL", "")
     monkeypatch.delenv("AGENTHYDRA_CLIMAYTE_WORKER", raising=False)
+    # The same blank URL keeps free_route.py (the Free web accounts, /api/mcp) off the real daemon; its process-wide state is reset too.
+    from hswarm import free_route as _free_route
+
+    monkeypatch.setattr(_free_route, "_LOGGED", set())
+    monkeypatch.setattr(_free_route, "_ACTIVE", 0)
     _faults.clear()
     # Crawl marks and provider load are process-wide (selection._CRAWL, _INFLIGHT, _SLOW): one test's crawling model
     # would move the next test's task off it after one turn.
