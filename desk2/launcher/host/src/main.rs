@@ -531,6 +531,11 @@ enum BrowserCmd {
     Close {
         id: String,
     },
+    /// Mute or unmute view `id` (ICoreWebView2_8::put_IsMuted).
+    Mute {
+        id: String,
+        muted: bool,
+    },
 }
 
 impl BrowserCmd {
@@ -541,7 +546,8 @@ impl BrowserCmd {
             | BrowserCmd::Back { id }
             | BrowserCmd::Forward { id }
             | BrowserCmd::Reload { id }
-            | BrowserCmd::Close { id } => id,
+            | BrowserCmd::Close { id }
+            | BrowserCmd::Mute { id, .. } => id,
         }
     }
 }
@@ -581,6 +587,65 @@ fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
 enum PageOut {
     Url { url: String, loading: bool },
     Title { title: String, url: String },
+    /// Whether the view's document is playing sound, and whether the view is muted.
+    Audio { playing: bool, muted: bool },
+}
+
+/// The view's ICoreWebView2_8, or None when the WebView2 runtime is too old to have it.
+fn webview8(
+    view: &wry::WebView,
+) -> Option<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8> {
+    use windows::core::Interface;
+    use wry::WebViewExtWindows;
+    let core = unsafe { view.controller().CoreWebView2() }.ok()?;
+    core.cast().ok()
+}
+
+/// A view's (playing, muted) as the runtime reports them now.
+fn audio_state(
+    wv: &webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8,
+) -> Option<(bool, bool)> {
+    let mut playing = windows::Win32::Foundation::FALSE;
+    let mut muted = windows::Win32::Foundation::FALSE;
+    unsafe {
+        wv.IsDocumentPlayingAudio(&mut playing).ok()?;
+        wv.IsMuted(&mut muted).ok()?;
+    }
+    Some((playing.as_bool(), muted.as_bool()))
+}
+
+/// Report the view's sound state to the window's page whenever it or the mute flag changes.
+fn watch_audio(view: &wry::WebView, id: &str, proxy: &tao::event_loop::EventLoopProxy<Ev>) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2_8;
+    use webview2_com::{IsDocumentPlayingAudioChangedEventHandler, IsMutedChangedEventHandler};
+    use windows::core::Interface;
+    let Some(wv) = webview8(view) else { return };
+    let mut token = 0i64;
+    let report = {
+        let (proxy, id) = (proxy.clone(), id.to_string());
+        move |wv: &ICoreWebView2_8| {
+            if let Some((playing, muted)) = audio_state(wv) {
+                let _ = proxy.send_event(Ev::Page(id.clone(), PageOut::Audio { playing, muted }));
+            }
+        }
+    };
+    let (a, b) = (report.clone(), report);
+    let on_playing = IsDocumentPlayingAudioChangedEventHandler::create(Box::new(move |s, _| {
+        if let Some(w) = s.and_then(|s| s.cast::<ICoreWebView2_8>().ok()) {
+            a(&w);
+        }
+        Ok(())
+    }));
+    let on_muted = IsMutedChangedEventHandler::create(Box::new(move |s, _| {
+        if let Some(w) = s.and_then(|s| s.cast::<ICoreWebView2_8>().ok()) {
+            b(&w);
+        }
+        Ok(())
+    }));
+    unsafe {
+        let _ = wv.add_IsDocumentPlayingAudioChanged(&on_playing, &mut token);
+        let _ = wv.add_IsMutedChanged(&on_muted, &mut token);
+    }
 }
 
 /// The script that hands `out` to the window's page as an `agenthydra:browser` event. JSON is a JavaScript literal.
@@ -783,11 +848,14 @@ fn build_page(
         })
         .build_as_child(&Holder(holder));
     match built {
-        Ok(view) => Some(PageView {
+        Ok(view) => {
+            watch_audio(&view, id, proxy);
+            Some(PageView {
             view: Some(view),
             holder,
             shown: false,
-        }),
+            })
+        }
         Err(_) => {
             win::destroy(holder);
             None
@@ -844,6 +912,11 @@ fn browser_cmd(
         BrowserCmd::Close { id } => {
             pages.remove(&id);
         }
+        BrowserCmd::Mute { id, muted } => {
+            if let Some(wv) = pages.get(&id).and_then(|p| webview8(p.view())) {
+                let _ = unsafe { wv.SetIsMuted(muted) };
+            }
+        }
     }
 }
 
@@ -896,7 +969,7 @@ fn run(
         .with_background_color((BG.0, BG.1, BG.2, 255))
         .with_devtools(true)
         // The page's page tabs show their addresses in views of this window's own (native-browser.ts).
-        .with_initialization_script("window.agentHydraHost=Object.freeze({browser:1});")
+        .with_initialization_script("window.agentHydraHost=Object.freeze({browser:1,audio:1});")
         .with_ipc_handler(move |req| {
             if origin_of(&req.uri().to_string()) != ipc_origin {
                 return;
@@ -1262,6 +1335,32 @@ mod tests {
         assert!(t.contains(
             r#"{"id":"p","type":"title","title":"A \"quoted\" title","url":"https://example.com/"}"#
         ));
+    }
+
+    #[test]
+    fn a_view_can_be_muted_and_reports_its_sound() {
+        for muted in [true, false] {
+            let text = format!(r#"{{"kind":"browser","op":"mute","id":"p","muted":{muted}}}"#);
+            assert_eq!(
+                parse_browser_cmd(&text),
+                Some(BrowserCmd::Mute {
+                    id: "p".into(),
+                    muted
+                })
+            );
+        }
+        assert_eq!(
+            parse_browser_cmd(r#"{"kind":"browser","op":"mute","id":"p"}"#),
+            None
+        );
+        let a = page_event_script(
+            "p",
+            &PageOut::Audio {
+                playing: true,
+                muted: false,
+            },
+        );
+        assert!(a.contains(r#"{"id":"p","type":"audio","playing":true,"muted":false}"#));
     }
 
     #[test]
