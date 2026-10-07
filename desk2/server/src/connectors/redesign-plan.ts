@@ -128,43 +128,28 @@ export function planJobs(ranked: Ranked[], want: number, load: ReadonlyMap<strin
   return out
 }
 
-/** A different design direction per instance of the same model, so repeats are not near-copies. Instance 0 is the brief as written. */
-const STYLE_HINTS = [
-  '',
-  'Take a clearly different direction from the obvious one: change the layout structure, not only the colours.',
-  'Make this one denser and more utilitarian: tighter spacing, compact controls, a strong information hierarchy.',
-  'Make this one calmer and more spacious: generous whitespace, soft contrast, fewer visual elements.',
-  'Make this one bolder: strong colour accents, a confident type scale, distinctive component shapes.',
-  'Make this one editorial: type-led, a restrained palette, a clear grid.'
+/** A design direction per job of a run, so options differ and each has a name (no caption is read for it). Job 0 is the brief as written. */
+const STYLES = [
+  { name: 'As briefed', hint: '' },
+  { name: 'Fresh layout', hint: 'Take a clearly different direction from the obvious one: change the layout structure, not only the colours.' },
+  { name: 'Dense and compact', hint: 'Make this one denser and more utilitarian: tighter spacing, compact controls, a strong information hierarchy.' },
+  { name: 'Calm and airy', hint: 'Make this one calmer and more spacious: generous whitespace, soft contrast, fewer visual elements.' },
+  { name: 'Bold accents', hint: 'Make this one bolder: strong colour accents, a confident type scale, distinctive component shapes.' },
+  { name: 'Editorial', hint: 'Make this one editorial: type-led, a restrained palette, a clear grid.' }
 ]
 
+const style = (instance: number) => STYLES[instance % STYLES.length] as (typeof STYLES)[number]
+
 export function styledBrief(brief: string, instance: number): string {
-  const hint = STYLE_HINTS[instance % STYLE_HINTS.length] as string
-  return hint ? `${brief}\n\nStyle direction for this option: ${hint}` : brief
+  const { hint } = style(instance)
+  return hint ? `${brief}
+
+Style direction for this option: ${hint}` : brief
 }
 
-/** The short name of each style hint's design direction (same order as STYLE_HINTS; instance 0 has none: it is named from its caption). */
-const STYLE_NAMES = ['', 'Fresh layout', 'Dense and compact', 'Calm and airy', 'Bold accents', 'Editorial']
-
-const NAME_FILLER = /^(an?|the|this|that|it|here|overall|design|option|layout|screen|page)\b[\s:,-]*/i
-
-/**
- * A 1-3 word name for an option: its style hint's name when it had one, else the first heading or sentence of ReDesign's
- * caption cut down to three words (never the caption itself). '' when nothing usable is left; the card then says "Option N".
- */
-export function designName(caption: string | null | undefined, instance: number): string {
-  const fromHint = STYLE_NAMES[instance % STYLE_NAMES.length] as string
-  if (fromHint) return fromHint
-  const lines = String(caption ?? '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
-  const heading = lines.find((l) => /^#{1,3}\s/.test(l) && !/^#{1,3}\s*overall\b/i.test(l))
-  let s = (heading ?? lines.find((l) => !l.startsWith('#')) ?? '').replace(/^#+\s*/, '')
-  s = s.split(/[.,;:—(]/)[0] ?? ''
-  s = s.replace(/[*_`"[\]]/g, '').trim()
-  for (let i = 0; i < 3 && NAME_FILLER.test(s); i++) s = s.replace(NAME_FILLER, '')
-  const words = s.split(/\s+/).filter(Boolean).slice(0, 3)
-  const out = words.join(' ')
-  return out ? out[0]!.toUpperCase() + out.slice(1) : ''
-}
+/** The 1-3 word name and the one-line description of the option that carried style direction `instance`. */
+export const designName = (instance: number): string => style(instance).name
+export const designHint = (instance: number): string => style(instance).hint
 
 /** Why a job failed, in the one way that decides what to do next. */
 export function failureKind(error: string | null | undefined): 'cutoff' | 'stalled' | 'recitation' | 'cooling' | 'quota' | 'other' {

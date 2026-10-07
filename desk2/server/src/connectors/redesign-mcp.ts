@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
 import { CHECK_LIMIT, copyHswarmKeys } from './redesign-keys'
-import { MIN_WORKING_KEYS, designName, failureKind, listsToRefill, loadHealth, planJobs, rankModels, saveHealth, styledBrief, type Health, type KeyEntry, type KeyPool, type ModelInfo, type Ranked } from './redesign-plan'
+import { MIN_WORKING_KEYS, designHint, designName, failureKind, listsToRefill, loadHealth, planJobs, rankModels, saveHealth, styledBrief, type Health, type KeyEntry, type KeyPool, type ModelInfo, type Ranked } from './redesign-plan'
 
 /** A run is given about this long to reach `count` options, replacing failed jobs on other models as it goes. */
 const BUDGET_MS = 5 * 60_000
@@ -75,7 +75,6 @@ interface Job {
   status: string
   modelId?: string
   file?: string | null
-  caption?: string | null
   error?: string | null
 }
 
@@ -340,7 +339,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     interface RunState {
       id: string
       expected: number
-      /** The style-hint instance this run carries; it names its options. */
+      /** The style direction this run carries; it names its option. */
       instance: number
       handled: Set<string>
       /** Jobs given up on as unanswered; they no longer count as on their way. */
@@ -349,7 +348,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       ended: boolean
     }
     const runs: RunState[] = []
-    const taken = new Map<string, number>() // jobs started per model; also the model's next style-hint instance
+    const taken = new Map<string, number>() // jobs started per model
     const blocked = new Set<string>()
     const strikes = new Map<string, number>()
     const failedJobs: Job[] = []
@@ -358,24 +357,20 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     let primary = ''
     let dir = ''
 
-    /** One ReDesign run per style-hint instance: ReDesign takes one prompt per run, and the models in it share that prompt. */
+    /** One ReDesign run per job: ReDesign takes one prompt per run, and every option gets its own style direction (its name). */
     const startJobs = async (ids: string[]): Promise<void> => {
-      const groups = new Map<number, string[]>()
       for (const id of ids) {
-        const n = taken.get(id) ?? 0
-        taken.set(id, n + 1)
-        groups.set(n, [...(groups.get(n) ?? []), id])
-      }
-      for (const [instance, group] of groups) {
+        taken.set(id, (taken.get(id) ?? 0) + 1)
+        const instance = runs.length
         const { runId } = await post<{ runId: string }>('/api/run', {
           inputs: [inputId],
-          models: group,
+          models: [id],
           prompts: { presets: [], custom: styledBrief(brief, instance) },
-          modelQuantities: Object.fromEntries(group.map((id) => [id, 1])),
+          modelQuantities: { [id]: 1 },
           mock,
           label: 'design-options'
         })
-        runs.push({ id: runId, expected: group.length, instance, handled: new Set(), stalled: new Set(), startedAt: Date.now(), ended: false })
+        runs.push({ id: runId, expected: 1, instance, handled: new Set(), stalled: new Set(), startedAt: Date.now(), ended: false })
         if (!primary) {
           primary = runId
           dir = join(o.outDir, runId)
@@ -411,15 +406,14 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       } catch {
         image = null
       }
-      const caption = await caption_(job)
       // A name is unique within the result: a repeat takes its option number.
-      const given = designName(caption, run.instance)
-      const dup = given && options.some((x) => x.name.toLowerCase() === given.toLowerCase())
+      const given = designName(run.instance)
+      const dup = options.some((x) => x.name.toLowerCase() === given.toLowerCase())
       options.push({
         option: n,
         name: dup ? `${given} ${n}` : given,
         model: name,
-        description: caption ?? `${name}, from the brief`,
+        description: designHint(run.instance) || `${name}, the brief as written`,
         image,
         markdown: image ? `![Option ${n}: ${name}](${image})` : null,
         page: `${base}/output/${job.file}`,
@@ -429,7 +423,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       health[job.modelId ?? ''] = { ...health[job.modelId ?? ''], okAt: Date.now() }
       // design_pick finds option N's real run and job here, since replacements live in other ReDesign runs.
       writeFileSync(join(dir, 'options.json'), JSON.stringify(options.map((x) => ({ option: x.option, run: x.run, job: x.job }))))
-      progress(n, count, ['Option ' + n + ' of ' + count + ' is ready', ...options.map((x) => x.name || `Option ${x.option}`)].join(' · '))
+      progress(n, count, ['Option ' + n + ' of ' + count + ' is ready', ...options.map((x) => x.name)].join(' · '))
     }
 
     const started = Date.now()
@@ -494,16 +488,6 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
         : 'The options are shown to the person in the chat as a ReDesign card. Say which one you pick and why (you decide; do not wait for them), then call design_pick with it.') +
         (missing ? ' (Some options have no picture: ReDesign could not render them, give the page link instead.)' : '')
     )
-  }
-
-  async function caption_(job: Job): Promise<string | null> {
-    if (job.caption) return job.caption
-    try {
-      const meta = await api<{ caption?: string | null }>(`/output-raw/${String(job.file).replace(/\.html$/i, '.meta.json')}`)
-      return meta.caption ?? null
-    } catch {
-      return null
-    }
   }
 
   async function designPick(args: Record<string, unknown>): Promise<ToolResult> {
