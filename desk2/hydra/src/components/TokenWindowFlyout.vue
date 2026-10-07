@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// The Tokens header's 5h / Week / Total choice, one per table (composables/useTokenWindow.ts). The
-// header text (the default slot: the sort button) keeps its click; hovering or focusing it opens a
+// The Tokens header's 5h / Week / Total choice, one for the one Instances table
+// (composables/useTokenWindow.ts; owner, 2026-10-07). The header text (the default slot: the sort button) keeps its click; hovering or focusing it opens a
 // flyout under it that lists the three windows. No note beside the header names the current one: it
 // cost the column width (owner, 2026-10-06), and the flyout's checkmark says it.
 // Hover timing follows UsageBadge: a short open delay so sweeping across the header does not flash
@@ -8,11 +8,10 @@
 import { Check } from '@lucide/vue'
 import { onUnmounted, ref } from 'vue'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
-import { useCliTokenWindow, useDesktopTokenWindow, useFreeTokenWindow } from '@/composables/useTokenWindow'
+import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 
-const props = defineProps<{ kind: 'cli' | 'desktop' | 'free' }>()
-const model = { cli: useCliTokenWindow, desktop: useDesktopTokenWindow, free: useFreeTokenWindow }[props.kind]()
+const model = useDesktopTokenWindow()
 const labelKey = { '5h': 'tokensWindow5h', week: 'tokensWindowWeek', total: 'tokensWindowTotal' }
 const hintKey = {
   '5h': 'tokensWindow5hHint',

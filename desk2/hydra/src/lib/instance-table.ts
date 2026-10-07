@@ -1,8 +1,9 @@
 // What the one instance table (components/InstanceTable.vue) and the one instance row
-// (components/InstanceRow.vue) are fed: a list of column definitions per table, and one row model
-// per instance. The Claude desktop, Claude CLI, Codex, DeepSeek and Free tables differ only in the
-// columns they list, the rows they hand over and the menu items they slot in (owner, 2026-10-03:
-// "identical code, just different content").
+// (components/InstanceRow.vue) are fed: a list of column definitions, and one row model per instance.
+// Desktop, CLI and Free are ONE table with kind toggles (owner, 2026-10-07), so the table draws the
+// union of the shown kinds' columns. The rows differ only in the columns they fill, the row model
+// they hand over and the menu items they slot in (owner, 2026-10-03: "identical code, just different
+// content").
 
 import type { TokenParts } from '@agenthydra/server/types'
 import type { Component } from 'vue'
@@ -172,31 +173,29 @@ const COLUMNS: ColumnDef[] = [
     skeleton: 'h-3 w-14',
   },
   // What the account has run, from its own transcripts on this PC (a Free login's: estimated from the
-  // text Desk sent and got back). The window flyout and the per-account totals plug in here and nowhere
-  // else: `flyout` and `cell` below.
-  ...(['cli', 'desktop', 'free'] as const).map(
-    (kind): ColumnDef => ({
-      key: 'tokens',
-      label: 'cliInstances.colTokens',
-      sortable: true,
-      kinds: [kind],
-      flyout: TokenWindowFlyout,
-      flyoutProps: { kind },
-      cell: AccountTokensCell,
-      skeleton: 'h-4 w-12',
-    }),
-  ),
+  // text Desk sent and got back). ONE column for every kind (owner, 2026-10-07): the window flyout and
+  // the per-account totals plug in here and nowhere else: `flyout` and `cell` below.
+  {
+    key: 'tokens',
+    label: 'cliInstances.colTokens',
+    sortable: true,
+    flyout: TokenWindowFlyout,
+    cell: AccountTokensCell,
+    skeleton: 'h-4 w-12',
+  },
   { key: 'actions', label: 'instances.colActions', headClass: 'text-end', skeleton: 'h-6 w-20' },
 ]
 
-/** The columns one table draws, in order, for the tab's column mode. */
+/** The columns the shown kinds need, once each, in COLUMNS order, for the table's column mode. */
 export function instanceColumns(
-  kind: InstanceTableKind,
+  kinds: InstanceTableKind | readonly InstanceTableKind[],
   opts: { usageMode: boolean },
 ): InstanceColumn[] {
+  const shown = typeof kinds === 'string' ? [kinds] : kinds
   return COLUMNS.filter(
     (c) =>
-      (!c.kinds || c.kinds.includes(kind)) && (!c.mode || (c.mode === 'quota') === opts.usageMode),
+      (!c.kinds || c.kinds.some((k) => shown.includes(k))) &&
+      (!c.mode || (c.mode === 'quota') === opts.usageMode),
   ).map(({ kinds: _k, mode: _m, ...c }) => c)
 }
 

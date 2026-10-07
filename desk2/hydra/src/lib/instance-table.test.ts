@@ -32,6 +32,66 @@ describe('instance table column model', () => {
     ])
   })
 
+  it('draws Desktop, CLI and Free as one list in usage mode', () => {
+    expect(instanceColumns(['desktop', 'cli', 'free'], { usageMode: true }).map((c) => c.key)).toEqual([
+      'status',
+      'name',
+      'session',
+      'weekly',
+      'plan',
+      'lastActive',
+      'tokens',
+      'actions',
+    ])
+  })
+
+  it('draws Desktop and CLI together in process mode', () => {
+    expect(instanceColumns(['desktop', 'cli'], { usageMode: false }).map((c) => c.key)).toEqual([
+      'status',
+      'name',
+      'configDir',
+      'pid',
+      'uptime',
+      'memory',
+      'usage',
+      'plan',
+      'lastActive',
+      'tokens',
+      'actions',
+    ])
+  })
+
+  it('leaves the plan out when only Free is shown', () => {
+    expect(instanceColumns(['free'], { usageMode: true }).map((c) => c.key)).toEqual([
+      'status',
+      'name',
+      'session',
+      'weekly',
+      'lastActive',
+      'tokens',
+      'actions',
+    ])
+  })
+
+  it('draws exactly one Tokens column for any mix of kinds', () => {
+    const mixes: Array<'desktop' | 'cli' | 'free'>[] = [
+      ['desktop'],
+      ['cli'],
+      ['free'],
+      ['desktop', 'cli'],
+      ['desktop', 'free'],
+      ['cli', 'free'],
+      ['desktop', 'cli', 'free'],
+    ]
+    for (const mix of mixes) {
+      for (const usageMode of [true, false]) {
+        expect(instanceColumns(mix, { usageMode }).map((c) => c.key).filter((k) => k === 'tokens')).toEqual([
+          'tokens',
+        ])
+      }
+    }
+  })
+
   it('leads the name hover with the address, then the folder', () => {
     const name = { full: 'Work', shown: 'Work', email: 'a@example.com', folder: '/x', copyHint: 'Copy' }
     expect(nameTooltipFor(name, false)).toEqual({

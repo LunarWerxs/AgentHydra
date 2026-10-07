@@ -30,9 +30,12 @@
 // master switch. Behind the switch, turning the filter off would bring back a provider you chose
 // not to see.
 //
-// Module-scope singleton + useStorage, matching useUsageMode.ts: the Instances table, the CLI tab's
-// table, the toolbar flyout and the compact quick window all read this, and a per-component ref
-// would let them disagree.
+// Beside the provider choice sits the KIND choice (owner, 2026-10-07: one Instances table with
+// Desktop, CLI and Free toggles). It works the same way: it decides which kinds' rows the table draws
+// and which columns it needs, and the last kind shown stays.
+//
+// Module-scope singleton + useStorage, matching useUsageMode.ts: the Instances table, the toolbar
+// flyout and the compact quick window all read this, and a per-component ref would let them disagree.
 
 import { useStorage } from '@vueuse/core'
 import { computed } from 'vue'
@@ -98,6 +101,17 @@ function decodeProviders(raw: string): Provider[] {
   return INSTANCE_PROVIDERS.filter((p) => raw.split(',').includes(p))
 }
 
+/** The kinds the Instances table draws, in the order its toggles and columns follow. */
+export const INSTANCE_KINDS = ['desktop', 'cli', 'free'] as const
+
+/** The kinds the table leaves out, comma-joined; empty is every kind (the same reasoning as the
+ *  providers above). */
+const hiddenKindsRaw = useStorage(`${KEY}.hiddenKinds`, '')
+
+function decodeKinds(raw: string): InstanceTableKind[] {
+  return INSTANCE_KINDS.filter((k) => raw.split(',').includes(k))
+}
+
 // Every switch, threshold and selection above is ALSO mirrored through the daemon, because the
 // quick-instances window can be served from a different PORT and browser storage is scoped per
 // origin — so without this, "the filter I set in the full manager" would not follow you into the
@@ -112,6 +126,7 @@ registerSharedPref(`${KEY}.threshold`, weekThreshold)
 registerSharedPref(`${KEY}.session`, sessionEnabled)
 registerSharedPref(`${KEY}.sessionThreshold`, sessionThreshold)
 registerSharedPref(`${KEY}.hiddenProviders`, hiddenProvidersRaw)
+registerSharedPref(`${KEY}.hiddenKinds`, hiddenKindsRaw)
 
 /** @param table the table the rule is for: its column mode decides whether the quota facet acts. */
 export function useInstanceFilter(table: InstanceTableKind = 'desktop') {
@@ -190,6 +205,18 @@ export function useInstanceFilter(table: InstanceTableKind = 'desktop') {
     hiddenProvidersRaw.value = next.join(',')
   }
 
+  const hiddenKinds = computed(() => decodeKinds(hiddenKindsRaw.value))
+  /** The kinds whose rows the table draws, in INSTANCE_KINDS order. */
+  const kinds = computed(() => INSTANCE_KINDS.filter((k) => !hiddenKinds.value.includes(k)))
+
+  function kindShown(kind: InstanceTableKind): boolean {
+    return !hiddenKinds.value.includes(kind)
+  }
+
+  function setHiddenKinds(next: readonly InstanceTableKind[]): void {
+    hiddenKindsRaw.value = next.join(',')
+  }
+
   /** Drop the hidden rows from a list. Sort first, then filter — the filter removes rows, it
    *  never reorders them. Takes a readonly array because that is what useSortable hands back. */
   function visible<T>(rows: readonly T[], factsOf: (row: T) => InstanceFacts): readonly T[] {
@@ -231,6 +258,20 @@ export function useInstanceFilter(table: InstanceTableKind = 'desktop') {
     showProvider: (provider: Provider) => {
       const hiddenNow = hiddenProviders.value
       if (hiddenNow.includes(provider)) setHiddenProviders(hiddenNow.filter((p) => p !== provider))
+    },
+    kinds,
+    kindShown,
+    /** Show or leave out one kind of row (Desktop, CLI, Free). The last one shown stays, as for
+     *  providers: a table with no kind on is empty with nothing to say why. */
+    toggleKind: (kind: InstanceTableKind) => {
+      const hiddenNow = hiddenKinds.value
+      if (hiddenNow.includes(kind)) setHiddenKinds(hiddenNow.filter((k) => k !== kind))
+      else if (kinds.value.length > 1) setHiddenKinds([...hiddenNow, kind])
+    },
+    /** Draw this kind's rows again, if it was left out (creating one of its instances does this). */
+    showKind: (kind: InstanceTableKind) => {
+      const hiddenNow = hiddenKinds.value
+      if (hiddenNow.includes(kind)) setHiddenKinds(hiddenNow.filter((k) => k !== kind))
     },
     /** Add or remove one plan from the selection. A toggle, not an append: the selection is a set,
      *  and every control that writes it is a two-state button. */
