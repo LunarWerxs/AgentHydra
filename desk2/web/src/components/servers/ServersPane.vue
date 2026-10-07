@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { AppWindow, Globe, Plus, RefreshCw, Search, X } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
+import { BROWSER_CLOSED_EVENT, type BrowserOpenRequest, type BrowserProfiles, type BrowserTab } from '@shared/browser'
 import { processAddress, type DevWebProcess, type LocalServers } from '@shared/devwebui'
-import { browserClose, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
-import { activateTab, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, REUSED_NOTE, saveTabs, startBlock, statusDot, tailLines, type TabsState, type TabSpec, isUp } from './logic'
+import { browserClosePage, browserNewPage, browserPages, browserProfiles, localhostServers, processLogs, setUpFolder } from './api'
+import { activateTab, cardPlan, closeTab, findServer, focusPlan, type FolderSetup, loadTabs, NEW_TAB, needsSetup, openPlan, openTab, otherRunning, type PaneTab, pageTitle, paneView, profileRows, requestTab, retargetTab, REUSED_NOTE, saveTabs, savedTabTitle, startBlock, statusDot, syncPages, tailLines, type TabsState, type TabSpec, isUp } from './logic'
 import { type ServerFocus, useDevServers } from './store'
 import { browserRequest, claimBrowserRequest } from './browser-request'
 import { backgroundViews } from './background-views'
@@ -192,21 +192,28 @@ function close(id: string) {
   const gone = state.value.tabs.find((t) => t.id === id)
   const only = !!gone && state.value.tabs.length === 1
   state.value = closeTab(state.value, id)
-  if (gone?.kind === 'saved' && gone.target) void closeSaved(gone.target)
+  if (gone?.kind === 'saved' && gone.target && gone.page) void closePageOf(gone.target, gone.page)
   if (!only) return
   // Closing the only tab closes the browser, like a browser window's last tab; it opens again on a New tab. Saved here:
   // the pane unmounts before the deep watch would write it.
   saveTabs(props.chatId, state.value)
   emit('close')
 }
-/** Closing a saved browser's tab closes its Chrome (not only the tab), so the transcript's Browser cards read it as closed. */
-async function closeSaved(profile: string) {
+/** Closing a page's tab closes that page only. The Chrome goes with it only when it was its last page, and then the transcript's
+ *  Browser cards read it as Closed at once. */
+async function closePageOf(profile: string, page: string) {
   const cwd = props.cwd
+  closing.add(page)
   try {
-    if ((await browserClose(cwd, profile)).closed) window.dispatchEvent(new CustomEvent(BROWSER_CLOSED_EVENT, { detail: { cwd, profile } }))
+    await browserClosePage(cwd, profile, page)
   } catch {
-    // floor-ok: the browser stays as it was; the cards keep reading its real state
+    // floor-ok: the page stays as it was; the next look puts its tab back
   }
+  const now = await browserPages(cwd, profile)
+  closing.delete(page)
+  if (cwd !== props.cwd) return
+  if (now === 'closed') window.dispatchEvent(new CustomEvent(BROWSER_CLOSED_EVENT, { detail: { cwd, profile } }))
+  applyPages(profile, now)
 }
 const aim = (id: string, spec: TabSpec) => {
   // A page tab pointed at a saved browser or a New tab unmounts its PageTab; one pointed at another page stays (its address bar moves it).
@@ -268,16 +275,85 @@ function navigated(id: string, url: string) {
   aim(id, { kind: 'page', target: url, proc: p && processAddress(p) === url ? p.id : null })
 }
 
+// ---- a saved browser's pages: each real page is a tab of its own, kept in step with its Chrome ----
+const pages = ref<Record<string, BrowserTab[]>>({})
+/** Pages this pane is closing: until Chrome has let go of them a look must not give them their tab back. */
+const closing = new Set<string>()
+const labelOf = (profile: string | null): string | null => (profile ? (profileList.value?.find((r) => r.name === profile)?.label ?? null) : null)
+function applyPages(profile: string, got: BrowserTab[] | 'closed' | null) {
+  if (got === null) return
+  const list = (got === 'closed' ? [] : got).filter((p) => !closing.has(p.id))
+  pages.value = { ...pages.value, [profile]: list }
+  state.value = syncPages(state.value, profile, list)
+}
+/** The browsers this chat uses: those it has a tab for, and the one its AI last drove. */
+const usedProfiles = (): string[] => [...new Set([...state.value.tabs.filter((t) => t.kind === 'saved' && t.target).map((t) => t.target as string), ...(props.aiBrowser?.profile ? [props.aiBrowser.profile] : [])])]
+const looking = new Set<string>()
+async function look() {
+  if (typeof document !== 'undefined' && document.hidden) return
+  void loadProfiles()
+  const cwd = props.cwd
+  await Promise.all(
+    usedProfiles().map(async (profile) => {
+      if (looking.has(profile)) return
+      looking.add(profile)
+      try {
+        const got = await browserPages(cwd, profile)
+        if (cwd === props.cwd) applyPages(profile, got)
+      } finally {
+        looking.delete(profile)
+      }
+    })
+  )
+}
+let lookTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  void look()
+  lookTimer = setInterval(() => void look(), 2000)
+})
+onBeforeUnmount(() => lookTimer && clearInterval(lookTimer))
+
+// The strip scrolls when the tabs outgrow the pane: the shown one is kept in view.
+const strip = ref<HTMLElement | null>(null)
+watch(
+  () => [state.value.active, state.value.tabs.length],
+  () => void nextTick(() => strip.value?.querySelector('[aria-selected="true"]')?.scrollIntoView({ inline: 'nearest', block: 'nearest' }))
+)
+
 const procOf = (t: PaneTab): DevWebProcess | null => (t.kind === 'page' ? findProc(t.proc) : null)
-const titleOf = (t: PaneTab): string => (t.kind === 'new' ? 'New tab' : t.kind === 'saved' ? (t.target ?? 'Saved browser') : pageTitle(t.target, procOf(t)))
+const titleOf = (t: PaneTab): string => (t.kind === 'new' ? 'New tab' : t.kind === 'saved' ? savedTabTitle(t, pages.value[t.target ?? ''], labelOf(t.target)) : pageTitle(t.target, procOf(t)))
 
 // The transcript card's request: the tab for that browser comes forward, else it opens in a new one. A request that
 // fired before this pane mounted waits in browser-request.ts; one that fires later changes the ref.
-function applyRequest(r: BrowserOpenRequest) {
+async function applyRequest(r: BrowserOpenRequest) {
   const spec = requestTab(r)
   if (!spec) return
+  const cwd = props.cwd
+  if (spec.kind === 'saved' && r.profile) {
+    // The page at the card's address comes forward; none there, the address opens in a NEW page (never one that exists:
+    // the AI may be driving it); a browser that is not open keeps the Open flow.
+    const got = await browserPages(cwd, r.profile)
+    if (cwd !== props.cwd) return
+    applyPages(r.profile, got)
+    const plan = cardPlan(state.value, r.profile, r.url, got)
+    if (plan.kind === 'pick') return void (state.value = activateTab(state.value, plan.tab))
+    if (plan.kind === 'placeholder') return void (state.value = openTab(state.value, spec))
+    let page: BrowserTab | null = plan.kind === 'add' ? plan.page : null
+    if (plan.kind === 'new') {
+      try {
+        page = await browserNewPage(cwd, r.profile, plan.url)
+      } catch {
+        return void (state.value = openTab(state.value, spec))
+      }
+      if (cwd !== props.cwd) return
+    }
+    if (!page) return
+    const have = state.value.tabs.find((t) => t.kind === 'saved' && t.target === r.profile && t.page === page.id)
+    state.value = have ? activateTab(state.value, have.id) : openTab(state.value, { kind: 'saved', target: r.profile, proc: null, page: page.id, url: page.url })
+    return
+  }
   const have = state.value.tabs.find((t) => t.kind === spec.kind && t.target === spec.target)
-  if (have) return pick(have.id)
+  if (have) return void pick(have.id)
   state.value = openTab(state.value, spec)
 }
 watch(
@@ -336,7 +412,7 @@ watch(
   <section class="relative flex h-full w-full min-w-0 flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]" aria-label="Servers">
     <!-- The tab strip, like a browser's: tabs, a + after the last, and the pane's own buttons at the right end. -->
     <div class="flex h-[41px] shrink-0 items-end gap-1 border-b border-border bg-[var(--bg-sidebar)] pl-2 pr-1.5 pt-[9px]">
-      <div role="tablist" aria-label="Tabs" class="flex min-w-0 items-end gap-px">
+      <div ref="strip" role="tablist" aria-label="Tabs" class="-mb-px flex min-w-0 items-end gap-px overflow-x-auto pb-px [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div
           v-for="t in state.tabs"
           :key="t.id"
@@ -344,18 +420,24 @@ watch(
           tabindex="0"
           :aria-selected="t.id === activeTab.id"
           :title="titleOf(t)"
-          class="group relative flex h-8 w-[170px] min-w-[44px] max-w-[190px] flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-[8px] pl-2.5 pr-1 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-          :class="t.id === activeTab.id ? 'z-10 -mb-px h-[33px] bg-[var(--bg-page)] text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'"
+          class="group relative flex h-8 w-[170px] max-w-[190px] flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-[8px] pl-2.5 pr-1 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+          :class="[t.kind === 'saved' && t.page ? 'min-w-[132px]' : 'min-w-[44px]', t.id === activeTab.id ? 'z-10 -mb-px h-[33px] bg-[var(--bg-page)] text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]']"
           @click="pick(t.id)"
           @keydown.enter.prevent="pick(t.id)"
           @mousedown.middle.prevent
           @auxclick.middle.prevent="close(t.id)"
         >
           <span v-if="procOf(t)" class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(procOf(t)!.status)]" aria-hidden="true" />
-          <Globe v-else-if="t.kind === 'page'" class="size-3.5 shrink-0" aria-hidden="true" />
+          <Globe v-else-if="t.kind === 'page' || (t.kind === 'saved' && t.page)" class="size-3.5 shrink-0" aria-hidden="true" />
           <AppWindow v-else-if="t.kind === 'saved'" class="size-3.5 shrink-0" aria-hidden="true" />
           <Search v-else class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 flex-1 truncate text-[12px]">{{ titleOf(t) }}</span>
+          <span
+            v-if="t.kind === 'saved' && t.page"
+            class="max-w-[58px] shrink-0 truncate rounded-[var(--radius-6)] bg-[var(--fill-selected)] px-1 text-[10px] leading-4 text-[var(--text-2)]"
+            data-testid="profile-badge"
+            :title="`Chrome profile: ${t.target}`"
+          >{{ labelOf(t.target) ?? t.target }}</span>
           <button
             type="button"
             class="size-5 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] hover:bg-[var(--fill-selected)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none group-hover:flex"
@@ -421,6 +503,6 @@ watch(
       />
     </template>
     <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-[30] max-w-[90%] -translate-x-1/2 rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text)] shadow-(--shadow-menu-ringed)">{{ notice }}</div>
-    <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}`" :cwd="cwd" :profile="activeTab.target" :url="activeTab.url" />
+    <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}|${activeTab.page ?? ''}`" :cwd="cwd" :profile="activeTab.target" :url="activeTab.url" :page-id="activeTab.page" />
   </section>
 </template>

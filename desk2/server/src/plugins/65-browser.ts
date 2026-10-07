@@ -5,9 +5,9 @@
 // Every route and the websocket upgrade is for Desk 2's own page only (browser/guard.ts), after Desk's localOnly
 // guard. A request names a profile, never a port: the port comes from that profile folder's DevToolsActivePort.
 
-import type { Hono } from 'hono'
-import { BROWSER_CLOSE, BROWSER_LIVE, BROWSER_OPEN, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
-import { capturePreview, closeBrowser, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, pageTabs, parseLiveIn } from '../browser/cdp'
+import type { Context, Hono } from 'hono'
+import { BROWSER_CLOSE, BROWSER_LIVE, BROWSER_OPEN, BROWSER_PAGE, BROWSER_PAGE_CLOSE, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
+import { capturePreview, closeBrowser, closePage, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, newPage, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
 import { previewHub } from '../browser/preview'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
@@ -22,6 +22,8 @@ async function usable(cwd: string, name: string): Promise<ProfileRef | null> {
 interface LiveData {
   port: number
   tab: { id: string; url: string; title: string }
+  /** The socket asked for one page (?tab=): it follows no other. */
+  bound: boolean
 }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
@@ -102,6 +104,47 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       return c.json(await pageTabs(ref.port))
     } catch {
       return c.json({ error: `'${profile}' did not answer` }, 502)
+    }
+  })
+
+  // One page of an open profile: a new one opened at an address, or one closed. Neither touches the other pages or the Chrome.
+  const pageRoute = async (c: Context, need: 'url' | 'tab') => {
+    const why = notOwnPage(c.req.raw.headers)
+    if (why) return { fail: c.json({ error: why }, 403) }
+    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown; url?: unknown; tab?: unknown } | null
+    const arg = body?.[need]
+    if (typeof body?.cwd !== 'string' || body.cwd === '' || typeof body.profile !== 'string' || body.profile === '' || typeof arg !== 'string' || arg === '')
+      return { fail: c.json({ error: `cwd, profile and ${need} required` }, 400) }
+    const ref = await usable(body.cwd, body.profile)
+    if (!ref) return { fail: c.json({ error: `no browser '${body.profile}' for this chat's workspace` }, 404) }
+    if (ref.port === null) return { fail: c.json({ error: `'${body.profile}' is not open` }, 409) }
+    return { port: ref.port, arg }
+  }
+  app.post(BROWSER_PAGE, async (c) => {
+    const r = await pageRoute(c, 'url')
+    if (r.fail) return r.fail
+    let ok = false
+    try {
+      const u = new URL(r.arg)
+      ok = u.protocol === 'http:' || u.protocol === 'https:'
+    } catch {
+      // floor-ok: not a URL, refused below
+    }
+    if (!ok) return c.json({ error: 'url must be http or https' }, 400)
+    try {
+      const tab = await newPage(r.port, r.arg)
+      return tab ? c.json(tab) : c.json({ error: 'the browser did not open a page' }, 502)
+    } catch {
+      return c.json({ error: 'the browser did not answer' }, 502)
+    }
+  })
+  app.post(BROWSER_PAGE_CLOSE, async (c) => {
+    const r = await pageRoute(c, 'tab')
+    if (r.fail) return r.fail
+    try {
+      return c.json({ closed: await closePage(r.port, r.arg) })
+    } catch {
+      return c.json({ error: 'the browser did not answer' }, 502)
     }
   })
 
@@ -187,7 +230,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
       const tab = await LiveSession.pick(ref.port, q.get('tab')).catch(() => null)
       if (!tab) return Response.json({ error: 'that page is not open' }, { status: 404 })
-      return { data: { port: ref.port, tab } }
+      return { data: { port: ref.port, tab, bound: !!q.get('tab') } }
     },
     open(ws, data) {
       const session = new LiveSession(
@@ -200,6 +243,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
           }
         },
         () => ws.close(),
+        data.bound,
       )
       sessions.set(ws, session)
       session.start(data.tab).catch(() => {

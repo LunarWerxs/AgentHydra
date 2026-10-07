@@ -2,15 +2,16 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ArrowLeft, ArrowRight, RefreshCw, RotateCw } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import type { BrowserLiveIn, BrowserLiveOut, BrowserProfiles, BrowserTab } from '@shared/browser'
+import { isRealPage, type BrowserLiveIn, type BrowserLiveOut, type BrowserProfiles, type BrowserTab } from '@shared/browser'
 import { browserOpen, browserProfiles } from './api'
 import { fitFrame, isPasteKey, keyMessage, liveSocketUrl, mapPoint, modifiersOf, mouseButton, normalizeAddress, profileRows } from './logic'
-import { ICON_BTN, INPUT, TEXT_BTN, tab } from './styles'
+import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A saved-browser tab: one saved Chrome browser of this chat's workspace (shared/browser.ts), watched live on a canvas
 // and driven with the person's mouse and keyboard (to sign in, say). One that is not open is opened here, or opened to
 // log in: that Chrome has no live view until it is closed. The list of saved browsers is the New tab's.
-const props = defineProps<{ cwd: string; profile: string; url?: string }>()
+// With `pageId` it shows that one page (the pane gives every real page its own tab); without, the Chrome's first page.
+const props = defineProps<{ cwd: string; profile: string; url?: string; pageId?: string }>()
 
 const list = shallowRef<BrowserProfiles | null>(null)
 const listError = ref<string | null>(null)
@@ -39,7 +40,6 @@ type Phase = 'idle' | 'connecting' | 'live' | 'closed'
 const phase = ref<Phase>('idle')
 const closedWhy = ref('')
 const page = ref<{ tab: BrowserTab; canGoBack: boolean; canGoForward: boolean } | null>(null)
-const tabs = ref<BrowserTab[]>([])
 const address = ref('')
 const canvas = ref<HTMLCanvasElement | null>(null)
 const stage = ref<HTMLElement | null>(null)
@@ -104,7 +104,6 @@ function disconnect() {
   frame = null
   decoding++
   page.value = null
-  tabs.value = []
   draw()
 }
 function connect(name: string, tabId?: string) {
@@ -129,8 +128,7 @@ function connect(name: string, tabId?: string) {
     } else if (m.type === 'page') {
       page.value = m
       if (document.activeElement !== addressEl.value) address.value = m.tab.url
-    } else if (m.type === 'tabs') tabs.value = m.tabs
-    else if (m.type === 'closed') {
+    } else if (m.type === 'closed') {
       closedWhy.value = m.reason
       phase.value = 'closed'
       void load()
@@ -152,7 +150,7 @@ function select(name: string) {
   actionError.value = null
   loginFor.value = null
   const row = rows.value.find((r) => r.name === name)
-  if (row?.open) connect(name)
+  if (row?.open) connect(name, props.pageId)
   else {
     disconnect()
     phase.value = 'idle'
@@ -202,7 +200,6 @@ function submitAddress() {
   canvas.value?.focus()
 }
 const history = (go: 'back' | 'forward' | 'reload') => send({ type: 'history', go })
-const pickTab = (id: string) => send({ type: 'tab', id })
 
 const box = () => canvas.value!.getBoundingClientRect()
 // The canvas is drawn in device pixels but sized by CSS, and the frame's letterbox is in the same box.
@@ -286,12 +283,6 @@ defineExpose({ refresh })
         <input ref="addressEl" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address" :class="INPUT" />
       </form>
       <div v-if="note" class="truncate border-b border-border px-3 py-1 text-[12px] text-[var(--text-muted)]" data-testid="browser-note" :title="note">{{ note }}</div>
-      <div v-if="tabs.length > 1 && (phase === 'live' || phase === 'connecting')" role="tablist" aria-label="Pages" class="flex h-8 shrink-0 items-center gap-0.5 overflow-x-auto border-t border-border px-2">
-        <button v-for="t in tabs" :key="t.id" type="button" role="tab" :aria-selected="t.id === page?.tab.id" :class="tab(t.id === page?.tab.id)" class="max-w-[160px]" :title="t.url" @click="pickTab(t.id)">
-          <span class="truncate">{{ t.title || t.url }}</span>
-        </button>
-      </div>
-
       <div class="relative min-h-0 flex-1 bg-[var(--bg-page)]">
         <div ref="stage" class="absolute inset-0" :class="phase === 'live' || phase === 'connecting' ? '' : 'invisible'">
           <canvas
@@ -308,10 +299,13 @@ defineExpose({ refresh })
             @paste="onPaste"
           />
         </div>
+        <div v-if="phase === 'live' && page && !isRealPage(page.tab.url)" class="pointer-events-none absolute inset-x-0 top-3 flex justify-center" role="status" data-testid="page-blank">
+          <span class="rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text-muted)] shadow-(--shadow-menu-ringed)">This page is blank.</span>
+        </div>
         <div v-if="phase === 'connecting'" class="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--text-muted)]" role="status">Connecting…</div>
         <div v-else-if="phase === 'closed'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center" role="status">
           <div class="text-[var(--text-muted)]">{{ closedWhy || 'The browser closed.' }}</div>
-          <div class="flex gap-1">
+          <div v-if="!pageId" class="flex gap-1">
             <button type="button" :class="TEXT_BTN" :disabled="busy" @click="openProfile(selected, false, url)">Open</button>
             <button type="button" :class="TEXT_BTN" class="font-medium" :disabled="busy" data-testid="browser-login" @click="openProfile(selected, true)">Log in</button>
           </div>

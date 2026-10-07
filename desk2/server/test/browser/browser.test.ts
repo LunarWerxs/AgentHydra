@@ -497,6 +497,76 @@ describe.skipIf(!chrome)('close of a real headless Chrome', () => {
   })
 })
 
+const pageApi = (desk: DeskServer, route: 'page' | 'page/close', body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`${desk.url}/api/browser/${route}`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) })
+
+describe('one page of a browser', () => {
+  test('a closed profile is 409, a bad address 400, another workspace 404, a foreign page 403', async () => {
+    makeStore()
+    const desk = await boot()
+    const cwd = 'c:/Users/me/Proj'
+    expect((await pageApi(desk, 'page', { cwd, profile: 'beta', url: 'https://example.com/' })).status).toBe(409)
+    expect((await pageApi(desk, 'page/close', { cwd, profile: 'beta', tab: 'x' })).status).toBe(409)
+    expect((await pageApi(desk, 'page', { cwd, profile: 'gamma', url: 'https://example.com/' })).status).toBe(404)
+    expect((await pageApi(desk, 'page', { cwd, profile: 'beta' })).status).toBe(400)
+    expect((await pageApi(desk, 'page', { cwd, profile: 'beta', url: 'https://example.com/' }, { origin: 'https://evil.example.com' })).status).toBe(403)
+  })
+})
+
+describe.skipIf(!chrome)('one page of a real headless Chrome', () => {
+  let pid = 0
+  afterEach(() => {
+    if (pid) killTree(pid)
+    pid = 0
+  })
+
+  test('a new page is opened beside the others, its bound view ends when it closes, and the Chrome and its other page stay', async () => {
+    const { root } = makeStore()
+    const dir = join(root, 'ws', WS_PROJ, 'alpha')
+    const site = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('<title>Second page</title><h1>Hello</h1>', { headers: { 'content-type': 'text/html' } }) })
+    fakes.push(site)
+    const proc = Bun.spawn(
+      [chrome as string, '--headless=new', `--user-data-dir=${dir}`, '--remote-debugging-port=0', '--no-first-run', '--no-default-browser-check', '--disable-gpu', 'about:blank'],
+      { stdout: 'ignore', stderr: 'ignore', stdin: 'ignore', windowsHide: true },
+    )
+    pid = proc.pid
+    const until = Date.now() + 20_000
+    while (!existsSync(join(dir, 'DevToolsActivePort')) && Date.now() < until) await Bun.sleep(100)
+    const desk = await boot()
+    const cwd = 'c:/Users/me/Proj'
+    const list = async () => {
+      const res = await fetch(`${desk.url}/api/browser/tabs?${q({ cwd, profile: 'alpha' })}`)
+      return res.ok ? ((await res.json()) as BrowserTab[]) : []
+    }
+    let before: BrowserTab[] = []
+    for (let i = 0; i < 50 && before.length === 0; i++) {
+      before = await list()
+      if (before.length === 0) await Bun.sleep(100)
+    }
+    expect(before.length).toBe(1)
+
+    const url = `http://127.0.0.1:${site.port}/two`
+    const made = await pageApi(desk, 'page', { cwd, profile: 'alpha', url })
+    expect(made.status).toBe(200)
+    const page = (await made.json()) as BrowserTab
+    expect(page.id).not.toBe(before[0]!.id)
+    expect((await list()).map((t) => t.id).sort()).toEqual([before[0]!.id, page.id].sort())
+    expect((await pageApi(desk, 'page', { cwd, profile: 'alpha', url: 'data:text/html,no' })).status).toBe(400)
+
+    const live = liveSocket(`${desk.url.replace('http', 'ws')}/api/browser/live?${q({ cwd, profile: 'alpha', tab: page.id })}`)
+    await live.opened
+    await live.until((m) => m.type === 'frame')
+    expect(live.got.some((m) => m.type === 'page' && m.tab.id !== page.id)).toBe(false)
+
+    expect(await (await pageApi(desk, 'page/close', { cwd, profile: 'alpha', tab: page.id })).json()).toEqual({ closed: true })
+    const ended = (await live.until((m) => m.type === 'closed')) as Extract<BrowserLiveOut, { type: 'closed' }>
+    expect(ended.reason).toBe('that page was closed')
+    expect((await list()).map((t) => t.id)).toEqual([before[0]!.id])
+    expect(await (await pageApi(desk, 'page/close', { cwd, profile: 'alpha', tab: page.id })).json()).toEqual({ closed: false })
+    expect((await profiles(desk, cwd)).profiles.find((p) => p.name === 'alpha')?.open).toBe(true)
+  })
+})
+
 function killTree(pid: number): void {
   if (process.platform === 'win32') Bun.spawnSync(['taskkill', '/PID', String(pid), '/T', '/F'], { stdout: 'ignore', stderr: 'ignore' })
   else process.kill(pid, 'SIGKILL')

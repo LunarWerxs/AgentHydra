@@ -27,8 +27,19 @@ export const BROWSER_CLOSE = `${BROWSER_BASE}/close`
  * Closed at once instead of waiting for its next look.
  */
 export const BROWSER_CLOSED_EVENT = 'hydra-desk:browser-closed'
-/** GET ?cwd=&profile= -> BrowserTab[]: the pages of the profile's running Chrome. */
+/** GET ?cwd=&profile= -> BrowserTab[]: the pages of the profile's running Chrome. 409 when it is not open. */
 export const BROWSER_TABS = `${BROWSER_BASE}/tabs`
+/** POST { cwd, profile, url } -> BrowserTab: a NEW page of the profile's running Chrome at that http(s) address (no page that exists is navigated). 409 when not open. */
+export const BROWSER_PAGE = `${BROWSER_BASE}/page`
+/**
+ * POST { cwd, profile, tab } -> { closed }: closes that one page (what closing its pane tab means); the Chrome stays unless that was its
+ * last page. closed is false when no such page. 404/403/409 as BROWSER_TABS.
+ */
+export const BROWSER_PAGE_CLOSE = `${BROWSER_BASE}/page/close`
+/** A page the pane gives a tab: an http(s) or file address. about:*, chrome://, devtools://, data:, blob: and empty are blank. */
+export function isRealPage(url: string | null | undefined): boolean {
+  return /^(https?|file):\/\//i.test((url ?? '').trim())
+}
 /**
  * GET ?cwd=&profile= -> a small JPEG (about 640px wide) of the profile's current page, Cache-Control: no-store.
  * 404 when the profile is not open, 403 for another workspace's profile; it never starts a Chrome.

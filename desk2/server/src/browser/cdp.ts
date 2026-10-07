@@ -57,6 +57,21 @@ export async function pageTabs(port: number): Promise<BrowserTab[]> {
   return list.filter((t) => t.type === 'page').map((t) => ({ id: String(t.id), url: String(t.url ?? ''), title: String(t.title ?? '') }))
 }
 
+/** A new page in the Chrome (never navigates an existing one); null when it did not answer with a page. */
+export async function newPage(port: number, url: string): Promise<BrowserTab | null> {
+  const res = await fetch(`http://${HOST}:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT', signal: AbortSignal.timeout(4000) })
+  if (!res.ok) return null
+  const t = (await res.json()) as Target
+  return t?.type === 'page' ? { id: String(t.id), url: String(t.url ?? url), title: String(t.title ?? '') } : null
+}
+
+/** Closes one page of the Chrome (the Chrome itself closes only when this was its last page); false when no such page. */
+export async function closePage(port: number, id: string): Promise<boolean> {
+  if (!(await pageTabs(port)).some((t) => t.id === id)) return false
+  const res = await fetch(`http://${HOST}:${port}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(4000) })
+  return res.ok
+}
+
 /** The installed Chrome: HYDRA_DESK_CHROME when set (and then only that), else the standard install paths. */
 export function findChrome(): string | null {
   const forced = process.env.HYDRA_DESK_CHROME
@@ -306,6 +321,8 @@ export class LiveSession {
     private readonly port: number,
     private readonly out: (msg: BrowserLiveOut) => void,
     private readonly onEnd: () => void,
+    /** Bound to the one page it was asked for: when that page closes the view ends, it does not move to another page. */
+    private readonly bound = false,
   ) {}
 
   /** The page target to show: the asked-for tab, else the first page. Null when the Chrome has no such page. */
@@ -319,6 +336,8 @@ export class LiveSession {
     mine.add(this)
     liveSessions.set(this.port, mine)
     liveChanged(this.port)
+    // A page that is not the front one of its Chrome paints no frames: the one asked for is brought to the front.
+    if (this.bound) await fetch(`http://${HOST}:${this.port}/json/activate/${encodeURIComponent(tab.id)}`, { signal: AbortSignal.timeout(1500) }).catch(() => undefined)
     await this.attach(tab)
     this.poll = setInterval(() => void this.watch(), 1000)
   }
@@ -436,6 +455,7 @@ export class LiveSession {
     const snapshot = JSON.stringify(tabs)
     const mine = tabs.find((t) => t.id === this.tab?.id)
     if (!mine) {
+      if (this.bound) return this.end('that page was closed')
       const next = tabs[0]
       if (!next) return this.end('the browser has no page left')
       try {

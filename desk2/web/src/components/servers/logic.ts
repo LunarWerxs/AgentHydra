@@ -1,7 +1,7 @@
 // The servers pane's decisions, pure so the tests and the component share them: what the pane shows for the
 // dev-servers service's status and the project list, when it sets the chat's folder up, a server's dot, the address bar's
 // input, and the pane's width.
-import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles } from '@shared/browser'
+import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles, type BrowserTab, isRealPage } from '@shared/browser'
 import { DW_PROXY, type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
 import { shortName } from './names'
 
@@ -284,8 +284,10 @@ export interface PaneTab {
   target: string | null
   /** page: the dev server it shows, when it was opened from one. */
   proc: string | null
-  /** saved: the address a transcript card asked to see, used when the browser is opened from here. */
+  /** saved: the address a transcript card asked to see, used when the browser is opened from here; a page tab's last known address. */
   url?: string
+  /** saved: the one page (the Chrome's own id for it) this tab shows live. A saved tab without one stands for the profile itself, not open or not yet showing a page. */
+  page?: string
 }
 
 export interface TabsState {
@@ -335,7 +337,7 @@ export function requestTab(r: BrowserOpenRequest): TabSpec | null {
 }
 
 export function serializeTabs(s: TabsState): string {
-  return JSON.stringify({ tabs: s.tabs.map((t) => ({ kind: t.kind, target: t.target, proc: t.proc, ...(t.url ? { url: t.url } : {}) })), active: Math.max(0, s.tabs.findIndex((t) => t.id === s.active)) })
+  return JSON.stringify({ tabs: s.tabs.map((t) => ({ kind: t.kind, target: t.target, proc: t.proc, ...(t.url ? { url: t.url } : {}), ...(t.page ? { page: t.page } : {}) })), active: Math.max(0, s.tabs.findIndex((t) => t.id === s.active)) })
 }
 
 /** Reads what serializeTabs wrote; anything unreadable, or a tab without its target, is dropped, and nothing left is one New tab. */
@@ -352,6 +354,7 @@ export function restoreTabs(raw: string | null | undefined): TabsState {
       if (kind !== 'new' && (typeof t.target !== 'string' || t.target === '')) return
       const tab: PaneTab = { id: nextTabId(), kind, target: kind === 'new' ? null : (t.target as string), proc: kind === 'page' && typeof t.proc === 'string' ? t.proc : null }
       if (kind === 'saved' && typeof t.url === 'string' && t.url) tab.url = t.url
+      if (kind === 'saved' && typeof t.page === 'string' && t.page) tab.page = t.page
       tabs.push(tab)
       if (i === data.active) active = tab.id
     })
@@ -376,6 +379,93 @@ export function saveTabs(chatId: string, s: TabsState, storage: Pick<Storage, 's
   } catch {
     // a full or blocked store: the tabs are just not remembered
   }
+}
+
+// ---- a saved browser's pages: one top tab per real page, kept in step with the Chrome ----
+
+/** The address with its hash and a trailing slash dropped, for telling whether two are the same page. */
+export function pageKey(url: string): string {
+  const t = url.trim()
+  try {
+    const u = new URL(t)
+    u.hash = ''
+    return u.href.replace(/\/$/, '')
+  } catch {
+    return t
+  }
+}
+export const sameAddress = (a: string, b: string): boolean => pageKey(a) === pageKey(b)
+
+/** What shows for an address: its host (a file's name). */
+export function hostOf(url: string | null | undefined): string {
+  try {
+    const u = new URL(url ?? '')
+    return u.host || decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() ?? '')
+  } catch {
+    return ''
+  }
+}
+
+/** A saved browser's page tab's name: the page's title, else its host; the profile's label when nothing is known. */
+export function savedTabTitle(t: Pick<PaneTab, 'target' | 'page' | 'url'>, pages: BrowserTab[] | undefined, label: string | null): string {
+  if (!t.page) return label ?? t.target ?? 'Saved browser'
+  const p = pages?.find((x) => x.id === t.page)
+  return p?.title.trim() || hostOf(p?.url ?? t.url) || label || t.target || 'Saved browser'
+}
+
+/**
+ * The profile's tabs follow its Chrome's pages: a real page without a tab gets one at the end (a tab standing for the profile
+ * itself, with no page yet, takes the first); a page that went loses its tab; a page that went blank loses it too unless it is
+ * the shown one, which stays (the view says the page is blank). A blank page never gets a tab. `pages` is null when the Chrome
+ * could not be asked: nothing changes then. The same state comes back when nothing changed.
+ */
+export function syncPages(s: TabsState, profile: string, pages: BrowserTab[] | null, mkId: () => string = nextTabId): TabsState {
+  if (!pages) return s
+  const byId = new Map(pages.map((p) => [p.id, p]))
+  let next = s
+  for (const t of s.tabs) {
+    if (t.kind !== 'saved' || t.target !== profile || !t.page) continue
+    const p = byId.get(t.page)
+    if (!p || (!isRealPage(p.url) && t.id !== s.active)) next = closeTab(next, t.id, mkId())
+  }
+  const have = new Set(next.tabs.filter((t) => t.kind === 'saved' && t.target === profile && t.page).map((t) => t.page))
+  let tabs = next.tabs.map((t) => {
+    const p = t.kind === 'saved' && t.target === profile && t.page ? byId.get(t.page) : undefined
+    return p && p.url !== t.url ? { ...t, url: p.url } : t
+  })
+  for (const p of pages) {
+    if (have.has(p.id) || !isRealPage(p.url)) continue
+    const holder = tabs.findIndex((t) => t.kind === 'saved' && t.target === profile && !t.page)
+    if (holder >= 0) tabs = tabs.map((t, i) => (i === holder ? { ...t, page: p.id, url: p.url } : t))
+    else tabs = [...tabs, { id: mkId(), kind: 'saved', target: profile, proc: null, page: p.id, url: p.url }]
+  }
+  const same = tabs.length === s.tabs.length && tabs.every((t, i) => t === s.tabs[i])
+  if (same && next === s) return s
+  return { ...next, tabs }
+}
+
+/** What a Browser card's click on a saved browser does, given what the Chrome holds now ('closed': not open; null: could not be asked). */
+export type CardPlan = { kind: 'pick'; tab: string } | { kind: 'add'; page: BrowserTab } | { kind: 'new'; url: string } | { kind: 'placeholder' }
+
+export function cardPlan(s: TabsState, profile: string, url: string | undefined, pages: BrowserTab[] | 'closed' | null): CardPlan {
+  const mine = s.tabs.filter((t) => t.kind === 'saved' && t.target === profile)
+  const placeholder = (): CardPlan => {
+    const holder = mine.find((t) => !t.page)
+    return holder ? { kind: 'pick', tab: holder.id } : { kind: 'placeholder' }
+  }
+  if (pages === null || pages === 'closed') return placeholder()
+  const wanted = url && isRealPage(url) ? url : null
+  if (wanted) {
+    const page = pages.find((p) => sameAddress(p.url, wanted))
+    if (page) {
+      const tab = mine.find((t) => t.page === page.id)
+      return tab ? { kind: 'pick', tab: tab.id } : { kind: 'add', page }
+    }
+    // A page that exists is never navigated (the AI may be driving it): the address opens in a page of its own.
+    if (/^https?:\/\//i.test(wanted)) return { kind: 'new', url: wanted }
+  }
+  const first = mine.find((t) => t.page) ?? mine[0]
+  return first ? { kind: 'pick', tab: first.id } : placeholder()
 }
 
 /** Every word of the filter appears in the text, ignoring case. */

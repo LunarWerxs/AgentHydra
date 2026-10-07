@@ -1,5 +1,5 @@
 // The calls the servers pane makes: Desk 2's /dw/status, /dw/service and /dw/folder, and the dev-servers service's API behind /dw/api.
-import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PROFILES, type BrowserOpened, type BrowserProfiles } from '@shared/browser'
+import { BROWSER_CLOSE, BROWSER_OPEN, BROWSER_PAGE, BROWSER_PAGE_CLOSE, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserProfiles, type BrowserTab } from '@shared/browser'
 import {
   DW_API,
   DW_FOLDER,
@@ -165,3 +165,20 @@ export const browserProfiles = (cwd: string): Promise<BrowserProfiles> => call(`
 export const browserClose = (cwd: string, profile: string): Promise<{ closed: boolean }> => call(BROWSER_CLOSE, post({ cwd, profile }))
 
 export const browserOpen = (cwd: string, profile: string, opts: { url?: string; login?: boolean } = {}): Promise<BrowserOpened> => call(BROWSER_OPEN, post({ cwd, profile, ...opts }))
+
+/** The pages of the profile's Chrome: 'closed' when it is not open, null when it could not be asked (nothing is then assumed). */
+export async function browserPages(cwd: string, profile: string): Promise<BrowserTab[] | 'closed' | null> {
+  try {
+    const res = await fetch(`${BROWSER_TABS}?${new URLSearchParams({ cwd, profile })}`)
+    if (res.status === 409) return 'closed'
+    return res.ok ? ((await res.json()) as BrowserTab[]) : null
+  } catch {
+    return null
+  }
+}
+
+/** A new page of the open Chrome at an address; no page that exists is navigated. */
+export const browserNewPage = (cwd: string, profile: string, url: string): Promise<BrowserTab> => call(BROWSER_PAGE, post({ cwd, profile, url }))
+
+/** Closes that one page; the Chrome stays. */
+export const browserClosePage = (cwd: string, profile: string, tab: string): Promise<{ closed: boolean }> => call(BROWSER_PAGE_CLOSE, post({ cwd, profile, tab }))
