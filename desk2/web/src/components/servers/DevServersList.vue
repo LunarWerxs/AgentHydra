@@ -291,7 +291,9 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               <CountBadge v-if="p.errorCount" :count="p.errorCount" :title="`${p.errorCount} errors`" />
               <AlertTriangle v-if="p.alertsFiring" class="size-3 shrink-0 text-warning-text" aria-label="An alert is firing" />
               <span v-if="outsideNote(p)" class="shrink-0 text-[11px] leading-4 text-text-muted" :title="OUTSIDE_TIP">{{ outsideNote(p) }}</span>
-              <span v-if="p.port" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">{{ serverPort(p) }}</span>
+              <!-- The port steps aside for the hover buttons: with a running server's three and the star, it pushed the star
+                   to the middle of the row, where a click meant for the row starred the server. -->
+              <span v-if="p.port" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(p) }}</span>
               <span class="hidden shrink-0 items-center gap-0.5 group-hover/row:flex group-focus-within/row:flex" @click.stop>
                 <Tip v-if="processAddress(p)" label="Open in browser">
                   <button type="button" :class="ROW_BTN" :aria-label="`Open ${p.name} in browser`" @click="openBrowser(g.project, p)"><ExternalLink class="size-3.5" /></button>
