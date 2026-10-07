@@ -32,6 +32,8 @@ export interface DossierChat {
   cwd: string | null
   createdAt: string | null
   lastActivityAt: string | null
+  /** Claude Desktop's unread dot: a turn finished after the app last had the chat in focus (`lastFocusedAt`). */
+  unread: boolean
   archived: boolean
   /** ⛔ THE SAME FLAG UNDER THE NAME THE STORE ITSELF USES, and it is not redundant.
    *  `archived` is this API's name for it; the metadata file on disk calls it `isArchived`.
@@ -100,6 +102,13 @@ function ultracodeOf(meta: unknown): boolean | null {
   return typeof flag === 'boolean' ? flag : null
 }
 
+/** Unread as the app shows it: the last activity is newer than the last time the app focused the chat. */
+function unreadOf(meta: unknown): boolean {
+  const activity = metaField(meta, 'lastActivityAt')
+  const focused = metaField(meta, 'lastFocusedAt')
+  return typeof activity === 'number' && typeof focused === 'number' && activity > focused
+}
+
 /** Everything a row takes from its own FILE. The rest (the scan's label, the profile's current
  *  login) belongs to the scan, so a re-login is seen without the record file changing. */
 type RecordFields = Omit<DossierChat, 'instance' | 'loginUuid' | 'staleLogin'>
@@ -118,6 +127,7 @@ function recordFields(path: string, rel: string, text: string, mtimeMs: number):
     cwd: nonEmptyText(metaField(meta, 'cwd')),
     createdAt: iso(metaField(meta, 'createdAt')),
     lastActivityAt: iso(metaField(meta, 'lastActivityAt')),
+    unread: unreadOf(meta),
     archived: !!metaField(meta, 'isArchived'),
     isArchived: !!metaField(meta, 'isArchived'),
     permissionMode: anyText(metaField(meta, 'permissionMode')),

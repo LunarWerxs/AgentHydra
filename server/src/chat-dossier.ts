@@ -168,6 +168,8 @@ export interface ChatListRow {
   archived: boolean
   isArchived: boolean
   lastActivityAt: string | null
+  /** Claude Desktop's unread dot (DossierChat.unread). */
+  unread: boolean
   cwd: string | null
   /** The chat's effort level and ultracode flag as its record holds them (DossierChat). */
   effort: string | null
@@ -341,6 +343,7 @@ export function listChats(
       archived: c.archived,
       isArchived: c.isArchived,
       lastActivityAt: c.lastActivityAt,
+      unread: c.unread,
       cwd: c.cwd,
       effort: c.effort,
       ultracode: c.ultracode,

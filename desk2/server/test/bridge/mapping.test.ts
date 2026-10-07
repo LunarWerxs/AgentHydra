@@ -141,6 +141,24 @@ describe('external sessions', () => {
     workers: s.workers,
   }
 
+  test('a Desktop chat whose turn finished unread keeps that mark on its row', () => {
+    const chat = (unread: boolean) => ({
+      instance: 'Claude-9',
+      chatId: 'local_chat9',
+      sessionId: sid(888),
+      title: 'Invented chat',
+      archived: false,
+      lastActivityAt: new Date(NOW - 5 * 60_000).toISOString(),
+      cwd: null,
+      live: true,
+      livePid: 4242,
+      unread,
+    })
+    const row = (unread: boolean) => mapExternal({ ...inputs, chats: [chat(unread)] }, new Set(), NOW).find((x) => x.id === sid(888))
+    expect(row(true)).toMatchObject({ source: 'desktop', status: 'idle', unread: true })
+    expect(row(false)).toMatchObject({ source: 'desktop', status: 'idle', unread: false })
+  })
+
   test('merges workers, desktop chats, the live registry, hooks and fresh transcripts', () => {
     const list = mapExternal(inputs, new Set(), NOW)
     const by = new Map(list.map((x) => [x.id, x]))

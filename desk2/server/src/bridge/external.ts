@@ -134,7 +134,7 @@ export function mapExternal(
   const fromIndex = (
     id: string,
     source: ExternalSession['source'],
-    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null },
+    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean },
   ) => {
     const row = index.get(id)
     const h = hooks.get(id)
@@ -161,11 +161,12 @@ export function mapExternal(
       // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
       fromPc: row?.from_pc || null,
       ...UNMARKED,
+      unread: base.unread ?? false,
     })
   }
 
   for (const c of chats.values())
-    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt) })
+    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread })
   for (const l of inp.live)
     fromIndex(l.sessionId, l.hostSessionId ? 'desktop' : 'cli', { cwd: l.cwd, last: l.startedAt, root: configRootOf(l.transcriptPath) })
   for (const h of hooks.values())

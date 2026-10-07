@@ -65,6 +65,7 @@ export interface AhChatRow {
   title: string
   archived: boolean
   lastActivityAt: string | null // ISO
+  unread: boolean // Claude Desktop's dot: a turn finished after the app last had the chat in focus
   cwd: string | null
   effort?: string | null
   live: boolean
