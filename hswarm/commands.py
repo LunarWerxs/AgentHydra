@@ -728,6 +728,12 @@ async def cmd_models(a) -> int:
         out = await catalogue.refresh(a.refresh)
         _print(out) if a.json else print(out["note"])
         return 0
+    if getattr(a, "watch", False):
+        from . import model_watch
+
+        out = await model_watch.scan()
+        _print(out) if a.json else print(model_watch.render(out))
+        return 0
     if getattr(a, "routes", False):
         out = await asyncio.to_thread(catalogue.routes_view)
         if a.json:

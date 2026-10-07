@@ -54,8 +54,9 @@ META: dict[str, dict] = {
               "`accept` on the new machine opens it and joins (exit 3: not granted yet); none of them prints the code. "
               "Keys come from stdin or a hidden prompt, never argv; every output is counts and 8-character fingerprints.",
               "examples": ["hswarm vault status", "hswarm vault sync --dry-run", "hswarm vault list openrouter"]},
-    "models": {"effect": WRITE, "guide": "Listing is read-only; --refresh rewrites ~/.hswarm/openrouter-models.json from the provider's catalogue.",
-               "examples": ["hswarm models --grep glm --json", "hswarm models --routes"]},
+    "models": {"effect": WRITE, "guide": "Listing is read-only; --refresh rewrites ~/.hswarm/openrouter-models.json from the provider's catalogue; "
+               "--watch makes one free model-list GET per chat provider with a live key and rewrites ~/.hswarm/model-watch.json.",
+               "examples": ["hswarm models --grep glm --json", "hswarm models --routes", "hswarm models --watch"]},
     "ask": {"effect": SPEND, "guide": "One paid, tool-free model call. Prefer the hswarm_ask MCP tool inside a Claude session; --json returns data.",
             "examples": ["hswarm ask \"Classify this: ...\" --json", "hswarm ask \"...\" --role search"]},
     "run": {"effect": SPEND, "guide": "Runs a whole tasks file of paid workers. Set --budget (USD ceiling) and check the task count before running; --check validates the file and the route without sending anything.",

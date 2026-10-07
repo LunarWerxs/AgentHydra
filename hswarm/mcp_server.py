@@ -25,7 +25,7 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
-from . import archive, batching, blobs, config, dispatch, free_route, health, mcp_policy, proposals, review, shared, utilization, verdict
+from . import archive, batching, blobs, config, dispatch, free_route, health, mcp_policy, model_watch, proposals, review, shared, utilization, verdict
 from .caller import detect as detect_caller
 from .jobs import JobManager
 from .ledger import append_row, ask_row, usage_report
@@ -94,6 +94,7 @@ def _served(fn):
             refused = {"error": why, "tool": name}
             return [refused] if list_typed else refused
         config.refresh()  # a settings change (hswarm ui, a provider file) reaches this long-lived server on its next call
+        model_watch.kick()  # at most one model-list scan a day, in the background (owner, 2026-10-07)
         return await fn(*args, **kwargs)
 
     # A dict answer goes out as ONE compact JSON line. Left to the SDK, a bare `-> dict` is rendered with indent=2
@@ -738,9 +739,13 @@ async def hswarm_models(refresh: str | None = None, grep: str | None = None, lim
     OpenRouter models are addressed as 'or:<its id>' (e.g. 'or:deepseek/deepseek-chat-v3.1', 'or:z-ai/glm-5.3-flash')
     with no registration step. refresh='openrouter' pulls its live catalogue (~440 models) and their current rates, so
     their cost stops reading '-'; OpenRouter also reports what it actually charged on every call, and that number wins.
+    refresh='watch' reads every chat provider's model list (free GETs) and reports the models it does not route yet:
+    new, benchmarked but unrouted (with strengths, weaknesses and blended price), and unbenchmarked.
     """
     from . import catalogue
 
+    if refresh == "watch":
+        return await model_watch.scan()
     if refresh:
         return await catalogue.refresh(refresh)
     return await asyncio.to_thread(catalogue.listing, grep, limit)

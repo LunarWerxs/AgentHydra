@@ -234,6 +234,34 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
   `repos/` indexes and `home/tools/memstore.py`) is `HSWARM_MEMORY_REPO`, default `~/claude-memory`.
 - `indexdiet` and the hooks module it fed are retired along with the memory index they served.
 
+## Model watch (owner, 2026-10-07)
+
+`model_watch.py` keeps routing current. Every chat provider with a live key is asked for its model list (one free GET,
+all in parallel; a provider that fails is recorded with its error and hides nothing else), and each id lands in
+`~/.hswarm/model-watch.json` with a standing:
+
+- `routed`: a registered model or `rank:` route on that provider serves the id.
+- `benchmarked_unrouted`: the index (`data/published-models.json`) scores it and no route here does. Register the route with its sourced price.
+- `unbenchmarked`: no index point. Source its published scores into the index.
+- `gone`: listed before, not now.
+
+`hswarm models --watch` scans and prints, per provider, counts first and then the ids: new, benchmarked but unrouted, and
+unbenchmarked. Each benchmarked model comes with its strengths, weaknesses and blended price (Artificial Analysis's 3:1
+input-to-output blend, USD per 1M tokens). An index point is a strength on a benchmark above the index's 75th percentile
+on it and a weakness below the 25th; a benchmark with fewer than four scores ranks nothing. `hswarm doctor` (and
+`hswarm_doctor`) carries one line from the stored file with the age of the last scan, no network. The MCP server rescans
+in the background at most once a day, never blocking a call. `hswarm_models` takes `refresh='watch'`.
+
+The standing instruction, also in `data/agent-instructions.md`: when the watch reports benchmarked-but-unrouted or
+unbenchmarked models, the agent working on HSwarm registers the route with its sourced price, or sources the model's
+published scores into the index, before other HSwarm work. Never a guessed score or price.
+
+**How a dead best route steps down.** When the best route is dead (no live key, an open breaker, or a leg that fails for a
+reason another leg cannot fix), dispatch walks the profile's remaining candidates in order, with the rescue legs of the
+lower profiles queued behind them, and the first that serves wins. Only when a profile has no route left does it step down
+one level (critical to code, code to general, general to routine, and routine stays tool-free), so a task ends on the
+cheapest model that is up rather than on a dead route.
+
 ## Transcript scanners
 
 `hswarm savings` reads every Claude Code transcript on the machine. That scan exists three times with identical

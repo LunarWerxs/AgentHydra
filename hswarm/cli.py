@@ -106,6 +106,7 @@ def build_parser() -> argparse.ArgumentParser:
     md = sub.add_parser("models", help="every model this machine can address; --refresh pulls a provider's live catalogue and prices")
     md.add_argument("--refresh", nargs="?", const="openrouter", metavar="PROVIDER", help="pull PROVIDER's /models catalogue (default openrouter) into ~/.hswarm/openrouter-models.json")
     md.add_argument("--routes", action="store_true", help="the price routes: which provider serves each model right now, and why")
+    md.add_argument("--watch", action="store_true", help="scan every chat provider's model list (free GETs) and report new, benchmarked-but-unrouted and unbenchmarked models")
     md.add_argument("--grep", help="filter the listing by substring")
     md.add_argument("--limit", type=int, default=60)
     md.add_argument("--json", action="store_true")

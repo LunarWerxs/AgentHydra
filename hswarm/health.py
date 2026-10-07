@@ -5,7 +5,7 @@ import asyncio
 import os
 from shutil import which
 
-from . import breaker, config, faults, keys, shared, shellpolicy, verdict
+from . import breaker, config, faults, keys, model_watch, shared, shellpolicy, verdict
 from . import web
 from .broker import BROKER_ENV
 from .claude_env import claude_bin
@@ -46,6 +46,8 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     # read_url's standing host policy and which backend serves each channel now, offline: a missing yt-dlp or a
     # backend that just failed is said here, the way agent-reach's doctor names the backend per platform.
     out["web"] = web.report()
+    # The stored model-watch scan (model_watch.py), one line, offline: how old it is and what it has not routed yet.
+    out["model_watch"] = model_watch.summary()
     # Every provider's pool, offline and in one place: which keys are ready, resting, or in the disabled slot.
     # `hswarm keys probe` (or hswarm_keys action="probe") is the one that spends a GET and heals a topped-up key.
     # BOUNDED, like hswarm_keys' default list: the verbose report is one row per key, and with 1,700+ keys
