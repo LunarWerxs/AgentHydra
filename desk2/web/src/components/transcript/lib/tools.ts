@@ -105,7 +105,53 @@ export function parseBrowserCall(
   const verb = BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser')
   const params = input.params && typeof input.params === 'object' ? (input.params as Record<string, unknown>) : {}
   const fromResult = resultText ? (/https?:\/\/[^\s"'<>)\]}\\]+/.exec(resultText)?.[0] ?? '') : ''
-  return { verb, url: str(params.url) || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
+  return { verb, url: str(params.url) || paramsScriptAddress(params) || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
+}
+
+const SCRIPT_KEYS = ['function', 'expression', 'code', 'script']
+const SCHEMED = /^(https?|file|about|chrome|edge|data|blob|javascript):/i
+const LOCATION_SET = /(?:\b(?:window|self|top|document)\s*\.\s*)?\blocation(?:\s*\.\s*href)?\s*=\s*(['"`])([^'"`]*)/g
+const LOCATION_CALL = /\blocation\s*\.\s*(?:assign|replace)\s*\(\s*(['"`])([^'"`]*)/g
+const IFRAME_HTML_SRC = /<iframe\b[^>]*?\bsrc\s*=\s*\\?["']?([^"'\s>\\]*)/gi
+const DOT_SRC = /\.src\s*=\s*(['"`])([^'"`]*)/g
+
+/**
+ * The page a browser script (evaluate / run_code text) loaded: the LAST, in code order, of a navigation
+ * (location.href = / location = / location.assign / location.replace) and an iframe source (an `<iframe src=...>` in
+ * an HTML string, or `.src =` in a script that makes an iframe). A string literal ends at its closing quote, so a
+ * `+ Date.now()` tail is dropped. null: the script loaded no page. Other URLs (fetch, images, scripts) are ignored.
+ */
+export function scriptAddress(code: string): string | null {
+  let best: { at: number; url: string } | null = null
+  const take = (at: number, raw: string) => {
+    const url = raw.split('${')[0].trim()
+    if (!SCHEMED.test(url)) return
+    if (!best || at >= best.at) best = { at, url }
+  }
+  for (const re of [LOCATION_SET, LOCATION_CALL, DOT_SRC]) {
+    if (re === DOT_SRC && !/createElement\s*\(\s*['"`]iframe['"`]\s*\)|<iframe/i.test(code)) continue
+    for (const m of code.matchAll(re)) take(m.index ?? 0, m[2])
+  }
+  for (const m of code.matchAll(IFRAME_HTML_SRC)) take(m.index ?? 0, m[1])
+  return (best as { url: string } | null)?.url ?? null
+}
+
+function paramsScriptAddress(params: Record<string, unknown>): string {
+  const own = SCRIPT_KEYS.map((k) => params[k]).filter((v): v is string => typeof v === 'string').join('\n')
+  if (own) {
+    const a = scriptAddress(own)
+    if (a) return a
+  }
+  if (Array.isArray(params.steps)) {
+    for (let i = params.steps.length - 1; i >= 0; i--) {
+      const s = params.steps[i]
+      if (!s || typeof s !== 'object') continue
+      const step = s as Record<string, unknown>
+      const a = str(step.url) || paramsScriptAddress({ ...step, steps: undefined })
+      if (a) return a
+    }
+  }
+  return ''
 }
 
 /** A real page address: http(s) or file. about:*, chrome://, edge://, data:, blob:, javascript: and '' are blank. */

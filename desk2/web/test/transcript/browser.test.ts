@@ -101,6 +101,49 @@ describe('parseBrowserCall', () => {
     expect(isRealAddress('file:///C:/Users/me/a.html')).toBe(true)
   })
 
+  describe('a script that loads a page into the browser', () => {
+    const nav = (id: string, url: string) => item(id, A, call('browser_navigate', { url }))
+    const ev = (id: string, fn: string) => item(id, A, call('browser_evaluate', { function: fn }))
+    const embed = 'https://shop.example.com/embed/checkout?slug=a&page=event&cb='
+
+    test('an iframe made by script is the page; the Date.now() tail is dropped', () => {
+      const run = [
+        nav('1', 'https://shop.example.com/robots.txt?cb=hero5'),
+        ev('2', `async () => { const f = document.createElement('iframe'); f.style.cssText = 'position:fixed;inset:0'; f.src = '${embed}' + Date.now(); document.body.appendChild(f); }`),
+        item('3', A, call('browser_take_screenshot')),
+      ]
+      expect(browserRunAddress(run)).toEqual({ url: embed, left: false })
+      expect(lastBrowserRequest(run)).toEqual({ profile: undefined, url: embed })
+      expect(browserRunAddress([...run, nav('4', 'about:blank')])).toEqual({ url: embed, left: true })
+    })
+
+    test('an iframe in an innerHTML string is the page', () => {
+      const fn = `() => { document.documentElement.innerHTML = '<body style="margin:0"><iframe id="co" src="https://shop.example.com/embed/a"></iframe></body>' }`
+      expect(browserRunAddress([nav('1', 'https://example.com/'), ev('2', fn)])).toEqual({ url: 'https://shop.example.com/embed/a', left: false })
+      expect(parseBrowserCall(A, call('browser_evaluate', { function: `() => { x.innerHTML = "<iframe src='https://example.com/q'></iframe>" }` })).url).toBe('https://example.com/q')
+    })
+
+    test('location.href = about:blank inside a script marks the page left; the last navigation in code order wins', () => {
+      const run = [nav('1', 'https://example.com/page'), ev('2', `() => { location.href = 'about:blank' }`)]
+      expect(browserRunAddress(run)).toEqual({ url: 'https://example.com/page', left: true })
+      expect(parseBrowserCall(A, call('browser_evaluate', { function: `() => { location.assign('https://example.com/a'); window.location.replace("https://example.com/b") }` })).url).toBe('https://example.com/b')
+      expect(parseBrowserCall(A, call('browser_evaluate', { function: `() => { location = 'https://example.com/c' }` })).url).toBe('https://example.com/c')
+    })
+
+    test('a fetch, an image or a script src is not the page shown', () => {
+      const fn = `async () => { const r = await fetch('https://api.example.com/x'); const i = new Image(); i.src = 'https://example.com/i.png'; return r.status }`
+      expect(parseBrowserCall(A, call('browser_evaluate', { function: fn })).url).toBe('')
+      expect(browserRunAddress([nav('1', 'https://example.com/page'), ev('2', fn)])).toEqual({ url: 'https://example.com/page', left: false })
+    })
+
+    test('a steps list gives the address of its newest step with a url or a script', () => {
+      const steps = [{ url: 'https://example.com/one' }, { click: '#a' }, { url: 'https://example.com/two' }, { click: '#b' }]
+      expect(parseBrowserCall(A, call('browser_script', { steps })).url).toBe('https://example.com/two')
+      const withScript = [...steps, { function: `() => { location.href = 'https://example.com/three' }` }]
+      expect(parseBrowserCall(A, call('browser_script', { steps: withScript })).url).toBe('https://example.com/three')
+    })
+  })
+
   test('a blank address is never asked of the pane', () => {
     expect(browserOpenRequest({ url: 'about:blank', profile: 'default browser' })).toEqual({ profile: undefined, url: undefined })
     expect(browserOpenRequest({ url: 'about:blank', profile: 'shop' })).toEqual({ profile: 'shop', url: undefined })
