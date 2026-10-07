@@ -159,7 +159,7 @@ export function tellHydra(message: DeskMessage): void {
 }
 
 /** Slides AgentHydra in on an instance's row in Instances, its desktop or CLI table, marked. */
-export function showInstanceInHydra(num: number, kind: 'desktop' | 'cli' | 'free'): void {
+export function showInstanceInHydra(num: number, kind: 'desktop' | 'cli'): void {
   tellHydra({ type: 'desk:show-instance', num, kind })
   openHydra()
 }
