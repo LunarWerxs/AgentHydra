@@ -340,7 +340,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'set_scheduler',
     description:
-      'MUTATES: update scheduler settings (any subset of enabled, spacing_seconds, poll_seconds, max_concurrent).',
+      'MUTATES: update scheduler settings (any subset of enabled, spacing_seconds, poll_seconds, max_concurrent). Enabling it starts no run: each tick takes the next queued item and marks it failed under the no-headless policy, so leave it off.',
     inputSchema: S({
       enabled: { type: 'boolean' },
       spacing_seconds: { type: 'number' },
@@ -2274,7 +2274,10 @@ export function runMcp(): Promise<void> {
     // answer instead of being projected away (mcp-output.ts); the call budget outermost, so it
     // times the whole call.
     tools: withRenamedTools(
-      withCallBudget(withDaemonWarning(withOutputShaping(TOOLS))),
+      withUnlistedTools(
+        withCallBudget(withDaemonWarning(withOutputShaping(TOOLS))),
+        UNLISTED_TOOLS,
+      ),
       RENAMED_TOOLS,
     ),
     instructions: SERVER_INSTRUCTIONS,
@@ -2311,6 +2314,25 @@ export function withRenamedTools<T extends { name: string }>(
         if (pred({ name: old } as T)) return find((t) => t.name === current)
       return undefined
     },
+  })
+  return list
+}
+
+/** Tools that refuse every call. Never listed, so no agent spends a turn on one; still answered by
+ *  name, so a caller that names one gets the refusal. */
+export const UNLISTED_TOOLS: ReadonlySet<string> = new Set([
+  'add_queue_item',
+  'launch_terminal_session',
+])
+
+/** `tools` without the unlisted names in its listing; `find` still reaches every tool. */
+export function withUnlistedTools<T extends { name: string }>(
+  tools: T[],
+  unlisted: ReadonlySet<string>,
+): T[] {
+  const list = tools.filter((t) => !unlisted.has(t.name))
+  Object.defineProperty(list, 'find', {
+    value: (pred: (t: T) => unknown): T | undefined => tools.find((t) => pred(t)),
   })
   return list
 }

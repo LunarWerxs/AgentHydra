@@ -1,10 +1,16 @@
 // MCP stdio server tests — engine handshake, tool catalog, and a tool call against a stubbed
 // HTTP backend (no live daemon required). Modeled on RepoYeti's tests/mcp.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { daemonBase, SERVER_INFO, TOOLS } from '../server/src/mcp.ts'
+import {
+  daemonBase,
+  SERVER_INFO,
+  TOOLS,
+  UNLISTED_TOOLS,
+  withUnlistedTools,
+} from '../server/src/mcp.ts'
 import { handleRpc } from '../server/src/mcp-stdio.mjs'
 
-const ctx = { serverInfo: SERVER_INFO, tools: TOOLS }
+const ctx = { serverInfo: SERVER_INFO, tools: withUnlistedTools(TOOLS, UNLISTED_TOOLS) }
 
 const originalFetch = global.fetch
 let calls: Array<{ url: string; init?: RequestInit }> = []
@@ -77,7 +83,6 @@ describe('tools/list', () => {
       'get_session',
       'tail_session',
       'list_queue',
-      'add_queue_item',
       'update_queue_item',
       'run_queue_item',
       'cancel_queue_item',
@@ -102,11 +107,14 @@ describe('tools/list', () => {
     // the caller to list_instances instead, so it was a duplicate that still occupied a slot
     // (removed 2026-09-04). The route it called stays; only the agent-facing tool is gone.
     expect(names).not.toContain('list_accounts')
+    // the two tools that refuse every call are never listed (they are still answered by name)
+    expect(names).not.toContain('add_queue_item')
+    expect(names).not.toContain('launch_terminal_session')
     for (const t of res.result.tools) {
       expect(typeof t.description).toBe('string')
       expect((t.inputSchema as { type: string }).type).toBe('object')
     }
-    expect(res.result.tools.length).toBe(TOOLS.length)
+    expect(res.result.tools.length).toBe(TOOLS.length - UNLISTED_TOOLS.size)
   })
 })
 

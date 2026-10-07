@@ -110,11 +110,13 @@ import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
+  UNLISTED_TOOLS as MCP_UNLISTED_TOOLS,
   toolsForCaller as mcpToolsForCaller,
   useOwnDaemon as mcpUseOwnDaemon,
   withCallBudget as mcpWithCallBudget,
   withDaemonWarning as mcpWithDaemonWarning,
   withRenamedTools as mcpWithRenamedTools,
+  withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -411,10 +413,13 @@ app.post('/api/mcp', async (c) => {
     serverInfo: MCP_SERVER_INFO,
     // Old tool names (a chat's list is fixed at its start) answer as the renamed tools (mcp.ts).
     tools: mcpWithRenamedTools(
-      withRestartWarning(
-        mcpWithCallBudget(
-          mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+      mcpWithUnlistedTools(
+        withRestartWarning(
+          mcpWithCallBudget(
+            mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+          ),
         ),
+        MCP_UNLISTED_TOOLS,
       ),
       MCP_RENAMED_TOOLS,
     ),

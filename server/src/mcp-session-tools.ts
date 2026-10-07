@@ -717,7 +717,8 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'run_queue_item',
-    description: 'MUTATES: start running a queued item now (fails if already running).',
+    description:
+      'MUTATES: no run starts. Every dispatch is refused under the no-headless policy, so this marks the queued item failed with that reason and records it as an event. Kept for the queue record; to start visible work use fan_out.',
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) => api(`/api/queue/${encodeURIComponent(str(a.id))}/run`, { method: 'POST' }),
   },
