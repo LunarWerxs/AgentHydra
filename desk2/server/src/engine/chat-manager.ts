@@ -48,6 +48,7 @@ import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '..
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
 import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
+import { chatAddOns } from './desk-prompt'
 import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
@@ -699,7 +700,7 @@ export class ChatManager {
         let started!: () => void
         e.starting = new Promise<void>((r) => (started = r))
         try {
-          const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP })
+          const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte) })
           e.workerCwd = chat.cwd
           chat.workerId = w.id
           chat.sessionId = w.sessionId

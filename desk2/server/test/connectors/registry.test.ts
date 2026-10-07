@@ -11,7 +11,10 @@ import type { ChatSummary } from '@shared/protocol'
 import { connectorsForChat, createRegistry, startConnectors } from '../../src/connectors/registry'
 import type { ConnectorDef, Detected } from '../../src/connectors/types'
 import type { ServerContext } from '../../src/context'
+import { createClient } from '../../src/bridge/client'
 import { ChatRuntime } from '../../src/engine/chat-runtime'
+import { chatAddOns } from '../../src/engine/desk-prompt'
+import { startFakeHydra } from '../bridge/fake-hydra'
 import { ChatStore } from '../../src/engine/store'
 import { DEFAULT_SETTINGS } from '../../src/settings'
 
@@ -105,6 +108,34 @@ describe('what reaches a chat', () => {
     const o = runtime({ devwebui: own }).buildOptions()
     expect(o.mcpServers?.devwebui).toEqual(own)
     expect(o.mcpServers?.repoyeti).toMatchObject({ url: 'http://127.0.0.1:1/repoyeti' })
+  })
+
+  test('a CliMayte chat gets the same append and servers as the in-process one, from one function', async () => {
+    await start([fake('devwebui'), fake('repoyeti', { state: 'absent' })])
+    const hydra = await startFakeHydra()
+    try {
+      await createClient({ url: hydra.url }).startWorker({ prompt: 'p', cwd: 'C:/Users/me/proj', title: 't', group: 'g', desk: chatAddOns('C:/Users/me/proj', false) }).catch(() => {})
+      const task = (hydra.posts.find((p) => p.path === '/api/corch/workers')?.body as { tasks: Array<Record<string, any>> }).tasks[0]
+      const inProcess = runtime(null).buildOptions()
+      expect(task.chat).toBe(true)
+      expect(task.desk.append).toBe((inProcess.systemPrompt as { append: string }).append)
+      expect(task.desk.append.endsWith('Use devwebui.')).toBe(true)
+      expect(task.desk.mcpServers).toEqual(inProcess.mcpServers ?? {})
+      expect(Object.keys(task.desk.mcpServers)).toEqual(['devwebui'])
+    } finally {
+      await hydra.stop()
+    }
+  })
+
+  test('a worker started without desk add-ons sends none', async () => {
+    const hydra = await startFakeHydra()
+    try {
+      await createClient({ url: hydra.url }).startWorker({ prompt: 'p', cwd: 'C:/Users/me/proj', title: 't', group: 'g' }).catch(() => {})
+      const task = (hydra.posts.find((p) => p.path === '/api/corch/workers')?.body as { tasks: Array<Record<string, unknown>> }).tasks[0]
+      expect('desk' in task).toBe(false)
+    } finally {
+      await hydra.stop()
+    }
   })
 
   test('stopping the server takes it back to nothing', async () => {

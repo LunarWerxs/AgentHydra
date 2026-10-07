@@ -3,6 +3,8 @@
 // (../server/src/types.ts, climayte-lib.ts, live-registry.ts), trimmed to the fields the bridge reads;
 // recorded samples live in server/test/fixtures/agenthydra-*.json.
 
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
+
 export const DEFAULT_HYDRA_URL = 'http://127.0.0.1:7787'
 export const REQUEST_TIMEOUT_MS = 4000
 /** A transcript search may scan for up to 7 s before AgentHydra's index is built (session-search.ts budget). */
@@ -377,6 +379,8 @@ export interface StartWorker {
   model?: string
   effort?: string
   modelWhy?: string
+  /** The chat's system-prompt append and connector MCP servers (`chatAddOns`); AgentHydra keeps them for every launch. */
+  desk?: { append: string; mcpServers: Record<string, McpServerConfig> }
 }
 
 export function createClient(opts: HydraClientOptions = {}) {
@@ -467,7 +471,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {
-        tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title, chat: true }],
+        tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title, chat: true, ...(task.desk ? { desk: task.desk } : {}) }],
         group: task.group,
         ...(task.model ? { model: task.model, modelWhy: task.modelWhy } : {}),
         ...(task.effort ? { effort: task.effort } : {}),

@@ -1,4 +1,6 @@
 // DESK_APPEND (SPEC "The engine"): the text every chat's claude_code system prompt gets appended.
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
+import { connectorsForChat } from '../connectors/registry'
 
 const FIRST =
   "You are running inside Hydra Desk, Jacob's own desktop for Claude Code."
@@ -34,4 +36,10 @@ export const DESK_APPEND_NO_DELEGATE = `${FIRST} ${BROWSER}`
 
 export function deskAppend(delegate: boolean): string {
   return delegate ? DESK_APPEND : DESK_APPEND_NO_DELEGATE
+}
+
+/** What a chat in `cwd` gets beyond Claude Code's own prompt and tools, in-process or as a CliMayte worker: the one place that decides it. */
+export function chatAddOns(cwd: string, delegate: boolean): { append: string; mcpServers: Record<string, McpServerConfig> } {
+  const { mcpServers, prompts } = connectorsForChat(cwd)
+  return { append: deskAppend(delegate) + prompts.map((p) => `\n\n${p}`).join(''), mcpServers }
 }
