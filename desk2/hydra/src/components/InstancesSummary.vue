@@ -81,7 +81,7 @@ const cliRows = computed<PoolInput[]>(() =>
   })),
 )
 const freeRows = computed<PoolInput[]>(() =>
-  freeInstances.value.map((i) => ({ signedIn: i.loggedIn, usage: freeUsageSnapshot(i.usage) })),
+  freeInstances.value.map((i) => ({ signedIn: i.loggedIn, usage: freeUsageSnapshot(i.usage) ?? undefined })),
 )
 
 /** The collapsed line: every Claude account, desktop and CLI, pooled together. */
@@ -133,7 +133,7 @@ const headroom = computed(() => {
       .map((i) => row(`desktop:${i.dir}`, `#${i.num} ${pii(i.name)}`, snapshotFor(`desktop:${i.dir}`))),
     ...freeInstances.value
       .filter((i) => i.loggedIn)
-      .map((i) => row(`free:${i.id}`, `#${i.num} ${pii(i.name)}`, freeUsageSnapshot(i.usage))),
+      .map((i) => row(`free:${i.id}`, `#${i.num} ${pii(i.name)}`, freeUsageSnapshot(i.usage) ?? undefined)),
   ])
 })
 const limitsOpen = ref(false)
