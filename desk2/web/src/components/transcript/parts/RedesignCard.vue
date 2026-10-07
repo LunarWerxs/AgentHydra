@@ -2,12 +2,12 @@
 // A design_options call: the ReDesign run's options as a grid of large pictures, each with its name on it. With ask_owner the
 // person chooses here (an option by its name, "Other" with words, or "More options") and Send posts ONE normal message into
 // this chat; without it the card only shows the options and, once design_pick ran, which one the AI took.
-import { computed, ref } from 'vue'
-import { Check, KeyRound, LayoutGrid, LoaderCircle, Maximize2 } from '@lucide/vue'
+import { computed, ref, watch } from 'vue'
+import { Check, ChevronDown, ChevronUp, KeyRound, LayoutGrid, LoaderCircle, Maximize2 } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
-import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
+import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, pickedOption, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
 import { listConnectors } from '@/components/connectors/api'
 import { openLightbox } from '../lib/media'
 
@@ -73,7 +73,13 @@ const chosenName = computed(() => {
 const reply = computed(() => replyFor(choice.value, chosenName.value, text.value))
 const sentChip = computed(() => (sent.value ? parseReplyChip(sent.value) : null))
 const ready = computed(() => canSendReply(reply.value))
-const shown = (n: number) => (editable.value ? choice.value === n : aiPick.value === n || (sentChip.value?.kind === 'pick' && sentChip.value.n === n))
+const picked = computed(() => pickedOption({ editable: editable.value, choice: choice.value, aiPick: aiPick.value, sentChip: sentChip.value }))
+const shown = (n: number) => picked.value === n
+// With an option picked the card folds to a row for it; a pick that changes folds it again, a click on the row unfolds it.
+const expanded = ref(false)
+watch(picked, (n) => { if (n !== null) expanded.value = false }, { immediate: true })
+const pickedOpt = computed(() => view.value.options.find((o) => o.n === picked.value) ?? null)
+const folded = computed(() => !!pickedOpt.value && !expanded.value)
 const title = computed(() => (view.value.askOwner ? 'Pick a design' : 'Design options'))
 // Tiles while a run is still going: the count the call asked for, else four.
 const expected = computed(() => {
@@ -120,6 +126,15 @@ const moreCount = computed(() => view.value.options.length || expected.value)
         </span>
         <span class="min-w-0 truncate text-[14px] font-medium text-text">{{ title }}</span>
         <span v-if="countLabel" class="ml-auto shrink-0 text-[12px] text-text-muted">{{ countLabel }}</span>
+        <button
+          v-if="view.state === 'done' && pickedOpt && expanded"
+          type="button"
+          class="tx-btn shrink-0"
+          aria-expanded="true"
+          @click="expanded = false"
+        >
+          <ChevronUp class="size-3.5" aria-hidden="true" />Collapse
+        </button>
       </div>
       <p v-if="view.brief" class="mt-1 truncate text-[12px] text-text-muted" :title="view.brief">{{ view.brief }}</p>
     </div>
@@ -151,7 +166,23 @@ const moreCount = computed(() => view.value.options.length || expected.value)
     <p v-else-if="view.state === 'error'" class="whitespace-pre-wrap break-words px-3 pb-3 text-[13px] text-danger-text">{{ view.error }}</p>
 
     <template v-else>
-      <ul class="grid grid-cols-1 gap-2.5 px-3 pb-2.5 @[420px]:grid-cols-2" aria-label="Design options">
+      <button
+        v-if="folded && pickedOpt"
+        type="button"
+        class="mx-3 mb-2.5 flex w-[calc(100%-1.5rem)] items-center gap-3 rounded-[8px] text-left outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        aria-expanded="false"
+        @click="expanded = true"
+      >
+        <span class="block aspect-[16/10] w-28 shrink-0 overflow-hidden rounded-[8px] bg-(--bg-picture) shadow-[0_0_0_2px_var(--accent)]">
+          <img v-if="pickedOpt.src" :src="pickedOpt.src" :alt="optionLabel(pickedOpt)" class="size-full object-cover object-top" draggable="false" />
+          <span v-else class="flex size-full items-center justify-center text-[12px] text-text-muted">No picture</span>
+        </span>
+        <span class="flex min-w-0 items-center gap-1 text-[13px] font-medium text-text">
+          <Check class="size-3.5 shrink-0" aria-hidden="true" /><span class="truncate">{{ optionLabel(pickedOpt) }}</span>
+        </span>
+        <span class="ml-auto flex shrink-0 items-center gap-1 text-[12px] text-text-muted">Show all {{ view.options.length }}<ChevronDown class="size-3.5" aria-hidden="true" /></span>
+      </button>
+      <ul v-else class="grid grid-cols-1 gap-2.5 px-3 pb-2.5 @[420px]:grid-cols-2" aria-label="Design options">
         <li v-for="o in view.options" :key="o.n" class="min-w-0">
           <div
             class="group/opt relative overflow-hidden rounded-[8px] bg-(--bg-picture) transition-shadow"

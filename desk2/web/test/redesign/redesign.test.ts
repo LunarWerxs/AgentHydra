@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { toolFamily } from '../../src/components/transcript/lib/tools'
-import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, redesignSetup, redesignState, replyFor, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
+import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, pickedOption, redesignSetup, redesignState, replyFor, RETRY_MESSAGE } from '../../src/components/transcript/lib/redesign'
 
 const OPT = 'mcp__desk_redesign__design_options'
 const PICK = 'mcp__desk_redesign__design_pick'
@@ -64,6 +64,25 @@ describe('replyFor: the card choice state', () => {
   })
   test('More options is always sendable and carries nothing else', () => {
     expect(send('other', 'x', 'words', true)).toBe('ReDesign: more options please.')
+  })
+})
+
+describe('pickedOption: which option the card counts as picked', () => {
+  const chip = (t: string) => parseReplyChip(t)
+  test('editable: the choice when it is an option number', () => {
+    expect(pickedOption({ editable: true, choice: 3, aiPick: 1, sentChip: null })).toBe(3)
+  })
+  test('editable: Other or nothing is no pick, whatever the AI took', () => {
+    expect(pickedOption({ editable: true, choice: 'other', aiPick: 1, sentChip: null })).toBeNull()
+    expect(pickedOption({ editable: true, choice: null, aiPick: 1, sentChip: null })).toBeNull()
+  })
+  test('not editable: the AI pick, else the sent pick', () => {
+    expect(pickedOption({ editable: false, choice: null, aiPick: 2, sentChip: null })).toBe(2)
+    expect(pickedOption({ editable: false, choice: null, aiPick: null, sentChip: chip('ReDesign: I pick option 4, Cards.') })).toBe(4)
+  })
+  test('a sent More options or Other is no pick', () => {
+    expect(pickedOption({ editable: false, choice: null, aiPick: null, sentChip: chip('ReDesign: more options please.') })).toBeNull()
+    expect(pickedOption({ editable: false, choice: null, aiPick: null, sentChip: chip('ReDesign: warmer') })).toBeNull()
   })
 })
 

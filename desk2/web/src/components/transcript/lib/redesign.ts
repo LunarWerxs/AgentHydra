@@ -131,6 +131,13 @@ export function replyFor(choice: RedesignChoice, name: string, text: string, mor
   return { ...none, pick: choice, name }
 }
 
+/** The option number the card counts as picked: the person's choice while they can still choose, else the AI's design_pick or the person's sent pick. */
+export function pickedOption(s: { editable: boolean; choice: RedesignChoice; aiPick: number | null; sentChip: { kind: string; n?: number } | null }): number | null {
+  if (s.editable) return typeof s.choice === 'number' ? s.choice : null
+  if (s.aiPick !== null) return s.aiPick
+  return s.sentChip?.kind === 'pick' && typeof s.sentChip.n === 'number' ? s.sentChip.n : null
+}
+
 /** Something to send: an option, a request for more, or (under Other) words. */
 export const canSendReply = (r: RedesignReply): boolean => r.more || r.pick !== null || (r.other && r.text.trim() !== '')
 
