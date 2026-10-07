@@ -1,0 +1,24 @@
+{
+  "closed": null,
+  "def_hash": "7c813023393223ad",
+  "id": "20261007-climayte-worker-brief-chars-9fdc",
+  "idea": "tighten the worker brief's own sentences (ETA line untouched), every rule kept",
+  "lane": "normal",
+  "metric": "climayte.worker_brief_chars",
+  "opened": {
+    "at": "2026-10-07T10:07:33+00:00",
+    "by": "blogi",
+    "commit": "9718365fac7d83ddb3d7ffec1686f68ba3de3e9c",
+    "machine": "MPC-HELL"
+  },
+  "pass_line": null,
+  "predict": {
+    "expect": 1630.0,
+    "hi": 1720.0,
+    "lo": 1560.0,
+    "p_keep": 0.85
+  },
+  "probe_minutes": null,
+  "project": "agenthydra",
+  "schema": "hydra-rsi-trial/1"
+}
