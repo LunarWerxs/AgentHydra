@@ -20,6 +20,7 @@ import { scopesNarrowed } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import type { SidebarFilter } from './logic'
 import { useHiddenGroups } from './hidden'
+import { activeOnly } from './active'
 import { MENU_CONTENT, focusFirstItem } from './menuClasses'
 
 // The Search and Filter buttons at the right end of the sidebar list's first header, the desk list's or
@@ -30,7 +31,7 @@ const emit = defineEmits<{ search: []; 'update:filter': [filter: SidebarFilter] 
 const cloud = useCloud()
 const { showHidden } = useHiddenGroups()
 // Show hidden counts too: the list holds groups it otherwise leaves out.
-const narrowed = computed(() => (cloud.on.value ? scopesNarrowed(cloud.scopes.value) : props.filter !== 'active') || showHidden.value)
+const narrowed = computed(() => (cloud.on.value ? scopesNarrowed(cloud.scopes.value) : props.filter !== 'active') || showHidden.value || activeOnly.value)
 // The colour is apart so the Filter's blue (a filter is narrowing the list) replaces it rather than racing it.
 const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover'
 const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`

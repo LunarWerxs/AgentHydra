@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { isWaitingForAccount, statusGlyph, waitingLine } from '../../src/components/sidebar/logic'
+import { externalGlyph, isActive, isWaitingForAccount, statusGlyph, waitingLine } from '../../src/components/sidebar/logic'
 
 // A CliMayte chat whose worker waits for an account is status 'starting' with a `waiting` note: it must say
 // Waiting (with the start time when known), and only a chat really launching says Starting.
@@ -25,4 +25,32 @@ test('only a starting chat with a wait is waiting for an account', () => {
   expect(isWaitingForAccount({ status: 'starting', waiting: { reason: 'x', until: null } })).toBe(true)
   expect(isWaitingForAccount({ status: 'starting' })).toBe(false)
   expect(isWaitingForAccount({ status: 'working', waiting: { reason: 'x', until: null } })).toBe(false)
+})
+
+// Active only keeps the rows whose dot is active: running, starting, waiting on you, or done with background work still running.
+test('the dot decides what Active only keeps', () => {
+  type Over = Omit<Parameters<typeof statusGlyph>[0], 'unread'> & { unread?: boolean }
+  const chat = (over: Over) => isActive(statusGlyph({ unread: false, ...over }))
+  const cases: [string, boolean, Over][] = [
+    ['a running chat', true, { status: 'working' }],
+    ['a starting chat', true, { status: 'starting' }],
+    ['a chat waiting on the owner', true, { status: 'needs_you' }],
+    ['a finished chat with background tasks running', true, { status: 'idle', backgroundActive: 1 }],
+    ['a finished chat with a CliMayte worker running', true, { status: 'idle', climayteActive: 1 }],
+    ['a closed chat with background tasks running', true, { status: 'closed', backgroundActive: 2 }],
+    ['an idle chat', false, { status: 'idle' }],
+    ['an unread finished chat', false, { status: 'idle', unread: true }],
+    ['a closed chat', false, { status: 'closed' }],
+    ['a stopped chat', false, { status: 'stopped' }],
+    ['a chat at a usage limit', false, { status: 'limited' }],
+    ['a chat in error', false, { status: 'error' }]
+  ]
+  for (const [name, active, over] of cases) expect({ name, active: chat(over) }).toEqual({ name, active })
+  const session = (status: 'working' | 'needs_you' | 'idle' | 'stale', unread = false) => isActive(externalGlyph({ status, unread }))
+  expect(session('working')).toBe(true)
+  expect(session('needs_you')).toBe(true)
+  expect(session('idle')).toBe(false)
+  expect(session('idle', true)).toBe(false)
+  expect(session('stale', true)).toBe(false)
+  expect(isActive(undefined)).toBe(false)
 })

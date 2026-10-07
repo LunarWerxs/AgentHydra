@@ -4,7 +4,7 @@ import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
-import type { UpdateOffer } from '@/lib/server-update'
+import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-update'
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu and Hide sidebar (28px, r7).
 // The real app's Chat / Code mode switch is left out: Hydra Desk is Code only. Its Back and Forward arrows
@@ -40,11 +40,11 @@ const COLLAPSED_WIDTH = 246
   >
     <Tip label="Menu">
       <span class="inline-flex">
-    <DropdownMenu>
+    <DropdownMenu @update:open="(open: boolean) => open && update && markUpdateSeen(true)">
         <DropdownMenuTrigger as-child>
-          <button type="button" :class="[BTN, 'relative']" :aria-label="update ? 'Menu (update ready)' : 'Menu'">
+          <button type="button" :class="[BTN, 'relative']" :aria-label="update && !updateSeen ? 'Menu (update ready)' : 'Menu'">
             <component :is="shellGlyphs.menu" class="size-4" />
-            <span v-if="update" class="absolute right-1 top-1 size-1.5 rounded-full bg-accent" aria-hidden="true" />
+            <span v-if="update && !updateSeen" class="absolute right-1 top-1 size-1.5 rounded-full bg-accent" aria-hidden="true" />
           </button>
         </DropdownMenuTrigger>
       <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">

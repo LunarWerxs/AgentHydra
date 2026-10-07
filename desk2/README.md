@@ -177,6 +177,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   header's button keeps it open), and a desk list a filter empties still shows the button. Every
   Filter menu item says what it does when the pointer rests on it, and that word draws over the menu
   (`ui/tooltip/TitleTips.vue` sits on the page body above every menu) (owner, 2026-10-05).
+- **Active only.** The Filter menu's Active only, above Show hidden groups, lists only the rows whose dot is
+  active (`isActive` in `sidebar/logic.ts`): running, starting, waiting on you, or done with background work
+  still running. Both lists and every row kind follow it, and it is remembered (`sidebar/active.ts`) (owner,
+  2026-10-07). An inactive chat is dimmed with Cloud on or off: the dim rule is one (`dimText` in `sidebar/rowClasses.ts`).
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,

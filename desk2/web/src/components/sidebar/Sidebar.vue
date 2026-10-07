@@ -12,6 +12,7 @@ const DevServersList = lazyPanel(() => import('@/components/servers/DevServersLi
 import { useDevServers } from '@/components/servers/store'
 import { useCloud } from '@/components/cloud/store'
 import { ahSource, appShown, deskOnPcs } from '@/components/cloud/logic'
+import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -60,6 +61,9 @@ import {
   entryRunning,
   externalGlyph,
   externalRow,
+  isActive,
+  onlyActive,
+  statusGlyph,
   groupChats,
   groupChoices,
   groupOrderKey,
@@ -83,6 +87,7 @@ import {
   type RowMenuEntry,
   type RowMenuItem,
   type RowState,
+  type SidebarEntry,
   type StatusGlyph,
   type SidebarFilter,
   type SidebarGroups
@@ -234,7 +239,7 @@ const ownGroups = computed<ChatGroup[]>(() => {
   const g = groups.value
   return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
-const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active' || deskPcs.value !== null)
+const filtering = computed(() => query.value.trim() !== '' || filter.value !== 'active' || deskPcs.value !== null || activeOnly.value)
 // Rows drag to another place in their own group (rowDrag.ts); not while a search or a filter narrows the list.
 const rowDrag = useRowDrag()
 const rowsDraggable = (g: ChatGroup) => !filtering.value && g.key !== 'archived'
@@ -246,7 +251,9 @@ const emptyText = computed(() =>
       ? 'Every group here is hidden'
       : filter.value === 'archived'
         ? 'No archived sessions'
-        : 'No sessions yet'
+        : activeOnly.value
+          ? 'No active sessions'
+          : 'No sessions yet'
 )
 
 // Hydra Desk 2: with the chrome bar's CliMayte button on, each row of the list shown (the cloud list or the
@@ -324,7 +331,8 @@ const deskShown = computed<SidebarGroups>(() => {
 })
 const groupList = computed<ChatGroup[]>(() => {
   const g = deskShown.value
-  return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
+  const list = [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
+  return activeOnly.value ? onlyActive(list, entryGlyph) : list
 })
 // A group or row the plain list shows that the order lacks joins it at the top, so it keeps the place it
 // appeared in, and so does one only the cloud list had shown (recordDeskOrder); any other saved one never
@@ -351,13 +359,20 @@ watch(
 const cloudGroups = computed(() => {
   const pcs = cloud.scopes.value.pcs
   const added = cloud.search.value.trim() ? [] : (nesting.value?.added ?? []).filter((a) => pcs === null || pcs.includes(a.pc ?? cloud.thisPc.value))
-  if (!cloud.on.value || !added.length) return cloud.groups.value
-  return addToCloudGroups(cloud.groups.value, added, {
-    order: order.value,
-    hidden: hiddenGroups.hidden.value,
-    showHidden: hiddenGroups.showHidden.value,
-    orderKey: cloud.orderKey,
-    onDesk: cloud.onDesk
+  const groups =
+    !cloud.on.value || !added.length
+      ? cloud.groups.value
+      : addToCloudGroups(cloud.groups.value, added, {
+          order: order.value,
+          hidden: hiddenGroups.hidden.value,
+          showHidden: hiddenGroups.showHidden.value,
+          orderKey: cloud.orderKey,
+          onDesk: cloud.onDesk
+        })
+  if (!activeOnly.value) return groups
+  return groups.flatMap((g) => {
+    const rows = g.rows.filter((r) => isActive(cloudDot(r.id)))
+    return rows.length ? [{ ...g, rows }] : []
   })
 })
 
@@ -394,6 +409,9 @@ const addedGlyph = (id: string): StatusGlyph | undefined => {
 }
 /** A cloud row's dot: an added row's, or its desk row's. */
 const cloudDot = (id: string) => addedGlyph(id) ?? deskDots.value.get(id)
+/** A desk-list entry's dot, as its row draws it: a chat's, or an outside session's (an added row's, when it is one). */
+const entryGlyph = (e: SidebarEntry): StatusGlyph | undefined => (e.kind === 'chat' ? statusGlyph(e.chat) : (addedGlyph(e.id) ?? externalGlyph(e.session)))
+const showAll = () => (activeOnly.value = false)
 /** How an added row's cloud pulses, from the work it stands for and lists (tasks.ts addedPulse); undefined for any other row. */
 const cloudPulse = (id: string) => {
   const a = addedRows.value.get(id)
@@ -811,6 +829,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <span class="flex-1">{{ emptyText }}</span>
           <template v-if="filtering && !searchOpen">
             <button type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
+            <button v-if="activeOnly" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
           </template>
           <button v-if="groups.hiddenOut" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
           <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />

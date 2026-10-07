@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
+import { Activity, Archive, Bot, Boxes, CalendarRange, CircleAlert, EyeOff, Hourglass, ListTodo, Monitor, RefreshCw, Network, RotateCcw, Search, Settings2 } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   DropdownMenuItem,
@@ -11,6 +11,7 @@ import {
   DropdownMenuSubTrigger
 } from '@/components/ui/dropdown-menu'
 import { FILTER_LABELS, type SidebarFilter } from '@/components/sidebar/logic'
+import { activeOnly } from '@/components/sidebar/active'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { SUB_KIND_LABELS, subModes, type SubKind, type SubMode } from '@/components/sidebar/subitems'
@@ -49,6 +50,7 @@ const emit = defineEmits<{ 'update:filter': [filter: SidebarFilter] }>()
 
 const cloud = useCloud()
 const { hidden, showHidden, setShowHidden } = useHiddenGroups()
+const ACTIVE_TIP = 'Show only the sessions running, starting or waiting on you, and those with background work still running, in both lists'
 const hiddenTip = computed(() =>
   hidden.value.size || showHidden.value
     ? "Show the groups hidden with a group header's right-click, in both lists"
@@ -61,6 +63,9 @@ const claude = computed(() => s.value.apps.includes('claude'))
 function set(patch: Partial<CloudScopes>) {
   cloud.scopes.value = { ...cloud.scopes.value, ...patch }
   cloud.on.value = true
+}
+function toggleActive(): void {
+  activeOnly.value = !activeOnly.value
 }
 /** The Computer filter narrows both lists (Sidebar.vue deskOnPcs), so it leaves the list shown as it is. */
 function setPcs(pcs: string[] | null) {
@@ -182,6 +187,17 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+  <DropdownMenuItem
+    role="menuitemcheckbox"
+    :aria-checked="activeOnly"
+    :title="ACTIVE_TIP"
+    :class="ITEM"
+    @select.prevent="toggleActive"
+  >
+    <Activity />
+    <span class="flex-1">Active only</span>
+    <component :is="icons.check" v-if="activeOnly" class="ml-3" />
+  </DropdownMenuItem>
   <DropdownMenuItem
     role="menuitemcheckbox"
     :aria-checked="showHidden"

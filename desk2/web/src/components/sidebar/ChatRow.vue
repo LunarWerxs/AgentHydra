@@ -13,6 +13,7 @@ import RowMenuList from './RowMenuList.vue'
 import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { cleanSidebar } from './clean'
+import { dimText } from './rowClasses'
 import RowAge from '@/lib/RowAge.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
@@ -132,7 +133,7 @@ defineExpose({ startRename })
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
+            dimText(glyph, selected)
           ]"
           @click="!renaming && emit('select')"
           @keydown.enter.self="emit('select')"
@@ -172,7 +173,7 @@ defineExpose({ startRename })
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
+            dimText(glyph, selected)
           ]"
           @click="!renaming && emit('select')"
           @keydown.enter.self="emit('select')"

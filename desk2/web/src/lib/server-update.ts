@@ -6,8 +6,19 @@ import { computed, ref } from 'vue'
 import type { ServerUpdate } from '@shared/protocol'
 
 const LOOK_EVERY_MS = 60_000
+const SEEN_KEY = 'hydra-desk.menu.updateSeen'
+const storage = typeof localStorage === 'undefined' ? null : localStorage
 
 export const serverUpdate = ref<ServerUpdate | null>(null)
+/**
+ * The Menu was opened while the server was stale: its blue dot is off. The server says only whether it is stale,
+ * so the dot returns for a change only after a restart has made it current (owner, 2026-10-07).
+ */
+export const updateSeen = ref(storage?.getItem(SEEN_KEY) === '1')
+export function markUpdateSeen(seen: boolean): void {
+  updateSeen.value = seen
+  storage?.setItem(SEEN_KEY, seen ? '1' : '0')
+}
 /** A restart asked for and not yet answered by the new server's hello, or why it could not start. */
 export const restartState = ref<{ restarting: true } | { error: string } | null>(null)
 
@@ -29,13 +40,18 @@ export function offerOf(update: ServerUpdate | null, state: typeof restartState.
 
 export const updateOffer = computed(() => offerOf(serverUpdate.value, restartState.value))
 
+function setServerUpdate(update: ServerUpdate): void {
+  serverUpdate.value = update
+  if (!update.stale && updateSeen.value) markUpdateSeen(false)
+}
+
 /** The window asks the server, which says whether its code is older than the files. */
 export async function checkServerUpdate(): Promise<void> {
   try {
     const res = await fetch('/api/server/update', { cache: 'no-store' })
     // A server older than this route is older than this window: it needs a restart it cannot do itself.
-    if (res.status === 404) serverUpdate.value = { stale: true, restartable: false }
-    else if (res.ok) serverUpdate.value = (await res.json()) as ServerUpdate
+    if (res.status === 404) setServerUpdate({ stale: true, restartable: false })
+    else if (res.ok) setServerUpdate((await res.json()) as ServerUpdate)
   } catch {
     // Unreachable (restarting, say): the next hello asks again.
   }

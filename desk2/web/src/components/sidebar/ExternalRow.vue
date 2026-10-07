@@ -17,6 +17,7 @@ import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 import { cleanSidebar } from './clean'
+import { dimText } from './rowClasses'
 import RowAge from '@/lib/RowAge.vue'
 
 // A session running outside Hydra Desk, in the same list as our chats: the same 26px row, dot, title
@@ -150,7 +151,7 @@ function run(item: RowMenuItem) {
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
+            dimText(glyph, selected)
           ]"
           @click="!renaming && emit('select')"
           @keydown.enter.self="emit('select')"
@@ -191,7 +192,7 @@ function run(item: RowMenuItem) {
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
-            glyph.dim && !selected ? 'text-text-muted' : ''
+            dimText(glyph, selected)
           ]"
           @click="!renaming && emit('select')"
           @keydown.enter.self="emit('select')"

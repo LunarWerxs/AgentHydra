@@ -365,17 +365,17 @@ export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], extern
 export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
   switch (s.status) {
     case 'working':
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Running elsewhere' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Running elsewhere' }
     case 'needs_you':
-      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, label: 'Needs you elsewhere' }
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you elsewhere' }
     case 'stale':
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, label: 'Unread' }
-        : { shape: 'ring', tone: 'muted', motion: 'none', dim: true, label: 'Stale' }
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, active: false, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', dim: true, active: false, label: 'Stale' }
     default:
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, label: 'Unread' }
-        : { shape: 'ring', tone: 'muted', motion: 'none', dim: false, label: 'Idle elsewhere' }
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, active: false, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', dim: false, active: false, label: 'Idle elsewhere' }
   }
 }
 
@@ -396,7 +396,13 @@ export interface StatusGlyph {
   tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
   dim: boolean // the row title is dimmed (closed)
+  active: boolean // what Active only keeps (isActive): running, starting, waiting on you, or background work still running
   label: string // aria-label of the dot, in words
+}
+
+/** Whether a row's dot says it is active (Active only). Undefined is a row with no dot known, drawn as an idle ring. */
+export function isActive(glyph: StatusGlyph | undefined): boolean {
+  return glyph?.active ?? false
 }
 
 /** A CliMayte chat whose worker waits for an account: it is not launching, whatever its status says. */
@@ -410,16 +416,16 @@ export function waitingLine(wait: NonNullable<ChatSummary['waiting']>, now: numb
 export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { waiting?: ChatSummary['waiting']; climayteActive?: number; backgroundActive?: number }): StatusGlyph {
   switch (chat.status) {
     case 'starting':
-      if (chat.waiting) return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Waiting' }
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Starting' }
+      if (chat.waiting) return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Waiting' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Starting' }
     case 'working':
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, label: 'Running' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Running' }
     case 'needs_you':
-      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, label: 'Needs you' }
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you' }
     case 'error':
-      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, label: 'Error' }
+      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, active: false, label: 'Error' }
     case 'limited':
-      return { shape: 'ring', tone: 'limited', motion: 'none', dim: false, label: 'Usage limit' }
+      return { shape: 'ring', tone: 'limited', motion: 'none', dim: false, active: false, label: 'Usage limit' }
     case 'closed':
       return settledGlyph(chat, true, 'Closed')
     default: // idle, stopped
@@ -434,14 +440,23 @@ export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { wai
  * not looked at is green.
  */
 function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, dim: boolean, idle: string): StatusGlyph {
-  if ((chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0) return { shape: 'dot', tone: 'warning', motion: 'none', dim, label: 'Replied, background tasks running' }
+  const background = (chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0
+  if (background) return { shape: 'dot', tone: 'warning', motion: 'none', dim, active: true, label: 'Replied, background tasks running' }
   return chat.unread
-    ? { shape: 'dot', tone: 'success', motion: 'none', dim, label: 'Done, unread' }
-    : { shape: 'ring', tone: 'muted', motion: 'none', dim, label: idle }
+    ? { shape: 'dot', tone: 'success', motion: 'none', dim, active: false, label: 'Done, unread' }
+    : { shape: 'ring', tone: 'muted', motion: 'none', dim, active: false, label: idle }
 }
 
 /** The dot of a row that stands for a running HSwarm job no chat is known to have called (tasks.ts AddedRow.job). */
-export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', dim: false, label: 'HSwarm job running' }
+export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', dim: false, active: true, label: 'HSwarm job running' }
+
+/** Active only's rows: each group's entries whose dot is active, a group with none left dropped (Sidebar.vue). */
+export function onlyActive(groups: ChatGroup[], glyphOf: (e: SidebarEntry) => StatusGlyph | undefined): ChatGroup[] {
+  return groups.flatMap((g) => {
+    const entries = g.entries.filter((e) => isActive(glyphOf(e)))
+    return entries.length ? [{ ...g, entries }] : []
+  })
+}
 
 /**
  * A running mark's classes: the one shared pulse (style.css .run-pulse, the working dot's blink, still under
