@@ -193,9 +193,13 @@ describe('HSwarm ledger ingest', () => {
   test('an archive written before the live file was replaced does not count its month twice', async () => {
     const path = join(root, 'pending.jsonl')
     const month = (ms: number) => iso(ms).slice(0, 7).replace('-', '')
+    // The last hour of the previous month: always inside the store's 35-day raw window, so these stay raw rows
+    // the count below can see. The 1st of last month passed that window around the 6th of every month, and from
+    // then on its calls were settled instead of raw and the count read 1.
     const lastMonth = new Date(NOW)
     lastMonth.setUTCDate(1)
-    lastMonth.setUTCMonth(lastMonth.getUTCMonth() - 1)
+    lastMonth.setUTCHours(0, 0, 0, 0)
+    lastMonth.setTime(lastMonth.getTime() - 3_600_000)
     const old = [
       line('t1', { ts: iso(lastMonth.getTime()) }),
       line('t2', { ts: iso(lastMonth.getTime() + 1000) }),
