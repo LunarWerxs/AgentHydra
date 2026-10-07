@@ -43,8 +43,9 @@ metrics:
     measure: "python scripts/rsi/hswarm-prefix.py"
     pick: 'json:$.chars'
     light: true
-  # Free accounts cost nothing but are the first route (owner, 2026-10-07): every free call pays this wrapper
-  # around its prompt, so a shorter one is a saving on every call.
+  # Free accounts cost nothing but are the first route (owner, 2026-10-07): every task HSwarm sends them pays this
+  # wrapper around its prompt, measured on the common shape (tool-free, with a schema), so a shorter one is a saving
+  # on every call.
   - id: free.route.wrapper_chars
     kind: size
     better: lower
