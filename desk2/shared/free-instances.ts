@@ -17,6 +17,8 @@ export interface FreeRequest {
   prompt?: string
   name?: string
   webSearch?: boolean
+  /** Claude family for a new chat (owner, 2026-10-07: Haiku 5.5 through free accounts where possible). */
+  model?: 'haiku' | 'sonnet'
 }
 export interface FreeChat {
   chat_id: string

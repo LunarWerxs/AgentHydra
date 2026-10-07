@@ -171,13 +171,16 @@ def execute(args, *, api, on_text=None) -> dict:
             preferred_org, remembered_org=config.get("organization_id")
         )
         org = organization["uuid"]
+        # The login's last model is only a default, and a retired Haiku (4.x) is never used again (owner, 2026-10-07).
+        remembered = config.get("model")
+        remembered = None if remembered and http.retired_haiku(remembered) else remembered
         if args.command == "nudge":
             # Nothing is recorded, so Desk never imports this chat. It asks the cheapest model the account offers
             # (AgentHydra's CLI keepalive uses Haiku 5.5 too; never a Haiku 4.x, see model_for); one Claude
             # refuses outright gets a single retry on the model a chat would use. Only a refusal: a network
             # failure may have sent the message already.
             cheap = args.model or client.model_for(org, "haiku", own_default=False)
-            usual = config.get("model") or client.model_for(org, "sonnet")
+            usual = remembered or client.model_for(org, "sonnet")
             tried = [m for m in dict.fromkeys([cheap, usual]) if m]
             if not tried:
                 raise ClaudeError("Choose a Claude model with --model.", code="model_required")
@@ -289,12 +292,17 @@ def execute(args, *, api, on_text=None) -> dict:
                 return result
 
             # A login that never chatted remembers no model: it takes the one claude.ai would (owner, 2026-10-06).
-            model = (
-                args.model
-                or (conversation or {}).get("model")
-                or config.get("model")
-                or client.model_for(org, "sonnet")
-            )
+            # A NEW chat asked for Haiku takes the newest Haiku the account offers ahead of the login's remembered
+            # model, or a login that ever chatted on Sonnet would never get it (owner, 2026-10-07: Haiku 5.5 work
+            # goes through the free accounts); an account that offers no newer Haiku gets what a chat would. A
+            # continued chat keeps its own model unless that is a retired Haiku.
+            continued = (conversation or {}).get("model")
+            continued = None if continued and http.retired_haiku(continued) else continued
+            haiku = None
+            if args.prefer == "haiku" and not (args.model or continued):
+                haiku = client.model_for(org, "haiku", own_default=False)
+                haiku = haiku if haiku and "haiku" in haiku else None
+            model = args.model or continued or haiku or remembered or client.model_for(org, "sonnet")
             if not model:
                 raise ClaudeError("Choose a Claude model with --model.", code="model_required")
             if not isinstance(model, str) or not re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model):

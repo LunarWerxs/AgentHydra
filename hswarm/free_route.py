@@ -25,6 +25,7 @@ STATUS_TIMEOUT_S = 2.0
 MAX_PROMPT_CHARS = 100_000
 WAIT_S = 40  # the daemon waits at most 45 s per call
 WAIT_CAP_S = 240  # the longest a free account may hold a task before it goes back to its API route, whatever its timeout_s
+HAIKU_PROFILES = ("routine", "general")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks on a free account right now, across every job of this process (route_via_free_max)
 SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, with no prose and no code fence:"
@@ -116,7 +117,12 @@ async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     started = now_iso("milliseconds")
     name = f"hswarm {job_id} {task.id}"
     try:
-        sent = await _call("free_chat", {"tasks": [{"prompt": shape(task), "name": name}], "wait_s": WAIT_S}, WAIT_S + 5)
+        item = {"prompt": shape(task), "name": name}
+        # Narrow work asks for the lightest Claude model (Haiku 5.5); research and decision keep the account's usual one
+        # (owner, 2026-10-07: low-impact Haiku 5.5 through free instances where possible).
+        if task.profile in HAIKU_PROFILES:
+            item["model"] = "haiku"
+        sent = await _call("free_chat", {"tasks": [item], "wait_s": WAIT_S}, WAIT_S + 5)
     except _ERRORS as e:
         _say(job_id, f"free chat send failed ({type(e).__name__}); the task runs on its API route")
         return None, None

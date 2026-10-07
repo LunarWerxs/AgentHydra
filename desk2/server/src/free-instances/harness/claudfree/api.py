@@ -36,6 +36,7 @@ class Client:
         model: str | None = None,
         regular: bool = False,
         web_search: bool = False,
+        prefer: str | None = None,
         check: bool = False,
         brief: bool = False,
         export_dir: str | Path | None = None,
@@ -63,6 +64,7 @@ class Client:
             ("--model", model),
             ("--org-id", self.organization_id),
             ("--export", export_dir),
+            ("--prefer", prefer),
         ):
             if value is not None:
                 # --flag=value also accepts prompts that begin with a hyphen.
@@ -120,11 +122,12 @@ class Client:
         model: str | None = None,
         regular: bool = False,
         web_search: bool = False,
+        prefer: str | None = None,
         brief: bool = False,
         export_dir: str | Path | None = None,
         on_text=None,
     ) -> dict:
-        """Create a new Incognito chat and save its UUID before sending."""
+        """Create a new Incognito chat and save its UUID before sending. `prefer="haiku"` asks for the newest Haiku."""
         return self.execute(
             "chat",
             prompt=prompt,
@@ -132,6 +135,7 @@ class Client:
             model=model,
             regular=regular,
             web_search=web_search,
+            prefer=prefer,
             brief=brief,
             export_dir=export_dir,
             on_text=on_text,

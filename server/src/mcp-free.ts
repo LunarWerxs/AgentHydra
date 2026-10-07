@@ -155,6 +155,7 @@ export interface FreeTask {
   account?: number
   provider?: Provider
   web_search?: boolean
+  model?: 'haiku' | 'sonnet'
 }
 interface TaskState {
   task: number
@@ -299,6 +300,10 @@ async function runBatch(b: Batch): Promise<void> {
             ? { name: it.task.name }
             : {}),
         ...(it.task.web_search && account.provider === 'claude' ? { webSearch: true } : {}),
+        // A continued thread keeps its model; the family only picks a new Claude chat's (owner, 2026-10-07).
+        ...(it.task.model && !it.task.chat_id && account.provider === 'claude'
+          ? { model: it.task.model }
+          : {}),
       }
       try {
         await desk('POST', '/jobs', body)
@@ -367,6 +372,7 @@ function readTask(raw: unknown, index: number): FreeTask {
     ...(t.account != null ? { account: Number(t.account) } : {}),
     ...(provider ? { provider } : {}),
     ...(t.web_search === true ? { web_search: true } : {}),
+    ...(t.model === 'haiku' || t.model === 'sonnet' ? { model: t.model } : {}),
   }
 }
 
@@ -406,7 +412,7 @@ export const FREE_TOOLS: McpEngineTool[] = [
   {
     name: 'free_chat',
     description:
-      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
+      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. A task's `model` ('haiku') asks for the lightest Claude model on a new claude.ai thread. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
     inputSchema: S(
       {
         tasks: {
@@ -432,6 +438,12 @@ export const FREE_TOOLS: McpEngineTool[] = [
                 description: 'Only this provider.',
               },
               web_search: { type: 'boolean', description: 'Claude only: let it search the web.' },
+              model: {
+                type: 'string',
+                enum: ['haiku', 'sonnet'],
+                description:
+                  "Preferred Claude family on a Free claude.ai account: 'haiku' takes the newest Haiku the account offers (Haiku 5.5 today), else the account's usual model. Ignored for chatgpt and for a continued thread.",
+              },
             },
             ['prompt'],
           ),

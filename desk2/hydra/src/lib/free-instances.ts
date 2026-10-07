@@ -1,4 +1,4 @@
-import type { FreeInstance, FreeJob, FreeProvider, FreeRequest, FreeSettings, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
+import type { FreeInstance, FreeJob, FreeResult, FreeProvider, FreeRequest, FreeSettings, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
 import { ref } from 'vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import type { UsageLimit, UsageSnapshot } from '@/lib/api'
@@ -56,6 +56,35 @@ export function freeUsageSnapshot(usage: FreeUsage | null): UsageSnapshot | null
   const weekAll = limit('seven_day')
   if (!session && !weekAll) return null
   return { account: null, session, weekAll, weekModel: null, capturedAt: usage.observed_at ?? new Date().toISOString() }
+}
+
+export type FreeVerdict = { state: 'alive' | 'dead' | 'unknown'; text: string; reason: string }
+
+/** What a hand-started check says in one line (owner, 2026-10-07: "It just spun, and then it stopped"). `auth` is the
+ *  login check's result (null when the request itself failed, then `error` says why), `usage` the latest reading. A
+ *  login the provider answered "not signed in" is dead; no answer at all is unknown, never dead. */
+export function freeCheckVerdict(
+  who: string,
+  auth: FreeResult | null,
+  usage: FreeUsage | null | undefined,
+  error: string,
+  t: (key: string, params?: Record<string, unknown>) => string,
+): FreeVerdict {
+  const reason = auth?.error?.message || error
+  if (auth?.ok && auth.authenticated) {
+    const snap = freeUsageSnapshot(usage ?? null)
+    const win = snap?.session ? 'verdictFiveHour' : 'verdictWeek'
+    const used = snap?.session?.pct ?? snap?.weekAll?.pct
+    const text = used == null
+      ? t('freeInstances.verdictAlive', { who })
+      : t('freeInstances.verdictAliveUsage', { who, left: Math.max(0, Math.round(100 - used)), window: t(`freeInstances.${win}`) })
+    return { state: 'alive', text, reason: '' }
+  }
+  if (auth && auth.authenticated === false) {
+    return { state: 'dead', text: t(reason ? 'freeInstances.verdictDeadWhy' : 'freeInstances.verdictDead', { who, reason }), reason }
+  }
+  const why = reason || t('freeInstances.verdictNoAnswer')
+  return { state: 'unknown', text: t('freeInstances.verdictUnknown', { who, reason: why }), reason: why }
 }
 
 /** The provider's mark on a Free row (ProviderLogo). */

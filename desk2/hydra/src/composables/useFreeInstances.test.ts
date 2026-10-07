@@ -32,3 +32,17 @@ it("opening the tab starts no operation and spins nothing, while Desk's own read
     globalThis.fetch = realFetch
   }
 })
+
+it('a check that finished keeps its result when the list refresh after it fails', async () => {
+  const done = { id: 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff', instanceId: account.id, provider: 'claude', command: 'auth', state: 'done', phase: 'done', startedAt: 1, result: { ok: true, authenticated: true } }
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (_url: string | URL, init?: RequestInit) =>
+    init?.method === 'POST' ? new Response(JSON.stringify(done), { status: 200 }) : new Response('{}', { status: 502 })) as typeof fetch
+  try {
+    const free = useFreeInstances()
+    const result = await free.run(account, 'auth')
+    expect([result?.ok, free.errors[account.id]]).toEqual([true, ''])
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})

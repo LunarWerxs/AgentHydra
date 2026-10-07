@@ -5,6 +5,7 @@
 // the facts on each row and the menu items. A row's private chats open under HSwarm → CliMayte.
 import {
   Funnel,
+  HeartPulse,
   LogIn,
   LogOut,
   MessagesSquare,
@@ -24,7 +25,7 @@ import {
 } from '@desk/shared/free-instances'
 import type { TokenParts } from '@agenthydra/server/types'
 import { useStorage } from '@vueuse/core'
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceNameDialog from '@/components/CliInstanceNameDialog.vue'
@@ -47,7 +48,7 @@ import type { UsageSnapshot } from '@/lib/api'
 import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
 import { openSettingsInDesk } from '@/lib/desk-embed'
-import { freeApi, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
+import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
 import { type InstanceRowModel, instanceColumns } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -138,15 +139,17 @@ function rowModel(i: FreeInstance): InstanceRowModel {
     status: {
       on: i.loggedIn,
       pulse: working,
-      title: t(
-        working
-          ? 'freeInstances.working'
-          : i.loggedIn
-            ? 'freeInstances.connected'
-            : i.checkedAt
-              ? 'freeInstances.signedOut'
-              : 'freeInstances.unchecked',
-      ),
+      title:
+        (!working && lastCheckLine(i)) ||
+        t(
+          working
+            ? 'freeInstances.working'
+            : i.loggedIn
+              ? 'freeInstances.connected'
+              : i.checkedAt
+                ? 'freeInstances.signedOut'
+                : 'freeInstances.unchecked',
+        ),
     },
     name: {
       shown,
@@ -155,9 +158,11 @@ function rowModel(i: FreeInstance): InstanceRowModel {
       tooltip: () => ({
         label: i.name,
         description: `${providerName(i.provider)} · ${chatMode(i.provider)}`,
-        detail: i.checkedAt
+        detail:
+          lastCheckLine(i) ??
+          (i.checkedAt
           ? t('freeInstances.checkedAt', { time: new Date(i.checkedAt).toLocaleString() })
-          : t('freeInstances.unchecked'),
+          : t('freeInstances.unchecked')),
       }),
     },
     // The name is the login; the provider is the logo and the chat kind is in the name's hover.
@@ -218,8 +223,8 @@ function menuActionsFor(i: FreeInstance): MenuIconAction[] {
       key: 'checkUsage',
       icon: RefreshCw,
       label: t('freeInstances.check'),
-      run: () => void run(i, 'auth'),
-      spin: runningOf(i, 'auth'),
+      run: () => void checkByHand(i),
+      spin: runningOf(i, 'auth', 'usage'),
       disabled: busy(i.id),
     },
     {
@@ -249,14 +254,60 @@ function menuActionsFor(i: FreeInstance): MenuIconAction[] {
   ]
 }
 
+// --- check: the login check, then the usage read, ending in a verdict (owner, 2026-10-07: "It just spun, and
+// then it stopped") that the row keeps for its dot and name hover. Not kept across a page load: the server's
+// own checkedAt and loggedIn describe the row then.
+const lastCheck = reactive<Record<string, FreeVerdict & { at: number }>>({})
+async function checkOne(i: FreeInstance, withUsage: boolean): Promise<FreeVerdict> {
+  const who = t('freeInstances.accountLabel', { num: i.num, name: shortDisplayName(pii(i.name), 36) })
+  const auth = await run(i, 'auth')
+  let usage = auth?.usage
+  if (withUsage && auth?.ok && auth.authenticated) {
+    const read = await run(i, 'usage')
+    if (read?.ok && read.usage) usage = read.usage
+    // The login is fine: a failed usage read must not leave the triangle on an alive row.
+    errors[i.id] = ''
+  }
+  const verdict = freeCheckVerdict(who, auth, usage, errors[i.id] ?? '', t)
+  lastCheck[i.id] = { ...verdict, at: Date.now() }
+  return verdict
+}
+function toastVerdict(v: FreeVerdict) {
+  if (v.state === 'alive') toast.success(v.text)
+  else if (v.state === 'dead') toast.error(v.text)
+  else toast.warning(v.text)
+}
+async function checkByHand(i: FreeInstance) {
+  if (busy(i.id)) return
+  toastVerdict(await checkOne(i, true))
+}
+/** The status dot's title and the name hover's detail, from the last check this page ran. */
+function lastCheckLine(i: FreeInstance): string | null {
+  const c = lastCheck[i.id]
+  if (!c) return null
+  const time = new Date(c.at).toLocaleTimeString()
+  return t(c.state === 'alive' ? 'freeInstances.rowAlive' : c.state === 'dead' ? 'freeInstances.rowDead' : 'freeInstances.rowUnknown', {
+    time,
+    reason: c.reason,
+  })
+}
+
 /** Refresh re-reads the list, then checks every saved login (read-only: no window opens). Only this
- *  spins the header: the background reads and opening the tab show no spinner. */
+ *  spins the header: the background reads and opening the tab show no spinner. It ends with one summary toast. */
 const refreshing = ref(false)
 async function refreshAccounts() {
   refreshing.value = true
   try {
     await refreshFree()
-    await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => run(i, 'auth')))
+    const verdicts = await Promise.all(instances.value.filter((i) => !busy(i.id)).map((i) => checkOne(i, false)))
+    const count = (s: FreeVerdict['state']) => verdicts.filter((v) => v.state === s).length
+    if (verdicts.length > 0) {
+      const text =
+        t('freeInstances.checkSummary', { alive: count('alive'), dead: count('dead') }) +
+        (count('unknown') > 0 ? t('freeInstances.checkSummaryUnknown', { unknown: count('unknown') }) : '')
+      if (count('dead') + count('unknown') > 0) toast.warning(text)
+      else toast.success(text)
+    }
   } finally {
     refreshing.value = false
   }
@@ -465,6 +516,9 @@ async function onRenameSubmit(name: string) {
                 >
                   <LogIn />
                   {{ $t(inst.lastSignedInAt ? 'freeInstances.signInAgain' : 'freeInstances.login') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem :disabled="busy(inst.id)" @click="checkByHand(inst)">
+                  <HeartPulse /> {{ $t('freeInstances.isAlive') }}
                 </DropdownMenuItem>
                 <!-- The page lost track of a running operation: look it up rather than send again. -->
                 <DropdownMenuItem

@@ -299,9 +299,9 @@ class ClaudeHttp:
         offers (claude_ai_bootstrap_models_config, newest first; retired ones are inactive or overflow):
         the account's own default when it has one (unless `own_default` is off), else the first active
         model whose id holds `prefer` ("sonnet" for a chat, as claude.ai picks; "haiku" for a keepalive
-        nudge, the cheapest), else the account's default, else the first active one. Only the account's own
-        default (with `own_default` on) can be a Haiku 4.x: an org that offers no newer Haiku gets its
-        default instead (owner, 2026-10-07: never use Haiku 4.5).
+        nudge, the cheapest), else the account's default, else the first active one. A retired Haiku (4.x and
+        older) is never returned, not even as the account's own default (owner, 2026-10-07: never use Haiku 4.5):
+        an org that offers no newer Haiku gets its default instead.
         """
         try:
             body = self._json("GET", "/api/account")
@@ -309,7 +309,7 @@ class ClaudeHttp:
                 return None
             own = (body.get("settings") or {}).get("default_model")
             own = own if isinstance(own, str) and re.fullmatch(r"claude-[a-zA-Z0-9._-]+", own) else None
-            if own and own_default:
+            if own and own_default and not retired_haiku(own):
                 return own
             offered: list[str] = [own] if own else []
             for membership in body.get("memberships") or []:

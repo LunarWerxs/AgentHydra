@@ -57,7 +57,7 @@ The answer carries the route, a one-sentence reason, both dollar figures and whe
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `routing_enabled` | true | Off sends everything to the API. |
-| `routing_api_preference_pct` | 60 | Share of close calls sent to the API (0 to 100). |
+| `routing_api_preference_pct` | 20 | Share of close calls sent to the API (0 to 100). |
 | `routing_close_ratio` | 3 | Two costs within this factor are close. |
 | `routing_session_overhead_pct` | 1 | % of a Pro window every subscription task pays to start a session. |
 | `routing_discounts` | all 0 | JSON `{ anthropic, deepseek, openrouter, other }`, percent off list. |

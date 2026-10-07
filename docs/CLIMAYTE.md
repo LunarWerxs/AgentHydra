@@ -36,6 +36,17 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   now starts on Haiku 5.5 (see Scorecard), Haiku 4.5 names are refused, and every Claude Code process
   AgentHydra starts has its `haiku` alias pinned to Haiku 5.5 (see Model and thinking).
 
+## Which route first
+
+Free accounts, then CliMayte, then HSwarm's paid API (owner, 2026-10-07: "the free ones are actually free").
+
+1. **Free accounts** take tool-free work at no cost. HSwarm tries them first when `route_via_free` is on and the
+   task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step.
+2. **CliMayte** takes tasks with tools on the subscription, or what free could not take, when the cost comparison
+   (`docs/COST-MODEL.md`) puts the subscription side clearly cheaper (beyond `closeRatio`).
+3. **The paid API** takes the rest. When the costs are close, only `routing_api_preference_pct` (default 20) of
+   the calls go to the API, so that arm stays measured.
+
 ## Server: `server/src/climayte.ts`
 
 ### Records

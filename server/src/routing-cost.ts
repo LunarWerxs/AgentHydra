@@ -167,7 +167,9 @@ export function readRoutingSettings(): RoutingSettings {
   const enabledRaw = getSetting('routing_enabled').trim().toLowerCase()
   return {
     enabled: !['0', 'false', 'off', 'no'].includes(enabledRaw),
-    apiPreferencePct: clamp(num(getSetting('routing_api_preference_pct'), 60), 0, 100),
+    // Free first, then CliMayte, then the paid API (owner, 2026-10-07). Not 0: a fifth of the close calls keep
+    // the API arm measured.
+    apiPreferencePct: clamp(num(getSetting('routing_api_preference_pct'), 20), 0, 100),
     closeRatio: Math.max(1, num(getSetting('routing_close_ratio'), 3)),
     discounts,
     sessionOverheadPct: clamp(num(getSetting('routing_session_overhead_pct'), 1), 0, 100),

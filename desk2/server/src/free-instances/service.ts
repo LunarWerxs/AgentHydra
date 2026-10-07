@@ -24,7 +24,7 @@ function name(value: unknown): string {
 }
 export function validateRequest(value: unknown): FreeRequest {
   const r = record(value) as unknown as FreeRequest
-  const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch']
+  const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch', 'model']
   if (Object.keys(r).some(k => !keys.includes(k))) throw new FreeError('Unknown operation option.')
   if (typeof r.requestId !== 'string' || !UUID.test(r.requestId) || typeof r.instanceId !== 'string' || !UUID.test(r.instanceId) || !FREE_PROVIDERS.includes(r.provider) || !FREE_COMMANDS.includes(r.command)) throw new FreeError('Request and instance UUIDs, a supported provider and command are required.')
   const send = r.command === 'chat' || r.command === 'resume'
@@ -35,6 +35,7 @@ export function validateRequest(value: unknown): FreeRequest {
   if (r.command === 'nudge' && r.provider !== 'claude') throw new FreeError('A keepalive nudge is for Claude only.')
   if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
   if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !send || r.provider !== 'claude')) throw new FreeError('Web search is an option for Claude messages only.')
+  if (r.model !== undefined && (!['haiku', 'sonnet'].includes(r.model) || !send || r.provider !== 'claude')) throw new FreeError('Model is haiku or sonnet, for Claude messages only.')
   return { ...r }
 }
 
@@ -233,7 +234,7 @@ export class FreeInstances {
    *  person or a chat asks for while it runs waits for it instead of being refused. */
   start(value: unknown, auto = false): FreeJob {
     const r = validateRequest(value)
-    const fingerprint = createHash('sha256').update(JSON.stringify([r.instanceId, r.provider, r.command, r.chatId, r.prompt, r.name, r.webSearch])).digest('hex')
+    const fingerprint = createHash('sha256').update(JSON.stringify([r.instanceId, r.provider, r.command, r.chatId, r.prompt, r.name, r.webSearch, r.model])).digest('hex')
     const previous = this.jobs.get(r.requestId)
     if (previous) {
       if (this.fingerprints.get(r.requestId) !== fingerprint) throw new FreeError('That request UUID already identifies another operation.', 409)

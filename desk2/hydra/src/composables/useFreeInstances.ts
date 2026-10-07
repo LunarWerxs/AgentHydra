@@ -55,7 +55,9 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
       }
       rememberedJob(job.instanceId, null)
       if (!job.result?.ok) errors[job.instanceId] = job.result?.error?.message || 'The operation did not complete. Read the chat before sending again.'
-      await snapshot()
+      // The job's own result stands: a list refresh that fails after it is no reason to call a finished check
+      // interrupted (owner, 2026-10-07: an account showed a warning, then was fine on the next check).
+      await snapshot().catch(() => {})
       return job.result ?? null
     } catch (error) {
       errors[job.instanceId] = error instanceof Error ? error.message : 'Connection interrupted. Check the operation before sending again.'

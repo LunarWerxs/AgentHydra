@@ -21,6 +21,7 @@ export function commandArgs(config: FreeConfig, request: FreeRunRequest): string
   // Registry aliases are restricted; Desk keeps the friendly display name separately.
   if (request.name) args.push('--name', `desk-${createHash('sha256').update(request.name).digest('hex').slice(0, 24)}`)
   if (request.webSearch) args.push('--web-search')
+  if (request.model) args.push('--prefer', request.model)
   return args
 }
 

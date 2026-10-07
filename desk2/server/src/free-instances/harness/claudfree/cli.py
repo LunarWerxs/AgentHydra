@@ -107,6 +107,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--brief", action="store_true", help="Compact JSON with repeated/raw content blocks omitted"
     )
     parser.add_argument(
+        "--prefer",
+        choices=["haiku", "sonnet"],
+        default="sonnet",
+        help="Model family for a new chat when no model is named or remembered (default: sonnet)",
+    )
+    parser.add_argument(
         "--web-search",
         action="store_true",
         help="Enable Claude's web search/fetch tool for this HTTP chat message",

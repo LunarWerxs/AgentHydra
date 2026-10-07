@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from claudfree import cli, http, service
+from claudfree import cli, http, service, state
 from claudfree.registry import ChatRegistry
 
 ORG_A = "11111111-1111-4111-8111-111111111111"
@@ -83,6 +83,7 @@ OFFERED = [
         # org's default is used, never an old Haiku own default either.
         (account(None, [{"model": "claude-haiku-4-5-20251001"}, {"model": "claude-haiku-5-5"}]), "haiku", False, "claude-haiku-5-5"),
         (account("claude-haiku-4-5", [{"model": "claude-3-5-haiku-20241022"}, {"model": "claude-sonnet-9"}]), "haiku", False, "claude-sonnet-9"),
+        (account("claude-haiku-4-5", [{"model": "claude-sonnet-9"}]), "sonnet", True, "claude-sonnet-9"),
         ("<html>", "sonnet", True, None),
     ],
 )
@@ -92,6 +93,14 @@ def test_model_for_picks_an_offered_model(body, prefer, own_default, expected):
 
 def nudge(tmp_path, monkeypatch, config, refuse=(), fail=None):
     """Run 'nudge' against a fake client offering OFFERED; returns (result or error, models sent)."""
+    args = SimpleNamespace(
+        command="nudge", prompt=None, chat_id=None, identifier=None, org_id=None,
+        request_timeout=5, model=None, timezone="UTC", locale="en-US",
+    )
+    return execute(tmp_path, monkeypatch, config, args, refuse=refuse, fail=fail)
+
+
+def execute(tmp_path, monkeypatch, config, args, offered=OFFERED, refuse=(), fail=None):
     sent = []
 
     class FakeHttp:
@@ -106,7 +115,7 @@ def nudge(tmp_path, monkeypatch, config, refuse=(), fail=None):
         model_for = http.ClaudeHttp.model_for
 
         def _json(self, method, path, **kwargs):
-            return account(None, OFFERED)
+            return account(None, offered)
 
         def send(self, organization_id, prompt, model, **kwargs):
             sent.append((organization_id, prompt, model, kwargs))
@@ -123,13 +132,11 @@ def nudge(tmp_path, monkeypatch, config, refuse=(), fail=None):
             pass
 
     session = {"cookies": [], "origins": []}
-    api = SimpleNamespace(HTTP_CONFIG_FILE=tmp_path / "http-config.json", load_session=lambda: session)
+    api = SimpleNamespace(
+        HTTP_CONFIG_FILE=tmp_path / "http-config.json", load_session=lambda: session, atomic_write=state.atomic_write
+    )
     (tmp_path / "http-config.json").write_text(json.dumps(config), encoding="utf-8")
     monkeypatch.setattr(http, "ClaudeHttp", FakeHttp)
-    args = SimpleNamespace(
-        command="nudge", prompt=None, chat_id=None, identifier=None, org_id=None,
-        request_timeout=5, model=None, timezone="UTC", locale="en-US",
-    )
     try:
         outcome = service.execute(args, api=api)
     except http.HttpError as error:
@@ -142,6 +149,25 @@ def test_desk_argv_for_a_nudge_parses():
     # --json --brief. The first nudge refused --brief, live on 2026-10-06, while the tests above passed.
     args = cli.parse_args(["nudge", "--provider", "claude", "--json", "--brief", "--request-timeout", "120"])
     assert (args.command, args.json_output, args.brief) == ("nudge", True, True)
+
+
+@pytest.mark.parametrize(
+    "remembered, prefer, offered, expected",
+    [
+        # Haiku 5.5 work goes through the free accounts (owner, 2026-10-07): a new chat asked for Haiku gets one
+        # even when the login last chatted on Sonnet.
+        ("claude-sonnet-9", "haiku", OFFERED, "claude-haiku-9"),
+        # No newer Haiku offered: the login's own model, never the org's first one (an Opus here).
+        ("claude-sonnet-9", "haiku", [{"model": "claude-opus-9"}, {"model": "claude-haiku-4-5"}], "claude-sonnet-9"),
+        # A remembered Haiku 4.x is never used again.
+        ("claude-haiku-4-5", "sonnet", OFFERED, "claude-sonnet-9"),
+    ],
+)
+def test_a_new_chat_picks_its_model(tmp_path, monkeypatch, remembered, prefer, offered, expected):
+    args = cli.parse_args(["chat", "--prompt", "hello", "--prefer", prefer, "--request-timeout", "5"])
+    _, sent = execute(tmp_path, monkeypatch, {"model": remembered}, args, offered=offered)
+
+    assert [m for _, _, m, _ in sent] == [expected]
 
 
 def test_nudge_sends_one_temporary_message_on_haiku_and_records_nothing(tmp_path, monkeypatch):

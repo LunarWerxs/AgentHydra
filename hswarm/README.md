@@ -124,9 +124,9 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `routine`, `general`, `research` or
 `decision`, purpose not `evaluation`, at most 100,000 characters) may run on the owner's signed-in Free claude.ai and
 ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
-leg, at no cost. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
+leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a free account's limit), the others for the account's usual model. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
 failed, slow or unparseable reply keeps the API route. `selection.route` shows it (`via: free`), the ledger line says
-provider `free`. Settings: `route_via_free` (default on), `route_via_free_max` (default 6), `route_via_free_profiles`.
+provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default 6), `route_via_free_profiles`.
 
 ## One tool with CliMayte
 

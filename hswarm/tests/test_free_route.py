@@ -126,6 +126,15 @@ def test_a_tool_free_task_is_answered_by_a_free_account(fake):
     assert f.chats[0]["tasks"][0]["name"] == "hswarm j1 t0" and "say hi" in f.chats[0]["tasks"][0]["prompt"]
 
 
+def test_only_narrow_profiles_ask_for_haiku(fake):
+    f = fake()
+    for profile in ("routine", "general", "research", "decision"):
+        task = _task()
+        task.profile = profile
+        _consult(task)
+    assert [c["tasks"][0].get("model") for c in f.chats] == ["haiku", "haiku", None, None]
+
+
 def test_the_ledger_line_of_a_free_task_has_provider_free_and_no_cost(fake, monkeypatch):
     fake()
     api = _Api()
