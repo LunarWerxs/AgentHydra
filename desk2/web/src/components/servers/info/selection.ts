@@ -1,5 +1,6 @@
-// What the right-hand info pane shows (owner, 2026-10-07): a click in the sidebar's Dev servers list selects a thing
-// and the pane describes it, instead of starting or opening it. The store keeps the one selection (store.ts `select`).
+// What the Dev servers page shows (owner, 2026-10-07; a page since 2026-10-08): a click in the sidebar's Dev servers
+// list selects a thing and the page describes it, instead of starting or opening it; none is the page's overview. The
+// store keeps the one selection (store.ts `select`).
 export type DevSelection =
   | { kind: 'server'; id: string }
   | { kind: 'project'; id: string }

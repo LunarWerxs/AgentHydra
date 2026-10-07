@@ -1,20 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { ChevronRight, Pencil, Play, Plus, Server, Square } from '@lucide/vue'
+import { Pencil, Play, Plus, Server, Square } from '@lucide/vue'
 import type { DevWebProject } from '@shared/devwebui'
 import PaneSwitch from '@/components/panes/PaneSwitch.vue'
-import { Tip } from '@/components/ui/tooltip'
-import { allKey, groupActions, serverActions, serverPort, statusDot, statusWord } from '../logic'
+import { allKey, groupActions } from '../logic'
 import { setProjectEnabled, takeoverCheck } from '../api'
 import { useDevServers } from '../store'
-import { DOT } from '../styles'
 import { usePaneNav } from './nav'
-import { BTN, BTN_PRIMARY, CHIP, chip, ICON_BTN_SM, MONO, SECTION_TITLE } from './kit/kit'
+import { BTN, BTN_PRIMARY, CHIP, chip, MONO, SECTION_TITLE } from './kit/kit'
 import Card from './kit/Card.vue'
-import CountBadge from './kit/CountBadge.vue'
 import EmptyState from './kit/EmptyState.vue'
 import Notice from './kit/Notice.vue'
 import StatTile from './kit/StatTile.vue'
+import ServerRows from './ServerRows.vue'
 
 // One project as cards: a hero with its .devwebui file and Start all / Stop all, tiles for its servers, running count,
 // errors and the master autostart switch, a take-over offer when the folder also starts its server by itself, and its
@@ -106,28 +104,7 @@ const addServer = () => nav.open({ kind: 'add-server', projectId: pr.value.id })
     <section class="flex flex-col gap-2.5">
       <h3 :class="SECTION_TITLE" class="px-0.5">Servers</h3>
       <Card v-if="pr.processes.length" flush>
-        <ul class="divide-y divide-border">
-          <li v-for="x in pr.processes" :key="x.id" class="group relative">
-            <button type="button" class="flex h-12 w-full cursor-default items-center gap-2.5 px-4 text-left transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" :aria-label="`${x.name} details`" @click="servers.select({ kind: 'server', id: x.id })">
-              <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(x.status)]" aria-hidden="true" />
-              <span class="min-w-0 truncate text-[13px] text-text">{{ x.name }}</span>
-              <span class="shrink-0 text-[12px] text-text-muted">{{ statusWord(x) }}</span>
-              <span v-if="x.port" :class="CHIP" class="tnum">{{ serverPort(x) }}</span>
-              <CountBadge v-if="x.errorCount" :count="x.errorCount" />
-              <span class="flex-1" />
-              <span class="size-6 shrink-0" aria-hidden="true" />
-              <ChevronRight class="size-4 shrink-0 text-text-muted" aria-hidden="true" />
-            </button>
-            <div class="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-[60ms] focus-within:opacity-100 group-hover:opacity-100">
-              <Tip v-if="serverActions(x.status).includes('stop')" :label="`Stop ${x.name}`">
-                <button type="button" :class="ICON_BTN_SM" :aria-label="`Stop ${x.name}`" :disabled="servers.busy.value.has(x.id)" @click.stop="servers.act(x, 'stop')"><Square class="size-3.5" /></button>
-              </Tip>
-              <Tip v-else-if="serverActions(x.status).includes('start')" :label="`Start ${x.name}`">
-                <button type="button" :class="ICON_BTN_SM" :aria-label="`Start ${x.name}`" :disabled="servers.busy.value.has(x.id)" @click.stop="servers.act(x, 'start')"><Play class="size-3.5" /></button>
-              </Tip>
-            </div>
-          </li>
-        </ul>
+        <ServerRows :processes="pr.processes" />
       </Card>
       <Card v-else>
         <EmptyState :icon="Server" title="No servers yet" text="Add the command that starts this project's dev server.">

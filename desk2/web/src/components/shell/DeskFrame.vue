@@ -11,7 +11,8 @@ import { lastBrowserRequest } from '@/components/transcript/lib/tools'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
-const InfoPane = lazyPanel(() => import('@/components/servers/info/InfoPane.vue'))
+const loadInfoPane = () => import('@/components/servers/info/InfoPane.vue')
+const InfoPane = lazyPanel(loadInfoPane)
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
 import type { ServerFocus } from '@/components/servers/store'
 import type { DevSelection } from '@/components/servers/info/selection'
@@ -287,13 +288,16 @@ const openThinking = computed(() => (showThinking.value ? items.value.filter((i)
 // nodes: components/hydra/HydraSidebar.vue), else AgentHydra's session list (the cloud list, turned on for it
 // and off again after unless it was already on); a session clicked there opens on Desk's side. Picking anything of Desk's own in
 // the sidebar slides the chat back. The cloud button turns the sidebar's list into every session of
-// both PCs on its own too (components/cloud).
+// both PCs on its own too (components/cloud). The Dev servers page takes the same place (below), so opening
+// one closes the other.
 const cloud = useCloud()
+const devServers = useDevServers()
 let cloudForHydra = false
 function toggleHydra(open = !hydraOpen.value) {
   if (open === hydraOpen.value) return
   hydraOpen.value = open
   if (open) {
+    devServers.closePage()
     cloudForHydra = !cloud.on.value
     cloud.on.value = true
     toggleSidebar(true)
@@ -313,13 +317,15 @@ if (kept.hydra) {
   keepHydra()
 }
 const onOpenHydra = () => toggleHydra(true)
-// Picking anything slides the chat back; an outside session came from the cloud list, which stays.
-// Settings is a pop-up over whatever is on screen, so opening and closing it leaves AgentHydra where it is:
-// a table's gear opens its Instances page over the table, and closing Settings goes back to it.
+// Picking anything slides the chat back, from AgentHydra or the Dev servers page; an outside session came from the
+// cloud list, which stays. Settings is a pop-up over whatever is on screen, so opening and closing it leaves the page
+// where it is: a table's gear opens its Instances page over the table, and closing Settings goes back to it.
 watch(
   () => src.selected.value,
   (v, was) => {
-    if (!hydraOpen.value || v.kind === 'settings' || was?.kind === 'settings') return
+    if (v.kind === 'settings' || was?.kind === 'settings') return
+    devServers.closePage()
+    if (!hydraOpen.value) return
     if (v.kind === 'external') cloudForHydra = false
     toggleHydra(false)
   }
@@ -353,20 +359,32 @@ function toggleCloud() {
   keepHydra()
   if (cloud.on.value) toggleSidebar(true)
 }
-// The Dev servers button: the sidebar lists DevWebUI's projects and servers (components/servers). One list at a time: it
-// and the cloud list turn each other off, and AgentHydra's own pane, which borrows the cloud list, does too. An
-// AgentHydra tab with a list of its own has the sidebar while it is open, so it slides back to the desk, as for tasks.
-const devServers = useDevServers()
-watch(() => devServers.on.value, (on) => on && (cloud.on.value = false), { immediate: true })
+// The Dev servers button: the sidebar lists the projects and servers (components/servers) and the Dev servers page
+// slides in, in the chat's place, as AgentHydra does (owner, 2026-10-08: "just be its own page ... have it slide in like
+// Hydra slides in"): its overview, until a row is picked. One list at a time: it and the cloud list turn each other off,
+// and AgentHydra, which borrows the cloud list, does too. Pressed with the list on and the page closed (its X, Esc, a
+// chat picked), it brings the page back; pressed with both, both go. A reload with the page open opens it again.
+watch(
+  () => devServers.on.value,
+  (on) => {
+    if (on) cloud.on.value = false
+    else devServers.closePage()
+    // The page's code loads with the list, so its first slide in is not an empty page while it arrives.
+    if (on) void loadInfoPane().catch(() => {}) // floor-ok: a failed load is the page's to report when it opens (lazyPanel)
+  },
+  { immediate: true }
+)
 watch(() => cloud.on.value, (on) => on && devServers.setOn(false))
 function toggleDev() {
-  devServers.setOn(!devServers.on.value)
-  if (!devServers.on.value) return
+  if (devServers.on.value && devServers.page.value) return devServers.setOn(false)
+  devServers.setOn(true)
+  devServers.openPage()
   cloudForHydra = false
+  toggleHydra(false)
   keepHydra()
   toggleSidebar(true)
-  if (hydraOpen.value && hydraShown.value) toggleHydra(false)
 }
+if (kept.dev && !kept.hydra && devServers.on.value) devServers.openPage()
 function toggleTasks() {
   showTasks.value = !showTasks.value
   if (!showTasks.value) return
@@ -414,7 +432,8 @@ watch(
     serversCwd.value = f.cwd
     serversFocus.value = f
     tasks.value = null
-    devServers.select(null)
+    // The browser is the chat's pane: the Dev servers page slides back so it shows.
+    devServers.closePage()
     pane.value = 'servers'
   }
 )
@@ -425,72 +444,51 @@ watch(
 watch(pane, (p) => {
   if (p !== 'servers') serversCwd.value = null
 })
-// A selection in the Dev servers list opens the info pane over whatever is on screen, a chat, the new-chat page or any
-// AgentHydra tab (owner, 2026-10-07: "the sidebar ... should open anywhere"): it is the stage's own aside, outside the
-// sliding track, so it shows on either side of the push. It slides in and out (a Transition on its width, the window's
-// slow snap) and keeps the last selection while it slides out, so it never empties on its way. The selection is the
-// window's one: moving to another view keeps it. The view's own right pane steps aside while it shows and is back after;
-// opening a right pane or Background tasks in the view on screen closes it.
-const devSel = computed(() => devServers.selection.value)
-const devOpen = computed(() => !!devSel.value)
-const devShown = ref<DevSelection | null>(null)
-watch(devSel, (sel) => {
-  if (!sel) return
-  devShown.value = sel
-  tasks.value = null
+// The page side of the track (owner, 2026-10-08: the right-hand info pane "kind of ugly ... just be in the center of the
+// page ... like Hydra slides in"): AgentHydra and the Dev servers page are its two layers. Opened from the desk, the
+// track pushes the chat out and the page in; one page opened over the other pushes that one out within the side, the
+// same 420ms push. The Dev servers page is mounted while it is open and through its slide out (it polls while mounted),
+// and keeps the last selection while it leaves, so it never empties on its way.
+type Page = 'hydra' | 'dev'
+const devPage = computed(() => devServers.page.value)
+const pageOpen = computed(() => hydraOpen.value || devPage.value)
+const PAGE_SLIDE = 'transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none'
+const PAGE_MS = 460
+const slotPage = ref<Page>(devPage.value && !hydraOpen.value ? 'dev' : 'hydra')
+const slotLeaving = ref<Page | null>(null)
+let slotTimer: ReturnType<typeof setTimeout> | undefined
+watch([hydraOpen, devPage], ([h, d], [wasH, wasD]) => {
+  const next: Page | null = h && !wasH ? 'hydra' : d && !wasD ? 'dev' : null
+  if (!next || next === slotPage.value) return
+  clearTimeout(slotTimer)
+  // Only a page on screen is pushed out; with the desk on screen the new one is simply there when the track slides.
+  slotLeaving.value = wasH || wasD ? slotPage.value : null
+  slotPage.value = next
+  if (slotLeaving.value) slotTimer = setTimeout(() => (slotLeaving.value = null), PAGE_MS)
 })
-watch([pane, viewKey], ([p, key], [was, wasKey]) => {
-  if (key === wasKey && p && p !== was) devServers.select(null)
+const layerAt = (p: Page) => (p === slotPage.value ? 'translateX(0)' : p === slotLeaving.value ? 'translateX(-100%)' : 'translateX(100%)')
+const layerSlides = (p: Page) => !!slotLeaving.value && (p === slotPage.value || p === slotLeaving.value)
+watch(devPage, (open) => {
+  if (open && hydraOpen.value) toggleHydra(false)
+  if (!props.demo) rememberScreen({ dev: open || undefined })
 })
-// Its width is the person's (dragged on its left edge, remembered), kept between DEV_MIN and what leaves the chat or
-// AgentHydra DEV_ROOM.
-const DEV_KEY = 'hydra-desk.devinfo.width'
-const DEV_DEFAULT = 600
-const DEV_MIN = 400
-const DEV_ROOM = 360
-const stageEl = ref<HTMLElement | null>(null)
-const { width: stageOuter } = useElementSize(stageEl)
-const devWant = ref((typeof localStorage === 'undefined' ? 0 : Number(localStorage.getItem(DEV_KEY))) || DEV_DEFAULT)
-const devWidth = computed(() => {
-  const room = stageOuter.value || 1200
-  return Math.round(Math.max(Math.min(DEV_MIN, room), Math.min(devWant.value, room - DEV_ROOM)))
+const devMounted = ref(devPage.value)
+let devTimer: ReturnType<typeof setTimeout> | undefined
+watch(devPage, (open) => {
+  clearTimeout(devTimer)
+  if (open) devMounted.value = true
+  else devTimer = setTimeout(() => (devMounted.value = devPage.value), PAGE_MS)
 })
-function setDevWidth(want: number) {
-  devWant.value = Math.round(Math.max(DEV_MIN, want))
-  try {
-    localStorage.setItem(DEV_KEY, String(devWidth.value))
-  } catch {
-    // floor-ok: a full or blocked store: the width is just not remembered
-  }
-}
-function onDevDown(e: PointerEvent) {
-  const el = e.currentTarget as HTMLElement
-  el.setPointerCapture(e.pointerId)
-  const right = stageEl.value?.getBoundingClientRect().right ?? window.innerWidth
-  const move = (ev: PointerEvent) => setDevWidth(right - ev.clientX)
-  const up = () => {
-    el.removeEventListener('pointermove', move)
-    el.removeEventListener('pointerup', up)
-  }
-  el.addEventListener('pointermove', move)
-  el.addEventListener('pointerup', up)
-}
-function onDevKey(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') setDevWidth(devWidth.value + 16)
-  else if (e.key === 'ArrowRight') setDevWidth(devWidth.value - 16)
-}
+const devShown = ref<DevSelection | null>(devServers.selection.value)
+watch([() => devServers.selection.value, devPage], ([sel, open]) => {
+  if (open) devShown.value = sel
+})
 // Changes with RepoYeti selected is as wide as the servers pane (it is a whole page in a frame).
 const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
 function togglePane(p: RightPane) {
-  // The view's pane is hidden under the info pane: its button opens it, whatever it was.
-  if (devOpen.value) {
-    devServers.select(null)
-    pane.value = p
-    return
-  }
   pane.value = pane.value === p ? null : p
 }
-const asideOpen = computed(() => !devOpen.value && !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
+const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
 // A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
 // window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
 // chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
@@ -557,12 +555,11 @@ function toggleTasksPanel() {
     return
   }
   pane.value = null
-  devServers.select(null)
   tasks.value = { focus: null, expanded: false }
 }
 function onOpenTasks(e: Event) {
   pane.value = null
-  devServers.select(null)
+  devServers.closePage()
   tasks.value = { focus: (e as CustomEvent<OpenTasksDetail>).detail?.taskId ?? null, expanded: tasks.value?.expanded ?? false }
 }
 watch(pane, (p) => {
@@ -670,6 +667,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', markOpenRead)
   document.removeEventListener('visibilitychange', onVisibility)
   if (slideTimer) clearTimeout(slideTimer)
+  clearTimeout(slotTimer)
+  clearTimeout(devTimer)
   peek.dispose()
 })
 
@@ -731,22 +730,20 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
     </div>
     <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute left-0 top-0 z-[19] h-full w-1.5" />
 
-    <!-- Hydra Desk 2: the chat side and AgentHydra side by side on one track; the AgentHydra button slides it
-         (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
+    <!-- Hydra Desk 2: the chat side and the page side (AgentHydra or the Dev servers page) on one track; their buttons
+         slide it (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
     <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
-    <!-- The Dev servers list's info pane is beside the track, not on it, so it shows over the desk and AgentHydra alike. -->
-    <div ref="stageEl" class="relative col-start-2 row-span-2 row-start-1 flex min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
-      <div class="relative h-full min-w-0 flex-1 overflow-hidden" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
+    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
       <div
         class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
-        :style="{ transform: hydraOpen ? 'translateX(-50%)' : 'translateX(0)' }"
+        :style="{ transform: pageOpen ? 'translateX(-50%)' : 'translateX(0)' }"
       >
         <div
           ref="splitEl"
           class="grid h-full w-1/2 min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-[41px_minmax(0,1fr)]"
           :style="split ? { gridTemplateColumns: splitColumns(chatWidth) } : undefined"
-          :inert="hydraOpen"
-          :aria-hidden="hydraOpen || undefined"
+          :inert="pageOpen"
+          :aria-hidden="pageOpen || undefined"
         >
           <div
             class="col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
@@ -847,43 +844,24 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             />
           </aside>
         </div>
-        <div class="h-full w-1/2 min-w-0" :inert="!hydraOpen" :aria-hidden="!hydraOpen || undefined">
-          <HydraPane
-            :open="hydraOpen"
-            :pad-left="titlePad"
-            @close="toggleHydra(false)"
-            @open-session="(id: string) => src.select({ kind: 'external', id })"
-            @show-sessions="showSessions"
-            @open-settings="openSettingsOn"
-          />
+        <!-- The page side: AgentHydra and the Dev servers page are layers of it, the one on screen at 0, one being pushed
+             out to the left, the other waiting on the right. -->
+        <div class="relative h-full w-1/2 min-w-0 overflow-hidden" :inert="!pageOpen" :aria-hidden="!pageOpen || undefined" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
+          <div class="absolute inset-0" :class="layerSlides('hydra') && PAGE_SLIDE" :style="{ transform: layerAt('hydra') }" :inert="slotPage !== 'hydra'" :aria-hidden="slotPage !== 'hydra' || undefined">
+            <HydraPane
+              :open="hydraOpen"
+              :pad-left="titlePad"
+              @close="toggleHydra(false)"
+              @open-session="(id: string) => src.select({ kind: 'external', id })"
+              @show-sessions="showSessions"
+              @open-settings="openSettingsOn"
+            />
+          </div>
+          <div class="absolute inset-0 flex" :class="layerSlides('dev') && PAGE_SLIDE" :style="{ transform: layerAt('dev') }" :inert="slotPage !== 'dev'" :aria-hidden="slotPage !== 'dev' || undefined" data-testid="dev-page">
+            <InfoPane v-if="devMounted" :sel="devShown" :active="devPage" :pad-left="titlePad" @close="devServers.closePage()" />
+          </div>
         </div>
       </div>
-      </div>
-
-      <Transition
-        enter-from-class="w-0!"
-        leave-to-class="w-0!"
-        enter-active-class="transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none"
-        leave-active-class="transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none"
-      >
-        <aside v-if="devOpen" class="relative h-full shrink-0 overflow-hidden border-l border-border bg-bg-page" :style="{ width: `${devWidth}px` }" aria-label="Server details">
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize the server details"
-            tabindex="0"
-            :aria-valuenow="devWidth"
-            :aria-valuemin="DEV_MIN"
-            class="absolute left-0 top-0 z-[22] h-full w-1.5 cursor-col-resize touch-none focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-            @pointerdown.prevent="onDevDown"
-            @keydown="onDevKey"
-          />
-          <!-- The content keeps its width as the aside grows from 0, so it slides in from the right instead of squeezing. -->
-          <div class="flex h-full" :style="{ width: `${devWidth}px` }">
-            <InfoPane :sel="devShown" @close="devServers.select(null)" />
-          </div>
-        </aside>
-      </Transition>
     </div>
 
     <Dialog :open="settingsOpen" @update:open="(o: boolean) => !o && closeSettings()">

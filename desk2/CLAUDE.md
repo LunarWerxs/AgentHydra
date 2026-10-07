@@ -33,17 +33,19 @@ between server/ and web/.
   `devwebui` connector). Projects stay `.devwebui` files; data in `~/.hydra-desk-2/devservers/`. Page contract:
   `shared/devwebui.ts`. There is no separate DevWebUI copy or daemon any more: never bring one back.
 - The title bar's Dev servers button lists the projects and servers in the sidebar (README, "What Desk 2 adds",
-  owner 2026-10-06): `web/src/components/servers/DevServersList.vue`. It and `ServersPane` read the one client
-  state, `servers/store.ts` (on `api.ts` and `logic.ts`; one polling loop, only while one is on screen), never a second
-  client. A click selects a server, project or found folder and the right-hand info pane describes it, never starting
-  anything (owner 2026-10-07; `store.select`, `servers/info/`); its Open in browser hands the servers pane the
+  owner 2026-10-06): `web/src/components/servers/DevServersList.vue`, and slides in the Dev servers page on its
+  overview. It, the page and `ServersPane` read the one client state, `servers/store.ts` (on `api.ts` and `logic.ts`;
+  one polling loop, only while one is on screen), never a second client. A click selects a server, project or found
+  folder and the page describes it, never starting anything (owner 2026-10-07; `store.select`, `servers/info/`); its Open in browser hands the servers pane the
   project's folder and the server (`store.show`, DeskFrame's `serversCwd`). Everything DevWebUI did is here: scanning
   and the found list, adding, editing and removing projects and servers, take-over, logs history, errors, free port,
-  metrics and alerts, and its settings in Settings -> Dev servers. The info pane is cards, never tables (owner
-  2026-10-07: "fucking ugly table when it should be in a nice, like, card display"): it slides in and out over any view,
-  AgentHydra's tabs included (DeskFrame's stage aside, outside the sliding track), with CPU and memory charts and stats
-  (the service's ten-minute ring, `GET /dw/api/processes/:id/metrics`), roomy errors, alert rules and forms, a back
-  button and a visible star. Build on its kit (`servers/info/kit/`), whose class strings never set one property twice
+  metrics and alerts, and its settings in Settings -> Dev servers. The Dev servers page is its own page, never a
+  right-hand sidebar (owner 2026-10-08: "just be its own page ... like Hydra slides in"): it shares AgentHydra's half
+  of DeskFrame's sliding track, so it pushes the chat out as AgentHydra does and opening one closes the other, and its
+  content is one centered column capped at 960px. It is cards, never tables (owner 2026-10-07: "fucking ugly table
+  when it should be in a nice, like, card display"), with CPU and memory charts and stats (the service's ten-minute
+  ring, `GET /dw/api/processes/:id/metrics`), roomy errors, alert rules and forms, a breadcrumb from the overview, a
+  back button and a visible star. Build on its kit (`servers/info/kit/`), whose class strings never set one property twice
   (README, "Dev servers in the sidebar").
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).

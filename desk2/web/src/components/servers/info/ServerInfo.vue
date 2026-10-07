@@ -334,7 +334,7 @@ const MENU_ITEM = 'text-[13px]'
     </div>
 
     <div v-if="serverTab === 'overview'" role="tabpanel" aria-label="Overview" class="flex flex-col gap-4">
-      <div class="grid grid-cols-2 gap-2.5 @lg:grid-cols-3">
+      <div class="grid grid-cols-2 gap-2.5 @lg:grid-cols-3 @3xl:grid-cols-6">
         <StatTile label="Status" :value="statusText" :tone="tone === 'neutral' ? undefined : tone" :sub="statusSub" />
         <StatTile label="Uptime" :value="up ? uptime(p.startedAt, clock) : '–'" :sub="p.startedAt ? `Since ${clockTime(p.startedAt, clock)}` : 'Not started'" />
         <StatTile label="Restarts" :value="String(p.restarts)" :sub="p.restarts === 1 ? 'time restarted' : 'times restarted'" />

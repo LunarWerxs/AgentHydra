@@ -1,10 +1,10 @@
-// The one dev-servers client of the window's views of it: the sidebar's Dev servers list, the right-hand servers pane
-// and Settings -> Connectors' row. All read the service's status (and the lists, their project list) from here, and each
+// The one dev-servers client of the window's views of it: the sidebar's Dev servers list, the Dev servers page, the
+// right-hand servers pane and Settings -> Connectors' row. All read the service's status (and the lists, their project list) from here, and each
 // says it is on screen with `use()`: the polling loop runs while at least one is, and the window is visible, so they never
 // disagree and never ask twice. There is no daemon to start: Desk starts the service for the first request that needs it,
 // so the first list read of a list view is that request (shown as 'starting' while it is in flight). It is made once per
 // page load: a service stopped from Settings stays stopped until a request or `tryAgain` starts it. A Settings-only view
-// (`use({ quiet: true })`) reads the status and asks for nothing. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's).
+// (`use({ quiet: true })`) reads the status and asks for nothing. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's, and the page slides in).
 // `focus` is the list's request to the pane: show this server of this project, whatever chat is open (DeskFrame).
 import { ref, shallowRef } from 'vue'
 import type { DevWebFound, DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
@@ -226,13 +226,26 @@ function createDevServers() {
     focus.value = { cwd: projectDir(project), procId: proc.id, seq: ++seq }
   }
 
-  /** What the right-hand info pane describes (DeskFrame opens it on a selection and clears it on close). */
+  /**
+   * The Dev servers page (owner, 2026-10-08: "just be its own page ... have it slide in like Hydra slides in"): whether
+   * it is on screen, and what it shows, null being its overview of every project. A selection opens it; DeskFrame slides
+   * it in and out. Closing it clears the selection, so the list highlights nothing.
+   */
+  const page = ref(false)
   const selection = ref<DevSelection | null>(null)
   const select = (sel: DevSelection | null): void => {
     selection.value = sel
+    if (sel) page.value = true
+  }
+  const openPage = (): void => {
+    page.value = true
+  }
+  const closePage = (): void => {
+    page.value = false
+    selection.value = null
   }
 
-  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, selection, select, refresh, use, tryAgain, service, run, act, actAll, star, show }
+  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, page, selection, select, openPage, closePage, refresh, use, tryAgain, service, run, act, actAll, star, show }
 }
 
 let servers: ReturnType<typeof createDevServers> | null = null

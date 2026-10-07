@@ -14,7 +14,7 @@ import Notice from './kit/Notice.vue'
 import Segmented from './kit/Segmented.vue'
 import SwitchRow from './kit/SwitchRow.vue'
 
-// The edit / new server form, a sub-view of the info pane (InfoPane draws its title and Back). Owner, 2026-10-07: "the
+// The edit / new server form, a sub-view of the Dev servers page (InfoPane draws its title and Back). Owner, 2026-10-07: "the
 // edit menu ... Holy fuck ... That is so horrible." So: sections of cards, labels above the fields, a line of help
 // under each, and Save / Cancel in a footer that stays in view while the form scrolls.
 const props = defineProps<{ projectId: string; processId: string | null; siblings: DevWebProcess[] }>()

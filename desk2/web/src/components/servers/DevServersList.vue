@@ -19,9 +19,9 @@ import { DOT, INPUT } from './styles'
 // The sidebar's Dev servers list (the title bar's Dev servers button). A toolbar (filter, Scan, Add project, Start all /
 // Stop all) over the projects (a header each and its servers: starred first, then the ones that are up, then by name),
 // then "Found on this PC" (what scans found and nobody added) and "Other servers" (dev servers no project lists). A click
-// SELECTS a row and the right-hand info pane describes it (store.select); nothing starts by a click. Start / Stop / Restart
-// are on hover, and Open in browser (the old click) on rows with an address. It reads the window's one client
-// (store.ts), the pane's too, and keeps its polling on while it is on screen. Rows wear the cloud list's look (sidebar/rowClasses.ts).
+// SELECTS a row and the Dev servers page, in the chat's place, describes it (store.select); nothing starts by a click.
+// Start / Stop / Restart are on hover, and Open in browser (the old click) on rows with an address. It reads the
+// window's one client (store.ts), the page's too, and keeps its polling on while it is on screen. Rows wear the cloud list's look (sidebar/rowClasses.ts).
 const servers = useDevServers()
 const release = servers.use()
 onBeforeUnmount(release)

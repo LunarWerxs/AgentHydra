@@ -1,7 +1,8 @@
-// How the info pane moves between its views (owner, 2026-10-07: "there's no back button on the top left"). The card
-// view of a selection can open a sub-view (edit a server, add one, edit a project, take over); the pane's title strip
-// then shows Back, which returns to the card view where it was scrolled. A card's own links (a server's project, a
-// project's server) move the selection and Back returns there too. InfoPane provides this; a view injects it.
+// How the Dev servers page moves between its views (owner, 2026-10-07: "there's no back button on the top left"). The
+// card view of a selection can open a sub-view (edit a server, add one, edit a project, take over); the page's title
+// strip then shows Back, which returns to the card view where it was scrolled. A card's own links (a server's project,
+// a project's server) move the selection and Back returns there too, then to the overview. InfoPane provides this; a
+// view injects it.
 import { inject, ref, type InjectionKey } from 'vue'
 
 export type SubView =
@@ -13,9 +14,9 @@ export type SubView =
 export interface PaneNav {
   /** Opens a sub-view over the card view. */
   open(sub: SubView): void
-  /** Back: closes the sub-view, else returns to the selection before this one, else closes the pane. */
+  /** Back: closes the sub-view, else returns to the selection before this one, else to the overview. */
   back(): void
-  /** Closes the pane. */
+  /** Closes the page: the desk slides back. */
   close(): void
 }
 
@@ -23,7 +24,7 @@ export const PANE_NAV: InjectionKey<PaneNav> = Symbol('pane-nav')
 
 export function usePaneNav(): PaneNav {
   const nav = inject(PANE_NAV, null)
-  if (!nav) throw new Error('usePaneNav is for the views inside the info pane')
+  if (!nav) throw new Error('usePaneNav is for the views inside the Dev servers page')
   return nav
 }
 

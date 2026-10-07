@@ -16,16 +16,17 @@ test('a reload comes back to the chat or screen the window showed, and to the de
   expect(readView('not json')).toBeNull()
 })
 
-test('a reload also comes back to the AgentHydra pane, the Settings page and the view under Settings, each kept apart', () => {
+test('a reload also comes back to the AgentHydra pane, the Dev servers page, the Settings page and the view under Settings, each kept apart', () => {
   const kept = new Map<string, string>()
   const storage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v) }
   expect(restoreScreen(storage)).toEqual({})
   rememberScreen({ under: { kind: 'chat', id: 'c1' } }, storage)
   rememberScreen({ hydra: { cloud: true } }, storage)
   rememberScreen({ section: 'free' }, storage)
-  expect(restoreScreen(storage)).toEqual({ under: { kind: 'chat', id: 'c1' }, hydra: { cloud: true }, section: 'free' })
-  rememberScreen({ hydra: undefined }, storage)
+  rememberScreen({ dev: true }, storage)
+  expect(restoreScreen(storage)).toEqual({ under: { kind: 'chat', id: 'c1' }, hydra: { cloud: true }, dev: true, section: 'free' })
+  rememberScreen({ hydra: undefined, dev: undefined }, storage)
   expect(restoreScreen(storage)).toEqual({ under: { kind: 'chat', id: 'c1' }, section: 'free' })
-  expect(readScreen('{"under":{"kind":"settings"},"hydra":{},"section":3}')).toEqual({ hydra: { cloud: false } })
+  expect(readScreen('{"under":{"kind":"settings"},"hydra":{},"dev":1,"section":3}')).toEqual({ hydra: { cloud: false } })
   expect(readScreen('not json')).toEqual({})
 })

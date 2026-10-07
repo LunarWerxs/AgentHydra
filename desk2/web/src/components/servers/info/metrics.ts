@@ -1,4 +1,4 @@
-// A server's CPU and memory history for the info pane's charts: the service's last ~10 minutes of samples
+// A server's CPU and memory history for the Dev servers page's charts: the service's last ~10 minutes of samples
 // (GET processes/:id/metrics), read when the server's view opens and again with the client's poll, at most every
 // 2.5 s (the service samples every 3 s). What it last read per server is kept, so picking a server again draws its
 // chart at once instead of an empty one.

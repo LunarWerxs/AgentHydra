@@ -16,7 +16,7 @@ import { BTN_GHOST, ICON_BTN, ICON_BTN_ON, INPUT } from './kit/kit'
 import Segmented from './kit/Segmented.vue'
 
 // The Logs tab of a server: the newest 300 lines from its log on disk, then a poll every ~1.5 s of the service's
-// in-memory tail (no disk read) merged in by seq while the pane is open. It follows the bottom until the person scrolls
+// in-memory tail (no disk read) merged in by seq while it is on screen. It follows the bottom until the person scrolls
 // up (or turns Follow off), "Load older" pages back from the oldest seq, and Clear only empties this view (the log on
 // disk stays). A line without a seq (an outside server's note) is kept once. The tab draws a toolbar, not a heading.
 const props = defineProps<{ processId: string }>()

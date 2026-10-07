@@ -11,7 +11,7 @@ import Field from './kit/Field.vue'
 import FormSection from './kit/FormSection.vue'
 import SwitchRow from './kit/SwitchRow.vue'
 
-// A project's edit view (a sub-view of the info pane): its name and color, saved by the footer; the master autostart
+// A project's edit view (a sub-view of the Dev servers page): its name and color, saved by the footer; the master autostart
 // switch, saved at once; and removing it behind a confirm (the servers AgentHydra started stop, the .devwebui file is kept).
 const props = defineProps<{ project: DevWebProject }>()
 const emit = defineEmits<{ saved: []; cancel: []; removed: [] }>()

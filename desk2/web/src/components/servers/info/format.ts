@@ -1,4 +1,4 @@
-// How the info pane words numbers: uptime, bytes, CPU, durations, clock times and "how long ago".
+// How the Dev servers page words numbers: uptime, bytes, CPU, durations, clock times and "how long ago".
 export function uptime(startedAt: number | null, now = Date.now()): string {
   if (startedAt === null) return '–'
   const s = Math.max(0, Math.floor((now - startedAt) / 1000))

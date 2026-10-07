@@ -73,11 +73,12 @@ const NAME = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] bu
 // Only the copy's own toast: the page can show another toast on load.
 const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t) => t.textContent.includes('Copied')).length`
 
-// The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): a click on the row shows
-// its details in the right-hand pane and starts nothing (owner, 2026-10-07).
+// The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): the button slides the Dev
+// servers page in on its overview, and a click on the row shows the server's details there and starts nothing (owner,
+// 2026-10-07; a page since 2026-10-08).
 const DEV = 'button[aria-label="Dev servers"]'
 const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="api details"]')])`
-const DETAILS_PANE = `!!document.querySelector('aside[aria-label="Server details"]')`
+const DETAILS_PANE = `!!document.querySelector('[data-testid="dev-page"] section[aria-label="Server details"]')`
 // What Desk answers to the window here for the dev servers (shared/devwebui.ts): one invented project with a running and a stopped server.
 const DW_FIXTURE: Record<string, unknown> = {
   '/dw/status': { state: 'running', pid: 1, running: 1 },

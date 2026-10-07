@@ -66,10 +66,11 @@ export function rememberView(view: View, storage: ViewStorage | null = session()
 
 /** The rest of the screen: the view under the Settings dialog (closing it after a reload goes back there),
  *  whether AgentHydra's pane was slid in, with whether opening it turned the cloud list on (closing it turns
- *  the list off again), and the Settings page. */
+ *  the list off again), whether the Dev servers page was, and the Settings page. */
 export interface ScreenMemory {
   under?: View
   hydra?: { cloud: boolean }
+  dev?: true
   section?: string
 }
 
@@ -84,6 +85,7 @@ export function readScreen(raw: string | null): ScreenMemory {
   const under = toView(o.under)
   if (under && under.kind !== 'settings') out.under = under
   if (o.hydra && typeof o.hydra === 'object') out.hydra = { cloud: (o.hydra as Record<string, unknown>).cloud === true }
+  if (o.dev === true) out.dev = true
   if (typeof o.section === 'string') out.section = o.section
   return out
 }

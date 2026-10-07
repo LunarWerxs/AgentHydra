@@ -62,10 +62,11 @@ const dockEl = ref<HTMLElement | null>(null)
 let mountedAt = 0
 function onKey(e: KeyboardEvent) {
   if (ctx.readOnly.value || busy.value || denying.value || props.item.state !== 'pending') return
-  // Not while the card is out of sight (the Background tasks panel covers the composer column), nor while a
-  // menu or dialog (Settings, the image lightbox) is open: Esc and the digits are theirs then.
+  // Not while the card is out of sight (the Background tasks panel covers the composer column, or AgentHydra or the
+  // Dev servers page has the chat's place, whose side is then inert: Esc there closes the page), nor while a menu or
+  // dialog (Settings, the image lightbox) is open: Esc and the digits are theirs then.
   const el = dockEl.value
-  if (!el?.getClientRects().length || document.querySelector('[role="menu"], [role="dialog"]')) return
+  if (!el?.getClientRects().length || el.closest('[inert]') || document.querySelector('[role="menu"], [role="dialog"]')) return
   // Never the rest of what the owner was typing for the composer when the card docked and hid the box.
   const moment = { now: performance.now(), mountedAt, prevKeyAt: keyBefore(), repeat: e.repeat, inCard: el.contains(e.target as Node | null), target: e.target }
   if (!keyIsForCard(moment)) return
