@@ -35,7 +35,11 @@ between server/ and web/.
 - The title bar's Dev servers button lists the projects and servers in the sidebar (README, "What Desk 2 adds",
   owner 2026-10-06): `web/src/components/servers/DevServersList.vue`. It and `ServersPane` read the one client
   state, `servers/store.ts` (on `api.ts` and `logic.ts`; one polling loop, only while one is on screen), never a second
-  client; a click on a server hands the pane the project's folder and the server (`store.show`, DeskFrame's `serversCwd`).
+  client. A click selects a server, project or found folder and the right-hand info pane describes it, never starting
+  anything (owner 2026-10-07; `store.select`, `servers/info/`); its Open in browser hands the servers pane the
+  project's folder and the server (`store.show`, DeskFrame's `serversCwd`). Everything DevWebUI did is here: scanning
+  and the found list, adding, editing and removing projects and servers, take-over, logs history, errors, free port,
+  metrics and alerts, and its settings in Settings -> Dev servers.
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
