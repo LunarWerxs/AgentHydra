@@ -123,7 +123,7 @@ async function tick() {
     const open = await openProfiles(cwd)
     // Only a read that succeeded and does not list the profile means closed; a failed read or frame keeps the last good one.
     const gone = open !== null && !open.has(info.value.profile)
-    const frame = gone ? null : await nextFrame(cwd, info.value.profile).catch(() => null)
+    const frame = gone ? null : await nextFrame(cwd, info.value.profile, ctx.chatId.value).catch(() => null)
     if (!watching.value) {
       if (frame) URL.revokeObjectURL(frame)
       return
@@ -137,7 +137,7 @@ async function tick() {
 }
 // The stream feeds the picture while it works; the 3 s poll takes over when it fails or the browser is closed.
 const feed = new PreviewFeed(
-  { openStream: (onFrame, onEnd) => openPreviewStream(ctx.cwd.value ?? '', info.value.profile, onFrame, onEnd), poll: tick },
+  { openStream: (onFrame, onEnd) => openPreviewStream(ctx.cwd.value ?? '', info.value.profile, onFrame, onEnd, ctx.chatId.value), poll: tick },
   show,
 )
 watch(watching, (on) => feed.setWanted(on), { immediate: true })

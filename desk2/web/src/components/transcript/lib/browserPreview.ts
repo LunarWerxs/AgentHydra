@@ -58,8 +58,8 @@ export function isBlankPixels(rgba: ArrayLike<number>): boolean {
 }
 
 /** The next frame of the profile as an object URL, loaded and decoded so showing it never flashes blank; null when the browser is not open. */
-export async function nextFrame(cwd: string, profile: string): Promise<string | null> {
-  const res = await fetch(`${BROWSER_PREVIEW}?${new URLSearchParams({ cwd, profile })}`, { cache: 'no-store', signal: AbortSignal.timeout(6000) })
+export async function nextFrame(cwd: string, profile: string, chat?: string): Promise<string | null> {
+  const res = await fetch(`${BROWSER_PREVIEW}?${new URLSearchParams({ cwd, profile, ...(chat ? { chat } : {}) })}`, { cache: 'no-store', signal: AbortSignal.timeout(6000) })
   if (!res.ok) return null
   const url = URL.createObjectURL(await res.blob())
   const img = new Image()
@@ -74,8 +74,8 @@ export async function nextFrame(cwd: string, profile: string): Promise<string | 
 }
 
 /** BROWSER_PREVIEW_STREAM's address for a page at `loc`. */
-export function previewStreamUrl(loc: { protocol: string; host: string }, cwd: string, profile: string): string {
-  return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}${BROWSER_PREVIEW_STREAM}?${new URLSearchParams({ cwd, profile })}`
+export function previewStreamUrl(loc: { protocol: string; host: string }, cwd: string, profile: string, chat?: string): string {
+  return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}${BROWSER_PREVIEW_STREAM}?${new URLSearchParams({ cwd, profile, ...(chat ? { chat } : {}) })}`
 }
 
 /** Whether a card should be fed: the newest card of an open, named profile that is on screen in a visible window. */
@@ -84,9 +84,9 @@ export function previewWanted(s: { named: boolean; newest: boolean; onScreen: bo
 }
 
 /** Opens the card's stream; frames come as `data:` addresses, onEnd fires once when it closes, fails or says closed. Returns the closer. */
-export function openPreviewStream(cwd: string, profile: string, onFrame: (src: string) => void, onEnd: () => void): () => void {
+export function openPreviewStream(cwd: string, profile: string, onFrame: (src: string) => void, onEnd: () => void, chat?: string): () => void {
   let done = false
-  const ws = new WebSocket(previewStreamUrl(location, cwd, profile))
+  const ws = new WebSocket(previewStreamUrl(location, cwd, profile, chat))
   const end = (): void => {
     if (done) return
     done = true

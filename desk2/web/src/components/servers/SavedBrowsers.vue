@@ -11,7 +11,7 @@ import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 // and driven with the person's mouse and keyboard (to sign in, say). One that is not open is opened here, or opened to
 // log in: that Chrome has no live view until it is closed. The list of saved browsers is the New tab's.
 // With `pageId` it shows that one page (the pane gives every real page its own tab); without, the Chrome's first page.
-const props = defineProps<{ cwd: string; profile: string; url?: string; pageId?: string }>()
+const props = defineProps<{ cwd: string; chatId?: string; profile: string; url?: string; pageId?: string }>()
 
 const list = shallowRef<BrowserProfiles | null>(null)
 const listError = ref<string | null>(null)
@@ -132,7 +132,7 @@ function connect(name: string, tabId?: string) {
   disconnect()
   phase.value = 'connecting'
   closedWhy.value = ''
-  const ws = new WebSocket(liveSocketUrl(window.location, props.cwd, name, tabId))
+  const ws = new WebSocket(liveSocketUrl(window.location, props.cwd, name, tabId, props.chatId))
   socket = ws
   sentSize = null
   ws.onopen = () => queueViewport(true)
@@ -189,7 +189,7 @@ async function openProfile(name: string, login = false, url?: string) {
   busy.value = true
   actionError.value = null
   try {
-    await browserOpen(props.cwd, name, { login, ...(url ? { url } : {}) })
+    await browserOpen(props.cwd, name, { login, ...(url ? { url } : {}), ...(props.chatId ? { chat: props.chatId } : {}) })
     if (login) {
       loginFor.value = name
       disconnect()

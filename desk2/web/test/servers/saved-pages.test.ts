@@ -111,7 +111,7 @@ describe('the pane markup', () => {
     const pane = read('ServersPane.vue')
     expect(pane).toContain('data-testid="profile-badge"')
     expect(pane).toContain(':title="`Chrome profile: ${t.target}`"')
-    expect(pane).toContain('browserClosePage(cwd, profile, page)')
+    expect(pane).toContain('browserClosePage(cwd, profile, page, props.chatId)')
     expect(pane).not.toContain('browserClose(')
   })
 })

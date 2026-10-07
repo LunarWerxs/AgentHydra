@@ -115,6 +115,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     storeDebounceMs: typeof deps.storeDebounceMs === 'number' ? deps.storeDebounceMs : undefined,
     newChats: deps.newChats === 'sdk' ? 'sdk' : undefined,
   })
+  // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
+  ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
   const queue = new QueueManager({
     home: ctx.home,
     manager,

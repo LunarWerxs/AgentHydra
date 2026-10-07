@@ -237,9 +237,10 @@ export function normalizeAddress(text: string): string | null {
 }
 
 /** BROWSER_LIVE's address for a page at `loc`. */
-export function liveSocketUrl(loc: { protocol: string; host: string }, cwd: string, profile: string, tab?: string): string {
+export function liveSocketUrl(loc: { protocol: string; host: string }, cwd: string, profile: string, tab?: string, chat?: string): string {
   const q = new URLSearchParams({ cwd, profile })
   if (tab) q.set('tab', tab)
+  if (chat) q.set('chat', chat)
   return `${loc.protocol === 'https:' ? 'wss:' : 'ws:'}//${loc.host}${BROWSER_LIVE}?${q}`
 }
 

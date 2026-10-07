@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserLiveIn, BrowserLiveOut, BrowserTab } from '@shared/browser'
+import type { TabScope } from './ownership'
 
 const HOST = '127.0.0.1'
 
@@ -284,10 +285,15 @@ interface Pending {
 /** The live sessions by Chrome port, so a preview request can reuse the frames one is already receiving. */
 const liveSessions = new Map<number, Set<LiveSession>>()
 
-/** The newest screencast frame (JPEG bytes) of a page being shown live on this port, or null when none is. */
-export function liveFrame(port: number): Buffer | null {
+/** The live sessions of one chat on a port ('' is a viewer with no chat): chats never share frames. */
+function sessionsOf(port: number, scope: string): LiveSession[] {
+  return [...(liveSessions.get(port) ?? [])].filter((s) => s.scopeKey === scope)
+}
+
+/** The newest screencast frame (JPEG bytes) of a page of this chat being shown live on this port, or null when none is. */
+export function liveFrame(port: number, scope = ''): Buffer | null {
   let newest: { at: number; data: string } | null = null
-  for (const s of liveSessions.get(port) ?? []) if (s.frame && (!newest || s.frame.at > newest.at)) newest = s.frame
+  for (const s of sessionsOf(port, scope)) if (s.frame && (!newest || s.frame.at > newest.at)) newest = s.frame
   return newest ? Buffer.from(newest.data, 'base64') : null
 }
 
@@ -297,29 +303,31 @@ export interface TappedFrame {
   height: number
 }
 
-const frameTaps = new Map<number, Set<(f: TappedFrame) => void>>()
+const frameTaps = new Map<string, Set<(f: TappedFrame) => void>>()
+const tapKey = (port: number, scope: string): string => `${port}|${scope}`
 const liveWatchers = new Set<(port: number) => void>()
 
 /** Whether the pane is showing a page of this Chrome live (its screencast runs, so no second one is needed). */
-export function hasLiveSession(port: number): boolean {
-  return (liveSessions.get(port)?.size ?? 0) > 0
+export function hasLiveSession(port: number, scope = ''): boolean {
+  return sessionsOf(port, scope).length > 0
 }
 
 /** The newest live frame with its size, for a viewer that joins between frames. */
-export function liveFrameSized(port: number): TappedFrame | null {
+export function liveFrameSized(port: number, scope = ''): TappedFrame | null {
   let newest: { at: number; f: TappedFrame } | null = null
-  for (const s of liveSessions.get(port) ?? []) if (s.frame && (!newest || s.frame.at > newest.at)) newest = { at: s.frame.at, f: { data: s.frame.data, width: s.frame.width, height: s.frame.height } }
+  for (const s of sessionsOf(port, scope)) if (s.frame && (!newest || s.frame.at > newest.at)) newest = { at: s.frame.at, f: { data: s.frame.data, width: s.frame.width, height: s.frame.height } }
   return newest?.f ?? null
 }
 
-/** Calls fn with every frame a live session of this port receives; the returned function stops it. */
-export function tapLiveFrames(port: number, fn: (f: TappedFrame) => void): () => void {
-  const set = frameTaps.get(port) ?? new Set()
+/** Calls fn with every frame a live session of this chat on this port receives; the returned function stops it. */
+export function tapLiveFrames(port: number, fn: (f: TappedFrame) => void, scope = ''): () => void {
+  const key = tapKey(port, scope)
+  const set = frameTaps.get(key) ?? new Set()
   set.add(fn)
-  frameTaps.set(port, set)
+  frameTaps.set(key, set)
   return () => {
     set.delete(fn)
-    if (set.size === 0 && frameTaps.get(port) === set) frameTaps.delete(port)
+    if (set.size === 0 && frameTaps.get(key) === set) frameTaps.delete(key)
   }
 }
 
@@ -355,7 +363,14 @@ export class LiveSession {
     private readonly onEnd: () => void,
     /** Bound to the one page it was asked for: when that page closes the view ends, it does not move to another page. */
     private readonly bound = false,
+    /** The chat this view is for: it shows and follows only that chat's pages and the unowned ones. Absent: every page. */
+    private readonly scope: TabScope | null = null,
   ) {}
+
+  /** The chat the frames belong to ('' for a view with no chat). */
+  get scopeKey(): string {
+    return this.scope?.key ?? ''
+  }
 
   /** The page target to show: the asked-for tab, else the first page. Null when the Chrome has no such page. */
   static async pick(port: number, tab: string | null): Promise<BrowserTab | null> {
@@ -452,7 +467,7 @@ export class LiveSession {
         const height = Math.round(meta.deviceHeight ?? 0)
         this.frame = { at: Date.now(), data: msg.params.data, width, height }
         this.out({ type: 'frame', data: msg.params.data, width, height })
-        for (const tap of [...(frameTaps.get(this.port) ?? [])]) tap({ data: msg.params.data, width, height })
+        for (const tap of [...(frameTaps.get(tapKey(this.port, this.scopeKey)) ?? [])]) tap({ data: msg.params.data, width, height })
       }
       return
     }
@@ -483,12 +498,13 @@ export class LiveSession {
     } catch {
       return this.end('the browser was closed')
     }
+    if (this.scope) tabs = this.scope.visible(tabs)
     if (this.ended) return
     const snapshot = JSON.stringify(tabs)
     const mine = tabs.find((t) => t.id === this.tab?.id)
     if (!mine) {
       if (this.bound) return this.end('that page was closed')
-      const next = tabs[0]
+      const next = this.scope ? this.scope.best(tabs) : tabs[0]
       if (!next) return this.end('the browser has no page left')
       try {
         await this.attach(next)
@@ -614,7 +630,8 @@ export class LiveSession {
         return
       }
       case 'tab': {
-        const target = await LiveSession.pick(this.port, msg.id)
+        const all = await pageTabs(this.port)
+        const target = (this.scope ? this.scope.visible(all) : all).find((t) => t.id === msg.id)
         if (!target) return
         await fetch(`http://${HOST}:${this.port}/json/activate/${encodeURIComponent(target.id)}`, { signal: AbortSignal.timeout(1500) }).catch(() => {
           // floor-ok: a page that cannot be raised is still shown

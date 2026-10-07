@@ -164,12 +164,12 @@ export const browserProfiles = (cwd: string): Promise<BrowserProfiles> => call(`
 
 export const browserClose = (cwd: string, profile: string): Promise<{ closed: boolean }> => call(BROWSER_CLOSE, post({ cwd, profile }))
 
-export const browserOpen = (cwd: string, profile: string, opts: { url?: string; login?: boolean } = {}): Promise<BrowserOpened> => call(BROWSER_OPEN, post({ cwd, profile, ...opts }))
+export const browserOpen = (cwd: string, profile: string, opts: { url?: string; login?: boolean; chat?: string } = {}): Promise<BrowserOpened> => call(BROWSER_OPEN, post({ cwd, profile, ...opts }))
 
 /** The pages of the profile's Chrome: 'closed' when it is not open, null when it could not be asked (nothing is then assumed). */
-export async function browserPages(cwd: string, profile: string): Promise<BrowserTab[] | 'closed' | null> {
+export async function browserPages(cwd: string, profile: string, chat?: string): Promise<BrowserTab[] | 'closed' | null> {
   try {
-    const res = await fetch(`${BROWSER_TABS}?${new URLSearchParams({ cwd, profile })}`)
+    const res = await fetch(`${BROWSER_TABS}?${new URLSearchParams({ cwd, profile, ...(chat ? { chat } : {}) })}`)
     if (res.status === 409) return 'closed'
     return res.ok ? ((await res.json()) as BrowserTab[]) : null
   } catch {
@@ -178,7 +178,7 @@ export async function browserPages(cwd: string, profile: string): Promise<Browse
 }
 
 /** A new page of the open Chrome at an address; no page that exists is navigated. */
-export const browserNewPage = (cwd: string, profile: string, url: string): Promise<BrowserTab> => call(BROWSER_PAGE, post({ cwd, profile, url }))
+export const browserNewPage = (cwd: string, profile: string, url: string, chat?: string): Promise<BrowserTab> => call(BROWSER_PAGE, post({ cwd, profile, url, ...(chat ? { chat } : {}) }))
 
 /** Closes that one page; the Chrome stays. */
-export const browserClosePage = (cwd: string, profile: string, tab: string): Promise<{ closed: boolean }> => call(BROWSER_PAGE_CLOSE, post({ cwd, profile, tab }))
+export const browserClosePage = (cwd: string, profile: string, tab: string, chat?: string): Promise<{ closed: boolean }> => call(BROWSER_PAGE_CLOSE, post({ cwd, profile, tab, ...(chat ? { chat } : {}) }))

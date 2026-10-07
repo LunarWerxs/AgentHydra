@@ -4,9 +4,13 @@
 // while someone watches. Frames reach a card at most `minIntervalMs` apart (the newest wins) and are held back while
 // its socket is backed up. Nothing is ever forwarded from a card to the page.
 
+import type { TabScope } from './ownership'
+import type { BrowserTab } from '@shared/browser'
 import { hasLiveSession, liveFrameSized, onLiveChange, pageTabs, tapLiveFrames, type TappedFrame } from './cdp'
 
 const HOST = '127.0.0.1'
+
+const entryKey = (port: number, scope: string): string => `${port}|${scope}`
 
 export interface PreviewSink {
   send(frame: TappedFrame): void
@@ -18,7 +22,7 @@ export interface PreviewSink {
 export interface Cast {
   stop(): void
 }
-export type CastFactory = (port: number, onFrame: (f: TappedFrame) => void, onEnd: (reason: string) => void) => Cast
+export type CastFactory = (port: number, onFrame: (f: TappedFrame) => void, onEnd: (reason: string) => void, scope?: TabScope) => Cast
 
 /** A small screencast of the first page of a Chrome, over its own CDP socket; follows the page when its tab goes. */
 export class PreviewCast implements Cast {
@@ -33,13 +37,15 @@ export class PreviewCast implements Cast {
     private readonly port: number,
     private readonly onFrame: (f: TappedFrame) => void,
     private readonly onEnd: (reason: string) => void,
+    private readonly scope?: TabScope,
   ) {
     void this.begin()
   }
 
   private async begin(): Promise<void> {
     try {
-      const tab = (await pageTabs(this.port))[0]
+      const all = await pageTabs(this.port)
+      const tab = this.scope ? this.scope.best(all) : all[0]
       if (!tab) return this.end('the browser has no page')
       await this.attach(tab.id)
       if (this.ended) return
@@ -108,15 +114,16 @@ export class PreviewCast implements Cast {
   /** Every 2 s: the browser gone ends the cast; the page gone moves it to the first page left. */
   private async watch(): Promise<void> {
     if (this.ended) return
-    let tabs: { id: string }[]
+    let tabs: BrowserTab[]
     try {
       tabs = await pageTabs(this.port)
     } catch {
       return this.end('the browser was closed')
     }
     if (this.ended) return
-    if (tabs.some((t) => t.id === this.tabId) && this.ws?.readyState === WebSocket.OPEN) return
-    const next = tabs.find((t) => t.id === this.tabId) ?? tabs[0]
+    const seen = this.scope ? this.scope.visible(tabs as BrowserTab[]) : tabs
+    if (seen.some((t) => t.id === this.tabId) && this.ws?.readyState === WebSocket.OPEN) return
+    const next = seen.find((t) => t.id === this.tabId) ?? (this.scope ? this.scope.best(seen as BrowserTab[]) : seen[0])
     if (!next) return this.end('the browser has no page left')
     try {
       await this.attach(next.id)
@@ -163,6 +170,8 @@ interface Sub {
 }
 
 interface Entry {
+  port: number
+  scope: TabScope | null
   subs: Set<Sub>
   cast: Cast | null
   untap: () => void
@@ -177,7 +186,8 @@ export interface HubOptions {
 }
 
 export class PreviewHub {
-  private readonly entries = new Map<number, Entry>()
+  /** By Chrome port and chat: two chats on one Chrome never share a cast. */
+  private readonly entries = new Map<string, Entry>()
   private readonly minIntervalMs: number
   private readonly now: () => number
   private readonly castFactory: CastFactory
@@ -186,61 +196,63 @@ export class PreviewHub {
   constructor(opts: HubOptions = {}) {
     this.minIntervalMs = opts.minIntervalMs ?? 200
     this.now = opts.now ?? Date.now
-    this.castFactory = opts.castFactory ?? ((port, onFrame, onEnd) => new PreviewCast(port, onFrame, onEnd))
+    this.castFactory = opts.castFactory ?? ((port, onFrame, onEnd, scope) => new PreviewCast(port, onFrame, onEnd, scope))
   }
 
   /** How many cards watch this Chrome. */
-  count(port: number): number {
-    return this.entries.get(port)?.subs.size ?? 0
+  count(port: number, scope = ''): number {
+    return this.entries.get(entryKey(port, scope))?.subs.size ?? 0
   }
 
   /** Whether the hub's own screencast runs on this Chrome. */
-  casting(port: number): boolean {
-    return !!this.entries.get(port)?.cast
+  casting(port: number, scope = ''): boolean {
+    return !!this.entries.get(entryKey(port, scope))?.cast
   }
 
-  subscribe(port: number, sink: PreviewSink): () => void {
-    let entry = this.entries.get(port)
+  subscribe(port: number, sink: PreviewSink, scope?: TabScope): () => void {
+    const key = entryKey(port, scope?.key ?? '')
+    let entry = this.entries.get(key)
     if (!entry) {
-      const e: Entry = { subs: new Set(), cast: null, untap: () => {}, last: null }
-      e.untap = tapLiveFrames(port, (f) => this.deliver(e, f))
-      this.entries.set(port, e)
+      const e: Entry = { port, scope: scope ?? null, subs: new Set(), cast: null, untap: () => {}, last: null }
+      e.untap = tapLiveFrames(port, (f) => this.deliver(e, f), scope?.key ?? '')
+      this.entries.set(key, e)
       entry = e
     }
-    if (!this.unwatch) this.unwatch = onLiveChange((p) => this.reconcile(p))
+    if (!this.unwatch) this.unwatch = onLiveChange((p) => [...this.entries].forEach(([k, e]) => e.port === p && this.reconcile(k)))
     const sub: Sub = { sink, at: 0, pending: null, timer: null }
     entry.subs.add(sub)
     // A card that joins between frames gets the newest one at once.
-    const first = entry.last ?? liveFrameSized(port)
+    const first = entry.last ?? liveFrameSized(port, scope?.key ?? '')
     if (first) this.offer(sub, first)
-    this.reconcile(port)
-    return () => this.leave(port, sub)
+    this.reconcile(key)
+    return () => this.leave(key, sub)
   }
 
-  private leave(port: number, sub: Sub): void {
+  private leave(key: string, sub: Sub): void {
     if (sub.timer) clearTimeout(sub.timer)
     sub.timer = null
     sub.pending = null
-    const entry = this.entries.get(port)
+    const entry = this.entries.get(key)
     if (!entry?.subs.delete(sub)) return
-    this.reconcile(port)
+    this.reconcile(key)
   }
 
   /** One screencast per Chrome at most: the pane's when it runs, else the hub's while anyone watches, else none. */
-  private reconcile(port: number): void {
-    const entry = this.entries.get(port)
+  private reconcile(key: string): void {
+    const entry = this.entries.get(key)
     if (!entry) return
+    const { port } = entry
     if (entry.subs.size === 0) {
       entry.cast?.stop()
       entry.untap()
-      this.entries.delete(port)
+      this.entries.delete(key)
       if (this.entries.size === 0) {
         this.unwatch?.()
         this.unwatch = null
       }
       return
     }
-    if (hasLiveSession(port)) {
+    if (hasLiveSession(port, entry.scope?.key ?? '')) {
       entry.cast?.stop()
       entry.cast = null
     } else if (!entry.cast) {
@@ -250,19 +262,20 @@ export class PreviewHub {
         (reason) => {
           if (entry.cast !== cast) return
           entry.cast = null
-          this.end(port, reason)
+          this.end(key, reason)
         },
+        entry.scope ?? undefined,
       )
       entry.cast = cast
     }
   }
 
   /** The source is gone: every card hears it and is dropped (the cards fall back to polling). */
-  private end(port: number, reason: string): void {
-    const entry = this.entries.get(port)
+  private end(key: string, reason: string): void {
+    const entry = this.entries.get(key)
     if (!entry) return
     for (const sub of [...entry.subs]) {
-      this.leave(port, sub)
+      this.leave(key, sub)
       try {
         sub.sink.closed(reason)
       } catch {

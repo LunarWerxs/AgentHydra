@@ -205,11 +205,11 @@ async function closePageOf(profile: string, page: string) {
   const cwd = props.cwd
   closing.add(page)
   try {
-    await browserClosePage(cwd, profile, page)
+    await browserClosePage(cwd, profile, page, props.chatId)
   } catch {
     // floor-ok: the page stays as it was; the next look puts its tab back
   }
-  const now = await browserPages(cwd, profile)
+  const now = await browserPages(cwd, profile, props.chatId)
   closing.delete(page)
   if (cwd !== props.cwd) return
   if (now === 'closed') window.dispatchEvent(new CustomEvent(BROWSER_CLOSED_EVENT, { detail: { cwd, profile } }))
@@ -298,7 +298,7 @@ async function look() {
       if (looking.has(profile)) return
       looking.add(profile)
       try {
-        const got = await browserPages(cwd, profile)
+        const got = await browserPages(cwd, profile, props.chatId)
         if (cwd === props.cwd) applyPages(profile, got)
       } finally {
         looking.delete(profile)
@@ -332,7 +332,7 @@ async function applyRequest(r: BrowserOpenRequest) {
   if (spec.kind === 'saved' && r.profile) {
     // The page at the card's address comes forward; none there, the address opens in a NEW page (never one that exists:
     // the AI may be driving it); a browser that is not open keeps the Open flow.
-    const got = await browserPages(cwd, r.profile)
+    const got = await browserPages(cwd, r.profile, props.chatId)
     if (cwd !== props.cwd) return
     applyPages(r.profile, got)
     const plan = cardPlan(state.value, r.profile, r.url, got)
@@ -341,7 +341,7 @@ async function applyRequest(r: BrowserOpenRequest) {
     let page: BrowserTab | null = plan.kind === 'add' ? plan.page : null
     if (plan.kind === 'new') {
       try {
-        page = await browserNewPage(cwd, r.profile, plan.url)
+        page = await browserNewPage(cwd, r.profile, plan.url, props.chatId)
       } catch {
         return void (state.value = openTab(state.value, spec))
       }
@@ -503,6 +503,6 @@ watch(
       />
     </template>
     <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-[30] max-w-[90%] -translate-x-1/2 rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text)] shadow-(--shadow-menu-ringed)">{{ notice }}</div>
-    <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}|${activeTab.page ?? ''}`" :cwd="cwd" :profile="activeTab.target" :url="activeTab.url" :page-id="activeTab.page" />
+    <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}|${activeTab.page ?? ''}`" :cwd="cwd" :chat-id="chatId" :profile="activeTab.target" :url="activeTab.url" :page-id="activeTab.page" />
   </section>
 </template>

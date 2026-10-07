@@ -413,6 +413,13 @@ export class ChatManager {
     return [...this.chats.values()].flatMap((e) => [...(e.pastSessions ?? []), ...(e.chat.sessionId ? [e.chat.sessionId] : [])])
   }
 
+  /** Every Claude session id of a chat, current first then the earlier ones it continued from (a browser page a chat drove stays its own); [] for an unknown chat. */
+  browserSessions(chatId: string): string[] {
+    const e = this.chats.get(chatId)
+    if (!e) return []
+    return [...(e.chat.sessionId ? [e.chat.sessionId] : []), ...[...(e.pastSessions ?? [])].reverse()]
+  }
+
   /** The id of the live chat (not archived, not a CliMayte worker's) whose current or past session is `sessionId`, else null. */
   chatForSession(sessionId: string): string | null {
     for (const e of this.chats.values()) {

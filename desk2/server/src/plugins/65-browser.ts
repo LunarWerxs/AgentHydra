@@ -6,9 +6,10 @@
 // guard. A request names a profile, never a port: the port comes from that profile folder's DevToolsActivePort.
 
 import type { Context, Hono } from 'hono'
-import { BROWSER_CLOSE, BROWSER_LIVE, BROWSER_OPEN, BROWSER_PAGE, BROWSER_PAGE_CLOSE, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserPreviewOut } from '@shared/browser'
+import { BROWSER_CLOSE, BROWSER_LIVE, BROWSER_OPEN, BROWSER_PAGE, BROWSER_PAGE_CLOSE, BROWSER_PREVIEW, BROWSER_PREVIEW_STREAM, BROWSER_PROFILES, BROWSER_TABS, type BrowserOpened, type BrowserTab, type BrowserPreviewOut } from '@shared/browser'
 import { capturePreview, closeBrowser, closePage, firstTab, LaunchError, launchChrome, liveFrame, LiveSession, newPage, pageTabs, parseLiveIn } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
+import { askedTab, TabScope } from '../browser/ownership'
 import { previewHub } from '../browser/preview'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
 import type { ServerContext } from '../context'
@@ -21,6 +22,7 @@ async function usable(cwd: string, name: string): Promise<ProfileRef | null> {
 
 interface LiveData {
   port: number
+  scope: TabScope | null
   tab: { id: string; url: string; title: string }
   /** The socket asked for one page (?tab=): it follows no other. */
   bound: boolean
@@ -28,6 +30,13 @@ interface LiveData {
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const sessions = new WeakMap<object, LiveSession>()
+
+  /** What the chat named in a request may see of the profile: its own pages and unowned ones. No chat named: every page (the person's own servers pane). */
+  const scopeOf = (ref: ProfileRef, chat: unknown): TabScope | null => {
+    if (typeof chat !== 'string' || chat === '') return null
+    const sessionsOf = ctx.deps.chatSessions as ((id: string) => string[]) | undefined
+    return new TabScope(ref.dir, chat, sessionsOf?.(chat) ?? [])
+  }
 
   app.get(BROWSER_PROFILES, async (c) => {
     const why = notOwnPage(c.req.raw.headers)
@@ -40,7 +49,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.post(BROWSER_OPEN, async (c) => {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return c.json({ error: why }, 403)
-    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown; url?: unknown; login?: unknown } | null
+    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown; url?: unknown; login?: unknown; chat?: unknown } | null
     if (typeof body?.cwd !== 'string' || body.cwd === '' || typeof body.profile !== 'string' || body.profile === '')
       return c.json({ error: 'cwd and profile required' }, 400)
     const url = typeof body.url === 'string' && body.url !== '' ? body.url : undefined
@@ -57,7 +66,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const ref = await usable(body.cwd, body.profile)
     if (!ref) return c.json({ error: `no browser '${body.profile}' for this chat's workspace` }, 404)
     if (ref.port !== null) {
-      const tab = (await pageTabs(ref.port).catch(() => []))[0] ?? null
+      const scope = scopeOf(ref, body.chat)
+      let tab: BrowserTab | null
+      try {
+        tab = scope ? await scope.pickOrOpen(ref.port) : ((await pageTabs(ref.port).catch(() => []))[0] ?? null)
+      } catch {
+        tab = null
+      }
       const opened: BrowserOpened = { profile: ref.profile.name, started: false, tab }
       return c.json(opened)
     }
@@ -66,7 +81,9 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     try {
       const login = body.login === true
       const port = await launchChrome(ref.dir, url, login)
-      const opened: BrowserOpened = { profile: ref.profile.name, started: true, tab: port === null ? null : await firstTab(port) }
+      const first = port === null ? null : await firstTab(port)
+      if (first) scopeOf(ref, body.chat)?.adopt(first.id)
+      const opened: BrowserOpened = { profile: ref.profile.name, started: true, tab: first }
       return c.json(opened)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -101,7 +118,8 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (!ref) return c.json({ error: `no browser '${profile}' for this chat's workspace` }, 404)
     if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 409)
     try {
-      return c.json(await pageTabs(ref.port))
+      const tabs = await pageTabs(ref.port)
+      return c.json(scopeOf(ref, c.req.query('chat'))?.visible(tabs) ?? tabs)
     } catch {
       return c.json({ error: `'${profile}' did not answer` }, 502)
     }
@@ -111,14 +129,14 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const pageRoute = async (c: Context, need: 'url' | 'tab') => {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return { fail: c.json({ error: why }, 403) }
-    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown; url?: unknown; tab?: unknown } | null
+    const body = (await c.req.json().catch(() => null)) as { cwd?: unknown; profile?: unknown; url?: unknown; tab?: unknown; chat?: unknown } | null
     const arg = body?.[need]
     if (typeof body?.cwd !== 'string' || body.cwd === '' || typeof body.profile !== 'string' || body.profile === '' || typeof arg !== 'string' || arg === '')
       return { fail: c.json({ error: `cwd, profile and ${need} required` }, 400) }
     const ref = await usable(body.cwd, body.profile)
     if (!ref) return { fail: c.json({ error: `no browser '${body.profile}' for this chat's workspace` }, 404) }
     if (ref.port === null) return { fail: c.json({ error: `'${body.profile}' is not open` }, 409) }
-    return { port: ref.port, arg }
+    return { port: ref.port, arg, scope: scopeOf(ref, body.chat) }
   }
   app.post(BROWSER_PAGE, async (c) => {
     const r = await pageRoute(c, 'url')
@@ -133,6 +151,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (!ok) return c.json({ error: 'url must be http or https' }, 400)
     try {
       const tab = await newPage(r.port, r.arg)
+      if (tab) r.scope?.adopt(tab.id)
       return tab ? c.json(tab) : c.json({ error: 'the browser did not open a page' }, 502)
     } catch {
       return c.json({ error: 'the browser did not answer' }, 502)
@@ -142,6 +161,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const r = await pageRoute(c, 'tab')
     if (r.fail) return r.fail
     try {
+      if (r.scope?.isOther(await pageTabs(r.port), r.arg)) return c.json({ error: 'that page belongs to another chat' }, 403)
       return c.json({ closed: await closePage(r.port, r.arg) })
     } catch {
       return c.json({ error: 'the browser did not answer' }, 502)
@@ -161,10 +181,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 404)
     try {
       // A page the pane is showing live already streams frames: answer from the newest, never a second capture.
-      const frame = liveFrame(ref.port)
+      const scope = scopeOf(ref, c.req.query('chat'))
+      const frame = liveFrame(ref.port, scope?.key ?? '')
       if (frame) return new Response(new Uint8Array(frame), { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } })
-      const tab = await LiveSession.pick(ref.port, null)
-      if (!tab) return c.json({ error: `'${profile}' has no page open` }, 404)
+      const tab = scope ? scope.best(await pageTabs(ref.port)) : await LiveSession.pick(ref.port, null)
+      if (!tab) return c.json({ error: `'${profile}' has no page of this chat open` }, 404)
       const jpeg = await capturePreview(ref.port, tab.id)
       return new Response(new Uint8Array(jpeg), { headers: { 'content-type': 'image/jpeg', 'cache-control': 'no-store' } })
     } catch {
@@ -174,7 +195,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
 
   // The Browser card's stream: frames only, at most ~5 a second, shared with the pane's live view; nothing the card sends is read.
   const previews = new WeakMap<object, () => void>()
-  ctx.wsRoute<{ port: number }>(BROWSER_PREVIEW_STREAM, {
+  ctx.wsRoute<{ port: number; scope: TabScope | null }>(BROWSER_PREVIEW_STREAM, {
     async accept(req) {
       const why = notOwnPage(req.headers)
       if (why) return Response.json({ error: why }, { status: 403 })
@@ -186,7 +207,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const ref = listing.refs.find((r) => r.profile.name === profile)
       if (!ref) return Response.json({ error: `no browser '${profile}' for this chat's workspace` }, { status: ofAnotherWorkspace(listing, profile) ? 403 : 404 })
       if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
-      return { data: { port: ref.port } }
+      return { data: { port: ref.port, scope: scopeOf(ref, q.get('chat')) } }
     },
     open(ws, data) {
       const send = (msg: BrowserPreviewOut): void => {
@@ -205,7 +226,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
             ws.close()
           },
           backed: () => ws.getBufferedAmount() > 512 * 1024,
-        }),
+        }, data.scope ?? undefined),
       )
     },
     message() {
@@ -228,9 +249,20 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const ref = await usable(cwd, profile)
       if (!ref) return Response.json({ error: `no browser '${profile}' for this chat's workspace` }, { status: 404 })
       if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
-      const tab = await LiveSession.pick(ref.port, q.get('tab')).catch(() => null)
+      const scope = scopeOf(ref, q.get('chat'))
+      const asked = q.get('tab')
+      let tab: BrowserTab | null
+      try {
+        if (asked) {
+          const got = await askedTab(ref.port, scope, asked)
+          if ('error' in got) return Response.json({ error: got.error }, { status: got.status })
+          tab = got.tab
+        } else tab = scope ? await scope.pickOrOpen(ref.port) : await LiveSession.pick(ref.port, null)
+      } catch {
+        tab = null
+      }
       if (!tab) return Response.json({ error: 'that page is not open' }, { status: 404 })
-      return { data: { port: ref.port, tab, bound: !!q.get('tab') } }
+      return { data: { port: ref.port, scope, tab, bound: !!asked } }
     },
     open(ws, data) {
       const session = new LiveSession(
@@ -244,6 +276,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
         },
         () => ws.close(),
         data.bound,
+        data.scope,
       )
       sessions.set(ws, session)
       session.start(data.tab).catch(() => {
