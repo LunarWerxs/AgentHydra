@@ -2161,7 +2161,20 @@ function assertRunnable(t: RunTask, i: number): void {
     throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
   if (t.chat !== undefined && typeof t.chat !== 'boolean')
     throw new Error(`task ${i + 1}: chat must be true or false`)
+  if (t.desk !== undefined && t.desk !== null) {
+    const d = t.desk as Partial<NonNullable<RunTask['desk']>>
+    if (t.chat !== true) throw new Error(`task ${i + 1}: desk is only for a chat task (chat: true)`)
+    if (typeof d.append !== 'string' || d.append.length > DESK_APPEND_MAX)
+      throw new Error(
+        `task ${i + 1}: desk.append must be a string of at most ${DESK_APPEND_MAX} characters`,
+      )
+    if (!d.mcpServers || typeof d.mcpServers !== 'object' || Array.isArray(d.mcpServers))
+      throw new Error(`task ${i + 1}: desk.mcpServers must be an object of server configs`)
+  }
 }
+
+/** The longest `desk.append` a chat task may carry; a longer one is refused, never cut. */
+const DESK_APPEND_MAX = 20_000
 
 /** One task's model, effort, kind and priority. A named model or effort is held only when the task
  *  (or its run) gives `ownerWords`, or gives a `modelWhy` AND the named setting sits on a cheaper
@@ -2269,6 +2282,7 @@ function newWorker(
     kind: setting?.kind ?? null,
     ...(setting?.auto ? { auto: true } : {}),
     ...(t.chat === true ? { chat: true } : {}),
+    ...(t.chat === true && t.desk ? { desk: t.desk } : {}),
     ...(t.sealed ? { sealed: sealedOf(t.sealed) } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(size ? { size } : {}),
@@ -2417,6 +2431,8 @@ export function climayteRun(input: {
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
     chat?: boolean
+    /** A Desk chat's add-ons, only with `chat` (CliMayteWorker.desk). */
+    desk?: { append: string; mcpServers: Record<string, object> }
     /** Launch sealed (CliMayteSealed, sealedOf); `prompt` here stands in for an empty task prompt,
      *  and the task's `cwd` is not read. */
     sealed?: CliMayteSealed & { prompt?: string }

@@ -824,6 +824,11 @@ export const TOOLS: McpEngineTool[] = [
                 description:
                   "Default false. true only for one of the OWNER'S OWN interactive chats run headless (a chat front end sends each later message with climayte_send): it launches like his own `claude` in that folder, with no worker brief, his full CLAUDE.md, skills, MCP servers and connectors, and Opus xhigh unless the task names its own (no modelWhy needed; the scorecard never picks for it). Never for a delegated task: the workers a chat dispatches are ordinary.",
               },
+              desk: {
+                type: 'object',
+                description:
+                  "Only with `chat: true`, from a Desk chat: `{append, mcpServers}`, the Desk's appended system text (at most 20,000 characters, refused if longer) and its connector MCP servers. Kept on the worker, so every continuation and account move launches with them; the owner's own servers of the same name win.",
+              },
               sealed: {
                 type: 'object',
                 description:

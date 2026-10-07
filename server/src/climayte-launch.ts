@@ -274,6 +274,7 @@ function handoffText(
     {
       sameAccount: acct.id === last.account.id,
       why: asked?.reason ?? (asked?.pct === null ? 'request' : 'usage'),
+      chat: w.chat === true,
     },
   )
 }
@@ -406,7 +407,12 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
   const file = workerFiles(w.id)[1]
   // A chat has the owner's servers with none left out: his own `claude` has AgentHydra's too.
   const deny = w.chat ? { names: [], paths: [] } : { names: WORKER_DENIED_MCP, paths: [MCP_PATH] }
-  const servers = ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}
+  // A Desk chat's connector servers join them, the owner's own of the same name winning (as in
+  // desk2's chat-runtime).
+  const servers: Record<string, unknown> = {
+    ...w.desk?.mcpServers,
+    ...(ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}),
+  }
 
   // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
   // is only the preferred one and the daemon hops off it when it is busy.
@@ -507,13 +513,18 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md'))] }
 }
 
-/** What a chat is told on top of the CLI's own prompt: it runs headless, its process (every
- *  background command with it) ends with the turn, and the window it is read in (AgentHydra's,
- *  desk2/) plays a markdown image of a local picture or video in place (desk2 media cache). */
-export const CHAT_NOTE =
-  'This session runs headless through AgentHydra: no one sees a terminal, so nothing that waits for an interactive prompt or a permission dialog can be answered.' +
-  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.' +
-  ' To show the person a picture, GIF or video, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov or webm (videos up to 200 MB) appear and play right in the chat, so never only name the path of a screenshot, GIF or recording you made or found.'
+/** What a chat is told on top of the CLI's own prompt: it is the main agent of the owner's Desk
+ *  chat (he reads every reply; it orchestrates subjects and hands off to an heir that is again the
+ *  main agent), no terminal is attached, its process (every background command with it) ends with
+ *  the turn, and the window it is read in (AgentHydra's, desk2/) plays a markdown image of a local
+ *  picture or video in place (desk2 media cache: CHAT_MEDIA, left out when the Desk's own append
+ *  carries the same sentence). */
+const CHAT_MEDIA =
+  'To show the person a picture, GIF or video, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov or webm (videos up to 200 MB) appear and play right in the chat, so never only name the path of a screenshot, GIF or recording you made or found.'
+const CHAT_NOTE_BASE =
+  "You are the main agent of the owner's Desk chat: he reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Orchestrate: send the work to CliMayte workers, HSwarm or sub-agents, check what they report, and report to him; when you run out of context or account you hand off to an heir that continues as this chat's main agent." +
+  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
+export const CHAT_NOTE = `${CHAT_NOTE_BASE} ${CHAT_MEDIA}`
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
@@ -523,20 +534,22 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
   return !rel.startsWith('..') && !isAbsolute(rel)
 }
 
-/** A chat's appended prompt: CHAT_NOTE, then the owner's global CLAUDE.md unless the CLI's own
- *  walk reads it already from the chat's folder (so it is never in a request twice). */
-function chatPromptText(w: CliMayteWorker): string {
-  if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return CHAT_NOTE
+/** A chat's appended prompt: CHAT_NOTE, then the Desk's append when the task carried one (it has
+ *  the media sentence, so CHAT_NOTE's own is left out), then the owner's global CLAUDE.md unless
+ *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
+export function chatPromptText(w: CliMayteWorker): string {
+  const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
+  if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
   let owner = ''
   try {
     owner = readFileSync(md, 'utf8').trim()
   } catch {
-    return CHAT_NOTE
+    return note
   }
   return owner
-    ? `${CHAT_NOTE}\n\nContents of ${slashed(md)} (the owner's global instructions):\n\n${owner}`
-    : CHAT_NOTE
+    ? `${note}\n\nContents of ${slashed(md)} (the owner's global instructions):\n\n${owner}`
+    : note
 }
 
 /** Write a chat's appended prompt (`--append-system-prompt-file`): a file, so the owner's CLAUDE.md

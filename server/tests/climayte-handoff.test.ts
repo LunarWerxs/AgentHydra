@@ -1,6 +1,34 @@
 // When CliMayte asks a session to hand off for its conversation's size (climayte-lib.ts).
 import { describe, expect, test } from 'bun:test'
-import { contextTokens, notConverging, pickAccount, windDownAt } from '../src/climayte-lib'
+import {
+  contextTokens,
+  continuationPrompt,
+  notConverging,
+  pickAccount,
+  windDownAt,
+} from '../src/climayte-lib'
+
+describe('continuationPrompt', () => {
+  const args = ['the task', 'the handoff', 'h.md', ['t.jsonl'], []] as [
+    string,
+    string,
+    string,
+    string[],
+    string[],
+  ]
+  const from = { sameAccount: true, why: 'context' as const }
+  test('a chat heir is the main agent; any other continuation is unchanged', () => {
+    const chat = continuationPrompt(...args, { ...from, chat: true })
+    expect(chat).toContain("main agent of the owner's Desk chat")
+    expect(chat).toContain('he reads every reply')
+    expect(chat).toContain('commit with that message verbatim')
+    const plain = continuationPrompt(...args, from)
+    expect(plain).not.toContain('main agent')
+    expect(plain).toContain(
+      'An earlier session already worked on this task on this account and handed off because its conversation had grown large. Continue from its handoff below',
+    )
+  })
+})
 
 const now = Date.now()
 const reading = (sessionPct: number) => ({

@@ -235,6 +235,9 @@ export interface CliMayteWorker {
    *  launched like his own `claude` in the folder, with no worker brief, his full instructions and
    *  skills, and Opus xhigh unless the task names its own. Absent: an ordinary delegated worker. */
   chat?: boolean
+  /** A Desk chat's add-ons (only with `chat`): its appended system text and connector MCP servers.
+   *  Every launch of the worker, continuations and account moves included, carries them. */
+  desk?: { append: string; mcpServers: Record<string, object> }
   /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
    *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
   sealed?: CliMayteSealed
@@ -852,7 +855,7 @@ export function continuationPrompt(
   handoffPath: string,
   transcripts: string[],
   messages: string[],
-  from: { sameAccount: boolean; why: WindDownWhy['reason'] },
+  from: { sameAccount: boolean; why: WindDownWhy['reason']; chat?: boolean },
 ): string {
   const more = messages.length
     ? `\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n${messages.map((m) => `- ${m}`).join('\n')}`
@@ -869,7 +872,10 @@ export function continuationPrompt(
       : from.why === 'request'
         ? 'handed off when the orchestrator asked it to'
         : 'wound down before its usage limit'
-  return `${task}\n\n---\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
+  const who = from.chat
+    ? `An earlier session was the main agent of the owner's Desk chat before you, ${account}, and ${ended}. You continue as the main agent of this chat: he reads every reply you write, and you orchestrate the work and report to him. Continue`
+    : `An earlier session already worked on this task ${account} and ${ended}. Continue`
+  return `${task}\n\n---\n${who} from its handoff below (also saved at ${handoffPath}).${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
 
 export const PRE_OVERAGE_NOTICE =

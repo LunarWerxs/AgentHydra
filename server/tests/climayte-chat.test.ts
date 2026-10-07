@@ -16,7 +16,7 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
-import { CHAT_NOTE, cliArgv } from '../src/climayte-launch'
+import { CHAT_NOTE, cliArgv, writeWorkerMcp } from '../src/climayte-launch'
 import { WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
@@ -71,7 +71,67 @@ describe('chat workers', () => {
     const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
     expect(prompt.startsWith(CHAT_NOTE)).toBe(true)
     expect(prompt).toContain(OWNER_RULES)
-    expect(prompt).not.toContain('CliMayte worker')
+    expect(prompt).not.toContain('a CliMayte worker')
+  })
+
+  test("a Desk chat's add-ons: its servers (the owner's of a name win) and its append, once", () => {
+    writeFileSync(
+      join(HOME, '.claude.json'),
+      JSON.stringify({
+        mcpServers: { shared: { type: 'http', url: 'http://owner.example.test/mcp' } },
+      }),
+    )
+    const media = 'To show the person a picture, GIF or video, put it in your reply'
+    const w = dispatch({
+      title: 'a desk chat',
+      chat: true,
+      desk: {
+        append: `Desk text. ${media}, as the Desk words it.`,
+        mcpServers: {
+          redesign: { type: 'http', url: 'http://desk.example.test/mcp' },
+          shared: { type: 'http', url: 'http://desk.example.test/other' },
+        },
+      },
+    })
+    const file = writeWorkerMcp(w) ?? ''
+    const servers = JSON.parse(readFileSync(file, 'utf8')).mcpServers
+    expect(servers.redesign.url).toBe('http://desk.example.test/mcp')
+    expect(servers.shared.url).toBe('http://owner.example.test/mcp')
+
+    const argv = cliArgv(w, 'sid', false, 'hooks.json', file)
+    const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
+    expect(prompt.split('Desk text.').length).toBe(2)
+    expect(prompt.split(media).length).toBe(2)
+    expect(prompt.indexOf('main agent')).toBeLessThan(prompt.indexOf('Desk text.'))
+    expect(prompt.indexOf('Desk text.')).toBeLessThan(prompt.indexOf(OWNER_RULES))
+    rmSync(join(HOME, '.claude.json'))
+  })
+
+  test('a chat without desk keeps the media sentence once', () => {
+    const w = dispatch({ title: 'plain chat', chat: true })
+    const argv = cliArgv(w, 'sid', false, 'hooks.json', null)
+    const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
+    expect(prompt.split('To show the person a picture').length).toBe(2)
+  })
+
+  test('desk is refused without chat, and a longer append is refused, not cut', () => {
+    const desk = { append: 'x', mcpServers: {} }
+    expect(() => dispatch({ title: 'not a chat', desk })).toThrow(/only for a chat/)
+    expect(() =>
+      dispatch({ chat: true, desk: { append: 'x'.repeat(20_001), mcpServers: {} } }),
+    ).toThrow(/at most 20000/)
+    expect(
+      dispatch({ chat: true, desk: { append: 'x'.repeat(20_000), mcpServers: {} } }).desk,
+    ).toBeDefined()
+  })
+
+  test("a chat's heir launches on the model and effort the chat had", () => {
+    const w = dispatch({ title: 'heir', chat: true, model: 'opus', effort: 'max' })
+    const first = cliArgv(w, 'sid', false, 'hooks.json', null)
+    const heir = cliArgv(w, 'sid2', false, 'hooks.json', null)
+    for (const flag of ['--model', '--effort'])
+      expect(valueAfter(heir, flag)).toBe(valueAfter(first, flag))
+    expect(valueAfter(heir, '--effort')).toBe('max')
   })
 
   test("an ordinary worker's argv is what it was: the worker brief, no chat flags", () => {

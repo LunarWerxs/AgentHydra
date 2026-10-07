@@ -473,6 +473,9 @@ its brief said to report, not act. A task with `chat: true` (the task field on `
 `POST /api/corch/workers` and the `climayte_run` MCP tool; default false) makes a chat worker. The
 flag is on the worker record (`CliMayteWorker.chat`), so it holds through moves, resends and
 revives; workers a chat dispatches with `climayte_run` are ordinary unless they say otherwise.
+A Desk chat also sends `desk: {append, mcpServers}` (only with `chat: true`, `append` at most 20,000
+characters): its connector servers join the MCP config (the owner's of the same name win) and its
+append follows `CHAT_NOTE`, on every launch, continuations and account moves included.
 
 | | Ordinary worker | Chat worker |
 | --- | --- | --- |
