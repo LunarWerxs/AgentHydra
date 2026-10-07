@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it } from 'bun:test'
 import { BROWSER_PROFILES, OPEN_BROWSER_EVENT, type BrowserProfiles } from '@shared/browser'
 import { browserOpen, browserProfiles } from '../../src/components/servers/api'
-import { fitFrame, formatAgo, isPasteKey, keyMessage, liveSocketUrl, mapPoint, mouseButton, normalizeAddress, profileRows, resolveRequest } from '../../src/components/servers/logic'
+import { clipboardAction, fitFrame, formatAgo, isPasteKey, keyMessage, liveSocketUrl, mapPoint, mouseButton, normalizeAddress, profileRows, resolveRequest } from '../../src/components/servers/logic'
 
 const NOW = Date.parse('2026-10-06T12:00:00Z')
 const list: BrowserProfiles = {
@@ -140,5 +140,23 @@ describe('address bar and socket', () => {
   it('builds the live socket address from the page', () => {
     expect(liveSocketUrl({ protocol: 'http:', host: 'localhost:7798' }, 'C:/Users/me/App', 'shop')).toBe('ws://localhost:7798/api/browser/live?cwd=C%3A%2FUsers%2Fme%2FApp&profile=shop')
     expect(liveSocketUrl({ protocol: 'https:', host: 'h.example.com' }, '/w', 'a b', 't1')).toBe('wss://h.example.com/api/browser/live?cwd=%2Fw&profile=a+b&tab=t1')
+  })
+})
+
+describe('clipboardAction', () => {
+  const k = (key: string, m: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) => clipboardAction({ key, ctrlKey: false, metaKey: false, shiftKey: false, altKey: false, ...m })
+  it('names the copy, cut and paste shortcuts, Ctrl or Cmd', () => {
+    expect(k('c', { ctrlKey: true })).toBe('copy')
+    expect(k('X', { metaKey: true })).toBe('cut')
+    expect(k('v', { ctrlKey: true })).toBe('paste')
+    expect(k('Insert', { ctrlKey: true })).toBe('copy')
+    expect(k('Insert', { shiftKey: true })).toBe('paste')
+    expect(k('Delete', { shiftKey: true })).toBe('cut')
+  })
+  it('leaves every other key to the page', () => {
+    expect(k('c')).toBeNull()
+    expect(k('a', { ctrlKey: true })).toBeNull()
+    expect(k('c', { ctrlKey: true, shiftKey: true })).toBeNull()
+    expect(k('c', { ctrlKey: true, altKey: true })).toBeNull()
   })
 })

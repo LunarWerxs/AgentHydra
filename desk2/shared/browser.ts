@@ -122,6 +122,8 @@ export type BrowserLiveOut =
   | { type: 'page'; tab: BrowserTab; canGoBack: boolean; canGoForward: boolean }
   | { type: 'tabs'; tabs: BrowserTab[] }
   | { type: 'closed'; reason: string }
+  /** The text a `copy` asked for (empty when nothing is selected); the page puts it on the person's own clipboard. */
+  | { type: 'clipboard'; text: string }
 
 /** Server to card over BROWSER_PREVIEW_STREAM. */
 export type BrowserPreviewOut =
@@ -144,6 +146,8 @@ export type BrowserLiveIn =
   | { type: 'wheel'; x: number; y: number; deltaX: number; deltaY: number }
   | { type: 'key'; event: 'down' | 'up'; key: string; code: string; modifiers: number; text?: string }
   | { type: 'text'; text: string }
+  /** Copy (or cut: the selection is removed as well): the server reads the page's selection and answers `clipboard`. */
+  | { type: 'copy'; cut: boolean }
   | { type: 'navigate'; url: string }
   | { type: 'history'; go: 'back' | 'forward' | 'reload' }
   | { type: 'tab'; id: string }

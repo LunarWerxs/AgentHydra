@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, RefreshCw, RotateCw } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { isRealPage, type BrowserLiveIn, type BrowserLiveOut, type BrowserProfiles, type BrowserTab } from '@shared/browser'
 import { browserOpen, browserProfiles } from './api'
-import { fitFrame, isPasteKey, keyMessage, liveSocketUrl, mapPoint, modifiersOf, mouseButton, normalizeAddress, profileRows } from './logic'
+import { clipboardAction, fitFrame, keyMessage, liveSocketUrl, mapPoint, modifiersOf, mouseButton, normalizeAddress, profileRows } from './logic'
 import { ICON_BTN, INPUT, TEXT_BTN } from './styles'
 
 // A saved-browser tab: one saved Chrome browser of this chat's workspace (shared/browser.ts), watched live on a canvas
@@ -43,6 +43,9 @@ const page = ref<{ tab: BrowserTab; canGoBack: boolean; canGoForward: boolean } 
 const address = ref('')
 const canvas = ref<HTMLCanvasElement | null>(null)
 const stage = ref<HTMLElement | null>(null)
+/** What takes the keys and the paste event: an editable box (a canvas gets no paste event) outside the stage, so a hidden stage never costs it focus. */
+const keys = ref<HTMLTextAreaElement | null>(null)
+const focused = ref(false)
 let socket: WebSocket | null = null
 let frame: { image: HTMLImageElement; width: number; height: number } | null = null
 let decoding = 0
@@ -97,6 +100,24 @@ function showFrame(m: Extract<BrowserLiveOut, { type: 'frame' }>) {
   image.src = `data:image/jpeg;base64,${m.data}`
 }
 
+/** The person's clipboard gets the page's selection; a webview that refuses the async API gets the copy command's way. */
+async function writeClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return
+  } catch {
+    // falls through to the copy command
+  }
+  const box = document.createElement('textarea')
+  box.value = text
+  box.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0'
+  document.body.append(box)
+  box.select()
+  document.execCommand('copy')
+  box.remove()
+  keys.value?.focus()
+}
+
 function disconnect() {
   const s = socket
   socket = null
@@ -107,6 +128,7 @@ function disconnect() {
   draw()
 }
 function connect(name: string, tabId?: string) {
+  const had = focused.value
   disconnect()
   phase.value = 'connecting'
   closedWhy.value = ''
@@ -128,6 +150,8 @@ function connect(name: string, tabId?: string) {
     } else if (m.type === 'page') {
       page.value = m
       if (document.activeElement !== addressEl.value) address.value = m.tab.url
+    } else if (m.type === 'clipboard') {
+      if (m.text) void writeClipboard(m.text)
     } else if (m.type === 'closed') {
       closedWhy.value = m.reason
       phase.value = 'closed'
@@ -142,7 +166,10 @@ function connect(name: string, tabId?: string) {
       phase.value = 'closed'
     }
   }
-  void nextTick(sizeCanvas)
+  void nextTick(() => {
+    sizeCanvas()
+    if (had) keys.value?.focus()
+  })
 }
 const send = (m: BrowserLiveIn) => socket?.readyState === WebSocket.OPEN && socket.send(JSON.stringify(m))
 
@@ -197,7 +224,7 @@ const addressEl = ref<HTMLInputElement | null>(null)
 function submitAddress() {
   const url = normalizeAddress(address.value)
   if (url) send({ type: 'navigate', url })
-  canvas.value?.focus()
+  keys.value?.focus()
 }
 const history = (go: 'back' | 'forward' | 'reload') => send({ type: 'history', go })
 
@@ -214,7 +241,7 @@ function mouse(e: MouseEvent, event: 'down' | 'up' | 'move') {
 }
 function onDown(e: MouseEvent) {
   e.preventDefault()
-  canvas.value?.focus()
+  keys.value?.focus()
   dragging = true
   window.addEventListener('mouseup', onWindowUp)
   mouse(e, 'down')
@@ -242,8 +269,14 @@ function onWheel(e: WheelEvent) {
   if (p) send({ type: 'wheel', x: p.x, y: p.y, deltaX: e.deltaX, deltaY: e.deltaY })
 }
 function onKey(e: KeyboardEvent) {
-  if (isPasteKey(e)) return
+  const action = clipboardAction(e)
+  // Paste is the textarea's own paste event; copy and cut read the selection from the page (a synthesized Ctrl+C does not reach the clipboard).
+  if (action === 'paste') return
   e.preventDefault()
+  if (action) {
+    if (e.type === 'keydown') send({ type: 'copy', cut: action === 'cut' })
+    return
+  }
   send(keyMessage(e))
 }
 function onPaste(e: ClipboardEvent) {
@@ -288,17 +321,28 @@ defineExpose({ refresh })
           <canvas
             ref="canvas"
             tabindex="0"
-            class="size-full outline-none focus-visible:shadow-[var(--focus-ring)]"
+            class="size-full outline-none"
+            :class="focused ? 'shadow-[var(--focus-ring)]' : ''"
             aria-label="The browser, live"
             @mousedown="onDown"
             @mousemove="onMove"
             @wheel.prevent="onWheel"
             @contextmenu.prevent
-            @keydown="onKey"
-            @keyup="onKey"
-            @paste="onPaste"
+            @focus="keys?.focus()"
           />
         </div>
+        <textarea
+          ref="keys"
+          class="pointer-events-none absolute left-0 top-0 size-px resize-none opacity-0"
+          aria-label="Keyboard input for the browser"
+          autocomplete="off"
+          spellcheck="false"
+          @keydown="onKey"
+          @keyup="onKey"
+          @paste="onPaste"
+          @focus="focused = true"
+          @blur="focused = false"
+        />
         <div v-if="phase === 'live' && page && !isRealPage(page.tab.url)" class="pointer-events-none absolute inset-x-0 top-3 flex justify-center" role="status" data-testid="page-blank">
           <span class="rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text-muted)] shadow-(--shadow-menu-ringed)">This page is blank.</span>
         </div>

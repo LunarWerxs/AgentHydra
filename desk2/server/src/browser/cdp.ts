@@ -242,6 +242,37 @@ function virtualKeyCode(key: string): number {
   return 0
 }
 
+/** Blink's editing commands for the shortcuts a synthesized key does not run by itself (CDP's `commands` on a key event). */
+export function editCommands(key: string, modifiers: number): string[] | undefined {
+  if (!(modifiers & 6) || modifiers & 1) return undefined
+  const k = key.toLowerCase()
+  if (k === 'a' && !(modifiers & 8)) return ['selectAll']
+  if (k === 'z') return [modifiers & 8 ? 'redo' : 'undo']
+  if (k === 'y' && !(modifiers & 8)) return ['redo']
+  return undefined
+}
+
+/** Runs in the page: the selected text of the focused input/textarea, else of the document, looking into focused same-origin iframes; `cut` removes it from an editable one. */
+export const READ_SELECTION = (cut: boolean): string => `(() => {
+  let doc = document
+  for (let i = 0; i < 8; i++) {
+    const a = doc.activeElement
+    if (a && a.tagName === 'IFRAME') { try { if (a.contentDocument) { doc = a.contentDocument; continue } } catch {} }
+    break
+  }
+  const a = doc.activeElement
+  let text = ''
+  let editable = false
+  if (a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && typeof a.selectionStart === 'number' && a.selectionStart !== null))) {
+    try { text = a.value.slice(a.selectionStart, a.selectionEnd); editable = !a.readOnly && !a.disabled } catch {}
+  } else {
+    text = String(doc.getSelection ? doc.getSelection() : '')
+    editable = !!(a && a.isContentEditable)
+  }
+  if (${cut} && text && editable) doc.execCommand('delete')
+  return text
+})()`
+
 const MOUSE_TYPES = { down: 'mousePressed', up: 'mouseReleased', move: 'mouseMoved' } as const
 
 interface Pending {
@@ -540,6 +571,7 @@ export class LiveSession {
           code: msg.code,
           modifiers: msg.modifiers,
           windowsVirtualKeyCode: virtualKeyCode(msg.key),
+          ...(msg.event === 'down' && editCommands(msg.key, msg.modifiers) ? { commands: editCommands(msg.key, msg.modifiers) } : {}),
           ...(msg.event === 'down' && text ? { text } : {}),
         })
         return
@@ -547,6 +579,12 @@ export class LiveSession {
       case 'text':
         await this.call('Input.insertText', { text: msg.text })
         return
+      case 'copy': {
+        const r = (await this.call('Runtime.evaluate', { expression: READ_SELECTION(msg.cut), returnByValue: true })) as { result?: { value?: unknown } }
+        const text = r.result?.value
+        this.out({ type: 'clipboard', text: typeof text === 'string' ? text : '' })
+        return
+      }
       case 'navigate': {
         let url: URL
         try {
@@ -619,6 +657,8 @@ export function parseLiveIn(raw: string): BrowserLiveIn | null {
       return null
     case 'text':
       return typeof m.text === 'string' ? { type: 'text', text: m.text } : null
+    case 'copy':
+      return { type: 'copy', cut: m.cut === true }
     case 'navigate':
       return typeof m.url === 'string' ? { type: 'navigate', url: m.url } : null
     case 'history':

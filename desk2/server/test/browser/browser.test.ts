@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, setDefaultTimeout, t
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { BrowserLiveOut, BrowserOpened, BrowserProfiles, BrowserTab } from '@shared/browser'
-import { findChrome, parseLiveIn } from '../../src/browser/cdp'
+import { editCommands, findChrome, parseLiveIn } from '../../src/browser/cdp'
 import { createServer, type DeskServer } from '../../src/index'
 import { cleanTemps, commitAll, git, initRepo, tempDir } from '../git/helpers'
 
@@ -583,5 +583,20 @@ describe('parseLiveIn viewport', () => {
     expect(parseLiveIn('{"type":"viewport","width":"500","height":400}')).toBeNull()
     expect(parseLiveIn('{"type":"viewport","width":500}')).toBeNull()
     expect(parseLiveIn('{"type":"viewport","width":null,"height":400}')).toBeNull()
+  })
+})
+
+describe('copy messages and editing commands', () => {
+  test('parseLiveIn takes a copy and a cut', () => {
+    expect(parseLiveIn('{"type":"copy","cut":true}')).toEqual({ type: 'copy', cut: true })
+    expect(parseLiveIn('{"type":"copy"}')).toEqual({ type: 'copy', cut: false })
+  })
+  test('Ctrl+A, Ctrl+Z and redo ride the key as Blink commands; other keys carry none', () => {
+    expect(editCommands('a', 2)).toEqual(['selectAll'])
+    expect(editCommands('z', 2)).toEqual(['undo'])
+    expect(editCommands('Z', 2 | 8)).toEqual(['redo'])
+    expect(editCommands('y', 4)).toEqual(['redo'])
+    expect(editCommands('a', 0)).toBeUndefined()
+    expect(editCommands('a', 2 | 1)).toBeUndefined()
   })
 })

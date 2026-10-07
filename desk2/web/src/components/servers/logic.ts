@@ -207,6 +207,16 @@ export interface KeyLike extends ModifierState {
 /** True for the paste shortcut: the page's own paste event carries the text, so the key is not sent as well. */
 export const isPasteKey = (e: Pick<KeyLike, 'key' | 'ctrlKey' | 'metaKey'>): boolean => (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v'
 
+/** The clipboard shortcut a key press is, if any: Ctrl/Cmd+C, X, V and the old Ctrl+Insert, Shift+Delete, Shift+Insert. */
+export function clipboardAction(e: Pick<KeyLike, 'key' | 'ctrlKey' | 'metaKey'> & { shiftKey: boolean; altKey: boolean }): 'copy' | 'cut' | 'paste' | null {
+  if (e.altKey) return null
+  const mod = e.ctrlKey || e.metaKey
+  const k = e.key.toLowerCase()
+  if (mod && !e.shiftKey) return k === 'c' ? 'copy' : k === 'x' ? 'cut' : k === 'v' ? 'paste' : k === 'insert' ? 'copy' : null
+  if (e.shiftKey && !mod) return k === 'insert' ? 'paste' : k === 'delete' ? 'cut' : null
+  return null
+}
+
 /** A keydown/keyup as the message the live socket takes; `text` is set on a printable key's down (Enter types a return). */
 export function keyMessage(e: KeyLike): Extract<BrowserLiveIn, { type: 'key' }> {
   const down = e.type === 'keydown'
