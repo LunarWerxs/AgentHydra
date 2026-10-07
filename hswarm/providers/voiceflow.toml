@@ -1,0 +1,24 @@
+# Voiceflow v4 interaction uses the sessionKey returned here, not the project API key.
+# The legacy non-stream interaction remains documented and uses the project API key.
+base_url = "https://general-runtime.voiceflow.com"
+transport = "service"
+about = "Voiceflow project-key agent interaction through the documented legacy endpoint, plus v4 session creation. The legacy endpoint is deprecated but remains available; v4 interaction requires the returned sessionKey."
+website = "https://www.voiceflow.com"
+key_url = "https://creator.voiceflow.com"
+docs = "https://docs.voiceflow.com/api-reference/session/start-session-specific-environment"
+auth_header = "Authorization"
+auth_prefix = ""
+capabilities = ["agent-session", "agent-runtime"]
+
+[operations.create_session]
+method = "POST"
+path = "/v4/project/{project_id}/environment/{environment_id}/session"
+capability = "agent-session"
+response = "json"
+
+[operations.interact]
+method = "POST"
+path = "/state/user/{user_id}/interact"
+capability = "agent-runtime"
+response = "json"
+docs = "https://docs.voiceflow.com/api-reference/conversation/interact--legacy-non-stream"

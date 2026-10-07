@@ -13,6 +13,7 @@ balance_path = "/key"
 credits_path = "/credits"
 balance_authority = "status"
 check_model = "openai/gpt-oss-20b:free"  # the key check chats with it: /key answers 200 for deleted accounts
+check_model_free = true  # https://openrouter.ai/docs/guides/routing/model-variants/free
 headers = {HTTP-Referer = "https://github.com/LunarWerxs/AgentHydra", X-Title = "HydraSwarm"}
 passthrough = ["or:", "openrouter:"]
 anthropic_url = "https://openrouter.ai/api"

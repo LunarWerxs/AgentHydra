@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from hswarm import config, keys, selection, settings
+from hswarm import config, keys, selection, settings, vault
 from hswarm.client import KeyPool
 
 
@@ -30,6 +30,91 @@ def test_the_key_store_is_the_pool(monkeypatch):
     monkeypatch.setenv("GROQ_API_KEY", "sk-env-dddd-0004")
     with pytest.raises(settings.SettingsError, match="env:GROQ_API_KEY"):
         settings.remove_key("groq", _fp("sk-env-dddd-0004"))  # a key from the environment is changed there
+
+
+def test_console_provider_cards_expose_service_transport_capabilities_and_operations():
+    provider = next(row for row in settings.snapshot()["providers"] if row["name"] == "elevenlabs")
+    assert provider["transport"] == "service"
+    assert "text-to-speech" in provider["capabilities"] and "synthesize" in provider["operations"]
+
+
+def test_console_keys_live_in_the_encrypted_vault_and_survive_a_second_machine(tmp_path, monkeypatch):
+    a, b = "sk-shared-aaaa-0001", "sk-shared-bbbb-0002"
+    backend = tmp_path / "remote"
+    vault.init(f"dir:{backend}")
+    code = vault.pair_code()
+    added = settings.add_key("groq", a)
+    settings.add_key("groq", b)
+    assert added["sync"]["to_vault"] == 1
+    assert not config.user_file("groq").exists()
+    assert a.encode() not in (backend / "vault.bin").read_bytes()
+    settings.remove_key("groq", _fp(a))
+    state = vault.fetch_state()["lists"]["groq_api_keys"]
+    assert state[vault.key_id(a)]["k"] is None
+    assert state[vault.key_id(b)]["k"] == b
+
+    other = tmp_path / "other-home"
+    monkeypatch.setattr(config, "HOME", other)
+    monkeypatch.setattr(config, "PROVIDERS_DIR", other / "providers")
+    monkeypatch.setattr(config, "SECRETS_DIR", other / "secrets")
+    config.reload()
+    vault.join(code)
+    assert config.load_api_keys("groq") == [b]
+    assert settings.key_rows("groq")[0]["editable"]
+
+
+def test_key_edit_moves_legacy_toml_keys_without_erasing_provider_settings(user_toml):
+    a, b, c = "sk-legacy-aaaa-0001", "sk-legacy-bbbb-0002", "sk-legacy-cccc-0003"
+    path = user_toml("groq", f'# custom endpoint\nbase_url = "https://api.example.test/v1"\nkeys = ["{a}", "{b}"]\n'
+                              f'key_priority = {{"{_fp(a)}" = 2}}\n\n# keep this model\n[models.example-model]\nctx = 8192\n')
+    settings.add_key("groq", c)
+    text = path.read_text(encoding="utf-8")
+    assert "# custom endpoint" in text and "# keep this model" in text
+    assert 'base_url = "https://api.example.test/v1"' in text and "ctx = 8192" in text
+    assert a not in text and b not in text and c not in text
+    assert config.load_api_keys("groq") == [a, b, c]
+    assert config.PROVIDERS["groq"]["key_priority"][_fp(a)] == 2
+
+
+def test_remove_drops_every_managed_duplicate_and_its_stale_priority(user_toml):
+    a, b = "sk-duplicate-aaaa-0001", "sk-duplicate-bbbb-0002"
+    path = user_toml("groq", f'keys = ["{a}", "{b}"]\nkey_priority = {{"{_fp(a)}" = 1}}\n')
+    config.SECRETS_DIR.mkdir(parents=True)
+    keyfile = config.SECRETS_DIR / "groq_api_keys"
+    keyfile.write_text(f"# retained list comment\n{a}\n{b}\n", encoding="utf-8")
+    settings.remove_key("groq", _fp(a))
+    assert config.load_api_keys("groq") == [b]
+    assert a not in path.read_text(encoding="utf-8") and _fp(a) not in path.read_text(encoding="utf-8")
+    assert keyfile.read_text(encoding="utf-8") == f"# retained list comment\n{b}\n"
+
+
+def test_explicit_add_clears_old_dead_and_unfunded_classifications():
+    key = "sk-new-proof-alive-0001"
+    config.SECRETS_DIR.mkdir(parents=True)
+    for suffix in (".dead", ".unfunded"):
+        (config.SECRETS_DIR / ("groq_api_keys" + suffix)).write_text(key + "\n", encoding="utf-8")
+    settings.add_key("groq", key)
+    assert config.load_api_keys("groq") == [key]
+    assert all(key not in (config.SECRETS_DIR / ("groq_api_keys" + suffix)).read_text(encoding="utf-8")
+               for suffix in (".dead", ".unfunded"))
+
+
+def test_invalid_legacy_provider_file_refuses_a_key_edit_before_writing():
+    path = config.user_file("groq")
+    path.parent.mkdir(parents=True)
+    path.write_text('keys = ["unfinished"\n', encoding="utf-8")
+    with pytest.raises(settings.SettingsError, match="not valid TOML"):
+        settings.add_key("groq", "sk-valid-but-unsaved-0001")
+    assert not (config.SECRETS_DIR / "groq_api_keys").exists()
+    assert path.read_text(encoding="utf-8") == 'keys = ["unfinished"\n'
+
+
+def test_failed_upload_reports_that_the_local_key_is_pending(tmp_path, monkeypatch):
+    vault.init(f"dir:{tmp_path / 'remote'}")
+    monkeypatch.setattr(vault, "_sync_locked", lambda **kwargs: (_ for _ in ()).throw(vault.VaultError("offline")))
+    with pytest.raises(vault.VaultError, match="local key changes were saved, but vault sync failed"):
+        settings.add_key("groq", "sk-pending-upload-0001")
+    assert config.load_api_keys("groq") == ["sk-pending-upload-0001"]
 
 
 def test_key_priority_tiers_take_turns_and_fall_through():
@@ -83,7 +168,8 @@ def test_switches_and_priority_decide_what_auto_runs():
     # A hand edit of the provider files (no settings call) reaches a long-lived process through refresh().
     f1, f2 = config.user_file(first["provider"]), config.user_file(second["provider"])
     f1.write_text(f1.read_text(encoding="utf-8").replace("enabled = false", ""), encoding="utf-8")
-    f2.write_text(f2.read_text(encoding="utf-8") + f'\n[models."{second["model"]}"]\npriority = 1\n', encoding="utf-8")
+    f2.write_text((f2.read_text(encoding="utf-8") if f2.exists() else "") +
+                  f'\n[models."{second["model"]}"]\npriority = 1\n', encoding="utf-8")
     for f in (f1, f2):
         os.utime(f, ns=(1, 1))  # a new stamp even within one clock tick
     assert config.refresh() is True

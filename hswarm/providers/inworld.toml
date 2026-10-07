@@ -1,0 +1,36 @@
+# The copied Portal credential is already Base64; do not encode it a second time.
+base_url = "https://api.inworld.ai"
+transport = "openai"
+check_path = "/voices/v1/voices?pageSize=1"
+about = "Inworld's chat model router, speech synthesis and voice catalog. Uses the complete Base64 credential copied from the Portal."
+website = "https://inworld.ai"
+key_url = "https://platform.inworld.ai"
+docs = "https://docs.inworld.ai/api-reference/ttsAPI/texttospeech/synthesize-speech"
+auth_header = "Authorization"
+auth_prefix = "Basic "
+capabilities = ["chat", "text-to-speech", "voices", "model-catalog"]
+chat_path = "/v1/chat/completions"
+passthrough = ["inworld:"]
+options = ["reasoning_effort"]
+anthropic_url = "facade"
+key_billing = "unknown"
+# The catalog has its own schema; list_models returns it through the service adapter.
+
+[operations.synthesize]
+method = "POST"
+path = "/tts/v1/voice"
+capability = "text-to-speech"
+response = "json"
+
+[operations.list_voices]
+method = "GET"
+path = "/voices/v1/voices"
+capability = "voices"
+response = "json"
+
+[operations.list_models]
+method = "GET"
+path = "/llm/v1alpha/models"
+capability = "model-catalog"
+response = "json"
+docs = "https://docs.inworld.ai/api-reference/modelsAPI/modelservice/list-models"

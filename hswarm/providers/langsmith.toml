@@ -1,0 +1,22 @@
+base_url = "https://api.smith.langchain.com"
+transport = "service"
+check_path = "/api/v1/sessions?limit=1"
+about = "LangSmith trace queries and tracing project metadata. Organization-scoped keys may also require a workspace header in a local provider configuration."
+website = "https://www.langchain.com/langsmith"
+key_url = "https://smith.langchain.com"
+docs = "https://docs.langchain.com/langsmith/smith-api/runs/query-runs"
+auth_header = "X-API-Key"
+auth_prefix = ""
+capabilities = ["observability"]
+
+[operations.query_runs]
+method = "POST"
+path = "/api/v2/runs/query"
+capability = "observability"
+response = "json"
+
+[operations.list_projects]
+method = "GET"
+path = "/api/v1/sessions"
+capability = "observability"
+response = "json"

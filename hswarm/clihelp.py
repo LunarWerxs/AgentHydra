@@ -31,12 +31,18 @@ META: dict[str, dict] = {
     "help": {"effect": READ, "guide": "This sitemap. `help <command> --json` gives one command's args, flags, effect and guide."},
     "skill": {"effect": WRITE, "guide": "Prints the agent SKILL.md; only --install writes it. --check exits 1 when the installed copy is missing or stale.",
               "examples": ["hswarm skill --check", "hswarm skill --install"]},
-    "import-keys": {"effect": WRITE, "guide": "Copies key files from a ZSwarm clone's .secrets into HSWARM_HOME/secrets; prints only counts, never a key or prefix.",
-                    "examples": ["hswarm import-keys --from <clone>"]},
+    "import-keys": {"effect": WRITE, "guide": "Merges *_alive_keys.txt exports or *_api_keys lists into the vault-backed secrets lists. "
+                     "Retains keys omitted from an alive export; removes active keys only when explicitly present in a dead list. "
+                     "A newer alive export clears old dead/unfunded list classifications but preserves credit/manual disables. "
+                     "Consolidates legacy provider TOML keys and syncs the configured encrypted vault. --dry-run writes nothing; output is counts only.",
+                     "examples": ["hswarm import-keys --from <key-export> --dry-run --json", "hswarm import-keys --from <key-export>"]},
     "import-zswarm": {"effect": WRITE, "guide": "Brings a ZSwarm home's stats database, ledger/survival/routing/savings lines, job records and history archives into HSWARM_HOME; "
                       "a one-shot (the first real run records that it ran; later runs do nothing), never copies keys, secrets, egress logs or the vault; prints counts only. --dry-run writes nothing.",
                       "examples": ["hswarm import-zswarm --dry-run --json", "hswarm import-zswarm"]},
     "doctor": {"effect": READ, "guide": "Free GETs only (balance, /models); prints key fingerprints, never key values. Run it first when anything fails."},
+    "service": {"effect": SPEND, "guide": "With only a provider name, lists its capabilities and operation schemas offline. An operation makes one authenticated REST request with that provider's payload schema; generations may be billed. "
+                "Use --input for a JSON payload, --path NAME=VALUE for IDs, --file FIELD=PATH for multipart, and --output for binary media. POSTs are never automatically retried; poll a job using the same --key-fingerprint that created it.",
+                "examples": ["hswarm service tavily", "hswarm service tavily search --input search.json", "hswarm service elevenlabs synthesize --path voice_id=example --input speech.json --output speech.mp3"]},
     "keys": {"effect": WRITE, "guide": "`keys` (list) is offline and read-only; `probe` makes one free GET per key and may return a topped-up key to the pool; "
              "`enable` / `disable` edit the disabled slot. Pass the 8-character fingerprint, never a key.",
              "examples": ["hswarm keys --json", "hswarm keys probe --provider deepseek"]},

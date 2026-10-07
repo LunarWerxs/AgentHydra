@@ -1,0 +1,28 @@
+base_url = "https://api.lumalabs.ai/dream-machine/v1"
+transport = "service"
+check_path = "/generations?limit=1"
+about = "Luma Dream Machine image and video generation. Generated assets are referenced by URLs in job metadata."
+website = "https://lumalabs.ai"
+key_url = "https://platform.lumalabs.ai"
+docs = "https://docs.lumalabs.ai/docs/api"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["image-generation", "video-generation", "generation-status"]
+
+[operations.generate_image]
+method = "POST"
+path = "/generations/image"
+capability = "image-generation"
+response = "json"
+
+[operations.generate_video]
+method = "POST"
+path = "/generations/video"
+capability = "video-generation"
+response = "json"
+
+[operations.get_generation]
+method = "GET"
+path = "/generations/{generation_id}"
+capability = "generation-status"
+response = "json"

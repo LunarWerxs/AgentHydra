@@ -87,7 +87,7 @@ def test_no_key_for_a_provider_names_its_env_and_file(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEYS", raising=False)
     monkeypatch.setattr(config, "SECRETS_DIR", Path("Z:/nowhere"))
-    with pytest.raises(RuntimeError, match=r"gemini\.toml.*GEMINI_API_KEY"):
+    with pytest.raises(RuntimeError, match=r"gemini_api_keys.*GEMINI_API_KEY"):
         ChatClient(provider="gemini")
     monkeypatch.setenv("GEMINI_API_KEY", "g-unit-secret")
     st = config.key_status("gemini")

@@ -1,0 +1,23 @@
+# These REST routes use an API key alone; OAuth API-key/secret exchange and EVI WebSockets are separate protocols.
+base_url = "https://api.hume.ai"
+transport = "service"
+check_path = "/v0/tts/voices?provider=HUME_AI&page_size=1"
+about = "Hume Octave speech synthesis and voice catalog. Speech is returned as base64 audio in JSON."
+website = "https://www.hume.ai"
+key_url = "https://platform.hume.ai"
+docs = "https://dev.hume.ai/voice/reference/text-to-speech-tts/synthesize-json"
+auth_header = "X-Hume-Api-Key"
+auth_prefix = ""
+capabilities = ["text-to-speech", "voices"]
+
+[operations.synthesize]
+method = "POST"
+path = "/v0/tts"
+capability = "text-to-speech"
+response = "json"
+
+[operations.list_voices]
+method = "GET"
+path = "/v0/tts/voices"
+capability = "voices"
+response = "json"

@@ -45,6 +45,37 @@ def test_the_api_answers_only_this_machine_with_the_token(monkeypatch):
     assert client.get("/api/state", headers={"X-Hswarm-Token": b"\xe9" * 43}).status_code == 401  # a non-ASCII byte: 401, not a 500
 
 
+def test_a_pending_key_upload_leaves_the_console_responsive_and_reloads_on_its_loop(monkeypatch):
+    import asyncio
+    import threading
+    from hswarm import config, settings
+
+    entered, release = threading.Event(), threading.Event()
+    changed_on, reloaded_on = [], []
+    def blocked_add(provider, key, *, _reload=True):
+        assert _reload is False
+        changed_on.append(threading.get_ident())
+        entered.set()
+        assert release.wait(3)
+        return {"added": True}
+    monkeypatch.setattr(settings, "add_key", blocked_add)
+    monkeypatch.setattr(settings, "snapshot", lambda: {"ready": True})
+    monkeypatch.setattr(config, "refresh", lambda: False)
+    monkeypatch.setattr(config, "reload", lambda: reloaded_on.append(threading.get_ident()))
+
+    async def exercise():
+        loop_thread = threading.get_ident()
+        upload = asyncio.create_task(console.handle("POST", "keys/add", {"provider": "groq", "key": "sk-fake-upload-0001"}))
+        try:
+            assert await asyncio.to_thread(entered.wait, 2)
+            assert await asyncio.wait_for(console.handle("GET", "state", {}), 0.5) == (200, {"ready": True})
+        finally:
+            release.set()
+        assert await upload == (200, {"added": True})
+        assert changed_on != [loop_thread] and reloaded_on == [loop_thread]
+    asyncio.run(exercise())
+
+
 def test_codex_registration_keeps_the_rest_of_config_toml(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     cfg = tmp_path / "config.toml"

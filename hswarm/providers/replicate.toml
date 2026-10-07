@@ -1,0 +1,28 @@
+base_url = "https://api.replicate.com"
+transport = "service"
+check_path = "/v1/account"
+about = "Replicate model predictions. The chosen model version determines the input and output schema."
+website = "https://replicate.com"
+key_url = "https://replicate.com/account/api-tokens"
+docs = "https://replicate.com/docs/reference/http"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["model-inference", "prediction-status"]
+
+[operations.predict]
+method = "POST"
+path = "/v1/predictions"
+capability = "model-inference"
+response = "json"
+
+[operations.get_prediction]
+method = "GET"
+path = "/v1/predictions/{prediction_id}"
+capability = "prediction-status"
+response = "json"
+
+[operations.list_predictions]
+method = "GET"
+path = "/v1/predictions"
+capability = "prediction-status"
+response = "json"

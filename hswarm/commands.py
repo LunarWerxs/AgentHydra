@@ -685,32 +685,22 @@ def _print_keys(out: dict) -> None:
 
 
 async def cmd_import_keys(a) -> int:
-    """Import API keys from a ZSwarm clone's .secrets/ directory into HSWARM_HOME/secrets/."""
-    import shutil
+    """Merge key exports, retaining omitted keys and removing only explicit dead entries."""
+    from . import key_import, vault
 
-    source_dir = Path(a.source_dir)
-    if not source_dir.exists():
-        print(f"Error: source directory not found: {source_dir}", file=sys.stderr)
+    try:
+        out = await asyncio.to_thread(key_import.run, Path(a.source_dir), dry_run=a.dry_run)
+    except (key_import.KeyImportError, vault.VaultError) as e:
+        print(f"Error: {e}", file=sys.stderr)
         return 1
-
-    secrets_dir = source_dir / ".secrets"
-    if not secrets_dir.exists():
-        print(f"Error: .secrets/ not found in {source_dir}", file=sys.stderr)
-        return 1
-
-    # Create target directory
-    hswarm_secrets = config.HOME / "secrets"
-    hswarm_secrets.mkdir(parents=True, exist_ok=True)
-
-    # Copy all *_api_keys files
-    count = 0
-    for src_file in secrets_dir.glob("*_api_keys"):
-        if src_file.is_file():
-            dst_file = hswarm_secrets / src_file.name
-            shutil.copy2(src_file, dst_file)
-            count += 1
-
-    print(f"Imported {count} key file(s) into {hswarm_secrets}")
+    if a.json:
+        print(json.dumps(out, indent=2))
+    else:
+        mode = "Would merge" if a.dry_run else "Merged"
+        print(f"{mode} {out['incoming_alive']} alive keys: {out['added']} added, {out['removed_dead']} explicitly dead removed, "
+              f"{out['restored_classifications']} stale classifications cleared; {out['provider_files_consolidated']} provider files consolidated.")
+        if out.get("sync"):
+            print(f"Vault synced: revision {out['sync']['rev']}, {out['sync']['keys']} entries.")
     return 0
 
 
@@ -811,7 +801,14 @@ async def cmd_egress(a) -> int:
     return 0
 
 
+async def cmd_service(a) -> int:
+    from .service import cmd_service as call_service
+
+    return await call_service(a)
+
+
 COMMANDS = {
+    "service": cmd_service,
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
     "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,

@@ -1,0 +1,12 @@
+base_url = "https://api.tokenfactory.nebius.com/v1"
+about = "Nebius Token Factory (formerly AI Studio), OpenAI-compatible language-model inference."
+website = "https://tokenfactory.nebius.com"
+key_url = "https://tokenfactory.nebius.com"
+docs = "https://docs.tokenfactory.nebius.com/quickstart"
+transport = "openai"
+capabilities = ["chat"]
+key_billing = "unknown"
+models_path = "/models"
+passthrough = ["nebius:"]
+options = ["reasoning_effort"]
+anthropic_url = "facade"

@@ -1,0 +1,29 @@
+# REST endpoints and API-key authentication verified against official docs 2026-10-07.
+base_url = "https://api.assemblyai.com"
+transport = "service"
+check_path = "/v2/transcript?limit=1"
+about = "AssemblyAI prerecorded audio transcription. Submit an audio URL and poll the returned transcript ID."
+website = "https://www.assemblyai.com"
+key_url = "https://www.assemblyai.com/dashboard"
+docs = "https://www.assemblyai.com/docs/api-reference/transcripts/submit"
+auth_header = "Authorization"
+auth_prefix = ""
+capabilities = ["transcription", "transcript-status"]
+
+[operations.transcribe]
+method = "POST"
+path = "/v2/transcript"
+capability = "transcription"
+response = "json"
+
+[operations.get_transcript]
+method = "GET"
+path = "/v2/transcript/{transcript_id}"
+capability = "transcript-status"
+response = "json"
+
+[operations.list_transcripts]
+method = "GET"
+path = "/v2/transcript"
+capability = "transcript-status"
+response = "json"

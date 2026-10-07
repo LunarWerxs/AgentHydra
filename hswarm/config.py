@@ -311,7 +311,7 @@ PRIORITY: dict[str, int] = {}
 BUILTIN_PROVIDERS: dict[str, dict] = {}
 BUILTIN_MODELS: dict[str, dict] = {}
 
-_TUPLE_FIELDS = ("key_env", "key_files", "options", "passthrough", "omit")
+_TUPLE_FIELDS = ("key_env", "key_files", "options", "passthrough", "omit", "capabilities")
 _ROLES_DEFAULT, _PANEL_DEFAULT = dict(ROLES), list(PANEL)
 _LOADED: tuple = ()  # the stamp of the files the registry was last built from; refresh() compares it
 _LAST_GOOD: dict[str, dict] = {}  # file -> its last readable parse, so a broken hand edit never drops a provider
@@ -370,7 +370,7 @@ def _default_provider(name: str) -> dict:
     """What a provider file leaves out: keys from <NAME>_API_KEYS / <NAME>_API_KEY and <home>/secrets/<name>_api_keys."""
     env = re.sub(r"[^A-Z0-9]", "_", name.upper())
     return {"key_env": (f"{env}_API_KEYS", f"{env}_API_KEY"), "key_files": (f"{name}_api_keys",), "options": (),
-            "models_path": None, "balance_path": None}
+            "models_path": None, "balance_path": None, "transport": "openai", "capabilities": ("chat",)}
 
 
 def _add_provider(name: str, doc: dict, user: bool) -> None:
@@ -382,6 +382,10 @@ def _add_provider(name: str, doc: dict, user: bool) -> None:
     if "key_priority" in spec:
         spec["key_priority"] = ranks(spec["key_priority"])
     PROVIDERS[name] = PROVIDERS.get(name, _default_provider(name)) | spec
+    # Every provider has one canonical editable/syncable list, including a user file which explicitly
+    # clears key_files. Keep older/custom sources afterwards so an upgrade does not hide existing keys.
+    p = PROVIDERS[name]
+    p["key_files"] = tuple(dict.fromkeys((f"{name}_api_keys", *(p.get("key_files") or ()))))
     _add_models(name, doc.get("models"), user)
 
 
@@ -566,6 +570,12 @@ def provider_enabled(provider: str) -> bool:
     return PROVIDERS.get(provider, {}).get("enabled", True) is not False
 
 
+def provider_chat(provider: str) -> bool:
+    """Only chat transports may enter model routing; media/search/observability use service operations."""
+    spec = PROVIDERS.get(provider, {})
+    return spec.get("transport", "openai") in ("openai", "anthropic") and "chat" in spec.get("capabilities", ("chat",))
+
+
 # 2026-10-03: AgentHydra has no launcher script and the package is not installed, so `python -m hswarm` only worked from
 # the AgentHydra root. This bootstrap puts the package's parent (argv[1]) on sys.path and runs the module, so it
 # starts from any folder with no install. No backslash and no double quote, so one command string, a stdio
@@ -586,6 +596,8 @@ def _register_passthrough(name: str, original: str | None = None) -> str | None:
     NO price until `hswarm models --refresh openrouter` writes the live rates, so its cost reads '-' rather than
     a guessed number - except that OpenRouter reports the real charged cost on every call, which the client uses."""
     for provider, spec in PROVIDERS.items():
+        if not provider_chat(provider):
+            continue
         for prefix in spec.get("passthrough") or ():
             if name.startswith(prefix) and len(name) > len(prefix):
                 # The registry key is lowercase; the WIRE id keeps the caller's case, because a Hugging Face
@@ -826,7 +838,7 @@ NAME_RX = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")  # a provider or model name
 
 def user_file(provider: str) -> Path:
     """The user's own file for a provider: its settings over the shipped ones, its models, its switches and its keys
-    (`keys = [...]`). `hswarm ui` and `hswarm keys add` write it; so can a person. Read through HOME at call time, so
+    (legacy `keys = [...]`). Settings edits write it; key edits move its keys into secrets/ for vault sync. Read through HOME at call time, so
     HSWARM_HOME (and a test's home) is honoured. A name that is not a provider name (`../settings`, a drive path) is
     refused: removing a provider deletes this file."""
     if not NAME_RX.match(provider or ""):
@@ -835,7 +847,7 @@ def user_file(provider: str) -> Path:
 
 
 def user_source(provider: str) -> str:
-    """The label of the one key source hswarm edits (the user's file), built from the real path."""
+    """The legacy provider-file key source label, built from the real path."""
     path = user_file(provider)
     try:
         return "~/" + path.relative_to(Path.home()).as_posix()
@@ -848,7 +860,7 @@ _KEYS_READ: dict[str, tuple] = {}  # file -> ((mtime, size), its keys)
 
 def user_keys(provider: str) -> list[str]:
     """The `keys` in the user's file for a provider, re-read when the file changed: keys.pool_for asks every few
-    seconds, so a key added by hand or in `hswarm ui` reaches a running server without a restart. A file that stops
+    seconds, so a legacy key added by hand reaches a running server without a restart. A file that stops
     parsing keeps the keys it had."""
     path = user_file(provider)
     try:
@@ -876,7 +888,13 @@ def key_sources(provider: str = DEFAULT_PROVIDER) -> tuple:
     env = tuple((f"env:{e}", (lambda e=e: _split_keys(os.environ.get(e)))) for e in p.get("key_env", ()))
     mine = ((user_source(provider), lambda: user_keys(provider)),)
     files = tuple((f"<home>/secrets/{f}", (lambda f=f: _read_key_lines(SECRETS_DIR / f))) for f in p.get("key_files", ()))
-    return env + mine + files
+    def live(reader):
+        # Explicit dead classifications override a duplicate in any active source. Read these each
+        # time so another paired machine cannot revive a removed key by syncing an older active list.
+        dead = {key for f in p.get("key_files", ()) for key in _read_key_lines(SECRETS_DIR / (f + ".dead"))}
+        return [key for key in reader() if key not in dead]
+
+    return tuple((name, lambda reader=reader: live(reader)) for name, reader in env + mine + files)
 
 
 def fingerprint(key: str) -> str:
@@ -899,7 +917,7 @@ def no_key_message(provider: str = DEFAULT_PROVIDER) -> str:
         return f"{provider} is switched off in settings; turn it on in `hswarm ui` (or remove `enabled = false` from {user_file(provider)})."
     env = " or ".join(PROVIDERS.get(provider, {}).get("key_env") or ("<PROVIDER>_API_KEY",))
     return (f"No {provider} API key found. Add one in `hswarm ui`, with `hswarm keys add {provider}`, or as "
-            f"`keys = [\"...\"]` in {user_file(provider)}; or set {env}.")
+            f"a line in {SECRETS_DIR / (provider + '_api_keys')}; or set {env}.")
 
 
 def load_api_key(provider: str = DEFAULT_PROVIDER) -> str:
@@ -936,6 +954,8 @@ def providers_status() -> dict:
         out[name] = {
             "base_url": p.get("base_url"), "keys": key_status(name)["count"], "models": models,
             "unpriced_models": [m for m in models if price(m) is None], "docs": p.get("docs"),
+            "transport": p.get("transport", "openai"), "capabilities": list(p.get("capabilities") or ()),
+            "operations": sorted(p.get("operations") or {}),
         }
     return out
 

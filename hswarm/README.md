@@ -2,6 +2,14 @@
 
 HydraSwarm is AgentHydra's swarm. It began as a copy of ZSwarm and replaced it when ZSwarm was retired (2026-10-03); `hswarm import-zswarm` brings a ZSwarm home's history across.
 
+**TL;DR**
+
+- Run `python -m hswarm ui` for the console or `python -m hswarm ask "your question"` for a worker.
+- Keys added through the console, CLI and API use the same provider lists and encrypted vault.
+- Paired machines sync key additions and removals; provider settings and work history stay local.
+
+<details><summary>Setup, configuration and development</summary>
+
 ## What is HydraSwarm?
 
 A cheap worker swarm: hands work from Claude Code, Claude Desktop or Codex to many cheap AI models at once, with a flagship orchestrator (MCP server + CLI, costed against the Claude it displaces).
@@ -29,7 +37,16 @@ python -m hswarm help
 HydraSwarm reads API keys from:
 
 1. Environment variables: `<PROVIDER>_API_KEYS` or `<PROVIDER>_API_KEY`
-2. Files in `$HSWARM_HOME/secrets/<provider>_api_keys`
+2. Legacy `keys` fields in `$HSWARM_HOME/providers/<provider>.toml`
+3. Files in `$HSWARM_HOME/secrets/<provider>_api_keys`
+
+Add or remove keys in the console or with `hswarm keys add|remove`; these edit the provider lists in `secrets/`
+and sync the encrypted vault immediately when configured. The next key edit moves a provider's legacy TOML keys
+into its list and keeps its other settings, comments and priority numbers. Environment keys are read-only.
+An explicit addition clears that key's older `.dead` and `.unfunded` classifications.
+Key validation uses an authenticated free read or an explicitly free model check; adding a key never starts paid
+generation. A provider without a safe check keeps the key as unverified. Credential acceptance does not prove
+paid credit, and a service endpoint's permission denial leaves the key unchecked rather than marking it dead.
 
 For example:
 ```bash
@@ -37,13 +54,18 @@ export DEEPSEEK_API_KEYS="sk-..."
 export OPENROUTER_API_KEYS="sk-..."
 ```
 
-Or import them from a ZSwarm clone:
+Import a checker export containing `<provider>_alive_keys.txt` and `<provider>_dead_keys.txt`:
 
 ```bash
-python -m hswarm import-keys --from /path/to/zswarm
+python -m hswarm import-keys --from /path/to/key-export --dry-run --json
+python -m hswarm import-keys --from /path/to/key-export --json
 ```
 
-This copies key files from a ZSwarm clone's `<clone>/.secrets/` into `$HSWARM_HOME/secrets/` and prints only counts (never a key).
+The dry run reports counts and changes nothing. Import adds alive keys, removes only explicitly dead keys from
+active lists, and preserves existing keys omitted from the export. New alive evidence clears older dead/unfunded
+classifications. Credit and manual disables remain local measurements. The import also moves legacy provider TOML
+keys into the shared lists while preserving their settings, then syncs the encrypted vault. Output contains counts,
+never key values. Existing `<provider>_api_keys` lists and a legacy clone's `.secrets/` folder are accepted too.
 
 ### Key vault
 
@@ -65,8 +87,9 @@ python -m hswarm vault list [openrouter]  |  status  |  sync [--dry-run] [--allo
 - **What is stored.** AES-256-GCM, a random vault key in `$HSWARM_HOME/vault.key` (owner-only). The server holds
   ciphertext only, so a plain SSH box, a shared folder (`dir:<folder>`) or any other backend is a placement choice,
   not a trust decision.
-- **What is synced.** The list files in `$HSWARM_HOME/secrets/` and nothing else; the disabled slot (`keys.json`)
-  is each machine's own measurement.
+- **What is synced.** The list files in `$HSWARM_HOME/secrets/`, including keys added through settings, the CLI
+  and the API. These lists are local runtime copies of the encrypted vault. Provider/model settings and the
+  disabled slot (`keys.json`) are each machine's own configuration and measurements.
 - **How two machines agree.** Each key is one entry: the key, a time and who wrote it, or a tombstone when removed.
   The newer entry wins and a removal wins a tie. A write is compare-and-swap on the file's hash, so a writer that
   lost a race re-reads, merges and retries.
@@ -74,11 +97,30 @@ python -m hswarm vault list [openrouter]  |  status  |  sync [--dry-run] [--allo
   and says so (`--allow-removals`; `--rebase` brings everything back from the vault). A server that went back to an
   older vault is refused. The server keeps the last 40 versions. A failed background sync is logged once and the
   next tick retries.
+- **Local edits.** Key edits and syncs share an exclusive local lock so a background sync cannot overwrite an
+  edit in progress. A busy lock refuses the operation. A failed upload reports that the local change was saved
+  and remains pending for the next sync.
 - **`adopt`.** When `~/.zswarm` (or `ZSWARM_HOME`) holds `vault.key` and `vault.json` and `$HSWARM_HOME` has no
   vault, `adopt` copies those two files here owner-only (only once the key opens the stored vault), then runs a
   first sync, which only adds. `vault status` says when it is available.
 - **Output.** Every verb prints counts and 8-character fingerprints. `pair` prints the code only to a terminal: the
   code opens every key, so it goes person to person, never into a chat or a ticket.
+
+### Provider services
+
+Speech, image, video, search and observability providers use service operations with their provider's request
+schema. List operations offline, or pass a JSON file and save binary output when needed:
+
+```bash
+python -m hswarm service tavily
+python -m hswarm service tavily search --input search.json
+python -m hswarm service elevenlabs synthesize --path voice_id=example --input speech.json --output speech.mp3
+```
+
+The service CLI reports the selected key's fingerprint so an asynchronous operation can be polled with the same
+key. It never automatically retries a POST. Chat endpoints accept explicit live model IDs using provider prefixes
+such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:` and `inworld:`; these models become candidates
+for automatic routing only after evaluation.
 
 ### Configuration Directory
 
@@ -220,3 +262,5 @@ export HSWARM_PORT=7793
 ```
 
 Run the tests with `python -m pytest hswarm/tests -q` from the repository root.
+
+</details>

@@ -1,0 +1,41 @@
+base_url = "https://api.coze.com"
+transport = "service"
+about = "Coze agent runtime, agent lists and conversation metadata. Non-streaming calls return a chat ID; poll it and retrieve messages. Uses a personal access token with workspace permissions."
+website = "https://www.coze.com"
+key_url = "https://www.coze.com/open/oauth/pats"
+docs = "https://www.coze.com/open/docs/developer_guides/list_agents"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["agent-management", "conversation-metadata", "agent-runtime"]
+
+[operations.list_agents]
+method = "GET"
+path = "/v1/bots"
+capability = "agent-management"
+response = "json"
+
+[operations.run_agent]
+method = "POST"
+path = "/v3/chat"
+capability = "agent-runtime"
+response = "json"
+docs = "https://www.coze.com/open/docs/developer_guides/chat_v3"
+
+[operations.get_chat]
+method = "POST"
+path = "/v3/chat/retrieve"
+capability = "agent-runtime"
+response = "json"
+docs = "https://www.coze.com/open/docs/developer_guides/retrieve_chat"
+
+[operations.list_chat_messages]
+method = "GET"
+path = "/v3/chat/message/list"
+capability = "agent-runtime"
+response = "json"
+
+[operations.get_conversation]
+method = "GET"
+path = "/v1/conversation/retrieve"
+capability = "conversation-metadata"
+response = "json"

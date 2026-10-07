@@ -1,0 +1,13 @@
+base_url = "https://api.x.ai/v1"
+about = "xAI's Grok models through the Chat Completions API."
+website = "https://x.ai"
+key_url = "https://console.x.ai"
+docs = "https://docs.x.ai/developers/model-capabilities/legacy/chat-completions"
+transport = "openai"
+capabilities = ["chat"]
+key_env = ["XAI_API_KEYS", "XAI_API_KEY", "GROK_XAI_API_KEYS", "GROK_XAI_API_KEY"]
+key_billing = "unknown"
+models_path = "/models"
+passthrough = ["xai:", "grok_xai:"]
+options = ["reasoning_effort"]
+anthropic_url = "facade"

@@ -37,6 +37,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="key present? models? balance? binaries?")
 
+    svc = sub.add_parser("service", help="list or call a provider's speech, image, video, search or application operations")
+    svc.add_argument("provider", help="provider name; omit operation to list capabilities and documented endpoints offline")
+    svc.add_argument("operation", nargs="?", help="one operation from the provider's list")
+    svc.add_argument("--input", help="JSON payload file, or - to read a JSON object from stdin")
+    svc.add_argument("--path", dest="path_param", action="append", metavar="NAME=VALUE", help="endpoint path placeholder (repeatable)")
+    svc.add_argument("--param", action="append", metavar="NAME=VALUE", help="query parameter (repeatable)")
+    svc.add_argument("--file", action="append", metavar="FIELD=PATH", help="multipart file (repeatable)")
+    svc.add_argument("--data-body", help="binary request body file for operations with input=bytes")
+    svc.add_argument("--content-type", help="media type for a binary request body")
+    svc.add_argument("--output", help="response destination; required for binary media")
+    svc.add_argument("--key-fingerprint", help="use this provider key's fingerprint (use the same key to poll its generation)")
+    svc.add_argument("--timeout-s", type=float, default=120.0)
+
     # The allow-always / block half of read_url's host gate (web.py); allow-once is web_hosts on the batch.
     w = sub.add_parser("web", help="read_url's standing host policy (allow / block) and which backend serves each channel")
     w.add_argument("--allow", action="append", metavar="HOST", help="allow HOST for every batch from now on (repeatable)")
@@ -63,8 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     k.add_argument("--reason", default="disabled by hand", help="with disable: why, recorded in the slot")
     k.add_argument("--json", action="store_true")
 
-    ik = sub.add_parser("import-keys", help="import API keys from a ZSwarm clone's .secrets/ directory")
-    ik.add_argument("--from", dest="source_dir", required=True, help="path to a ZSwarm clone with .secrets/")
+    ik = sub.add_parser("import-keys", help="merge alive/dead key exports into the shared encrypted vault")
+    ik.add_argument("--from", dest="source_dir", required=True, help="directory of *_alive_keys.txt / *_dead_keys.txt, key lists, or a legacy clone with .secrets/")
+    ik.add_argument("--dry-run", action="store_true", help="show additions and explicit dead removals without writing or syncing")
+    ik.add_argument("--json", action="store_true", help="print counts only as JSON")
 
     iz = sub.add_parser("import-zswarm", help="import ZSwarm's stats and history (database, ledger and other logs, jobs, archives) into HSwarm, once (later runs do nothing)")
     iz.add_argument("--from", dest="source_dir", help="the ZSwarm home (default: $ZSWARM_HOME or ~/.zswarm)")

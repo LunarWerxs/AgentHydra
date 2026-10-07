@@ -323,6 +323,16 @@ def _vault(fn):
     return lambda b: asyncio.to_thread(fn, b)
 
 
+def _key_change(fn):
+    """Keep blocking key sync off the loop, then reload the model registry on the loop itself."""
+    async def change(body):
+        try:
+            return await asyncio.to_thread(fn, body)
+        finally:
+            config.reload()
+    return change
+
+
 RUN_ARGS = {"tasks", "cwd", "tools", "model", "role", "backend", "system", "max_turns", "schema", "timeout_s", "concurrency",
             "budget_usd", "label", "wait", "wait_s", "thinking", "reasoning_effort", "max_cost_usd", "profile", "max_answer_chars",
             "unbatched"}
@@ -332,8 +342,8 @@ ASK_ARGS = {"prompt", "system", "model", "schema", "thinking", "reasoning_effort
 ROUTES = {
     ("GET", "state"): lambda b: settings.snapshot(),
     ("GET", "keys"): lambda b: {"provider": b.get("provider"), "rows": settings.key_rows(b.get("provider") or "")},
-    ("POST", "keys/add"): lambda b: settings.add_key(b.get("provider") or "", b.get("key") or ""),
-    ("POST", "keys/remove"): lambda b: settings.remove_key(b.get("provider") or "", b.get("fingerprint") or ""),
+    ("POST", "keys/add"): _key_change(lambda b: settings.add_key(b.get("provider") or "", b.get("key") or "", _reload=False)),
+    ("POST", "keys/remove"): _key_change(lambda b: settings.remove_key(b.get("provider") or "", b.get("fingerprint") or "", _reload=False)),
     ("POST", "keys/priority"): lambda b: settings.set_key_priority(b.get("provider") or "", b.get("fingerprint") or "", b.get("priority")),
     ("POST", "keys/enabled"): lambda b: settings.set_key_enabled(b.get("provider") or "", b.get("fingerprint") or "", bool(b.get("enabled"))),
     ("POST", "keys/probe"): _probe,
@@ -391,7 +401,7 @@ async def handle(method: str, path: str, body: dict) -> tuple[int, dict]:
         return 404, {"error": f"no route {method} /api/{path}", "routes": sorted(f"{m} /api/{p}" for m, p in ROUTES)}
     try:
         # A provider file or settings.toml edited by hand shows up on the next call, as the docs promise. The
-        # handlers run on the loop on purpose: a reload in a thread would race the jobs reading the registry.
+        # Most settings handlers run on the loop; key changes and vault calls run off it because SSH can block.
         config.refresh()
         out = fn(body)
         if hasattr(out, "__await__"):

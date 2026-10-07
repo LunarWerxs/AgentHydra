@@ -1,0 +1,26 @@
+# The current API accepts the API key as a Bearer credential and requires a version header.
+base_url = "https://api.cartesia.ai"
+transport = "service"
+check_path = "/voices?limit=1"
+about = "Cartesia speech synthesis and voice catalog through its REST API."
+website = "https://cartesia.ai"
+key_url = "https://play.cartesia.ai/keys"
+docs = "https://docs.cartesia.ai/api-reference/tts/bytes"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["text-to-speech", "voices"]
+
+[headers]
+Cartesia-Version = "2026-08-14"
+
+[operations.synthesize]
+method = "POST"
+path = "/tts/bytes"
+capability = "text-to-speech"
+response = "bytes"
+
+[operations.list_voices]
+method = "GET"
+path = "/voices"
+capability = "voices"
+response = "json"

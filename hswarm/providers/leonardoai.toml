@@ -1,0 +1,21 @@
+base_url = "https://cloud.leonardo.ai/api/rest"
+transport = "service"
+about = "Leonardo image generation through the documented v1 API. Submit a generation then retrieve its result by ID."
+website = "https://leonardo.ai"
+key_url = "https://app.leonardo.ai/api-access"
+docs = "https://docs.leonardo.ai/v1.0/docs/getting-started"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["image-generation", "generation-status"]
+
+[operations.generate]
+method = "POST"
+path = "/v1/generations"
+capability = "image-generation"
+response = "json"
+
+[operations.get_generation]
+method = "GET"
+path = "/v1/generations/{generation_id}"
+capability = "generation-status"
+response = "json"

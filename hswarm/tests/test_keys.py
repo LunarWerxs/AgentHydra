@@ -48,7 +48,7 @@ def test_config_no_keys_is_a_clear_error(tmp_path, monkeypatch):
     try:
         config.load_api_key()
     except RuntimeError as e:
-        assert "deepseek.toml" in str(e) and "DEEPSEEK_API_KEY" in str(e)
+        assert "deepseek_api_keys" in str(e) and "DEEPSEEK_API_KEY" in str(e)
     else:
         raise AssertionError("expected RuntimeError")
 
@@ -565,6 +565,82 @@ def test_a_checked_key_the_provider_refuses_is_disabled_with_the_reason(monkeypa
     assert row["disabled"] and "rejected this key" in row["disabled_reason"]
 
 
+def test_service_probe_checks_credentials_without_clearing_credit_or_manual_disables(monkeypatch):
+    from hswarm import keys, settings
+
+    credit, manual, rejected, revoked = [f"sk-service-{label}-0001" for label in ("credit", "manual", "rejected", "revoked")]
+    values = [credit, manual, rejected, revoked]
+    for key in values:
+        settings.add_key("elevenlabs", key)
+    pool = KeyPool(values, "elevenlabs")
+    pool.broke(credit, status=402)
+    pool.disable(manual, reason="disabled by hand")
+    pool.disable(rejected, reason="elevenlabs rejected this key (HTTP 401)", status=401)
+    pool.disable(revoked, reason="revoked (401/403)", status=403)
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert request.method == "GET" and request.url.path == "/v1/user/subscription"
+        assert request.headers["xi-api-key"] in values and "Authorization" not in request.headers
+        return httpx.Response(200, json={"character_limit": 0})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(keys, "ChatClient", lambda *a, **kw: pytest.fail("service credentials must not build a chat client"))
+    out = asyncio.run(keys.probe("elevenlabs"))["providers"]["elevenlabs"]
+    assert len(requests) == 4 and out["credential_valid"] == 4 and out["usable"] == 2
+    assert set(KeyPool(values, "elevenlabs").disabled()) == {config.fingerprint(credit), config.fingerprint(manual)}
+    assert all(key not in json.dumps(out) for key in values)
+
+
+def test_a_service_endpoint_permission_denial_does_not_classify_the_key_as_dead(monkeypatch):
+    from hswarm import keys, settings
+
+    key = "sk-scoped-service-0001"
+    settings.add_key("elevenlabs", key)
+    status = [403]
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, transport=httpx.MockTransport(
+        lambda request: httpx.Response(status[0], json={"message": "missing endpoint permission"})), **kw))
+    assert asyncio.run(keys.check("elevenlabs", config.fingerprint(key)))["result"] == "unchecked"
+    assert not KeyPool([key], "elevenlabs").disabled()
+    status[0] = 401
+    assert asyncio.run(keys.check("elevenlabs", config.fingerprint(key)))["result"] == "rejected"
+    assert KeyPool([key], "elevenlabs").disabled() == [config.fingerprint(key)]
+
+
+def test_paid_native_key_addition_checks_an_authenticated_get_without_generating(monkeypatch):
+    from hswarm import cli
+
+    key = "sk-native-free-check-0001"
+    requests = []
+    def handler(request):
+        requests.append(request)
+        assert request.method == "GET" and request.url.path == "/v1/models"
+        assert request.headers["x-api-key"] == key and request.headers["anthropic-version"]
+        assert "Authorization" not in request.headers
+        return httpx.Response(200, json={"data": []})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: real(*a, transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(key))
+    assert cli.main(["keys", "add", "anthropic"]) == 0
+    assert len(requests) == 1 and config.load_api_keys("anthropic") == [key]
+
+
+@pytest.mark.parametrize("provider", ["voiceflow", "chutes"])
+def test_keys_without_a_free_authenticated_check_are_saved_without_network_or_credit_recovery(provider, monkeypatch):
+    from hswarm import cli, keys
+
+    key = "sk-unverified-new-0001"
+    monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(key))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **kw: pytest.fail("no paid or public-model validation call is allowed"))
+    assert cli.main(["keys", "add", provider]) == 0
+    assert config.load_api_keys(provider) == [key]
+    KeyPool([key], provider).broke(key, status=402)
+    result = asyncio.run(keys.probe(provider))["providers"][provider]
+    assert result["unchecked"] == 1 and result["usable"] == 0
+    assert KeyPool([key], provider).disabled() == [config.fingerprint(key)]
+
+
 # Contract: a key added from the terminal is checked with the provider, like one pasted in the console, and a key the
 # provider refuses is not kept. Regression: `hswarm keys add` saved whatever it was given (audit, 2026-09-26).
 def test_the_terminal_does_not_keep_a_key_the_provider_refuses(monkeypatch, capsys):
@@ -593,7 +669,8 @@ def test_the_terminal_adds_every_key_piped_in_and_drops_only_the_refused_one(mon
     monkeypatch.setattr(keys, "check", check)
     monkeypatch.setattr(sys, "stdin", __import__("io").StringIO(f"gsk_not_a_real_key_0001\n{bad}, gsk_not_a_real_key_0003\n"))
     assert cli.main(["keys", "add", "groq"]) == 1
-    assert config.user_keys("groq") == ["gsk_not_a_real_key_0001", "gsk_not_a_real_key_0003"]
+    assert config.all_keys("groq") == ["gsk_not_a_real_key_0001", "gsk_not_a_real_key_0003"]
+    assert config.user_keys("groq") == []
 
 
 # Contract: a window of 0 ("re-read every key now", as `hswarm keys probe` asks) counts a balance read stamped in the

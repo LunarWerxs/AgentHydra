@@ -1,0 +1,27 @@
+base_url = "https://api.runpod.ai"
+transport = "service"
+about = "Runpod queue-based Serverless endpoint inference. Supply an endpoint ID and that endpoint's documented input schema."
+website = "https://www.runpod.io"
+key_url = "https://www.runpod.io/console/user/settings"
+docs = "https://docs.runpod.io/serverless/endpoints/send-requests"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["model-inference", "job-status", "endpoint-health"]
+
+[operations.run]
+method = "POST"
+path = "/v2/{endpoint_id}/run"
+capability = "model-inference"
+response = "json"
+
+[operations.get_status]
+method = "GET"
+path = "/v2/{endpoint_id}/status/{job_id}"
+capability = "job-status"
+response = "json"
+
+[operations.health]
+method = "GET"
+path = "/v2/{endpoint_id}/health"
+capability = "endpoint-health"
+response = "json"

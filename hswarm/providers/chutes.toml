@@ -1,0 +1,14 @@
+base_url = "https://llm.chutes.ai/v1"
+about = "OpenAI-compatible hosted language models; use a live model ID from /models."
+website = "https://chutes.ai"
+key_url = "https://chutes.ai/app"
+docs = "https://chutes.ai/agents/codex"
+transport = "openai"
+capabilities = ["chat"]
+key_billing = "unknown"
+models_path = "/models"
+models_public = true
+passthrough = ["chutes:"]
+options = ["reasoning_effort"]
+anthropic_url = "facade"
+# /models is public: listing models does not validate a key.

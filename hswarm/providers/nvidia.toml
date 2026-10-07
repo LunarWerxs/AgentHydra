@@ -36,6 +36,7 @@ models_path = "/models"
 # The model list answers ANY key (HTTP 200 for a made-up one), so a key is checked with a one-token chat, which answers
 # a bad key 403; Nemotron 3 Ultra is NVIDIA's own and answered fastest.
 check_model = "nvidia/nemotron-3-ultra-550b-a55b"
+check_model_free = true  # the hosted trial endpoint's calls are free (free_calls above)
 docs = "https://docs.api.nvidia.com/nim/reference/llm-apis"
 
 [models."rank:glm-5-3-flash:nvidia"]

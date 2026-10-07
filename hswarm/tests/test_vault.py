@@ -68,6 +68,39 @@ def test_sealed_state_opens_only_with_its_key_and_unaltered():
         vault.unseal(KEY, b"hello")
 
 
+def test_busy_local_lock_refuses_to_edit_or_sync(monkeypatch):
+    from hswarm import client
+
+    monkeypatch.setattr(vault, "LOCAL_LOCK_WAIT_S", 0)
+    def busy(fd):
+        raise OSError("locked")
+    monkeypatch.setattr(client, "_lock_fd", busy)
+    with pytest.raises(vault.VaultError, match="holds the vault lock; nothing was changed"):
+        vault.add_keys("groq", ["sk-never-written-0001"])
+    assert not (config.SECRETS_DIR / "groq_api_keys").exists()
+
+
+def test_simultaneous_local_additions_keep_both_keys(monkeypatch):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    entered, release = threading.Event(), threading.Event()
+    rewrite = vault._rewrite
+    def paused(path, drop, add):
+        if "sk-first-editor-0001" in add:
+            entered.set()
+            assert release.wait(5)
+        return rewrite(path, drop, add)
+    monkeypatch.setattr(vault, "_rewrite", paused)
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        first = workers.submit(vault.add_keys, "groq", ["sk-first-editor-0001"])
+        assert entered.wait(5)
+        second = workers.submit(vault.add_keys, "groq", ["sk-second-editor-0002"])
+        release.set()
+        assert first.result()["added"] == second.result()["added"] == 1
+    assert keys_of("groq_api_keys") == ["sk-first-editor-0001", "sk-second-editor-0002"]
+
+
 def test_merge_keeps_the_newer_entry_and_a_removal_wins_a_tie_in_either_order():
     put = {"k": "sk-test-0001", "t": 10, "by": "a"}
     gone = {"k": None, "t": 10, "by": "b"}

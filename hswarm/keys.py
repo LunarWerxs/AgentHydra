@@ -133,21 +133,19 @@ def _note(out: dict) -> str:
 async def probe(only: str | None = None) -> dict:
     """One FREE GET of the balance endpoint per key. A key that reads as topped up comes back out of the
     disabled slot here; for a provider whose number is not authority (OpenRouter) the reading is reported
-    and nothing is disabled by it. A provider with no balance endpoint (Hugging Face) has nothing to read, so
-    its keys disabled for credit are let out on the spot instead - a human asked, and the next 402 re-disables."""
+    and nothing is disabled by it. Providers with no balance endpoint use their free credential check instead;
+    accepting a credential never proves its account is funded, so credit and manual disables remain."""
     out: dict = {"providers": {}}
     for name in _providers(only):
         keys = config.load_api_keys(name)
         if not keys:
             continue
         spec = config.PROVIDERS[name]
-        if spec.get("check_model") and not spec.get("balance_path"):
+        if not config.provider_chat(name) or not spec.get("balance_path"):
             out["providers"][name] = await _check_each(name, keys)
             continue
         async with ChatClient(api_keys=keys, provider=name) as c:
             before = set(c.pool.disabled())
-            if not c.spec.get("balance_path"):
-                c.pool.probation(0.0)  # no endpoint to ask: a key disabled for credit gets its chance now, since a human asked
             try:
                 rows = await c.balances()
             except Exception as e:  # noqa: BLE001 - one provider down must not hide the rest
@@ -166,9 +164,7 @@ async def probe(only: str | None = None) -> dict:
 
 
 async def _check_each(name: str, keys: list[str], width: int = 16) -> dict:
-    """A provider with no balance to read whose model list answers ANY key (NVIDIA): the only honest probe is the key
-    check's one-token chat, so every key gets one. A refused key moves to the disabled slot and one that answers again
-    comes back out (check does both); a key that could not be checked right now (timeout, overload) moves nowhere."""
+    """Check credentials independently of credit, without starting a service generation operation."""
     import asyncio
 
     before = set(KeyPool(keys, name).disabled())
@@ -181,7 +177,9 @@ async def _check_each(name: str, keys: list[str], width: int = 16) -> dict:
     rows = await asyncio.gather(*(one(k) for k in keys))
     after = set(KeyPool(keys, name).disabled())
     count = lambda result: sum(1 for r in rows if r.get("result") == result)  # noqa: E731
-    return {"keys": len(rows), "usable": count("ok"), "rejected": count("rejected"), "unchecked": count("unchecked"),
+    usable = sum(1 for row in KeyPool(keys, name).status() if row["state"] == "ok")
+    return {"keys": len(rows), "credential_valid": count("ok"), "usable": usable,
+            "rejected": count("rejected"), "unchecked": count("unchecked"),
             "disabled_now": sorted(after - before), "recovered": sorted(before - after), "still_disabled": sorted(after),
             "rows": rows}
 
@@ -198,34 +196,49 @@ async def check(provider: str, fingerprint: str) -> dict:
         raise ValueError(f"no {provider} key has fingerprint {fingerprint!r}")
     spec = config.PROVIDERS[provider]
     # An endpoint that needs the key: OpenRouter's model list answers anyone, so a dead key would pass it.
-    path = spec.get("check_path") or spec.get("balance_path") or spec.get("models_path")
+    path = spec.get("check_path") or spec.get("balance_path") or (None if spec.get("models_public") else spec.get("models_path"))
+    model_check = bool(config.provider_chat(provider) and spec.get("check_model") and spec.get("check_model_free"))
+    service = not config.provider_chat(provider)
     out = {"provider": provider, "fingerprint": fingerprint}
-    if not path and not spec.get("check_model"):
-        return {**out, "result": "unchecked", "note": f"{provider} has no free way to check a key; press Test on one of its models"}
-    async with ChatClient(api_keys=[key], provider=provider) as c:
-        try:
-            if spec.get("check_model"):
+    if not path and not model_check:
+        return {**out, "result": "unchecked", "note": f"{provider} has no configured free authenticated key check; the key is saved, credit remains unverified"}
+    pool = KeyPool([key], provider)
+    try:
+        if model_check:
+            async with ChatClient(api_keys=[key], provider=provider) as c:
                 # A one-token chat on a free model: OpenRouter's /key answered 200 for keys whose account was deleted
                 # (70 such keys were put back on 2026-09-26 and every one failed its first real call).
                 r = await c._http.post("/chat/completions", headers=c._auth(key),
                                        json={"model": spec["check_model"], "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1})
-                if r.status_code in (401, 403):
+                if not r.is_success:
                     raise ApiError(r.status_code, r.text, provider)
-            else:
-                await c.get_json(path, key)
-        except ApiError as e:
-            # Google answers a bad key with 400 and "API key not valid"; everyone else with 401 or 403.
-            if e.status in (401, 403) or (e.status == 400 and "api key" in (e.body or "").lower()):
-                c.pool.disable(key, reason=f"{provider} rejected this key (HTTP {e.status})", status=e.status)
-                return {**out, "result": "rejected", "status": e.status,
-                        "note": f"{provider} rejected this key (HTTP {e.status}): check it was copied whole, or make a new one"}
-            return {**out, "result": "unchecked", "status": e.status, "note": f"{provider} answered HTTP {e.status}, so the key could not be checked now"}
-        except httpx.HTTPError as e:
-            return {**out, "result": "unchecked", "note": f"could not reach {provider} ({type(e).__name__})"}
-        row = next((r for r in c.pool.status() if r.get("fingerprint") == fingerprint), {})
-        if row.get("disabled") and "rejected this key" in (row.get("disabled_reason") or ""):
-            c.pool.enable(key)
-    return {**out, "result": "ok", "note": f"{provider} accepted this key"}
+        else:
+            from .provider_auth import request_headers
+
+            headers = request_headers(spec, key)
+            if spec.get("transport") == "anthropic":
+                from . import anthropic_native
+
+                headers = {**(spec.get("headers") or {}), "x-api-key": key, "anthropic-version": anthropic_native.VERSION}
+                headers.pop("Authorization", None)
+            async with httpx.AsyncClient(base_url=spec["base_url"], timeout=30, follow_redirects=False) as client:
+                response = await client.get(path, headers=headers)
+            if not response.is_success:
+                raise ApiError(response.status_code, response.text, provider)
+    except ApiError as e:
+        # A service 403 can mean the key lacks permission for this endpoint, rather than being invalid.
+        if e.status == 401 or (not service and e.status == 403) or (e.status == 400 and "api key" in (e.body or "").lower()):
+            pool.disable(key, reason=f"{provider} rejected this key (HTTP {e.status})", status=e.status)
+            return {**out, "result": "rejected", "status": e.status,
+                    "note": f"{provider} rejected this key (HTTP {e.status}): check it was copied whole, or make a new one"}
+        return {**out, "result": "unchecked", "status": e.status, "note": f"{provider} answered HTTP {e.status}, so the key could not be checked now"}
+    except httpx.HTTPError as e:
+        return {**out, "result": "unchecked", "note": f"could not reach {provider} ({type(e).__name__})"}
+    row = next((r for r in pool.status() if r.get("fingerprint") == fingerprint), {})
+    reason = str(row.get("disabled_reason") or "").lower()
+    if row.get("disabled") and pool._entry(key).get("disabled_status") in (400, 401, 403) and ("rejected this key" in reason or "revoked" in reason):
+        pool.enable(key)
+    return {**out, "result": "ok", "note": f"{provider} accepted this credential; paid credit was not checked"}
 
 
 def set_enabled(fingerprint: str | None, enabled: bool, only: str | None = None, all_keys: bool = False, reason: str = "disabled by hand") -> dict:

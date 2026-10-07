@@ -1,0 +1,28 @@
+base_url = "https://api.elevenlabs.io"
+transport = "service"
+check_path = "/v1/user/subscription"
+about = "ElevenLabs speech synthesis, voice catalog, and subscription metadata. API key permissions may restrict individual operations."
+website = "https://elevenlabs.io"
+key_url = "https://elevenlabs.io/app/settings/api-keys"
+docs = "https://elevenlabs.io/docs/api-reference/authentication"
+auth_header = "xi-api-key"
+auth_prefix = ""
+capabilities = ["text-to-speech", "voices", "account"]
+
+[operations.synthesize]
+method = "POST"
+path = "/v1/text-to-speech/{voice_id}"
+capability = "text-to-speech"
+response = "bytes"
+
+[operations.list_voices]
+method = "GET"
+path = "/v2/voices"
+capability = "voices"
+response = "json"
+
+[operations.subscription]
+method = "GET"
+path = "/v1/user/subscription"
+capability = "account"
+response = "json"

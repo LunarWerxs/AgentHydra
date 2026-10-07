@@ -1,0 +1,25 @@
+base_url = "https://api.dev.runwayml.com"
+transport = "service"
+check_path = "/v1/organization"
+about = "Runway image-to-video generation and task metadata. Uses a dated API version header."
+website = "https://runwayml.com"
+key_url = "https://dev.runwayml.com"
+docs = "https://docs.dev.runwayml.com/guides/using-the-api/"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["video-generation", "generation-status"]
+
+[headers]
+X-Runway-Version = "2024-11-06"
+
+[operations.image_to_video]
+method = "POST"
+path = "/v1/image_to_video"
+capability = "video-generation"
+response = "json"
+
+[operations.get_task]
+method = "GET"
+path = "/v1/tasks/{task_id}"
+capability = "generation-status"
+response = "json"

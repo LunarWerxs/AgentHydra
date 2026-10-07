@@ -38,6 +38,7 @@ backend's vault file (HSWARM_HOME/vault-request.pin) and `accept` joins only a c
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -57,13 +58,14 @@ MAGIC = b"ZSV1"         # ZSwarm's, on purpose: one vault serves both, and a ZSw
 CODE_PREFIX = "zsv1-"
 # The lists: a file name is also a path, so only these shapes are ever read or written (a name from the vault is checked
 # against it before a byte touches the disk).
-LIST_RX = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}_api_keys(\.(dead|unfunded))?$")
+LIST_RX = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}_api_keys(\.(dead|unfunded))?$")
 KEY_MIN_LEN = 8
 KEEP_VERSIONS = 40            # earlier vault files kept beside the current one on the backend: the way back from a bad merge
 SYNC_EVERY_S = 120            # the shared server's own sync cadence
 FIRST_SYNC_DELAY_S = 20
 FIRST_SYNC_TIME = 1           # a first sync's puts are older than any real change: they never beat a tombstone
 CAS_TRIES = 8
+LOCAL_LOCK_WAIT_S = 10
 SSH_TIMEOUT_S = 120
 MASS_REMOVE_SHARE = 4         # refuse a sync that removes 1/4 or more of the base's keys ...
 MASS_REMOVE_MIN = 5           # ... when that is at least this many, or empties a list that held at least this many
@@ -526,50 +528,98 @@ def _apply_local(merged: dict, local: dict[str, list[str]]) -> dict:
     return {"lists": base, "added": added, "removed": removed}
 
 
+@contextlib.contextmanager
+def local_lock():
+    """Serialize local key edits and syncs. A busy or unavailable lock refuses the operation."""
+    from .client import _lock_fd, _unlock_fd
+
+    path = config.HOME / "vault.lock"
+    fd, held = None, False
+    try:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+        except OSError as e:
+            raise VaultError("the local vault lock could not be opened; nothing was changed") from e
+        deadline = time.monotonic() + LOCAL_LOCK_WAIT_S
+        while not held:
+            try:
+                _lock_fd(fd)
+                held = True
+            except OSError as e:
+                if time.monotonic() >= deadline:
+                    raise VaultError("another local key edit or sync holds the vault lock; nothing was changed, try again") from e
+                time.sleep(0.02)
+        yield
+    finally:
+        if fd is not None:
+            try:
+                if held:
+                    _unlock_fd(fd)
+            finally:
+                os.close(fd)
+
+
+def mutate_local(change, *, allow_removals: bool = False) -> dict:
+    """Run a local edit and its configured sync under one lock; the callback returns counts or fingerprints only.
+    An unsuccessful upload keeps the saved local change for the next sync and explicitly reports that state."""
+    with local_lock():
+        out = change()
+        if configured():
+            try:
+                out = {**out, "sync": _sync_locked(allow_removals=allow_removals)}
+            except VaultError as e:
+                raise VaultError(f"local key changes were saved, but vault sync failed: {e}; the next sync will retry") from e
+        return out
+
+
 def sync(*, rebase: bool = False, allow_removals: bool = False, dry_run: bool = False, backend=None) -> dict:
+    """Synchronize under the same lock used by local key edits."""
+    with local_lock():
+        return _sync_locked(rebase=rebase, allow_removals=allow_removals, dry_run=dry_run, backend=backend)
+
+
+def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run: bool = False, backend=None) -> dict:
     """One round: read the vault, add what changed here, push it if anything is new there, bring this machine's files up
     to date. Counts only; a key is never in the result."""
-    from .client import file_lock
-
     cfg, key = _load_config(), _load_key()
     be = backend or open_backend(cfg["backend"])
     me = cfg.get("machine") or socket.gethostname().lower()
-    with file_lock(config.HOME / "vault.lock"):
-        base = None if rebase else _read_json(base_file())
-        local = scan()
-        ops, stats = _local_ops(local, base, me, FIRST_SYNC_TIME if base is None else _now_ms())
-        if base is not None and not allow_removals:
-            _guard(stats)
-        merged = remote = None
-        pushed = False
-        for _ in range(CAS_TRIES):
-            blob, etag = be.get()
-            remote = unseal(key, blob) if blob else empty_state()
-            if base is not None and remote["rev"] < base.get("rev", 0):
-                raise VaultError(f"the server holds an older vault (rev {remote['rev']}, this machine last saw {base['rev']}): it was rolled back "
-                                 "or replaced; nothing was changed. `hswarm vault sync --rebase` accepts it.")
-            merged = merge(remote, {"lists": ops})
-            if present(merged) == present(remote) or dry_run:
-                break
-            merged["rev"] = remote["rev"] + 1
-            try:
-                be.put(seal(key, merged), etag)
-                pushed = True
-                break
-            except Conflict:
-                continue
-        else:
-            raise VaultError("the vault kept changing under this sync (another machine writing); try again in a minute")
-        after, before = present(merged), present(remote)  # once each: this runs over every key, and 60,000 of them is seconds, not hours
-        into_vault = sum(1 for k, v in after.items() if v and not before.get(k))
-        out_of_vault = sum(1 for k, v in after.items() if not v and before.get(k))
-        if dry_run:
-            held = {n: {key_id(k) for k in keys} for n, keys in local.items()}
-            local_add = sum(1 for (n, kid), v in after.items() if v and kid not in held.get(n, ()) and LIST_RX.fullmatch(n))
-            return {"backend": be.label, "dry_run": True, "pushed": False, "rev": remote["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
-                    "to_here": local_add, "keys": live_count(merged)}
-        applied = _apply_local(merged, local)
-        _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
+    base = None if rebase else _read_json(base_file())
+    local = scan()
+    ops, stats = _local_ops(local, base, me, FIRST_SYNC_TIME if base is None else _now_ms())
+    if base is not None and not allow_removals:
+        _guard(stats)
+    merged = remote = None
+    pushed = False
+    for _ in range(CAS_TRIES):
+        blob, etag = be.get()
+        remote = unseal(key, blob) if blob else empty_state()
+        if base is not None and remote["rev"] < base.get("rev", 0):
+            raise VaultError(f"the server holds an older vault (rev {remote['rev']}, this machine last saw {base['rev']}): it was rolled back "
+                             "or replaced; nothing was changed. `hswarm vault sync --rebase` accepts it.")
+        merged = merge(remote, {"lists": ops})
+        if present(merged) == present(remote) or dry_run:
+            break
+        merged["rev"] = remote["rev"] + 1
+        try:
+            be.put(seal(key, merged), etag)
+            pushed = True
+            break
+        except Conflict:
+            continue
+    else:
+        raise VaultError("the vault kept changing under this sync (another machine writing); try again in a minute")
+    after, before = present(merged), present(remote)  # once each: this runs over every key, and 60,000 of them is seconds, not hours
+    into_vault = sum(1 for k, v in after.items() if v and not before.get(k))
+    out_of_vault = sum(1 for k, v in after.items() if not v and before.get(k))
+    if dry_run:
+        held = {n: {key_id(k) for k in keys} for n, keys in local.items()}
+        local_add = sum(1 for (n, kid), v in after.items() if v and kid not in held.get(n, ()) and LIST_RX.fullmatch(n))
+        return {"backend": be.label, "dry_run": True, "pushed": False, "rev": remote["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
+                "to_here": local_add, "keys": live_count(merged)}
+    applied = _apply_local(merged, local)
+    _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
     return {"backend": be.label, "dry_run": False, "pushed": pushed, "rev": merged["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
             "added_here": applied["added"], "removed_here": applied["removed"], "keys": live_count(merged), "lists": len(applied["lists"])}
 
@@ -932,24 +982,27 @@ def add_keys(target: str, keys: list[str]) -> dict:
     bad = [k for k in keys if len(k) < KEY_MIN_LEN or any(c.isspace() for c in k)]
     if bad or not keys:
         raise VaultError(f"a key is one unbroken string of at least {KEY_MIN_LEN} characters" if bad else "no key given")
-    have = {key_id(k) for k in scan().get(name, ())}
-    new = [k for k in dict.fromkeys(keys) if key_id(k) not in have]
-    if new:
-        _rewrite(config.SECRETS_DIR / name, set(), new)
-    out = {"list": name, "added": len(new), "already_there": len(keys) - len(new), "fingerprints": [config.fingerprint(k) for k in new]}
-    return {**out, "sync": sync()} if configured() else out
+    def change():
+        have = {key_id(k) for k in scan().get(name, ())}
+        new = [k for k in dict.fromkeys(keys) if key_id(k) not in have]
+        if new:
+            _rewrite(config.SECRETS_DIR / name, set(), new)
+        return {"list": name, "added": len(new), "already_there": len(keys) - len(new),
+                "fingerprints": [config.fingerprint(k) for k in new]}
+    return mutate_local(change)
 
 
 def remove_key(target: str, fingerprint: str) -> dict:
     name = list_file(target)
-    hits = [k for k in scan().get(name, ()) if config.fingerprint(k) == fingerprint]
-    if not hits:
-        raise VaultError(f"no key in {name} has fingerprint {fingerprint!r} (`hswarm vault list {target}`)")
-    if len(hits) > 1:
-        raise VaultError(f"{len(hits)} keys in {name} share fingerprint {fingerprint!r}; remove one by editing the file")
-    _rewrite(config.SECRETS_DIR / name, {key_id(hits[0])}, [])
-    out = {"list": name, "removed": fingerprint}
-    return {**out, "sync": sync(allow_removals=True)} if configured() else out
+    def change():
+        hits = [k for k in scan().get(name, ()) if config.fingerprint(k) == fingerprint]
+        if not hits:
+            raise VaultError(f"no key in {name} has fingerprint {fingerprint!r} (`hswarm vault list {target}`)")
+        if len(hits) > 1:
+            raise VaultError(f"{len(hits)} keys in {name} share fingerprint {fingerprint!r}; remove one by editing the file")
+        _rewrite(config.SECRETS_DIR / name, {key_id(hits[0])}, [])
+        return {"list": name, "removed": fingerprint}
+    return mutate_local(change, allow_removals=True)
 
 
 def status() -> dict:

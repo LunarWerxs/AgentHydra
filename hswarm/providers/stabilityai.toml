@@ -1,0 +1,32 @@
+base_url = "https://api.stability.ai"
+transport = "service"
+check_path = "/v1/user/balance"
+about = "Stability AI Stable Image Core generation and account metadata. Images are base64 encoded in JSON."
+website = "https://stability.ai"
+key_url = "https://platform.stability.ai/account/keys"
+docs = "https://platform.stability.ai/docs/api-reference"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["image-generation", "account"]
+
+[headers]
+Accept = "application/json"
+
+[operations.generate]
+method = "POST"
+path = "/v2beta/stable-image/generate/core"
+capability = "image-generation"
+input = "multipart"
+response = "json"
+
+[operations.balance]
+method = "GET"
+path = "/v1/user/balance"
+capability = "account"
+response = "json"
+
+[operations.account]
+method = "GET"
+path = "/v1/user/account"
+capability = "account"
+response = "json"

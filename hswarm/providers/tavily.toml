@@ -1,0 +1,16 @@
+base_url = "https://api.tavily.com"
+transport = "service"
+check_path = "/usage"
+about = "Tavily web search through its REST API."
+website = "https://tavily.com"
+key_url = "https://app.tavily.com"
+docs = "https://docs.tavily.com/documentation/api-reference/endpoint/search"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+capabilities = ["search"]
+
+[operations.search]
+method = "POST"
+path = "/search"
+capability = "search"
+response = "json"

@@ -1,0 +1,12 @@
+base_url = "https://api.together.ai/v1"
+about = "Together AI's hosted language models; address a model as together:<model ID>."
+website = "https://www.together.ai"
+key_url = "https://api.together.ai/settings/api-keys"
+docs = "https://docs.together.ai/docs/quickstart"
+transport = "openai"
+capabilities = ["chat"]
+key_billing = "unknown"
+models_path = "/models"
+passthrough = ["together:"]
+options = ["reasoning_effort"]
+anthropic_url = "facade"

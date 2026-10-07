@@ -1,0 +1,28 @@
+base_url = "https://api.deepgram.com"
+transport = "service"
+check_path = "/v1/projects"
+about = "Deepgram prerecorded speech recognition, speech synthesis, and project metadata. Transcription accepts a remote audio URL."
+website = "https://deepgram.com"
+key_url = "https://console.deepgram.com"
+docs = "https://developers.deepgram.com/guides/fundamentals/authenticating"
+auth_header = "Authorization"
+auth_prefix = "Token "
+capabilities = ["transcription", "text-to-speech", "account"]
+
+[operations.transcribe]
+method = "POST"
+path = "/v1/listen"
+capability = "transcription"
+response = "json"
+
+[operations.synthesize]
+method = "POST"
+path = "/v1/speak"
+capability = "text-to-speech"
+response = "bytes"
+
+[operations.list_projects]
+method = "GET"
+path = "/v1/projects"
+capability = "account"
+response = "json"

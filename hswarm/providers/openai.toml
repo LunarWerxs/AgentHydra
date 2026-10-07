@@ -1,0 +1,14 @@
+base_url = "https://api.openai.com/v1"
+about = "OpenAI language models through Chat Completions; address a model as openai:<model ID>."
+website = "https://openai.com"
+key_url = "https://platform.openai.com/api-keys"
+docs = "https://developers.openai.com/api/reference/resources/chat"
+transport = "openai"
+capabilities = ["chat"]
+key_billing = "unknown"
+models_path = "/models"
+passthrough = ["openai:"]
+options = ["reasoning_effort"]
+max_tokens_field = "max_completion_tokens"
+anthropic_url = "facade"
+# The catalog includes non-chat models. Choose a Chat Completions-capable model explicitly.

@@ -1052,6 +1052,9 @@ class ChatClient:
             raise ValueError(f"unknown provider {provider!r}; known: {sorted(config.PROVIDERS)}")
         self.provider = provider
         self.spec = config.PROVIDERS[provider]
+        if not config.provider_chat(provider) and self.spec.get("transport") != "typed":
+            raise ValueError(f"{provider} provides {', '.join(self.spec.get('capabilities') or ('service operations',))}; "
+                             f"use `hswarm service {provider}` to list its operations instead of a chat client")
         keys = list(api_keys) if api_keys else ([api_key] if api_key else config.load_api_keys(provider))
         self.pool = KeyPool(keys, provider)
         self._key = self.pool.keys[0]  # older name, kept for anything that still reads it
@@ -1076,7 +1079,7 @@ class ChatClient:
         # `transport = "anthropic"`: chat goes to the provider's native Messages endpoint (anthropic_native), which
         # caches prompts; its OpenAI-compatible one does not. Everything else posts OpenAI chat to base_url.
         self.native = self.spec.get("transport") == "anthropic"
-        self._chat_url = (self.spec["anthropic_url"].rstrip("/") + anthropic_native.PATH) if self.native else "/chat/completions"
+        self._chat_url = (self.spec["anthropic_url"].rstrip("/") + anthropic_native.PATH) if self.native else self.spec.get("chat_path", "/chat/completions")
         self._sticky = bool(self.spec.get("sticky_keys"))
         self._pins: dict = {}  # conversation -> the key it runs on (_pick)
         self._tpm: dict[tuple[str, str], tuple[int, float]] = {}  # (key, api model) -> (its account's limit, when learned): _LIMIT_413
@@ -1092,7 +1095,9 @@ class ChatClient:
         identifiers, never credentials)."""
         if self.native:
             return {"x-api-key": key, "anthropic-version": anthropic_native.VERSION, **(self.spec.get("headers") or {})}
-        return {"Authorization": "Bearer " + key, **(self.spec.get("headers") or {})}
+        from .provider_auth import request_headers
+
+        return request_headers(self.spec, key)
 
     def _pick(self, free: bool, exclude: Collection[str], affinity) -> str:
         """The key for one attempt. On a `sticky_keys` provider a conversation (`affinity`, one per task) stays on the
@@ -1453,6 +1458,8 @@ class ChatClient:
         body = request_body(api_id, messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
                             thinking=thinking if "thinking" in allowed else None, reasoning_effort=reasoning_effort if "reasoning_effort" in allowed else None,
                             response_format=response_format, user=None if "user" in omit else user, stop=stop)
+        if "max_tokens" in body and self.spec.get("max_tokens_field") == "max_completion_tokens":
+            body["max_completion_tokens"] = body.pop("max_tokens")
         _set_reasoning(body, model, entry, allowed, thinking, reasoning_effort)
         if temperature is not None:
             body["temperature"] = temperature  # 0.0 is a real value here, unlike the other options

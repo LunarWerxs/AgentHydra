@@ -2,9 +2,10 @@
 custom providers and models, roles and the routing knobs. The console (`hswarm ui`), the CLI (`hswarm keys
 add|remove`) and the HTTP API all call these, so every fact has one owner:
 
-- a provider's settings, its models, their switches and the keys a user adds live in that provider's file,
-  <home>/providers/<name>.toml (config.user_file), layered over the shipped one. Keys from the environment or
-  ~/.hswarm/secrets/ are listed read-only: they are changed where they live.
+- a provider's settings, its models and their switches live in <home>/providers/<name>.toml, layered over the
+  shipped one. Keys added through the console, CLI or API live in <home>/secrets/ and use the shared encrypted
+  vault when configured. Legacy TOML keys are still read, and move to secrets/ on the next key edit.
+- environment keys remain read-only; provider key lists in secrets/ can be added to and removed from here.
 - roles, the review panel and the routing knobs live in <home>/settings.toml (config.SETTINGS_FILE).
 
 Each change is one read-change-write of one file under a lock file beside it, through tomlkit, so a person's own
@@ -69,7 +70,7 @@ def _header(provider: str | None) -> str:
     if provider is None:
         return "# hswarm settings: roles, the review panel and price routing (docs/PROVIDERS.md).\n\n"
     return (f"# Your settings for {provider}, layered over the ones hswarm ships (docs/PROVIDERS.md).\n"
-            "# This file can hold your API keys (keys = [...]): keep it private, never commit or share it.\n\n")
+            "# API keys are managed in secrets/ and synced through the encrypted vault when configured.\n\n")
 
 
 def _change(path: Path, change, provider: str | None) -> None:
@@ -119,20 +120,35 @@ def _provider(name: str) -> dict:
     return config.PROVIDERS[name]
 
 
+def _key_files(provider: str) -> list[str]:
+    """Editable provider lists only: a configured filename is never accepted as an arbitrary path."""
+    from . import vault
+
+    files = [name for name in _provider(provider).get("key_files", ()) if vault.LIST_RX.fullmatch(name)]
+    return list(dict.fromkeys(files or [vault.list_file(provider)]))
+
+
+def _editable_sources(provider: str) -> set[str]:
+    return {config.user_source(provider), *(f"<home>/secrets/{name}" for name in _key_files(provider))}
+
+
 def key_rows(provider: str) -> list[dict]:
     """Every key the provider's pool would use, in pool order, with where it comes from and its live state.
     Listed even when the provider is switched off, so the switch can be turned back on knowingly."""
     from .client import KeyPool, key_tier
 
     _provider(provider)
-    mine = config.user_source(provider)
-    rows, seen = [], set()
+    editable = _editable_sources(provider)
+    rows, seen = [], {}
     for source, read in config.key_sources(provider):
         for k in read():
             if k and k not in seen:
-                seen.add(k)
-                rows.append({"key": k, "fingerprint": config.fingerprint(k), "masked": mask(k), "source": source,
-                             "editable": source == mine})
+                row = {"key": k, "fingerprint": config.fingerprint(k), "masked": mask(k), "source": source,
+                       "editable": source in editable}
+                seen[k] = row
+                rows.append(row)
+            elif k and source in editable:
+                seen[k].update(source=source, editable=True)
     if rows:
         state = {r["fingerprint"]: r for r in KeyPool([r["key"] for r in rows], provider).status(reload=False)}
         tiers = config.PROVIDERS[provider].get("key_priority") or {}
@@ -148,13 +164,21 @@ def key_rows(provider: str) -> list[dict]:
 
 
 def _find(provider: str, fingerprint: str) -> str:
-    mine = config.user_source(provider)
+    editable = _editable_sources(provider)
+    hits, other = set(), None
     for source, read in config.key_sources(provider):
         for k in read():
             if config.fingerprint(k) == fingerprint:
-                if source != mine:
-                    raise SettingsError(f"that key comes from {source}; change it there (hswarm only edits your provider file)")
-                return k
+                if source in editable:
+                    hits.add(k)
+                else:
+                    other = source
+    if len(hits) > 1:
+        raise SettingsError(f"several {provider} keys share fingerprint {fingerprint!r}; edit their files directly")
+    if hits:
+        return hits.pop()
+    if other:
+        raise SettingsError(f"that key comes from {other}; change it there (hswarm edits provider key lists and legacy provider keys)")
     raise SettingsError(f"no {provider} key has fingerprint {fingerprint!r}")
 
 
@@ -163,26 +187,73 @@ def split_keys(text: str) -> list[str]:
     return list(dict.fromkeys(k for k in re.split(r"[\s,;]+", text or "") if k))
 
 
-def add_key(provider: str, key: str) -> dict:
+def _edit_provider_keys(provider: str, *, add: str | None = None, remove: str | None = None, reload_config: bool = True) -> dict:
+    """Keep keys in syncable lists, and retire a legacy TOML keys field without changing its settings."""
+    from . import vault
+
+    names = _key_files(provider)
+    path = config.user_file(provider)
+
+    def change():
+        with _locked(path):
+            doc = _read(path)
+            raw = doc.get("keys") or ()
+            raw = [raw] if isinstance(raw, str) else raw
+            if not isinstance(raw, (list, tuple, tomlkit.items.Array)) or any(not isinstance(k, str) for k in raw):
+                raise SettingsError(f"{path} has an invalid keys field; nothing was changed")
+            legacy = list(dict.fromkeys(k.strip() for k in raw if k.strip()))
+            # Read every affected list before writing any of them; unreadable input is never treated as empty.
+            held = {}
+            retired = [name + suffix for name in names if not name.endswith((".dead", ".unfunded"))
+                       for suffix in (".dead", ".unfunded")]
+            for name in names + (retired if add else []):
+                try:
+                    held[name] = vault._keys_in(config.SECRETS_DIR / name)
+                except FileNotFoundError:
+                    held[name] = []
+            target = _find(provider, remove) if remove else None
+            existed = add in config.all_keys(provider) if add else False
+            into = [k for k in legacy if k != target]
+            if add:
+                into.append(add)
+            drop = {vault.key_id(target)} if target else set()
+            changed_doc = "keys" in doc
+            if changed_doc:
+                del doc["keys"]
+            if target:
+                elsewhere = any(k == target for source, read in config.key_sources(provider)
+                                if source not in _editable_sources(provider) for k in read())
+                if not elsewhere:
+                    before = tomlkit.dumps(doc)
+                    _key_rank(doc, remove, None)
+                    changed_doc = changed_doc or tomlkit.dumps(doc) != before
+            for name in names:
+                vault._rewrite(config.SECRETS_DIR / name, drop, into if name == names[0] else [])
+            if add:
+                # An explicit addition is newer evidence that this key is alive.
+                for name in retired:
+                    vault._rewrite(config.SECRETS_DIR / name, {vault.key_id(add)}, [])
+            if changed_doc:
+                atomic_write(path, tomlkit.dumps(doc), private=True)
+        if reload_config:
+            config.reload()
+        if add:
+            out = {"fingerprint": config.fingerprint(add), "added": not existed, "masked": mask(add),
+                   "file": str(config.SECRETS_DIR / names[0])}
+            if existed:
+                out["note"] = "already in the pool"
+            return out
+        return {"fingerprint": remove, "removed": True}
+
+    return vault.mutate_local(change, allow_removals=bool(remove))
+
+
+def add_key(provider: str, key: str, *, _reload: bool = True) -> dict:
     key = (key or "").strip()
     if not key or any(c.isspace() for c in key) or len(key) < 8:
         raise SettingsError("a key is one unbroken string of at least 8 characters")
     _provider(provider)
-    fp = config.fingerprint(key)
-    if key in config.all_keys(provider):
-        return {"fingerprint": fp, "added": False, "note": "already in the pool"}
-
-    def change(doc):
-        keys = doc.get("keys")
-        if keys is None or isinstance(keys, str):  # a hand-written `keys = "sk-..."` becomes a list holding it
-            held = [str(keys).strip()] if isinstance(keys, str) and str(keys).strip() else []
-            keys = doc["keys"] = tomlkit.array()
-            keys.multiline(True)
-            keys.extend(held)
-        if key not in keys:
-            keys.append(key)
-    _in_provider(provider, change)
-    return {"fingerprint": fp, "added": True, "masked": mask(key), "file": str(config.user_file(provider))}
+    return _edit_provider_keys(provider, add=key, reload_config=_reload)
 
 
 def _key_rank(doc, fingerprint: str, rank: int | None) -> None:
@@ -197,27 +268,9 @@ def _key_rank(doc, fingerprint: str, rank: int | None) -> None:
             del doc["key_priority"]
 
 
-def remove_key(provider: str, fingerprint: str) -> dict:
-    key = _find(provider, fingerprint)
-    mine = config.user_source(provider)
-    # The same key may also sit in the environment or ~/.hswarm/secrets/: its number stays while it is still used.
-    elsewhere = any(k == key for source, read in config.key_sources(provider) if source != mine for k in read())
-
-    def change(doc):
-        keys = doc.get("keys")
-        if isinstance(keys, str):
-            if str(keys).strip() == key:
-                del doc["keys"]
-        elif keys is not None:
-            for i in reversed(range(len(keys))):
-                if str(keys[i]).strip() == key:
-                    del keys[i]
-            if not len(keys):
-                del doc["keys"]
-        if not elsewhere:  # a number left behind would come back if the key is re-added
-            _key_rank(doc, fingerprint, None)
-    _in_provider(provider, change)
-    return {"fingerprint": fingerprint, "removed": True}
+def remove_key(provider: str, fingerprint: str, *, _reload: bool = True) -> dict:
+    _provider(provider)
+    return _edit_provider_keys(provider, remove=fingerprint, reload_config=_reload)
 
 
 def set_key_priority(provider: str, fingerprint: str, priority) -> dict:
@@ -266,7 +319,7 @@ def set_provider(name: str, *, enabled: bool | None = None, base_url: str | None
 
 
 def add_provider(name: str, base_url: str, *, docs: str = "", anthropic_url: str = "", website: str = "") -> dict:
-    """A new OpenAI-compatible endpoint, as its own file: keys go in it, or in <NAME>_API_KEY(S) in the env."""
+    """A new OpenAI-compatible endpoint, as its own file; keys go in secrets/ or <NAME>_API_KEY(S) in the env."""
     name = (name or "").strip().lower()
     if not NAME_RX.match(name):
         raise SettingsError("a provider name is lowercase letters, digits, '.', '_' or '-'")
@@ -294,7 +347,7 @@ def add_provider(name: str, base_url: str, *, docs: str = "", anthropic_url: str
 
 
 def remove_provider(name: str) -> dict:
-    """A custom provider is its file: removing it deletes the file, with its models and the keys in it."""
+    """Remove a custom provider's settings and models; shared key lists remain in the vault."""
     if name in config.BUILTIN_PROVIDERS:
         raise SettingsError(f"{name} is built in; switch it off instead")
     if not NAME_RX.match(name or "") or name not in config.PROVIDERS:
@@ -468,6 +521,8 @@ def _provider_row(name: str, p: dict, state: dict | None = None) -> dict:
         "disabled_why": [{"reason": r, "keys": n} for r, n in why.most_common(4)],
         "name": name, "builtin": name in config.BUILTIN_PROVIDERS, "enabled": config.provider_enabled(name),
         "base_url": p.get("base_url"), "docs": p.get("docs"), "about": p.get("about") or "", "key_url": p.get("key_url") or "",
+        "transport": p.get("transport", "openai"), "capabilities": list(p.get("capabilities") or ()),
+        "operations": sorted(p.get("operations") or {}),
         "free_tier": bool(p.get("free_tier")), "keys": len(rows),
         "ready": states.count("ok"), "resting": states.count("resting"), "disabled": sum(1 for r in rows if r["disabled"]),
         "prioritized_keys": len(p.get("key_priority") or {}),

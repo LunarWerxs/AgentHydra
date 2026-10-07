@@ -1,0 +1,22 @@
+base_url = "https://api.ideogram.ai"
+transport = "service"
+about = "Ideogram image generation through its multipart REST API. Poll asynchronous generation IDs separately."
+website = "https://ideogram.ai"
+key_url = "https://ideogram.ai/manage-api"
+docs = "https://developer.ideogram.ai/v1/api-reference/generate-images/generate-v4"
+auth_header = "Api-Key"
+auth_prefix = ""
+capabilities = ["image-generation", "generation-status"]
+
+[operations.generate]
+method = "POST"
+path = "/v1/ideogram-v4/generate"
+capability = "image-generation"
+input = "multipart"
+response = "json"
+
+[operations.get_generation]
+method = "GET"
+path = "/v1/generations/{generation_id}"
+capability = "generation-status"
+response = "json"
