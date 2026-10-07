@@ -169,6 +169,7 @@ import {
   attemptUnits,
   bestRung,
   bestRungPastHaiku,
+  CLIMAYTE_LADDER,
   type CliMayteKind,
   type CliMayteVerdict,
   climayteKind,
@@ -3716,6 +3717,14 @@ function settleKeyOfWorker(w: CliMayteWorker, ok: boolean, note: string | null):
       settleWaveTask(wave, task, ok, note ?? 'settled by the orchestrator verdict', Date.now())
   })
   queueWaveForTick(w.wave)
+}
+
+/** The model an auto task of `kind` runs on now (the scorecard's pick, the Haiku trial's while it runs). The
+ *  cost router prices CliMayte work at it: work on a signed-in account costs the plan's share of what that model
+ *  lists at, never another model's list price (owner, 2026-10-07: CliMayte gets the plan's discounted rate). */
+export function climaytePickModel(kind: CliMayteKind): string {
+  load()
+  return CLIMAYTE_LADDER[pickedRung(kind, scoreRows(workers.values()))]!.model
 }
 
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost

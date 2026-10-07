@@ -138,6 +138,8 @@ def test_an_eligible_task_routed_to_the_subscription_returns_the_workers_report(
     assert sent["kind"] == "code" and sent["cwd"] == str(tmp_path) and "look at it" in sent["prompt"]
     d = f.decides[0]
     assert d["key"] == f"{job.id}:t0" and d["subscriptionRoom"] is True and d["listUsd"] > 0
+    # AgentHydra prices the plan side at CliMayte's own pick for this kind and size (owner, 2026-10-07).
+    assert d["kind"] == "code" and d["tokens"]["input"] > 0 and d["tokens"]["output"] > 0
     assert d["api"]["model"] == "deepseek-flash" and d["api"]["provider"] == "deepseek"
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert row["provider"] == "climayte" and row["climayte_worker"] == "w1" and row["route_why"] == "cheaper on the plan"

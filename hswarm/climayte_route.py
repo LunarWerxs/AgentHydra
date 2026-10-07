@@ -154,7 +154,10 @@ async def decide(job_id: str, task: Task) -> dict | None:
     except _Unpriced as e:
         _say(job_id, f"{e} has no price in data/prices.json, so there is nothing to compare; tasks keep their own route")
         return None
-    body = {"key": f"{job_id}:{task.id}", "listUsd": _list_usd(api), "api": api, "subscriptionRoom": True}
+    # kind and tokens let AgentHydra price the subscription side at the model CliMayte would run this task on (the
+    # plan's share of that model's list price, owner 2026-10-07), in place of listUsd.
+    body = {"key": f"{job_id}:{task.id}", "listUsd": _list_usd(api), "kind": worker_kind(task), "tokens": _tokens(),
+            "api": api, "subscriptionRoom": True}
     try:
         # to_thread cannot stop a socket early, so the wait is bounded here as well as on the socket
         status, doc = await asyncio.wait_for(_call("POST", "/api/routing/decide", body, DECIDE_TIMEOUT_S), DECIDE_TIMEOUT_S + 0.5)

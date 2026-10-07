@@ -41,6 +41,12 @@ Sonnet's list price, the same order as a subscription, and that is where the spl
 
 - Subscription cost = `listUsd` x fleet fraction + the session overhead (a share of a Pro window, converted the
   same way). API cost = the API's list dollars less the provider's discount.
+- Work on a signed-in account is priced at the plan's rate for the model it really runs on, never at another
+  model's list price (owner, 2026-10-07: CliMayte gets the plan's discounted rate, and so does Haiku run inside an
+  account). A caller that sends the task's `kind` and `tokens` (`{ input, output }`, HSwarm does) gets `listUsd`
+  computed here, at the model CliMayte's scorecard picks for that kind now (Haiku 5.5 while its trial runs), and the
+  answer names it as `subscriptionModel`. Free claude.ai accounts cost nothing, so HSwarm sends tool-free work to
+  them before it asks this question at all (docs/CLIMAYTE.md, "Which route first").
 - Routing off, no subscription room or no `listUsd`: the API. No API model fits: the subscription.
 - If the dearer side costs more than `routing_close_ratio` times the cheaper, the cheaper wins.
 - Otherwise the call is close. The key is hashed into 0..99; below `routing_api_preference_pct` it goes to the API.
@@ -83,7 +89,9 @@ whose API leg is a Claude model goes to a subscription, about 50 times cheaper t
   table (Claude and DeepSeek from `hswarm/data/prices.json` through `pricing.ts`) and the settings.
 - `PUT /api/routing/settings`: validated and clamped; send any of `enabled`, `apiPreferencePct`, `closeRatio`,
   `sessionOverheadPct`, `discounts`, `planPrices`.
-- `POST /api/routing/decide`: the body of `decideRoute`; answers `{ route, why, apiUsd, subscriptionUsd, close }`.
+- `POST /api/routing/decide`: the body of `decideRoute`, plus `kind` and `tokens` to price the subscription side at
+  CliMayte's pick; answers `{ route, why, apiUsd, subscriptionUsd, close, subscriptionModel }` (`subscriptionModel`
+  null when no `kind` was sent). An unknown `kind`, or a `kind` without both token counts, is a 400.
 
 ## Where to change it
 

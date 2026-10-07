@@ -4,9 +4,11 @@
  */
 
 import priceFile from '../../../hswarm/data/prices.json'
+import { climaytePickModel } from '../climayte'
+import { type CliMayteKind, climayteKind } from '../climayte-scorecard'
 import { setSetting } from '../db'
 import { app } from '../http-app'
-import { priceFor, pricesAsOf } from '../pricing'
+import { priceFor, pricesAsOf, priceTokens } from '../pricing'
 import {
   clampDiscounts,
   costModel,
@@ -142,16 +144,38 @@ app.post('/api/routing/decide', async (c) => {
       return c.json({ error: 'api.usd must be a finite number >= 0' }, 400)
     api = { provider: a.provider, model: a.model, usd }
   }
-  const list = numeric(b.listUsd)
-  return c.json(
-    decideRoute(
-      {
-        key: b.key,
-        listUsd: list !== null && list >= 0 ? list : null,
-        api,
-        subscriptionRoom: b.subscriptionRoom === true,
-      },
-      currentContext(),
-    ),
+  let list = numeric(b.listUsd)
+  // Work on a signed-in account costs the plan's share of what the model CliMayte runs it on lists at (owner,
+  // 2026-10-07): a caller that names the task's kind and size gets that model priced here, not its own guess.
+  let subscriptionModel: string | null = null
+  if (b.kind !== undefined) {
+    let kind: CliMayteKind | null
+    try {
+      kind = climayteKind(b.kind)
+    } catch (error) {
+      return c.json({ error: (error as Error).message }, 400)
+    }
+    const t = (b.tokens && typeof b.tokens === 'object' ? b.tokens : {}) as Record<string, unknown>
+    const input = numeric(t.input)
+    const output = numeric(t.output)
+    if (!kind || input === null || output === null || input < 0 || output < 0)
+      return c.json({ error: 'kind needs tokens: { input, output }, numbers >= 0' }, 400)
+    subscriptionModel = climaytePickModel(kind)
+    const none = { cacheRead: 0, cacheCreation5m: 0, cacheCreation1h: 0 }
+    list = priceTokens(
+      { [subscriptionModel]: { input, output, ...none } },
+      Date.now(),
+      input,
+    ).costUsd
+  }
+  const decision = decideRoute(
+    {
+      key: b.key,
+      listUsd: list !== null && list >= 0 ? list : null,
+      api,
+      subscriptionRoom: b.subscriptionRoom === true,
+    },
+    currentContext(),
   )
+  return c.json({ ...decision, subscriptionModel })
 })

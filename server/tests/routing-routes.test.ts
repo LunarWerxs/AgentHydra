@@ -42,6 +42,31 @@ test('decide treats a junk listUsd as no list cost', async () => {
   expect(((await r.json()) as { subscriptionUsd: number | null }).subscriptionUsd).toBeNull()
 })
 
+test("decide prices CliMayte work at its own pick's list price, not the caller's, given a kind and size", async () => {
+  // Owner, 2026-10-07: work on a signed-in account gets the plan's rate for the model it really runs on.
+  const priced = async (listUsd: number) => {
+    const r = await send('POST', '/api/routing/decide', {
+      key: 'k',
+      listUsd,
+      kind: 'sweep',
+      tokens: { input: 40_000, output: 4_000 },
+      api: { provider: 'deepseek', model: 'm', usd: 1 },
+      subscriptionRoom: true,
+    })
+    expect(r.status).toBe(200)
+    return (await r.json()) as { subscriptionUsd: number; subscriptionModel: string }
+  }
+  const [low, high] = [await priced(0), await priced(1000)]
+  expect(low.subscriptionModel).toStartWith('claude-')
+  expect(high.subscriptionUsd).toBe(low.subscriptionUsd)
+  const bad = await send('POST', '/api/routing/decide', {
+    key: 'k',
+    kind: 'nap',
+    tokens: { input: 1, output: 1 },
+  })
+  expect(bad.status).toBe(400)
+})
+
 test('PUT settings leaves a field alone when its value is junk, and names it', async () => {
   setSetting('routing_api_preference_pct', '37')
   const r = await send('PUT', '/api/routing/settings', { apiPreferencePct: false })
