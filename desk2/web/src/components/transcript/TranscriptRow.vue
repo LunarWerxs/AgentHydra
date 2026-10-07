@@ -19,6 +19,7 @@ import TodoList from './parts/TodoList.vue'
 import TaskCard from './parts/TaskCard.vue'
 import WorkflowCard from './parts/WorkflowCard.vue'
 import SendFileRow from './parts/SendFileRow.vue'
+import NamedMedia from './parts/NamedMedia.vue'
 import PermissionCard from './parts/PermissionCard.vue'
 import QuestionCard from './parts/QuestionCard.vue'
 import PlanCard from './parts/PlanCard.vue'
@@ -77,6 +78,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 
   <div v-else-if="item.kind === 'assistant_text'" class="group/message-row relative flex flex-col gap-1" :class="nested && 'tx-nested'">
     <MarkdownBlock :text="item.text" :streaming="item.streaming" />
+    <NamedMedia v-if="item.media?.length && !item.streaming" :media="item.media" />
     <MessageActions
       v-if="endOfTurn && !nested"
       :text="item.text"

@@ -10,6 +10,7 @@
 // Notifications here: 'finished' / 'error' from a result, 'limited' from a rejected rate_limit_event.
 // 'needs_you' comes from canUseTool, which the runtime owns.
 
+import { resolve } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import {
   MAX_TOOL_RESULT_CHARS,
@@ -145,8 +146,11 @@ function inputPaths(name: string, input: Loose): string[] {
 
 const isSendFile = (name: string) => name === 'SendUserFile' || name.endsWith('__SendUserFile') || name.endsWith('__send_user_file')
 
-/** A markdown image target that is a local absolute path ("C:\a\b.png", "C:/a/b.png", "file:///C:/a/b.png"). */
-function localTarget(raw: string): string | null {
+/**
+ * A markdown image target that is a local path: absolute ("C:\a\b.png", "C:/a/b.png", "file:///C:/a/b.png"),
+ * or, with the chat's folder, relative to it ("out/demo.mp4").
+ */
+function localTarget(raw: string, cwd?: string | null): string | null {
   let t = raw.startsWith('<') && raw.endsWith('>') ? raw.slice(1, -1) : raw
   if (/^file:\/\//i.test(t)) {
     try {
@@ -156,7 +160,10 @@ function localTarget(raw: string): string | null {
     }
     if (!/^[A-Za-z]:/.test(t)) t = `/${t}`
   }
-  return /^[A-Za-z]:[\\/]/.test(t) || (t.startsWith('/') && !t.startsWith(MEDIA_ROUTE)) ? t : null
+  if (/^[A-Za-z]:[\\/]/.test(t) || (t.startsWith('/') && !t.startsWith(MEDIA_ROUTE))) return t
+  // Relative: no scheme ("https:", "data:"), not an anchor or a network path.
+  if (!cwd || !t || t.startsWith('#') || t.startsWith('/') || t.startsWith('\\') || /^[A-Za-z][A-Za-z0-9+.-]*:/.test(t)) return null
+  return resolve(cwd, t)
 }
 
 const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g
@@ -167,15 +174,63 @@ const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g
  * cached file's url, named earlier in the transcript or not; any other target is left as written (a file
  * chip, never loaded).
  */
-export function rewriteLocalImages(text: string, _named: ReadonlySet<string>, media: MediaCache | null): string {
+export function rewriteLocalImages(text: string, _named: ReadonlySet<string>, media: MediaCache | null, cwd?: string | null): string {
   if (!media || !text.includes('![')) return text
   return text.replace(MD_IMAGE, (all, alt: string, target: string, title: string | undefined) => {
-    const path = localTarget(target)
+    const path = localTarget(target, cwd)
     if (!path || !RENDERABLE.test(path)) return all
     const ref = media.fileRef(path)
     return ref?.url ? `![${alt}](${ref.url}${title ?? ''})` : all
   })
 }
+
+/** How many named files one message shows, and how many candidates it looks up to find them. */
+const MAX_NAMED_MEDIA = 8
+const MAX_NAMED_CANDIDATES = 40
+
+const MEDIA_EXT = 'png|jpe?g|gif|webp|mp4|m4v|mov|webm'
+const CODE_SPAN = /`([^`\n]+)`/g
+const MD_LINK = /(?<!!)\[[^\]\n]*\]\(\s*(<[^>\n]+>|[^)\s]+)(?:\s+"[^"\n]*")?\s*\)/g
+// A bare path in prose (no spaces): not the tail of a url or a longer word.
+const BARE_MEDIA = new RegExp(`(?<![\\w/\\\\.:@-])(?:[A-Za-z]:[\\\\/]|/)?(?:[\\w.@~+-]+[\\\\/])*[\\w.@~+-]+\\.(?:${MEDIA_EXT})(?![\\w-])`, 'gi')
+const MEDIA_ENDING = new RegExp(`\\.(?:${MEDIA_EXT})$`, 'i')
+
+/**
+ * Pictures and videos a finished reply only names, in backticks, bare in prose or as a plain markdown link's
+ * target, absolute or relative to the chat's folder. Only files the media cache accepts (exists, extension,
+ * first bytes, size) come back, never one a markdown image of the same text already shows, each file once,
+ * at most eight. The text itself is not changed.
+ */
+export function namedMedia(text: string, media: MediaCache | null, cwd: string | null | undefined, shownText: string = text): ImageRef[] {
+  if (!media || !MEDIA_ENDING_ANYWHERE.test(text)) return []
+  const candidates: string[] = []
+  for (const m of text.matchAll(CODE_SPAN)) candidates.push(m[1]!.trim())
+  for (const m of text.matchAll(MD_LINK)) candidates.push(m[1]!)
+  for (const m of text.matchAll(BARE_MEDIA)) candidates.push(m[0])
+  const embedded = new Set<string>()
+  for (const m of text.matchAll(MD_IMAGE)) {
+    const p = localTarget(m[2]!, cwd)
+    if (p) embedded.add(pathKey(p))
+  }
+  const seen = new Set<string>()
+  const out: ImageRef[] = []
+  let tried = 0
+  for (const c of candidates) {
+    if (out.length >= MAX_NAMED_MEDIA || tried >= MAX_NAMED_CANDIDATES) break
+    if (!MEDIA_ENDING.test(c.replace(/^<|>$/g, ''))) continue
+    const path = localTarget(c, cwd)
+    if (!path || !RENDERABLE.test(path)) continue
+    const key = pathKey(path)
+    if (embedded.has(key) || seen.has(key)) continue
+    seen.add(key)
+    tried++
+    const ref = media.fileRef(path)
+    if (!ref?.url || shownText.includes(ref.url) || out.some((o) => o.url === ref.url)) continue
+    out.push(ref)
+  }
+  return out
+}
+const MEDIA_ENDING_ANYWHERE = new RegExp(`\\.(?:${MEDIA_EXT})`, 'i')
 
 /** The result text of a tool that started something in the background: "... launched in background. Task ID: x" or "... running in background with ID: x". */
 const BACKGROUND_TASK = /^\s*(?:Workflow launched in background\.\s*Task ID:|Command running in background with ID:)\s*([\w-]+)/
@@ -345,9 +400,11 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         const kind = block.type === 'text' ? 'assistant_text' : 'thinking'
         // Thinking shown as "updates" finalizes with an empty block: keep what streamed.
         const said = str(block.type === 'text' ? block.text : block.thinking) || s?.text || ''
-        const text = kind === 'assistant_text' ? rewriteLocalImages(said, named, media) : said
+        const text = kind === 'assistant_text' ? rewriteLocalImages(said, named, media, opts.cwd) : said
+        const files = kind === 'assistant_text' ? namedMedia(said, media, opts.cwd, text) : []
         if (text || s?.upserted) {
-          out.push({ type: 'upsert', item: withParent({ kind, id, ts: s?.ts ?? now(), text, streaming: false }, parent) })
+          const item = withParent({ kind, id, ts: s?.ts ?? now(), text, streaming: false, ...(files.length ? { media: files } : {}) } as TranscriptItem, parent)
+          out.push({ type: 'upsert', item })
         }
       } else if (block.type === 'tool_use' || block.type === 'server_tool_use' || block.type === 'mcp_tool_use') {
         const id = str(block.id)

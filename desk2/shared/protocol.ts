@@ -137,7 +137,8 @@ export type TranscriptItem =
   /** A message another program typed into the session as a user turn (an AgentHydra ping): never the person's bubble. */
   | (ItemBase & { kind: 'note'; from: string; text: string })
   /** branchFrom: an outside Claude Code session's reply names its transcript line, where "Copy up to here into a new chat" cuts (ExternalBranchRequest). */
-  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string })
+  /** media: pictures and videos the finished reply only names (a path in backticks, prose or a link), shown under it; the text is unchanged. */
+  | (ItemBase & { kind: 'assistant_text'; text: string; streaming?: boolean; branchFrom?: string; media?: ImageRef[] })
   | (ItemBase & { kind: 'thinking'; text: string; streaming?: boolean })
   | (ItemBase & {
       kind: 'tool_use'

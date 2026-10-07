@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
@@ -65,6 +65,69 @@ describe('inline pictures in assistant text', () => {
     writeFileSync(p, PNG)
     const md = `![mine](${p})`
     expect(render('user', md)).toBe(md)
+  })
+})
+
+describe('files a reply only names', () => {
+  const MP4 = Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypmp42'), Buffer.alloc(32)])
+  const cwd = join(root, 'proj')
+  mkdirSync(join(cwd, 'out'), { recursive: true })
+  writeFileSync(join(cwd, 'out', 'demo.mp4'), MP4)
+  writeFileSync(join(cwd, 'shot.png'), PNG)
+
+  const named = (text: string, dir: string | null = cwd) => {
+    const media = createMediaCache(join(root, 'media'))
+    const items = historyToItems([rec('assistant', text)], { media, cwd: dir }) as TranscriptItem[]
+    const it = items[0] as Extract<TranscriptItem, { kind: 'assistant_text' }>
+    return { text: it.text, media: it.media ?? [] }
+  }
+
+  test('a relative .mp4 in inline code becomes a video ref and the text stays', () => {
+    const said = 'Ad: rendered at `out/demo.mp4`.'
+    const r = named(said)
+    expect(r.text).toBe(said)
+    expect(r.media).toHaveLength(1)
+    expect(r.media[0]!.mediaType).toBe('video/mp4')
+    expect(r.media[0]!.url).toMatch(/^\/api\/media\/[0-9a-f]{64}\.mp4$/)
+  })
+
+  test('an absolute bare .png in prose becomes a picture ref', () => {
+    const r = named(`Saved ${join(cwd, 'shot.png').replaceAll('\\', '/')} for you.`, null)
+    expect(r.media.map((m) => m.mediaType)).toEqual(['image/png'])
+  })
+
+  test('the target of a plain markdown link is shown', () => {
+    expect(named('See [the cut](out/demo.mp4).').media).toHaveLength(1)
+  })
+
+  test('a missing file, or a relative path with no folder to resolve against, gives no ref', () => {
+    expect(named('Look at `out/nope.mp4` and `gone.png`').media).toEqual([])
+    expect(named('Rendered `out/demo.mp4`', null).media).toEqual([])
+  })
+
+  test('a .mp4 that is really text gives no ref', () => {
+    writeFileSync(join(cwd, 'out', 'fake.mp4'), 'not a video at all, just text')
+    expect(named('`out/fake.mp4`').media).toEqual([])
+  })
+
+  test('a file a markdown image already embeds, in any spelling, is not repeated', () => {
+    const r = named('![demo](out/demo.mp4)\n\nIt is `out/demo.mp4`, also out/demo.mp4 again.')
+    expect(r.text).toMatch(URL_RE('mp4'))
+    expect(r.media).toEqual([])
+  })
+
+  test('the same file named twice is shown once', () => {
+    expect(named('`out/demo.mp4` then ./out/demo.mp4').media).toHaveLength(1)
+  })
+
+  test('at most 8 files a message', () => {
+    for (let i = 0; i < 12; i++) writeFileSync(join(cwd, `p${i}.png`), Buffer.concat([PNG, Buffer.from([i])]))
+    const r = named(Array.from({ length: 12 }, (_, i) => `\`p${i}.png\``).join(' '))
+    expect(r.media).toHaveLength(8)
+  })
+
+  test('a relative markdown image target plays in place', () => {
+    expect(named('![x](out/demo.mp4)').text).toMatch(URL_RE('mp4'))
   })
 })
 
