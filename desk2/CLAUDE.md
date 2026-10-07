@@ -55,6 +55,11 @@ between server/ and web/.
   (`.rsi/rsi.yaml`) are the ones to move, and `python <hydra>/ph.py rsi next --here` picks among them.
 - After changing a tooltip, menu, popover, sidebar row or lazy overlay: `bun run build`, then
   `bun run e2e:gestures` (the first gesture on every untouched trigger, headless; see the README).
+- A failed build empties its dist, and `web/dist` and `hydra/dist` are what the running window serves (2026-10-07: a
+  hydra build failing on another session's half-made edits left `/ah/` blank for ten minutes). While another session's
+  uncompiled edits sit in `hydra/` or `web/`, build only the app you changed (`bun run --cwd web build`). A wiped dist
+  comes back from HEAD: `git archive` that app's source to a temp folder, junction its `node_modules`, and run
+  `vite build --outDir <the real dist>` there.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
