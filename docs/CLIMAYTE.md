@@ -194,6 +194,16 @@ and a daemon start removes those of every worker that is gone or finished, never
 connections-local was denied for a day to save tokens (`8486a2d`); a worker asked to use
 connections_execute then had no such tool and drove the local MCP through a script.
 
+**The owner's command guards run in every worker** (2026-10-07). A worker runs with permissions
+skipped, so the PreToolUse hooks in its settings are its only guard. Beside the edit_claims hook on
+Edit, Write, MultiEdit and NotebookEdit, its settings carry the owner's `destructive_guard.py` and
+`push_force_guard.py` from the owner's `.claude/hooks` (each only when that file exists) on every Bash
+and PowerShell call (`workerHooks` in `climayte-signal.ts`, wired in `writeWorkerSettings`). Each runs
+through `RUN_IF_PRESENT`, a `python -S -c` launcher that does nothing when the file is gone and puts the
+script's folder first on `sys.path`, so a guard that imports a sibling module finds it. A sealed task
+carries none of the owner's hooks. Verified the same day after a daemon restart: a live worker's
+`git switch --discard-changes` was refused by the guard.
+
 ### Runner and restarts (`server/src/climayte-runner.ts`)
 
 Owner, 2026-09-30: restarting AgentHydra must not break CliMayte workers. A `Bun.spawn` child sits in

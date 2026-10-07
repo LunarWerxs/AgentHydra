@@ -45,6 +45,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte workers are stopped by the same command guards as your own chats.** Every Bash and PowerShell call a
+  worker makes now goes through the guard hooks in your Claude profile that refuse destructive commands and force
+  pushes, when you have them installed. Workers run with permissions skipped, so before this nothing stopped one
+  from wiping the uncommitted work in a shared checkout.
 - **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5.** Every kind of task now starts on
   Haiku 5.5, about a fifth of Sonnet 5.5's price on CliMayte's own work, and a task it cannot do goes straight back
   on the setting that would have run it. Asking for Haiku 4.5 is refused, and the Claude Code sessions
