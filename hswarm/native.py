@@ -66,7 +66,15 @@ def threads(explicit: int | None = None) -> int:
 
 
 def prices_json() -> str:
-    return json.dumps([{"prefix": p, "in": i, "out": o, "read_x": r} for p, i, o, r in claude_usage.PRICES])
+    """The table on the scanners' stdin. A tiered row adds over_at (the prompt size its long-prompt rates start
+    above) and over_in / over_out / over_read_x; a binary built before those fields ignores them."""
+    rows = []
+    for p, i, o, r, over in claude_usage.PRICES:
+        row = {"prefix": p, "in": i, "out": o, "read_x": r}
+        if over:
+            row |= dict(zip(("over_at", "over_in", "over_out", "over_read_x"), over))
+        rows.append(row)
+    return json.dumps(rows)
 
 
 def command(lang: str, root: Path, since: dt.date, until: dt.date, n_threads: int = 1) -> list[str]:
@@ -99,7 +107,7 @@ def log_stale(lang: str) -> None:
     and carry on with Python (claude_usage.collect does the falling back)."""
     from . import savings
 
-    savings.log(f"{lang} scanner is older than this checkout (no token counts in its output); scanning with Python. Rebuild: python -m hswarm native build")
+    savings.log(f"{lang} scanner is older than this checkout (no token counts or long-prompt tier in its output); scanning with Python. Rebuild: python -m hswarm native build")
 
 
 def scan(lang: str, root: Path, since: dt.date, until: dt.date, n_threads: int | None = None) -> dict:

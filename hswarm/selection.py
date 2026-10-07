@@ -37,15 +37,18 @@ PURPOSES = {
     "evaluation": "the answer is only measured or compared: a benchmark, an eval, a probe, a spike, a scratch test",
 }
 
-# Model families AUTO never picks, on any leg: evaluated, sibling or backup. Haiku only: the 2026-09-24 never-Sonnet
-# ruling was retired on 2026-10-03 because it predated Sonnet 5.5, so Sonnet is an ordinary AUTO candidate again and
-# the benchmark order decides. Naming the model (`model=`) is the explicit override: a pinned model never goes through
-# this plan.
-AUTO_BARRED_FAMILIES = ("claude-haiku",)
+# Models AUTO never picks, on any leg: evaluated, sibling or backup. Claude Haiku 4.5 and older only (owner,
+# 2026-10-07: "never use Haiku 4.5"); Haiku 5.5 is an ordinary candidate, and the owner wants work to start
+# "attempting to offload there first ... it's really good and really cheap", so the benchmark order decides as for
+# any model. The 2026-09-24 never-Sonnet ruling was retired on 2026-10-03 because it predated Sonnet 5.5. Matched
+# as id prefixes (OpenRouter's dotted ids too). Naming the model (`model=`) is the explicit override: a pinned model
+# never goes through this plan.
+AUTO_BARRED_FAMILIES = ("claude-haiku-4", "claude-haiku-3", "claude-3-haiku", "claude-3-5-haiku", "claude-3.5-haiku")
 
 
 def auto_barred(entry) -> bool:
-    """True when the model belongs to a family AUTO never picks, read off its benchmark slug and its API id."""
+    """True when the model is one AUTO never picks (Claude Haiku 4.5 and older), read off its benchmark slug and its
+    API id."""
     ids = (entry.get("benchmark_slug") or "", (entry.get("api_id") or "").rsplit("/", 1)[-1])
     return any(i.startswith(AUTO_BARRED_FAMILIES) for i in ids)
 
@@ -159,7 +162,8 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
     data = evidence()
     points = {p["slug"]: p for p in data["points"]}
     floors = dict(PROFILES[profile])
-    valid = set(next(iter(points.values()))["scores"]) - {"critpt"}
+    # The benchmark table names every key; a point may carry only some (a vendor-reported one), so no point is the list.
+    valid = set(data["benchmarks"]) - {"critpt"}
     for key, value in (min_scores or {}).items():
         if key not in valid or not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             raise ValueError(f"invalid score requirement {key!r}; CritPt is excluded while under review")
@@ -173,12 +177,14 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
         p = points.get(entry["benchmark_slug"])
         # A user's file must not keep a shipped model's evidence while changing the model or effort it runs.
         expected = config.BUILTIN_MODELS.get(name, entry)
-        short = [k for k, v in floors.items() if p and (p["scores"].get(k) is None or p["scores"][k] < v)]
+        # A floor key the point never published (a vendor-only point, Haiku 5.5's) is unmeasured, not below the floor.
+        missing = [k for k in floors if p and p["scores"].get(k) is None]
+        short = [k for k, v in floors.items() if p and p["scores"].get(k) is not None and p["scores"][k] < v]
         effort = entry.get("default_reasoning_effort")
         if name in config.DISABLED_MODELS or not config.provider_enabled(entry["provider"]):
             why = ("disabled", "switched off in settings")
         elif auto_barred(entry):
-            why = ("family", "Claude Haiku is never picked automatically; name the model to use one")
+            why = ("family", "Claude Haiku 4.5 and older are never picked (owner, 2026-10-07)")
         elif purpose != "evaluation" and config.PROVIDERS[entry["provider"]].get("evaluation_only"):
             why = ("purpose", f"{entry['provider']}'s own terms allow evaluation only; this task's purpose is {purpose!r}")
         elif not p:
@@ -191,6 +197,8 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
             why = ("identity", "a user file changed model or effort: " + ", ".join(k for k in identity if entry.get(k) != expected.get(k)))
         elif short:
             why = ("floor", "below " + ", ".join(f"{k} {floors[k]}" for k in short))
+        elif missing:
+            why = ("floor", "no published score for " + ", ".join(missing) + " (not measured)")
         elif reasoning_effort is not None and effort != reasoning_effort:
             why = ("effort", f"runs at {effort}, not {reasoning_effort}")
         elif thinking is False and entry.get("default_thinking") is not False:
@@ -212,13 +220,14 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
             continue
         factor = .5 if entry["provider"] == "deepseek" and not config.is_peak() else 1
         candidates.append({"model": name, "reasoning_effort": effort, "thinking": entry.get("default_thinking"),
-                           "benchmark_slug": p["slug"], "score": p["score"], "benchmark_cost_usd": p["cost"]*factor,
+                           # score is the AA index, None on a point AA has not measured yet (vendor evidence)
+                           "benchmark_slug": p["slug"], "score": p.get("score"), "benchmark_cost_usd": p["cost"]*factor,
                            "source": p["source"], "scores": {k: p["scores"][k] for k in floors},
                            "rates": config.price(name), "provider": entry["provider"], "configuration": p["name"],
                            "free": bool(config.PROVIDERS[entry["provider"]].get("free_calls"))})
     # A provider whose calls cost nothing (`free_calls`, NVIDIA's trial keys) serves first; among free routes, and among
     # paid ones, the cheapest capable model still goes first, so a free route never means a bigger model than needed.
-    candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -c["score"], c["model"]))
+    candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -(c["score"] or 0), c["model"]))
     last = _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
                         tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),
                         purpose=purpose)

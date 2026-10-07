@@ -1,7 +1,7 @@
 {
  "version": 1,
- "as_of": "2026-10-03",
- "note": "The one place a list price is written. USD per million tokens. cache_read, cache_write_5m and cache_write_1h are derived from input (0.1x, 1.25x, 2x) when absent. Read by server/src/pricing.ts and hswarm/prices.py; tests/pricing-parity fixture proves both price alike.",
+ "as_of": "2026-10-07",
+ "note": "The one place a list price is written. USD per million tokens. cache_read, cache_write_5m and cache_write_1h are derived from input (0.1x, 1.25x, 2x) when absent. A row's `over` block holds the rates of ONE request whose prompt (input + cache reads + cache writes) is over over.prompt_tokens, its cache rates derived from its own input the same way; a total of many requests prices at the row's own rates. Read by server/src/pricing.ts and hswarm/prices.py; tests/pricing-parity fixture proves both price alike.",
  "models": {
   "claude-fable-5-1": {
    "input": 10,
@@ -27,8 +27,26 @@
   "claude-sonnet-5-5": {
    "input": 2,
    "output": 10,
-   "source": "https://platform.claude.com/docs/en/about-claude/pricing",
-   "verified_at": "2026-10-03"
+   "cache_read": 0.1,
+   "source": "https://platform.claude.com/docs/en/about-claude/pricing (cache reads halved to $0.10 per million, 5% of input, announced with Claude Haiku 5.5: https://www.anthropic.com/claude-haiku-5-5)",
+   "verified_at": "2026-10-07"
+  },
+  "claude-haiku-5-5": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "cache_write_1h": 0.2,
+   "over": {
+    "prompt_tokens": 100000,
+    "input": 0.5,
+    "output": 2.5,
+    "cache_read": 0.05,
+    "cache_write_5m": 0.625,
+    "cache_write_1h": 1.0
+   },
+   "source": "https://platform.claude.com/docs/en/about-claude/pricing (a prompt of 100,000 tokens or fewer pays the first rates, a longer one the `over` rates, chosen per request)",
+   "verified_at": "2026-10-07"
   },
   "claude-fable-5": {
    "input": 10,

@@ -334,7 +334,10 @@ describe('chat routes', () => {
 
     // running: the live runtime's lists answer
     expect((await call(second.desk, 'GET', `/api/chats/${chat.id}/commands`)).body).toEqual([{ name: 'compact', description: 'Compact the conversation', argumentHint: '<instructions>' }])
-    expect((await call(second.desk, 'GET', '/api/models')).body).toEqual([{ value: 'claude-opus-5-5', label: 'Opus 5.5' }])
+    expect((await call(second.desk, 'GET', '/api/models')).body).toEqual([
+      { value: 'claude-opus-5-5', label: 'Opus 5.5' },
+      { value: 'claude-haiku-5-5', label: 'Haiku 5.5' },
+    ])
     expect((await call(second.desk, 'GET', '/api/folders/recent')).body).toEqual([cwd])
   })
 

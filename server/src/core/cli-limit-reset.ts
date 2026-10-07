@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { join } from 'node:path'
 import { CLAUDE_PROBE_NO_MCP_ARGS, DATA_DIR, resolveClaudeExe } from '../config'
 import type { CliLimitResetResult } from '../types'
+import { pinHaikuModel } from './haiku-pin'
 import { killProcessTreesAsync } from './process'
 
 type LimitResetOutcome = CliLimitResetResult['outcome']
@@ -170,7 +171,7 @@ function resetEnv(configDir: string): Record<string, string> {
   for (const [k, v] of Object.entries(process.env))
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   env.CLAUDE_CONFIG_DIR = configDir
-  return env
+  return pinHaikuModel(env) // never Haiku 4.5 behind the alias (haiku-pin.ts)
 }
 
 /** Start the CLI on a pseudo-terminal whose output lands in `out`. Throws when it cannot start. */

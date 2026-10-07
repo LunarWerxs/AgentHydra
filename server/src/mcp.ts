@@ -782,7 +782,7 @@ export const TOOLS: McpEngineTool[] = [
               model: {
                 type: 'string',
                 description:
-                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 4.5 up to Opus 5.5 max; every 4th pick tries a cheaper one still learning, every 2nd while the kind's pick is Opus). Leave `model` out. A `modelWhy` holds only a setting CHEAPER than the kind's pick; a setting at or above it is held only with `ownerWords`, otherwise it is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
+                  "Leave it out (or `auto`): CliMayte picks model AND effort for the task's `kind` from the scorecard, the setting that passes that kind reliably for the least quota per passed task (Haiku 5.5 medium up to Opus 5.5 max; every kind tries Haiku 5.5 first while it is still learning, every 4th pick tries another cheaper setting still learning, every 2nd while the kind's pick is Opus). Haiku 4.5 is refused. Leave `model` out. A `modelWhy` holds only a setting CHEAPER than the kind's pick; a setting at or above it is held only with `ownerWords`, otherwise it is left to the scorecard. A task that fails on a cheap setting is usually too big: split it and send the parts on auto.",
               },
               effort: {
                 type: 'string',
@@ -1164,7 +1164,8 @@ export const TOOLS: McpEngineTool[] = [
         },
         model: {
           type: 'string',
-          description: 'Run this turn and the later ones on this model: opus or sonnet.',
+          description:
+            'Run this turn and the later ones on this model: opus, sonnet or haiku (Haiku 5.5; Haiku 4.5 is refused).',
         },
         effort: {
           type: 'string',
@@ -1195,7 +1196,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'climayte_verdict',
     description:
-      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Verdicts feed climayte_scorecard, which picks the setting for model `auto`. A fail needs `severity` (0 not the model's: check or brief at fault, not scored; 1 slip: a small fix; 2 rework: a real part wrong; 3 failed: unusable) and `note` (what was wrong, self-contained: the worker gets it; at most 8,000 characters, a longer one is refused, never cut) and sends the task back to the SAME session one rung up the ladder (Haiku 4.5, Sonnet low, medium, high, then Opus medium, high, xhigh, max); the answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
+      "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Verdicts feed climayte_scorecard, which picks the setting for model `auto`. A fail needs `severity` (0 not the model's: check or brief at fault, not scored; 1 slip: a small fix; 2 rework: a real part wrong; 3 failed: unusable) and `note` (what was wrong, self-contained: the worker gets it; at most 8,000 characters, a longer one is refused, never cut) and sends the task back to the SAME session one rung up the ladder (Haiku 5.5 medium, high, Sonnet low, medium, high, then Opus medium, high, xhigh, max); a fail on Haiku goes at least to the setting its kind would run without Haiku. The answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
     inputSchema: S(
       {
         id: { type: 'string' },

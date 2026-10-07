@@ -1,4 +1,5 @@
 import type { QueryImpl } from './chat-runtime'
+import { pinHaikuModel } from './haiku-pin'
 
 /** What a generated title is made from, and how long the model has (SPEC "Titles"). */
 export const TITLE_PROMPT_CHARS = 2000
@@ -29,9 +30,13 @@ export function cleanTitle(raw: string): string | null {
   return title.charAt(0).toUpperCase() + title.slice(1)
 }
 
+/** Haiku 5.5 by id, never the `haiku` alias, which an older Claude Code resolves to Haiku 4.5 (owner, 2026-10-07: never use Haiku 4.5). */
+export const TITLE_MODEL = 'claude-haiku-5-5'
+
 /**
- * One Sonnet query on the chat's own account, low effort, no tools, one turn (never Haiku). Chosen over
- * HydraSwarm because it needs no extra service, rides the login the chat already has, and is one call.
+ * One Haiku 5.5 query on the chat's own account, low effort, no tools, one turn: a one-turn summary is the
+ * narrow work Haiku 5.5 is built for, at a fraction of Sonnet's price. Chosen over HydraSwarm because it
+ * needs no extra service, rides the login the chat already has, and is one call.
  */
 export function sdkTitleGenerator(
   queryImpl: QueryImpl,
@@ -47,6 +52,7 @@ export function sdkTitleGenerator(
       const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
       if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
       else delete childEnv.CLAUDE_CONFIG_DIR
+      pinHaikuModel(childEnv)
       const binary = binaryPath()
       const q = queryImpl({
         prompt:
@@ -55,7 +61,7 @@ export function sdkTitleGenerator(
         options: {
           cwd: req.cwd,
           env: childEnv,
-          model: 'sonnet',
+          model: TITLE_MODEL,
           effort: 'low',
           tools: [],
           maxTurns: 1,

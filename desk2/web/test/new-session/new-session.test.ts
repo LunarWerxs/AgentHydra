@@ -18,7 +18,7 @@ function memory(): DraftStorage & { data: Map<string, string> } {
 const MODELS = [
   { value: 'claude-opus-5-5', label: 'Opus 5.5' },
   { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' }
+  { value: 'claude-haiku-5-5', label: 'Haiku 5.5' }
 ]
 
 describe('account labels', () => {

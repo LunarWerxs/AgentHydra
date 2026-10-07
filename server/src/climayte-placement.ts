@@ -137,9 +137,10 @@ export function expectedCost(
   const kindFamily = kind.filter((f) => modelFamily(f.model) === modelFamily(task.model))
   const exact = kindFamily.filter((f) => f.model === task.model && f.effort === task.effort)
   const levels: Array<[CostEstimate['basis'], number[]]> = [
-    ['model', family.map((f) => f.pct)],
+    // Scaled at every family level too: Haiku 4.5 (0.5x) and Haiku 5.5 (0.14x) share the family.
+    ['model', family.map(scaled)],
     ['kind', kind.map(scaled)],
-    ['kind-model', kindFamily.map((f) => f.pct)],
+    ['kind-model', kindFamily.map(scaled)],
     ['setting', exact.map((f) => f.pct)],
   ]
   let est: CostEstimate = { pct: DEFAULT_TASK_PCT, basis: 'default', samples: 0 }

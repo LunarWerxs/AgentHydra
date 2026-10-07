@@ -10,8 +10,9 @@
 //	zscan --root <dir> --since YYYY-MM-DD --until YYYY-MM-DD [--threads N]  < prices.json
 //
 // prices.json: [{"prefix": "claude-sonnet-5", "in": 2.0, "out": 10.0, "read_x": 0.1}, ...], first
-// matching prefix wins. With --threads N the files are read by N workers and folded in file order,
-// so the numbers are the single-threaded scan's.
+// matching prefix wins. A tiered row (Haiku 5.5) adds over_at, over_in, over_out and over_read_x: a request
+// whose prompt (input + cache reads + cache writes) is over over_at pays those. With --threads N the files
+// are read by N workers and folded in file order, so the numbers are the single-threaded scan's.
 package main
 
 import (
@@ -44,6 +45,12 @@ type price struct {
 	In     float64 `json:"in"`
 	Out    float64 `json:"out"`
 	ReadX  float64 `json:"read_x"`
+
+	// The long-prompt tier; OverAt 0 means the row has none.
+	OverAt    int64   `json:"over_at"`
+	OverIn    float64 `json:"over_in"`
+	OverOut   float64 `json:"over_out"`
+	OverReadX float64 `json:"over_read_x"`
 }
 
 // Only the fields the scan reads; the decoder skips the rest (the message content, most of a line).
@@ -219,8 +226,12 @@ func tokens(usage map[string]any) (toks, bool) {
 func priceOf(prices []price, model string, t toks) (float64, bool) {
 	for _, p := range prices {
 		if strings.HasPrefix(model, p.Prefix) {
-			weightedIn := float64(t.input) + float64(t.cacheRead)*p.ReadX + float64(t.cache5m)*1.25 + float64(t.cache1h)*2.0
-			return (weightedIn*p.In + float64(t.output)*p.Out) / 1e6, true
+			in, out, readX := p.In, p.Out, p.ReadX
+			if p.OverAt > 0 && t.input+t.cacheRead+t.cache5m+t.cache1h > p.OverAt {
+				in, out, readX = p.OverIn, p.OverOut, p.OverReadX
+			}
+			weightedIn := float64(t.input) + float64(t.cacheRead)*readX + float64(t.cache5m)*1.25 + float64(t.cache1h)*2.0
+			return (weightedIn*in + float64(t.output)*out) / 1e6, true
 		}
 	}
 	return 0, false
@@ -529,6 +540,7 @@ type statsJSON struct {
 type outJSON struct {
 	Days    map[string]*dayJSON `json:"days"`
 	Threads int                 `json:"threads"`
+	Tiers   bool                `json:"tiers"` // reads the long-prompt tier (over_at); an older build omits it
 	Stats   statsJSON           `json:"stats"`
 }
 
@@ -560,7 +572,7 @@ func (c *collector) output(threads int) outJSON {
 		}
 	}
 	return outJSON{
-		Days: days, Threads: threads,
+		Days: days, Threads: threads, Tiers: true,
 		Stats: statsJSON{Files: c.stats.files, Candidates: c.stats.candidates, Parsed: c.stats.parsed, Records: c.stats.records},
 	}
 }

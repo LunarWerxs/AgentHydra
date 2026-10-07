@@ -30,14 +30,19 @@ describe('weighCounts', () => {
   })
 
   // The model's list price relative to Sonnet. Fable above Opus is measured: weighing them the same
-  // made the budget's held-out predictions worse.
+  // made the budget's held-out predictions worse. Haiku 5.5 is its measured blend of the two prompt
+  // tiers; Haiku 4.5 keeps 0.5 so old transcripts weigh as they did.
   test.each([
     ['claude-sonnet-5-5', 1],
     ['claude-opus-5-5', 2],
     ['CLAUDE-OPUS-4', 2],
     ['claude-fable-5-1', 5],
     ['FABLE', 5],
+    ['claude-haiku-5-5', 0.14],
+    ['claude-haiku-5-5-20261007', 0.14],
     ['Claude-Haiku-4-5', 0.5],
+    ['claude-haiku-4-5-20251001', 0.5],
+    ['claude-3-5-haiku-20241022', 0.5],
     ['some-mystery-model', 1],
   ])('%s weighs its multiple of Sonnet', (model, mult) => {
     expect(weighCounts(model, counts)).toBeCloseTo(

@@ -544,7 +544,7 @@ function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description
       label: t('cliInstances.nudgedLabel', { ago: timeAgo(n.at) }),
       description: t('cliInstances.nudgedHint', {
         when: new Date(until).toLocaleString(),
-        model: n.model ?? 'Haiku',
+        model: n.model ?? 'Haiku 5.5',
         cost: n.costUsd == null ? '?' : formatUsd(n.costUsd),
       }),
     }

@@ -247,9 +247,18 @@ def test_a_crawl_mark_reaches_every_hswarm_process_and_the_newest_reading_wins()
     assert not selection.crawling("rank:glm-5-3-flash:nvidia")
 
 
-def test_auto_never_picks_claude_haiku_on_any_leg():
-    """AUTO refuses the Haiku family on every leg (evaluated, sibling, backup) and names why in `rejected`. Sonnet is
-    not barred: Jacob retired the 2026-09-24 never-Sonnet ruling on 2026-10-03, because it predated Sonnet 5.5."""
+# Contract: AUTO never offers Claude Haiku 4.5 or older on any leg (evaluated, sibling, backup) and names why in
+# `rejected`, while Haiku 5.5 is an ordinary candidate. Regression: the bar was the whole `claude-haiku` family, which
+# would have kept Haiku 5.5 out of every plan after the owner said to offload there first (2026-10-07). Seam: the plan
+# over the shipped provider files plus a user file that registers a Haiku 4.5 route as all three kinds of leg.
+def test_auto_never_picks_claude_haiku_4_5_on_any_leg_and_offers_haiku_5_5(user_toml):
+    """Owner, 2026-10-07: never use Haiku 4.5; Haiku 5.5 is where work should be offloaded first. Sonnet is not barred
+    either: the 2026-09-24 never-Sonnet ruling was retired on 2026-10-03, because it predated Sonnet 5.5."""
+    old = "rank:claude-haiku-4-5:direct"
+    user_toml("anthropic", f'[models."{old}"]\napi_id = "claude-haiku-4-5-20251001"\nbenchmark_slug = "claude-haiku-4-5"\n'
+                           'ctx = 200000\ntools = true\nvision = true\ncc_effort = true\nbackup = true\n\n'
+                           f'[models."rank:claude-sonnet-5-5-low:direct"]\nsiblings = ["{old}"]\n')
+    assert config.MODELS[old]["backup"] and old in config.MODELS["rank:claude-sonnet-5-5-low:direct"]["siblings"]
     everywhere = lambda p: True  # noqa: E731 - a live-looking plan, so siblings and backups are offered too
     for backend in ("api", "cc"):
         for profile in selection.PROFILES:
@@ -257,10 +266,15 @@ def test_auto_never_picks_claude_haiku_on_any_leg():
             chosen = selection.plan(profile, tools=tools, backend=backend, usable=everywhere, purpose="evaluation")
             picked = [c["model"] for c in chosen["candidates"] if selection.auto_barred(config.MODELS[c["model"]])]
             assert not picked, f"{profile} on {backend} offered {picked}"
+            assert {"model": old, "filter": "family", "reason": "Claude Haiku 4.5 and older are never picked (owner, 2026-10-07)"} in chosen["rejected"]
     code = selection.plan("code", tools="all", backend="cc", usable=everywhere)
-    assert code["candidates"], "barring the families left a cc code task with no route at all"
-    assert selection.auto_barred({"benchmark_slug": "claude-haiku-4-5"})
-    assert selection.auto_barred({"api_id": "anthropic/claude-haiku-4-5-20251001"})
-    assert not selection.auto_barred({"benchmark_slug": "claude-sonnet-5-5-high"})
-    assert not any(r["filter"] == "family" for r in code["rejected"])
+    assert code["candidates"], "barring Haiku 4.5 left a cc code task with no route at all"
     assert any("sonnet" in c["model"] for c in code["candidates"]), "Sonnet 5.5 is an ordinary AUTO candidate again"
+    for barred in ({"benchmark_slug": "claude-haiku-4-5"}, {"api_id": "anthropic/claude-haiku-4-5-20251001"},
+                   {"api_id": "anthropic/claude-haiku-4.5"}, {"api_id": "claude-3-5-haiku-20241022"}):
+        assert selection.auto_barred(barred), barred
+    for allowed in ({"benchmark_slug": "claude-sonnet-5-5-high"}, {"benchmark_slug": "claude-haiku-5-5", "api_id": "claude-haiku-5-5"}):
+        assert not selection.auto_barred(allowed), allowed
+    # Haiku 5.5's published point covers Humanity's Last Exam, so it clears the routine floor on both backends.
+    for backend in ("api", "cc"):
+        assert "rank:claude-haiku-5-5:direct" in [c["model"] for c in _p("routine", backend=backend)], backend

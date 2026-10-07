@@ -1,5 +1,5 @@
 {
-  "note": "Token mixes priced by BOTH server/src/pricing.ts and hswarm/prices.py; usd is the list-price cost, null = unpriced. Used by server/tests/pricing-parity.test.ts and hswarm/tests/test_prices.py.",
+  "note": "Token mixes priced by BOTH server/src/pricing.ts and hswarm/prices.py; usd is the list-price cost, null = unpriced. prompt_tokens, where present, is the prompt of the one request the mix is priced as (it picks a tiered row's rates; the mix is scaled up so the tier shows to the cent); absent, the mix is a total and pays the first tier. Used by server/tests/pricing-parity.test.ts and hswarm/tests/test_prices.py.",
   "cases": [
     {
       "model": "claude-opus-5-5",
@@ -43,7 +43,31 @@
         "cache_1h": 125000,
         "output": 333333
       },
-      "usd": 6.25833
+      "usd": 5.85833
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "prompt_tokens": 100000,
+      "tokens": {
+        "input": 10000000,
+        "cache_read": 10000000,
+        "cache_5m": 10000000,
+        "cache_1h": 10000000,
+        "output": 10000000
+      },
+      "usd": 9.35
+    },
+    {
+      "model": "claude-haiku-5-5",
+      "prompt_tokens": 100001,
+      "tokens": {
+        "input": 10000000,
+        "cache_read": 10000000,
+        "cache_5m": 10000000,
+        "cache_1h": 10000000,
+        "output": 10000000
+      },
+      "usd": 46.75
     },
     {
       "model": "claude-fable-5-1",

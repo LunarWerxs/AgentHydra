@@ -67,7 +67,7 @@ export async function liveCheck(list: string, key: string, doFetch: typeof fetch
   const req: Record<string, [string, RequestInit]> = {
     gemini: ['https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent', { method: 'POST', headers: { ...json, 'x-goog-api-key': key }, body: JSON.stringify({ contents: [{ parts: [{ text: 'hi' }] }], generationConfig: { maxOutputTokens: 1 } }) }],
     mistral: ['https://api.mistral.ai/v1/chat/completions', { method: 'POST', headers: { ...json, authorization: `Bearer ${key}` }, body: JSON.stringify({ model: 'mistral-small-latest', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) }],
-    anthropic: ['https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...json, 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-haiku-4-5', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) }]
+    anthropic: ['https://api.anthropic.com/v1/messages', { method: 'POST', headers: { ...json, 'x-api-key': key, 'anthropic-version': '2023-06-01' }, body: JSON.stringify({ model: 'claude-haiku-5-5', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }) }]
   }
   const r = req[list]
   if (!r) return true

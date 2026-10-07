@@ -16,6 +16,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A Dev servers button lists your projects and their servers in the sidebar**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
+- **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5**
 - **The download is about 12 MB instead of about 200 MB**
 
 **Everything in 2.0.0**
@@ -40,6 +41,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5.** Every kind of task now starts on
+  Haiku 5.5, about a fifth of Sonnet 5.5's price on CliMayte's own work, and a task it cannot do goes straight back
+  on the setting that would have run it. Asking for Haiku 4.5 is refused, and the Claude Code sessions
+  AgentHydra starts make their own small background calls on Haiku 5.5 too.
 - **The download is about 12 MB instead of about 200 MB.** AgentHydra no longer packs Bun or Claude Code inside the
   download: the small `AgentHydra.exe` fetches Bun the first time you run it (and keeps it up to date), and the new
   window fetches Claude Code when it needs it. Updates are quicker too, and an install on 1.13 updates itself to

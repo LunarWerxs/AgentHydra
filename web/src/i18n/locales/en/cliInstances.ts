@@ -130,7 +130,7 @@ export default {
   tableSettings: 'CLI settings',
   keepaliveSwitch: 'Keep windows running',
   keepaliveSwitchHint:
-    'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku, one word back, about two cents at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
+    'When a signed-in account has no 5-hour window running, AgentHydra sends it one tiny prompt (Haiku 5.5, one word back, a fraction of a cent at API prices) so its window starts now and resets sooner. Skips accounts at their limit, signed out, busy, or at {floor}% or more of their weekly limit. A timer icon on the row marks a window it started.',
   keepaliveSaveFailed: 'Could not change the setting.',
   // A row's nudge note (lastNudge from GET /api/cli-instances).
   nudgedLabel: 'Window started by AgentHydra {ago}',

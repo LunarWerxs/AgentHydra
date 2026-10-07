@@ -168,6 +168,7 @@ import { roomNow, scheduleDue, tickAccounts, tickState } from './climayte-schedu
 import {
   attemptUnits,
   bestRung,
+  bestRungPastHaiku,
   type CliMayteKind,
   type CliMayteVerdict,
   climayteKind,
@@ -177,6 +178,7 @@ import {
   nextRung,
   OPUS,
   pickConfig,
+  pickedRung,
   rereadUnits,
   scoreOf,
   scoreRows,
@@ -2207,11 +2209,11 @@ export function runSetting(
   if (t.chat === true) return chatSetting(t, defaults, kind, priority)
   const autoAsked = isAutoSetting(t.model) || (isBlank(t.model) && defaults.auto)
   const model = autoAsked ? null : (climayteModel(t.model) ?? defaults.model)
-  // Haiku runs with no effort level, as on the ladder, whatever the run's default says.
-  const effort =
-    autoAsked || model === HAIKU
-      ? null
-      : ((isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort)
+  const namedEffort = autoAsked
+    ? null
+    : ((isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort)
+  // A Haiku named with no effort runs at medium: its first rung, and the API's default.
+  const effort = namedEffort ?? (model === HAIKU ? 'medium' : null)
   const why = (typeof t.modelWhy === 'string' && t.modelWhy.trim()) || defaults.why
   // The run's ownerWords asked for the run's setting: a task naming its own needs its own words.
   const namesOwn =
@@ -2230,10 +2232,7 @@ export function runSetting(
     }
   if ((model || effort) && why) {
     // The CLI's defaults: a model alone runs at high, an effort alone on Opus.
-    const named = ladderIndex({
-      model: model ?? OPUS,
-      effort: model === HAIKU ? null : (effort ?? 'high'),
-    })
+    const named = ladderIndex({ model: model ?? OPUS, effort: effort ?? 'high' })
     if (named !== -1 && named < bestRung(k, rows))
       return { model, effort, kind, auto: false, reason: `named by the sender: ${why}`, priority }
   }
@@ -2242,7 +2241,7 @@ export function runSetting(
   const pick = pickConfig(k, rows, n)
   const unexplained =
     model || effort
-      ? ` (${[model, effort].filter(Boolean).join(' ')} was named but not held: that takes the owner's words, or a modelWhy for a setting cheaper than the pick)`
+      ? ` (${[model, namedEffort].filter(Boolean).join(' ')} was named but not held: that takes the owner's words, or a modelWhy for a setting cheaper than the pick)`
       : ''
   return { ...pick.config, kind: k, auto: true, reason: pick.reason + unexplained, priority }
 }
@@ -2261,9 +2260,8 @@ function chatSetting(
   const named = (v: unknown): boolean => !isBlank(v) && !isAutoSetting(v)
   const model = (named(t.model) ? climayteModel(t.model) : defaults.model) ?? climayteModel('opus')
   const effort =
-    model === HAIKU
-      ? null
-      : ((named(t.effort) ? climayteEffort(t.effort) : defaults.effort) ?? 'xhigh')
+    (named(t.effort) ? climayteEffort(t.effort) : defaults.effort) ??
+    (model === HAIKU ? 'medium' : 'xhigh')
   return { model, effort, kind, auto: false, reason: 'a chat: Opus xhigh unless named', priority }
 }
 
@@ -2416,8 +2414,9 @@ function assertKnownAccounts(accounts: string[] | undefined): void {
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  The scorecard chooses model AND effort for the task's kind (default `code`): of the settings that
- *  pass it reliably the one whose passed task costs least, or a cheaper one still learning on every
- *  4th pick, every 2nd while the kind's pick is Opus (pickConfig). A named model or effort holds
+ *  pass it reliably the one whose passed task costs least; Haiku 5.5 on every pick while it is still
+ *  learning for the kind, else a cheaper one still learning on every 4th pick, every 2nd while the
+ *  kind's pick is Opus (pickConfig). A named model or effort holds
  *  only with `ownerWords`, or a `modelWhy` on a rung cheaper than the pick (runSetting).
  *  A task an earlier dispatch of the same group already made (repeatOf) answers with that worker,
  *  marked `repeat`, and makes nothing, unless `copies` asks for new ones. */
@@ -2932,7 +2931,8 @@ export function climayteSend(
   let effort: string | null
   try {
     model = climayteModel(opts.model)
-    effort = climayteEffort(opts.effort)
+    // A move to Haiku with no effort runs at medium, not at the effort the old model had.
+    effort = climayteEffort(opts.effort) ?? (model === HAIKU && w.model !== HAIKU ? 'medium' : null)
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : String(err) }
   }
@@ -3146,10 +3146,19 @@ export function climayteAsk(
 
 const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'
 
-const configLabel = (c: { model: string | null; effort: string | null }): string =>
-  c.model?.includes('haiku')
-    ? 'Haiku 4.5'
-    : `${c.model?.includes('sonnet') ? 'Sonnet 5.5' : c.model?.includes('opus') ? 'Opus 5.5' : (c.model ?? 'the default model')} · ${c.effort ?? 'default effort'}`
+const configLabel = (c: { model: string | null; effort: string | null }): string => {
+  const m = c.model
+  const name = m?.includes('haiku-5-5')
+    ? 'Haiku 5.5'
+    : m?.includes('haiku')
+      ? 'Haiku 4.5'
+      : m?.includes('sonnet')
+        ? 'Sonnet 5.5'
+        : m?.includes('opus')
+          ? 'Opus 5.5'
+          : (m ?? 'the default model')
+  return `${name} · ${c.effort ?? 'default effort'}`
+}
 
 /** Tag an untagged task's kind from the verdict. The reason it is not a kind, or null. */
 function tagKind(w: CliMayteWorker, kind: unknown): string | null {
@@ -3199,14 +3208,31 @@ function verdictRecord(
   }
 }
 
-/** Send a failed result back to its session one rung up the ladder. What it was sent back on
- *  (null when it was not: already on the top setting, or the send was refused) and what to say. */
+/** The ladder index a failed Haiku result climbs to at least: the rung its kind would run without
+ *  the Haiku trial (bestRungPastHaiku), so a task Haiku cannot do goes straight to the setting that
+ *  would have run it. Undefined for any other result, or a worker with no kind on the list. */
+function haikuFailFloor(
+  w: CliMayteWorker | undefined,
+  verdict: CliMayteVerdict,
+): number | undefined {
+  if (!w?.auto || !w.kind || verdict.model !== HAIKU) return undefined
+  try {
+    const k = climayteKind(w.kind)
+    return k ? bestRungPastHaiku(k, scoreRows(workers.values())) : undefined
+  } catch {
+    return undefined // a kind no longer on the list: one rung up
+  }
+}
+
+/** Send a failed result back to its session one rung up the ladder (a failed Haiku result at least
+ *  to haikuFailFloor). What it was sent back on (null when it was not: already on the top setting,
+ *  or the send was refused) and what to say. */
 function sendBack(
   id: string,
   verdict: CliMayteVerdict,
   note: string | null,
 ): { next: { model: string; effort: string | null } | null; message: string } {
-  const next = nextRung(verdict)
+  const next = nextRung(verdict, haikuFailFloor(workers.get(id), verdict))
   if (!next)
     return {
       next: null,
@@ -3737,7 +3763,7 @@ export function climayteScorecard(): {
     if (picks.has(r.kind)) continue
     try {
       const k = climayteKind(r.kind)
-      if (k) picks.set(r.kind, bestRung(k, rows))
+      if (k) picks.set(r.kind, pickedRung(k, rows))
     } catch {
       // a kind no longer on the list: shown, never picked
     }

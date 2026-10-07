@@ -224,6 +224,14 @@ describe('a downloaded catalog takes precedence over the bundled table', () => {
     expect(priceFor('claude-opus-5', NOW)).toMatchObject({ input: 5, output: 25 })
   })
 
+  test('a bundled row with a long-prompt tier is not replaced by a catalog row without one', () => {
+    // The catalog carries standard rates only; adopting its Haiku 5.5 row would price every prompt
+    // over 100k tokens at the short tier, a fifth of the bill.
+    setFetchedPrices({ 'claude-haiku-5-5': { input: 0.1, output: 0.5 } }, Date.parse('2024-08-12'))
+    expect(priceFor('claude-haiku-5-5', NOW, 100_001)).toMatchObject({ input: 0.5, output: 2.5 })
+    expect(priceFor('claude-haiku-5-5', NOW, 100_000)).toMatchObject({ input: 0.1, output: 0.5 })
+  })
+
   test('clearing it falls back, so an install can refuse downloaded prices', () => {
     setFetchedPrices({ 'claude-opus-5': { input: 4, output: 20 } }, Date.parse('2024-08-12'))
     clearFetchedPrices()

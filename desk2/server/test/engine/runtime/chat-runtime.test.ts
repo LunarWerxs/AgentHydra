@@ -350,6 +350,14 @@ describe('ChatRuntime: start options', () => {
     expect(o.mcpServers).toBeUndefined()
   })
 
+  test("Claude Code's haiku alias runs Haiku 5.5: unset or Haiku 4.5 is pinned, a newer Haiku kept", () => {
+    const pinned = (named?: string) =>
+      setup({}, { env: { PATH: '/bin', ANTHROPIC_DEFAULT_HAIKU_MODEL: named } }).rt.buildOptions().env?.ANTHROPIC_DEFAULT_HAIKU_MODEL
+    expect(pinned()).toBe('claude-haiku-5-5')
+    expect(pinned('claude-haiku-4-5-20251001')).toBe('claude-haiku-5-5')
+    expect(pinned('claude-haiku-5-6')).toBe('claude-haiku-5-6')
+  })
+
   test('another account, resume, model, effort, delegate off, agenthydra MCP', () => {
     const events: ServerEvent[] = []
     let opts: Options | undefined

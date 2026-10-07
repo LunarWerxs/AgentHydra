@@ -10,8 +10,8 @@
 // session resetsAt in its usage reading, or the reset is in the past), send one cheap prompt ... to
 // start the timer: claude -p with that instance's CLAUDE_CONFIG_DIR, cheapest model, lowest effort,
 // 1 turn, hidden window, env scrubbed like CliMayte. Skip walled, signed-out or org-disabled
-// accounts and any at 85%+ weekly." So a nudge is Haiku at low effort, one turn, no tools, no MCP
-// servers, no skills, nothing saved, in the environment a CliMayte worker gets (scrubbedEnv: the
+// accounts and any at 85%+ weekly." So a nudge is Haiku 5.5 at low effort, one turn, no tools, no
+// MCP servers, no skills, nothing saved, in the environment a CliMayte worker gets (scrubbedEnv: the
 // account's own login, never an inherited API key or token). Every nudge, sent or failed, is a
 // record in <DATA_DIR>/keepalive.json (which is also what holds off a second nudge while the first
 // one's window runs) and a `nudged` line in CliMayte's journal (usage-refresh.ts wires that).
@@ -49,11 +49,12 @@ import { getCachedUsage } from './usage-cache'
  *  chattily costs more output than one told exactly what to say, and the reply is discarded. */
 export const KEEPALIVE_PROMPT = 'Reply with the single word: ok'
 
-/** The cheapest setting that still starts the window: the CLI's Haiku alias, at its lowest effort.
- *  The owner asked for exactly that ("cheapest model, lowest effort", 2026-10-01). His standing
- *  "never Haiku" rule (2026-09-06) is about work whose answers were wrong four times in five; a
- *  nudge's one-word answer is thrown away, so nothing here depends on Haiku being right. */
-export const KEEPALIVE_MODEL = 'haiku'
+/** The cheapest setting that still starts the window: Haiku 5.5, at its lowest effort. The owner
+ *  asked for exactly that ("cheapest model, lowest effort", 2026-10-01). The old "never Haiku" rule
+ *  (2026-09-06) was about Haiku 4.5, which is never used here (owner, 2026-10-07); Haiku 5.5 is
+ *  allowed and preferred. The full id, never the `haiku` alias: an older CLI resolves the alias to
+ *  Haiku 4.5. */
+export const KEEPALIVE_MODEL = 'claude-haiku-5-5'
 export const KEEPALIVE_EFFORT = 'low'
 
 /** How long a failed nudge holds the next one off. */

@@ -412,6 +412,8 @@ def _add_models(provider: str, models, user: bool) -> None:
                 print(f"[hswarm] {provider}/{name}: price_ref {ref!r} is not in data/prices.json; the model stays unpriced", file=sys.stderr)
             else:
                 spec["peak" if found[1] else "price"] = found[0]
+                if over := prices.registry_price_over(str(ref)):
+                    spec["price_over"] = over  # a long prompt's tier (Haiku 5.5): price() picks it per call
         old = MODELS.get(name, {})
         merged = {**old, **spec}
         # A table changes only what it names, one level down too: `price = {out = 0.5}` keeps the shipped hit and
@@ -421,6 +423,8 @@ def _add_models(provider: str, models, user: bool) -> None:
                 merged[k] = {**old[k], **spec[k]}
         if "price" in spec and "peak" not in spec:
             merged.pop("peak", None)  # a price written here is the price; a shipped peak table would win over it
+        if "price" in spec and "price_over" not in spec:
+            merged.pop("price_over", None)  # and a shipped long-prompt tier would replace it on long prompts
         MODELS[name] = {**merged, "provider": provider}
 
 
@@ -437,6 +441,10 @@ def _inherit() -> None:
         if parent_name in MODELS and parent_name not in seen and parent_name != name:
             parent = resolved(parent_name, (*seen, name))
             base = {k: v for k, v in parent.items() if k not in ("fallback", "benchmark_slug", "inherits", "siblings")}
+            if "price" in m:  # a price written on the child is its price: the parent's peak or long-prompt tier would win
+                for tier in ("peak", "price_over"):
+                    if tier not in m:
+                        base.pop(tier, None)
             m = {**base, "api_id": parent.get("api_id") or parent_name, **m}
         done[name] = m
         return m
@@ -707,14 +715,19 @@ def next_rate_change(when: dt.datetime | None = None) -> tuple[dt.datetime, str]
     return probe, "off-peak"
 
 
-def price(model: str, when: dt.datetime | None = None) -> dict | None:
+def price(model: str, when: dt.datetime | None = None, prompt_tokens: int = 0) -> dict | None:
     """{hit, miss, out} USD per 1M at this moment, plus `write` where the model prices a prompt cache write (Anthropic:
-    1.25x input for the 5-minute cache; a model without one pays input for it). None for a model with no price on record."""
+    1.25x input for the 5-minute cache; a model without one pays input for it). None for a model with no price on record.
+    A model with a `price_over` tier (Haiku 5.5) charges it on one request whose `prompt_tokens` is over its threshold;
+    0 (a total, or a size not known) is the first tier."""
     m = MODELS[resolve_model(model)]
     if m.get("peak"):
         f = 1.0 if is_peak(when) else 0.5
         return {k: v * f for k, v in m["peak"].items()}
     p = m.get("price")
+    over = m.get("price_over")
+    if p and over and prompt_tokens > int(over.get("prompt_tokens") or 0):
+        p = over
     if not p:
         return None
     rates = {"hit": float(p.get("hit", p.get("miss", 0.0)) or 0.0), "miss": float(p.get("miss") or 0.0), "out": float(p.get("out") or 0.0)}
@@ -784,9 +797,12 @@ def cheapest_route(model: str, when: dt.datetime | None = None, usable=None) -> 
     return route_plan(model, when, usable)[0]
 
 
-def cost_usd(model: str, hit: int, miss: int, out: int, when: dt.datetime | None = None, write: int = 0) -> float | None:
-    """USD for one call. `write` is the part of `miss` written to the prompt cache, billed at the `write` rate."""
-    p = price(model, when)
+def cost_usd(model: str, hit: int, miss: int, out: int, when: dt.datetime | None = None, write: int = 0,
+             prompt_tokens: int = 0) -> float | None:
+    """USD for one call. `write` is the part of `miss` written to the prompt cache, billed at the `write` rate.
+    `prompt_tokens` is that one call's prompt (hit + miss), which picks a tiered model's rates; a caller holding
+    totals of many calls leaves it 0 and gets the first tier."""
+    p = price(model, when, prompt_tokens)
     if p is None:
         return None  # not measured, never zero: the ledger prints '-'
     write = min(int(write or 0), miss)

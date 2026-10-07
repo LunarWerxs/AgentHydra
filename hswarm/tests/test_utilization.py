@@ -181,9 +181,11 @@ def test_rule_check_reads_models_agents_and_the_gate_log(tmp_path, monkeypatch):
     row = {"day": day, "claude_usd": 100.0, "claude_sub_usd": 3.0, "subagent_usd": {"sonnet": [0.5, 0.25, 0.25], "opus": [2.0]}, "agent_tokens": agents,
            "by_model": {"claude-opus-5": {"requests": 50, "usd": 90.0, "main_usd": 88.0, "sub_usd": 2.0, "agents": 1},
                         "claude-sonnet-5": {"requests": 6, "usd": 1.0, "main_usd": 0.0, "sub_usd": 1.0, "agents": 3},
-                        "claude-haiku-4-5": {"requests": 2, "usd": 0.01, "main_usd": 0.01, "sub_usd": 0.0, "agents": 0}}}
+                        "claude-haiku-4-5": {"requests": 2, "usd": 0.01, "main_usd": 0.01, "sub_usd": 0.0, "agents": 0},
+                        # Haiku 5.5 is allowed (owner, 2026-10-07): counted apart, never as a broken ban
+                        "claude-haiku-5-5": {"requests": 7, "usd": 0.01, "main_usd": 0.01, "sub_usd": 0.0, "agents": 0}}}
     r = utilization.rule_check(row)
-    assert r["haiku_requests"] == 2 and r["sonnet_agents"] == 3 and r["sonnet_usd"] == 1.0 and r["sonnet_workflow_agents"] == 2 and r["opus_agents"] == 1
+    assert r["haiku_requests"] == 2 and r["haiku55_requests"] == 7 and r["sonnet_agents"] == 3 and r["sonnet_usd"] == 1.0 and r["sonnet_workflow_agents"] == 2 and r["opus_agents"] == 1
     assert r["gate_decisions"] == 2 and r["gate_blocked"] == 1 and r["gate_allowed"] == 1 and r["gate_allowed_sonnet_agents"] == 1
     assert r["agents_after_gate"] == 3 and r["ungated_agents_after_gate"] == 1  # cccccccc never hit the gate; dddddddd started before it existed
     assert r["agents_detail"] and r["gate_live_since"] == "2026-09-15T17:00"
@@ -193,7 +195,7 @@ def test_rule_check_reads_models_agents_and_the_gate_log(tmp_path, monkeypatch):
     c.close()
     assert d["by_model"]["claude-sonnet-5"]["agents"] == 3 and d["rules"]["ungated_agents_after_gate"] == 1
     text = utilization.rules_text(d)
-    assert "HAIKU 2 REQUESTS" in text and "Sonnet sub-agents 3" in text and "1 of them from sessions the gate never saw" in text
+    assert "HAIKU 4.5 2 REQUESTS" in text and "Haiku 5.5 7" in text and "Sonnet sub-agents 3" in text and "1 of them from sessions the gate never saw" in text
     from hswarm import report_html
 
     assert "opus" in {report_html.family_of("claude-opus-5")} and report_html.family_of("gpt-x") == "other"

@@ -88,11 +88,16 @@ export const W_OUTPUT = 31
  *  weight must account for WHICH model spent it. The meter agrees where the data can tell: weighing
  *  Fable 2.5x Opus instead of the same cut the held-out error about as much as the token weights
  *  did. Sonnet was about 4% of the measured weighted traffic, too little to tell half of Opus from
- *  equal. */
+ *  equal.
+ *  Haiku 5.5 is priced per request by prompt size: 0.05x Sonnet at 100k tokens or fewer, 0.25x over.
+ *  Measured on CliMayte's CLI traffic (7 days, 2026-10-07), 45.6% of the weight sits on requests over
+ *  100k, so 0.05 x 54.4% + 0.25 x 45.6% = 0.14. Haiku 4.5 and older keep 0.5, so old transcripts
+ *  weigh as they did. */
 export function modelMultiplier(model: string): number {
   const m = model.toLowerCase()
   if (m.includes('fable')) return 5
   if (m.includes('opus')) return 2
+  if (/haiku-[5-9](?!\d)/.test(m)) return 0.14
   if (m.includes('haiku')) return 0.5
   return 1 // sonnet + anything unrecognized
 }

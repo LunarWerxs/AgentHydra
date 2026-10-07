@@ -22,6 +22,7 @@ import {
   resolveClaudeExe,
 } from './config'
 import { cliConfigDirCredentialState, resolveCliConfigDirToken } from './core/accounts'
+import { pinHaikuModel } from './core/haiku-pin'
 import { capturePipedProc } from './core/process.ts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
@@ -692,7 +693,7 @@ function usageProbeEnv(opts: UsageCheckOpts): Record<string, string> {
     }
   }
   if (opts.configDir) env.CLAUDE_CONFIG_DIR = opts.configDir
-  return env
+  return pinHaikuModel(env) // never Haiku 4.5 behind the alias (core/haiku-pin.ts)
 }
 
 /**

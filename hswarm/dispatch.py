@@ -548,6 +548,10 @@ def _handoff_context(run, leg, remaining):
     clear = task.context_clear_at_least * trigger // task.context_trigger
     # A plain estimate, not plan_turn: that one reserves money against the budgets.
     first = budget.prompt_tokens(context.ContextEditor(trigger, clear).view(resumed), None)
+    # A tiered leg (Haiku 5.5) charges a long prompt's rate on a prompt over its threshold, as plan_turn prices it.
+    if (at_size := budget.top_rates(leg, first)) is not None:
+        rate = max(rate, at_size["miss"], at_size["hit"], at_size.get("write", 0.0))
+        share = remaining * HANDOFF_TURN_SHARE / rate * 1_000_000
     if first > share:
         return {}, (f"cost budget (max_cost_usd) reached: {leg}'s first turn would re-send {came_from}'s transcript, "
                     f"${first * rate / 1_000_000:.4f} of input even with the older tool outputs cleared, over "

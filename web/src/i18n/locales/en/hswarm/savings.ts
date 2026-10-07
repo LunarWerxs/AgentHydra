@@ -38,10 +38,10 @@ export default {
   chartFamilyHint: 'What Claude itself spent per day, split by model family.',
   ruleCheck: 'Rule check',
   ruleCheckHint:
-    'Are the cheap-model rules holding? Haiku requests, Sonnet sub-agents and Opus or Fable sub-agents Claude started, the gate’s decisions, and sub-agents that bypassed the gate.',
+    'Are the cheap-model rules holding? Haiku 4.5 requests (never allowed), Sonnet sub-agents and Opus or Fable sub-agents Claude started, the gate’s decisions, and sub-agents that bypassed the gate.',
   stillRunning: 'today, still running',
   rule: {
-    haiku: 'Haiku requests',
+    haiku: 'Haiku 4.5 requests',
     sonnet: 'Sonnet agents',
     opusFable: 'Opus + Fable agents',
     gate: 'Gate decisions',

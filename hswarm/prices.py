@@ -5,6 +5,11 @@ them and derived from its input rate otherwise (read 0.1x, 5-minute write 1.25x,
 rule pricing.ts applies. Lookup is exact on the lowercased id with a trailing -YYYYMMDD snapshot date
 removed, then on the part after a `provider/` prefix; an id the file does not list is None (never a guess,
 never a prefix match: `claude-opus-5-5` once priced as `claude-opus-5`, 81% too high).
+
+A row with an `over` block (Claude Haiku 5.5) is tiered per request: a request whose prompt (input + cache
+reads + cache writes, `prompt_size`) is over `over.prompt_tokens` pays the `over` rates. A caller pricing ONE
+request passes `prompt_tokens`; a caller holding only totals of many requests passes nothing and gets the
+first tier, as pricing.ts does.
 """
 from __future__ import annotations
 
@@ -46,9 +51,19 @@ def entry(model: str) -> tuple[str, dict] | None:
     return None if found is None else (key, found)
 
 
-def rates(e: dict, when: dt.datetime | None = None) -> dict:
+def prompt_size(t: dict) -> int:
+    """The prompt of one request from its token buckets (input, cache_read, cache_5m, cache_1h): what picks a
+    tiered row's rates."""
+    return int(t.get("input", 0) + t.get("cache_read", 0) + t.get("cache_5m", 0) + t.get("cache_1h", 0))
+
+
+def rates(e: dict, when: dt.datetime | None = None, prompt_tokens: int = 0) -> dict:
     """Every rate of one raw entry: input, output, cache_read, cache_write_5m, cache_write_1h. `intro` applies
-    before its `until` date, as in pricing.ts."""
+    before its `until` date, as in pricing.ts. A request whose `prompt_tokens` is over `over.prompt_tokens` pays
+    the `over` rates."""
+    over = e.get("over")
+    if over and prompt_tokens > int(over["prompt_tokens"]):
+        e = over
     inp, out = float(e["input"]), float(e["output"])
     intro = e.get("intro")
     if intro:
@@ -62,15 +77,16 @@ def rates(e: dict, when: dt.datetime | None = None) -> dict:
             "cache_write_5m": pick("cache_write_5m", CACHE_WRITE_5M_RATIO), "cache_write_1h": pick("cache_write_1h", CACHE_WRITE_1H_RATIO)}
 
 
-def price_for(model: str, when: dt.datetime | None = None) -> dict | None:
+def price_for(model: str, when: dt.datetime | None = None, prompt_tokens: int = 0) -> dict | None:
     """Rates for a model id, or None when the file has no price for it."""
     found = entry(model)
-    return None if found is None else rates(found[1], when)
+    return None if found is None else rates(found[1], when, prompt_tokens)
 
 
-def cost(model: str, t: dict, when: dt.datetime | None = None) -> float | None:
-    """USD of the five token buckets (input, cache_read, cache_5m, cache_1h, output); None for an unpriced model."""
-    p = price_for(model, when)
+def cost(model: str, t: dict, when: dt.datetime | None = None, prompt_tokens: int = 0) -> float | None:
+    """USD of the five token buckets (input, cache_read, cache_5m, cache_1h, output); None for an unpriced model.
+    `prompt_tokens` is the prompt of the one request `t` is (prompt_size(t)); 0 for a total, the first tier."""
+    p = price_for(model, when, prompt_tokens)
     if p is None:
         return None
     return (t.get("input", 0) * p["input"] + t.get("output", 0) * p["output"] + t.get("cache_read", 0) * p["cache_read"]
@@ -92,6 +108,18 @@ def registry_price(key: str) -> tuple[dict, bool] | None:
     if key.startswith("claude-") or e.get("cache_write_5m") is not None:
         out["write"] = r["cache_write_5m"]
     return out, False
+
+
+def registry_price_over(key: str) -> dict | None:
+    """The `over` tier of file entry `key` in the registry's shape plus its threshold:
+    `{prompt_tokens, hit, miss, out, write}`. None when the entry has no tier."""
+    e = models().get(key) or table().get("providers", {}).get(key)
+    over = (e or {}).get("over")
+    if not over:
+        return None
+    at = int(over["prompt_tokens"])
+    r = rates(e, prompt_tokens=at + 1)
+    return {"prompt_tokens": at, "hit": r["cache_read"], "miss": r["input"], "out": r["output"], "write": r["cache_write_5m"]}
 
 
 def peak_windows() -> tuple[tuple[int, int], ...]:

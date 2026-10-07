@@ -1004,7 +1004,8 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     expect(climayteList({ id: mid })[0]).toMatchObject({
       status: 'waiting',
       hold: 'wave',
-      effort: 'low',
+      model: 'claude-haiku-5-5', // a manager starts on Haiku 5.5 medium like every kind (2026-10-07)
+      effort: 'medium',
     })
 
     // The task arrives and passes on its commit: the wave is done, which wakes the manager at once.

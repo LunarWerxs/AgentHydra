@@ -1,6 +1,6 @@
 // Records ONE real, short Agent SDK turn as JSONL for the normalize tests.
 // Run: bun server/scripts/record-fixture.ts [out.jsonl]   (default server/test/fixtures/basic-turn.jsonl)
-// Uses the machine's default Claude login and a Haiku model; costs a few cents.
+// Uses the machine's default Claude login and Haiku 5.5 (never Haiku 4.5); costs a few cents at most.
 // Home paths are rewritten to C:/Users/test so the fixture carries nothing of this machine.
 
 import { query, type SDKMessage } from '@anthropic-ai/claude-agent-sdk'
@@ -42,7 +42,7 @@ try {
     prompt: 'List the files in this folder, read notes.txt, then answer in one sentence: when is the meeting?',
     options: {
       cwd,
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-5-5',
       includePartialMessages: true,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,

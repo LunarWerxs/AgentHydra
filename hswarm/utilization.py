@@ -25,6 +25,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import platform
 import secrets
 import sqlite3
@@ -279,6 +280,7 @@ def estimate(row: dict, prof: dict | None) -> dict:
         return empty | {"basis": "no sub-agent profile yet: `hswarm savings --record` (or --profile) prices this row once one is measured"}
     model = row.get("orchestrator_model") or ""
     est_model, why = (model, "the calling session's model") if model else (FLOOR_MODEL, "caller model unknown, priced at the Sonnet floor")
+    # prof is a total of many requests: a tiered model (Haiku 5.5) prices at its first tier.
     per = claude_usage.price_tokens(est_model, prof)
     if per is None:
         est_model, why = FLOOR_MODEL, f"no list price for {model}, priced at the Sonnet floor"
@@ -528,18 +530,29 @@ def _gated_sessions(routing: list[dict]) -> set[str]:
     return {(r.get("session_id") or "")[:8] for r in routing if r.get("session_id")}
 
 
-def _haiku_requests(by_model: dict) -> int:
-    """Every Haiku request that day: the ban is on the model, and it is counted from Claude's own by-model split."""
-    return sum(int(v.get("requests") or 0) for m, v in by_model.items() if "haiku" in m)
+def _banned_haiku(model: str) -> bool:
+    """Every Haiku but 5.x and newer (owner, 2026-10-07: "never use Haiku 4.5"). Allowed only on a positive match, so a
+    form the prefixes miss (Bedrock's `us.anthropic.claude-haiku-4-5-...-v1:0`) counts as banned, never as 5.5."""
+    m = (model or "").lower()
+    return "haiku" in m and not re.search(r"haiku-[5-9]", m)
+
+
+def _haiku_requests(by_model: dict) -> dict:
+    """That day's Haiku requests from Claude's own by-model split: the banned ones (4.5 and older) and Haiku 5.5's,
+    which are allowed and counted apart."""
+    haiku = {m: int(v.get("requests") or 0) for m, v in by_model.items() if "haiku" in (m or "").lower()}
+    return {"haiku_requests": sum(n for m, n in haiku.items() if _banned_haiku(m)),
+            "haiku55_requests": sum(n for m, n in haiku.items() if not _banned_haiku(m))}
 
 
 def rule_check(day_row: dict, routing: list[dict] | None = None) -> dict:
-    """Were the rulings followed that day, from the transcripts and the routing gate's log: Haiku requests (banned),
-    Sonnet sub-agents and their cost (allowed only with a logged reason), Opus/Fable sub-agents, how many sub-agents
-    started after the gate went live, and how many of those came from sessions the gate never saw (a bypass)."""
+    """Were the rulings followed that day, from the transcripts and the routing gate's log: Haiku 4.5 and older
+    requests (banned; Haiku 5.5's counted apart, allowed), Sonnet sub-agents and their cost (allowed only with a
+    logged reason), Opus/Fable sub-agents, how many sub-agents started after the gate went live, and how many of those
+    came from sessions the gate never saw (a bypass)."""
     routing = _routing_rows() if routing is None else routing
     agents = [a for v in (day_row.get("agent_tokens") or {}).values() for a in v if isinstance(a, dict)]
-    out = {"haiku_requests": _haiku_requests(day_row.get("by_model") or {})}
+    out = _haiku_requests(day_row.get("by_model") or {})
     out |= _agent_counts(agents)
     out |= _gate_decisions(routing, day_row.get("day") or "")
     out |= _gate_bypass(agents, _gate_start(routing), _gated_sessions(routing))
@@ -882,7 +895,8 @@ def rules_text(d: dict | None) -> str:
     r = d["rules"]
     bm = d.get("by_model") or {}
     models = ", ".join(f"{short_model(m)} {usd(v.get('usd'))} ({v.get('requests')} req, {v.get('agents')} sub-agents)" for m, v in sorted(bm.items(), key=lambda kv: -(kv[1].get('usd') or 0)))
-    haiku = "Haiku 0 (ban held)" if not r.get("haiku_requests") else f"HAIKU {r['haiku_requests']} REQUESTS (banned)"
+    haiku = "Haiku 4.5 0 (ban held)" if not r.get("haiku_requests") else f"HAIKU 4.5 {r['haiku_requests']} REQUESTS (banned)"
+    haiku += f", Haiku 5.5 {r.get('haiku55_requests', 0)}"
     return (f"rule check {d['day']}{'*' if d.get('partial') else ''}: {haiku}; Sonnet sub-agents {r.get('sonnet_agents', 0)} ({usd(r.get('sonnet_usd'))}, "
             f"{r.get('sonnet_workflow_agents', 0)} in workflows); Opus {r.get('opus_agents', 0)}, Fable {r.get('fable_agents', 0)}; gate live since {r.get('gate_live_since') or '-'}: "
             f"{r.get('gate_decisions', 0)} decisions ({r.get('gate_blocked', 0)} blocked, {r.get('gate_allowed', 0)} allowed, {r.get('gate_reminded', 0)} reminded), "

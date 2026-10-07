@@ -192,7 +192,10 @@ class _SpendWatch:
         for call in self.calls.values():
             for k, v in call.items():
                 usage[k] = usage.get(k, 0) + v
-        return usage, config.cost_usd(self.task.model, usage.get("in_hit", 0), usage.get("in_miss", 0), usage.get("out", 0), write=usage.get("in_write", 0))
+        # Each call priced on its own prompt, so a tiered model's (Haiku 5.5) long requests pay their tier.
+        per = [config.cost_usd(self.task.model, c.get("in_hit", 0), c.get("in_miss", 0), c.get("out", 0), write=c.get("in_write", 0),
+                               prompt_tokens=c.get("in_hit", 0) + c.get("in_miss", 0)) for c in self.calls.values()]
+        return usage, None if any(p is None for p in per) else sum(per)
 
     def __call__(self, line: str) -> bool:
         try:
@@ -315,6 +318,7 @@ def _failure_reason(task: Task, res: Result, subtype: str, code: int, err: str) 
 def _read_reply(res: Result, task: Task, j: dict, code: int, err: str) -> None:
     """Fill the Result from Claude Code's final result event: usage at DeepSeek rates, answer, status."""
     res.usage = _usage(j.get("usage") or {})
+    # The run's total over all its calls: a tiered model (Haiku 5.5) prices at its first tier.
     res.cost_usd = config.cost_usd(task.model, res.usage["in_hit"], res.usage["in_miss"], res.usage["out"], write=res.usage.get("in_write", 0))
     res.turns = int(j.get("num_turns") or 0)
     res.answer = str(j.get("result") or "").strip()

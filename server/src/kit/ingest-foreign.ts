@@ -132,8 +132,10 @@ interface Counts {
   output: number
 }
 
-/** list_usd for one call; null when the model has no price. */
-function listUsd(model: string, c: Counts, at: number): number | null {
+/** list_usd for one call; null when the model has no price. `promptTokens` is that call's prompt
+ *  when `c` is ONE request (it picks a tiered model's rates); a running total leaves it 0, the
+ *  short-prompt tier. */
+function listUsd(model: string, c: Counts, at: number, promptTokens = 0): number | null {
   const spend = {
     ...emptyModelSpend(),
     input: c.input,
@@ -142,7 +144,7 @@ function listUsd(model: string, c: Counts, at: number): number | null {
     output: c.output,
     turns: 1,
   }
-  const p = priceTokens({ [model]: spend }, at)
+  const p = priceTokens({ [model]: spend }, at, promptTokens)
   return p.unpriced.length > 0 ? null : p.costUsd
 }
 
@@ -546,7 +548,8 @@ async function ingestDshSession(
       cache_write_5m: c.cacheWrite,
       // A subset of output, kept as its own column, never added to it.
       reasoning: r.tokens_reasoning ?? 0,
-      list_usd: listUsd(model, c, ts),
+      // One DSH assistant message is one request.
+      list_usd: listUsd(model, c, ts, c.input + c.cacheRead + c.cacheWrite),
       price_ver: PRICE_VER(),
       weighted: weighTurnCounts(model, c),
     })

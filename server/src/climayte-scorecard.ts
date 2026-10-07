@@ -15,6 +15,13 @@
 // trusted nor written off, so the table keeps learning instead of settling on the first thing that
 // worked.
 //
+// HAIKU 5.5 FIRST (owner, 2026-10-07: never use Haiku 4.5, and things should start "attempting to
+// offload there first ... it's really good and really cheap"). Every kind starts on Haiku medium,
+// and while a Haiku rung is still learning EVERY auto pick of a kind whose best rung is above Haiku
+// tries it, not only every 4th. A failed Haiku result goes back on the rung the kind would have run
+// without the trial, so a task Haiku cannot do costs one Haiku attempt, not a climb. Verdicts on
+// Haiku 4.5 stay off the ladder: they judged another model.
+//
 // WHY COST DECIDES (owner, 2026-10-02: "you are supposed to be sending the task to the cheapest/fastest
 // model capable of reliably completing your offloaded task", and "don't forget Haiku exists"). The
 // first version took the cheapest rung at 80%: code's Sonnet medium sat at 78% (93 of 119) while each
@@ -38,19 +45,20 @@ export type CliMayteKind = (typeof CLIMAYTE_KINDS)[number]
 
 export interface CliMayteConfig {
   model: string
-  /** `--effort`; null for a model run without one (Haiku: no effort level is asked of it). */
+  /** `--effort`; null for a setting that asks none (the CLI's default). */
   effort: string | null
 }
 
-export const HAIKU = 'claude-haiku-4-5'
+export const HAIKU = 'claude-haiku-5-5'
 export const SONNET = 'claude-sonnet-5-5'
 export const OPUS = 'claude-opus-5-5'
 
-/** Cheapest first. Price: Haiku 4.5 is half Sonnet 5.5 per token and Opus 5.5 twice it
- *  (usage-tokens modelMultiplier), and a higher effort writes more thinking, which is output, the
- *  dearest token on the meter. */
+/** Cheapest first. Price: Haiku 5.5 weighs 0.14x Sonnet 5.5 on the meter (its two prompt-size
+ *  tiers blended as CliMayte's traffic measured, usage-tokens modelMultiplier) and Opus 5.5 twice
+ *  it, and a higher effort writes more thinking, which is output, the dearest token on the meter. */
 export const CLIMAYTE_LADDER: readonly CliMayteConfig[] = [
-  { model: HAIKU, effort: null },
+  { model: HAIKU, effort: 'medium' },
+  { model: HAIKU, effort: 'high' },
   { model: SONNET, effort: 'low' },
   { model: SONNET, effort: 'medium' },
   { model: SONNET, effort: 'high' },
@@ -59,20 +67,24 @@ export const CLIMAYTE_LADDER: readonly CliMayteConfig[] = [
   { model: OPUS, effort: 'xhigh' },
   { model: OPUS, effort: 'max' },
 ]
+/** The Haiku rungs: the first this many of the ladder. */
+const HAIKU_RUNGS = 2
 /** What the CLI runs when asked for no model or effort: Opus high. */
-const CLI_DEFAULT_RUNG = 5
+const CLI_DEFAULT_RUNG = 6
 
-/** Where a kind starts before any rung has earned its trust: frugal (the climayte skill), and the
- *  every-4th exploring pick tries cheaper still. */
-const START: Record<CliMayteKind, number> = {
-  trivial: 0,
-  sweep: 2,
-  mechanical: 2,
-  docs: 2,
-  code: 2,
-  review: 2,
-  debug: 4,
-  manage: 1, // Sonnet low: reading reports and following a plan
+/** Where a kind starts before any rung has earned its trust: Haiku medium, every kind. */
+const START = 0
+/** Where a kind starts once Haiku is out of its way (both Haiku rungs written off, or a failed Haiku
+ *  trial sent back): the frugal starts it had before Haiku 5.5 (the climayte skill). */
+const START_PAST_HAIKU: Record<CliMayteKind, number> = {
+  trivial: 2,
+  sweep: 3,
+  mechanical: 3,
+  docs: 3,
+  code: 3,
+  review: 3,
+  debug: 5,
+  manage: 2, // Sonnet low: reading reports and following a plan
 }
 
 /** A rung is trusted after this many verdicts at or above PASS_BAR, the floor for "reliably"... */
@@ -245,23 +257,25 @@ export function scoreRows(
   return [...rows.values()].sort((a, b) => a.kind.localeCompare(b.kind) || rung(a) - rung(b))
 }
 
-/** A model as the ladder names it: older tasks stored `opus`, and the CLI may report a dated id. */
+/** A model as the ladder names it: older tasks stored `opus`, and the CLI may report a dated id.
+ *  Haiku 4.5 stays as it is, off the ladder: its verdicts must not count for Haiku 5.5. */
 export function ladderModel(model: string | null | undefined): string | null {
   if (!model) return null
   const m = model.toLowerCase()
   if (m.includes('opus-5-5') || m === 'opus') return OPUS
   if (m.includes('sonnet-5-5') || m === 'sonnet') return SONNET
-  if (m.includes('haiku-4-5') || m === 'haiku') return HAIKU
+  if (m.includes('haiku-5-5') || m === 'haiku') return HAIKU
   return model
 }
 
-/** A rung's place on the ladder; -1 off it. Haiku is one rung whatever effort a verdict names. */
+/** A rung's place on the ladder; -1 off it. A Haiku 5.5 verdict with no effort ran at medium, the
+ *  API's default. */
 export function ladderIndex(c: { model: string | null; effort: string | null }): number {
-  if (c.model === HAIKU) return 0
-  return CLIMAYTE_LADDER.findIndex((r) => r.model === c.model && r.effort === c.effort)
+  const effort = c.model === HAIKU ? (c.effort ?? 'medium') : c.effort
+  return CLIMAYTE_LADDER.findIndex((r) => r.model === c.model && r.effort === effort)
 }
 
-/** "Sonnet medium", "Haiku". */
+/** "Sonnet medium", "Haiku high". */
 export function rungLabel(i: number): string {
   const c = CLIMAYTE_LADDER[i]!
   const family = c.model === HAIKU ? 'Haiku' : c.model === SONNET ? 'Sonnet' : 'Opus'
@@ -296,8 +310,10 @@ function statAt(rows: ScoreRow[], kind: string, i: number): RungStat {
 const trusted = (s: RungStat): boolean => s.n >= MIN_SAMPLES && s.rate >= PASS_BAR
 
 /** The rung CliMayte uses for `kind`: of the trusted rungs, the one whose passed task costs least
- *  (cheaper rung on a tie); else the kind's start, moved up past any rung that keeps failing. */
-export function bestRung(kind: CliMayteKind, rows: ScoreRow[]): number {
+ *  (cheaper rung on a tie); else the kind's start, moved up past any rung that keeps failing, and
+ *  to START_PAST_HAIKU once both Haiku rungs are written off. `pastHaiku` passes over every Haiku
+ *  rung not trusted: the rung the kind would run without the Haiku trial (bestRungPastHaiku). */
+export function bestRung(kind: CliMayteKind, rows: ScoreRow[], pastHaiku = false): number {
   let best = -1
   let bestCost = Infinity
   for (let i = 0; i < CLIMAYTE_LADDER.length; i++) {
@@ -308,10 +324,16 @@ export function bestRung(kind: CliMayteKind, rows: ScoreRow[]): number {
     }
   }
   if (best !== -1) return best
-  let i = START[kind]
+  let i = START
+  while (i < HAIKU_RUNGS && (pastHaiku || isBad(kind, rows, i))) i++
+  if (i >= HAIKU_RUNGS) i = Math.max(i, START_PAST_HAIKU[kind])
   while (i < CLIMAYTE_LADDER.length - 1 && isBad(kind, rows, i)) i++
   return i
 }
+
+/** The rung `kind` would run without the Haiku trial: where a failed Haiku result goes back to. */
+export const bestRungPastHaiku = (kind: CliMayteKind, rows: ScoreRow[]): number =>
+  bestRung(kind, rows, true)
 
 function isBad(kind: string, rows: ScoreRow[], i: number): boolean {
   const s = statAt(rows, kind, i)
@@ -327,7 +349,30 @@ function exploreRung(kind: CliMayteKind, rows: ScoreRow[], best: number): number
   return null
 }
 
-/** The setting for an auto task: the best rung, or on every EXPLORE_EVERY-th (EXPLORE_EVERY_ON_OPUS
+/** The Haiku rung every auto pick tries while the kind's best rung is above Haiku: the cheapest one
+ *  still learning, or none once a cheaper Haiku rung is written off (Haiku is out for the kind, and
+ *  the every-4th exploring pick takes over). */
+function haikuTrial(kind: CliMayteKind, rows: ScoreRow[], best: number): number | null {
+  if (best < HAIKU_RUNGS) return null
+  for (let i = 0; i < HAIKU_RUNGS; i++) {
+    if (isBad(kind, rows, i)) return null
+    // Only until the rung has its samples: one that settles between the bars (0.5 to 0.7) goes back
+    // to the every-EXPLORE_EVERY-th cadence, or it would take every pick of the kind for good.
+    const s = statAt(rows, kind, i)
+    if (!trusted(s) && s.n < MIN_SAMPLES) return i
+  }
+  return null
+}
+
+/** The rung an auto pick of `kind` goes to now, before exploring: the Haiku trial's rung while it
+ *  runs, else the best rung. What the scorecard reports as the pick. */
+export function pickedRung(kind: CliMayteKind, rows: ScoreRow[]): number {
+  const best = bestRung(kind, rows)
+  return haikuTrial(kind, rows, best) ?? best
+}
+
+/** The setting for an auto task: a Haiku rung still learning on every pick while the best rung is
+ *  above Haiku (haikuTrial); else the best rung, or on every EXPLORE_EVERY-th (EXPLORE_EVERY_ON_OPUS
  *  while the best rung is an Opus one) auto pick of the kind
  *  (`autoIndex` counts them from 0) a cheaper one still learning (exploreRung). */
 export function pickConfig(
@@ -336,6 +381,12 @@ export function pickConfig(
   autoIndex: number,
 ): { config: CliMayteConfig; reason: string } {
   const best = bestRung(kind, rows)
+  const trial = haikuTrial(kind, rows, best)
+  if (trial !== null)
+    return {
+      config: CLIMAYTE_LADDER[trial]!,
+      reason: `trying ${rungLabel(trial)} first (Haiku 5.5), cheaper than ${rungLabel(best)}, for ${kind}`,
+    }
   const every = CLIMAYTE_LADDER[best]!.model === OPUS ? EXPLORE_EVERY_ON_OPUS : EXPLORE_EVERY
   const explore = autoIndex % every === every - 1 ? exploreRung(kind, rows, best) : null
   if (explore !== null)
@@ -352,13 +403,17 @@ export function pickConfig(
   }
 }
 
-/** The rung above what produced a failed result, or null at the top. A setting off the ladder (the
- *  CLI's default model and effort) counts as Opus high, what the CLI runs by default here. */
-export function nextRung(c: {
-  model: string | null
-  effort: string | null
-}): CliMayteConfig | null {
+/** The rung above what produced a failed result, or the ladder index `floor` when that is higher;
+ *  null at the top. A setting off the ladder counts as the rung it sits nearest: Haiku 5.5 low just
+ *  below Haiku medium, any other Haiku (4.5, or 5.5 above high) as Haiku high, anything else (the
+ *  CLI's default model and effort) as Opus high, what the CLI runs by default here. */
+export function nextRung(
+  c: { model: string | null; effort: string | null },
+  floor = 0,
+): CliMayteConfig | null {
   let i = ladderIndex(c)
-  if (i === -1) i = CLI_DEFAULT_RUNG
-  return CLIMAYTE_LADDER[i + 1] ?? null
+  if (i === -1 && c.model?.toLowerCase().includes('haiku'))
+    i = c.model === HAIKU && c.effort === 'low' ? -1 : HAIKU_RUNGS - 1
+  else if (i === -1) i = CLI_DEFAULT_RUNG
+  return CLIMAYTE_LADDER[Math.max(i + 1, floor)] ?? null
 }

@@ -1241,7 +1241,7 @@
         "upper95ci": 1821.89
       },
       "gdpval_ci": {},
-      "cached_input": 0.2,
+      "cached_input": 0.1,
       "cache_write": 2.5
     },
     {
@@ -1290,7 +1290,7 @@
         "upper95ci": 1755.95
       },
       "gdpval_ci": {},
-      "cached_input": 0.2,
+      "cached_input": 0.1,
       "cache_write": 2.5
     },
     {
@@ -1339,7 +1339,7 @@
         "upper95ci": 1643.79
       },
       "gdpval_ci": {},
-      "cached_input": 0.2,
+      "cached_input": 0.1,
       "cache_write": 2.5
     },
     {
@@ -1388,7 +1388,7 @@
         "upper95ci": 1470.37
       },
       "gdpval_ci": {},
-      "cached_input": 0.2,
+      "cached_input": 0.1,
       "cache_write": 2.5
     },
     {
@@ -1437,8 +1437,39 @@
         "upper95ci": 1274.3
       },
       "gdpval_ci": {},
-      "cached_input": 0.2,
+      "cached_input": 0.1,
       "cache_write": 2.5
+    },
+    {
+      "slug": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5 (max, vendor-reported)",
+      "short": "Haiku 5.5 (max, vendor)",
+      "creator": "Anthropic",
+      "score": null,
+      "cost": 0.38,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://www.anthropic.com/claude-haiku-5-5",
+      "pareto": false,
+      "full_name": "Claude Haiku 5.5 (Adaptive Reasoning, Max Effort)",
+      "release_date": "2026-10-07",
+      "scores": {
+        "aa-briefcase": 1578,
+        "gdpval-aa": 1620,
+        "terminalbench-4-0": 0.392,
+        "humanitys-last-exam": 0.459
+      },
+      "score_sources": {
+        "aa-briefcase": "https://www.anthropic.com/claude-haiku-5-5",
+        "gdpval-aa": "https://www.anthropic.com/claude-haiku-5-5",
+        "terminalbench-4-0": "https://www.anthropic.com/claude-haiku-5-5",
+        "humanitys-last-exam": "https://www.anthropic.com/claude-haiku-5-5"
+      },
+      "cached_input": 0.01,
+      "cache_write": 0.125,
+      "evidence": "vendor",
+      "evidence_note": "Anthropic's launch scores, read 2026-10-07; Artificial Analysis has not published Haiku 5.5. The effort behind each result was not stated and is taken as max (scores rise with effort). Only benchmarks that are the same test as this file's keys are mapped (Humanity's Last Exam is the no-tools result); every other key is absent, so a floor that needs it rejects this point. score (the AA index) is null: not measured.",
+      "cost_estimated": "not published: Sonnet 5.5 max's published cost (7.6) x 0.05, Haiku 5.5's low-tier price ratio to Sonnet 5.5 ($0.10 / $2 input, $0.50 / $10 output)"
     }
   ],
   "benchmarks": {
@@ -1503,7 +1534,7 @@
       "source": "https://artificialanalysis.ai/evaluations/critpt"
     }
   },
-  "scope": "24 selected exact configurations; not an exhaustive catalogue. All 240 component scores sourced, no new model benchmarks. kimi-k3 and nvidia-nemotron-3-ultra-550b-a55b were added 2026-09-27 from the same source, for their free NVIDIA routes.",
+  "scope": "24 selected exact configurations; not an exhaustive catalogue. All 240 component scores sourced, no new model benchmarks. kimi-k3 and nvidia-nemotron-3-ultra-550b-a55b were added 2026-09-27 from the same source, for their free NVIDIA routes. claude-haiku-5-5 was added 2026-10-07 from Anthropic's own launch scores (evidence: vendor), with an estimated cost, until Artificial Analysis publishes it.",
   "selection_policy": "Published task-specific evidence first; choose cheapest capable available Swarm route, escalate for quality or capacity. Desktop Opus 5.5 retains orchestration and final decisions.",
   "cost_note": "Measured AA index cost per task, rounded as published; not a prediction of production cost. Token rates are separate, current standard API reference rates.",
   "limitations": [

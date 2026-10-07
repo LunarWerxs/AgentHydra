@@ -29,9 +29,9 @@ models_path = "/models"
 # No credit endpoint exists, so there is nothing for a balance probe to read: a key's funding shows up
 # only when a real call answers 400 "credit balance is too low", which client.py routes to broke().
 balance_authority = "status"
-# The key check chats with the cheapest model on the account. This is a one-token liveness ping, not work:
-# the no-Haiku rule is about what does the thinking, and nothing here reasons.
-check_model = "claude-haiku-4-5-20251001"
+# The key check chats with the cheapest live model on the account: a one-token liveness ping, not work.
+# Haiku 5.5 since 2026-10-07 (owner: "never use Haiku 4.5").
+check_model = "claude-haiku-5-5"
 # The native endpoint. cc_env() sees no `anthropic_auth`, so it hands the key to Claude Code as
 # ANTHROPIC_API_KEY (x-api-key), which is what a real Anthropic key wants - a bearer token is
 # OpenRouter's shape, not Anthropic's.
@@ -105,4 +105,39 @@ default_reasoning_effort = "high"
 [models."rank:claude-sonnet-5-5-xhigh:direct"]
 inherits = "rank:claude-sonnet-5-5:direct"
 benchmark_slug = "claude-sonnet-5-5-xhigh"
+default_reasoning_effort = "xhigh"
+
+# Haiku 5.5 (2026-10-07): $0.10 in / $0.50 out per 1M for a prompt of 100k tokens or fewer, $0.50 / $2.50 above it
+# (prices.json). Its API default effort is medium, so the evaluated entry says max outright: its evidence point
+# (Anthropic's own launch scores, effort unstated) is read as the top setting. Haiku 4.5 is never registered here.
+[models."rank:claude-haiku-5-5:direct"]
+api_id = "claude-haiku-5-5"
+benchmark_slug = "claude-haiku-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "claude-haiku-5-5"
+default_thinking = true
+cc_effort = true
+default_reasoning_effort = "max"
+
+[models."rank:claude-haiku-5-5-low:direct"]
+inherits = "rank:claude-haiku-5-5:direct"
+benchmark_slug = "claude-haiku-5-5-low"
+default_reasoning_effort = "low"
+
+[models."rank:claude-haiku-5-5-medium:direct"]
+inherits = "rank:claude-haiku-5-5:direct"
+benchmark_slug = "claude-haiku-5-5-medium"
+default_reasoning_effort = "medium"
+
+[models."rank:claude-haiku-5-5-high:direct"]
+inherits = "rank:claude-haiku-5-5:direct"
+benchmark_slug = "claude-haiku-5-5-high"
+default_reasoning_effort = "high"
+
+[models."rank:claude-haiku-5-5-xhigh:direct"]
+inherits = "rank:claude-haiku-5-5:direct"
+benchmark_slug = "claude-haiku-5-5-xhigh"
 default_reasoning_effort = "xhigh"

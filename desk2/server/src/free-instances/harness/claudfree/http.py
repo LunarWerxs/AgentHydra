@@ -58,6 +58,14 @@ def account_label(name: Any, email: Any) -> str | None:
     return label[:60] or None
 
 
+def retired_haiku(model: str) -> bool:
+    """Claude Haiku 4.x and older (claude-haiku-4-5, claude-3-5-haiku-...): never picked (owner, 2026-10-07)."""
+    if "haiku" not in model:
+        return False
+    version = re.match(r"claude-haiku-(\d+)", model)
+    return version is None or int(version.group(1)) < 5
+
+
 def valid_uuid(value: str) -> str:
     # Validate before interpolation: caller-provided IDs never become URL paths.
     try:
@@ -291,7 +299,9 @@ class ClaudeHttp:
         offers (claude_ai_bootstrap_models_config, newest first; retired ones are inactive or overflow):
         the account's own default when it has one (unless `own_default` is off), else the first active
         model whose id holds `prefer` ("sonnet" for a chat, as claude.ai picks; "haiku" for a keepalive
-        nudge, the cheapest), else the account's default, else the first active one.
+        nudge, the cheapest), else the account's default, else the first active one. Only the account's own
+        default (with `own_default` on) can be a Haiku 4.x: an org that offers no newer Haiku gets its
+        default instead (owner, 2026-10-07: never use Haiku 4.5).
         """
         try:
             body = self._json("GET", "/api/account")
@@ -315,6 +325,7 @@ class ClaudeHttp:
                         and not entry.get("overflow")
                     ):
                         offered.append(model)
+            offered = [m for m in offered if not retired_haiku(m)]
             return next((m for m in offered if prefer in m), offered[0] if offered else None)
         except Exception:
             return None

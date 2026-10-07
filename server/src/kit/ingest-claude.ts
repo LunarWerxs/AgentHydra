@@ -41,7 +41,7 @@ import {
 import { collectChatsAsync, lineageIdsOf } from '../core/chat-store-scan'
 import { listCliInstances } from '../core/cli-instances'
 import { POINTER_DIR } from '../instance'
-import { pricesAsOf, priceTokens } from '../pricing'
+import { pricesAsOf, priceTokens, promptSize } from '../pricing'
 import { hswarmAccountId } from '../routes/hswarm'
 import { accumulateUsageLine, defaultConfigDir, emptySpend } from '../usage-tokens'
 import { sessionAddSql, sessionAggSql } from './schema'
@@ -302,7 +302,8 @@ export function claudeLineEvent(
   if (!m) return null
   const msg = MESSAGE_ID.exec(line)?.[1] ?? REQUEST_ID.exec(line)?.[1]
   const id = `claude:${msg ?? `h${createHash('sha1').update(line).digest('hex').slice(0, 20)}`}`
-  const priced = priceTokens({ [model]: m }, ts)
+  // One line is one request: its own prompt picks a tiered model's rates (Haiku 5.5 over 100k).
+  const priced = priceTokens({ [model]: m }, ts, promptSize(m))
   return {
     id,
     ts,

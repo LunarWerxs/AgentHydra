@@ -23,6 +23,7 @@
 // an unusual setup is worse than one that hands you the string.
 
 import { resolveClaudeExe } from './config'
+import { HAIKU_PIN_MODEL, pinHaikuModel } from './core/haiku-pin'
 import type { SessionSource } from './types'
 
 export interface ResumePlan {
@@ -60,8 +61,10 @@ export function buildResumePlan(
     return { argv: ['cmd', '/c', 'start', '', 'cmd', '/k', command], command, cwd }
   }
   if (platform === 'darwin') {
+    // Terminal.app's new shell does not inherit the spawn's env, so the Haiku pin rides the command line.
+    const pinned = `ANTHROPIC_DEFAULT_HAIKU_MODEL=${HAIKU_PIN_MODEL} ${command}`
     const script = `tell application "Terminal" to do script ${JSON.stringify(
-      cwd ? `cd ${quote(cwd)} && ${command}` : command,
+      cwd ? `cd ${quote(cwd)} && ${pinned}` : pinned,
     )}`
     return { argv: ['osascript', '-e', script], command, cwd }
   }
@@ -109,6 +112,8 @@ export function resumeSessionInTerminal(
       // session would read as the click doing nothing. The rule that changed was about windows
       // NOBODY asked for; this one is asked for by definition.
       ...(cwd ? { cwd } : {}),
+      // Never Haiku 4.5 behind the CLI's `haiku` alias (core/haiku-pin.ts).
+      env: pinHaikuModel({ ...(process.env as Record<string, string>) }),
       stdin: 'ignore',
       stdout: 'ignore',
       stderr: 'ignore',

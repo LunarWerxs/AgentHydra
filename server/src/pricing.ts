@@ -28,6 +28,11 @@
 //      and either way the effective date travels with the numbers into the UI, so a stale figure
 //      is visibly stale rather than silently wrong.
 //
+// A LONG-PROMPT TIER is modelled per request: Claude Haiku 5.5 bills a request whose prompt (input +
+// cache reads + cache writes) is over 100,000 tokens at five times its short-prompt rates. A caller
+// pricing ONE request passes that request's prompt size (promptSize); a caller holding only totals
+// of many requests passes nothing and gets the short-prompt tier. hswarm/prices.py reads it alike.
+//
 // NOT MODELLED (documented rather than approximated): Anthropic's fast mode re-prices Opus 5.5 at
 // 8/40 and Opus 5 / 4.8 at 10/50, and transcripts do not record which turns used it; batch requests
 // are half price and Claude Code does not make them. Both would need data the transcript does not
@@ -50,6 +55,19 @@ export interface ModelPrice {
   cacheReadUsd?: number
   cacheWrite5mUsd?: number
   cacheWrite1hUsd?: number
+  /** The rates of ONE request whose prompt is over `promptTokens` tokens (Haiku 5.5 over 100,000). */
+  over?: PriceTier
+}
+
+/** A long-prompt tier: the same rates as a ModelPrice, for a prompt over `promptTokens`. Cache rates
+ *  left out derive from this tier's own `input`. */
+export interface PriceTier {
+  promptTokens: number
+  input: number
+  output: number
+  cacheReadUsd?: number
+  cacheWrite5mUsd?: number
+  cacheWrite1hUsd?: number
 }
 
 /**
@@ -65,14 +83,24 @@ export const CACHE_WRITE_1H_RATIO = 2
 /** One model's row in hswarm/data/prices.json, the single place a list price is written (hswarm/prices.py
  *  reads the same file; tests/pricing-parity.test.ts proves both price alike). Rates are USD per million;
  *  a cache rate left out is derived from `input` by the ratios above. */
-interface PriceFileRow {
+interface PriceFileRates {
   input: number
   output: number
   cache_read?: number
   cache_write_5m?: number
   cache_write_1h?: number
-  intro?: { input: number; output: number; until: string }
 }
+interface PriceFileRow extends PriceFileRates {
+  intro?: { input: number; output: number; until: string }
+  /** The long-prompt tier: these rates for a request whose prompt is over `prompt_tokens`. */
+  over?: PriceFileRates & { prompt_tokens: number }
+}
+
+const cacheRates = (r: PriceFileRates) => ({
+  ...(r.cache_read !== undefined && { cacheReadUsd: r.cache_read }),
+  ...(r.cache_write_5m !== undefined && { cacheWrite5mUsd: r.cache_write_5m }),
+  ...(r.cache_write_1h !== undefined && { cacheWrite1hUsd: r.cache_write_1h }),
+})
 
 /** The day the table was last checked against the published prices. Surfaced in the UI. */
 export const PRICES_AS_OF: string = priceFile.as_of
@@ -89,9 +117,15 @@ const PRICES: Record<string, ModelPrice> = Object.fromEntries(
       input: r.input,
       output: r.output,
       ...(r.intro && { intro: r.intro }),
-      ...(r.cache_read !== undefined && { cacheReadUsd: r.cache_read }),
-      ...(r.cache_write_5m !== undefined && { cacheWrite5mUsd: r.cache_write_5m }),
-      ...(r.cache_write_1h !== undefined && { cacheWrite1hUsd: r.cache_write_1h }),
+      ...cacheRates(r),
+      ...(r.over && {
+        over: {
+          promptTokens: r.over.prompt_tokens,
+          input: r.over.input,
+          output: r.over.output,
+          ...cacheRates(r.over),
+        },
+      }),
     } satisfies ModelPrice,
   ]),
 )
@@ -102,7 +136,8 @@ const PRICES: Record<string, ModelPrice> = Object.fromEntries(
  * Precedence is deliberate and one-directional: a fetched price is newer than a compiled-in one by
  * construction, so it wins outright rather than being merged field-by-field with it. The bundled
  * table keeps answering for anything the catalog does not carry, so adopting a catalog can only
- * ever price MORE models, never fewer.
+ * ever price MORE models, never fewer. One exception: a bundled row with a long-prompt tier keeps
+ * answering (see lookup).
  */
 let fetched: { prices: Record<string, ModelPrice>; asOf: string } | null = null
 
@@ -158,7 +193,11 @@ function routedModel(key: string): string {
 }
 
 function lookup(key: string): ModelPrice | undefined {
-  return fetched?.prices[key] ?? PRICES[key]
+  // A bundled row with a long-prompt tier wins over a downloaded one: the catalog carries standard
+  // rates only (price-catalog.ts rule 3), so its row would price every long prompt at the short tier.
+  const bundled = PRICES[key]
+  if (bundled?.over) return bundled
+  return fetched?.prices[key] ?? bundled
 }
 
 /** Every rate needed to price one model's tokens, in USD per million. */
@@ -179,26 +218,35 @@ export interface ResolvedPrice {
  * introductory rate. Callers pass the session's newest turn rather than "now", so an archived
  * session keeps the price that actually applied to it.
  *
+ * `promptTokens` is the prompt of the ONE request being priced (promptSize); over a row's
+ * `over.promptTokens` the long-prompt tier applies. 0, for a total, is the short-prompt tier.
+ *
  * A bare family name ("opus", "sonnet") deliberately does NOT resolve: Opus has been billed at both
  * 15/75 and 5/25 depending on the generation, so a name with no generation in it is unpriceable —
  * see rule 2 at the top of the file.
  */
-export function priceFor(model: string, at: number = Date.now()): ResolvedPrice | null {
+export function priceFor(
+  model: string,
+  at: number = Date.now(),
+  promptTokens = 0,
+): ResolvedPrice | null {
   const key = canonical(model)
   const entry = lookup(key) ?? lookup(routedModel(key))
   if (!entry) return null
-  const intro = entry.intro && at < Date.parse(entry.intro.until) ? entry.intro : null
-  const input = intro ? intro.input : entry.input
+  const tier = entry.over && promptTokens > entry.over.promptTokens ? entry.over : null
+  const rates: PriceTier | ModelPrice = tier ?? entry
+  const intro = !tier && entry.intro && at < Date.parse(entry.intro.until) ? entry.intro : null
+  const input = intro ? intro.input : rates.input
   return {
     model: key,
     input,
-    output: intro ? intro.output : entry.output,
+    output: intro ? intro.output : rates.output,
     // An absolute rate wins over the derived one where the source published it. `?? ` and not `||`:
     // zero is a real, published rate (a provider that creates cache entries for free), and `||`
     // would quietly replace it with the 1.25x premium.
-    cacheRead: entry.cacheReadUsd ?? input * CACHE_READ_RATIO,
-    cacheWrite5m: entry.cacheWrite5mUsd ?? input * CACHE_WRITE_5M_RATIO,
-    cacheWrite1h: entry.cacheWrite1hUsd ?? input * CACHE_WRITE_1H_RATIO,
+    cacheRead: rates.cacheReadUsd ?? input * CACHE_READ_RATIO,
+    cacheWrite5m: rates.cacheWrite5mUsd ?? input * CACHE_WRITE_5M_RATIO,
+    cacheWrite1h: rates.cacheWrite1hUsd ?? input * CACHE_WRITE_1H_RATIO,
   }
 }
 
@@ -226,8 +274,16 @@ export interface PricedSpend {
 const tokensIn = (t: PriceableTokens): number =>
   t.input + t.output + t.cacheRead + t.cacheCreation5m + t.cacheCreation1h
 
+/** The prompt of one request from its tokens: input + cache reads + cache writes. What picks a
+ *  tiered model's rates (priceFor's `promptTokens`). */
+export const promptSize = (t: PriceableTokens): number =>
+  t.input + t.cacheRead + t.cacheCreation5m + t.cacheCreation1h
+
 /**
  * Cost of a per-model token breakdown, in USD.
+ *
+ * `promptTokens` is for a breakdown that is ONE request (promptSize of its tokens): it picks a
+ * tiered model's rates. Left 0, a total of many requests prices at the short-prompt tier.
  *
  * A model with no published price is listed in `unpriced` — but only if it actually carried
  * tokens. Claude Code writes synthetic assistant turns (`"model":"<synthetic>"`) with an all-zero
@@ -237,12 +293,13 @@ const tokensIn = (t: PriceableTokens): number =>
 export function priceTokens(
   byModel: Record<string, PriceableTokens>,
   at: number = Date.now(),
+  promptTokens = 0,
 ): PricedSpend {
   const priced: string[] = []
   const unpriced: string[] = []
   let cost = 0
   for (const [model, t] of Object.entries(byModel)) {
-    const p = priceFor(model, at)
+    const p = priceFor(model, at, promptTokens)
     if (!p) {
       if (tokensIn(t) > 0) unpriced.push(model)
       continue

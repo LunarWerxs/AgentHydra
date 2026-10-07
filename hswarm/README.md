@@ -174,8 +174,13 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
 
 ## Routing and memory (ported 2026-10-03)
 
-- **AUTO may pick Claude Sonnet; Haiku stays barred.** The Haiku family is rejected on every leg (evaluated, sibling and
-  backup) with the reason `family`; naming a model (`model=`) is the explicit override (`selection.AUTO_BARRED_FAMILIES`).
+- **AUTO may pick Claude Sonnet and Haiku 5.5; only Haiku 4.5 and older stay barred.** Those are rejected on every leg
+  (evaluated, sibling and backup) with the reason `family`; naming a model (`model=`) is the explicit override
+  (`selection.AUTO_BARRED_FAMILIES`). Haiku 5.5 (2026-10-07) is an ordinary candidate, ranked by its evidence like any
+  other: Anthropic's own launch scores until Artificial Analysis publishes it, so it clears only the floors those
+  scores cover. Today that is the tool-free `routine` profile, on its one scored route (`claude-haiku-5-5`); its
+  effort variants have no scores of their own. Tool work reaches Haiku 5.5 first through CliMayte, whose scorecard
+  tries it on every kind of task before Sonnet.
 - **A `cc` leg whose key cannot start a worker is listed unavailable and refused.** A headless Claude Code worker's first
   turn is tens of thousands of input tokens (`config.CC_FIRST_TURN_TOKENS`, 40,000). `input_limit.py` records each key's
   input-tokens-per-minute limit per model (Anthropic's header on native calls, or the 429 a cc worker dies of) for 3 days

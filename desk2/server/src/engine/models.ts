@@ -4,6 +4,7 @@
 
 import type { ModelInfo, SlashCommand } from '@anthropic-ai/claude-agent-sdk'
 import type { ModelChoice, SlashCommandInfo } from '@shared/protocol'
+import { HAIKU_PIN_MODEL, OLD_HAIKU } from './haiku-pin'
 
 /** The value that means "the account's default model" (ChatSummary.model null). */
 export const ACCOUNT_DEFAULT_MODEL = 'default'
@@ -12,7 +13,7 @@ export const STATIC_MODELS: ModelChoice[] = [
   { value: 'claude-opus-5-5', label: 'Opus 5.5' },
   { value: 'claude-fable-5-1', label: 'Fable 5.1' },
   { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
-  { value: 'claude-haiku-4-5', label: 'Haiku 4.5' },
+  { value: 'claude-haiku-5-5', label: 'Haiku 5.5' },
   { value: ACCOUNT_DEFAULT_MODEL, label: 'Account default' },
 ]
 
@@ -36,8 +37,15 @@ export function normalizeModel(model: string | null | undefined): string | null 
   return m === '' || m === ACCOUNT_DEFAULT_MODEL ? null : m
 }
 
+/** A live runtime's model menu, without Haiku 4.5 or older (owner, 2026-10-07: never Haiku 4.5), and with
+ *  Haiku 5.5 by id when the runtime does not offer it. The bare `haiku` alias goes too: its label names
+ *  whatever the CLI build ships, which can read Haiku 4.5 though the pinned alias runs Haiku 5.5. */
 export function modelChoicesFrom(models: ModelInfo[]): ModelChoice[] {
-  return models.filter((m) => m && typeof m.value === 'string').map((m) => ({ value: m.value, label: m.displayName || m.value }))
+  const choices = models
+    .filter((m) => m && typeof m.value === 'string' && m.value.toLowerCase() !== 'haiku' && !OLD_HAIKU.test(m.value))
+    .map((m) => ({ value: m.value, label: m.displayName || m.value }))
+  if (!choices.some((c) => /haiku-[5-9]/i.test(c.value))) choices.push({ value: HAIKU_PIN_MODEL, label: 'Haiku 5.5' })
+  return choices
 }
 
 export function commandInfosFrom(commands: SlashCommand[]): SlashCommandInfo[] {

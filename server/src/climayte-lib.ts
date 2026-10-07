@@ -25,6 +25,7 @@ import {
   rereadUnits,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
+import { pinHaikuModel } from './core/haiku-pin'
 import { sharedKitStore, usageQuery } from './kit/query'
 import type { KitStore } from './kit/store'
 import {
@@ -602,9 +603,9 @@ export function toReport(
   }
 }
 
-/** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5), by the names the CLI
- *  accepts for them (`claude --help`: an alias or the full name). CliMayte passes the full id, so a
- *  later alias move cannot change what a recorded task asked for. */
+/** The models a worker may run (owner, 2026-09-30: Opus 5.5 or Sonnet 5.5; 2026-10-07: Haiku 5.5,
+ *  tried first), by the names the CLI accepts for them (`claude --help`: an alias or the full name).
+ *  CliMayte passes the full id, so a later alias move cannot change what a recorded task asked for. */
 export const CLIMAYTE_MODELS: Readonly<Record<string, string>> = {
   opus: 'claude-opus-5-5',
   'opus-5.5': 'claude-opus-5-5',
@@ -614,11 +615,16 @@ export const CLIMAYTE_MODELS: Readonly<Record<string, string>> = {
   'sonnet-5.5': 'claude-sonnet-5-5',
   'sonnet-5-5': 'claude-sonnet-5-5',
   'claude-sonnet-5-5': 'claude-sonnet-5-5',
-  haiku: 'claude-haiku-4-5',
-  'haiku-4.5': 'claude-haiku-4-5',
-  'haiku-4-5': 'claude-haiku-4-5',
-  'claude-haiku-4-5': 'claude-haiku-4-5',
+  haiku: 'claude-haiku-5-5',
+  'haiku-5.5': 'claude-haiku-5-5',
+  'haiku-5-5': 'claude-haiku-5-5',
+  'claude-haiku-5-5': 'claude-haiku-5-5',
 }
+/** Haiku 4.5 by any of its names, dated ids included: refused, never mapped to 5.5, so a sender
+ *  learns the name it used no longer runs. */
+const HAIKU_45 = /^(?:claude-)?haiku-4[.-]5(?:-\d{8})?$/
+export const HAIKU_45_REFUSED =
+  'Haiku 4.5 is retired here (owner, 2026-10-07): use haiku (Haiku 5.5)'
 /** `claude --effort <level>` (2.1.284): how hard the model thinks on every turn. */
 export const CLIMAYTE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
@@ -628,10 +634,12 @@ const blank = (v: unknown): boolean => v === undefined || v === null || v === ''
  *  valid values: junk must never reach the CLI. */
 export function climayteModel(v: unknown): string | null {
   if (blank(v)) return null
-  const id = typeof v === 'string' ? CLIMAYTE_MODELS[v.trim().toLowerCase()] : undefined
+  const name = typeof v === 'string' ? v.trim().toLowerCase() : ''
+  if (HAIKU_45.test(name)) throw new Error(HAIKU_45_REFUSED)
+  const id = CLIMAYTE_MODELS[name]
   if (!id)
     throw new Error(
-      `unknown model '${String(v)}': use auto, haiku, sonnet or opus (or claude-haiku-4-5, claude-sonnet-5-5, claude-opus-5-5)`,
+      `unknown model '${String(v)}': use auto, haiku, sonnet or opus (or claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5)`,
     )
   return id
 }
@@ -944,7 +952,8 @@ export function scrubbedEnv(configDir: string, workerId?: string): Record<string
   // No self-update from inside a worker (config.ts): an interrupted one broke every launch.
   env.DISABLE_AUTOUPDATER = '1'
   if (workerId) env.AGENTHYDRA_CLIMAYTE_WORKER = workerId
-  return env
+  // The CLI's own small-model calls and Explore agents run on Haiku 5.5, never 4.5 (core/haiku-pin).
+  return pinHaikuModel(env)
 }
 
 export interface AttemptVerdict {

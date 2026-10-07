@@ -27,7 +27,11 @@ export class FakeQuery {
   /** The MCP status read and toggle never answer (a session too busy to). */
   mcpHangs = false
   commands: SlashCommand[] = [{ name: 'compact', description: 'Compact the conversation', argumentHint: '<instructions>' }]
-  models: ModelInfo[] = [{ value: 'claude-opus-5-5', displayName: 'Opus 5.5', description: '' }]
+  // A Haiku 4.5 entry as an older CLI lists it: the model menu drops it and offers Haiku 5.5.
+  models: ModelInfo[] = [
+    { value: 'claude-opus-5-5', displayName: 'Opus 5.5', description: '' },
+    { value: 'claude-haiku-4-5-20251001', displayName: 'Haiku 4.5', description: '' },
+  ]
 
   constructor(
     readonly prompt: string | AsyncIterable<SDKUserMessage>,

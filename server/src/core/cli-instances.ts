@@ -30,6 +30,7 @@ import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { CONFIG_DIR, resolveClaudeExe } from '../config'
 import type { CliInstance, CliLimitResetResult, UsageSnapshot } from '../types'
+import { pinHaikuModel } from './haiku-pin'
 import { instanceNumberFor, instanceNumbers, instanceRef } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -781,10 +782,11 @@ export function launchCliInstance(id: string, opts: LaunchOpts = {}): CMActionRe
     if (typeof opts.model === 'string') claudeArgs.push('--model', opts.model)
     if (typeof opts.effort === 'string') claudeArgs.push('--effort', opts.effort)
   }
-  const env: Record<string, string> = {
+  // Never Haiku 4.5 behind the CLI's `haiku` alias (haiku-pin.ts); the darwin line exports it too.
+  const env = pinHaikuModel({
     ...(process.env as Record<string, string>),
     CLAUDE_CONFIG_DIR: rec.configDir,
-  }
+  })
 
   try {
     if (process.platform === 'win32') {
@@ -798,7 +800,7 @@ export function launchCliInstance(id: string, opts: LaunchOpts = {}): CMActionRe
       })
     } else if (process.platform === 'darwin') {
       // AppleScript to open Terminal.app with the env exported inline.
-      const cmdline = `CLAUDE_CONFIG_DIR=${JSON.stringify(rec.configDir)} ${JSON.stringify(exe)} ${claudeArgs.join(' ')}`
+      const cmdline = `CLAUDE_CONFIG_DIR=${JSON.stringify(rec.configDir)} ANTHROPIC_DEFAULT_HAIKU_MODEL=${JSON.stringify(env.ANTHROPIC_DEFAULT_HAIKU_MODEL)} ${JSON.stringify(exe)} ${claudeArgs.join(' ')}`
       const script = `tell application "Terminal" to do script ${JSON.stringify(cmdline)}`
       Bun.spawn(['osascript', '-e', script], {
         stdin: 'ignore',

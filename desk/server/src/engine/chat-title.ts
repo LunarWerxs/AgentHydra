@@ -1,4 +1,5 @@
 import type { QueryImpl } from './chat-runtime'
+import { pinHaikuModel } from './haiku-pin'
 
 /** What a generated title is made from, and how long the model has (SPEC "Titles"). */
 export const TITLE_PROMPT_CHARS = 2000
@@ -30,7 +31,7 @@ export function cleanTitle(raw: string): string | null {
 }
 
 /**
- * One Sonnet query on the chat's own account, low effort, no tools, one turn (never Haiku). Chosen over
+ * One Sonnet query on the chat's own account, low effort, no tools, one turn (never Haiku 4.5). Chosen over
  * HydraSwarm because it needs no extra service, rides the login the chat already has, and is one call.
  */
 export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, string | undefined> | undefined, timeoutMs = TITLE_TIMEOUT_MS): TitleGenerator {
@@ -41,6 +42,7 @@ export function sdkTitleGenerator(queryImpl: QueryImpl, env: Record<string, stri
       const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
       if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
       else delete childEnv.CLAUDE_CONFIG_DIR
+      pinHaikuModel(childEnv)
       const q = queryImpl({
         prompt:
           'Title this chat in 3-6 words, sentence case, no quotes, no trailing period. Answer with the title only.\n\nFirst message:\n' +

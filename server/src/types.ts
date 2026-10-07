@@ -1234,7 +1234,8 @@ export interface TokenSpend {
   /**
    * The unit to budget in: the four counts converted to one scale by weights fitted to the
    * subscription meter (cache read 0.1, cache write 3.2 or 5.1 by TTL, output 31) and by the model's
-   * list price relative to Sonnet (Opus 2x, Fable 5x, Haiku 0.5x). See usage-tokens.ts.
+   * list price relative to Sonnet (Opus 2x, Fable 5x, Haiku 5.5 0.14x, Haiku 4.5 0.5x). See
+   * usage-tokens.ts.
    */
   weighted: number
   /** Assistant turns counted. */

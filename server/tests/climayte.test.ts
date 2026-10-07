@@ -801,7 +801,7 @@ describe('integration: a quota wall hands the session to the next account', () =
     ])
     startCliMayte()
     // One known setting: an auto pick depends on how many auto workers the store already holds
-    // (every 4th explores Haiku), and in the serial suite that is every earlier file's workers.
+    // (Haiku first while it learns), and in the serial suite that is every earlier file's workers.
     const run = climayteRun({
       tasks: [
         {
@@ -1837,7 +1837,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       { id: account, num: 7, name: 'slow', configDir: slowDir, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-    // One known setting, so a follow-up's switch shows against it (auto may explore Haiku).
+    // One known setting, so a follow-up's switch shows against it (auto may try Haiku).
     const run = climayteRun({
       tasks: [
         {
@@ -1925,6 +1925,11 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(() => climayteRun({ model: 'gpt', tasks: [{ prompt: 'x', cwd }] })).toThrow(
       'unknown model',
     )
+    // Owner, 2026-10-07: never Haiku 4.5. Its names are refused, never run as Haiku 5.5.
+    for (const model of ['haiku-4.5', 'claude-haiku-4-5', 'claude-haiku-4-5-20251001'])
+      expect(() => climayteRun({ tasks: [{ prompt: 'x', cwd, model }] })).toThrow(
+        'task 1: Haiku 4.5 is retired here (owner, 2026-10-07): use haiku (Haiku 5.5)',
+      )
     const run = climayteRun({
       model: 'sonnet',
       effort: 'medium',
@@ -1946,13 +1951,14 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
     expect(run.workers.map((w) => [w.model, w.effort])).toEqual([
       ['claude-sonnet-5-5', 'medium'],
       ['claude-opus-5-5', 'xhigh'],
-      ['claude-haiku-4-5', null],
+      ['claude-haiku-5-5', 'medium'],
     ])
     // Owner, 2026-10-02: the cheapest model that reliably does the task. A model named with no
-    // reason is left to the scorecard: a sweep pinned to Opus starts where sweeps start.
+    // reason is left to the scorecard: a sweep pinned to Opus starts where sweeps start, on
+    // Haiku 5.5 medium (owner, 2026-10-07).
     const bare = climayteRun({ tasks: [{ prompt: 'x', cwd, kind: 'sweep', model: 'opus' }] })
     climayteCancel({ group: bare.group })
-    expect(bare.workers.map((w) => [w.model, w.effort])).toEqual([['claude-sonnet-5-5', 'medium']])
+    expect(bare.workers.map((w) => [w.model, w.effort])).toEqual([['claude-haiku-5-5', 'medium']])
   })
 
   test('a follow-up switches model and effort for its turn on, in the same session', async () => {
@@ -2446,7 +2452,8 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     })
     groups.push(run.group)
     const manager = run.workers[0]
-    expect(manager).toMatchObject({ kind: 'manage', effort: 'low' })
+    // Every kind starts on Haiku 5.5 medium, a manager too (owner, 2026-10-07).
+    expect(manager).toMatchObject({ kind: 'manage', model: 'claude-haiku-5-5', effort: 'medium' })
     expect(manager?.size?.expected).toBe(2)
     climayteCancel({ group: 'size-manage' })
   }, 60_000)
@@ -2465,6 +2472,8 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
           kind: 'review',
           model: 'sonnet',
           effort: 'medium',
+          // Sonnet on the owner's words, so the review is sized as recorded, not tried on Haiku.
+          ownerWords: 'sized',
         },
       ],
       group: 'size-room',
@@ -2506,6 +2515,7 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
       kind: 'sweep',
       model: 'sonnet',
       effort: 'medium',
+      ownerWords: 'sized', // as recorded, not tried on Haiku
     }
     const run = climayteRun({ tasks: [task], group: 'size-short', size: 'whole' })
     groups.push(run.group)

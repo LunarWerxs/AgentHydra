@@ -174,7 +174,8 @@ def analyze(body: dict, model: str | None = None, top: int = 10) -> dict:
         "heaviest": sorted(rows, key=lambda r: -r["chars"])[:top],
     }
     if model:
-        cold, warm = config.cost_usd(model, 0, est_tokens, 0), config.cost_usd(model, est_tokens, 0, 0)
+        cold = config.cost_usd(model, 0, est_tokens, 0, prompt_tokens=est_tokens)
+        warm = config.cost_usd(model, est_tokens, 0, 0, prompt_tokens=est_tokens)
         out["price"] = {"model": model, "cold_usd": cold, "cached_usd": warm}  # None = unpriced, never 0
     return out
 

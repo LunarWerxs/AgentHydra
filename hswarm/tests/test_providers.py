@@ -50,7 +50,8 @@ def test_without_the_overlay_the_builtins_stand():
     # + the direct Anthropic provider's 10 `:direct` routes - Opus 5.5 and Sonnet 5.5, each at five efforts (5744065,
     #   which left this count at 39 and the assertion red)
     # + Cohere's Aya Expanse 32B (d94af6a): no `rank:` route, so it is in the list below and not in this count
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 49
+    # + Haiku 5.5 direct at five efforts (2026-10-07)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 54
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",

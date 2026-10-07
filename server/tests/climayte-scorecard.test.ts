@@ -2,6 +2,7 @@
 import { describe, expect, test } from 'bun:test'
 import { type RunDefaults, runSetting } from '../src/climayte'
 import {
+  bestRungPastHaiku,
   type CliMayteVerdict,
   HAIKU,
   nextRung,
@@ -21,33 +22,81 @@ const v = (
 ): CliMayteVerdict => ({ at: 0, verdict, note: null, model, effort, units, ...overrides })
 const task = (kind: string, ...verdicts: CliMayteVerdict[]) => ({ kind, verdicts })
 const times = (n: number, make: () => ReturnType<typeof task>) => Array.from({ length: n }, make)
+/** Both Haiku rungs written off for `kind`: two fails on each. */
+const haikuOut = (kind: string) => [
+  ...times(2, () => task(kind, v('fail', HAIKU, 'medium'))),
+  ...times(2, () => task(kind, v('fail', HAIKU, 'high'))),
+]
 
 describe('pickConfig', () => {
-  test('starts where the kind starts, then follows what passes and what fails', () => {
-    // No verdicts: trivial starts on Haiku, a sweep and code on Sonnet medium, debug on Opus medium.
-    expect(pickConfig('trivial', [], 0).config).toEqual({ model: HAIKU, effort: null })
-    expect(pickConfig('sweep', [], 0).config).toEqual({ model: SONNET, effort: 'medium' })
-    expect(pickConfig('code', [], 0).config).toEqual({ model: SONNET, effort: 'medium' })
-    expect(pickConfig('debug', [], 0).config).toEqual({ model: OPUS, effort: 'medium' })
-    expect(pickConfig('manage', [], 0).config).toEqual({ model: SONNET, effort: 'low' })
+  test('starts on Haiku medium, then follows what passes and what fails', () => {
+    // No verdicts: every kind starts on Haiku 5.5 medium (owner, 2026-10-07).
+    for (const kind of ['trivial', 'code', 'debug', 'manage'] as const)
+      expect(pickConfig(kind, [], 0).config).toEqual({ model: HAIKU, effort: 'medium' })
+    // Fails on Haiku 4.5 judged another model: they leave Haiku 5.5's start alone.
+    const old = scoreRows(
+      times(2, () => task('code', v('fail', 'claude-haiku-4-5-20251001', null))),
+    )
+    expect(pickConfig('code', old, 0).config).toEqual({ model: HAIKU, effort: 'medium' })
 
-    // Sonnet high passed 3 of 3 code tasks: code moves to it.
-    const high = times(3, () => task('code', v('pass', SONNET, 'high')))
+    // Haiku medium keeps failing (the CLI reports a dated id, no effort counts as medium): Haiku
+    // high is next; with both written off each kind goes where it started before Haiku 5.5.
+    const mediumBad = scoreRows(times(2, () => task('code', v('fail', `${HAIKU}-20261007`, null))))
+    expect(pickConfig('code', mediumBad, 0).config).toEqual({ model: HAIKU, effort: 'high' })
+    expect(pickConfig('code', scoreRows(haikuOut('code')), 0).config).toEqual({
+      model: SONNET,
+      effort: 'medium',
+    })
+    expect(pickConfig('manage', scoreRows(haikuOut('manage')), 0).config).toEqual({
+      model: SONNET,
+      effort: 'low',
+    })
+
+    // Sonnet high passed 3 of 3 code tasks: code moves to it, and every 4th auto pick tries the
+    // cheapest rung still learning.
+    const high = [...haikuOut('code'), ...times(3, () => task('code', v('pass', SONNET, 'high')))]
     const cheap = scoreRows(high)
     expect(pickConfig('code', cheap, 0).config).toEqual({ model: SONNET, effort: 'high' })
-    // Every 4th auto pick tries the cheapest rung still learning: Haiku first.
-    expect(pickConfig('code', cheap, 3).config).toEqual({ model: HAIKU, effort: null })
-
-    // ...the next one up once Haiku keeps failing (the CLI reports a dated Haiku id).
-    const haikuBad = scoreRows([
-      ...high,
-      ...times(2, () => task('code', v('fail', `${HAIKU}-20251001`, null))),
-    ])
-    expect(pickConfig('code', haikuBad, 3).config).toEqual({ model: SONNET, effort: 'low' })
+    expect(pickConfig('code', cheap, 3).config).toEqual({ model: SONNET, effort: 'low' })
 
     // A start rung that keeps failing is stepped over: debug moves from Opus medium to Opus high.
-    const startBad = scoreRows(times(2, () => task('debug', v('fail', OPUS, 'medium'))))
+    const startBad = scoreRows([
+      ...haikuOut('debug'),
+      ...times(2, () => task('debug', v('fail', OPUS, 'medium'))),
+    ])
     expect(pickConfig('debug', startBad, 0).config).toEqual({ model: OPUS, effort: 'high' })
+  })
+
+  test('while Haiku medium is learning every auto pick tries it; written off, picks return', () => {
+    // Owner, 2026-10-07: things should start "attempting to offload there first". A trusted
+    // Sonnet medium and no Haiku verdicts: every pick, not every 4th, goes to Haiku medium.
+    const sonnet = times(3, () => task('code', v('pass', SONNET, 'medium')))
+    const learning = [0, 1, 2, 3].map((i) => pickConfig('code', scoreRows(sonnet), i))
+    expect(learning.map((p) => p.config)).toEqual(Array(4).fill({ model: HAIKU, effort: 'medium' }))
+    expect(learning[0]?.reason).toBe(
+      'trying Haiku medium first (Haiku 5.5), cheaper than Sonnet medium, for code',
+    )
+    // Two Haiku medium fails write it off: picks go back to Sonnet medium, and only the every-4th
+    // exploring pick still tries the next Haiku rung.
+    const out = scoreRows([...sonnet, ...times(2, () => task('code', v('fail', HAIKU, 'medium')))])
+    expect([0, 1, 2, 3].map((i) => pickConfig('code', out, i).config)).toEqual([
+      { model: SONNET, effort: 'medium' },
+      { model: SONNET, effort: 'medium' },
+      { model: SONNET, effort: 'medium' },
+      { model: HAIKU, effort: 'high' },
+    ])
+    // Both Haiku rungs at 2 of 3, between the bars: the every-pick trial is over, picks go back to
+    // Sonnet medium (it never takes every pick of the kind for good).
+    const between = scoreRows([
+      ...sonnet,
+      ...['medium', 'high'].flatMap((effort) => [
+        ...times(2, () => task('code', v('pass', HAIKU, effort))),
+        task('code', v('fail', HAIKU, effort)),
+      ]),
+    ])
+    expect([0, 1, 2].map((i) => pickConfig('code', between, i).config)).toEqual(
+      Array(3).fill({ model: SONNET, effort: 'medium' }),
+    )
   })
 
   test('of the settings that pass reliably, the one that costs least per passed task wins', () => {
@@ -55,6 +104,7 @@ describe('pickConfig', () => {
     // 7 of 9 code tasks at a quarter of the quota beats Opus high passing every one; the first
     // version sent all code to Opus high, its 80% bar just above Sonnet medium's 78%.
     const rows = scoreRows([
+      ...haikuOut('code'),
       ...times(7, () => task('code', v('pass', SONNET, 'medium'))),
       ...times(2, () => task('code', v('fail', SONNET, 'medium'))),
       ...times(3, () => task('code', v('pass', OPUS, 'high', 400_000))),
@@ -65,24 +115,29 @@ describe('pickConfig', () => {
 
 describe('pickConfig on an Opus pick', () => {
   test("while the kind's best rung is Opus, every 2nd auto pick explores; on Sonnet every 4th", () => {
-    // Owner, 2026-10-05: review sat on Opus high though Sonnet only had 2 verdicts.
+    // Owner, 2026-10-05: review sat on Opus high though Sonnet only had 2 verdicts. Haiku is
+    // written off here, so the cadence is the exploring one, not the Haiku trial.
     const rows = scoreRows([
+      ...haikuOut('review'),
       ...times(3, () => task('review', v('pass', OPUS, 'high'))),
       ...times(2, () => task('review', v('pass', SONNET, 'medium'))),
     ])
     const picks = [0, 1, 2, 3].map((i) => pickConfig('review', rows, i).config)
     expect(picks).toEqual([
       { model: OPUS, effort: 'high' },
-      { model: HAIKU, effort: null },
+      { model: SONNET, effort: 'low' },
       { model: OPUS, effort: 'high' },
-      { model: HAIKU, effort: null },
+      { model: SONNET, effort: 'low' },
     ])
-    const sonnet = scoreRows(times(3, () => task('code', v('pass', SONNET, 'medium'))))
-    expect([0, 1, 2, 3].map((i) => pickConfig('code', sonnet, i).config.model)).toEqual([
-      SONNET,
-      SONNET,
-      SONNET,
-      HAIKU,
+    const sonnet = scoreRows([
+      ...haikuOut('code'),
+      ...times(3, () => task('code', v('pass', SONNET, 'medium'))),
+    ])
+    expect([0, 1, 2, 3].map((i) => pickConfig('code', sonnet, i).config)).toEqual([
+      { model: SONNET, effort: 'medium' },
+      { model: SONNET, effort: 'medium' },
+      { model: SONNET, effort: 'medium' },
+      { model: SONNET, effort: 'low' },
     ])
   })
 })
@@ -97,8 +152,11 @@ describe('runSetting: what a named model holds', () => {
     kind: null,
     priority: 0,
   }
-  // code's pick is Sonnet medium.
-  const rows = scoreRows(times(3, () => task('code', v('pass', SONNET, 'medium'))))
+  // code's pick is Sonnet medium (Haiku written off, so no Haiku trial).
+  const rows = scoreRows([
+    ...haikuOut('code'),
+    ...times(3, () => task('code', v('pass', SONNET, 'medium'))),
+  ])
   const set = (t: Record<string, unknown>) =>
     runSetting({ prompt: 'x', cwd: '.', kind: 'code', ...t }, defaults, rows, new Map())
 
@@ -111,9 +169,11 @@ describe('runSetting: what a named model holds', () => {
     expect(owner).toMatchObject({ auto: false, model: OPUS, effort: null })
     expect(owner.reason).toBe('named by the owner: "use Opus for this"')
 
+    // A Haiku named with no effort runs at medium.
     expect(set({ model: 'haiku', modelWhy: 'a rename' })).toMatchObject({
       auto: false,
       model: HAIKU,
+      effort: 'medium',
     })
     // The pick itself is not cheaper than the pick.
     expect(set({ model: 'sonnet', effort: 'medium', modelWhy: 'same' }).auto).toBe(true)
@@ -195,11 +255,37 @@ describe('scoreRows', () => {
 
 describe('nextRung', () => {
   test('a failed result goes one rung up; the top has nowhere to go', () => {
-    expect(nextRung({ model: HAIKU, effort: null })).toEqual({ model: SONNET, effort: 'low' })
+    // Haiku 5.5 with no effort ran at medium.
+    expect(nextRung({ model: HAIKU, effort: null })).toEqual({ model: HAIKU, effort: 'high' })
+    expect(nextRung({ model: HAIKU, effort: 'high' })).toEqual({ model: SONNET, effort: 'low' })
     expect(nextRung({ model: SONNET, effort: 'high' })).toEqual({ model: OPUS, effort: 'medium' })
     expect(nextRung({ model: OPUS, effort: 'max' })).toBeNull()
     // The CLI's own default (no model or effort asked for) counts as Opus high.
     expect(nextRung({ model: null, effort: null })).toEqual({ model: OPUS, effort: 'xhigh' })
+  })
+
+  test('a failed Haiku trial goes back on the setting its kind would have run without it', () => {
+    // As sendBack climbs: the floor is the kind's rung without the Haiku trial.
+    const failed = { model: HAIKU, effort: 'medium' }
+    const sonnet = scoreRows([
+      ...times(3, () => task('code', v('pass', SONNET, 'medium'))),
+      task('code', v('fail', HAIKU, 'medium')),
+    ])
+    expect(nextRung(failed, bestRungPastHaiku('code', sonnet))).toEqual({
+      model: SONNET,
+      effort: 'medium',
+    })
+    // Nothing on record: the start the kind had before Haiku 5.5.
+    expect(nextRung(failed, bestRungPastHaiku('debug', []))).toEqual({
+      model: OPUS,
+      effort: 'medium',
+    })
+    // A kind whose trusted rung is Haiku medium itself climbs one rung.
+    const haiku = scoreRows(times(3, () => task('trivial', v('pass', HAIKU, 'medium'))))
+    expect(nextRung(failed, bestRungPastHaiku('trivial', haiku))).toEqual({
+      model: HAIKU,
+      effort: 'high',
+    })
   })
 })
 
@@ -228,7 +314,11 @@ describe('fail severity (owner, 2026-10-06: a whoopsie-daisy is not a catastroph
 
   test('a slip-heavy rung becomes trusted where all-full-fails would not', () => {
     // 2 passes and 4 slips: 33% as full fails (written off), 78% weighted (trusted, over the 70% bar).
-    const make = (severity: 1 | 3) => [...times(2, pass), ...times(4, () => sev(severity))]
+    const make = (severity: 1 | 3) => [
+      ...haikuOut('code'),
+      ...times(2, pass),
+      ...times(4, () => sev(severity)),
+    ]
     expect(pickConfig('code', scoreRows(make(3)), 0).config).not.toEqual({
       model: SONNET,
       effort: 'medium',

@@ -508,7 +508,8 @@ def rule_tiles(d: dict | None) -> str:
     haiku = r.get("haiku_requests", 0)
     detail = r.get("agents_detail", False)
     tiles = [
-        _tile("Haiku requests", str(haiku), f"{day}. Banned for every task." + (" Held." if not haiku else " BROKEN."), "pos" if not haiku else "neg"),
+        _tile("Haiku 4.5 requests", str(haiku), f"{day}. Haiku 4.5 and older are banned for every task." + (" Held." if not haiku else " BROKEN.")
+              + f" Haiku 5.5 is allowed: {r.get('haiku55_requests', 0)} requests.", "pos" if not haiku else "neg"),
         _sonnet_tile(r, detail),
         _flagship_tile(r, detail),
         _gate_tile(r),

@@ -38,6 +38,7 @@ import type {
 } from '@shared/protocol'
 import { contextPct } from './describe'
 import { deskAppend } from './desk-prompt'
+import { pinHaikuModel, withoutOldHaiku } from './haiku-pin'
 import { mainMcpOption } from './mcp-servers'
 import { InputQueue, type QueuedInput } from './input-queue'
 import { createNormalizer, LIMIT_LABEL, type Emission, type Normalizer } from './normalize'
@@ -303,6 +304,7 @@ export class ChatRuntime {
     const env: Record<string, string | undefined> = { ...this.baseEnv, ...SESSION_STATE_ENV }
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
     else delete env.CLAUDE_CONFIG_DIR
+    pinHaikuModel(env)
     const options: Options = {
       cwd: chat.cwd,
       env,
@@ -318,7 +320,7 @@ export class ChatRuntime {
     // A Bypass chat in plan mode goes back to Bypass when the plan is approved, and the CLI refuses Bypass
     // to a process not launched for it (a process restarted mid-plan included).
     if (chat.permissionMode === 'bypassPermissions' || this.beforePlan === 'bypassPermissions') options.allowDangerouslySkipPermissions = true
-    if (chat.model) options.model = chat.model
+    if (chat.model) options.model = withoutOldHaiku(chat.model) ?? undefined
     if (chat.effort) options.effort = chat.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
     if (chat.sessionId) options.resume = chat.sessionId
@@ -645,7 +647,8 @@ ${swap.real}` }
     }
   }
 
-  async setModel(model: string | null): Promise<void> {
+  async setModel(picked: string | null): Promise<void> {
+    const model = withoutOldHaiku(picked)
     this.chat.model = model
     this.touch()
     this.publishChat()

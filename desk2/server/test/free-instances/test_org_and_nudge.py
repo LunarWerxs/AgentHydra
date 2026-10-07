@@ -79,6 +79,10 @@ OFFERED = [
         (account("claude-opus-9", OFFERED), "haiku", False, "claude-haiku-9"),
         (account(None, [{"model": "claude-opus-9"}]), "haiku", False, "claude-opus-9"),
         (account(None, [{"model": "claude-haiku-8", "overflow": True}]), "haiku", False, None),
+        # Haiku 4.x is never picked (owner, 2026-10-07), even listed first; with no newer Haiku the
+        # org's default is used, never an old Haiku own default either.
+        (account(None, [{"model": "claude-haiku-4-5-20251001"}, {"model": "claude-haiku-5-5"}]), "haiku", False, "claude-haiku-5-5"),
+        (account("claude-haiku-4-5", [{"model": "claude-3-5-haiku-20241022"}, {"model": "claude-sonnet-9"}]), "haiku", False, "claude-sonnet-9"),
         ("<html>", "sonnet", True, None),
     ],
 )

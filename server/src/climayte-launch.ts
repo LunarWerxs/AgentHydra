@@ -55,9 +55,11 @@ import {
 } from './climayte-lib'
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
+import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
 import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
+import { OLD_HAIKU } from './core/haiku-pin'
 import { MCP_PATH, MCP_SERVER_KEY } from './mcp-register'
 import { getOrchestratorDaemonUrl } from './orchestrator'
 
@@ -786,6 +788,9 @@ export function launch(
   accounts: CliMayteAccount[],
   activeOnAccount = 0,
 ): void {
+  // A worker stored on Haiku 4.5 before 2026-10-07 starts on Haiku 5.5 (owner: "never use Haiku
+  // 4.5"): a follow-up, resume, restart or handoff would otherwise pass `--model claude-haiku-4-5`.
+  if (w.model && OLD_HAIKU.test(w.model)) w.model = HAIKU
   const n = w.attempts.length
   const last = w.attempts[n - 1]
   const fromId = w.accountId !== acct.id ? w.accountId : null

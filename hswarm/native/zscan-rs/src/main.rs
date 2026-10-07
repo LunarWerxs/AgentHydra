@@ -10,8 +10,9 @@
 //!   zscan --root <dir> --since YYYY-MM-DD --until YYYY-MM-DD [--threads N]  < prices.json
 //!
 //! prices.json: [{"prefix": "claude-sonnet-5", "in": 2.0, "out": 10.0, "read_x": 0.1}, ...], first
-//! matching prefix wins. With --threads N the files are read by N workers and folded in file order,
-//! so the result is identical to the single-threaded scan.
+//! matching prefix wins. A tiered row (Haiku 5.5) adds over_at, over_in, over_out and over_read_x: a request
+//! whose prompt (input + cache reads + cache writes) is over over_at pays those. With --threads N the files
+//! are read by N workers and folded in file order, so the result is identical to the single-threaded scan.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
@@ -37,6 +38,15 @@ struct Price {
     inp: f64,
     out: f64,
     read_x: f64,
+    /// The long-prompt tier; over_at 0 means the row has none.
+    #[serde(default)]
+    over_at: i64,
+    #[serde(default)]
+    over_in: f64,
+    #[serde(default)]
+    over_out: f64,
+    #[serde(default)]
+    over_read_x: f64,
 }
 
 /// Only the fields the scan reads; serde skips the rest (the message content, which is most of a line).
@@ -192,11 +202,17 @@ fn tokens(u: &Map<String, Value>) -> (Toks, bool) {
 /// Same arithmetic, same order as claude_usage.price_tokens, so the floats agree bit for bit.
 fn price(prices: &[Price], model: &str, t: &Toks) -> Option<f64> {
     let p = prices.iter().find(|p| model.starts_with(&p.prefix))?;
+    let prompt = t.input + t.cache_read + t.cache_5m + t.cache_1h;
+    let (inp, out, read_x) = if p.over_at > 0 && prompt > p.over_at {
+        (p.over_in, p.over_out, p.over_read_x)
+    } else {
+        (p.inp, p.out, p.read_x)
+    };
     let weighted_in = t.input as f64
-        + t.cache_read as f64 * p.read_x
+        + t.cache_read as f64 * read_x
         + t.cache_5m as f64 * 1.25
         + t.cache_1h as f64 * 2.0;
-    Some((weighted_in * p.inp + t.output as f64 * p.out) / 1_000_000.0)
+    Some((weighted_in * inp + t.output as f64 * out) / 1_000_000.0)
 }
 
 fn family(model: &str) -> String {
@@ -436,7 +452,7 @@ impl Collector {
             }));
         }
         json!({
-            "days": days, "threads": threads,
+            "days": days, "threads": threads, "tiers": true,
             "stats": {"files": self.stats.files, "candidates": self.stats.candidates, "parsed": self.stats.parsed, "records": self.stats.records},
         })
     }

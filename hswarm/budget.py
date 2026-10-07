@@ -76,12 +76,13 @@ class Budget:
         await f
 
 
-def top_rates(model: str) -> dict | None:
+def top_rates(model: str, prompt: int = 0) -> dict | None:
     """The highest {hit, miss, out} USD per 1M this leg can charge: DeepSeek's peak rate whatever the clock says
-    (a turn sent off-peak can land on-peak), the flat price elsewhere. None when the model has no price on record."""
+    (a turn sent off-peak can land on-peak), the flat price elsewhere, a tiered model's (Haiku 5.5) tier for a
+    `prompt`-token prompt. None when the model has no price on record."""
     try:
         m = config.MODELS[config.resolve_model(model)]
-        return dict(m["peak"]) if m.get("peak") else config.price(model)
+        return dict(m["peak"]) if m.get("peak") else config.price(model, prompt_tokens=prompt)
     except (KeyError, ValueError):
         return None
 
@@ -101,10 +102,10 @@ def prompt_tokens(messages: list[dict], tools: list[dict] | None) -> int:
     return chars // CHARS_PER_TOKEN + 1 + images * IMAGE_TOKENS
 
 
-def _input_usd(rates: dict, messages: list[dict], tools: list[dict] | None, cached: int) -> float:
-    """The next prompt's worst case in USD. `cached` tokens (what the previous reply on this leg reported as read from
-    or written to the prompt cache, so the prefix the provider now holds) are priced at the hit rate, everything
-    else at the leg's highest input rate.
+def _input_usd(rates: dict, tokens: int, cached: int) -> float:
+    """The next prompt's worst case in USD, `tokens` being its prompt_tokens(). `cached` tokens (what the previous
+    reply on this leg reported as read from or written to the prompt cache, so the prefix the provider now holds) are
+    priced at the hit rate, everything else at the leg's highest input rate.
 
     WHY: the whole prompt used to be held at max(miss, write), $5/M on Opus for a prefix that bills at $0.2/M. Over 7
     days to 2026-10-02 the held worst case was a median 2.26x the task's real mean turn, and of the 622 cost-cap
@@ -113,7 +114,6 @@ def _input_usd(rates: dict, messages: list[dict], tools: list[dict] | None, cach
     full price, and the caller passes 0 wherever the next turn will not read that cache (agent._TurnBudget.cached_tokens).
     A cache that misses after all (a sticky key that rests or dies, a long 429 rest) can therefore overshoot a ceiling by
     one turn's (top rate - hit rate) x cached; worker.over_budget stops the task on that turn."""
-    tokens = prompt_tokens(messages, tools)
     top = max(rates["miss"], rates["hit"], rates.get("write", 0.0))
     warm = min(max(int(cached), 0), tokens)
     return (warm * rates["hit"] + (tokens - warm) * top) / 1_000_000.0
@@ -122,10 +122,11 @@ def _input_usd(rates: dict, messages: list[dict], tools: list[dict] | None, cach
 def worst_turn_usd(model: str, messages: list[dict], tools: list[dict] | None, max_tokens: int, cached: int = 0) -> float:
     """The least the next turn can be reserved at: its prompt plus MIN_TURN_TOKENS of output. plan_turn refuses a
     turn this does not fit. 0 for an unpriced leg, which reserves nothing."""
-    rates = top_rates(model)
+    tokens = prompt_tokens(messages, tools)
+    rates = top_rates(model, tokens)
     if rates is None:
         return 0.0
-    return _input_usd(rates, messages, tools, cached) + min(MIN_TURN_TOKENS, max_tokens) * rates["out"] / 1_000_000.0
+    return _input_usd(rates, tokens, cached) + min(MIN_TURN_TOKENS, max_tokens) * rates["out"] / 1_000_000.0
 
 
 async def plan_turn(model: str, messages: list[dict], tools: list[dict] | None, max_tokens: int, ceilings: list[Budget], cached: int = 0) -> tuple[int, float] | str:
@@ -138,10 +139,11 @@ async def plan_turn(model: str, messages: list[dict], tools: list[dict] | None, 
     exceed a small budget_usd while almost nothing is spent. Judged against holds, most workers were refused at turn
     0 and the rest had max_tokens cut. Now a turn that fits the unspent money but not the unheld money waits for a
     sibling to settle, then re-plans (a settle may have spent more than expected)."""
-    rates = top_rates(model)
+    tokens = prompt_tokens(messages, tools)
+    rates = top_rates(model, tokens)
     if rates is None or not ceilings:
         return max_tokens, 0.0
-    input_usd = _input_usd(rates, messages, tools, cached)
+    input_usd = _input_usd(rates, tokens, cached)
     floor = min(MIN_TURN_TOKENS, max_tokens)
     while True:
         tightest = min(ceilings, key=lambda b: b.unspent())

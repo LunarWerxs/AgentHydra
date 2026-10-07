@@ -173,8 +173,9 @@ def execute(args, *, api, on_text=None) -> dict:
         org = organization["uuid"]
         if args.command == "nudge":
             # Nothing is recorded, so Desk never imports this chat. It asks the cheapest model the account offers
-            # (AgentHydra's CLI keepalive uses Haiku too); one Claude refuses outright gets a single retry on the
-            # model a chat would use. Only a refusal: a network failure may have sent the message already.
+            # (AgentHydra's CLI keepalive uses Haiku 5.5 too; never a Haiku 4.x, see model_for); one Claude
+            # refuses outright gets a single retry on the model a chat would use. Only a refusal: a network
+            # failure may have sent the message already.
             cheap = args.model or client.model_for(org, "haiku", own_default=False)
             usual = config.get("model") or client.model_for(org, "sonnet")
             tried = [m for m in dict.fromkeys([cheap, usual]) if m]

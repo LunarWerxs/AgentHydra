@@ -28,10 +28,22 @@ PROJECTS = Path(os.environ.get("HSWARM_CLAUDE_PROJECTS") or (Path.home() / ".cla
 LONG_PATH_PREFIX = "\\\\?\\" if os.name == "nt" else ""  # sub-agent transcripts nest past Windows' 260-char limit
 SUBAGENT_DIR = f"{os.sep}subagents{os.sep}"
 
+
+def _native_tier(e: dict) -> tuple | None:
+    """A tiered row's long-prompt rates for the native scanners: (prompt tokens they start above, in, out,
+    cache-read multiplier), or None."""
+    over = e.get("over")
+    if not over:
+        return None
+    r = prices.rates(e, prompt_tokens=int(over["prompt_tokens"]) + 1)
+    return int(over["prompt_tokens"]), r["input"], r["output"], r["cache_read"] / r["input"]
+
+
 # Prices come from data/prices.json through prices.py (exact id, no prefix match). PRICES below is only the
-# (prefix, in, out, cache-read multiplier) view the native scanners are handed (native.py); the longest id sorts first so a
-# stem never shadows a longer id. Their cache writes are the derived 1.25x / 2x, which every Claude row uses.
-PRICES = tuple(sorted(((k, e["input"], e["output"], prices.rates(e)["cache_read"] / e["input"])
+# (prefix, in, out, cache-read multiplier, long-prompt tier) view the native scanners are handed (native.py); the longest
+# id sorts first so a stem never shadows a longer id. Their cache writes are the derived 1.25x / 2x, which every Claude
+# row uses, both tiers.
+PRICES = tuple(sorted(((k, e["input"], e["output"], prices.rates(e)["cache_read"] / e["input"], _native_tier(e))
                        for k, e in prices.models().items() if k.startswith("claude-")), key=lambda r: -len(r[0])))
 TOKEN_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens")
 # The five buckets one Anthropic request bills, in the order the price formula weighs them.
@@ -51,14 +63,16 @@ def split_tokens(usage: dict) -> dict:
             "cache_5m": max(_n(usage, "cache_creation_input_tokens") - w1h, 0), "cache_1h": w1h, "output": _n(usage, "output_tokens")}
 
 
-def price_tokens(model: str, t: dict) -> float | None:
-    """API-equivalent USD of the token buckets on `model`; None for a model with no known price ("not measured", never zero)."""
-    return prices.cost(model, t)
+def price_tokens(model: str, t: dict, prompt_tokens: int = 0) -> float | None:
+    """API-equivalent USD of the token buckets on `model`; None for a model with no known price ("not measured", never zero).
+    `prompt_tokens` is the prompt of the one request `t` is, which picks a tiered model's rates; 0 for a total."""
+    return prices.cost(model, t, prompt_tokens=prompt_tokens)
 
 
 def price_request(model: str, usage: dict) -> float | None:
     """API-equivalent USD of one request; None for a model with no known price."""
-    return price_tokens(model, split_tokens(usage))
+    t = split_tokens(usage)
+    return price_tokens(model, t, prices.prompt_size(t))
 
 
 def family(model: str) -> str:
@@ -201,7 +215,7 @@ class _Collector:
             m["tokens"][k] += t[k]
             if s is not None:
                 s["tokens"][k] += t[k]
-        usd = price_tokens(model, t)
+        usd = price_tokens(model, t, prices.prompt_size(t))  # one request: its own prompt picks a tiered model's rates
         if usd is None:
             d["unpriced_requests"] += 1
             return
@@ -262,8 +276,11 @@ def collect(since: dt.date, until: dt.date, root: Path | None = None, scanner: s
     lang = native.choose(scanner)
     if lang == "python":
         return collect_python(since, until, root)
-    days = native.scan(lang, root or PROJECTS, since, until)["days"]
-    if scanner or not days or all("tokens" in d for d in days.values()):
+    out = native.scan(lang, root or PROJECTS, since, until)
+    days = out["days"]
+    # A build from before the long-prompt tier (Haiku 5.5) prices every request at the first tier and says no "tiers".
+    current = all("tokens" in d for d in days.values()) and (out.get("tiers") or not any(r[4] for r in PRICES))
+    if scanner or not days or current:
         return days
     native.log_stale(lang)
     return collect_python(since, until, root)

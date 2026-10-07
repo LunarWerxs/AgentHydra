@@ -28,6 +28,7 @@ import {
   listCliInstances,
   renameCliInstance,
 } from './cli-instances'
+import { pinHaikuModel } from './haiku-pin'
 import { killProcessTree, spawnCaptured } from './process'
 import { openSigninWindow, type SigninWindow } from './signin-window'
 
@@ -76,7 +77,7 @@ function scrubbedEnv(configDir: string): Record<string, string> {
     if (v !== undefined && !ENV_SCRUB.test(k)) env[k] = v
   env.CLAUDE_CONFIG_DIR = configDir
   env.DISABLE_AUTOUPDATER = '1'
-  return env
+  return pinHaikuModel(env) // never Haiku 4.5 behind the alias (haiku-pin.ts)
 }
 
 function prune(): void {

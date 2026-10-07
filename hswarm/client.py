@@ -1024,7 +1024,8 @@ def _chat_result(r: httpx.Response, attempts: int, model: str, t0: float, upstre
     return ChatResult(
         message=choice.get("message") or {}, finish_reason=choice.get("finish_reason") or "", usage=usage, model=model,
         seconds=time.perf_counter() - t0,
-        cost_usd=reported if reported is not None else config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write),
+        cost_usd=reported if reported is not None else config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write,
+                                                                        prompt_tokens=usage.hit + usage.miss),
         peak=config.is_peak(now), attempts=attempts, raw=data,
     )
 
@@ -1037,7 +1038,7 @@ def _native_result(r: httpx.Response, attempts: int, model: str, t0: float) -> C
     now = dt.datetime.now(dt.timezone.utc)
     return ChatResult(
         message=message, finish_reason=finish, usage=usage, model=model, seconds=time.perf_counter() - t0,
-        cost_usd=config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write),
+        cost_usd=config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write, prompt_tokens=usage.hit + usage.miss),
         peak=config.is_peak(now), attempts=attempts, raw=data,
     )
 

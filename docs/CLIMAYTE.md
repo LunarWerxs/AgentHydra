@@ -31,6 +31,10 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
 - **2026-10-03:** "when a worker hits a five-hour or weekly limit, CliMayte moves it to another
   account and resumes it, unless the limit resets in under five minutes; distribute the load." See
   "The five-minute rule" under Placement; it supersedes the 2026-10-01 pace cooldown where they clash.
+- **2026-10-07:** Anthropic released Claude Haiku 5.5. The owner: never use Haiku 4.5, and things
+  should start "attempting to offload there first ... it's really good and really cheap". Every kind
+  now starts on Haiku 5.5 (see Scorecard), Haiku 4.5 names are refused, and every Claude Code process
+  AgentHydra starts has its `haiku` alias pinned to Haiku 5.5 (see Model and thinking).
 
 ## Server: `server/src/climayte.ts`
 
@@ -286,10 +290,23 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
 The orchestrating chat picks each worker's model and thinking level (owner, 2026-09-30). The CLI
 (2.1.284) takes `--model <alias or full name>` and `--effort low|medium|high|xhigh|max`.
 `climayteModel(v)` maps `opus`, `opus-5.5`, `opus-5-5`, `claude-opus-5-5` (and the same four for
-sonnet) to the full id (`CLIMAYTE_MODELS`), so a later alias move cannot change what a recorded task
-asked for; `climayteEffort(v)` accepts `CLIMAYTE_EFFORTS`. Blank means the CLI's default; anything else
-throws with the valid values listed, so junk never reaches the CLI (`climayteRun`: "task N: unknown
-model ..."; `climayteSend`: `ok: false`).
+sonnet and for haiku, which is Haiku 5.5, `claude-haiku-5-5`) to the full id (`CLIMAYTE_MODELS`), so a
+later alias move cannot change what a recorded task asked for; `climayteEffort(v)` accepts
+`CLIMAYTE_EFFORTS`. Blank means the CLI's default; anything else throws with the valid values listed,
+so junk never reaches the CLI (`climayteRun`: "task N: unknown model ..."; `climayteSend`: `ok:
+false`). A Haiku 4.5 name (`haiku-4.5`, `haiku-4-5`, `claude-haiku-4-5`, dated ids) is refused with
+"Haiku 4.5 is retired here (owner, 2026-10-07): use haiku (Haiku 5.5)", never mapped to 5.5. A
+Haiku named with no effort runs at medium (`runSetting`, `chatSetting`; a `climayteSend` that moves
+a worker to Haiku with no effort too).
+
+The haiku alias pin (`server/src/core/haiku-pin.ts`, `pinHaikuModel`). Claude Code makes its own
+small-model calls (titles, summaries, the Explore agent) on its `haiku` alias, whatever `--model`
+says. Over the 7 days before 2026-10-07, 11,884 of 97,974 requests on CliMayte's CLI instances were
+`claude-haiku-4-5-20251001`, a median of 220 output tokens each: those calls, inside the workers.
+So every env AgentHydra builds for a Claude Code process (a worker's and the nudge's `scrubbedEnv`,
+the `/usage` probe, the limit reset, quick add, the CLI tab's Launch and resume in a terminal) sets
+`ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-5-5`, unless it already names a model newer than Haiku
+4.5.
 
 - `climayteRun`'s top-level `model`/`effort` are the group default for tasks without their own.
 - `climayteSend(id, text, { model, effort })` sets them on the worker; they apply from the next
@@ -613,11 +630,25 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   (`judgeInWave`) is 1 for commits outside the brief's paths, else 2. Retries, send-backs and
   status are unchanged: only the severity is new. Scorecard rows carry `slip`, `rework`, `failed`,
   `excluded` and `score`.
-- **The ladder**, cheapest first: Haiku 4.5 (run with no `--effort`), Sonnet 5.5 low, medium, high,
-  then Opus 5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high.
-- **Kinds**: code, debug, review, sweep, mechanical, docs, trivial (`climayte_run` `kind`). Before a
-  rung has earned its trust a kind starts frugal (`START`): trivial on Haiku; sweep, mechanical, docs,
-  code and review on Sonnet medium; debug on Opus medium.
+- **The ladder**, cheapest first: Haiku 5.5 medium, high, Sonnet 5.5 low, medium, high, then Opus
+  5.5 medium, high, xhigh, max. A CLI-default setting counts as Opus high. A Haiku 5.5 verdict with
+  no effort counts as Haiku medium (the API's default). Verdicts on Haiku 4.5 stay off the ladder
+  (`ladderModel` leaves the id as it is): they judged another model and do not count for 5.5.
+- **Kinds**: code, debug, review, sweep, mechanical, docs, trivial, manage (`climayte_run` `kind`).
+  Before a rung has earned its trust every kind starts on Haiku medium (`START`, owner,
+  2026-10-07). Once both Haiku rungs are written off for a kind it starts where it did before Haiku
+  5.5 (`START_PAST_HAIKU`): trivial and manage on Sonnet low; sweep, mechanical, docs, code and
+  review on Sonnet medium; debug on Opus medium.
+- **Haiku first while it learns** (`haikuTrial`): while the kind's best rung is above Haiku and a
+  Haiku rung is still learning (neither trusted nor written off, and no cheaper Haiku rung written
+  off), EVERY auto pick goes to that Haiku rung, not only every 4th; the reason reads `trying Haiku
+  medium first (Haiku 5.5), cheaper than Sonnet medium, for code`. Once Haiku is trusted the cost
+  order prefers it; once it is written off the exploring below returns.
+- **A failed Haiku result** goes back on the rung the kind would have run without the Haiku trial
+  (`bestRungPastHaiku`: the trusted rung, else `START_PAST_HAIKU` moved past rungs that keep
+  failing), or one rung up if that is higher (`nextRung`'s `floor`, passed by `sendBack` when the
+  worker has a kind). So a task Haiku cannot do costs one Haiku attempt, then runs where it would
+  have run.
 - **`model: "auto"`** (`pickConfig`), the default (owner, 2026-10-02: "the cheapest/fastest model
   capable of reliably completing your offloaded task"): of the rungs trusted for the kind (at least 3
   verdicts, 70% or more passes), the one whose passed task costs least (`perPass`: all its work over
@@ -635,15 +666,23 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   it, quoted (at most 2000 characters, refused if longer; its reason reads `named by the owner:
   "<first 120 characters>"`), or (b) it gives a `modelWhy` AND the setting sits on a CHEAPER rung
   than the kind's pick (`bestRung`). A setting at or above the pick without `ownerWords` goes to
-  auto, and its reason says so. A named setting is ranked with `ladderIndex`: Haiku is rung 0
-  whatever the effort; a model alone counts as that model at `high` (the CLI's default effort); an
-  effort alone counts as Opus at that effort (the CLI's default model). Chat tasks are unchanged.
+  auto, and its reason says so. A named setting is ranked with `ladderIndex`: Haiku alone counts
+  as Haiku medium; any other model alone counts as that model at `high` (the CLI's default effort);
+  an effort alone counts as Opus at that effort (the CLI's default model); a setting off the ladder
+  (Haiku low, Opus low) is never held by a `modelWhy`. Chat tasks are unchanged.
 - **While a kind's pick is an Opus rung, every 2nd auto pick** (`EXPLORE_EVERY_ON_OPUS`) tries the
   cheaper rung still learning, not every 4th: review sat on Opus high because Sonnet had 2 review
   verdicts and a try came too rarely to earn the third.
-- **Haiku** is back on the ladder on the owner's word of 2026-10-02 ("don't forget Haiku exists"),
-  which supersedes the 2026-09-06 "never Haiku" for CliMayte work: the scorecard writes it off for a
-  kind after two fails, so a kind it cannot do costs two small tries, not a habit.
+- **Haiku 5.5, never Haiku 4.5** (owner, 2026-10-07). Haiku came back on the ladder on 2026-10-02
+  ("don't forget Haiku exists") as Haiku 4.5, one rung with no effort. On 2026-10-07 Haiku 5.5
+  replaced it with two effort rungs, and Haiku 4.5 is refused. The price check behind "really
+  cheap": Haiku 5.5 is $0.10 input, $0.50 output, $0.01 cache read per million tokens for a prompt
+  of 100,000 tokens or fewer, five times that over (the tier is chosen per request). CliMayte's CLI
+  traffic over 7 days (97,974 requests, median prompt 78,698 tokens, 35.1% of requests over 100k)
+  re-priced at list prices: Sonnet 5.5 $2,519, Haiku 4.5 $1,276, Haiku 5.5 $494, so 0.2x Sonnet and
+  61% cheaper than Haiku 4.5. Anthropic calls it best suited to narrowly scoped tasks and a
+  subagent beside Opus and Sonnet; the scorecard writes it off for a kind after two fails, so a kind
+  it cannot do costs two small tries, not a habit.
 - **`climayteScorecard()`** (`GET /api/corch/scorecard`, `climayte_scorecard`): passes, fails and cost per
   task as a share of a Pro 5-hour window (`UNITS_PER_PRO_PERCENT` = 320,000 weighted units per 1%,
   fitted on run 1, R^2 0.48) per kind and setting, `pick` on the next auto setting. The CliMayte view
@@ -863,6 +902,10 @@ plan: a Max 5x window holds five Pro windows (`planFactor`).
   room (a reset, or the work there finishing). A session going on at home, and a task no window
   fits (sent `whole`), are never held. Since 2026-10-03 it waits only when such a window frees up
   within 5 minutes; else it starts short (see the five-minute rule).
+- **Model weight** (`modelMultiplier`, usage-tokens.ts): Opus 5.5 2x Sonnet 5.5, Fable 5x, Haiku 4.5
+  and older 0.5x, Haiku 5.5 0.14x. Haiku 5.5's price is 0.05x Sonnet for a prompt of 100,000 tokens or
+  fewer and 0.25x over; on CliMayte's measured traffic 45.6% of the meter weight sits on requests over
+  100k, so 0.05 x 54.4% + 0.25 x 45.6% = 0.14. A Haiku 5.5 task is sized at that weight.
 - **Why half:** run 1's 49 finished tasks averaged 24% of a Pro window and 80% stayed under 36%, but
   single tasks ran to 93% and 107%, and code on Opus high (33% on average) moved 33 times over 19
   tasks. An estimate is an average; over half a window a task runs past the whole one often enough
@@ -1177,18 +1220,18 @@ When a signed-in CLI account has no 5-hour window running (its reading has no re
 reset is in the past), the keepalive sends it one cheap prompt so the window starts now and resets
 sooner. Off by default (it spends quota); on in **Settings → Instances → CLI** ("Keep windows running", with its weekly floor; the CLI table's gear opens it).
 
-- A nudge: `claude -p 'Reply with the single word: ok' --system-prompt <one line> --model haiku
-  --effort low --max-turns 1 --tools '' --disable-slash-commands --no-session-persistence
+- A nudge: `claude -p 'Reply with the single word: ok' --system-prompt <one line> --model
+  claude-haiku-5-5 --effort low --max-turns 1 --tools '' --disable-slash-commands --no-session-persistence
   --output-format stream-json --verbose` plus `CLAUDE_PROBE_NO_MCP_ARGS`, in `scrubbedEnv(configDir)`
   with `ENABLE_CLAUDEAI_MCP_SERVERS=false` and `CLAUDE_CODE_PROMPT_CACHE_TTL=5m`, `windowsHide`.
   Measured on three idle Pro accounts: $0.040 a nudge at list price with the CLI's default system
   prompt, $0.028 with the one-line prompt, $0.018 with the 5-minute cache too; the 5-hour meter
   read 0% after it. It counts as started when the CLI's own `rate_limit_event` or the usage check
   after it shows the window running.
-- Why Haiku, despite the owner's "never Haiku, however mechanical the task" (2026-09-06): that rule
-  is about work, after a Haiku pass was wrong four times in five. A nudge does no work: its one-word
-  answer is discarded and only the request itself matters. For this feature the owner asked for the
-  cheapest model at the lowest effort (2026-10-01), which is Haiku.
+- Why Haiku 5.5: the owner asked for the cheapest model at the lowest effort (2026-10-01). The old
+  "never Haiku, however mechanical the task" (2026-09-06) was about Haiku 4.5, which is never used
+  here (owner, 2026-10-07); Haiku 5.5 is allowed and preferred. The nudge names the full id, never
+  the `haiku` alias, which an older CLI resolves to Haiku 4.5.
 - Skipped: a signed-out or org-disabled login (listCliInstances lists it `loggedIn: false`), an
   account CliMayte walled at a limit, one with a Claude session running (its live registry, CliMayte
   workers included), one at or above the weekly floor (85, the owner's line), an unreadable reading,
@@ -1873,9 +1916,10 @@ denied, so nothing the manager starts can start anything.
 
 ### Model: the `manage` kind
 
-`CLIMAYTE_KINDS` gains `manage` (`climayte-scorecard.ts:27-35`); `START.manage` is Sonnet low (rung
-1): the work is reading short reports and following a plan, the judging is done by commands, and
-every 4th pick tries Haiku as for every kind (`EXPLORE_EVERY`). The orchestrator's
+`CLIMAYTE_KINDS` gains `manage` (`climayte-scorecard.ts:27-35`). Like every kind it starts on Haiku
+5.5 medium (owner, 2026-10-07); with Haiku written off it starts on Sonnet low
+(`START_PAST_HAIKU.manage`): the work is reading short reports and following a plan, and the judging
+is done by commands. The orchestrator's
 `climayte_wave_verify` is the manager's verdict, so the scorecard learns which rung manages a wave
 the orchestrator accepts, with its cost per wave, like any kind. `modelWhy` still overrides.
 
