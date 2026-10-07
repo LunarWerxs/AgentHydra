@@ -1,15 +1,18 @@
 <script setup lang="ts">
 // The AI used its browser: one compact preview card that opens that browser live in the side pane (DeskFrame listens
-// for OPEN_BROWSER_EVENT). A run of browser calls is one card showing the latest (`run`). The picture is, in order,
+// for OPEN_BROWSER_EVENT); the default browser is never live, its click loads the address in the pane. The caption and
+// click use the run's latest real address, never about:blank. A run of browser calls is one card showing the latest (`run`). The picture is, in order,
 // the browser live (a stream, else a 3 s poll; newest card of an open profile, on screen, window visible), the run's latest screenshot, a quiet
 // placeholder; the caption along the bottom is faint until the pointer is over it. A browser that is closed (its pane tab
 // was closed, or a look finds it not open) shows a quiet Closed and is not fed any more; the full-screen button and the
-// copy-the-calls button are the card's own, over the picture and the status.
+// copy-the-calls button are the card's own, over the picture and the status. When the run ended on a blank address (the AI
+// left the page) or a live look finds a blank page, its last screenshot stays, dimmed, badged Page closed. With no real
+// address a click on the picture opens it full screen.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Copy, Globe, Maximize2 } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { BROWSER_CLOSED_EVENT, OPEN_BROWSER_EVENT } from '@shared/browser'
-import { browserOpenRequest, DEFAULT_BROWSER, parseBrowserCall } from '../lib/tools'
+import { browserOpenRequest, browserRunAddress, DEFAULT_BROWSER, parseBrowserCall } from '../lib/tools'
 import { imageSrc, openLightbox } from '../lib/media'
 import { browserCallsText } from '../lib/browserCopy'
 import { forgetProfiles, isBlankPicture, nextFrame, openPreviewStream, openProfiles, PreviewFeed, previewWanted, savedProfiles } from '../lib/browserPreview'
@@ -23,16 +26,9 @@ const ctx = useTranscript()
 
 const calls = computed(() => props.run ?? [props.item])
 const count = computed(() => calls.value.length)
-// The latest call's address and profile; a call with no address of its own shows the run's latest one.
-const info = computed(() => {
-  const own = parseBrowserCall(props.item.name, props.item.input, props.item.result?.text)
-  if (own.url || !props.run) return own
-  for (let i = props.run.length - 1; i >= 0; i--) {
-    const u = parseBrowserCall(props.run[i].name, props.run[i].input, props.run[i].result?.text).url
-    if (u) return { ...own, url: u }
-  }
-  return own
-})
+// The latest call's profile and the run's latest REAL address (never about:blank); `left` says the run ended on a blank one.
+const address = computed(() => browserRunAddress(calls.value))
+const info = computed(() => ({ ...parseBrowserCall(props.item.name, props.item.input, props.item.result?.text), url: address.value.url }))
 const shownUrl = computed(() => {
   const u = info.value.url.replace(/^https?:\/\//, '').replace(/\/$/, '')
   return u.length > 60 ? u.slice(0, 59) + '…' : u
@@ -66,9 +62,14 @@ const named = computed(() => info.value.profile !== DEFAULT_BROWSER)
 const newest = computed(() => named.value && ctx.newestBrowser?.value.get(info.value.profile) === props.item.id)
 // The browser was found closed (not open any more): the card says so and stops feeding itself. A newer call resets it.
 const closed = ref(false)
+// A live look found a blank page: the page is gone, so the picture shown is only the run's old screenshot.
+const sawBlank = ref(false)
 watch(
   () => props.item.id,
-  () => (closed.value = false)
+  () => {
+    closed.value = false
+    sawBlank.value = false
+  }
 )
 const watching = computed(() => !closed.value && previewWanted({ named: named.value, newest: newest.value, onScreen: onScreen.value, visible: visible.value, hasCwd: !!ctx.cwd.value }))
 
@@ -102,6 +103,7 @@ function show(src: string | null) {
       if (src.startsWith('blob:')) URL.revokeObjectURL(src)
       return
     }
+    sawBlank.value = blank
     if (!blank) return put(src)
     if (src.startsWith('blob:')) URL.revokeObjectURL(src)
     put(null)
@@ -167,6 +169,15 @@ onBeforeUnmount(() => {
 })
 
 const picture = computed(() => live.value ?? shot.value)
+// The picture is the AI's last screenshot of a page that is gone: the run ended on a blank address, or a live look found one.
+const past = computed(() => !closed.value && !live.value && !!shot.value && (address.value.left || sawBlank.value))
+const tip = computed(() => {
+  if (closed.value) return 'This browser is closed: open it again'
+  if (past.value)
+    return `Page closed: this is the AI's last screenshot of it. ${info.value.url ? `Click to open ${info.value.url} again in the browser pane` : 'Click to see it full screen'}`
+  if (named.value) return `Watch this browser live${info.value.url ? ': ' + info.value.url : ''}`
+  return info.value.url ? `Open ${info.value.url} in the browser pane` : 'Open the browser pane'
+})
 
 // Copy the calls: plain text, brief feedback.
 const copied = ref(false)
@@ -183,6 +194,8 @@ async function copyCalls() {
 }
 onBeforeUnmount(() => copiedTimer && clearTimeout(copiedTimer))
 function open() {
+  // No real address to open and a picture to show: the picture, not an empty pane tab.
+  if (!named.value && !info.value.url && picture.value) return openLightbox(picture.value, 'Browser')
   window.dispatchEvent(new CustomEvent(OPEN_BROWSER_EVENT, { detail: browserOpenRequest(info.value) }))
 }
 </script>
@@ -193,15 +206,16 @@ function open() {
       <button
         type="button"
         class="group/open relative block aspect-[16/10] w-full overflow-hidden rounded-[inherit] text-left outline-none focus-visible:ring-2 focus-visible:ring-brand"
-        :title="closed ? 'This browser is closed: open it again' : `Watch this browser live${info.url ? ': ' + info.url : ''}`"
+        :title="tip"
         @click="open"
       >
-        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="closed ? 'opacity-60 grayscale' : ''" draggable="false" />
+        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="closed || past ? 'opacity-60 grayscale' : ''" draggable="false" />
         <span v-else class="flex size-full flex-col items-center justify-center gap-1 bg-fill-hover text-text-muted">
           <Globe class="size-5" aria-hidden="true" />
           <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
         </span>
         <span v-if="closed" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Closed</span>
+        <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Page closed</span>
         <span
           class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-[120ms] hover:opacity-100 group-focus-visible/open:opacity-100"
           :title="`${info.verb}${info.url ? ' ' + info.url : ''}`"

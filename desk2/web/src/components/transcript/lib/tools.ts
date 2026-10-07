@@ -108,9 +108,33 @@ export function parseBrowserCall(
   return { verb, url: str(params.url) || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
 }
 
-/** What a click on a Browser card asks the pane to show: no profile for the person's own (default) browser. */
+/** A real page address: http(s) or file. about:*, chrome://, edge://, data:, blob:, javascript: and '' are blank. */
+export function isRealAddress(url: string): boolean {
+  return /^(https?|file):/i.test(url.trim())
+}
+
+/**
+ * The latest real address in a run of browser calls, and whether the browser LEFT the page: the newest call that
+ * carries an address of its own carries a blank one (the AI ended on about:blank).
+ */
+export function browserRunAddress(calls: readonly { name: string; input: Record<string, unknown>; result?: { text?: string } }[]): { url: string; left: boolean } {
+  let url = ''
+  let left: boolean | null = null
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const u = parseBrowserCall(calls[i].name, calls[i].input, calls[i].result?.text).url
+    if (!u) continue
+    if (left === null) left = !isRealAddress(u)
+    if (isRealAddress(u)) {
+      url = u
+      break
+    }
+  }
+  return { url, left: left ?? false }
+}
+
+/** What a click on a Browser card asks the pane to show: no profile for the person's own (default) browser, never a blank address. */
 export function browserOpenRequest(info: { url: string; profile: string }): BrowserOpenRequest {
-  return { profile: info.profile === DEFAULT_BROWSER ? undefined : info.profile, url: info.url || undefined }
+  return { profile: info.profile === DEFAULT_BROWSER ? undefined : info.profile, url: isRealAddress(info.url) ? info.url : undefined }
 }
 
 /** The browser a chat's AI last used, as its Browser card would ask the pane for it; null when it used none. */
