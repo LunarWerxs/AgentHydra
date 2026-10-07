@@ -2,7 +2,7 @@
 
 The owner's decision (2026-10-06): Hydra Desk 2 (`desk2/`) is AgentHydra 2.0. Opening AgentHydra shows
 Desk 2, which will carry the name AgentHydra. The old AgentHydra window (`web/`, served by the daemon on
-7787) retires, and Hydra Desk 1 (`desk/`) is no longer used. The daemon (`server/`, 7787) stays: it is
+7787) retires, and Hydra Desk 1 (`desk/`) is removed from the repo (2026-10-07). The daemon (`server/`, 7787) stays: it is
 Desk 2's engine, and Desk 2 reaches it through its `/ah/api` proxy.
 
 This file is the checklist for that move: what is done, what still ties AgentHydra to the old window
@@ -42,8 +42,8 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   plus the quick-instances page (below).
 - **The old window's table settings moved too.** Desk's Settings has an Instances section (CLI, Desktop, Free)
   holding what the tables' gears held; see `desk2/README.md`.
-- **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` stays
-  in the repo: it is Jacob's, and removing it is his call.
+- **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` was
+  removed from the repo on 2026-10-07 (the owner's call; history keeps it).
 
 ## What still ties AgentHydra to the old window
 
@@ -104,5 +104,6 @@ the queue, Free instances, notifications and the shortcut sheet.
    migration if renamed: `HydraDesk2.exe`, the mutexes `Local\HydraDesk2Launcher` and `Local\HydraDesk2Host`,
    `~/.hydra-desk-2/`, `%LOCALAPPDATA%\HydraDesk2`, port 7798 and the `desk2/` folder.
 4. **Remove `web/`**: the static serving and embedding, the workspace and scripts, the CI steps, the checks
-   and tests above, the docs, then the folder.
-5. **`desk/`**: Jacob's to keep or remove.
+   and tests above, the docs, then the folder. Not done 2026-10-07: `web/` still serves the quick-instances
+   page (`/instances`) and `orchestrator/web/` the remote gateway, so both stay until those move.
+5. **`desk/`**: removed 2026-10-07 (the owner's call; history keeps it).

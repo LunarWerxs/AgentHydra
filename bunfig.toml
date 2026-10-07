@@ -11,10 +11,9 @@ preload = ["./tests/setup.ts"]
 # synthetic JSON and a spawn that handed back an EventEmitter with no setEncoding. `bun run test`
 # (--parallel=4) happened to be green only because the workers split the files differently.
 # Mirrors .gitignore's `tmp/`: what git does not see, the suite does not run.
-# desk/ (Hydra Desk) runs its own suite from its own folder (`bun test ./server/test ./web/test`
-# inside desk/), with its own tsconfig and preload; the root suite must not pick its tests up. desk2/ (Hydra Desk 2,
-# Michael's copy of desk/ from 2026-10-04) is the same.
-pathIgnorePatterns = ["**/tmp/**", "**/desk/**", "**/desk2/**"]
+# desk2/ (Hydra Desk 2, AgentHydra 2.0's window) runs its own suite from its own folder (`bun test ./server/test ./web/test`
+# inside desk2/), with its own tsconfig and preload; the root suite must not pick its tests up.
+pathIgnorePatterns = ["**/tmp/**", "**/desk2/**"]
 
 # NO LINKER SETTING. An isolated linker backed by a global store was tried here on 2026-08-07 and
 # reverted the same day: it installs fine on a machine whose global store is already warm, and fails

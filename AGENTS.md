@@ -95,7 +95,7 @@ the current compiler compatibility note are in the native-control runbook.
 
 ## Public repository
 
-This repo is PUBLIC (LunarWerxs/AgentHydra), `desk/` and `desk2/` included.
+This repo is PUBLIC (LunarWerxs/AgentHydra), `desk2/` included.
 
 - No real identities in tests, fixtures, comments or docs: use `example.com` /
   `example.test` addresses, a neutral name such as "Example Owner", and
@@ -103,8 +103,7 @@ This repo is PUBLIC (LunarWerxs/AgentHydra), `desk/` and `desk2/` included.
   parity fixtures use invented text of the same shape.
 - A test that must check a real local account (`server/tests/instances-crypto.test.ts`)
   compares a SHA-256 of the address, never the address itself.
-- Screenshots of real chats stay on the PC that took them: `desk/docs`
-  screenshots are gitignored.
+- Screenshots of real chats stay on the PC that took them and are never committed.
 - History was rewritten on 2026-10-05 to purge 68 such screenshots; main runs
   from `f53bbcda` and tags v1.9.0-v1.9.2 were moved. Never rebase or merge a
   branch made before that onto the new main: it brings the screenshots back.

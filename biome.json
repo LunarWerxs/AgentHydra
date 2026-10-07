@@ -12,7 +12,6 @@
       "!.claude",
       "!tmp",
       "!hswarm/ui",
-      "!desk",
       "!desk2",
       "!**/tray-host-native/target",
       "!**/*.gen.ts",
