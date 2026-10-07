@@ -483,4 +483,13 @@ export default {
     modelDefault: 'Default',
     modelOther: 'Other',
   },
+  // The micro summary above the Instances table (InstancesSummary), owner, 2026-10-07.
+  summary: {
+    expand: 'Show account details',
+    collapse: 'Hide account details',
+    usableOf: 'of {total} accounts usable now',
+    freeTitle: 'Free accounts',
+    freeUsable: 'of {total} free accounts usable now',
+    limitRow: '{name}: 5-hour {session} used, week {week} used',
+  },
 }
