@@ -1434,12 +1434,24 @@ onUnmounted(() => {
         @create="(id) => onCreateFor(id as string)"
       >
         <template #summary>
-          <div class="flex items-center gap-1" role="group" :aria-label="$t('instances.title')">
+          <!-- A bordered segmented control, so the kinds read as switches at a glance (owner,
+               2026-10-07: "really easy to click toggles on the top"): on is filled, off is muted. -->
+          <div
+            class="inline-flex items-center gap-0.5 rounded-md border bg-background/40 p-0.5"
+            role="group"
+            :aria-label="$t('instances.title')"
+          >
             <Button
               v-for="kind in INSTANCE_KINDS"
               :key="kind"
               size="sm"
-              :variant="kindShown(kind) ? 'secondary' : 'ghost'"
+              variant="ghost"
+              class="h-7 gap-1.5 rounded-[5px] px-2.5"
+              :class="
+                kindShown(kind)
+                  ? 'bg-primary/15 text-foreground ring-1 ring-primary/40 hover:bg-primary/20'
+                  : 'text-muted-foreground hover:text-foreground'
+              "
               :aria-pressed="kindShown(kind)"
               :data-kind="kind"
               @click="toggleKind(kind)"
