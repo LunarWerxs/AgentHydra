@@ -420,6 +420,15 @@ describe("a handoff's continuation prompt", () => {
     expect(userTurn(user(quoted), null)).toEqual(user(quoted))
   })
 
+  test("a chat's continuation, with the main-agent sentence, is still a continuation and not the person's message", () => {
+    const chat = continued({ messages: ['why did it stop?'] }).replace(
+      'Do not redo steps it reports finished.',
+      "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+    )
+    expect(continuationOf(chat)?.line).toBe('Continued in a fresh session: the conversation had grown long.')
+    expect(userTurn(user(chat), null)).toMatchObject({ kind: 'user', text: 'why did it stop?' })
+  })
+
   test('AgentHydra still writes the words this reads', () => {
     const lib = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-lib.ts'), 'utf8')
     // Source text: each `\\n` is the backslash and n its template literal holds.
