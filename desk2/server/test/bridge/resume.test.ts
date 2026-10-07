@@ -79,8 +79,8 @@ test('mapExternal derives canResume from the status and source, with or without 
       agentStatus: [],
       live: [],
       chats: [
-        { instance: 'eek', chatId: 'c1', sessionId: 'idle-1', title: 'Idle', archived: false, lastActivityAt: new Date(NOW - 10 * 60_000).toISOString(), cwd: 'C:/w', live: true },
-        { instance: 'eek', chatId: 'c2', sessionId: 'busy-1', title: 'Busy', archived: false, lastActivityAt: new Date(NOW - 5_000).toISOString(), cwd: 'C:/w', live: true }
+        { instance: 'eek', chatId: 'c1', sessionId: 'idle-1', title: 'Idle', archived: false, lastActivityAt: new Date(NOW - 10 * 60_000).toISOString(), cwd: 'C:/w', live: true, unread: false },
+        { instance: 'eek', chatId: 'c2', sessionId: 'busy-1', title: 'Busy', archived: false, lastActivityAt: new Date(NOW - 5_000).toISOString(), cwd: 'C:/w', live: true, unread: false }
       ],
       sessions: [],
       workers: []
