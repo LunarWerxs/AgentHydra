@@ -694,7 +694,7 @@ export class ChatManager {
         // An AgentHydra without deliver-now (v1.10.0) takes it as an urgent message: the turn stops and the session
         // continues with it first, in this one call. Only for a message it does not hold yet: it would go twice.
         urgent = queued && opts.now === true && !(await this.bridge.canDeliverNow())
-        stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent)
+        stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte))
         e.workerCwd = chat.cwd
       } else {
         let started!: () => void

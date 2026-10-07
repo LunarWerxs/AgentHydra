@@ -543,8 +543,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     return items
   }
 
-  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false): Promise<boolean> {
-    const r = await client.sendToWorker(id, text, cwd, urgent)
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk']): Promise<boolean> {
+    const r = await client.sendToWorker(id, text, cwd, urgent, desk)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()

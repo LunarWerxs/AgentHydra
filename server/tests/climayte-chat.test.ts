@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import {
   climayteCancel,
   climayteRun,
+  climayteSend,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -105,6 +106,30 @@ describe('chat workers', () => {
     expect(prompt.indexOf('main agent')).toBeLessThan(prompt.indexOf('Desk text.'))
     expect(prompt.indexOf('Desk text.')).toBeLessThan(prompt.indexOf(OWNER_RULES))
     rmSync(join(HOME, '.claude.json'))
+  })
+
+  test("a message brings a chat's add-ons as they are now, so a chat started before them gets them", () => {
+    const w = dispatch({ title: 'an old chat', chat: true })
+    expect(w.desk).toBeUndefined()
+    const desk = {
+      append: 'Design first.',
+      mcpServers: { redesign: { type: 'http', url: 'http://desk.example.test/mcp' } },
+    }
+    expect(climayteSend(w.id, 'show me options', { desk }).ok).toBe(true)
+    expect(w.desk).toEqual(desk)
+    expect(JSON.parse(readFileSync(writeWorkerMcp(w) ?? '', 'utf8')).mcpServers.redesign.url).toBe(
+      'http://desk.example.test/mcp',
+    )
+
+    const task = dispatch({ title: 'a task' })
+    expect(climayteSend(task.id, 'hi', { desk })).toMatchObject({
+      ok: false,
+      message: expect.stringMatching(/only for a chat/),
+    })
+    expect(
+      climayteSend(w.id, 'hi', { desk: { append: 'x'.repeat(20_001), mcpServers: {} } }).ok,
+    ).toBe(false)
+    expect(w.desk).toEqual(desk)
   })
 
   test('a chat without desk keeps the media sentence once', () => {

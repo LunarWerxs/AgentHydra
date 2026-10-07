@@ -237,8 +237,9 @@ app.post('/api/corch/workers/:id/send', async (c) => {
     model: body.model as string | undefined,
     effort: body.effort as string | undefined,
     cwd: body.cwd as string | undefined,
+    desk: body.desk,
   })
-  return c.json(r, r.ok || !body.cwd ? 200 : 400)
+  return c.json(r, r.ok || (!body.cwd && body.desk === undefined) ? 200 : 400)
 })
 // Send now on a held message (Hydra Desk 2): the running turn stops and the same session continues
 // with that message first. `text` names which held message; without it, the oldest.

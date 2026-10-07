@@ -2162,19 +2162,25 @@ function assertRunnable(t: RunTask, i: number): void {
   if (t.chat !== undefined && typeof t.chat !== 'boolean')
     throw new Error(`task ${i + 1}: chat must be true or false`)
   if (t.desk !== undefined && t.desk !== null) {
-    const d = t.desk as Partial<NonNullable<RunTask['desk']>>
-    if (t.chat !== true) throw new Error(`task ${i + 1}: desk is only for a chat task (chat: true)`)
-    if (typeof d.append !== 'string' || d.append.length > DESK_APPEND_MAX)
-      throw new Error(
-        `task ${i + 1}: desk.append must be a string of at most ${DESK_APPEND_MAX} characters`,
-      )
-    if (!d.mcpServers || typeof d.mcpServers !== 'object' || Array.isArray(d.mcpServers))
-      throw new Error(`task ${i + 1}: desk.mcpServers must be an object of server configs`)
+    const why = deskProblem(t.desk, t.chat === true)
+    if (why) throw new Error(`task ${i + 1}: ${why}`)
   }
 }
 
-/** The longest `desk.append` a chat task may carry; a longer one is refused, never cut. */
+/** The longest `desk.append` a chat may carry; a longer one is refused, never cut. */
 const DESK_APPEND_MAX = 20_000
+
+/** Why `d` cannot be a chat's add-ons (CliMayteWorker.desk), or null when it can: a chat task's and
+ *  every message to a chat's (climayteSend), so a chat started before them gets them too. */
+function deskProblem(d: unknown, chat: boolean): string | null {
+  const desk = d as Partial<NonNullable<CliMayteWorker['desk']>>
+  if (!chat) return 'desk is only for a chat task (chat: true)'
+  if (typeof desk?.append !== 'string' || desk.append.length > DESK_APPEND_MAX)
+    return `desk.append must be a string of at most ${DESK_APPEND_MAX} characters`
+  if (!desk.mcpServers || typeof desk.mcpServers !== 'object' || Array.isArray(desk.mcpServers))
+    return 'desk.mcpServers must be an object of server configs'
+  return null
+}
 
 /** One task's model, effort, kind and priority. A named model or effort is held only when the task
  *  (or its run) gives `ownerWords`, or gives a `modelWhy` AND the named setting sits on a cheaper
@@ -2908,7 +2914,7 @@ const URGENT_PREFIX =
 export function climayteSend(
   id: string,
   text: string,
-  opts: { urgent?: boolean; model?: string; effort?: string; cwd?: string } = {},
+  opts: { urgent?: boolean; model?: string; effort?: string; cwd?: string; desk?: unknown } = {},
 ): {
   ok: boolean
   message: string
@@ -2938,6 +2944,12 @@ export function climayteSend(
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) }
     }
+  }
+  // A Desk chat's add-ons as they are now replace the kept ones from the next launch on.
+  if (opts.desk !== undefined) {
+    const why = deskProblem(opts.desk, w.chat === true)
+    if (why) return { ok: false, message: why }
+    w.desk = opts.desk as CliMayteWorker['desk']
   }
   if (model) w.model = model
   if (effort) w.effort = effort

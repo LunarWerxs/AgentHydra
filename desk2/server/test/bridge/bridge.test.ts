@@ -134,6 +134,10 @@ describe('bridge', () => {
 
     await b.sendToWorker('w-00000001', 'also run the lint')
     expect(f.posts.at(-1)).toEqual({ path: '/api/corch/workers/w-00000001/send', body: { text: 'also run the lint' } })
+    // A chat's add-ons ride every message, so a chat started before them gets them on its next turn.
+    const desk = { append: 'Design first.', mcpServers: { redesign: { type: 'stdio' as const, command: 'bun', args: ['redesign-mcp.ts'] } } }
+    await b.sendToWorker('w-00000001', 'pick one', undefined, false, desk)
+    expect(f.posts.at(-1)).toEqual({ path: '/api/corch/workers/w-00000001/send', body: { text: 'pick one', desk } })
     expect(await b.sendToWorker('w-missing', 'hi').catch((e) => e)).toMatchObject({ status: 404 })
     expect(await b.sendToWorker('w-00000003', 'hi').catch((e) => e)).toMatchObject({ status: 400 })
 
