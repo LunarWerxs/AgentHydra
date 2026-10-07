@@ -1,5 +1,94 @@
 {
-  "closed": null,
+  "closed": {
+    "a": {
+      "commit": "2db000ec052160aebc23e36dc0b98acda1197a95",
+      "def_hash": "bfd9d1cdb7c235ed",
+      "dirty": false,
+      "id": "m-20261007T064901-a0578b",
+      "load_after": 1.0,
+      "load_before": 1.0,
+      "machine": "MPC-HELL",
+      "metric": "hswarm.read_task.prefix_chars",
+      "project": "agenthydra",
+      "reason": null,
+      "seconds": 3.184,
+      "settings": {
+        "arm": "a",
+        "gate": "exact",
+        "kind": "size",
+        "measure_files": {
+          "scripts/rsi/hswarm-prefix.py": "ad635b4175d3f27ba1e39f3947865787d8e2131d"
+        },
+        "ref": "f30cf8c6~1",
+        "rounds": 2
+      },
+      "started": "2026-10-07T06:48:52+00:00",
+      "status": "ok",
+      "value": 4198
+    },
+    "applies_if": null,
+    "at": "2026-10-07T06:49:43+00:00",
+    "b": {
+      "commit": "f30cf8c6326dfc1e91b36158f92400abd6fdf2fb",
+      "def_hash": "bfd9d1cdb7c235ed",
+      "dirty": false,
+      "id": "m-20261007T064904-01bb62",
+      "load_after": 1.0,
+      "load_before": 1.0,
+      "machine": "MPC-HELL",
+      "metric": "hswarm.read_task.prefix_chars",
+      "project": "agenthydra",
+      "reason": null,
+      "seconds": 5.178,
+      "settings": {
+        "arm": "b",
+        "gate": "exact",
+        "kind": "size",
+        "measure_files": {
+          "scripts/rsi/hswarm-prefix.py": "ad635b4175d3f27ba1e39f3947865787d8e2131d"
+        },
+        "ref": "f30cf8c6",
+        "rounds": 2
+      },
+      "started": "2026-10-07T06:48:52+00:00",
+      "status": "ok",
+      "value": 4130
+    },
+    "guards": [
+      {
+        "a": 3249,
+        "b": 3249,
+        "declared": false,
+        "metric": "arkitect_gating_errors",
+        "state": "ok"
+      },
+      {
+        "a": 11119,
+        "b": 11119,
+        "declared": false,
+        "metric": "arkitect_warnings",
+        "state": "ok"
+      },
+      {
+        "a": 88,
+        "b": 88,
+        "declared": false,
+        "metric": "arkitect_no_data",
+        "state": "ok"
+      },
+      {
+        "a": 24,
+        "b": 24,
+        "declared": false,
+        "metric": "deps_total",
+        "state": "ok"
+      }
+    ],
+    "method": "exact: 4198 -> 4130",
+    "note": "the outline description's language list is gone; a file outline cannot read gets an error naming the languages and the fallback, so the worker loses nothing; every rule and tool kept",
+    "pattern": null,
+    "verdict": "kept"
+  },
   "def_hash": "bfd9d1cdb7c235ed",
   "id": "20261007-hswarm-read-task-prefix-chars-aef7",
   "idea": "drop the language list from the outline tool's description: an unsupported file's error already names the languages and the fallback",
