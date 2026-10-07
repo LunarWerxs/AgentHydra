@@ -46,6 +46,43 @@ function fakeDevServers(over: Partial<DevServers> = {}): DevServers & { stopped:
     ensure: async () => ({ ok: false as const, error: 'unused' }),
     owned: async () => ({ ports: [4173], pids: [] }),
     runningIds: () => ['p1.web', 'p1.api'],
+    found: async () => ({ items: [], scanning: null, lastScan: null }),
+    scan: async () => ({ files: [], detected: [], scannedDirs: 0, truncated: false, timedOut: false, ms: 0, roots: [] }),
+    forgetFound: async () => ({ ok: true as const }),
+    preview: async () => ({ kind: 'none' as const, error: 'unused' }),
+    ignored: async () => ({ paths: [] }),
+    ignore: async () => ({ paths: [] }),
+    unignore: async () => ({ paths: [] }),
+    cloneDest: async () => ({ dest: 'C:/Users/me/dev/repo' }),
+    clone: async () => ({ ok: true }),
+    updateProject: async () => project,
+    removeProject: async () => ({ ok: true as const }),
+    setProjectEnabled: async () => project,
+    addProcess: async () => project,
+    processConfig: async () => ({ id: 'web', name: 'Web', command: 'bun dev' }),
+    updateProcess: async () => project,
+    removeProcess: async () => project,
+    setStarred: async () => ({}) as never,
+    setProcessEnabled: async () => ({}) as never,
+    takeover: async () => ({ triggers: [], backups: [] }),
+    takeOver: async () => ({ ok: true, disabled: [], backups: [], skipped: [] }),
+    restoreTakeover: async () => ({ ok: true as const, restored: [] }),
+    startAllServers: async () => ({ ok: true as const, started: [] }),
+    stopAllServers: async () => ({ ok: true as const, stopped: [] }),
+    logPage: async () => ({ lines: [], more: false }),
+    freePort: async () => ({ ok: true }),
+    errors: async () => [],
+    dismissError: async () => ({ ok: true as const }),
+    clearErrors: async () => ({ ok: true as const }),
+    openInEditor: async () => ({ ok: false as const, reason: 'no-editor' as const }),
+    settings: async () => ({}) as never,
+    saveSettings: async () => ({}) as never,
+    restartRunning: async () => ({ ok: true as const, restarted: [] }),
+    alerts: async () => ({}) as never,
+    addAlert: async () => ({}) as never,
+    updateAlert: async () => ({}) as never,
+    removeAlert: async () => ({ ok: true as const }),
+    clearAlertEvents: async () => ({ ok: true as const }),
     async stopAll() {
       dev.stopped++
     },
@@ -99,6 +136,48 @@ test("a manager error answers with its own status and message, an unknown server
   expect(((await unknown.json()) as { error: string }).error).toContain('p1.nope')
   expect((await b.call('/api/projects/load', { method: 'POST', body: '{}' })).status).toBe(400)
   expect((await b.call('/api/ensure', { method: 'POST', body: '{"server":"web"}' })).status).toBe(400)
+})
+
+test("the DevWebUI routes hand the manager their parsed input, and bad input is a 400 that reaches nothing", async () => {
+  const calls: unknown[][] = []
+  const record = (name: string, answer: unknown) => async (...args: unknown[]) => {
+    calls.push([name, ...args])
+    return answer
+  }
+  const b = await boot(
+    fakeDevServers({
+      saveSettings: record('saveSettings', {}) as never,
+      logPage: record('logPage', { lines: [], more: false }) as never,
+      freePort: record('freePort', { ok: true }) as never,
+      scan: record('scan', { files: [], detected: [], scannedDirs: 0, truncated: false, timedOut: false, ms: 0, roots: [] }) as never,
+      errors: record('errors', []) as never,
+      dismissError: record('dismissError', { ok: true }) as never,
+      clearErrors: record('clearErrors', { ok: true }) as never
+    })
+  )
+  const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) })
+  const cases: [string, string, RequestInit | undefined, unknown[] | 400][] = [
+    ['settings', '/api/settings', { method: 'PATCH', body: '{"autoScan":true}' }, ['saveSettings', { autoScan: true }]],
+    ['log page', '/api/processes/p1.web/logs?before=40&limit=5', undefined, ['logPage', 'p1.web', { before: 40, limit: 5 }]],
+    ['free port, confirmed', '/api/processes/p1.web/free-port', post({ pids: [4242] }), ['freePort', 'p1.web', [4242]]],
+    ['free port, no confirm', '/api/processes/p1.web/free-port', post({}), ['freePort', 'p1.web', undefined]],
+    ['scan', '/api/scan', post({ preset: 'scoped', roots: ['C:/Users/me/dev'] }), ['scan', { preset: 'scoped', roots: ['C:/Users/me/dev'] }]],
+    ["one server's errors", '/api/errors?process=p1.web', undefined, ['errors', 'p1.web']],
+    ['dismiss', '/api/errors/dismiss', post({ fingerprint: 'fp-1' }), ['dismissError', 'fp-1']],
+    ['clear', '/api/errors/clear', post({ process: 'p1.web' }), ['clearErrors', 'p1.web']],
+    ['limit not a number', '/api/processes/p1.web/logs?limit=abc', undefined, 400],
+    ['pids not whole positive numbers', '/api/processes/p1.web/free-port', post({ pids: [12, -3] }), 400],
+    ['unknown scan preset', '/api/scan', post({ preset: 'everything' }), 400],
+    ['dismiss without a fingerprint', '/api/errors/dismiss', post({}), 400]
+  ]
+  const got: unknown[] = []
+  for (const [what, path, init] of cases) {
+    calls.length = 0
+    const res = await b.call(path, init)
+    got.push([what, res.status, [...calls]])
+  }
+  // Each good request is one call with its input parsed; a refused one never reaches the manager.
+  expect(got).toEqual(cases.map(([what, , , want]) => (want === 400 ? [what, 400, []] : [what, 200, [want]])))
 })
 
 test('/api/servers lists the folder\'s project and the dev servers no project lists, never the service itself', async () => {

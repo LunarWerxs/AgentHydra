@@ -16,6 +16,7 @@ import { DW_API, DW_FOLDER, DW_NO_START, DW_PROXY, DW_SERVICE, DW_STATUS } from 
 import type { ServerContext } from '../context'
 import { type DevServicesClient, devServicesClient } from '../devservers/client'
 import { createDevProxy } from '../devservers/proxy'
+import { readSettings } from '../devservers/settings'
 import { notOwnPage } from '../own-page'
 
 const NOT_PASSED_ON = ['origin', 'referer', 'cookie', 'host', 'connection', 'accept-encoding', 'content-length', 'authorization']
@@ -25,6 +26,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const client = (ctx.deps.devservers as DevServicesClient | undefined) ?? devServicesClient(ctx.home)
   const proxy = createDevProxy(client, DW_PROXY)
   ctx.hostRoute(proxy.hostRoute)
+
+  // With "start when Desk starts" on, Desk brings the service (and with it the servers) up itself, once, in the background.
+  try {
+    if (readSettings(ctx.home, null).settings.autoStartOnLaunch) void client.ensure().catch(() => undefined)
+  } catch {
+    // floor-ok: an unreadable settings file just means no auto start
+  }
 
   /** Passes `path` on to the service with the page's method, headers and body; its answer back without hop headers. */
   const forward = async (c: { req: { raw: Request; method: string; arrayBuffer(): Promise<ArrayBuffer> } }, path: string): Promise<Response> => {
@@ -88,7 +96,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     // A poll's read never starts the service: one stopped while the read was on its way stays stopped.
     if (c.req.method === 'GET' && c.req.header(DW_NO_START)) {
       const res = await client.peek(path)
-      return res ? passOn(res) : c.json({ error: 'the dev-servers service is not running' }, 503)
+      return res ? passOn(res) : c.json({ error: 'the dev-servers service is not running, or did not answer within 2 s' }, 503)
     }
     return forward(c, path)
   })

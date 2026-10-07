@@ -218,11 +218,105 @@ async function logs(cwd: string, server: string | undefined, lines: unknown): Pr
   return [head, ...tail].join('\n')
 }
 
+async function restart(cwd: string, server: string | undefined): Promise<string> {
+  const found = await resolve(cwd, server)
+  if ('say' in found) return found.say
+  const p = found.proc
+  const r = await ask(
+    'POST',
+    `/dw/api/processes/${encodeURIComponent(p.id)}/restart`,
+    START_TIMEOUT_MS,
+    {},
+  )
+  if (r.status !== 200) return errorOf(r.json, r.status)
+  return `Restarted ${p.name}.`
+}
+
+async function scan(preset: unknown, roots: unknown): Promise<string> {
+  const r = await ask('POST', '/dw/api/scan', START_TIMEOUT_MS, {
+    preset: preset === 'deep' ? 'deep' : 'quick',
+    ...(Array.isArray(roots) ? { roots } : {}),
+  })
+  if (r.status !== 200) return errorOf(r.json, r.status)
+  const s = r.json as { files?: unknown[]; detected?: unknown[]; scannedDirs?: number }
+  return `Scanned ${s.scannedDirs ?? 0} folders: ${s.files?.length ?? 0} .devwebui files, ${s.detected?.length ?? 0} folders with dev scripts. \`found\` lists what is not added yet.`
+}
+
+async function found(): Promise<string> {
+  const r = await ask('GET', '/dw/api/found', ASK_TIMEOUT_MS)
+  if (r.status !== 200) return errorOf(r.json, r.status)
+  const items =
+    (r.json as { items?: { kind: string; path: string; name: string; processes: number }[] })
+      .items ?? []
+  if (!items.length) return 'Nothing found that is not added yet; `scan` looks again.'
+  return [
+    'Found, not added (add_project with path adds one):',
+    ...items.map((i) => `- ${i.name}: ${i.path} (${i.kind}, ${i.processes} servers)`),
+  ].join('\n')
+}
+
+async function addProject(path: string, accept: boolean): Promise<string> {
+  if (
+    !/^([a-zA-Z]:[\\/]|\\\\)/.test(path) &&
+    !(process.platform !== 'win32' && path.startsWith('/'))
+  )
+    return 'path must be an absolute folder or .devwebui file.'
+  const r = await ask('POST', '/dw/api/projects/load', ASK_TIMEOUT_MS, { path })
+  if (r.status !== 200) return errorOf(r.json, r.status)
+  const a = r.json as {
+    error?: string
+    needsScaffold?: boolean
+    dir?: string
+    fileName?: string
+    proposal?: unknown
+    project?: DevProject
+  }
+  if (a.error) return a.error
+  if (a.needsScaffold && !accept)
+    return `${path} has no .devwebui. This would be written:\n${JSON.stringify(a.proposal, null, 2)}\nCall again with accept: true to write it.`
+  if (a.needsScaffold) {
+    const w = await ask('POST', '/dw/api/projects/scaffold', ASK_TIMEOUT_MS, {
+      dir: a.dir,
+      fileName: a.fileName,
+      project: a.proposal,
+    })
+    if (w.status !== 200) return errorOf(w.json, w.status)
+    const made = w.json as { project?: DevProject; created?: string }
+    return `Wrote ${made.created} and added ${made.project?.name ?? 'the project'}.`
+  }
+  return a.project ? ['Added:', ...projectLines(a.project)].join('\n') : 'Added.'
+}
+
+async function errors(cwd: string, server: string | undefined): Promise<string> {
+  let q = ''
+  if (server?.trim()) {
+    const f = await resolve(cwd, server)
+    if ('say' in f) return f.say
+    q = `?process=${encodeURIComponent(f.proc.id)}`
+  }
+  const r = await ask('GET', `/dw/api/errors${q}`, ASK_TIMEOUT_MS)
+  if (r.status !== 200) return errorOf(r.json, r.status)
+  const list = (r.json as { processName: string; count: number; sample: string }[] | null) ?? []
+  if (!list.length) return 'No errors recorded.'
+  return list.map((e) => `- ${e.processName} (x${e.count}): ${e.sample.slice(0, 400)}`).join('\n')
+}
+
+const ACTIONS = [
+  'list',
+  'start',
+  'stop',
+  'logs',
+  'restart',
+  'scan',
+  'found',
+  'add_project',
+  'errors',
+]
+
 export async function devServers(a: Record<string, unknown>): Promise<string> {
   const action = str(a.action)
   const cwd = str(a.cwd).trim()
-  if (!['list', 'start', 'stop', 'logs'].includes(action))
-    return 'action must be one of list, start, stop, logs.'
+  if (!ACTIONS.includes(action)) return `action must be one of ${ACTIONS.join(', ')}.`
   // A drive or share path, or `/x` off Windows (on Windows it is relative to the current drive).
   if (!/^([a-zA-Z]:[\\/]|\\\\)/.test(cwd) && !(process.platform !== 'win32' && cwd.startsWith('/')))
     return 'cwd must be the absolute folder of the work (for example C:/Users/me/app).'
@@ -231,6 +325,12 @@ export async function devServers(a: Record<string, unknown>): Promise<string> {
     if (action === 'list') return await list(cwd, a.all === true)
     if (action === 'start') return await start(cwd, server)
     if (action === 'stop') return await stop(cwd, server)
+    if (action === 'restart') return await restart(cwd, server)
+    if (action === 'scan') return await scan(a.preset, a.roots)
+    if (action === 'found') return await found()
+    if (action === 'add_project')
+      return await addProject(str(a.path).trim() || cwd, a.accept === true)
+    if (action === 'errors') return await errors(cwd, server)
     return await logs(cwd, server, a.lines)
   } catch (e) {
     return e instanceof Error ? e.message : String(e)
@@ -241,10 +341,25 @@ export const DEV_SERVERS_TOOLS: McpEngineTool[] = [
   {
     name: 'dev_servers',
     description:
-      "MUTATES: (start, stop) one shared copy of each project's dev servers (vite, next, `bun run dev`...). AgentHydra 2.0 runs them for every session on this PC. `start` returns the address of the copy already running, whoever started it, or starts it; call it BEFORE starting a dev server from the shell, never start one yourself (a second copy fights the first for its port). `list` shows the folder's servers (all: every project's, plus other localhost dev servers), `stop` ends one, `logs` returns its last output. Needs AgentHydra 2.0 open.",
+      "MUTATES: (start, stop, restart, scan, add_project) one shared copy of each project's dev servers (vite, next, `bun run dev`...). AgentHydra 2.0 runs them for every session on this PC. `start` returns the address of the copy already running, whoever started it, or starts it; call it BEFORE starting a dev server from the shell, never start one yourself (a second copy fights the first for its port). `list` shows the folder's servers (all: every project's, plus other localhost dev servers), `stop` ends one, `logs` returns its last output, `restart` restarts one, `errors` lists recorded errors (server: one). `scan` (preset quick|deep, roots) searches the disk for projects, `found` lists what it found, `add_project` adds path (default cwd; a folder with no .devwebui answers a proposal, accept: true writes it). Needs AgentHydra 2.0 open.",
     inputSchema: S(
       {
-        action: { type: 'string', enum: ['list', 'start', 'stop', 'logs'] },
+        action: { type: 'string', enum: ACTIONS },
+        preset: {
+          type: 'string',
+          enum: ['quick', 'deep'],
+          description: 'scan: how far to look (default quick).',
+        },
+        roots: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'scan: absolute folders to scan instead.',
+        },
+        path: {
+          type: 'string',
+          description: 'add_project: absolute folder or .devwebui file (default cwd).',
+        },
+        accept: { type: 'boolean', description: 'add_project: write the proposed .devwebui.' },
         cwd: {
           type: 'string',
           description: 'Absolute folder of the work (your working directory).',

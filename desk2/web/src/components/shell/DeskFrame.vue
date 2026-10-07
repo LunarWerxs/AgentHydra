@@ -11,6 +11,7 @@ import { lastBrowserRequest } from '@/components/transcript/lib/tools'
 import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
 const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
+const InfoPane = lazyPanel(() => import('@/components/servers/info/InfoPane.vue'))
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
 import type { ServerFocus } from '@/components/servers/store'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
@@ -422,12 +423,29 @@ watch(
 watch(pane, (p) => {
   if (p !== 'servers') serversCwd.value = null
 })
+// A selection in the Dev servers list opens the info pane for the view on screen, even with no chat open. The selection
+// is the window's one, so a view that had the pane open shows it too; closing the pane (or replacing it) in the view on
+// screen clears it, and with no selection no view keeps the pane. Moving to another view leaves the selection.
+watch(
+  () => devServers.selection.value,
+  (sel) => {
+    if (!sel) {
+      if ([...paneByView.value.values()].includes('devinfo')) paneByView.value = new Map([...paneByView.value].filter(([, p]) => p !== 'devinfo'))
+      return
+    }
+    tasks.value = null
+    pane.value = 'devinfo'
+  }
+)
+watch([pane, viewKey], ([p, key], [was, wasKey]) => {
+  if (key === wasKey && was === 'devinfo' && p !== 'devinfo') devServers.select(null)
+})
 // Changes with RepoYeti selected is as wide as the servers pane (it is a whole page in a frame).
-const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
+const wide = computed(() => pane.value === 'servers' || pane.value === 'devinfo' || (pane.value === 'diff' && changesTabFor(changesTab.value, repoYeti.value) === 'repoyeti'))
 function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
-const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
+const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value) || pane.value === 'devinfo'))
 // A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
 // window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
 // chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
@@ -740,7 +758,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             v-if="asideOpen"
             class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-l border-border"
             :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
-            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
+            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'devinfo' ? 'Server details' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <div
               v-if="split"
@@ -756,6 +774,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             />
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
             <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" @close="pane = null" />
+            <InfoPane v-else-if="pane === 'devinfo'" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>

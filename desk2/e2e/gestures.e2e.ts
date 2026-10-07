@@ -73,10 +73,11 @@ const NAME = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] bu
 // Only the copy's own toast: the page can show another toast on load.
 const TOASTS = `[...document.querySelectorAll('[data-sonner-toast]')].filter((t) => t.textContent.includes('Copied')).length`
 
-// The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): a click on the row shows it in the servers pane.
+// The Dev servers button and a server's row in the sidebar's list (servers/DevServersList.vue): a click on the row shows
+// its details in the right-hand pane and starts nothing (owner, 2026-10-07).
 const DEV = 'button[aria-label="Dev servers"]'
-const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="Open api"]')])`
-const SERVERS_PANE = `!!document.querySelector('aside[aria-label="Servers"]')`
+const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="api details"]')])`
+const DETAILS_PANE = `!!document.querySelector('aside[aria-label="Server details"]')`
 // What Desk answers to the window here for the dev servers (shared/devwebui.ts): one invented project with a running and a stopped server.
 const DW_FIXTURE: Record<string, unknown> = {
   '/dw/status': { state: 'running', pid: 1, running: 1 },
@@ -104,7 +105,7 @@ each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pi
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'sidebar row ... menu opens', pick: ROW_MORE, ok: MENU_OPEN })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: CliMayte tasks flips once, no tooltip', pick: toggle(TASKS), ok: `${flipped(TASKS)} && !(${TIP_OPEN})`, diag: `[${flipped(TASKS)}, ${TIP_OPEN}]` })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: Dev servers flips once, no tooltip', pick: toggle(DEV), ok: `${flipped(DEV)} && !(${TIP_OPEN})`, diag: `[${flipped(DEV)}, ${TIP_OPEN}]` })
-each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its server in the servers pane', pick: DEV_ROW, ok: SERVERS_PANE, setup: `document.querySelector('${DEV}').click()` })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its details', pick: DEV_ROW, ok: DETAILS_PANE, setup: `document.querySelector('${DEV}').click()` })
 
 const TRACE = `(() => { window.__log = []; const d = (e) => { const t = e.target; window.__log.push([Math.round(performance.now()), e.type, e.isTrusted, t && t.tagName,
   t && t.getAttribute && (t.getAttribute('aria-label') || t.getAttribute('data-slot')), t && t.getAttribute && t.getAttribute('data-state'), t && t.isConnected, e.pointerType || '']) };

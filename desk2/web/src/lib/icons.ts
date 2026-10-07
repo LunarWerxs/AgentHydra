@@ -207,7 +207,7 @@ export const agentHydraIcon = glyph([
 ])
 
 // Settings dialog nav, as the real Settings nav draws them: 16px outline glyphs.
-import { Activity, BellRing, CloudDownload, Info, Monitor } from '@lucide/vue'
+import { Activity, BellRing, CloudDownload, Info, Monitor, Server } from '@lucide/vue'
 
 export const settingsIcons = {
   general: Settings,
@@ -215,6 +215,7 @@ export const settingsIcons = {
   climayte: Bot,
   connections: Plug,
   connectors: Blocks,
+  devservers: Server,
   diagnostics: Activity,
   updates: CloudDownload,
   about: Info,

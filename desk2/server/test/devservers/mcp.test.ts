@@ -205,7 +205,14 @@ test('dev_server_logs gives the last 60 lines by default, marks stderr, and is c
 test('the tools are listed, and an unknown one is an error', async () => {
   const { mcp } = make({})
   const list = (await mcp.handle({ jsonrpc: '2.0', id: 1, method: 'tools/list' })) as { result: { tools: { name: string }[] } }
-  expect(list.result.tools.map((t) => t.name)).toEqual(['dev_servers', 'dev_server_start', 'dev_server_stop', 'dev_server_logs'])
+  expect(list.result.tools.map((t) => t.name)).toEqual([
+    'dev_servers', 'dev_server_start', 'dev_server_stop', 'dev_server_logs',
+    'dev_server_restart', 'dev_servers_scan', 'dev_servers_found', 'dev_project_add', 'dev_project_remove',
+    'dev_server_config', 'dev_server_add', 'dev_server_update', 'dev_server_remove', 'dev_server_star',
+    'dev_server_autostart', 'dev_servers_start_all', 'dev_servers_stop_all', 'dev_server_log_history',
+    'dev_server_errors', 'dev_server_errors_clear', 'dev_server_error_dismiss', 'dev_server_free_port',
+    'dev_server_alerts', 'dev_server_alert_add', 'dev_server_alert_remove', 'dev_server_alert_events_clear'
+  ])
   const bad = (await mcp.handle({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'nope' } })) as { error: { code: number } }
   expect(bad.error.code).toBe(-32602)
 })

@@ -37,7 +37,7 @@ describe('settings search', () => {
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'alerts', 'climayte', 'connections', 'connectors', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+      'general', 'alerts', 'climayte', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
     ])
     expect(stepSection('general', 'ArrowDown')).toBe('alerts')
     expect(stepSection('about', 'ArrowDown')).toBe('cli')

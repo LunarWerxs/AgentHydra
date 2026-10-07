@@ -1,17 +1,19 @@
 // Desk's own small stdio MCP server for dev servers (connectors/defs/devwebui.ts starts it with Desk's bun for every
-// chat). Four tools, so a chat uses the dev server that already runs instead of starting a second copy beside it:
+// chat). Its main four tools make a chat use the dev server that already runs instead of starting a second copy:
 //
 //   dev_servers      { cwd?, all? }                 the folder's project and servers, and the other dev servers on this PC
 //   dev_server_start { server?, cwd?, wait? }       the address of the copy already running, or start it and wait for it
 //   dev_server_stop  { server, cwd? }                stop one (only when asked)
 //   dev_server_logs  { server, cwd?, lines? }        the last lines it printed
 //
+// The rest (extraTools) reach DevWebUI's other routes (DW_ROUTES): scan, found, projects, entries, errors, alerts.
+//
 // It calls Desk (AGENTHYDRA_DESK_URL, loopback) at /dw/api, which goes on to the dev-servers service. It sends no
 // Origin or Sec-Fetch header, so Desk takes it for a local client and not a page. `cwd` defaults to DEVSERVERS_CWD,
 // the chat's folder. No dependency on @modelcontextprotocol/sdk: newline-delimited JSON-RPC 2.0 over stdio, written
 // by hand like connectors/redesign-mcp.ts, whose stdio loop it shares.
 
-import { type DevWebEnsure, type DevWebLogLine, type DevWebProcess, type DevWebProject, type DevWebServers, type LocalServer, processAddress } from '@shared/devwebui'
+import { type DevWebAddResult, type DevWebEnsure, type DevWebLogLine, type DevWebProcess, type DevWebProject, type DevWebServers, DW_ROUTES, type LocalServer, processAddress } from '@shared/devwebui'
 import { serveStdio } from '../connectors/redesign-mcp'
 
 export interface DevServersMcpOptions {
@@ -78,8 +80,64 @@ const TOOLS = [
       required: ['server'],
       additionalProperties: false
     }
-  }
+  },
+  ...extraTools()
 ]
+
+/** The tools beyond the first four; each answers the service's JSON as it is. */
+function extraTools() {
+  const SERVER = { type: 'string', description: 'Its name or id from dev_servers.' }
+  const PROJECT = { type: 'string', description: 'The project: its id or name from dev_servers with all: true.' }
+  const ON = { type: 'boolean', description: 'true turns it on, false off.' }
+  const SPEC = { type: 'object', description: 'The server entry as a .devwebui writes it: id, name, command, and optional cwd, port, url, env, runtime, autostart, links, waitForPort, companion.' }
+  const tool = (name: string, description: string, properties: Record<string, unknown> = {}, required: string[] = []) => ({
+    name,
+    description,
+    inputSchema: { type: 'object', properties, required, additionalProperties: false }
+  })
+  return [
+    tool('dev_server_restart', 'Restarts a dev server. Only when the person asked: other chats may be using it.', { server: SERVER, cwd: CWD }, ['server']),
+    tool('dev_servers_scan', 'Scans the disk for projects with dev servers; the results join the found list.', {
+      preset: { type: 'string', enum: ['quick', 'deep'], description: 'quick (default) looks in the usual folders, deep looks further.' },
+      roots: { type: 'array', items: { type: 'string' }, description: 'Absolute folders to scan instead.' }
+    }),
+    tool('dev_servers_found', 'What scans found that is not added yet.'),
+    tool('dev_project_add', 'Adds a project from a folder or .devwebui file. A folder without one answers a proposal; call again with accept: true to write it.', {
+      path: { type: 'string', description: 'Absolute folder or .devwebui file.' },
+      accept: { type: 'boolean', description: 'Write the proposed .devwebui.' }
+    }, ['path']),
+    tool('dev_project_remove', 'Forgets a project and stops what AgentHydra runs of it. Its .devwebui file is kept.', { project: PROJECT }, ['project']),
+    tool('dev_server_config', "A server's entry as written in its .devwebui.", { server: SERVER, cwd: CWD }, ['server']),
+    tool('dev_server_add', "Adds a server to a project's .devwebui.", { project: PROJECT, spec: SPEC }, ['project', 'spec']),
+    tool('dev_server_update', "Rewrites a server's .devwebui entry (a changed id renames it).", { server: SERVER, spec: SPEC, cwd: CWD }, ['server', 'spec']),
+    tool('dev_server_remove', "Removes a server's entry from its .devwebui, stopping it first if AgentHydra runs it.", { server: SERVER, cwd: CWD }, ['server']),
+    tool('dev_server_star', 'Stars or unstars a server.', { server: SERVER, on: ON, cwd: CWD }, ['server', 'on']),
+    tool('dev_server_autostart', "Turns a server's autostart on or off. Starts or stops nothing.", { server: SERVER, on: ON, cwd: CWD }, ['server', 'on']),
+    tool('dev_servers_start_all', 'Starts every enabled server of every enabled project. Only when the person asked.'),
+    tool('dev_servers_stop_all', 'Stops every dev server that is up, whoever started it. Only when the person asked.'),
+    tool('dev_server_log_history', "Pages back through a server's saved log.", {
+      server: SERVER,
+      cwd: CWD,
+      before: { type: 'number', description: 'Lines before this seq (from an earlier page). Default: the newest.' },
+      limit: { type: 'number', description: 'How many lines.' }
+    }, ['server']),
+    tool('dev_server_errors', 'Errors servers printed, newest first: one server or all.', { server: { ...SERVER, description: 'Its name or id. Default: every server.' }, cwd: CWD }),
+    tool('dev_server_errors_clear', 'Clears the errors of one server or all.', { server: { ...SERVER, description: 'Its name or id. Default: every server.' }, cwd: CWD }),
+    tool('dev_server_error_dismiss', 'Dismisses one error.', { fingerprint: { type: 'string', description: 'The fingerprint from dev_server_errors.' } }, ['fingerprint']),
+    tool('dev_server_free_port', "Frees a server's port. When programs AgentHydra did not start hold it, pass their pids to end them; omit pids to see the list first and confirm.", { server: SERVER, cwd: CWD, pids: { type: 'array', items: { type: 'number' }, description: 'The pids of external programs to end (from a previous needsConfirm answer).' } }, ['server']),
+    tool('dev_server_alerts', 'Alert rules and the alerts that fired.'),
+    tool('dev_server_alert_add', 'Adds an alert: a server staying over a CPU or memory threshold for a time.', {
+      server: SERVER,
+      cwd: CWD,
+      metric: { type: 'string', enum: ['cpu', 'memory'] },
+      threshold: { type: 'number', description: 'cpu: percent of one core; memory: bytes.' },
+      forMs: { type: 'number', description: 'How long it must stay over, in ms.' },
+      enabled: { type: 'boolean' }
+    }, ['server', 'metric', 'threshold', 'forMs']),
+    tool('dev_server_alert_remove', 'Removes an alert rule.', { id: { type: 'string', description: 'The rule id from dev_server_alerts.' } }, ['id']),
+    tool('dev_server_alert_events_clear', 'Clears the alerts that fired.')
+  ]
+}
 
 /** Who runs a server that is up, in a few words. */
 function runBy(p: Pick<DevWebProcess, 'owner' | 'pid'>): string {
@@ -219,6 +277,107 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
     return ok(lines.length ? lines.map((l) => (l.stream === 'stderr' ? `[stderr] ${l.line}` : l.line)).join('\n') : `${p.name} has printed nothing.`)
   }
 
+  /** One service route through Desk; the answer goes back to the chat as JSON. */
+  async function route(path: string, method = 'GET', body?: unknown): Promise<ToolResult> {
+    const init: RequestInit = { method, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }
+    return ok(JSON.stringify(answerOf<unknown>(await desk(`/${path}`, init)), null, 2))
+  }
+
+  /** The id of the server args.server names; a name that names none or several is thrown as the reason. */
+  async function serverId(args: Record<string, unknown>, tool: string): Promise<string> {
+    if (typeof args.server !== 'string' || args.server.trim() === '') throw new Error(`${tool} needs server (a name or id from dev_servers).`)
+    const p = await resolve(args.server, cwdOf(args))
+    if (typeof p === 'string') throw new Error(p)
+    return p.id
+  }
+
+  async function projectId(args: Record<string, unknown>, tool: string): Promise<string> {
+    const want = typeof args.project === 'string' ? args.project.trim().toLowerCase() : ''
+    if (!want) throw new Error(`${tool} needs project (an id or name from dev_servers with all: true).`)
+    const hits = (await listing(null, true)).projects.filter((p) => p.id.toLowerCase() === want || p.name.toLowerCase() === want)
+    if (hits.length === 1) return hits[0]!.id
+    throw new Error(hits.length ? `More than one project is called "${args.project}": ${hits.map((p) => p.id).join(', ')}. Use the id.` : `No project "${args.project}".`)
+  }
+
+  async function projectAdd(args: Record<string, unknown>): Promise<ToolResult> {
+    const path = typeof args.path === 'string' ? args.path.trim() : ''
+    if (!absolute(path)) return fail('dev_project_add needs path (an absolute folder or .devwebui file).')
+    const r = answerOf<DevWebAddResult>(await desk(`/projects/load`, { method: 'POST', body: JSON.stringify({ path }) }))
+    if (!r.needsScaffold) return ok(JSON.stringify(r, null, 2))
+    if (args.accept !== true) return ok(`${path} has no .devwebui. This would be written:\n${JSON.stringify(r.proposal, null, 2)}\nCall again with accept: true to write it.`)
+    return route('projects/scaffold', 'POST', { dir: r.dir, fileName: r.fileName, project: r.proposal })
+  }
+
+  /** The tools after the first four, by name. */
+  async function extra(name: string, a: Record<string, unknown>): Promise<ToolResult | null> {
+    const sid = () => serverId(a, name)
+    const optionalSid = async () => (typeof a.server === 'string' && a.server.trim() !== '' ? sid() : undefined)
+    switch (name) {
+      case 'dev_server_restart':
+        return route(`processes/${encodeURIComponent(await sid())}/restart`, 'POST', {})
+      case 'dev_servers_scan':
+        return route(DW_ROUTES.scan, 'POST', { preset: a.preset === 'deep' ? 'deep' : 'quick', ...(Array.isArray(a.roots) ? { roots: a.roots } : {}) })
+      case 'dev_servers_found':
+        return route(DW_ROUTES.found)
+      case 'dev_project_add':
+        return projectAdd(a)
+      case 'dev_project_remove':
+        return route(DW_ROUTES.project(await projectId(a, name)), 'DELETE')
+      case 'dev_server_config':
+        return route(DW_ROUTES.processConfig(await sid()))
+      case 'dev_server_add':
+        return route(DW_ROUTES.projectProcesses(await projectId(a, name)), 'POST', { spec: a.spec })
+      case 'dev_server_update':
+        return route(DW_ROUTES.process(await sid()), 'PUT', { spec: a.spec })
+      case 'dev_server_remove':
+        return route(DW_ROUTES.process(await sid()), 'DELETE')
+      case 'dev_server_star':
+        return route(DW_ROUTES.processStarred(await sid()), 'POST', { on: a.on === true })
+      case 'dev_server_autostart':
+        return route(DW_ROUTES.processEnabled(await sid()), 'POST', { on: a.on === true })
+      case 'dev_servers_start_all':
+        return route(DW_ROUTES.startAll, 'POST', {})
+      case 'dev_servers_stop_all':
+        return route(DW_ROUTES.stopAll, 'POST', {})
+      case 'dev_server_log_history': {
+        const q = new URLSearchParams()
+        if (Number.isFinite(Number(a.before)) && a.before !== undefined) q.set('before', String(Math.round(Number(a.before))))
+        if (Number.isFinite(Number(a.limit)) && a.limit !== undefined) q.set('limit', String(Math.round(Number(a.limit))))
+        return route(`${DW_ROUTES.processLogs(await sid())}?${q}`)
+      }
+      case 'dev_server_errors': {
+        const id = await optionalSid()
+        return route(`${DW_ROUTES.errors}${id ? `?process=${encodeURIComponent(id)}` : ''}`)
+      }
+      case 'dev_server_errors_clear': {
+        const id = await optionalSid()
+        return route(DW_ROUTES.clearErrors, 'POST', id ? { process: id } : {})
+      }
+      case 'dev_server_error_dismiss':
+        if (typeof a.fingerprint !== 'string' || !a.fingerprint) return fail('dev_server_error_dismiss needs fingerprint.')
+        return route(DW_ROUTES.dismissError, 'POST', { fingerprint: a.fingerprint })
+      case 'dev_server_free_port':
+        return route(DW_ROUTES.freePort(await sid()), 'POST', Array.isArray(a.pids) ? { pids: a.pids } : {})
+      case 'dev_server_alerts':
+        return route(DW_ROUTES.alerts)
+      case 'dev_server_alert_add':
+        return route(DW_ROUTES.alerts, 'POST', {
+          processId: await sid(),
+          metric: a.metric,
+          threshold: a.threshold,
+          forMs: a.forMs,
+          ...(typeof a.enabled === 'boolean' ? { enabled: a.enabled } : {})
+        })
+      case 'dev_server_alert_remove':
+        if (typeof a.id !== 'string' || !a.id) return fail('dev_server_alert_remove needs id.')
+        return route(DW_ROUTES.alert(a.id), 'DELETE')
+      case 'dev_server_alert_events_clear':
+        return route(DW_ROUTES.clearAlertEvents, 'POST', {})
+      default:
+        return null
+    }
+  }
+
   /** One JSON-RPC message in; the reply to send, or null for a notification. */
   async function handle(msg: RpcMessage): Promise<unknown | null> {
     const reply = (result: unknown) => ({ jsonrpc: '2.0', id: msg.id, result })
@@ -243,6 +402,8 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
           if (name === 'dev_server_start') return reply(await devServerStart(args))
           if (name === 'dev_server_stop') return reply(await devServerStop(args))
           if (name === 'dev_server_logs') return reply(await devServerLogs(args))
+          const more = await extra(String(name), args)
+          if (more) return reply(more)
           return error(-32602, `unknown tool ${String(name)}`)
         } catch (err) {
           return reply(fail(err instanceof Error ? err.message : String(err)))

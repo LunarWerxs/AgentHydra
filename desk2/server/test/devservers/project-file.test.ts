@@ -67,13 +67,15 @@ describe('ids', () => {
     expect(lp.processes[1]).toMatchObject({ cwd: path.resolve(d), env: { A: '1' }, url: '/health' })
   })
 
-  test('compose and answers are accepted but flagged: they are not run here', () => {
+  test('compose and answers are read for the manager: the compose file against the project folder', () => {
     const d = tmp()
     const file = path.join(d, '.devwebui')
-    writeFileSync(file, JSON.stringify({ name: 'E', processes: [{ id: 'db', name: 'DB', command: 'x', compose: { file: 'compose.yaml' }, answers: [{ send: 'y' }] }, { id: 'web', name: 'W', command: 'y' }] }))
+    writeFileSync(file, JSON.stringify({ name: 'E', processes: [{ id: 'db', name: 'DB', command: 'x', compose: { file: 'compose.yaml' }, answers: [{ expect: 'Continue?', send: 'y' }, { expect: 7 }] }, { id: 'web', name: 'W', command: 'y' }] }))
     const [db, web] = readProjectFile(file).processes
-    expect(db!.unsupported).toBe('compose/answers')
-    expect(web!.unsupported).toBeUndefined()
+    expect(db!.compose?.file).toBe(path.resolve(d, 'compose.yaml'))
+    expect(db!.answers).toEqual([{ expect: 'Continue?', send: 'y' }])
+    expect(web!.compose).toBeUndefined()
+    expect(web!.answers).toBeUndefined()
   })
 })
 

@@ -7,9 +7,10 @@
 // (`use({ quiet: true })`) reads the status and asks for nothing. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's).
 // `focus` is the list's request to the pane: show this server of this project, whatever chat is open (DeskFrame).
 import { ref, shallowRef } from 'vue'
-import type { DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
+import type { DevWebFound, DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
 import { projectDir } from '@shared/devwebui'
-import { devwebService, devwebStatus, listProjects, processAction, projectAction, RouteMissing } from './api'
+import { devwebService, devwebStatus, foundList, listProjects, processAction, projectAction, RouteMissing } from './api'
+import type { DevSelection } from './info/selection'
 import { allKey, isUp, startReused } from './logic'
 
 export interface ServerFocus {
@@ -23,6 +24,11 @@ export interface ServerFocus {
 const ON_KEY = 'hydra-desk.devservers.on'
 const POLL_MS = 2000
 const STARTING_POLL_MS = 1000
+/**
+ * Missed list reads in a row before a shown list gives way to "did not answer": on a PC at full CPU one read in 60 still
+ * passed the 2 s limit (2026-10-07), and the next one answered.
+ */
+const MISSES_SHOWN = 3
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 
 function createDevServers() {
@@ -32,6 +38,7 @@ function createDevServers() {
   // Replaced whole by each answer, never edited in place.
   const projects = shallowRef<DevWebProject[] | null>(null)
   const projectsError = ref<string | null>(null)
+  const found = shallowRef<DevWebFound | null>(null)
   const busy = ref(new Set<string>())
   const actionError = ref<string | null>(null)
   /** Counts up with each finished refresh: a view that keeps more data of its own (the pane) reloads it on a change. */
@@ -51,6 +58,7 @@ function createDevServers() {
 
   // The first status read of a list view ends the automatic request, whatever it said: a service stopped later is not restarted behind the person's back.
   let asked = false
+  let misses = 0
   async function once(): Promise<void> {
     let s: DevWebStatus
     try {
@@ -89,9 +97,13 @@ function createDevServers() {
       // Never the read that starts it: a Stop clicked while this was on its way must stay a stop.
       projects.value = await listProjects({ start: false })
       projectsError.value = null
+      misses = 0
     } catch (err) {
-      projectsError.value = err instanceof Error ? err.message : String(err)
+      // A list already on screen stays through a missed read or two; with none yet, the reason shows at once.
+      if (!projects.value || ++misses >= MISSES_SHOWN) projectsError.value = err instanceof Error ? err.message : String(err)
     }
+    // The found list rides the same poll; a failed read keeps the last one.
+    found.value = await foundList({ start: false }).catch(() => found.value)
   }
 
   // A refresh asked for while one runs runs once more after it, so an action's refresh never reads what was already in flight.
@@ -208,7 +220,13 @@ function createDevServers() {
     focus.value = { cwd: projectDir(project), procId: proc.id, seq: ++seq }
   }
 
-  return { on, setOn, status, statusMissing, projects, projectsError, busy, actionError, answered, focus, reused, refresh, use, tryAgain, service, run, act, actAll, show }
+  /** What the right-hand info pane describes (DeskFrame opens it on a selection and clears it on close). */
+  const selection = ref<DevSelection | null>(null)
+  const select = (sel: DevSelection | null): void => {
+    selection.value = sel
+  }
+
+  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, selection, select, refresh, use, tryAgain, service, run, act, actAll, show }
 }
 
 let servers: ReturnType<typeof createDevServers> | null = null

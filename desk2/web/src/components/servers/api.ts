@@ -79,8 +79,9 @@ export function projectAction(id: string, action: 'start' | 'stop'): Promise<unk
   return call(`${DW_API}/projects/${encodeURIComponent(id)}/${action}`, post())
 }
 
-export async function processLogs(id: string): Promise<DevWebLogLine[]> {
-  return (await call<{ lines: DevWebLogLine[] }>(`${DW_API}/processes/${encodeURIComponent(id)}/logs`)).lines
+/** The last lines it printed, kept in memory (no disk read): a live tail's poll passes `start: false`. */
+export async function processLogs(id: string, o: { start?: boolean } = {}): Promise<DevWebLogLine[]> {
+  return (await call<{ lines: DevWebLogLine[] }>(`${DW_API}/processes/${encodeURIComponent(id)}/logs`, o.start === false ? { headers: { [DW_NO_START]: '1' } } : undefined)).lines
 }
 
 /** The chat folder's project, set up in the dev-servers service when it is not yet (no Add step). */
@@ -130,7 +131,7 @@ export function logPage(id: string, opts: { before?: number; limit?: number; sta
   const qs = q.toString()
   return call(`${dw(DW_ROUTES.processLogs(id))}${qs ? `?${qs}` : ''}`, quiet(opts))
 }
-export const freePort = (id: string, confirm = false): Promise<DevWebFreePort> => call(dw(DW_ROUTES.freePort(id)), post({ confirm }))
+export const freePort = (id: string, pids?: number[]): Promise<DevWebFreePort> => call(dw(DW_ROUTES.freePort(id)), post(pids !== undefined ? { pids } : {}))
 export const startAllServers = (): Promise<{ ok: true; started: string[] }> => call(dw(DW_ROUTES.startAll), post())
 export const stopAllServers = (): Promise<{ ok: true; stopped: string[] }> => call(dw(DW_ROUTES.stopAll), post())
 
@@ -140,7 +141,7 @@ export const dismissError = (fingerprint: string): Promise<{ ok: true }> => call
 export const clearErrors = (processId?: string): Promise<{ ok: true }> => call(dw(DW_ROUTES.clearErrors), post(processId ? { process: processId } : {}))
 export const openInEditor = (req: { file: string; line?: number; column?: number; processId?: string }): Promise<DevWebOpenInEditor> => call(dw(DW_ROUTES.openInEditor), post(req))
 
-export const devSettings = (): Promise<DevWebSettings> => call(dw(DW_ROUTES.settings))
+export const devSettings = (o: { start?: boolean } = {}): Promise<DevWebSettings> => call(dw(DW_ROUTES.settings), quiet(o))
 export const saveDevSettings = (patch: Partial<DevWebSettings>): Promise<DevWebSettings> => call(dw(DW_ROUTES.settings), send('PATCH', patch))
 export const restartRunning = (): Promise<{ ok: true; restarted: string[] }> => call(dw(DW_ROUTES.restartRunning), post())
 
@@ -150,6 +151,8 @@ export const updateAlert = (id: string, patch: Partial<DevWebAlertRuleInput>): P
 export const removeAlert = (id: string): Promise<{ ok: true }> => call(dw(DW_ROUTES.alert(id)), send('DELETE'))
 export const clearAlertEvents = (): Promise<{ ok: true }> => call(dw(DW_ROUTES.clearAlertEvents), post())
 
+/** Desk's own: shows a folder in the file manager (a server's Show folder). */
+export const revealFolder = (path: string): Promise<unknown> => call('/api/folders/reveal', post({ path }))
 /** Desk's own native folder picker (the new-chat folder's), for Add project's Browse. */
 export const pickFolder = async (current: string | null): Promise<string | null> => (await call<{ path: string | null }>('/api/folders/pick', post({ current }))).path
 

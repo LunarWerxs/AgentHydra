@@ -250,7 +250,11 @@ export const DW_ROUTES = {
   processEnabled: (id: string) => `processes/${encodeURIComponent(id)}/enabled`,
   /** GET ?before=<seq>&limit= -> {id, lines, more}: the newest `limit` lines before `before` (none: the newest). */
   processLogs: (id: string) => `processes/${encodeURIComponent(id)}/logs`,
-  /** POST {confirm?} -> DevWebFreePort. */
+  /**
+   * POST {pids?: number[]} -> DevWebFreePort. No pids: when programs AgentHydra did not start hold the port, answers
+   * needsConfirm with them and changes nothing. With pids: stops this app's own holders and ends only the listed
+   * outside ones; an outside holder not listed is answered needsConfirm again, with nothing ended.
+   */
   freePort: (id: string) => `processes/${encodeURIComponent(id)}/free-port`,
   /** POST -> {ok, started}: every enabled server of every enabled project. */
   startAll: 'start-all',
@@ -445,7 +449,7 @@ export interface DevWebPortOwner {
 
 export interface DevWebFreePort {
   ok?: boolean
-  /** Programs AgentHydra did not start hold it: confirm=true ends them. */
+  /** Programs AgentHydra did not start hold it (owners) and nothing was changed: send their pids to end them. */
   needsConfirm?: boolean
   owners?: DevWebPortOwner[]
   /** Servers AgentHydra runs that held it and were stopped cleanly. */

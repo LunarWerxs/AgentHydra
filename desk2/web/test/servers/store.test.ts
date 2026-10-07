@@ -11,6 +11,8 @@ let startBody: unknown = null
 let stopAfterStatus = false
 /** Holds a server action's answer until opened. */
 let gate: Promise<void> | null = null
+/** List reads still to miss while the service runs (a busy PC: Desk's 2 s wait for the service ran out). */
+let missReads = 0
 const realFetch = globalThis.fetch
 const realDocument = (globalThis as { document?: unknown }).document
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
@@ -40,6 +42,10 @@ beforeAll(() => {
     // A read marked x-dw-no-start is answered only while the service runs; any other request makes Desk start it.
     if (new Headers(init?.headers).has('x-dw-no-start')) {
       if (state !== 'running') return new Response(JSON.stringify({ error: 'the dev-servers service is not running' }), { status: 503, headers: { 'content-type': 'application/json' } })
+      if (url === '/dw/api/projects' && missReads > 0) {
+        missReads--
+        return new Response(JSON.stringify({ error: 'the dev-servers service is not running, or did not answer within 2 s' }), { status: 503, headers: { 'content-type': 'application/json' } })
+      }
     } else state = 'running'
     return json([{ id: 'p1', name: 'Example', path: 'C:/Users/me/Code/example/.devwebui', enabled: true, processes: [] }])
   }) as typeof fetch
@@ -116,6 +122,24 @@ describe('the shared dev-servers client', () => {
     stopAfterStatus = true
     await servers.refresh()
     expect(serviceState()).toBe('stopped')
+    release()
+  })
+
+  it('a list on screen stays through two missed reads; a third in a row shows why, and the next answer clears it', async () => {
+    const servers = useDevServers()
+    state = 'running'
+    const release = servers.use()
+    await settle()
+    expect(servers.projects.value?.map((p) => p.id)).toEqual(['p1'])
+    missReads = 3
+    await servers.refresh()
+    await servers.refresh()
+    expect(servers.projectsError.value).toBeNull()
+    expect(servers.projects.value?.map((p) => p.id)).toEqual(['p1'])
+    await servers.refresh()
+    expect(servers.projectsError.value).toContain('did not answer within 2 s')
+    await servers.refresh()
+    expect(servers.projectsError.value).toBeNull()
     release()
   })
 

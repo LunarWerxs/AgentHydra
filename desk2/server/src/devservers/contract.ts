@@ -14,7 +14,30 @@
 //   server whose command line is in its folder, is that server, whoever started it (`owner: 'outside'`), and is used as
 //   it is. It never kills a program to free a port: a port held by something that is not a dev server is a `conflict`.
 
-import type { DevWebEnsure, DevWebFolder, DevWebLogLine, DevWebProcess, DevWebProject, DevWebStartAnswer } from '@shared/devwebui'
+import type {
+  DevWebAddResult,
+  DevWebAlertRule,
+  DevWebAlertRuleInput,
+  DevWebAlerts,
+  DevWebEnsure,
+  DevWebErrorEntry,
+  DevWebFolder,
+  DevWebFound,
+  DevWebFreePort,
+  DevWebLogLine,
+  DevWebOpenInEditor,
+  DevWebPreview,
+  DevWebProcess,
+  DevWebProcessSpec,
+  DevWebProject,
+  DevWebScanPreset,
+  DevWebScanResult,
+  DevWebSettings,
+  DevWebStartAnswer,
+  DevWebTakeover,
+  DevWebTakeOverResult,
+  DevWebTrigger
+} from '@shared/devwebui'
 import type { Scan } from '../localhost/ports'
 
 /** <home>/devservers/service.json: written by the service once it listens, removed when it exits cleanly. */
@@ -43,6 +66,8 @@ export interface DevServersDeps {
   portListening?: (port: number) => Promise<boolean>
   /** Listening sockets and processes (default localhost/ports.ts scanPorts). */
   scan?: () => Promise<Scan>
+  /** Walks the disk for projects (default scan.ts scanProjects; the first start's scan covers every drive). */
+  findProjects?: (opts: { preset: DevWebScanPreset; roots?: string[]; exclude?: string[] }) => Promise<DevWebScanResult>
   now?: () => number
   /** Watch the .devwebui files and apply their changes (default true). */
   watch?: boolean
@@ -63,8 +88,8 @@ export class DevServerError extends Error {
 
 /** POST /projects/load answers (DevWebUI's shapes, so the folder set-up reads them as before). */
 export type LoadAnswer =
-  | { ok: true; project: DevWebProject; firstLoad: boolean }
-  | { needsScaffold: true; dir: string; fileName: '.devwebui'; proposal: ScaffoldProposal }
+  | { ok: true; project: DevWebProject; firstLoad: boolean; autostartTriggers?: DevWebTrigger[] }
+  | { needsScaffold: true; dir: string; fileName: '.devwebui'; proposal: ScaffoldProposal; autostartTriggers?: DevWebTrigger[] }
 
 /** A .devwebui body proposed from what a folder has (.claude/launch.json, package.json dev scripts). */
 export interface ScaffoldProposal {
@@ -90,7 +115,7 @@ export interface DevServers {
   /** POST /projects/load {path}: a folder or .devwebui file. Unknown folder without a .devwebui: `needsScaffold`. */
   load(path: string): Promise<LoadAnswer>
   /** POST /projects/scaffold: writes <dir>/.devwebui (never over one) and loads it; `created` is its path. */
-  scaffold(dir: string, fileName: string, project: ScaffoldProposal): Promise<{ ok: true; project: DevWebProject; firstLoad: boolean; created: string }>
+  scaffold(dir: string, fileName: string, project: ScaffoldProposal): Promise<{ ok: true; project: DevWebProject; firstLoad: boolean; created: string; autostartTriggers?: DevWebTrigger[] }>
   /** POST /dw/folder: the project of a chat's folder, set up from what the folder has when it has none. */
   folder(cwd: string): Promise<DevWebFolder>
   /**
@@ -103,6 +128,52 @@ export interface DevServers {
   owned(): Promise<{ ports: number[]; pids: number[] }>
   /** Ids of the servers it started that run now (a restart starts them again). */
   runningIds(): string[]
+
+  /** The found list: scans' finds not added, not ignored and still on disk, plus the scan running now. */
+  found(): Promise<DevWebFound>
+  /** One scan at a time (a second waits for the first); its finds are merged into `found`. */
+  scan(opts: { preset: DevWebScanPreset; roots?: string[] }): Promise<DevWebScanResult>
+  forgetFound(): Promise<{ ok: true }>
+  /** What adding a found .devwebui file or folder would add; writes nothing. */
+  preview(path: string): Promise<DevWebPreview>
+  ignored(): Promise<{ paths: string[] }>
+  ignore(path: string): Promise<{ paths: string[] }>
+  unignore(path: string): Promise<{ paths: string[] }>
+  cloneDest(url: string): Promise<{ dest: string }>
+  clone(url: string, dest: string): Promise<DevWebAddResult>
+
+  updateProject(id: string, patch: { name?: string; color?: string | null }): Promise<DevWebProject>
+  /** Stops the servers AgentHydra started of it (outside ones are left), forgets it; the file stays. */
+  removeProject(id: string): Promise<{ ok: true }>
+  setProjectEnabled(id: string, on: boolean): Promise<DevWebProject>
+  addProcess(projectId: string, spec: DevWebProcessSpec): Promise<DevWebProject>
+  processConfig(id: string): Promise<DevWebProcessSpec>
+  updateProcess(id: string, spec: DevWebProcessSpec): Promise<DevWebProject>
+  removeProcess(id: string): Promise<DevWebProject>
+  setStarred(id: string, on: boolean): Promise<DevWebProcess>
+  setProcessEnabled(id: string, on: boolean): Promise<DevWebProcess>
+  takeover(projectId: string): Promise<DevWebTakeover>
+  takeOver(projectId: string): Promise<DevWebTakeOverResult>
+  restoreTakeover(projectId: string): Promise<{ ok: true; restored: string[] }>
+
+  startAllServers(): Promise<{ ok: true; started: string[] }>
+  stopAllServers(): Promise<{ ok: true; stopped: string[] }>
+  /** A page of its on-disk log: the newest `limit` lines before `before` (a seq), newest last. */
+  logPage(id: string, opts: { before?: number; limit?: number }): Promise<{ lines: DevWebLogLine[]; more: boolean }>
+  /** Ends an outside holder only when its pid is in confirmPids (the owners a needsConfirm answer showed). */
+  freePort(id: string, confirmPids?: number[]): Promise<DevWebFreePort>
+  errors(processId?: string): Promise<DevWebErrorEntry[]>
+  dismissError(fingerprint: string): Promise<{ ok: true }>
+  clearErrors(processId?: string): Promise<{ ok: true }>
+  openInEditor(req: { file: string; line?: number; column?: number; processId?: string }): Promise<DevWebOpenInEditor>
+  settings(): Promise<DevWebSettings>
+  saveSettings(patch: Partial<DevWebSettings>): Promise<DevWebSettings>
+  restartRunning(): Promise<{ ok: true; restarted: string[] }>
+  alerts(): Promise<DevWebAlerts>
+  addAlert(input: DevWebAlertRuleInput): Promise<DevWebAlertRule>
+  updateAlert(id: string, patch: Partial<DevWebAlertRuleInput>): Promise<DevWebAlertRule>
+  removeAlert(id: string): Promise<{ ok: true }>
+  clearAlertEvents(): Promise<{ ok: true }>
   /** Stops every server it started (outside ones are left alone) and its timers and watchers. */
   stopAll(): Promise<void>
   /** Kills what it started at once, synchronously (a crash on the way out). */

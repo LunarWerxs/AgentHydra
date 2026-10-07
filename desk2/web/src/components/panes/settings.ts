@@ -7,7 +7,7 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'alerts' | 'climayte' | 'connections' | 'connectors' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'alerts' | 'climayte' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
@@ -15,6 +15,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: s
   { id: 'climayte', label: 'CliMayte', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
   { id: 'connectors', label: 'Connectors', caption: 'Settings' },
+  { id: 'devservers', label: 'Dev servers', caption: 'Settings' },
   { id: 'diagnostics', label: 'Diagnostics', caption: 'This computer' },
   { id: 'updates', label: 'Updates', caption: 'This computer' },
   { id: 'about', label: 'About', caption: 'This computer' },
@@ -78,6 +79,20 @@ export type SettingsRowId =
   | 'ahFreeProcess'
   | 'ahFreeKeepalive'
   | 'ahFreeFloor'
+  | 'dwService'
+  | 'dwRuntime'
+  | 'dwAutoStart'
+  | 'dwFreePort'
+  | 'dwRestartRunning'
+  | 'dwMonitor'
+  | 'dwLinkHost'
+  | 'dwAutoScan'
+  | 'dwSkip'
+  | 'dwExclude'
+  | 'dwScanNow'
+  | 'dwIgnored'
+  | 'dwForgetFound'
+  | 'dwAlerts'
 
 /** An AgentHydra state a row only makes sense under; agenthydra.ts says which hold. */
 export type SettingsCondition = 'alerts' | 'persistent' | 'email' | 'missing' | 'connected' | 'syncing' | 'keepalive' | 'native' | 'freeKeepalive'
@@ -384,7 +399,39 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Skip above weekly',
     description: 'Logins past this share of their weekly cap are left alone.',
     when: ['freeKeepalive']
-  }
+  },
+  {
+    id: 'dwService',
+    section: 'devservers',
+    group: 'Server manager',
+    label: 'Service status',
+    description: 'The dev-servers service that runs and monitors your projects.'
+  },
+  { id: 'dwRuntime', section: 'devservers', group: 'Starting servers', label: 'Runtime', description: 'How bun and node scripts are run when their project has no choice.' },
+  { id: 'dwAutoStart', section: 'devservers', group: 'Starting servers', label: 'Start on launch', description: 'Start every enabled server when the dev-servers service starts.' },
+  { id: 'dwFreePort', section: 'devservers', group: 'Starting servers', label: 'Free a port on start', description: 'End a program holding the port if it is not a tool daemon or OS service.' },
+  { id: 'dwRestartRunning', section: 'devservers', group: 'Starting servers', label: 'Restart running servers', description: 'Restart servers to apply a changed runtime or new settings.' },
+  { id: 'dwMonitor', section: 'devservers', group: 'Monitoring', label: 'Resource monitoring', description: 'Sample CPU and memory of every running server.' },
+  { id: 'dwLinkHost', section: 'devservers', group: 'Monitoring', label: 'Link host', description: 'A LAN name or IP to open server links on (blank is localhost).' },
+  { id: 'dwAutoScan', section: 'devservers', group: 'Finding projects', label: 'Scan on launch', description: 'Scan for projects each time the dev-servers service starts.' },
+  {
+    id: 'dwSkip',
+    section: 'devservers',
+    group: 'Finding projects',
+    label: 'Skip operating systems',
+    description: 'Do not scan folders that match an OS-specific name.'
+  },
+  {
+    id: 'dwExclude',
+    section: 'devservers',
+    group: 'Finding projects',
+    label: 'Exclude folders',
+    description: 'Folder names or absolute paths a scan skips (one per line).'
+  },
+  { id: 'dwScanNow', section: 'devservers', group: 'Finding projects', label: 'Scan now', description: 'Run a quick or deep scan for projects on this computer.' },
+  { id: 'dwIgnored', section: 'devservers', group: 'Finding projects', label: 'Ignored folders', description: 'Folders a scan found that you do not want to add.' },
+  { id: 'dwForgetFound', section: 'devservers', group: 'Finding projects', label: 'Forget found projects', description: 'Clear the list of projects a scan found.' },
+  { id: 'dwAlerts', section: 'devservers', group: 'Alerts', label: 'Alert rules', description: 'Alert when a server stays over a threshold for a time.' }
 ]
 
 /** The DeskSettings field each switch row writes. */

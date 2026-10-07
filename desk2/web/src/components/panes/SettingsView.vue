@@ -19,6 +19,8 @@ import { useAgentHydraSettings } from './agenthydra'
 import AgentHydraControl from './AgentHydraControl.vue'
 import { useInstanceSettings } from './instances'
 import InstancesControl from './InstancesControl.vue'
+import { useDevServerSettings } from './devservers'
+import DevServersControl from './DevServersControl.vue'
 
 // The body of the Settings dialog, laid out like the real Settings (docs/reference/real/user/
 // real-settings-claude-code.webp) without its account, billing and connector pages: a darker nav with
@@ -30,6 +32,7 @@ const api = usePaneApi()
 const src = useShellSource()
 const ah = useAgentHydraSettings(api)
 const inst = useInstanceSettings(api, ah)
+const dw = useDevServerSettings()
 
 const section = ref<SettingsSection>('general')
 // A reload with Settings open comes back to this page (DeskFrame asks for it, lib/view-memory.ts).
@@ -40,8 +43,9 @@ const holds = (c: SettingsCondition) =>
   c === 'native' ? !!inst.nativeConfig.value : c === 'freeKeepalive' ? !!inst.free.value?.keepWindows : ah.holds(c)
 const groups = computed(() => settingsGroups(section.value, query.value, holds))
 const isAh = (id: string) => id.startsWith('ah')
+const isDw = (id: string) => id.startsWith('dw')
 // Every Desk row but About's needs the saved settings.
-const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id))))
+const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id) && !isDw(r.id))))
 
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
@@ -73,6 +77,15 @@ watch(
   },
   { immediate: true }
 )
+
+watch(
+  () => groups.value.some((g) => g.rows.some((r) => isDw(r.id))),
+  (on) => {
+    if (on && !dw.settings.value) void dw.load()
+  },
+  { immediate: true }
+)
+watch(dw.savedAt, flashSaved)
 
 function setLocal(s: DeskSettings) {
   local.value = { ...s }
@@ -340,7 +353,7 @@ onBeforeUnmount(() => {
         <span class="flex items-center gap-1 text-text-muted transition-opacity duration-300" :class="showSaved ? 'opacity-100' : 'opacity-0'">
           <Check class="size-3.5 text-success-text" /> Saved
         </span>
-        <span v-if="saveError || ah.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value }}</span>
+        <span v-if="saveError || ah.error.value || dw.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value || dw.error.value }}</span>
       </div>
 
       <div v-if="!local && needsSettings" class="text-[13px] leading-[19px]" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
@@ -370,6 +383,7 @@ onBeforeUnmount(() => {
 
               <InstancesControl v-if="inst.owns(r.id)" :id="r.id" :label="r.label" :inst="inst" />
               <AgentHydraControl v-else-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
+              <DevServersControl v-else-if="isDw(r.id)" :id="r.id" :label="r.label" :ctx="dw" />
               <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-[19px] text-text-2">{{ version ? `v${version}` : '…' }}</span>
               <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-[19px] text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}

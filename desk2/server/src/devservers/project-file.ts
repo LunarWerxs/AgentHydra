@@ -6,12 +6,16 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import type { AnswerRule } from './answers'
+import { readRules } from './answers'
+import type { ComposeSpec } from './compose'
 
 export const ID_RE = /^[a-zA-Z0-9._-]+$/
+const MAX_READINESS_MS = 10 * 60_000
 
 export class ProjectFileError extends Error {}
 
-/** A server as written in the file (`compose` and `answers` are accepted and ignored here). */
+/** A server as written in the file (`compose` and `answers` stay as written; the manager reads them). */
 export interface ProcessSpec {
   id: string
   name: string
@@ -52,11 +56,15 @@ export interface ProcessDef {
   starred?: boolean
   port?: number
   url?: string
+  /** The entry's own runtime pin; without one Settings decides. */
+  runtime?: 'node' | 'bun'
   waitForPort?: number | string
   links?: string[]
   companion?: boolean
-  /** The entry carries `compose` or `answers`, which this manager does not run. */
-  unsupported?: string
+  /** Compose dependencies brought up before the server spawns; `file` is absolute. */
+  compose?: ComposeSpec
+  /** Replies typed to the server's stdin when its output asks. */
+  answers?: AnswerRule[]
   projectId: string
   projectName: string
 }
@@ -131,7 +139,19 @@ function parseProcess(raw: unknown, at: string): ProcessSpec {
   if (raw.links !== undefined) {
     if (!Array.isArray(raw.links) || raw.links.some((l) => typeof l !== 'string' || !ID_RE.test(l))) throw new ProjectFileError(`${label}: links must be a list of server ids`)
   }
-  if (raw.compose !== undefined && !isObject(raw.compose)) throw new ProjectFileError(`${label}: compose must be an object`)
+  if (raw.compose !== undefined) {
+    const c = raw.compose
+    if (!isObject(c)) throw new ProjectFileError(`${label}: compose must be an object`)
+    // Omitted, compose finds compose.yaml in the server's folder.
+    str(c.file, `${label}: compose.file`, { optional: true })
+    if (c.mode !== undefined && c.mode !== 'none' && c.mode !== 'start-only' && c.mode !== 'start-and-stop') throw new ProjectFileError(`${label}: compose.mode must be "none", "start-only" or "start-and-stop"`)
+    bool(c.skipIfRunning, `${label}: compose.skipIfRunning`)
+    bool(c.injectEnv, `${label}: compose.injectEnv`)
+    // A longer wait would hold a start for hours on a typo; `up` itself gives up after 10 minutes.
+    const wait = port(c.readinessTimeoutMs, `${label}: compose.readinessTimeoutMs`)
+    if (wait && wait > MAX_READINESS_MS) out.compose = { ...c, readinessTimeoutMs: MAX_READINESS_MS }
+    if (c.services !== undefined && (!Array.isArray(c.services) || c.services.some((s) => typeof s !== 'string' || s === ''))) throw new ProjectFileError(`${label}: compose.services must be a list of service names`)
+  }
   if (raw.answers !== undefined && !Array.isArray(raw.answers)) throw new ProjectFileError(`${label}: answers must be a list`)
   return out
 }
@@ -175,7 +195,8 @@ export function readProjectFile(filePath: string): LoadedProject {
   const id = projectIdFromPath(abs)
   const dir = path.dirname(abs)
   const processes = spec.processes.map((p): ProcessDef => {
-    const unsupported = [p.compose !== undefined ? 'compose' : '', p.answers !== undefined ? 'answers' : ''].filter(Boolean).join('/')
+    const compose = p.compose as ComposeSpec | undefined
+    const answers = readRules(p.answers)
     return {
       id: `${id}.${p.id}`,
       localId: p.id,
@@ -188,10 +209,12 @@ export function readProjectFile(filePath: string): LoadedProject {
       ...(p.starred !== undefined ? { starred: p.starred } : {}),
       ...(p.port !== undefined ? { port: p.port } : {}),
       ...(p.url ? { url: p.url } : {}),
+      ...(p.runtime ? { runtime: p.runtime } : {}),
       ...(p.waitForPort !== undefined ? { waitForPort: p.waitForPort } : {}),
       ...(p.links ? { links: p.links } : {}),
       ...(p.companion !== undefined ? { companion: p.companion } : {}),
-      ...(unsupported ? { unsupported } : {}),
+      ...(compose ? { compose: compose.file ? { ...compose, file: path.resolve(dir, compose.file) } : compose } : {}),
+      ...(answers.length ? { answers } : {}),
       projectId: id,
       projectName: spec.name,
     }

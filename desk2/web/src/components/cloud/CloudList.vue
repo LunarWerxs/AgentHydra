@@ -119,11 +119,15 @@ function appIcon(r: CloudSession): Component | null {
   const m = cloudMark(r)
   return m?.kind === 'app' ? appMark(m.app) : null
 }
-/** A row keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). */
+/**
+ * A row keeps its dot, moving while the desk's does (owner, 2026-10-05: the gray dots pulse while working). A row
+ * only this list has (a past session nothing runs now) draws the idle ring: a solid gray dot read as running
+ * (owner, 2026-10-07, of an old chat on another account: "I don't have that running on any of my accounts").
+ */
 function dotClass(r: CloudSession): string {
   if (r.archived) return 'border border-text-muted'
   const g = props.glyph?.(r.id)
-  return g ? glyphDotClass(g) : 'bg-text-muted'
+  return glyphDotClass(g ?? { shape: 'ring', tone: 'muted', motion: 'none' })
 }
 /**
  * Another PC's cloud pulses while its row runs, as the row's dot would (owner, 2026-10-05: "for chats that are

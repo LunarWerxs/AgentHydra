@@ -72,6 +72,8 @@ class World {
       now: () => this.t,
       portListening: async (p) => this.open.has(p),
       scan: async (): Promise<Scan> => ({ listeners: [...this.listeners], procs: new Map(this.procs), error: null }),
+      // The first start's project scan would walk every real drive.
+      findProjects: async () => ({ files: [], detected: [], scannedDirs: 0, truncated: false, timedOut: false, ms: 0, roots: [] }),
       kill: (pid) => {
         this.killed.push(pid)
         // A pid this world made up stops listening (unless stubborn); one the manager spawned (a real bun child) is
