@@ -92,10 +92,10 @@ SPECS: dict[str, dict] = {
     # outline + unfold: symbol-level reads, so a worker never pays for a whole file to find one function.
     "outline": {
         "description": (
-            "Folded map of one code file: every class, function and method (Python, JS/TS, Go, Rust, Java, C/C++, C#, "
-            "Kotlin, Swift, PHP, Dart) or Markdown heading, with its line range, nested by indentation, plus what "
-            "reading the whole file would cost in tokens. Use it before read_file on any file you do not need whole, "
-            "then unfold the symbol you want or read_file that line range."
+            # No language list: a file it cannot outline gets an error naming the languages it can, and the fallback.
+            "Folded map of one code file: every class, function and method, or Markdown heading, with its line range, "
+            "nested by indentation, plus what reading the whole file would cost in tokens. Use it before read_file on "
+            "any file you do not need whole, then unfold the symbol you want or read_file that line range."
         ),
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]},
     },
