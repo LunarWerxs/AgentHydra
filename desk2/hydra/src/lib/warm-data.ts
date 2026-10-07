@@ -58,13 +58,10 @@ export function refreshWarm(kind: WarmKind, opts: { viewed?: boolean } = {}): Pr
 
 /** The kinds a view shows. */
 const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
-  'instances-home': ['cli', 'desktop', 'climayte', 'hswarm'],
+  instances: ['desktop', 'cli', 'free'],
   analytics: ['analytics'],
   // CliMayte's page lists the Free logins' private chats beside its tasks.
   hswarm: ['hswarm', 'climayte', 'routing', 'free'],
-  cli: ['cli', 'desktop'],
-  desktop: ['desktop', 'cli'],
-  free: ['free'],
 }
 
 /** A page was opened (or the pane was shown on it): refresh what it shows, right then. */

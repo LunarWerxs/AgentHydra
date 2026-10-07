@@ -50,6 +50,7 @@ import {
   STATUS_FILTERS,
   type StatusFilter,
 } from '@/lib/instance-filter'
+import type { InstanceTableKind } from '@/lib/instance-table'
 import {
   clampThreshold,
   DEFAULT_USAGE_THRESHOLD,
@@ -58,7 +59,7 @@ import {
   type UsageFilterRule,
 } from '@/lib/usage-filter'
 import { registerSharedPref } from './useSharedPrefs'
-import { type InstanceTableKind, useUsageMode } from './useUsageMode'
+import { useUsageMode } from './useUsageMode'
 
 // The carry-over from the old single-threshold `scope2` shape runs in main.ts, before any of this
 // module is evaluated — see migrateLegacyUsageFilterScope in lib/usage-filter.ts for why it cannot
@@ -128,10 +129,9 @@ registerSharedPref(`${KEY}.sessionThreshold`, sessionThreshold)
 registerSharedPref(`${KEY}.hiddenProviders`, hiddenProvidersRaw)
 registerSharedPref(`${KEY}.hiddenKinds`, hiddenKindsRaw)
 
-/** @param table the table the rule is for: its column mode decides whether the quota facet acts. */
-export function useInstanceFilter(table: InstanceTableKind = 'desktop') {
+export function useInstanceFilter() {
   // No clock needed: nothing here counts down, it only compares percentages.
-  const { usageMode } = useUsageMode(false, table)
+  const { usageMode } = useUsageMode(false)
 
   /** The selected plan labels, as a set the UI can read and write directly. */
   const plans = computed<string[]>({

@@ -19,7 +19,6 @@ import {
   X,
 } from '@lucide/vue'
 import {
-  FREE_PROVIDERS,
   type FreeCommand,
   type FreeInstance,
   type FreeProvider,
@@ -301,11 +300,7 @@ async function refreshAccounts() {
   }
 }
 
-// --- add: the host's + menu names the provider (it merges these options into its own); the server
-// names the account after its login ---
-const createOptions = computed(() =>
-  FREE_PROVIDERS.map((p) => ({ id: p, provider: freeLogo(p), label: providerName(p) })),
-)
+// --- add: the host's + menu names the provider; the server names the account after its login ---
 async function openCreate(id?: string) {
   try {
     const created = await freeApi.create(id === 'chatgpt' ? 'chatgpt' : 'claude')
@@ -420,7 +415,6 @@ const visibleCount = computed(() => visibleRows.value.length)
 const total = computed(() => instances.value.length)
 defineExpose({
   openCreate,
-  createOptions,
   refresh: refreshAccounts,
   refreshing,
   hiddenByFilter,

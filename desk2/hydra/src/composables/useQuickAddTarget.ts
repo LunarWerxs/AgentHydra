@@ -1,7 +1,7 @@
 // web/src/composables/useQuickAddTarget.ts — which CLI instance Quick add signs in again, if any.
 //
 // "Log in" on a CLI row used to open a terminal to run /login by hand. It now points Quick add at that
-// row's instance (owner, 2026-09-30): the row menu (CliInstancesSection) sets the target, and the box
+// row's instance (owner, 2026-09-30): the row menu (CliInstanceRows) sets the target, and the box
 // (CliQuickAdd) says whose login it is about to replace and hands the id to startQuickAdd. One
 // module-level ref, so the two share it without a prop chain and it survives the box re-rendering.
 

@@ -8,7 +8,6 @@ import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
-import { useHomeSessions } from '@/composables/useHomeSessions'
 import { useInstances } from '@/composables/useInstances'
 import { refreshDesktopAccountTokens } from '@/composables/useTokenWindow'
 import { useUsage } from '@/composables/useUsage'
@@ -22,7 +21,7 @@ const settled = (jobs: Promise<unknown>[]) => Promise.allSettled(jobs)
 
 const { codexDesktopEnabled, codexCliEnabled, dshEnabled } = useAppSettings()
 
-// CLI instances (Claude and Codex), their usage, the Dsh homes and the landing page's session list.
+// CLI instances (Claude and Codex), their usage and the Dsh homes.
 registerWarm('cli', () =>
   settled([
     useCliInstances().refreshCliInstances({ silent: true }),
@@ -30,7 +29,6 @@ registerWarm('cli', () =>
     ...(codexDesktopEnabled.value || codexCliEnabled.value ? [useCodexInstances().refresh({ silent: true })] : []),
     ...(dshEnabled.value ? [useDshInstances().refresh()] : []),
     useUsage().hydrate(true),
-    useHomeSessions().refreshHomeSessions(),
   ]),
 )
 

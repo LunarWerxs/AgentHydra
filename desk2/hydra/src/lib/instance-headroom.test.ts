@@ -1,8 +1,8 @@
-// web/src/lib/home-charts.ts usableNow: the Instances landing's headline, "N of M accounts usable now".
+// web/src/lib/instance-headroom.ts usableNow: the Instances summary's count, "N of M accounts usable now".
 // The count is a promise about who can take work right now, so the reset rule, an unread window and
 // a signed-out account are the contract.
 import { expect, test } from 'bun:test'
-import { usableNow } from './home-charts'
+import { usableNow } from './instance-headroom'
 
 const NOW = Date.now()
 const HOUR = 3_600_000

@@ -33,7 +33,7 @@ interface Case {
   pick: string
   /** JS expression run before and after the gesture (X, Y are the point): true when the control did its job. */
   ok: string
-  /** The pane tab, by its mod+digit shortcut (default 5, the CLI table; 6 is the desktop table). */
+  /** The pane tab, by its mod+digit shortcut (default 3, the Instances tab). */
   tab?: string
   /** JS expression printed beside the verdict. */
   diag?: string
@@ -92,13 +92,13 @@ const CASES: Case[] = []
 const each = (kinds: Kind[], c: Omit<Case, 'kind'>) => { for (const kind of kinds) CASES.push({ ...c, kind }) }
 each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'row ... menu opens', pick: ROW_MENU, ok: MENU_OPEN })
 each(['right-click'], { page: 'pane', what: 'row name cell context menu opens', pick: ROW_CELL, ok: MENU_OPEN })
-each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'login history opens its popover', pick: HISTORY, ok: POPOVER_OPEN, tab: '6' })
-each(['hover', 'focus'], { page: 'pane', what: 'row action icon (Open/Focus) shows its tooltip', pick: ACTION, ok: TIP_OPEN, tab: '6' })
-each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'name cell copies once, no tooltip', pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
-CASES.push({ page: 'pane', what: 'name cell copies once, no tooltip (300 ms rest)', kind: 'hover-press', wait: 300, pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
-each(['long-press'], { page: 'pane', what: 'name cell long-press shows its tooltip, no copy', pick: NAME, ok: `${TOASTS} === 0 && (${TIP_OPEN})`, tab: '6', diag: `[${TOASTS}, ${TIP_OPEN}]` })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'login history opens its popover', pick: HISTORY, ok: POPOVER_OPEN, tab: '3' })
+each(['hover', 'focus'], { page: 'pane', what: 'row action icon (Open/Focus) shows its tooltip', pick: ACTION, ok: TIP_OPEN, tab: '3' })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'name cell copies once, no tooltip', pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '3', diag: `[${TOASTS}, ${TIP_OPEN}]` })
+CASES.push({ page: 'pane', what: 'name cell copies once, no tooltip (300 ms rest)', kind: 'hover-press', wait: 300, pick: NAME, ok: `${TOASTS} === 1 && !(${TIP_OPEN})`, tab: '3', diag: `[${TOASTS}, ${TIP_OPEN}]` })
+each(['long-press'], { page: 'pane', what: 'name cell long-press shows its tooltip, no copy', pick: NAME, ok: `${TOASTS} === 0 && (${TIP_OPEN})`, tab: '3', diag: `[${TOASTS}, ${TIP_OPEN}]` })
 // Owner, 2026-10-06 ("these stupid popups won't stop"): every tooltip and breakdown the pointer passed stayed on screen.
-each(['hover-leave'], { page: 'pane', what: 'name cell tooltip goes with the pointer, window unfocused', pick: NAME, ok: TIP_OPEN, tab: '6', paused: true })
+each(['hover-leave'], { page: 'pane', what: 'name cell tooltip goes with the pointer, window unfocused', pick: NAME, ok: TIP_OPEN, tab: '3', paused: true })
 each(['hover-leave'], { page: 'pane', what: 'usage breakdown goes with the pointer, window unfocused', pick: USAGE, ok: POPOVER_OPEN, paused: true, diag: POPOVER_STATES })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Tip button: Hide sidebar hides it', pick: HIDE, ok: HIDDEN })
 each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outside a session) is selected', pick: ROW, ok: SELECTED })
@@ -182,7 +182,7 @@ try {
       // The tab shortcut is listened for once the app has mounted its tab bar.
       if (!(await until(`${fresh} && document.querySelectorAll('button').length > 5`, 20_000))) return false
       await sleep(500)
-      const tab = c.tab ?? '5'
+      const tab = c.tab ?? '3'
       for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: tab, code: `Digit${tab}`, modifiers: 2, windowsVirtualKeyCode: 48 + Number(tab) })
     } else {
       if (!(await until(`${fresh} && !!document.querySelector('button[aria-label="Hide sidebar"], button[aria-label="Show sidebar"]')`, 20_000))) return false

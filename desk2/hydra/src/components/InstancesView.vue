@@ -3,9 +3,11 @@ import {
   AppWindow,
   ArrowRightLeft,
   Boxes,
+  Cloud,
   Coins,
   CreditCard,
   Eraser,
+  FileDown,
   FolderOpen,
   Funnel,
   Gauge,
@@ -29,11 +31,14 @@ import { useStorage } from '@vueuse/core'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
+import CliInstanceRows from '@/components/CliInstanceRows.vue'
+import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
 import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
+import FreeInstanceRows from '@/components/FreeInstanceRows.vue'
 import InstanceCard from '@/components/InstanceCard.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
@@ -41,6 +46,7 @@ import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
 import InstanceTable from '@/components/InstanceTable.vue'
+import InstancesSummary from '@/components/InstancesSummary.vue'
 import LoginHistoryPopover from '@/components/LoginHistoryPopover.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
 import type { Provider } from '@/components/ProviderLogo.vue'
@@ -68,8 +74,9 @@ import { useClaudeAppHints } from '@/composables/useClaudeAppHints'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
-import { useInstanceFilter } from '@/composables/useInstanceFilter'
+import { INSTANCE_KINDS, useInstanceFilter } from '@/composables/useInstanceFilter'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { useFreeInstances } from '@/composables/useFreeInstances'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
 import { piiDisplayName, piiName } from '@/composables/usePrivacy'
@@ -86,6 +93,7 @@ import {
   getChatCounts,
   getDesktopInstall,
 } from '@/lib/api'
+import { freeLogo } from '@/lib/free-instances'
 import { formatBytes, formatUptime, timeAgo } from '@/lib/format'
 import {
   accountDisplayName,
@@ -99,12 +107,14 @@ import type { InstanceFacts } from '@/lib/instance-filter'
 import {
   type InstanceColumnKey,
   type InstanceRowModel,
+  type InstanceTableKind,
   instanceColumns,
   nameTooltipFor,
 } from '@/lib/instance-table'
 import { groupByProject } from '@/lib/session-groups'
 import { requestSessionJump } from '@/lib/session-jump'
 import { tokenPartsFor } from '@/lib/token-window'
+import { FREE_PROVIDERS } from '@desk/shared/free-instances'
 import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import { planSize } from '@/lib/usage-pool'
@@ -181,7 +191,15 @@ function lastRunningExact(inst: CMInstance): string | undefined {
 // much quota is left. It runs AFTER the sort — it removes or greys rows, it never reorders them.
 // Its provider choice decides which providers' rows the table draws at all (see "which providers
 // the table draws" below).
-const { providerShown, showProvider, visible: filterVisible } = useInstanceFilter()
+const {
+  providerShown,
+  showProvider,
+  visible: filterVisible,
+  kinds: shownKinds,
+  kindShown,
+  toggleKind,
+  showKind,
+} = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
  *  it has a window that is open or shut, and an account with a plan and a quota reading. */
@@ -374,12 +392,14 @@ async function handleRefresh() {
   // hitting Refresh actually clears the warning banner below.
   // force: re-resolve every account live. Accounts resolve themselves now, so this button is the
   // one way left to say "that identity is stale, go ask again" (e.g. after a plan upgrade).
-  // The Codex and DeepSeek rows share this table, so the one Refresh reloads them too.
+  // The Codex, DeepSeek, CLI and Free rows share this table, so the one Refresh reloads the shown ones too.
   await Promise.all([
     refreshInstances({ force: true, resolve: 'full' }),
     refreshDesktopInstall(true),
     ...(codexEnabled.value ? [refreshRows(codexRows.value, () => refreshCodex())] : []),
     ...(dshEnabled.value ? [refreshRows(dshRows.value, () => refreshDsh())] : []),
+    ...(cliShown.value ? [refreshRows(cliRows.value, () => refreshCliInstances())] : []),
+    ...(freeShown.value ? [refreshRows(freeRows.value, () => refreshFree())] : []),
   ])
   // A Refresh you pressed is a moment to re-sort: memory and tokens take their order afresh.
   holdEpoch.value++
@@ -427,17 +447,27 @@ const {
   linkDesktop: linkCliDesktop,
   remove: removeCli,
 } = useCliInstances()
+const { instances: freeInstances, loading: freeLoading, refreshFree } = useFreeInstances()
 onMounted(loadAppSettings)
 
-// --- which providers the table draws ------------------------------------------------------------
-// One table for every desktop instance (owner, 2026-09-30): the Claude rows here, then the Codex
-// and DeepSeek rows, which are their own components rendering the same ten cells. A provider's rows
-// are drawn when Settings → Providers has it on AND the filter's provider choice keeps it.
+// --- which kinds and providers the table draws --------------------------------------------------
+// One table, three kinds (owner, 2026-10-07): Desktop (the Claude rows, then the Codex and DeepSeek
+// rows, which are their own components), CLI and Free, each a toggle in the header. A kind's rows
+// are drawn when its toggle is on; Desktop's provider rows also need Settings → Providers and the
+// filter's provider choice, and CLI needs its Settings switch.
 const { instances: dshInstances, refresh: refreshDsh } = useDshInstances()
 const codexEnabled = computed(() => codexDesktopEnabled.value || codexCliEnabled.value)
-const claudeShown = computed(() => showDesktopInstances.value && providerShown('claude'))
-const codexShown = computed(() => codexEnabled.value && providerShown('codex'))
-const dshShown = computed(() => dshEnabled.value && providerShown('deepseek'))
+const claudeShown = computed(
+  () => kindShown('desktop') && showDesktopInstances.value && providerShown('claude'),
+)
+const codexShown = computed(
+  () => kindShown('desktop') && codexEnabled.value && providerShown('codex'),
+)
+const dshShown = computed(
+  () => kindShown('desktop') && dshEnabled.value && providerShown('deepseek'),
+)
+const cliShown = computed(() => kindShown('cli') && showCliInstances.value)
+const freeShown = computed(() => kindShown('free'))
 /** The Codex rows are drawn, or will not be: their list answered and the usage cache is read. The
  *  DeepSeek rows under them wait for this (at most CODEX_WAIT_MAX_MS), since Codex rows landing
  *  later pushed the DeepSeek row down by their height (measured 2026-10-04: 119 px at 0.5 s). */
@@ -546,32 +576,73 @@ interface ProviderRowsHandle {
 }
 const codexRows = ref<ProviderRowsHandle | null>(null)
 const dshRows = ref<ProviderRowsHandle | null>(null)
+const cliRows = ref<InstanceType<typeof CliInstanceRows> | null>(null)
+const freeRows = ref<InstanceType<typeof FreeInstanceRows> | null>(null)
+const quickAdd = ref<InstanceType<typeof CliQuickAdd> | null>(null)
+const KIND_LABEL_KEY: Record<InstanceTableKind, string> = {
+  desktop: 'app.tabDesktop',
+  cli: 'app.tabCli',
+  free: 'app.tabFree',
+}
 
 /** A row component's own refresh while it is mounted, else the bare list, so a provider the filter
  *  is leaving out still has a current count. */
-function refreshRows(rows: ProviderRowsHandle | null, list: () => unknown): unknown {
+function refreshRows(
+  rows: { refresh?: () => unknown } | null | undefined,
+  list: () => unknown,
+): unknown {
   return rows?.refresh ? rows.refresh() : list()
 }
 
-// Rows per provider: every row Settings lets this tab list, and the rows the filter (its provider
-// choice included) takes out. Counted from the lists, not from the rows on screen: the Claude rows
-// wait for their first draw and the Codex rows for the usage cache (see "first draw"), and counting
-// what is drawn read "0 of 15, 15 hidden by filter" for that moment, a heading that came and went.
+// Rows per kind: every row Settings lets this tab list, and the rows the filter (its provider choice
+// included) takes out. Counted from the lists, not from the rows on screen: the Claude rows wait for
+// their first draw and the Codex rows for the usage cache (see "first draw"), and counting what is
+// drawn read "0 of 15, 15 hidden by filter" for that moment, a heading that came and went. A kind
+// whose toggle is off counts nothing here, so its rows are neither in the heading nor hidden by it.
 const claudeTotal = computed(() => (showDesktopInstances.value ? instances.value.length : 0))
 const codexTotal = computed(() => (codexEnabled.value ? codexInstances.value.length : 0))
 const dshTotal = computed(() => (dshEnabled.value ? dshInstances.value.length : 0))
-const claudeHidden = computed(() => (claudeShown.value ? claudeFiltered.value : claudeTotal.value))
+const desktopTotal = computed(() => claudeTotal.value + codexTotal.value + dshTotal.value)
+const cliTotal = computed(() => (showCliInstances.value ? cliInstances.value.length : 0))
+const freeTotal = computed(() => freeInstances.value.length)
+const claudeHidden = computed(() =>
+  !kindShown('desktop')
+    ? 0
+    : claudeShown.value
+      ? claudeFiltered.value
+      : claudeTotal.value,
+)
 const codexHidden = computed(() =>
-  codexShown.value ? (codexRows.value?.hiddenByFilter ?? 0) : codexTotal.value,
+  !kindShown('desktop') ? 0 : codexShown.value ? (codexRows.value?.hiddenByFilter ?? 0) : codexTotal.value,
 )
 const dshHidden = computed(() =>
-  dshShown.value ? (dshRows.value?.hiddenByFilter ?? 0) : dshTotal.value,
+  !kindShown('desktop') ? 0 : dshShown.value ? (dshRows.value?.hiddenByFilter ?? 0) : dshTotal.value,
 )
-const totalRows = computed(() => claudeTotal.value + codexTotal.value + dshTotal.value)
+const cliHidden = computed(() =>
+  !kindShown('cli') ? 0 : cliShown.value ? (cliRows.value?.hiddenByFilter ?? 0) : cliTotal.value,
+)
+const freeHidden = computed(() =>
+  !kindShown('free') ? 0 : freeShown.value ? (freeRows.value?.hiddenByFilter ?? 0) : freeTotal.value,
+)
+const totalRows = computed(
+  () =>
+    (kindShown('desktop') ? desktopTotal.value : 0) +
+    (kindShown('cli') ? cliTotal.value : 0) +
+    (kindShown('free') ? freeTotal.value : 0),
+)
+/** The toggles' counts: every row each kind has, whether its toggle is on or not. */
+const kindCounts = computed<Record<InstanceTableKind, number>>(() => ({
+  desktop: desktopTotal.value,
+  cli: cliInstances.value.length,
+  free: freeTotal.value,
+}))
 /** How many rows the filter (its provider choice included) took out of the table — the heading has
  *  to say so, or an instance that quietly stopped being listed reads as a bug rather than as the
  *  filter working. */
-const hiddenByFilter = computed(() => claudeHidden.value + codexHidden.value + dshHidden.value)
+const hiddenByFilter = computed(
+  () =>
+    claudeHidden.value + codexHidden.value + dshHidden.value + cliHidden.value + freeHidden.value,
+)
 const shownRows = computed(() => totalRows.value - hiddenByFilter.value)
 /** Every row filtered away. The table is not empty (there ARE instances), so the empty state has to
  *  explain the filter rather than tell the user to create their first instance. */
@@ -584,9 +655,9 @@ const lastProvider = computed<Provider>(() =>
 )
 
 // --- the table: one column list, one row model ---------------------------------------------------
-// The same InstanceTable and InstanceRow the CLI tab draws (components/InstanceTable.vue). The Codex
-// and DeepSeek row components get this column list and hand the shared row their own models.
-const columns = computed(() => instanceColumns('desktop', { usageMode: usageMode.value }))
+// One InstanceTable for every shown kind (components/InstanceTable.vue). The Codex, DeepSeek, CLI and
+// Free row components get this column list and hand the shared row their own models.
+const columns = computed(() => instanceColumns(shownKinds.value, { usageMode: usageMode.value }))
 
 /**
  * Each column's width, padding included, sized for its FINAL content in this compact table, its
@@ -710,21 +781,36 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
-/** The header's + menu (InstanceSectionHeader), one item per provider switched on. */
-const createOptions = computed(() =>
-  createProviders.value.map((provider) => ({
+/** The header's + menu (InstanceSectionHeader): one item per provider switched on, then the Free
+ *  accounts. Free's ids carry a prefix because its 'claude' would otherwise be Claude's id. */
+const FREE_CREATE_PREFIX = 'free:'
+const createOptions = computed(() => [
+  ...createProviders.value.map((provider) => ({
     id: provider,
     provider,
     label: t(CREATE_LABEL[provider]),
   })),
-)
+  ...FREE_PROVIDERS.map((p) => ({
+    id: `${FREE_CREATE_PREFIX}${p}`,
+    provider: freeLogo(p),
+    label: t(p === 'claude' ? 'freeInstances.claude' : 'freeInstances.chatgpt'),
+  })),
+])
 
 /**
- * "New … instance". A provider the filter is leaving out is listed again first, so the row being
- * created is one you will see, and so its row component, which owns that provider's create
+ * "New … instance". A kind or provider the table is leaving out is listed again first, so the row
+ * being created is one you will see, and so its row component, which owns that kind's create
  * dialog, is mounted to open it.
  */
-async function onCreateFor(provider: Provider) {
+async function onCreateFor(id: string) {
+  if (id.startsWith(FREE_CREATE_PREFIX)) {
+    showKind('free')
+    await nextTick()
+    freeRows.value?.openCreate(id.slice(FREE_CREATE_PREFIX.length))
+    return
+  }
+  const provider = id as Provider
+  showKind('desktop')
   showProvider(provider)
   if (provider === 'claude') {
     openCreateDialog()
@@ -1295,7 +1381,7 @@ async function refreshDesktopInstall(fresh = false) {
 let desktopInstallTimer: number | null = null
 
 onMounted(() => {
-  // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop and cli kinds).
+  // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop, cli and free kinds).
   startPolling()
   void hydrateUsage()
   // The Claude rows here read the CLI list too (the linked-CLI badge and the ⋯ menu's CLI items).
@@ -1324,12 +1410,11 @@ onUnmounted(() => {
   <div class="flex min-h-full flex-col pb-16">
     <InstanceCard>
       <!-- The card's header bar (InstanceCard): the table's column headings right below draw the
-           line under it.
-           One table for every provider's desktop instances, so the heading is a title, not a
-           collapse toggle, and carries no provider logo (each row carries its own). The count covers
-           every provider and reads "x of y" once the filter is hiding rows, so it never silently
-           disagrees with the number of instances that exist. No count while the skeleton stands in:
-           it read "(0)" and then jumped to the real number. -->
+           line under it. One card for every kind of instance: the title is not a collapse toggle, and
+           the kind toggles sit in its summary slot. The count covers the shown kinds and reads "x of
+           y" once the filter is hiding rows, so it never silently disagrees with the instances that
+           exist. No count while the skeleton stands in: it read "(0)" and then jumped to the real
+           number. -->
       <InstanceSectionHeader
         :title="$t('instances.title')"
         :count="
@@ -1341,13 +1426,29 @@ onUnmounted(() => {
         "
         :refresh-label="$t('instances.refresh')"
         :refresh-hint="$t('instances.refreshHint')"
-        :refreshing="loading"
+        :refreshing="loading || cliLoading || freeLoading"
         :create-label="$t('instances.createInstance')"
         :create-options="createOptions"
         :collapsible="false"
         @refresh="handleRefresh"
-        @create="(id) => onCreateFor(id as Provider)"
+        @create="(id) => onCreateFor(id as string)"
       >
+        <template #summary>
+          <div class="flex items-center gap-1" role="group" :aria-label="$t('instances.title')">
+            <Button
+              v-for="kind in INSTANCE_KINDS"
+              :key="kind"
+              size="sm"
+              :variant="kindShown(kind) ? 'secondary' : 'ghost'"
+              :aria-pressed="kindShown(kind)"
+              :data-kind="kind"
+              @click="toggleKind(kind)"
+            >
+              {{ $t(KIND_LABEL_KEY[kind]) }}
+              <span class="tabular-nums text-muted-foreground">{{ kindCounts[kind] }}</span>
+            </Button>
+          </div>
+        </template>
         <template #meta>
           <span
             v-if="hiddenByFilter > 0 && !claudeSkeleton"
@@ -1362,6 +1463,28 @@ onUnmounted(() => {
                composables/useInstanceFilter.ts). A dimmed or short table must always have the
                control that explains it visible in the same toolbar. -->
           <InstanceFilterMenu :present-plans="presentPlans" />
+          <template v-if="cliShown">
+            <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
+              <Button
+                variant="outline"
+                size="icon"
+                :aria-label="$t('cliInstances.sync')"
+                @click="cliRows?.openSync()"
+              >
+                <Cloud />
+              </Button>
+            </IconTooltip>
+            <IconTooltip :label="$t('cliInstances.moveIn')">
+              <Button
+                variant="outline"
+                size="icon"
+                :aria-label="$t('cliInstances.moveIn')"
+                @click="cliRows?.openMoveIn()"
+              >
+                <FileDown />
+              </Button>
+            </IconTooltip>
+          </template>
           <IconTooltip
             :label="$t('instances.refreshAllUsage')"
             :description="$t('instances.refreshAllUsageHint')"
@@ -1379,20 +1502,27 @@ onUnmounted(() => {
               <Gauge :class="refreshingAllUsage ? 'animate-pulse' : ''" />
             </Button>
           </IconTooltip>
-          <!-- This table's settings (which tables show, paid extra usage, Claude native control, its
-               process columns) are in Desk's Settings, Instances → Desktop (owner, 2026-10-06). -->
+          <!-- One gear: the kind on screen when only one is shown, else Desktop. Each page holds that
+               kind's settings in Desk's Settings (owner, 2026-10-06). -->
           <IconTooltip :label="$t('instances.settingsTitle')">
             <Button
               variant="outline"
               size="icon"
               :aria-label="$t('instances.settingsTitle')"
-              @click="openSettingsInDesk('desktop')"
+              @click="openSettingsInDesk(shownKinds.length === 1 ? shownKinds[0] : 'desktop')"
             >
               <Settings2 />
             </Button>
           </IconTooltip>
         </template>
       </InstanceSectionHeader>
+      <CliQuickAdd
+        v-if="cliShown"
+        ref="quickAdd"
+        class="px-3 pb-3"
+        @signed-in="refreshCliInstances({ silent: true })"
+      />
+      <InstancesSummary />
 
       <div
         v-if="desktopWarning"
@@ -1423,10 +1553,10 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- ONE table for every provider's desktop instances: the same InstanceTable and InstanceRow
-           the CLI tab draws, fed this kind's columns (lib/instance-table.ts). The Claude rows are
-           the bodies below; the Codex and DeepSeek rows are their own components handing the same
-           InstanceRow their own models. -->
+      <!-- ONE table for every shown kind: the same InstanceTable and InstanceRow for all of them,
+           fed the shown kinds' columns (lib/instance-table.ts). The Claude rows are the bodies below;
+           the Codex and DeepSeek rows, and the CLI and Free rows, are their own components handing
+           the same InstanceRow their own models. -->
       <InstanceTable
         :columns="columns"
         :indicator-for="indicatorFor"
@@ -1763,6 +1893,13 @@ onUnmounted(() => {
         <tbody v-if="dshShown && codexSettled" data-slot="table-body" class="[&_tr:last-child]:border-0">
           <DshInstanceRows ref="dshRows" :columns="columns" />
         </tbody>
+        <CliInstanceRows
+          v-if="cliShown"
+          ref="cliRows"
+          :columns="columns"
+          @quick-add="quickAdd?.focusEmail()"
+        />
+        <FreeInstanceRows v-if="freeShown" ref="freeRows" :columns="columns" />
       </InstanceTable>
     </InstanceCard>
 

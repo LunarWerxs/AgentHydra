@@ -1,5 +1,5 @@
 // CliMayte view (components/CliMayteView.vue, CliMayteWorkerDetail.vue) and the CLI Quick add row
-// (CliQuickAdd.vue, in CliInstancesSection.vue; both sit on the CLI tab). Plain words on purpose:
+// (CliQuickAdd.vue, in InstancesView.vue; both sit on the Instances tab). Plain words on purpose:
 // the owner reads this tab, so no "moves", "groups" or "turns" without saying what they mean
 // (2026-09-30 review).
 export default {

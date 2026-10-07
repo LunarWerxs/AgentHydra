@@ -9,7 +9,6 @@ import type { SettingsRowId } from './settings'
 // The control of an Instances row that is not a plain AgentHydra setting (instances.ts): a table's
 // process columns, Claude native control's account, switch and reset, and the Free keepalive.
 const props = defineProps<{ id: SettingsRowId; label: string; inst: InstanceSettings }>()
-const table = props.inst.processTable(props.id)
 
 // The Free weekly floor: a whole 1 to 100 (the server refuses anything else); a box left empty or not a
 // number goes back to the saved value.
@@ -30,10 +29,10 @@ function saveFloor(e: Event) {
 
 <template>
   <PaneSwitch
-    v-if="table"
+    v-if="id === 'ahDesktopProcess'"
     :label="label"
-    :model-value="inst.processColumns(table)"
-    @update:model-value="(v: boolean) => inst.setProcessColumns(table!, v)"
+    :model-value="inst.processColumns()"
+    @update:model-value="(v: boolean) => inst.setProcessColumns(v)"
   />
 
   <div v-else-if="id === 'ahNativeAccount'" class="flex shrink-0 items-center gap-1">

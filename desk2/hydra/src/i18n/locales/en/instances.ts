@@ -433,7 +433,7 @@ export default {
   // row, so the button is absent rather than present and broken.
   chatsOpen: 'Open in Sessions',
   chatsClose: 'Close',
-  // The landing page (InstancesHomeView): the quick look, accounts first; Analytics is the advanced page.
+  // The summary above the table: the quick look, accounts first; Analytics is the advanced page.
   home: {
     title: 'At a glance',
     refresh: 'Refresh',

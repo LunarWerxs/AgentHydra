@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Quick add: one email in, a browser sign-in out (server/src/core/cli-quick-add.ts, docs/CLIMAYTE.md).
-// Lives in CliInstancesSection, on the CLI tab right above CliMayte, which runs on these accounts. Polls
+// Lives on the Instances tab under its header, right above CliMayte, which runs on these accounts. Polls
 // every 2 s only while a flow is waiting; emits 'signed-in' when a flow turns signed-in so the host
 // can refresh its list.
 //

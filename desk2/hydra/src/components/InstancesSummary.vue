@@ -1,15 +1,9 @@
 <script setup lang="ts">
-// The micro summary above the one Instances table; it replaces the Instances landing page
-// (InstancesHomeView). Owner, 2026-10-07: "for the analytics page. Have it be a micro view. Like a
-// collapsed section. And when you expand it shows you the rest of the details ... since analytics is
-// its own tab. The instances analytics we only keep what is like particularly useful and necessary".
-// So it keeps only what answers "can work start now, and who is about to stop?":
-//   Collapsed (the default, remembered): one line, the accounts and how many are usable now, and the
-//     pooled 5-hour and week gauges over every Claude account (desktop and CLI).
-//   Expanded: that line per kind (Desktop, CLI, Free), then the accounts nearest their limit, the top
-//     few and the rest behind "+N more".
-// Every number comes from a composable the table already reads (useInstances, useCliInstances,
-// useFreeInstances, useUsage); nothing is fetched here.
+// The micro summary above the one Instances table. It keeps only what answers "can work start now, and
+// who is about to stop?". Collapsed (the default, remembered): one line with the accounts usable now and
+// the pooled 5-hour and week gauges over every Claude account. Expanded: that line per kind (Desktop,
+// CLI, Free), then the accounts nearest their limit, the top few and the rest behind "+N more".
+// Every number comes from a composable the table already reads; nothing is fetched here.
 import { ChevronRight, Monitor, Terminal, MessagesSquare } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
 import { computed, ref } from 'vue'
@@ -21,9 +15,9 @@ import { useInstances } from '@/composables/useInstances'
 import { pii } from '@/composables/usePrivacy'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
-import { type HeadroomRow, sortHeadroom, usableNow, usedPct } from '@/lib/home-charts'
 import { freeUsageSnapshot } from '@/lib/free-instances'
-import { usageBadgeVariant } from '@/lib/usage'
+import { type HeadroomRow, sortHeadroom, usableNow } from '@/lib/instance-headroom'
+import { usageBadgeVariant, windowUsedPct } from '@/lib/usage'
 import { pooledRemaining } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
@@ -46,7 +40,7 @@ interface PoolInput {
   usage: ReturnType<typeof snapshotFor>
 }
 
-/** One line's figures: usable now (home-charts usableNow), the breakdown, the two pooled windows. */
+/** One line's figures: usable now (usableNow), the breakdown, the two pooled windows. */
 function accountLine(rows: PoolInput[]) {
   const { signedIn, spent, usable } = usableNow(
     rows.map((r) => ({ signedIn: r.signedIn, session: r.usage?.session, week: r.usage?.weekAll })),
@@ -126,9 +120,8 @@ const headroom = computed(() => {
   const row = (key: string, label: string, snap: ReturnType<typeof snapshotFor>): HeadroomRow => ({
     key,
     label,
-    session: usedPct(snap?.session, at),
-    week: usedPct(snap?.weekAll, at),
-    to: 'instances',
+    session: windowUsedPct(snap?.session, at),
+    week: windowUsedPct(snap?.weekAll, at),
   })
   // An instance is usually named by its account's address: masked in privacy mode.
   return sortHeadroom([

@@ -241,6 +241,8 @@ export function nameTooltipFor(
 export interface InstanceRowModel {
   id: string
   num: number
+  /** The kind of instance this row is, for the Instances tab's deep links (desk-embed findInstanceRow). */
+  kind?: InstanceTableKind
   /** Set aside by the filter: drawn faded, never disabled. */
   dimmed?: boolean
   /** The provider's mark before the number (the tables that mix providers). */

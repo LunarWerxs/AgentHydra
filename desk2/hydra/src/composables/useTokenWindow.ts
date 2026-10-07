@@ -1,6 +1,6 @@
-// web/src/composables/useTokenWindow.ts — the Tokens column's 5h / Week / Total choice, one per
-// table, remembered through the daemon like the other table preferences (useSharedPrefs.ts), and
-// the desktop table's per-account figures (the CLI list carries its own).
+// web/src/composables/useTokenWindow.ts — the Tokens column's 5h / Week / Total choice, remembered
+// through the daemon like the other table preferences (useSharedPrefs.ts), and the per-account tokens
+// of the desktop instances. The one Tokens column serves every kind (lib/instance-table.ts).
 
 import type { AccountTokens } from '@agenthydra/server/types'
 import { useStorage } from '@vueuse/core'
@@ -9,16 +9,10 @@ import { listDesktopInstanceTokens } from '@/lib/api'
 import { TOKEN_WINDOWS, type TokenWindow } from '@/lib/token-window'
 import { registerSharedPref } from './useSharedPrefs'
 
-const cliTokenWindow = useStorage<TokenWindow>('agenthydra.cliTokens.window', 'total')
-registerSharedPref('agenthydra.cliTokens.window', cliTokenWindow, TOKEN_WINDOWS)
 const desktopTokenWindow = useStorage<TokenWindow>('agenthydra.desktopTokens.window', 'total')
 registerSharedPref('agenthydra.desktopTokens.window', desktopTokenWindow, TOKEN_WINDOWS)
-const freeTokenWindow = useStorage<TokenWindow>('agenthydra.freeTokens.window', 'total')
-registerSharedPref('agenthydra.freeTokens.window', freeTokenWindow, TOKEN_WINDOWS)
 
-export const useCliTokenWindow = () => cliTokenWindow
 export const useDesktopTokenWindow = () => desktopTokenWindow
-export const useFreeTokenWindow = () => freeTokenWindow
 
 /** Each desktop instance's current account's tokens, by instance dir. One shared copy, read by the
  *  table and refreshed by lib/warm-data.ts (the desktop kind) and when the tab is shown. */

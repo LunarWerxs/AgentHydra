@@ -128,7 +128,7 @@ export type DeskMessage =
   | { type: 'desk:sidebar'; view: string; action: 'switch'; id: string; on: boolean }
   | { type: 'desk:sidebar'; view: string; action: 'search'; value: string }
   /** Show this instance's row in Instances (its desktop or CLI table) and mark it. */
-  | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' }
+  | { type: 'desk:show-instance'; num: number; kind: 'desktop' | 'cli' | 'free' }
   /** Open this CliMayte task on the CliMayte node of the HSwarm tab; `pc` (that PC's name) for another PC's, whose id may repeat one here. */
   | { type: 'desk:open-worker'; id: string; pc?: string }
   /** Open the HSwarm tab, on that job of its Jobs node when one is named. */

@@ -5,7 +5,6 @@
 import { computed, type Ref } from 'vue'
 import { useInstanceFilter } from '@/composables/useInstanceFilter'
 import { type PersistedSort, type SortableColumn, useSortable } from '@/composables/useSortable'
-import type { InstanceTableKind } from '@/composables/useUsageMode'
 import type { UsageSnapshot } from '@/lib/api'
 import type { InstanceFacts } from '@/lib/instance-filter'
 import { bindingWeeklyPct } from '@/lib/usage'
@@ -50,8 +49,6 @@ export function useInstanceSource<Row>(opts: {
   facts: (row: Row) => InstanceFacts
   /** Where the sort is remembered across reloads, when it should be. */
   persisted?: PersistedSort
-  /** The table the rows are drawn in, whose column mode the filter follows (the desktop table's unless named). */
-  table?: InstanceTableKind
 }) {
   const { sortedRows, toggleSort, indicatorFor } = useSortable(
     opts.rows,
@@ -59,7 +56,7 @@ export function useInstanceSource<Row>(opts: {
     opts.persisted,
     { rowKey: opts.rowKey },
   )
-  const { dimmed, visible } = useInstanceFilter(opts.table)
+  const { dimmed, visible } = useInstanceFilter()
   const visibleRows = computed(() => visible(sortedRows.value, opts.facts))
   return {
     sortedRows,

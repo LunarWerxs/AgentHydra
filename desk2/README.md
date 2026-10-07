@@ -54,13 +54,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   each row's account number, its time since the last activity, a working chat's elapsed time and the AgentHydra
   lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
-  Instances has a page per table: CLI (the Claude CLI table shown, its process columns, Keep windows
-  running and its weekly floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI,
-  DeepSeek; its process columns; paid extra usage; Claude native control) and Free (its process columns, and
-  Keep windows running with its weekly floor for Claude logins, `/api/free/settings`).
-  Each table's gear opens its page over the table (`ah:open-settings`; Settings, a pop-up, leaves the pane open); the pane's own popover, its "Instances settings"
-  dialog and its toolbar column toggle are gone. "Show process columns" is each table's own now
-  (`hydra/src/composables/useUsageMode.ts`, `USAGE_MODE_KEYS`; Desk writes the same keys,
+  Instances has a page per kind: CLI (the Claude CLI kind shown, Keep windows running and its weekly
+  floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI, DeepSeek; the one "Show
+  process columns"; paid extra usage; Claude native control) and Free (Keep windows running with its weekly
+  floor for Claude logins, `/api/free/settings`).
+  The table's gear opens its page over the table (`ah:open-settings`; Settings, a pop-up, leaves the pane open); the pane's own popover, its "Instances settings"
+  dialog and its toolbar column toggle are gone. "Show process columns" is one setting now
+  (`hydra/src/composables/useUsageMode.ts`, `usageMode`; Desk writes the same key,
   `web/src/components/panes/instances.ts`). The pane's header gear beside Discord is gone too: Desk's
   Settings gear, bottom left, carries the "a newer AgentHydra is waiting" dot (`ah:update-dot`) and opens
   on Updates while it shows.
@@ -251,9 +251,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   slides it up out of view and back down; it lies over the top of the transcript, so the page never
   re-lays out while it moves. The chat title in the title bar is centred. It reads AgentHydra through
   Desk 2's `/ah/api`.
-- **One card for every Instances table** (owner, 2026-10-06). CLI, Desktop and Free each sit in the same
-  lighter, rounded card (`InstanceCard.vue`): the header bar is its top, the rows inside it. A table
-  that mixes providers (Desktop, Free) has a + menu with one item per provider, from the shared header.
+- **One card for the Instances tab** (owner, 2026-10-06; one table since 2026-10-07). Desktop, CLI and Free rows sit in the same
+  lighter, rounded card (`InstanceCard.vue`): the header bar is its top, the rows inside it. The kind
+  toggles in its header (Desktop, CLI, Free, each with its count; a kind with no rows still shows) choose
+  which row segments show, and the + menu has one item per provider, Free's as `free:` ids.
 - **The copy's own changes.** Its desktop Instances table keeps its column widths and row order while
   the stats load (fixed columns, placeholders the size of what replaces them; Memory and Tokens re-sort
   on a header click or Refresh, not on every poll), and an HSwarm job opens its summary right under its
@@ -275,7 +276,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   those shown cover under 95%, never more than 8, and all of them when there are six or fewer. The rest
   go into one "+N more" row with their combined share, which opens them in place and folds them again
   (`foldModels` in `web/src/components/shell/stats.ts`).
-- **Analytics and the Instances landing read top down, in gray** (owner, 2026-10-05: "my eyeballs don't
+- **Analytics and the Instances summary read top down, in gray** (owner, 2026-10-05: "my eyeballs don't
   know what to focus on ... a ton of blue. And no, adding a thousand colors to it isn't gonna help").
   Analytics (`hydra/src/components/AnalyticsView.vue`) leads with four numbers, each with its comparison:
   tokens in the last 7 days against the 7 before (on a 30-day or All window), cost at API rates with the
@@ -283,8 +284,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   against the 7 before (it opens HSwarm; the rest of HSwarm's card is behind its info icon), and the
   busiest model with its share. Then cost over time (bars or calendar in one panel), by model, project
   and account, sessions and tokens, what eats tokens, sessions worth a look, tools, busiest hours,
-  sessions at once, recurring mistakes, recent edits and the coding tools here. The Instances landing
-  ("At a glance", `hydra/src/components/InstancesHomeView.vue`) leads with how many CLI and desktop
+  sessions at once, recurring mistakes, recent edits and the coding tools here. The Instances summary
+  ("At a glance", `hydra/src/components/InstancesSummary.vue`) leads with how many CLI and desktop
   accounts are usable now (signed in, neither limit used up), the pooled 5h and week bars (the CLI
   table's own gauges, in gray), and the accounts nearest their limit, with one warning rule for both:
   amber from 70% used, red above 90%; then CliMayte's and this PC's session numbers, the 24-hour charts, and

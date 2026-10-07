@@ -1,36 +1,24 @@
-// The Instances pages of Desk's Settings (owner, 2026-10-06): the settings of the AgentHydra pane's three
-// tables, CLI, Desktop and Free, which were behind each table's gear (the CLI table's popover, the Desktop
-// tab's "Instances settings" dialog). The gear now opens this dialog on its table's page. Which tables
-// show, the keepalive and paid extra usage are AgentHydra settings like any other (agenthydra.ts rows).
-// What is here is the rest:
-// - each table's process columns: the pane's own localStorage keys, as tooltips and privacy mode are, also
+// The Instances page of Desk's Settings (owner, 2026-10-06): the settings of the AgentHydra pane's one
+// Instances table, which were behind its gear. Which kinds show, the keepalive and paid extra usage are
+// AgentHydra settings like any other (agenthydra.ts rows). What is here is the rest:
+// - the table's process columns: the pane's own localStorage key, as tooltips and privacy mode are, also
 //   kept in AgentHydra's ui-prefs store, which the pane reads at start;
 // - Claude native control, per desktop account (the daemon's /api/claude-native/settings), moved here
 //   with its helpers from the pane (hydra/src/components/ClaudeNativeSettings.vue, retired);
-// - the Free table's Keep windows running and its weekly floor, Desk's own (/api/free/settings,
+// - the Free logins' Keep windows running and their weekly floor, Desk's own (/api/free/settings,
 //   server/src/free-instances).
 import { useStorage } from '@vueuse/core'
-import { computed, ref, watch, type Ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import type { FreeSettings } from '@shared/free-instances'
 import type { PaneApi } from './api'
 import type { AgentHydraSettings } from './agenthydra'
 import type { SettingsRowId } from './settings'
 import { tellHydra } from '@/components/hydra/api'
 
-/** The pane's column-mode keys (hydra/src/composables/useUsageMode.ts USAGE_MODE_KEYS): true draws the
- *  quota columns, false the process ones. The CLI and Free tables start from the desktop table's. */
-export const TABLE_MODE_KEYS = {
-  desktop: 'agenthydra.instances.usageMode2',
-  cli: 'agenthydra.cli.usageMode',
-  free: 'agenthydra.free.usageMode'
-} as const
-export type InstanceTable = keyof typeof TABLE_MODE_KEYS
+/** The pane's column-mode key (hydra/src/composables/useUsageMode.ts): true draws the quota columns,
+ *  false the process ones. */
+const USAGE_MODE_KEY = 'agenthydra.instances.usageMode2'
 
-const PROCESS_ROWS: Partial<Record<SettingsRowId, InstanceTable>> = {
-  ahCliProcess: 'cli',
-  ahDesktopProcess: 'desktop',
-  ahFreeProcess: 'free'
-}
 const NATIVE_ROWS: SettingsRowId[] = ['ahNativeAccount', 'ahNativeAuto', 'ahNativeReset']
 const FREE_ROWS: SettingsRowId[] = ['ahFreeKeepalive', 'ahFreeFloor']
 
@@ -122,22 +110,13 @@ export function pairingSummary(r: PairingResult, privacy = false): string[] {
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
-  // --- each table's process columns ---
-  const desktopMode = useStorage<boolean>(TABLE_MODE_KEYS.desktop, true)
-  const modes: Record<InstanceTable, Ref<boolean>> = {
-    desktop: desktopMode,
-    cli: useStorage<boolean>(TABLE_MODE_KEYS.cli, desktopMode.value),
-    free: useStorage<boolean>(TABLE_MODE_KEYS.free, desktopMode.value)
-  }
-  for (const table of Object.keys(modes) as InstanceTable[]) {
-    const key = TABLE_MODE_KEYS[table]
-    // The pane trusts AgentHydra's store over its own storage at start: a pane loaded later would turn it back.
-    watch(modes[table], (v) => void api.agentHydra('/ui-prefs', { method: 'POST', body: JSON.stringify({ [key]: String(v) }) }).catch(() => {}))
-  }
-  const processTable = (id: SettingsRowId) => PROCESS_ROWS[id] ?? null
-  const processColumns = (table: InstanceTable) => !modes[table].value
-  function setProcessColumns(table: InstanceTable, on: boolean) {
-    modes[table].value = !on
+  // --- the table's process columns ---
+  const usageMode = useStorage<boolean>(USAGE_MODE_KEY, true)
+  // The pane trusts AgentHydra's store over its own storage at start: a pane loaded later would turn it back.
+  watch(usageMode, (v) => void api.agentHydra('/ui-prefs', { method: 'POST', body: JSON.stringify({ [USAGE_MODE_KEY]: String(v) }) }).catch(() => {}))
+  const processColumns = () => !usageMode.value
+  function setProcessColumns(on: boolean) {
+    usageMode.value = !on
     ah.savedAt.value = Date.now()
   }
 
@@ -311,8 +290,7 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   }
 
   return {
-    owns: (id: SettingsRowId) => !!PROCESS_ROWS[id] || NATIVE_ROWS.includes(id) || FREE_ROWS.includes(id) || id === 'ahDesktopCliPair',
-    processTable,
+    owns: (id: SettingsRowId) => id === 'ahDesktopProcess' || NATIVE_ROWS.includes(id) || FREE_ROWS.includes(id) || id === 'ahDesktopCliPair',
     processColumns,
     setProcessColumns,
     profiles,

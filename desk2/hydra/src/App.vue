@@ -1,16 +1,5 @@
 <script setup lang="ts">
-import {
-  BarChart3,
-  Boxes,
-  ChevronDown,
-  Layers,
-  Maximize2,
-  MessagesSquare,
-  Minimize2,
-  Monitor,
-  RotateCw,
-  Terminal,
-} from '@lucide/vue'
+import { BarChart3, Boxes, Layers, Maximize2, Minimize2, RotateCw } from '@lucide/vue'
 import {
   type Component,
   computed,
@@ -27,16 +16,11 @@ import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
 import ShortcutSheet from '@/components/ShortcutSheet.vue'
 import { Button } from '@/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { useBuilder } from '@/composables/useBuilder'
 import { useData } from '@/composables/useData'
+import { INSTANCE_KINDS, useInstanceFilter } from '@/composables/useInstanceFilter'
 import { useNotifications } from '@/composables/useNotifications'
 import { usePanels } from '@/composables/usePanels'
 import { useRunningCode } from '@/composables/useRunningCode'
@@ -44,7 +28,7 @@ import { SHELL_BASE_MAX, useShellWidth } from '@/composables/useShellWidth'
 import { openShortcutSheet, useShortcuts } from '@/composables/useShortcuts'
 import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
-import { hswarmNodeAsk, INSTANCES_VIEWS, OPEN_VIEW } from '@/lib/app-view'
+import { hswarmNodeAsk, OPEN_VIEW } from '@/lib/app-view'
 import { freeThreadAsk } from '@/lib/free-instances'
 import { lazyView } from '@/lib/lazy-view'
 import {
@@ -59,7 +43,6 @@ import {
   PANE_OPEN_EVENT,
   resendSidebar,
   setDeskView,
-  showSessionsInDesk,
   showUpdateDotInDesk,
 } from '@/lib/desk-embed'
 import { refreshForView } from '@/lib/warm-data'
@@ -80,10 +63,7 @@ const AutomationSettings = lazyView(() => import('@/components/AutomationSetting
 const QueueBuilder = lazyView(() => import('@/components/QueueBuilder.vue'))
 const QueueView = lazyView(() => import('@/components/QueueView.vue'))
 const AnalyticsView = lazyView(() => import('@/components/AnalyticsView.vue'))
-const CliView = lazyView(() => import('@/components/CliView.vue'))
 const HSwarmView = lazyView(() => import('@/components/HSwarmView.vue'))
-const InstancesHomeView = lazyView(() => import('@/components/InstancesHomeView.vue'))
-const FreeInstancesView = lazyView(() => import('@/components/FreeInstancesView.vue'))
 const InstancesView = lazyView(() => import('@/components/InstancesView.vue'))
 
 // The studio's one invite link, never expiring (the same one every product carries).
@@ -155,21 +135,22 @@ watch(
   },
   { flush: 'sync' },
 )
-// Desk's session header asked for an account's row in Instances: its table (desktop or CLI), else the
-// other one, scrolled to and marked.
+// Desk's session header asked for an account's row in Instances: its kind is drawn again if it was left
+// out, the row is scrolled to and marked; the other kinds are tried after it.
 watch(deskInstanceAsk, async (ask) => {
   if (!ask) return
   deskInstanceAsk.value = null
-  const other = ask.kind === 'cli' ? 'desktop' : 'cli'
-  for (const [tab, wait] of [
+  view.value = 'instances'
+  const { showKind } = useInstanceFilter()
+  const others = INSTANCE_KINDS.filter((k) => k !== ask.kind)
+  for (const [kind, wait] of [
     [ask.kind, 4000],
-    [other, 2500],
+    ...others.map((k) => [k, 2500] as const),
   ] as const) {
-    view.value = tab
-    const row = await findInstanceRow(ask.num, wait)
+    showKind(kind)
+    const row = await findInstanceRow(ask.num, kind, wait)
     if (row) return flashRow(row)
   }
-  view.value = ask.kind
   toast(t('app.deskInstanceMissing', { num: ask.num }))
 })
 
@@ -193,7 +174,7 @@ useShortcuts([
     labelKey: 'app.shortcutInstances',
     groupKey: 'app.shortcutGroupApp',
     run: () => {
-      view.value = 'instances-home'
+      view.value = 'instances'
     },
   },
   {
@@ -202,22 +183,6 @@ useShortcuts([
     groupKey: 'app.shortcutGroupApp',
     run: () => {
       view.value = 'analytics'
-    },
-  },
-  {
-    keys: 'mod+5',
-    labelKey: 'app.shortcutCli',
-    groupKey: 'app.shortcutGroupApp',
-    run: () => {
-      view.value = 'cli'
-    },
-  },
-  {
-    keys: 'mod+6',
-    labelKey: 'app.shortcutDesktop',
-    groupKey: 'app.shortcutGroupApp',
-    run: () => {
-      view.value = 'desktop'
     },
   },
   {
@@ -257,98 +222,21 @@ const { side, shiftPx, widthPx } = usePushPanel(anyPanelOpen, {
 // Shut down either: the daemon is Desk's engine.
 useTheme()
 
-// Top-level tabs. Instances opens the landing page; its account categories sit in a hover dropdown.
-const nav: { id: AppView; labelKey: string; icon: typeof MessagesSquare }[] = [
-  { id: 'instances-home', labelKey: 'app.tabInstances', icon: Boxes },
+// Top-level tabs. Instances is one tab: its kinds (Desktop, CLI, Free) are toggles inside it.
+const nav: { id: AppView; labelKey: string; icon: typeof Boxes }[] = [
+  { id: 'instances', labelKey: 'app.tabInstances', icon: Boxes },
   { id: 'analytics', labelKey: 'app.tabAnalytics', icon: BarChart3 },
   { id: 'hswarm', labelKey: 'app.tabHswarm', icon: Layers },
 ]
-const instancesSub: { id: AppView; labelKey: string; icon: typeof Terminal }[] = [
-  { id: 'cli', labelKey: 'app.tabCli', icon: Terminal },
-  { id: 'desktop', labelKey: 'app.tabDesktop', icon: Monitor },
-  { id: 'free', labelKey: 'app.tabFree', icon: MessagesSquare },
-]
-const inInstances = computed(() => INSTANCES_VIEWS.includes(view.value))
-// The tab on screen. 'desktop' is the fallback, as the v-else chain it replaces was.
+// The tab on screen. Instances is the fallback, as the v-else chain it replaces was.
 const VIEW_COMPONENTS: Partial<Record<AppView, Component>> = {
   analytics: AnalyticsView,
-  'instances-home': InstancesHomeView,
-  cli: CliView,
-  free: FreeInstancesView,
+  instances: InstancesView,
   hswarm: HSwarmView,
 }
 const viewComponent = computed(() => VIEW_COMPONENTS[view.value] ?? InstancesView)
-const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'desktop'))
-const viewProps = computed(() =>
-  view.value === 'hswarm'
-    ? { class: 'h-full' }
-    : view.value === 'instances-home'
-      ? { onNavigate: onHomeNavigate }
-      : {},
-)
-function tabActive(id: AppView) {
-  return id === 'instances-home' ? inInstances.value : view.value === id
-}
-
-// Instances dropdown: opens on mouse hover (closing ~150 ms after the pointer leaves both the tab and
-// the menu), on ArrowDown from the tab, on Enter/Space on the chevron, and on a tap of the chevron.
-// Only keyboard opens move focus into the menu; a hover must not steal it.
-const instancesMenuOpen = ref(false)
-let instancesMenuViaKeyboard = false
-let instancesCloseTimer: ReturnType<typeof setTimeout> | undefined
-function cancelInstancesClose() {
-  clearTimeout(instancesCloseTimer)
-}
-function hoverInstances(e: PointerEvent) {
-  if (e.pointerType === 'touch') return
-  cancelInstancesClose()
-  instancesMenuOpen.value = true
-}
-function leaveInstances(e: PointerEvent) {
-  if (e.pointerType === 'touch') return
-  cancelInstancesClose()
-  instancesCloseTimer = setTimeout(() => {
-    instancesMenuOpen.value = false
-  }, 150)
-}
-function setInstancesMenu(open: boolean) {
-  cancelInstancesClose()
-  instancesMenuOpen.value = open
-}
-function onInstancesTabKeydown(e: KeyboardEvent) {
-  // Enter/Space keep their normal job on the tab (open the landing page): keep them from reaching the
-  // trigger around it, which would open the menu instead.
-  if (e.key === 'Enter' || e.key === ' ') e.stopPropagation()
-  else if (e.key === 'ArrowDown') instancesMenuViaKeyboard = true
-}
-function onInstancesChevronPointerdown(e: PointerEvent) {
-  // With a mouse the hover already opened the menu: a click must not toggle it shut again.
-  if (e.pointerType === 'mouse') {
-    e.stopPropagation()
-    setInstancesMenu(true)
-  }
-}
-function onInstancesChevronKeydown() {
-  instancesMenuViaKeyboard = true
-}
-function onInstancesOpenAutoFocus(e: Event) {
-  if (!instancesMenuViaKeyboard) e.preventDefault()
-  instancesMenuViaKeyboard = false
-}
-function pickInstancesSub(id: AppView) {
-  pickTab(id)
-  setInstancesMenu(false)
-}
-
-// The landing page names the page a tile opens in its own words: its `instances` is the desktop page.
-function onHomeNavigate(
-  to: 'cli' | 'instances' | 'climayte' | 'sessions' | 'analytics' | 'hswarm',
-) {
-  if (to === 'sessions') showSessionsInDesk()
-  else if (to === 'climayte') openClimayte()
-  else if (to === 'hswarm') openHswarmSavings()
-  else view.value = to === 'instances' ? 'desktop' : to
-}
+const viewKey = computed(() => (view.value in VIEW_COMPONENTS ? view.value : 'instances'))
+const viewProps = computed(() => (view.value === 'hswarm' ? { class: 'h-full' } : {}))
 
 provide(OPEN_VIEW, (v: AppView) => {
   if (v === 'hswarm') openHswarmSavings()
@@ -476,76 +364,18 @@ onUnmounted(stopAvailabilityPolling)
     >
       <!-- view tabs (no logo or title: Desk's pane already says where you are, owner 2026-10-05) -->
       <nav class="flex items-start gap-1" :aria-label="$t('app.navLabel')">
-        <template v-for="n in nav" :key="n.id">
-          <!-- Instances: the tab opens the landing page; hovering it (or its chevron) drops down CLI and Desktop -->
-          <DropdownMenu
-            v-if="n.id === 'instances-home'"
-            :open="instancesMenuOpen"
-            :modal="false"
-            @update:open="setInstancesMenu"
-          >
-            <DropdownMenuTrigger as-child>
-              <div
-                class="flex items-center"
-                @pointerenter="hoverInstances"
-                @pointerleave="leaveInstances"
-              >
-                <Button
-                  :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
-                  size="sm"
-                  :title="$t(n.labelKey)"
-                  :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
-                  @pointerdown.stop
-                  @keydown="onInstancesTabKeydown"
-                  @click="pickTab(n.id)"
-                >
-                  <component :is="n.icon" />
-                  <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
-                </Button>
-                <Button
-                  :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
-                  size="icon-sm"
-                  class="-ms-1 w-5"
-                  :aria-label="$t('app.instancesMenu')"
-                  @pointerdown="onInstancesChevronPointerdown"
-                  @keydown="onInstancesChevronKeydown"
-                >
-                  <ChevronDown class="size-3" />
-                </Button>
-              </div>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="start"
-              :aria-label="$t('app.instancesMenu')"
-              @open-auto-focus="onInstancesOpenAutoFocus"
-              @close-auto-focus.prevent
-              @pointerenter="hoverInstances"
-              @pointerleave="leaveInstances"
-            >
-              <DropdownMenuItem
-                v-for="sub in instancesSub"
-                :key="sub.id"
-                :class="view === sub.id ? 'bg-secondary text-foreground' : ''"
-                :aria-current="view === sub.id ? 'page' : undefined"
-                @select="pickInstancesSub(sub.id)"
-              >
-                <component :is="sub.icon" />
-                {{ $t(sub.labelKey) }}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          <Button
-            v-else
-            :variant="tabActive(n.id) ? 'secondary' : 'ghost'"
-            size="sm"
-            :title="$t(n.labelKey)"
-            :aria-current="view === n.id ? 'page' : tabActive(n.id) ? 'true' : undefined"
-            @click="pickTab(n.id)"
-          >
-            <component :is="n.icon" />
-            <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
-          </Button>
-        </template>
+        <Button
+          v-for="n in nav"
+          :key="n.id"
+          :variant="view === n.id ? 'secondary' : 'ghost'"
+          size="sm"
+          :title="$t(n.labelKey)"
+          :aria-current="view === n.id ? 'page' : undefined"
+          @click="pickTab(n.id)"
+        >
+          <component :is="n.icon" />
+          <span class="hidden sm:inline">{{ $t(n.labelKey) }}</span>
+        </Button>
       </nav>
 
       <div class="ms-auto flex items-center gap-2">
@@ -594,7 +424,7 @@ onUnmounted(stopAvailabilityPolling)
     <div class="min-h-0 flex-1 pe-(--push-shift) transition-padding duration-300 ease-in-out">
       <main
         class="h-full min-h-0"
-        :class="inInstances ? 'overflow-y-auto scroll-slim' : ''"
+        :class="view === 'instances' ? 'overflow-y-auto scroll-slim' : ''"
       >
         <!-- Each tab is built the first time it is opened and then kept (KeepAlive), so switching
              back shows it as it was; its data is the shared warm copy (lib/warm-data.ts). -->

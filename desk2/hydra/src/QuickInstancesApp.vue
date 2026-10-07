@@ -126,7 +126,7 @@ const sortedClaude = computed(() =>
 )
 /**
  * EVERY CLI login gets its own row here, the linked ones too, the same rule the full manager's CLI
- * table follows (components/CliInstancesSection.vue). The owner, 2026-10-03: a CLI login linked to
+ * table follows (components/CliInstanceRows.vue). The owner, 2026-10-03: a CLI login linked to
  * a desktop row must still show in the CLI list ("I need to see it over there"). The desktop row
  * keeps its terminal badge as well, and a linked row names that desktop row, so the two windows
  * agree about the same machine.

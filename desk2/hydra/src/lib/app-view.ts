@@ -26,33 +26,19 @@
 
 import { type InjectionKey, type Ref, ref, watch } from 'vue'
 
-export type AppView =
-  | 'instances-home'
-  | 'cli'
-  | 'desktop'
-  | 'free'
-  | 'analytics'
-  | 'hswarm'
-export const APP_VIEWS: readonly AppView[] = [
-  'instances-home',
-  'cli',
-  'desktop',
-  'free',
-  'analytics',
-  'hswarm',
-]
+export type AppView = 'instances' | 'analytics' | 'hswarm'
+export const APP_VIEWS: readonly AppView[] = ['instances', 'analytics', 'hswarm']
 
-/** The views under the Instances group: the landing page and its account categories. */
-export const INSTANCES_VIEWS: readonly AppView[] = ['instances-home', 'cli', 'desktop', 'free']
-
-/** Tabs that were folded into another one, and where they went. The Corch tab (now CliMayte) became
- *  part of the CLI tab (2026-09-30); a window that last stood on it opens there rather than falling
- *  back to Sessions. `corch` is the value such a window stored. */
+/** Tabs that were folded into another one, and where they went. The Instances tab is one tab now
+ *  (Desktop, CLI and Free are kind toggles in it, owner 2026-10-07), so every old Instances id lands
+ *  there. Sessions and CliMayte live in the HSwarm tab's tree. */
 const RENAMED_VIEWS: Readonly<Record<string, AppView>> = {
-  corch: 'cli',
-  // `instances` was the desktop accounts page; the id now belongs to the group's landing page
-  // (`instances-home`), so a stored `instances` keeps meaning the desktop page it always meant.
-  instances: 'desktop',
+  'instances-home': 'instances',
+  cli: 'instances',
+  desktop: 'instances',
+  free: 'instances',
+  corch: 'instances',
+  instances: 'instances',
   // Hydra Desk 2's copy has no Sessions tab (2026-10-04): Desk's cloud list is it.
   sessions: 'hswarm',
   // CliMayte moved into the HSwarm tab, a node of its tree (2026-10-05).

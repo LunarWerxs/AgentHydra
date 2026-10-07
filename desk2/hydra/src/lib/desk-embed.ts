@@ -12,6 +12,7 @@
 import { onScopeDispose, ref, shallowReactive, watch } from 'vue'
 import type { AhMessage, AhSettingsPage, DeskMessage, SidebarModel } from '@desk/shared/hydra-embed'
 import { useAppSettings } from '@/composables/useAppSettings'
+import type { InstanceTableKind } from '@/lib/instance-table'
 import { sameData } from '@/lib/reconcile'
 import type { SessionJump } from '@/lib/session-jump'
 
@@ -27,11 +28,6 @@ function tellDesk(message: AhMessage): void {
 /** Desk opens this session in its own view. */
 export function openInDesk(s: SessionJump): void {
   tellDesk({ type: 'ah:open-session', session_id: s.session_id, source: s.source })
-}
-
-/** Desk shows its cloud list, every session of both PCs. */
-export function showSessionsInDesk(): void {
-  tellDesk({ type: 'ah:show-sessions' })
 }
 
 /** Desk opens its Settings, which hold this window's settings now (owner, 2026-10-06): on a table's
@@ -109,7 +105,7 @@ export function useDeskSidebar(
 }
 
 /** Desk asked for an instance's row in Instances (App.vue switches tab and marks it). */
-export const deskInstanceAsk = ref<{ num: number; kind: 'desktop' | 'cli' } | null>(null)
+export const deskInstanceAsk = ref<{ num: number; kind: InstanceTableKind } | null>(null)
 /** Desk asked for an HSwarm job, or just the HSwarm tab (App.vue switches to it; HSwarmView opens the
  *  job on its Jobs node and clears the ask). */
 export const deskSwarmAsk = ref<{ job?: string } | null>(null)
@@ -117,11 +113,19 @@ export const deskSwarmAsk = ref<{ job?: string } | null>(null)
  *  it once its list is in and clears the ask); `pc` names another PC's. */
 export const deskWorkerAsk = ref<{ id: string; pc?: string } | null>(null)
 
-/** The row of instance #num once the tab shows it, or null after `ms`; never one in the tab fading out
- *  (App.vue's view Transition keeps it mounted while the next comes in). */
-export function findInstanceRow(num: number, ms: number): Promise<HTMLElement | null> {
+/** The row of instance #num of this kind once the tab shows it, or null after `ms`; never one in the tab
+ *  fading out (App.vue's view Transition keeps it mounted while the next comes in). */
+export function findInstanceRow(
+  num: number,
+  kind: InstanceTableKind,
+  ms: number,
+): Promise<HTMLElement | null> {
   const look = () =>
-    [...document.querySelectorAll<HTMLElement>(`[data-instance-num="${num}"]`)].find(
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        `[data-instance-num="${num}"][data-instance-kind="${kind}"]`,
+      ),
+    ].find(
       (x) => !x.closest('.view-fade-leave-active'),
     ) ?? null
   const now = look()

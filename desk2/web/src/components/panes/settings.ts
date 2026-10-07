@@ -64,7 +64,6 @@ export type SettingsRowId =
   | 'home'
   | 'ahTray'
   | 'ahShowCli'
-  | 'ahCliProcess'
   | 'ahKeepalive'
   | 'ahKeepaliveFloor'
   | 'ahShowDesktop'
@@ -77,7 +76,6 @@ export type SettingsRowId =
   | 'ahNativeAuto'
   | 'ahNativeReset'
   | 'ahDesktopCliPair'
-  | 'ahFreeProcess'
   | 'ahFreeKeepalive'
   | 'ahFreeFloor'
   | 'dwService'
@@ -318,13 +316,6 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     description: 'Show the Claude CLI table. Hiding it signs nothing out.'
   },
   {
-    id: 'ahCliProcess',
-    section: 'cli',
-    group: 'Table',
-    label: 'Show process columns',
-    description: 'Config folder and usage in place of the quota bars.'
-  },
-  {
     id: 'ahKeepalive',
     section: 'cli',
     group: 'Keepalive',
@@ -385,13 +376,6 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Use standard controls',
     description: "Removes this account's native control settings.",
     when: ['native']
-  },
-  {
-    id: 'ahFreeProcess',
-    section: 'free',
-    group: 'Table',
-    label: 'Show process columns',
-    description: 'Usage in place of the quota bars.'
   },
   {
     id: 'ahFreeKeepalive',
