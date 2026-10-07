@@ -16,6 +16,8 @@ import RowMenuList from './RowMenuList.vue'
 import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
+import { cleanSidebar } from './clean'
+import RowAge from '@/lib/RowAge.vue'
 
 // A session running outside Hydra Desk, in the same list as our chats: the same 26px row, dot, title
 // and menu as the real app (without Delete: its files are not ours). Opening it shows its transcript,
@@ -60,6 +62,13 @@ const tooltip = computed(() =>
 // A chat of another app on this PC the Apps scope shows has that app's muted mark beside its dot, as in the cloud list; an added row never does.
 const app = computed(() => (props.session.fromPc || isAddedRow(props.session.id) ? null : appLead(ahSource(props.session.source))))
 const dotClass = computed(() => glyphDotClass(glyph.value))
+// The account number (an instance named "#38") and the age since its last activity, as the cloud list draws them;
+// Clean sidebar (clean.ts) hides both (owner, 2026-10-08).
+const account = computed(() => {
+  const num = cleanSidebar.value ? null : props.session.instance?.match(/^#(\d+)$/)
+  return num ? Number(num[1]) : null
+})
+const aged = computed(() => !cleanSidebar.value && props.session.lastActivityAt !== null)
 
 // Inline rename: the new title is Hydra Desk's own, the session keeps its name where it runs; an
 // emptied field goes back to that name.
@@ -121,8 +130,13 @@ function run(item: RowMenuItem) {
           />
           <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.title }}</span>
 
-          <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts; they make room for the three dots on hover. -->
-          <span v-if="!renaming && $slots.default" class="ml-1 flex shrink-0 items-center pr-1 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }"><slot /></span>
+          <!-- The account number, the sub-item badges (SubBadges.vue, when the sidebar shows them as counts) and the age; they
+               make room for the three dots on hover, the age giving its place. -->
+          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ml-1 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
+            <span v-if="account !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
+            <slot />
+            <RowAge v-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="session.lastActivityAt" />
+          </span>
 
       </DefineBody>
       <ContextMenu v-if="seen">

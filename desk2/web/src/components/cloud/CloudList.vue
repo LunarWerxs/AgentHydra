@@ -186,7 +186,7 @@ const ROW = LIST_ROW
             <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
             <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
-            <RowAge v-if="!cleanSidebar" :at="r.lastActivityAt" />
+            <RowAge v-if="!cleanSidebar" class="pr-1" :at="r.lastActivityAt" />
     </DefineRowBody>
     <header v-if="shownGroups.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>

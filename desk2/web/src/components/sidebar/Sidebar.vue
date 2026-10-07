@@ -103,9 +103,9 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-// 245, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's five extra buttons and a divider
-// (12 + 7 buttons of 28 + 7 gaps of 4 + 1 + 8 = 245).
-const MIN_WIDTH = 245
+// 250, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's five extra buttons and two dividers
+// (12 + 7 buttons of 28 + 8 gaps of 4 + 2 + 8 = 250).
+const MIN_WIDTH = 250
 const MAX_WIDTH = 420
 
 const src = useShellSource()

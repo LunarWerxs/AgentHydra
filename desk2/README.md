@@ -46,12 +46,13 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **The Connections chip works with the HTTP entry too** (owner, 2026-10-06). When the main Claude config has `mcpServers.connections` as `{type:'http', url, headersHelper}` (one shared local server for every chat) the connector is running when the url's `/health` answers, and Desk's calls (`server/src/connectors/connections-http.ts`) run the `headersHelper` per chat folder and session the way Claude Code does, then speak MCP Streamable HTTP; the helper is run again on a 401. The stdio entry still works. Header values are never logged.
 - **A Connections tab in the chat header** (owner, 2026-10-06): the Connections mark beside Changes and Browser, shown whenever the chip shows. Its pane (`connectors/ConnectionsPane.vue`) shows the server this Desk is connected to (transport, address, state, version), the sign-in state with Sign in, and this chat's workspace with the chip's switcher, the default-for-new-chats star, No workspace, the read-only Bypass permissions row and the Studio link. It and the chip share `connectors/connections-workspace.ts`; the chip stays in the title bar.
   **Undo this chat's changes** (`server/src/chat-undo/plan.ts`, `/api/chats/:id/file-undo`) reads the chat's own Claude transcript: the first Edit/Write of each file records its pre-chat content, replaying every edit gives what the file should be now. A confirm lists each file with +/- before anything changes; a file whose current content differs from that replay (someone else changed it) is refused, and one the transcript cannot settle (no recorded original, notebooks, outside the chat folder) is flagged and left alone. Files made by shell commands are not covered, and a file the chat created is deleted. The SDK's `rewindFiles` is not used: Desk starts queries without file checkpointing, it needs the live query, and it returns only totals.
-- **A clean sidebar, and no Back and Forward arrows** (owner, 2026-10-06). The chrome bar holds Menu, Hide
-  sidebar, Cloud, CliMayte and Clean sidebar, then, after a thin divider at its right end, AgentHydra and Dev
-  servers (owner, 2026-10-07); Alt + Left / Right still go back and forward.
-  Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves each row's account number, its
-  time since the last activity, a working chat's elapsed time and the AgentHydra lists' detail and time
-  out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
+- **A clean sidebar, and no Back and Forward arrows** (owner, 2026-10-06). The chrome bar holds Menu and Hide
+  sidebar, a thin divider, Cloud, CliMayte and Clean sidebar (owner, 2026-10-08), then, after another divider at
+  its right end, AgentHydra and Dev servers (owner, 2026-10-07); Alt + Left / Right still go back and forward.
+  The desk list's rows show their account number and time since the last activity as the cloud list's do, with
+  Cloud off too (owner, 2026-10-08). Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves
+  each row's account number, its time since the last activity, a working chat's elapsed time and the AgentHydra
+  lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
   Instances has a page per table: CLI (the Claude CLI table shown, its process columns, Keep windows
   running and its weekly floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI,

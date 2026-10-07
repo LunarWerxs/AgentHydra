@@ -157,8 +157,8 @@ const greetingName = computed(() => {
 const SIDEBAR_KEY = 'hydra-desk.sidebar.width'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 const savedWidth = Number(storage?.getItem(SIDEBAR_KEY))
-// A width saved before the minimum rose to 245 (Sidebar.vue's MIN_WIDTH) is raised to it.
-const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(245, savedWidth) : 288)
+// A width saved before the minimum rose to 250 (Sidebar.vue's MIN_WIDTH) is raised to it.
+const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(250, savedWidth) : 288)
 // Open or hidden (header toggle, Ctrl+B), remembered; the width animates 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
@@ -672,8 +672,8 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 237).
-const CHROME_COLLAPSED = 245
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 242).
+const CHROME_COLLAPSED = 250
 const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 

@@ -13,6 +13,7 @@ import RowMenuList from './RowMenuList.vue'
 import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
 import { cleanSidebar } from './clean'
+import RowAge from '@/lib/RowAge.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
@@ -44,6 +45,11 @@ const elapsed = computed(() =>
   !cleanSidebar.value && (props.chat.status === 'working' || props.chat.status === 'starting') ? elapsedLabel(props.chat.turnStartedAt, clock.value) : ''
 )
 const resets = computed(() => (props.chat.status === 'limited' ? resetClock(props.chat.limitResetsAt, clock.value) : ''))
+// The account number and the age since its last activity, as the cloud list draws them (owner, 2026-10-08: they show
+// without Cloud on, and Clean sidebar hides them). A working chat's elapsed time takes the age's place, and a limited
+// one's reset time does.
+const account = computed(() => (cleanSidebar.value ? null : (props.chat.account.number ?? null)))
+const aged = computed(() => !cleanSidebar.value && !elapsed.value && !resets.value)
 
 // Inline rename
 const renaming = ref(false)
@@ -99,12 +105,14 @@ defineExpose({ startRename })
           />
           <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
 
-          <!-- Hydra Desk extras: elapsed time, limit reset, CliMayte count -->
-          <!-- The elapsed counter gives its place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (elapsed || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
-            <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
+          <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset, CliMayte count -->
+          <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
+          <span v-if="!renaming && (account !== null || elapsed || aged || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
+            <span v-if="account !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
+            <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
+            <RowAge v-else-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="chat.updatedAt" />
             <span v-if="resets" class="tnum text-[var(--status-limited-text)]">resets {{ resets }}</span>
             <span
               v-if="chat.climayteActive > 0"

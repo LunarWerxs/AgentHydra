@@ -13,8 +13,8 @@ import type { UpdateOffer } from '@/lib/server-update'
 // every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
 // sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue)
 // and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
-// Each shows when it is on: AgentHydra pressed, the other four blue. AgentHydra and Dev servers sit at the right
-// end, after a thin divider: with the sidebar open, at its right edge; hidden, right after Clean sidebar. The bar's
+// Each shows when it is on: AgentHydra pressed, the other four blue. A thin divider sets Cloud and the toggles after
+// it apart from Menu and Hide sidebar. AgentHydra and Dev servers sit at the right end, after another: with the sidebar open, at its right edge; hidden, right after Clean sidebar. The bar's
 // width follows the sidebar's slide (`sliding`, DeskFrame's 300 ms snap), so the two glide left and right with it.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
@@ -27,8 +27,8 @@ const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: 
 const BTN_SHAPE =
   'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text`
-/** Hidden, the bar is just its buttons: 12 + 7 buttons of 28 + 7 gaps of 4 + the 1px divider + 4 = 241. */
-const COLLAPSED_WIDTH = 241
+/** Hidden, the bar is just its buttons: 12 + 7 buttons of 28 + 8 gaps of 4 + two 1px dividers + 4 = 246. */
+const COLLAPSED_WIDTH = 246
 </script>
 
 <template>
@@ -72,9 +72,9 @@ const COLLAPSED_WIDTH = 241
         <component :is="shellGlyphs.sidebarToggle" class="size-4" />
       </button>
     </Tip>
-    <!-- A divider before Cloud, inside the 4px gap already there (owner, 2026-10-08: "just a separator, not ... additional
-         spacing"): its margins take back its width and the gap it adds, and it sits on a whole pixel, so it stays sharp. -->
-    <span class="-ml-[2px] -mr-[3px] h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+    <!-- A divider before Cloud with the bar's own 4px each side (owner, 2026-10-08: "a little normal amount", not pushed
+         off to the right as AgentHydra and Dev servers are). -->
+    <span class="h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <Tip :label="cloudOn ? 'Back to the desk list' : 'Cloud: every session, both PCs'">
       <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
       <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
