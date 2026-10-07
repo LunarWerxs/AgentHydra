@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { db, getSetting, setSetting } from './db'
-import type { UsageForecast, UsageSample, UsageSnapshot } from './types'
+import type { FleetUsagePoint, UsageForecast, UsageSample, UsageSnapshot } from './types'
 
 /** The legacy store. Read once for the import below and never written again; left in place. */
 const LEGACY_PATH = join(DATA_DIR, 'usage-history.json')
@@ -185,6 +185,23 @@ export function usageSamples(key: string): UsageSample[] {
     .map(toSample)
 }
 
+/** Desktop and CLI keys' samples taken in (fromMs, toMs], oldest first per key, from one query. */
+export function fleetSamplesSince(fromMs: number, toMs: number): Map<string, UsageSample[]> {
+  const rows = db
+    .query<Row & { key: string }, [number, number]>(
+      'select key, at, session_pct, week_pct, week_resets_at, session_resets_at from usage_samples where at_ms > ? and at_ms <= ? order by at_ms',
+    )
+    .all(fromMs, toMs)
+  const out = new Map<string, UsageSample[]>()
+  for (const r of rows) {
+    if (!r.key.startsWith('desktop:') && !r.key.startsWith('cli:')) continue
+    const list = out.get(r.key) ?? []
+    list.push(toSample(r))
+    out.set(r.key, list)
+  }
+  return out
+}
+
 // --- the math (pure, tested) --------------------------------------------------
 
 /**
@@ -322,4 +339,82 @@ export function forecastUsage(
     exhaustsAt,
     exhaustsBeforeReset: hoursToReset === null ? null : headroomHours < hoursToReset,
   }
+}
+
+type TimedSample = { t: number; s: UsageSample }
+
+function lastAtOrBefore(list: readonly TimedSample[], ms: number): TimedSample | null {
+  let lo = 0
+  let hi = list.length - 1
+  let found: TimedSample | null = null
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (list[mid]!.t <= ms) {
+      found = list[mid]!
+      lo = mid + 1
+    } else hi = mid - 1
+  }
+  return found
+}
+
+/**
+ * The fleet's pooled usage, one point per bucket end E (fromMs + k * bucketMs, up to toMs). Each key
+ * contributes its last sample in (E - carryMs, E]: a reading stays good for carryMs after it was taken.
+ * A window whose reset is at or before E has rolled over since that reading, so it counts as 0.
+ *
+ * A CLI login linked to a desktop instance is the same account as that desktop row (owner, 2026-10-07),
+ * so the linked CLI key is dropped whenever its desktop key has a series.
+ */
+export function fleetUsageSeries(
+  series: ReadonlyMap<string, readonly UsageSample[]>,
+  opts: {
+    fromMs: number
+    toMs: number
+    bucketMs: number
+    carryMs: number
+    /** CLI key -> the desktop key of its linked instance. */
+    linkedCliToDesktop?: ReadonlyMap<string, string>
+  },
+): FleetUsagePoint[] {
+  const timelines: TimedSample[][] = []
+  for (const [key, list] of series) {
+    if (list.length === 0) continue
+    const desktop = opts.linkedCliToDesktop?.get(key)
+    if (desktop !== undefined && (series.get(desktop)?.length ?? 0) > 0) continue
+    timelines.push(
+      list
+        .map((s) => ({ t: Date.parse(s.at), s }))
+        .filter((x) => Number.isFinite(x.t))
+        .sort((a, b) => a.t - b.t),
+    )
+  }
+
+  const rolledOver = (resetsAt: string | null | undefined, end: number): boolean =>
+    !!resetsAt && Date.parse(resetsAt) <= end
+
+  const points: FleetUsagePoint[] = []
+  for (let end = opts.fromMs + opts.bucketMs; end <= opts.toMs; end += opts.bucketMs) {
+    let weekSum = 0
+    let sessionSum = 0
+    let sessionCount = 0
+    let accounts = 0
+    for (const list of timelines) {
+      const hit = lastAtOrBefore(list, end)
+      if (!hit || hit.t <= end - opts.carryMs) continue
+      const { s } = hit
+      accounts++
+      weekSum += rolledOver(s.weekResetsAt, end) ? 0 : s.weekAllPct
+      if (typeof s.sessionPct === 'number') {
+        sessionSum += rolledOver(s.sessionResetsAt, end) ? 0 : s.sessionPct
+        sessionCount++
+      }
+    }
+    points.push({
+      t: new Date(end).toISOString(),
+      week: accounts ? weekSum / accounts : null,
+      session: sessionCount ? sessionSum / sessionCount : null,
+      accounts,
+    })
+  }
+  return points
 }

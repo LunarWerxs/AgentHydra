@@ -68,7 +68,7 @@ import type { KitStore } from '../kit/store'
 import { readLiveRegistry } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
-import type { AccountTokens, UsageCheckResult, UsageSnapshot } from '../types'
+import type { AccountTokens, FleetUsageHistory, UsageCheckResult, UsageSnapshot } from '../types'
 import {
   allCachedUsage,
   checkUsage,
@@ -88,7 +88,12 @@ import {
   shownUsageMap,
   usageClearedAt,
 } from '../usage-cache'
-import { lastSampleSnapshot, usageHistoryKeys } from '../usage-history'
+import {
+  fleetSamplesSince,
+  fleetUsageSeries,
+  lastSampleSnapshot,
+  usageHistoryKeys,
+} from '../usage-history'
 import { withLimitWall, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
@@ -301,6 +306,34 @@ app.get('/api/usage/survey', async (c) => {
     deepseek,
     lastAutoRefreshAt: lastAutoRefreshAt(),
   })
+})
+
+// The fleet's pooled Claude usage over time, for the Instances tab's history charts. Desktop and CLI
+// logins only (usage-history.ts fleetUsageSeries counts a linked CLI login once, with its desktop row).
+const FLEET_BUCKET_MS = 3600_000
+const FLEET_CARRY_MS = 3 * 3600_000
+app.get('/api/usage/history', (c) => {
+  const n = Number(c.req.query('hours') ?? 168)
+  const hours = Number.isFinite(n) ? Math.min(2160, Math.max(1, n)) : 168
+  const toMs = Date.now()
+  const fromMs = toMs - hours * 3600_000
+  const linkedCliToDesktop = new Map<string, string>()
+  for (const i of listCliInstances())
+    if (i.associatedDesktopDir)
+      linkedCliToDesktop.set(cliKey(i.id), desktopKey(i.associatedDesktopDir))
+  const points = fleetUsageSeries(fleetSamplesSince(fromMs - FLEET_CARRY_MS, toMs), {
+    fromMs,
+    toMs,
+    bucketMs: FLEET_BUCKET_MS,
+    carryMs: FLEET_CARRY_MS,
+    linkedCliToDesktop,
+  })
+  return c.json({
+    from: new Date(fromMs).toISOString(),
+    to: new Date(toMs).toISOString(),
+    bucketMinutes: FLEET_BUCKET_MS / 60_000,
+    points,
+  } satisfies FleetUsageHistory)
 })
 
 // Force one background sweep now (the same pass the auto-refresh timer runs).

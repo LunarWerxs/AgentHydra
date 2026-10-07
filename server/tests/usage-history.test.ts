@@ -1,6 +1,7 @@
 // server/tests/usage-history.test.ts — the burn-rate + forecast math (server/src/usage-history.ts).
 //
-// Only the pure functions are exercised here (burnRateBounds, burnRatePctPerHour, forecastUsage); the
+// Only the pure functions are exercised here (burnRateBounds, burnRatePctPerHour, forecastUsage,
+// fleetUsageSeries); the
 // disk-backed recordUsageSample/usageSamples are intentionally left untested per the module's own doc
 // comment ("The pure math is separated from the storage so it is unit-testable without touching the
 // disk").
@@ -14,7 +15,12 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { UsageSample, UsageSnapshot } from '../src/types'
-import { burnRateBounds, burnRatePctPerHour, forecastUsage } from '../src/usage-history'
+import {
+  burnRateBounds,
+  burnRatePctPerHour,
+  fleetUsageSeries,
+  forecastUsage,
+} from '../src/usage-history'
 
 const mkSample = (at: string, weekAllPct: number): UsageSample => ({
   at,
@@ -282,5 +288,96 @@ describe('forecastUsage', () => {
     expect(forecast.hoursToReset).toBeNull() // NOT 0
     expect(forecast.exhaustsBeforeReset).toBeNull() // NOT false
     expect(forecast.exhaustsBeforeReset).not.toBe(false)
+  })
+})
+
+describe('fleetUsageSeries', () => {
+  const HOUR = 3600_000
+  const T0 = Date.parse('2026-10-01T00:00:00.000Z')
+  const window = (hours: number) => ({
+    fromMs: T0,
+    toMs: T0 + hours * HOUR,
+    bucketMs: HOUR,
+    carryMs: 3 * HOUR,
+  })
+  const fleetSample = (
+    at: string,
+    weekAllPct: number,
+    extra: Partial<UsageSample> = {},
+  ): UsageSample => ({ at, sessionPct: null, weekAllPct, weekResetsAt: null, ...extra })
+
+  const DESKTOP_A = 'desktop:C:/Users/me/.claude-instances/1'
+  const DESKTOP_B = 'desktop:C:/Users/me/.claude-instances/2'
+  const DESKTOP_C = 'desktop:C:/Users/me/.claude-instances/3'
+  const CLI_PLAIN = 'cli:example-login'
+  const CLI_LINKED = 'cli:example-linked'
+
+  test('a reading carries for 3 hours after it was taken, and no longer', () => {
+    const series = new Map([[DESKTOP_A, [fleetSample('2026-09-30T23:30:00.000Z', 40)]]])
+    expect(fleetUsageSeries(series, window(4))).toEqual([
+      { t: '2026-10-01T01:00:00.000Z', week: 40, session: null, accounts: 1 },
+      { t: '2026-10-01T02:00:00.000Z', week: 40, session: null, accounts: 1 },
+      { t: '2026-10-01T03:00:00.000Z', week: null, session: null, accounts: 0 },
+      { t: '2026-10-01T04:00:00.000Z', week: null, session: null, accounts: 0 },
+    ])
+  })
+
+  test('a window whose reset is at or before the bucket end reads 0', () => {
+    const series = new Map([
+      [
+        DESKTOP_B,
+        [
+          fleetSample('2026-10-01T00:10:00.000Z', 60, {
+            sessionPct: 20,
+            weekResetsAt: '2026-10-01T02:00:00.000Z',
+            sessionResetsAt: '2026-10-01T00:50:00.000Z',
+          }),
+        ],
+      ],
+    ])
+    expect(fleetUsageSeries(series, window(4))).toEqual([
+      { t: '2026-10-01T01:00:00.000Z', week: 60, session: 0, accounts: 1 },
+      { t: '2026-10-01T02:00:00.000Z', week: 0, session: 0, accounts: 1 },
+      { t: '2026-10-01T03:00:00.000Z', week: 0, session: 0, accounts: 1 },
+      { t: '2026-10-01T04:00:00.000Z', week: null, session: null, accounts: 0 },
+    ])
+  })
+
+  test('the mean is over the accounts that contributed; session only over those with one', () => {
+    const series = new Map([
+      [DESKTOP_C, [fleetSample('2026-10-01T00:10:00.000Z', 60, { sessionPct: 20 })]],
+      [CLI_PLAIN, [fleetSample('2026-10-01T00:20:00.000Z', 40)]],
+    ])
+    expect(fleetUsageSeries(series, window(3))).toEqual([
+      { t: '2026-10-01T01:00:00.000Z', week: 50, session: 20, accounts: 2 },
+      { t: '2026-10-01T02:00:00.000Z', week: 50, session: 20, accounts: 2 },
+      { t: '2026-10-01T03:00:00.000Z', week: 50, session: 20, accounts: 2 },
+    ])
+  })
+
+  test('a CLI login linked to a desktop row with a series is the same account and counts once', () => {
+    const linkedCliToDesktop = new Map([[CLI_LINKED, DESKTOP_C]])
+    const both = new Map([
+      [DESKTOP_C, [fleetSample('2026-10-01T00:10:00.000Z', 60, { sessionPct: 20 })]],
+      [CLI_LINKED, [fleetSample('2026-10-01T00:20:00.000Z', 90, { sessionPct: 70 })]],
+    ])
+    expect(fleetUsageSeries(both, { ...window(1), linkedCliToDesktop })).toEqual([
+      { t: '2026-10-01T01:00:00.000Z', week: 60, session: 20, accounts: 1 },
+    ])
+    const cliOnly = new Map([
+      [CLI_LINKED, [fleetSample('2026-10-01T00:20:00.000Z', 90, { sessionPct: 70 })]],
+    ])
+    expect(fleetUsageSeries(cliOnly, { ...window(1), linkedCliToDesktop })).toEqual([
+      { t: '2026-10-01T01:00:00.000Z', week: 90, session: 70, accounts: 1 },
+    ])
+  })
+
+  test('an empty window, or a key with no samples, gives nulls and 0 accounts', () => {
+    const empty = [
+      { t: '2026-10-01T01:00:00.000Z', week: null, session: null, accounts: 0 },
+      { t: '2026-10-01T02:00:00.000Z', week: null, session: null, accounts: 0 },
+    ]
+    expect(fleetUsageSeries(new Map(), window(2))).toEqual(empty)
+    expect(fleetUsageSeries(new Map([[DESKTOP_A, []]]), window(2))).toEqual(empty)
   })
 })

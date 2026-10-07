@@ -1198,6 +1198,25 @@ export interface UsageSample {
   sessionResetsAt?: string | null
 }
 
+/** One bucket of the fleet's pooled Claude usage. See usage-history.ts fleetUsageSeries. */
+export interface FleetUsagePoint {
+  /** ISO instant the bucket ends at. */
+  t: string
+  /** Mean weekly % over the accounts that contributed; a window that has reset counts as 0. */
+  week: number | null
+  /** Mean 5-hour % over the contributing accounts that have one. */
+  session: number | null
+  accounts: number
+}
+
+/** GET /api/usage/history. */
+export interface FleetUsageHistory {
+  from: string
+  to: string
+  bucketMinutes: number
+  points: FleetUsagePoint[]
+}
+
 /** The percentage, differentiated. See server/src/usage-history.ts. */
 export interface UsageForecast {
   /** Point-estimate burn, in percent per hour. Null = unmeasurable. NOTE: a value of 0 does NOT mean
