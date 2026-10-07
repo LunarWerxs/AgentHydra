@@ -31,7 +31,8 @@ ps(`$t = Get-Clipboard -Raw; if ($t) { [IO.File]::WriteAllText($env:BK, $t) }`, 
 
 const html = `<!doctype html><meta charset=utf-8><body style="font:16px sans-serif;margin:20px">
 <input id=name value="Ada Example" style="display:block;width:300px;margin:8px 0">
-<input id=email value="ada@example.com" style="display:block;width:300px;margin:8px 0">
+<input id=email type=email value="ada@example.com" style="display:block;width:300px;margin:8px 0">
+<input id=pw type=password value="not-a-real-password" style="display:block;width:300px;margin:8px 0">
 <textarea id=msg style="display:block;width:400px;height:120px;margin:8px 0">First line of an invented message.
 Second line, also invented.
 Third line to finish.</textarea>
@@ -85,6 +86,8 @@ try {
   const center = async (sel: string, fx = 0.5, fy = 0.5) => page.$eval(sel, (el, fx, fy) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width * fx, y: r.top + r.height * fy } }, fx, fy)
   const reset = () => page.evaluate(() => {
     ;(document.getElementById('name') as HTMLInputElement).value = 'Ada Example'
+    ;(document.getElementById('email') as HTMLInputElement).value = 'ada@example.com'
+    ;(document.getElementById('pw') as HTMLInputElement).value = 'not-a-real-password'
     ;(document.getElementById('msg') as HTMLTextAreaElement).value = 'First line of an invented message.\nSecond line, also invented.\nThird line to finish.'
     ;(document.activeElement as HTMLElement | null)?.blur()
     getSelection()?.removeAllRanges()
@@ -95,10 +98,14 @@ try {
     return a && typeof a.selectionStart === 'number' && a.selectionStart !== null ? a.value.slice(a.selectionStart, a.selectionEnd!) : String(getSelection())
   })
 
-  type Target = { name: string; select: () => Promise<void>; value: () => Promise<string>; editable: boolean }
+  type Target = { name: string; select: () => Promise<void>; value: () => Promise<string>; editable: boolean; secret?: boolean }
   const targets: Target[] = [
     { name: 'input', editable: true, value: () => page.$eval('#name', (e) => (e as HTMLInputElement).value),
       select: async () => { const p = await center('#name'); await mouse('down', p.x, p.y); await mouse('up', p.x, p.y); await press('a', true) } },
+    { name: 'email input', editable: true, value: () => page.$eval('#email', (e) => (e as HTMLInputElement).value),
+      select: async () => { const p = await center('#email'); await mouse('down', p.x, p.y); await mouse('up', p.x, p.y); await press('a', true) } },
+    { name: 'password input', editable: true, secret: true, value: () => page.$eval('#pw', (e) => (e as HTMLInputElement).value),
+      select: async () => { const p = await center('#pw'); await mouse('down', p.x, p.y); await mouse('up', p.x, p.y); await press('a', true) } },
     { name: 'textarea', editable: true, value: () => page.$eval('#msg', (e) => (e as HTMLTextAreaElement).value),
       select: async () => {
         const a = await center('#msg', 0.05, 0.12)
@@ -123,7 +130,7 @@ try {
         await t.select()
         const want = await selected()
         if (mode === 'paste') {
-          if (!t.editable) { good++; continue }
+          if (!t.editable || t.secret) { good++; continue }
           setClip(`pasted text ${n}`)
           await press('v', true)
           const v = await t.value()
@@ -133,6 +140,12 @@ try {
           await press(mode === 'copy' ? 'c' : 'x', true)
           const got = getClip()
           const after = await t.value()
+          if (t.secret) {
+            // Chrome puts nothing on the clipboard from a password field and leaves it alone.
+            if (got === sentinel && after === before) good++
+            else why = `clipboard ${got === sentinel ? 'unchanged' : 'CHANGED'}${after === before ? '' : ', field changed'}`
+            continue
+          }
           const gone = mode === 'cut' && t.editable ? after === before.replace(want, '') : after === before
           if (want && got === norm(want) && gone) good++
           else why = `selected ${JSON.stringify(want.slice(0, 30))}, clipboard ${JSON.stringify(got.slice(0, 30))}${gone ? '' : ', page text not as expected'}`

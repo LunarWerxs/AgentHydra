@@ -252,7 +252,7 @@ export function editCommands(key: string, modifiers: number): string[] | undefin
   return undefined
 }
 
-/** Runs in the page: the selected text of the focused input/textarea, else of the document, looking into focused same-origin iframes; `cut` removes it from an editable one. */
+/** Runs in the page: the selected text of the focused input/textarea, else of the document (an email or number input has no selection API, so its text comes from the document selection), looking into focused same-origin iframes; `cut` removes it from an editable one; a password field gives nothing. */
 export const READ_SELECTION = (cut: boolean): string => `(() => {
   let doc = document
   for (let i = 0; i < 8; i++) {
@@ -263,11 +263,12 @@ export const READ_SELECTION = (cut: boolean): string => `(() => {
   const a = doc.activeElement
   let text = ''
   let editable = false
+  if (a && a.tagName === 'INPUT' && a.type === 'password') return ''
   if (a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && typeof a.selectionStart === 'number' && a.selectionStart !== null))) {
     try { text = a.value.slice(a.selectionStart, a.selectionEnd); editable = !a.readOnly && !a.disabled } catch {}
   } else {
     text = String(doc.getSelection ? doc.getSelection() : '')
-    editable = !!(a && a.isContentEditable)
+    editable = !!(a && (a.isContentEditable || (a.tagName === 'INPUT' && !a.readOnly && !a.disabled)))
   }
   if (${cut} && text && editable) doc.execCommand('delete')
   return text
