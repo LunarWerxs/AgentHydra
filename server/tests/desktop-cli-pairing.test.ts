@@ -4,8 +4,9 @@
 // The contract (core/desktop-cli-pairing.ts): a signed-in desktop with no linked CLI instance gets
 // one created (or an unlinked CLI instance of the same account linked); a second pass makes nothing;
 // the background pass never remakes a deleted one, only the confirmed turn-on does; with the setting
-// off nothing changes; a signed-out desktop is skipped until it signs in. Temp profiles and the
-// test CLI store only. Windows only: the profile key is DPAPI's.
+// off nothing changes; a desktop with no live Claude Code login (signed out, or a grant that ran out
+// under a kept account id) gets no instance until it has one. Temp profiles and the test CLI store
+// only. Windows only: the profile key is DPAPI's.
 
 import { describe, expect, test } from 'bun:test'
 import { randomUUID } from 'node:crypto'
@@ -29,20 +30,21 @@ import './no-chats'
 process.env.APPDATA = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
 
 const far = Date.now() + 30 * 86_400_000
-const grant = JSON.stringify({
-  'c:o:https://api.example.test:user:inference user:file_upload user:profile user:sessions:claude_code':
-    { token: 'example-access', expiresAt: far, subscriptionType: 'max', rateLimitTier: 'tier' },
-})
+const grant = (expiresAt: number) =>
+  JSON.stringify({
+    'c:o:https://api.example.test:user:inference user:file_upload user:profile user:sessions:claude_code':
+      { token: 'example-access', expiresAt, subscriptionType: 'max', rateLimitTier: 'tier' },
+  })
 
-/** A desktop profile; `uuid` null leaves it signed out. */
-async function desktop(name: string, uuid: string | null): Promise<string> {
+/** A desktop profile; `uuid` null leaves it signed out, `expiresAt` dates its Claude Code grant. */
+async function desktop(name: string, uuid: string | null, expiresAt = far): Promise<string> {
   const dir = join(instancesRoot(), name)
   mkdirSync(dir, { recursive: true })
   await ensureWindowsMasterKey(dir)
   const cfg: Record<string, unknown> = { locale: 'en-US' }
   if (uuid) {
     cfg.lastKnownAccountUuid = uuid
-    cfg['oauth:tokenCacheV2'] = await encryptSafeStorage(grant, dir)
+    cfg['oauth:tokenCacheV2'] = await encryptSafeStorage(grant(expiresAt), dir)
   }
   writeFileSync(join(dir, 'config.json'), JSON.stringify(cfg))
   return dir
@@ -124,13 +126,20 @@ describe.skipIf(process.platform !== 'win32')('desktop CLI pairing', () => {
       expect(linked(dir)).toHaveLength(0)
     }))
 
-  test('a signed-out desktop is skipped and paired once it signs in', () =>
-    scratch(async ([a]) => {
-      const dir = await desktop(a, null)
-      await pairDesktopCliLogins()
-      expect(linked(dir)).toHaveLength(0)
+  test('a desktop with no live Claude Code login (signed out, or its grant ran out) gets no CLI instance until it has one', () =>
+    scratch(async ([a, b]) => {
+      const uuid = randomUUID()
+      const out = await desktop(a, null)
+      const stale = await desktop(b, uuid, Date.now() - 86_400_000)
+      expect(
+        (await pairingPlan()).filter((p) => p.desktopLabel === a || p.desktopLabel === b),
+      ).toEqual([])
+      await runPairing({ all: true })
+      expect([...linked(out), ...linked(stale)]).toHaveLength(0)
       await desktop(a, randomUUID())
+      await desktop(b, uuid)
       await pairDesktopCliLogins()
-      expect(linked(dir)).toHaveLength(1)
+      expect(linked(out).map((c) => c.loggedIn)).toEqual([true])
+      expect(linked(stale).map((c) => c.loggedIn)).toEqual([true])
     }))
 })

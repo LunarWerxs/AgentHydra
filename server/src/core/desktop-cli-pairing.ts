@@ -12,6 +12,12 @@
 // - A candidate with no CLI instance linked to it is paired: an UNLINKED CLI instance logged in as
 //   the same account is linked (lowest number wins), else a new "<label> (CLI)" instance is made and
 //   linked (and deleted again if the link fails). Then the feed signs it in at once.
+// - No empty CLI instance (owner, 2026-10-07: "They should not create empty CLI instances"). A new
+//   one is made only for a desktop whose token cache holds a Claude Code grant with time left, the
+//   login the feed signs it in with. A profile keeps its account id after that grant runs out (four
+//   on the owner's PC had), so the id alone made instances nothing could sign in. Such
+//   a desktop is not marked handled: the minute pass pairs it once the app is opened and renews the
+//   grant. A new instance the feed still could not sign in is deleted again.
 // - A desktop is paired ONCE. Its folder goes into the handled list (setting desktop_cli_paired), and
 //   so does every signed-in desktop that already has a linked CLI instance, so a person who deletes
 //   or unlinks one is respected: the background pass never makes it again.
@@ -36,7 +42,7 @@ import {
   linkCliInstanceToDesktop,
   listCliInstances,
 } from './cli-instances'
-import { feedCliFromDesktop } from './desktop-cli-feed'
+import { desktopCliCredential, feedCliFromDesktop } from './desktop-cli-feed'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumberFor } from './instance-numbers'
 import { readLoginUuid } from './login-state'
@@ -120,8 +126,10 @@ const linkedTo = (clis: CliInstance[], dir: string): CliInstance | undefined =>
 
 /** What turning the setting on would do now, ignoring the handled list unless `skip` names a
  *  desktop to leave out (the background pass: a handled desktop is never matched, so the minute
- *  timer reads no CLI folder for a desktop the person chose to leave unpaired). Folder reads only,
- *  no token decrypt: Settings asks for it through Desk 2's proxy, which gives up after 10 s. */
+ *  timer reads no CLI folder for a desktop the person chose to leave unpaired). A desktop that would
+ *  get a new instance but has no Claude Code login to give it is left out (see the header). That is
+ *  one token decrypt per such desktop, in process under its cached key: Settings asks for the plan
+ *  through Desk 2's proxy, which gives up after 10 s. */
 export async function pairingPlan(
   opts: { skip?: (dir: string) => boolean } = {},
 ): Promise<PairingCandidate[]> {
@@ -142,6 +150,7 @@ export async function pairingPlan(
     const match = clis
       .filter((c) => !c.associatedDesktopDir && !taken.has(c.id) && accountOf(c) === d.uuid)
       .sort((a, b) => a.num - b.num)[0]
+    if (!match && !(await desktopCliCredential(d.dir))) continue
     if (match) taken.add(match.id)
     out.push({
       desktopDir: d.dir,
@@ -211,6 +220,14 @@ async function doPairing({ all }: { all: boolean }): Promise<PairingResult> {
         configDir: cli.configDir,
         associatedDesktopDir: c.desktopDir,
       }).catch(() => null)
+      if (made && feed !== 'fed') {
+        deleteCliInstance(cli.id, cli.name)
+        throw new Error(
+          feed === 'no-desktop-login'
+            ? 'its Desktop app has no Claude Code sign-in right now'
+            : 'the new CLI instance could not be signed in',
+        )
+      }
       const p: Pairing = {
         desktopNum: c.desktopNum,
         desktopLabel: c.desktopLabel,

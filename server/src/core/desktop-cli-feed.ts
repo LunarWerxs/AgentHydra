@@ -84,6 +84,13 @@ export function hasOwnCliLogin(configDir: string): boolean {
   return typeof own?.refreshToken === 'string' && own.refreshToken.length > 0
 }
 
+/** The CLI login a desktop profile can give right now; null when it has none (signed out, or its
+ *  Claude Code grant ran out while the app stayed closed). */
+export async function desktopCliCredential(desktopDir: string): Promise<CliOauth | null> {
+  const tokens = existsSync(desktopDir) ? await readDesktopTokens(desktopDir) : null
+  return tokens?.v2 ? cliCredentialFromDesktop(tokens.v2) : null
+}
+
 export type FeedResult = 'fed' | 'current' | 'own-login' | 'no-desktop-login' | 'not-linked'
 
 /** Give one linked CLI instance its desktop instance's login (see the header). */
@@ -93,10 +100,7 @@ export async function feedCliFromDesktop(cli: {
 }): Promise<FeedResult> {
   if (!cli.associatedDesktopDir) return 'not-linked'
   if (hasOwnCliLogin(cli.configDir)) return 'own-login'
-  const tokens = existsSync(cli.associatedDesktopDir)
-    ? await readDesktopTokens(cli.associatedDesktopDir)
-    : null
-  const cred = tokens?.v2 ? cliCredentialFromDesktop(tokens.v2) : null
+  const cred = await desktopCliCredential(cli.associatedDesktopDir)
   if (!cred) return 'no-desktop-login'
   const path = credPath(cli.configDir)
   const file = readCredentials(path) ?? {}

@@ -1431,6 +1431,11 @@ desktop? ... to save me from having to do both individually."
   list and pairs everything again; its answer waits at most 7 s (`running: true` after that, and the
   run finishes on its own). A desktop whose pairing failed is left alone by the minute pass for 30
   minutes. One run at a time; Claude only, no Codex; neither key syncs.
+  No empty CLI instance (owner, 2026-10-07): a new one is made only for a desktop whose token cache
+  holds a Claude Code grant with time left. A profile keeps its account id after that grant runs out,
+  and the id alone had made instances nothing could sign in. Such a desktop is left out of the plan
+  and the Settings count, is not marked handled, and is paired on the first minute pass after its
+  app renews the grant. A new instance the feed still cannot sign in is deleted again.
 - Only the Claude Code grant is used (the path proven with the real CLI). A desktop login whose
   Code tab was never used, or not within the grant's weeks, has none: the link route answers
   `desktopHasNoCodeLogin` and the menu opens the usual sign-in, saying why. On 2026-10-01, 9 of the
