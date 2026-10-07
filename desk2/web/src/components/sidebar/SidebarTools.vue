@@ -12,8 +12,9 @@ let lastTools = 0
 
 <script setup lang="ts">
 import { computed, onUnmounted } from 'vue'
-import { shellGlyphs } from '@/lib/icons'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Activity } from '@lucide/vue'
+import { icons, shellGlyphs } from '@/lib/icons'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import FilterMenuItems from '@/components/cloud/FilterMenuItems.vue'
 import { scopesNarrowed } from '@/components/cloud/logic'
@@ -21,7 +22,7 @@ import { useCloud } from '@/components/cloud/store'
 import type { SidebarFilter } from './logic'
 import { useHiddenGroups } from './hidden'
 import { activeOnly } from './active'
-import { MENU_CONTENT, focusFirstItem } from './menuClasses'
+import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from './menuClasses'
 
 // The Search and Filter buttons at the right end of the sidebar list's first header, the desk list's or
 // the cloud list's. The Filter menu holds both lists' filters (cloud/FilterMenuItems.vue).
@@ -33,6 +34,8 @@ const { showHidden } = useHiddenGroups()
 // Show hidden counts too: the list holds groups it otherwise leaves out.
 const narrowed = computed(() => (cloud.on.value ? scopesNarrowed(cloud.scopes.value) : props.filter !== 'active') || showHidden.value || activeOnly.value)
 // The colour is apart so the Filter's blue (a filter is narrowing the list) replaces it rather than racing it.
+const toggleActive = () => (activeOnly.value = !activeOnly.value)
+const ACTIVE_TIP = 'Show only the sessions running, starting or waiting on you, and those with background work still running, in both lists'
 const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover'
 const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`
 
@@ -65,6 +68,18 @@ function keepFocus(e: Event): void {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" :class="`${MENU_CONTENT} w-64`" @open-auto-focus="focusFirstItem" @close-auto-focus="keepFocus">
           <FilterMenuItems :filter="filter" @update:filter="(f: SidebarFilter) => emit('update:filter', f)" />
+          <DropdownMenuSeparator :class="MENU_SEPARATOR" />
+          <DropdownMenuItem
+            role="menuitemcheckbox"
+            :aria-checked="activeOnly"
+            :title="ACTIVE_TIP"
+            :class="`${MENU_ITEM} pr-2`"
+            @select.prevent="toggleActive"
+          >
+            <Activity />
+            <span class="flex-1">Active only</span>
+            <component :is="icons.check" v-if="activeOnly" class="ml-3" />
+          </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </span>

@@ -15,7 +15,7 @@ import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { cleanSidebar } from '@/components/sidebar/clean'
-import { dimText, HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
+import { HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
@@ -260,7 +260,7 @@ const ROW = LIST_ROW
             tabindex="0"
             :aria-current="props.selectedId === r.id ? 'page' : undefined"
             :aria-pressed="cloud.selectMode.value ? cloud.selected.value.has(r.id) : undefined"
-            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : dimText(props.glyph?.(r.id), props.selectedId === r.id)]"
+            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : '']"
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
@@ -279,7 +279,7 @@ const ROW = LIST_ROW
             tabindex="0"
             :aria-current="props.selectedId === r.id ? 'page' : undefined"
             :aria-pressed="cloud.selectMode.value ? cloud.selected.value.has(r.id) : undefined"
-            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : dimText(props.glyph?.(r.id), props.selectedId === r.id)]"
+            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : '']"
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
