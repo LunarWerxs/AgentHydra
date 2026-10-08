@@ -21,7 +21,7 @@ from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.free")
 
-STATUS_TIMEOUT_S = 2.0
+STATUS_TIMEOUT_S = 5.0  # 2 s sent every task to the API while the daemon stalled (39 jobs at 23:51-00:00Z, 2026-10-07)
 MAX_PROMPT_CHARS = 100_000
 WAIT_S = 40  # the daemon waits at most 45 s per call
 WAIT_CAP_S = 240  # the longest a free account may hold a task before it goes back to its API route, whatever its timeout_s
@@ -89,9 +89,11 @@ _ERRORS = (OSError, ValueError, KeyError, IndexError, TypeError, asyncio.Timeout
 
 
 def _idle(status: dict) -> int:
+    """Signed-in accounts neither busy nor resting after a failed send (mcp-free.ts restingFor)."""
     if not status.get("ready"):
         return 0
-    return sum(1 for a in status.get("accounts") or [] if isinstance(a, dict) and a.get("signedIn") and not a.get("busy"))
+    return sum(1 for a in status.get("accounts") or []
+               if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting"))
 
 
 def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Result | None:
@@ -142,7 +144,8 @@ async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
             return (res, None) if res else (None, {"via": "api", "fallback": "the free reply was unusable", "account": one.get("account")})
         if state == "failed":
             _say(job_id, f"free account failed the task ({one.get('error') or 'no reason'}); it runs on its API route")
-            return None, {"via": "api", "fallback": "free account failed", "account": one.get("account")}
+            return None, {"via": "api", "fallback": "free account failed", "account": one.get("account"),
+                          "error": str(one.get("error") or "")[:200]}
         left = deadline - loop.time()
         if left <= 1:
             _say(job_id, f"free account still {state or 'silent'} after {waits} s; the task runs on its API route")
@@ -165,7 +168,9 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     except _ERRORS as e:
         _say(job_id, f"free accounts unavailable ({type(e).__name__}); tasks keep their API route")
         return None, None
-    if not isinstance(status, dict) or _ACTIVE >= min(_idle(status), config.ROUTE_VIA_FREE_MAX):
+    # _idle already leaves out the accounts this process's own tasks hold, so _ACTIVE is checked only against the
+    # cap: comparing it with _idle counted each of them twice and stopped a process at 3 of 6 accounts.
+    if not isinstance(status, dict) or _idle(status) == 0 or _ACTIVE >= config.ROUTE_VIA_FREE_MAX:
         return None, None
     _ACTIVE += 1  # taken before any await below
     try:

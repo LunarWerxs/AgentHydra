@@ -152,12 +152,16 @@ def test_hswarm_ask_on_auto_is_answered_by_a_free_account(fake, monkeypatch):
         async def ask_routed(self, *a, **k):
             raise AssertionError("the API route ran although a free account was idle")
 
-    fake()
+    f = fake()
     monkeypatch.setattr(mcp_server, "manager", lambda: _NoApi())
     out = asyncio.run(mcp_server.hswarm_ask("say hi"))
     assert out["status"] == "ok" and out["answer"] == "free answer" and out["model"] == "free:gpt-5-6-mini"
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert row["provider"] == "free" and row["cost_usd"] == 0
+    # A thread name is unique on its account: one fixed name refused every ask after the first (2026-10-07).
+    asyncio.run(mcp_server.hswarm_ask("say hi again"))
+    names = [c["tasks"][0]["name"] for c in f.chats]
+    assert len(names) == 2 and len(set(names)) == 2
 
 
 def test_a_schema_tasks_json_reply_becomes_data(fake):
@@ -181,9 +185,19 @@ def test_an_unreachable_daemon_falls_back_without_an_error(monkeypatch):
 
 
 def test_no_idle_account_falls_back_without_calling_free_chat(fake):
-    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "signedIn": False}])
+    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "signedIn": False},
+                       {**ACCOUNTS[0], "resting": "until 2026-10-08T08:00:00Z after http_rejected (x1)"}])
     assert _consult(_task()) == (None, None)
     assert f.chats == []
+
+
+def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
+    # Its own three tasks hold three accounts, which free_status already shows busy: the three idle ones are still
+    # free to take work (comparing in-flight tasks with idle accounts stopped every process at half of them).
+    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 3 + [ACCOUNTS[0]] * 3)
+    monkeypatch.setattr(free_route, "_ACTIVE", 3)
+    res, _ = _consult(_task())
+    assert res is not None and len(f.chats) == 1
 
 
 def test_a_failed_free_task_hands_the_task_back(fake):

@@ -19,6 +19,26 @@ BASE = "https://chatgpt.com"
 TEXT_MODEL = "gpt-5-6-mini"
 TEXT_MODEL_NAME = "GPT-5.6 Luna"
 UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include everything in Free
+# ChatGPT sets conv_key_<uuid> (30 days) and history_off_<uuid> (7 days) on every Temporary Chat. Kept and sent
+# back, ~370 chats made each account's jar ~62 KB and ChatGPT refused every request in 0.1 s (2026-10-07: all
+# three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.
+PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
+PER_CHAT_COOKIES_KEPT = 20  # of each family
+
+
+def prune_per_chat_cookies(cookies):
+    """The cookies with only the PER_CHAT_COOKIES_KEPT newest (latest expiry) of each per-chat family."""
+    kept, families = [], {}
+    for cookie in cookies:
+        match = PER_CHAT_COOKIE.fullmatch(cookie.get("name", ""))
+        if match:
+            families.setdefault(match.group(1), []).append(cookie)
+        else:
+            kept.append(cookie)
+    for family in families.values():
+        family.sort(key=lambda c: c.get("expires") or 0, reverse=True)
+        kept.extend(family[:PER_CHAT_COOKIES_KEPT])
+    return kept
 
 
 def visible_messages(conversation):
@@ -129,7 +149,7 @@ class ChatGPTHttp:
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/"}
         )
-        for cookie in saved.get("cookies", []):
+        for cookie in prune_per_chat_cookies(saved.get("cookies", [])):
             # A cookie from auth.openai.com must never be sent to chatgpt.com.
             expiry = cookie.get("expires", -1)
             if cookie.get("domain", "").lstrip(".").lower() != "chatgpt.com" or (
@@ -177,7 +197,7 @@ class ChatGPTHttp:
                     "sameSite": same_site if same_site in {"Strict", "Lax", "None"} else "Lax",
                 }
             )
-        return {"cookies": cookies, "origins": self.original.get("origins", [])}
+        return {"cookies": prune_per_chat_cookies(cookies), "origins": self.original.get("origins", [])}
 
     def _request(self, method, path, **kwargs):
         if path == "/api/auth/session":

@@ -16,6 +16,7 @@ import inspect
 import json
 import os
 import traceback
+import uuid
 from importlib.resources import files
 from pathlib import Path
 from typing import Any
@@ -430,7 +431,9 @@ async def hswarm_ask(prompt: str, system: str | None = None, model: str = "auto"
     if profile and not images:  # on auto, the owner's Free web accounts answer first when one is idle (free_route.py)
         free = Task(prompt=prompt, id="ask", system=system, schema=schema, tools="none", profile=profile, purpose=purpose,
                     timeout_s=int(timeout_s or 120))
-        served, _ = await free_route.consult("ask", free)
+        # Its own id per call: a Free thread's name must be unique on its account, and one fixed "hswarm ask ask"
+        # refused every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward: ~4,600 a day).
+        served, _ = await free_route.consult(f"ask-{uuid.uuid4().hex[:8]}", free)
         if served is not None:
             return served.as_dict(brief=True) | await _book_asks([served], "ask")
     r = await manager().ask_routed(prompt, model, system=system, schema=schema, thinking=thinking, reasoning_effort=reasoning_effort, max_tokens=max_tokens, images=images or None, **options)

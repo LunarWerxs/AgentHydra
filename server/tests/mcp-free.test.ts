@@ -106,6 +106,8 @@ describe('free_chat through a stand-in Desk 2', () => {
             chatId: r.chatId,
           }
           jobs.set(job.id, job)
+          // 'refused' is turned away by the first account it reaches, before any chat exists.
+          const refuse = r.prompt === 'refused' && !ran.some((x) => x.prompt === 'refused')
           ran.push({
             instance: r.instanceId,
             command: r.command,
@@ -114,13 +116,18 @@ describe('free_chat through a stand-in Desk 2', () => {
           })
           setTimeout(() => {
             job.state = 'done'
-            job.result = {
-              ok: true,
-              chat_id: r.chatId ?? crypto.randomUUID(),
-              chat_name: r.name ?? null,
-              response: `re: ${r.prompt}`,
-              model: 'm',
-            }
+            job.result = refuse
+              ? {
+                  ok: false,
+                  error: { code: 'http_rejected', message: 'ChatGPT rejected the HTTP request.' },
+                }
+              : {
+                  ok: true,
+                  chat_id: r.chatId ?? crypto.randomUUID(),
+                  chat_name: r.name ?? null,
+                  response: `re: ${r.prompt}`,
+                  model: 'm',
+                }
           }, 100)
           return Response.json(job, { status: 202 })
         }
@@ -170,6 +177,23 @@ describe('free_chat through a stand-in Desk 2', () => {
     expect(overlap).toBe(0)
     const batch = await run('free_results', { batch: out.batch, wait_s: 0 })
     expect(batch.done).toBe('4 of 4')
+  }, 30_000)
+
+  test('a new thread its account refuses is answered by another idle account, and the refusing one rests', async () => {
+    // 2026-10-07: a failing ChatGPT account stayed first in line and took ~3,700 sends in a row.
+    const out = await run('free_chat', { tasks: [{ prompt: 'refused' }] })
+    expect(out.tasks[0]).toMatchObject({ state: 'done', response: 're: refused' })
+    expect(out.tasks[0].retried).toContain('http_rejected')
+    const [first, second] = ran.filter((r) => r.prompt === 'refused').map((r) => r.instance)
+    expect(second).not.toBe(first)
+    const status = await run('free_status', {})
+    const refuser = INSTANCES.find((i) => i.id === first)!
+    expect(status.accounts.find((a: { num: number }) => a.num === refuser.num).resting).toContain(
+      'http_rejected',
+    )
+    // While it rests, new work goes to the account that answered.
+    await run('free_chat', { tasks: [{ prompt: 'next' }] })
+    expect(ran.find((r) => r.prompt === 'next')?.instance).toBe(second)
   }, 30_000)
 
   test('a task no signed-in account can take fails at once, naming why', async () => {

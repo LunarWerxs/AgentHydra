@@ -115,8 +115,65 @@ export function accountLabel(i: Pick<FreeInstance, 'num' | 'provider' | 'name'>)
   return `#${i.num} ${i.provider}${i.name ? ` (${i.name})` : ''}`
 }
 
+/** An account whose send failed for an account-wide reason rests before it is picked again, longer at each
+ *  failure in a row (2026-10-07: three ChatGPT accounts refused ~3,700 sends in a row while three idle Claude
+ *  accounts got almost none: a failure never moved lastActiveAt, so the failing one stayed "used longest ago"). */
+interface Rest {
+  until: number
+  code: string
+  strikes: number
+}
+const rests = new Map<string, Rest>()
+/** When each account was last given a task, answered or not: the "used longest ago" order reads it too. */
+const lastPicked = new Map<string, number>()
+const RATE_LIMIT_REST_MS = 30 * 60_000 // ChatGPT Free locks out for 25-28 min after ~75 messages
+const FAILURE_REST_MS = 5 * 60_000
+const MAX_REST_MS = 4 * 60 * 60_000
+/** Failure codes that are about the account (its limit, its login, the site refusing it), not the task. */
+const ACCOUNT_CODES = new Set([
+  'rate_limited',
+  'http_rejected',
+  'http_verification_required',
+  'network_error',
+  'login_required',
+  'login_expired',
+  'invalid_session',
+  'preparation_invalid',
+  'harness_failed',
+  'setup_failed',
+])
+
+/** Records how an account's send ended: a success ends its rest, an account-wide failure starts one. */
+export function noteFreeOutcome(instanceId: string, code: string | null, now = Date.now()): void {
+  if (code == null) {
+    rests.delete(instanceId)
+    return
+  }
+  if (!ACCOUNT_CODES.has(code)) return
+  const strikes = (rests.get(instanceId)?.strikes ?? 0) + 1
+  const base = code === 'rate_limited' ? RATE_LIMIT_REST_MS : FAILURE_REST_MS
+  rests.set(instanceId, {
+    until: now + Math.min(base * 2 ** (strikes - 1), MAX_REST_MS),
+    code,
+    strikes,
+  })
+}
+
+export function restingFor(instanceId: string, now = Date.now()): Rest | null {
+  const rest = rests.get(instanceId)
+  return rest && rest.until > now ? rest : null
+}
+
+/** For tests: forget every rest and pick. */
+export function resetFreeHealth(): void {
+  rests.clear()
+  lastPicked.clear()
+}
+
+const lastUse = (i: FreeInstance) => Math.max(i.lastActiveAt ?? 0, lastPicked.get(i.id) ?? 0)
+
 /** The accounts a new thread may go to: signed in, of the provider and number asked for, and, unless
- *  one was named, under 90% of its week. */
+ *  one was named, under 90% of its week and not resting after a failure. */
 export function eligibleAccounts(
   instances: FreeInstance[],
   want: { account?: number; provider?: Provider },
@@ -125,13 +182,15 @@ export function eligibleAccounts(
     (i) =>
       i.loggedIn &&
       (!want.provider || i.provider === want.provider) &&
-      (want.account == null ? (windowOf(i, 'seven_day') ?? 0) < 90 : i.num === want.account),
+      (want.account == null
+        ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id)
+        : i.num === want.account),
   )
 }
 
-/** The idle account with the most room (roomBand), the one used longest ago first so work spreads over
- *  every account and both providers, then Claude before ChatGPT, then the lowest number; null while
- *  every eligible account is busy. */
+/** The idle account with the most room (roomBand), the one used (or tried) longest ago first so work
+ *  spreads over every account and both providers, then Claude before ChatGPT, then the lowest number;
+ *  null while every eligible account is busy. */
 export function pickFreeAccount(
   instances: FreeInstance[],
   busy: ReadonlySet<string>,
@@ -141,7 +200,7 @@ export function pickFreeAccount(
   free.sort(
     (a, b) =>
       roomBand(a) - roomBand(b) ||
-      (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0) ||
+      lastUse(a) - lastUse(b) ||
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
       a.num - b.num,
   )
@@ -168,6 +227,8 @@ interface TaskState {
   error?: string
   warnings?: unknown[]
   seconds?: number
+  /** The failure on another account that sent this new thread to a second one. */
+  retried?: string
 }
 interface Item {
   task: FreeTask
@@ -233,10 +294,26 @@ function readTick(b: Batch, status: { instances: FreeInstance[]; jobs: FreeJob[]
   return { instances: status.instances, byId, busy }
 }
 
+/** A new thread whose account failed for an account-wide reason before any chat existed goes back to the
+ *  queue once, for another account; nothing reached the provider, so nothing is sent twice. */
+function retryElsewhere(it: Item, code: string | undefined): boolean {
+  if (it.s.retried || it.task.chat_id || it.task.account != null || it.s.chat_id) return false
+  if (!code || !ACCOUNT_CODES.has(code)) return false
+  Object.assign(it.s, { state: 'queued', retried: `${it.s.account}: ${it.s.error}` })
+  for (const k of ['account', 'error', 'seconds', 'thread', 'model'] as const) delete it.s[k]
+  for (const k of ['instanceId', 'requestId', 'startedAt'] as const) delete it[k]
+  return true
+}
+
 async function pollRunning(it: Item, tick: Tick) {
   try {
     const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
-    if (job.state === 'done') finish(it, job.result, tick.byId.get(it.instanceId ?? ''))
+    if (job.state === 'done') {
+      finish(it, job.result, tick.byId.get(it.instanceId ?? ''))
+      const code = job.result?.ok ? null : (job.result?.error?.code ?? 'unknown')
+      if (it.instanceId) noteFreeOutcome(it.instanceId, code)
+      if (code) retryElsewhere(it, code)
+    }
   } catch (e) {
     if ((e as DeskError).status === 404)
       finish(
@@ -260,7 +337,7 @@ function noAccountError(task: FreeTask): string {
       : task.provider
         ? `a ${task.provider} account`
         : 'an account'
-  return `No signed-in Free ${asked} can take it${task.account == null ? ' (accounts at 90% of their week are skipped)' : ''}. free_status shows them.`
+  return `No signed-in Free ${asked} can take it${task.account == null ? ' (accounts at 90% of their week, or resting after a failed send, are skipped)' : ''}. free_status shows them.`
 }
 
 /** The account a queued task starts on this tick; undefined while that account is busy or after the
@@ -308,7 +385,26 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
   const requestId = randomUUID()
   const body = jobBody(it.task, account, requestId)
   try {
-    await desk('POST', '/jobs', body)
+    try {
+      await desk('POST', '/jobs', body)
+    } catch (e) {
+      // A Desk 2 still running an older build refuses an option it does not know (2026-10-07: `model` cost
+      // 304 tasks over 5 hours): send without the optional ones rather than fail.
+      if (
+        !(e instanceof DeskError && e.status === 400 && /Unknown operation option/.test(e.message))
+      )
+        throw e
+      const {
+        model: _model,
+        webSearch: _web,
+        ...plain
+      } = body as typeof body & {
+        model?: unknown
+        webSearch?: unknown
+      }
+      await desk('POST', '/jobs', plain)
+    }
+    lastPicked.set(account.id, Date.now())
     Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
     Object.assign(it.s, {
       state: 'running',
@@ -395,27 +491,49 @@ function readTask(raw: unknown, index: number): FreeTask {
   }
 }
 
+/** The thread list (1.4 MB at 3,250 threads) only gives free_status its counts, and HSwarm reads free_status
+ *  before every task with a short timeout: one read a minute is enough. */
+const THREADS_TTL_MS = 60_000
+let threadsRead: { at: number; list: Promise<FreeThread[]> } | null = null
+function recentThreads(): Promise<FreeThread[]> {
+  if (!threadsRead || Date.now() - threadsRead.at > THREADS_TTL_MS)
+    threadsRead = {
+      at: Date.now(),
+      list: desk<FreeThread[]>('GET', '/threads').catch(() => []),
+    }
+  return threadsRead.list
+}
+
 async function freeStatus() {
   const [status, threads] = await Promise.all([
     desk<{ ready: boolean; instances: FreeInstance[]; jobs: FreeJob[] }>('GET', '/status'),
-    desk<FreeThread[]>('GET', '/threads').catch(() => []),
+    recentThreads(),
   ])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
   return {
     ready: status.ready,
-    accounts: status.instances.map((i) => ({
-      account: accountLabel(i),
-      num: i.num,
-      provider: i.provider,
-      signedIn: i.loggedIn,
-      busy: busy.has(i.id),
-      usage: !i.usage?.available
-        ? 'no reading yet (Claude reports usage once the account has chatted)'
-        : i.usage.unlimited_text
-          ? 'unlimited everyday text'
-          : `5h ${windowOf(i, 'five_hour') ?? '?'}%, week ${windowOf(i, 'seven_day') ?? '?'}%`,
-      threads: threads.filter((t) => t.instanceId === i.id).length,
-    })),
+    accounts: status.instances.map((i) => {
+      const rest = restingFor(i.id)
+      return {
+        account: accountLabel(i),
+        num: i.num,
+        provider: i.provider,
+        signedIn: i.loggedIn,
+        busy: busy.has(i.id),
+        // HSwarm counts an account resting after a failed send as not idle (hswarm/free_route.py _idle).
+        ...(rest
+          ? {
+              resting: `until ${new Date(rest.until).toISOString()} after ${rest.code} (x${rest.strikes})`,
+            }
+          : {}),
+        usage: !i.usage?.available
+          ? 'no reading yet (Claude reports usage once the account has chatted)'
+          : i.usage.unlimited_text
+            ? 'unlimited everyday text'
+            : `5h ${windowOf(i, 'five_hour') ?? '?'}%, week ${windowOf(i, 'seven_day') ?? '?'}%`,
+        threads: threads.filter((t) => t.instanceId === i.id).length,
+      }
+    }),
     running: status.jobs.filter((j) => j.state === 'running').length,
   }
 }
