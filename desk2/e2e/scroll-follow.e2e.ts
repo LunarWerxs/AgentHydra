@@ -9,6 +9,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
+import { QUIET_EDGE } from './lib/edge-flags'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -33,7 +34,7 @@ try {
   for (let t = 0; t < 120 && !up; t++) if (!(up = await answers(BASE))) await sleep(500)
   if (!up) throw new Error(`the Vite dev server did not answer on ${PORT}`)
   edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', '--window-size=1000,600', '--disable-features=CalculateNativeWinOcclusion',
+    '--no-first-run', ...QUIET_EDGE, '--window-size=1000,600', '--disable-features=CalculateNativeWinOcclusion',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
   let list: { type: string; webSocketDebuggerUrl: string }[] = []
   for (let t = 0; t < 50 && !list.length; t++) {

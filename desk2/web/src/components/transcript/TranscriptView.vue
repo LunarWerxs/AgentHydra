@@ -166,6 +166,18 @@ const showJump = computed(() => !pinned.value && fromBottom.value > Math.max(200
 
 const distanceOf = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight
 
+// A jump to the bottom (the button, a send, another chat) is the transcript's move, not a hand's: for half a second
+// after it, unless the person's own wheel, key or pointer comes first, a move up is the list settling, never a
+// let-go. Rows that mount at the bottom with estimated heights make the list shorter for a frame, and the browser's
+// clamp to it read as a scroll up: the jump button let go of the bottom 141px short of it (scroll-follow e2e case 5,
+// 2026-10-08; the clamp came 10ms after the click). Following a reply does not arm it: a drag or Page Up while it
+// streams still lets go.
+const SETTLE_MS = 500
+let settleUntil = 0
+const settling = () => performance.now() < settleUntil
+const settle = () => (settleUntil = performance.now() + SETTLE_MS)
+const userScrolls = () => (settleUntil = 0)
+
 function scrollToBottom() {
   const el = scroller.value
   if (!el) return
@@ -181,7 +193,7 @@ function scrollToBottom() {
 function follow() {
   const el = scroller.value
   if (!el || !pinned.value || held) return
-  if (el.scrollTop < lastTop - 1 && distanceOf(el) > 1) return onScroll()
+  if (!settling() && el.scrollTop < lastTop - 1 && distanceOf(el) > 1) return onScroll()
   scrollToBottom()
 }
 
@@ -193,7 +205,7 @@ function onScroll() {
   // Any move up lets go, however small (the browser clamping a shrunk list at the very bottom is not a move); only a
   // move down to within 24px of the bottom takes hold again.
   const up = top < lastTop - 1
-  if (up && distance > 1) pinned.value = false
+  if (up && distance > 1 && !settling()) pinned.value = false
   else if (!up && distance <= 24 && !held) pinned.value = true
   lastTop = top
   scrollTop.value = top
@@ -268,11 +280,13 @@ function trimSlack() {
 }
 
 function onWheel(e: WheelEvent) {
+  userScrolls()
   if (e.deltaY < 0) pinned.value = false
 }
 
 function jumpToLatest() {
   dropHold()
+  settle()
   pinned.value = true
   scrollToBottom()
   // Rows near the bottom get measured after this render; follow them down.
@@ -348,10 +362,14 @@ onMounted(() => {
   scroller.value?.querySelectorAll<HTMLElement>('[data-id]').forEach((el) => rowObserver!.observe(el, { box: 'border-box' }))
   scrollToBottom()
   window.addEventListener(CHAT_SENT_EVENT, onSent)
+  // A key (Page Up, the arrows) scrolls whatever has focus; a press on the scrollbar arrives as the scroller's own.
+  window.addEventListener('keydown', userScrolls, true)
+  scroller.value?.addEventListener('pointerdown', userScrolls, true)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener(CHAT_SENT_EVENT, onSent)
+  window.removeEventListener('keydown', userScrolls, true)
   rowObserver?.disconnect()
   viewObserver?.disconnect()
   clearFind()
@@ -495,6 +513,7 @@ watch(
     dropHold()
     heights.clear()
     version.value++
+    settle()
     pinned.value = true
     nextTick(scrollToBottom)
   },

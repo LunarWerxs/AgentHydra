@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { freePort } from './lib/free-port'
+import { QUIET_EDGE } from './lib/edge-flags'
 
 const DESK = resolve(process.env.PERF_DESK || resolve(import.meta.dir, '..'))
 const OUT = resolve(process.env.PERF_OUT || join(import.meta.dir, '..', 'tmp', 'perf.json'))
@@ -185,7 +186,7 @@ async function startEdge() {
   const profile = scratchDir('edge')
   const edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run',
     // No occlusion or backgrounding switches (the gestures check has them): a page behind another must go hidden here.
-    '--no-default-browser-check', '--window-size=1500,950', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
+    ...QUIET_EDGE, '--window-size=1500,950', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
   let version: { webSocketDebuggerUrl?: string } = {}
   for (let t = 0; t < 100 && !version.webSocketDebuggerUrl; t++) {
     try { version = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json() } catch {}

@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
+import { QUIET_EDGE } from './lib/edge-flags'
 
 const DESK = resolve(import.meta.dir, '..')
 // A free port each unless E2E_PORT / E2E_CDP_PORT name one: two sessions running this at once used to collide on 7819.
@@ -141,7 +142,7 @@ try {
   }
   if (!up) throw new Error(`server did not come up on ${PORT}`)
   edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`,
-    '--no-first-run', '--no-default-browser-check', '--window-size=1500,950', '--disable-features=CalculateNativeWinOcclusion',
+    '--no-first-run', ...QUIET_EDGE, '--window-size=1500,950', '--disable-features=CalculateNativeWinOcclusion',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
   let list: { type: string; webSocketDebuggerUrl: string }[] = []
   for (let t = 0; t < 50 && !list.length; t++) {
