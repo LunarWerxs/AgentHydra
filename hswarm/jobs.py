@@ -21,6 +21,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from . import blobs, breaker, climayte_route, config, escalation, free_route, input_limit, ledgerstore, review, scripted, survival, utilization, verify
@@ -677,6 +678,17 @@ class JobManager:
         profile = kw.pop("profile", None)
         purpose = kw.pop("purpose", "production")
         if profile or model == config.AUTO:
+            # The owner's Free web accounts answer first when one is idle (free_route.py). Every tool-free ask on auto
+            # comes through here: hswarm_ask, hswarm_decide's escalations (~4,900 a day that never tried one before
+            # 2026-10-08) and the role asks; free_route.eligible keeps critical and evaluation work off them.
+            if not kw.get("images"):
+                free = Task(prompt=prompt, id="ask", system=kw.get("system"), schema=kw.get("schema"), tools="none",
+                            profile=profile or "general", purpose=purpose, timeout_s=int(kw.get("timeout_s") or 120))
+                # Its own id per call: a Free thread's name must be unique on its account, and one fixed name refused
+                # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
+                served, _ = await free_route.consult(f"ask-{uuid.uuid4().hex[:8]}", free)
+                if served is not None:
+                    return served
             from .dispatch import ask_selected
             return await ask_selected(self, prompt, profile=profile or "general", route=route, purpose=purpose, **kw)
 

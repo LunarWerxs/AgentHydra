@@ -148,20 +148,26 @@ def test_the_ledger_line_of_a_free_task_has_provider_free_and_no_cost(fake, monk
 def test_hswarm_ask_on_auto_is_answered_by_a_free_account(fake, monkeypatch):
     from hswarm import mcp_server
 
-    class _NoApi:
-        async def ask_routed(self, *a, **k):
-            raise AssertionError("the API route ran although a free account was idle")
-
+    api = _Api()
     f = fake()
-    monkeypatch.setattr(mcp_server, "manager", lambda: _NoApi())
+    monkeypatch.setattr(mcp_server, "manager", lambda: JobManager(client=api))
     out = asyncio.run(mcp_server.hswarm_ask("say hi"))
     assert out["status"] == "ok" and out["answer"] == "free answer" and out["model"] == "free:gpt-5-6-mini"
+    assert api.calls == 0, "the API route ran although a free account was idle"
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert row["provider"] == "free" and row["cost_usd"] == 0
     # A thread name is unique on its account: one fixed name refused every ask after the first (2026-10-07).
     asyncio.run(mcp_server.hswarm_ask("say hi again"))
     names = [c["tasks"][0]["name"] for c in f.chats]
     assert len(names) == 2 and len(set(names)) == 2
+
+
+def test_a_decide_escalation_on_auto_is_answered_by_a_free_account(fake):
+    # hswarm_decide's escalations go through ask_routed, which never tried a Free account before 2026-10-08.
+    api = _Api()
+    f = fake()
+    res = asyncio.run(JobManager(client=api).ask_routed("pick one", config.AUTO, profile="decision"))
+    assert res.model == "free:gpt-5-6-mini" and api.calls == 0 and len(f.chats) == 1
 
 
 def test_a_schema_tasks_json_reply_becomes_data(fake):
