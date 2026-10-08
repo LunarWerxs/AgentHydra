@@ -27,6 +27,7 @@
  *
  * Exits 0 only when every check passes. Log: ROOT/upgrade-e2e.log.
  */
+import { Database } from 'bun:sqlite'
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import {
@@ -724,6 +725,21 @@ async function checkDesk2(
   return dh
 }
 
+/** 1.13 and 2.x both shut their daemon down when their tray icon is missing, unless the person hid
+ *  it (hide_tray_icon). The run hides it in its own settings, so no icon reaches this PC's taskbar and
+ *  the result does not hang on which tray this PC runs. Until 2026-10-08 the PC's own
+ *  lunarwerx-tray.exe answered 1.13's probe; renamed AgentHydra-Tray.exe, it did not, and 1.13
+ *  exited 36 s in, before its update could apply. */
+function hideTrayIcon(agenthydraHome: string): void {
+  mkdirSync(join(agenthydraHome, 'data'), { recursive: true })
+  const db = new Database(join(agenthydraHome, 'data', 'agenthydra.db'), { create: true })
+  db.exec('create table if not exists settings (key text primary key, value text not null)')
+  db.run(
+    "insert into settings (key, value) values ('hide_tray_icon', '1') on conflict(key) do update set value = '1'",
+  )
+  db.close()
+}
+
 async function scenario(label: string, ports: Ports, delayMs: number): Promise<void> {
   log(`==== scenario ${label}: bun mirror delay ${delayMs / 1000}s ====`)
   bunDelayMs = delayMs
@@ -746,6 +762,7 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
     join(home, 'dsh'),
   ])
     mkdirSync(d, { recursive: true })
+  hideTrayIcon(join(home, 'agenthydra'))
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     HOME: home,
