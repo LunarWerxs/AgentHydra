@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+**TL;DR**
+
+- **HSwarm's decisions keep working when every TypeSafe key is refused: Cloudflare's free Clef stands in**
+
+**Everything in Unreleased**
+
+- **Cloudflare's Clef stands in for Jev.** When no TypeSafe key works, HSwarm asks Clef on Workers AI
+  instead, free up to Cloudflare's daily allowance. Clef's answers are held to its own confidence scale,
+  and its cost is booked under Cloudflare.
+
 ## [2.0.0] - 2026-10-08
 
 **TL;DR**
