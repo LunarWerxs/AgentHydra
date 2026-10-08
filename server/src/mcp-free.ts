@@ -24,6 +24,8 @@ interface FreeWindow {
 interface FreeUsage {
   available: boolean
   unlimited_text?: boolean
+  /** The plan the site reports (ChatGPT: free, go, plus); Claude reports none. */
+  plan?: string | null
   windows: FreeWindow[]
 }
 export interface FreeInstance {
@@ -642,7 +644,12 @@ function recentThreads(): Promise<FreeThread[]> {
 
 async function freeStatus() {
   const [status, threads] = await Promise.all([
-    desk<{ ready: boolean; instances: FreeInstance[]; jobs: FreeJob[] }>('GET', '/status'),
+    desk<{
+      ready: boolean
+      instances: FreeInstance[]
+      jobs: FreeJob[]
+      health?: Record<string, { sent: number; failed: number; failing: boolean }>
+    }>('GET', '/status'),
     recentThreads(),
   ])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
@@ -658,6 +665,7 @@ async function freeStatus() {
         account: accountLabel(i),
         num: i.num,
         provider: i.provider,
+        ...(i.usage?.plan ? { plan: i.usage.plan } : {}),
         signedIn: i.loggedIn,
         busy: busy.has(i.id),
         // HSwarm counts an account resting after a failed send as not idle (hswarm/free_route.py _idle).
@@ -680,6 +688,12 @@ async function freeStatus() {
             ? 'unlimited everyday text'
             : `5h ${windowOf(i, 'five_hour') ?? '?'}%, week ${windowOf(i, 'seven_day') ?? '?'}%`,
         threads: threads.filter((t) => t.instanceId === i.id).length,
+        // Desk's count of how its messages ended (desk2 free-instances/health.ts); "failing" at 90% of 5 or more.
+        ...(status.health?.[i.id]
+          ? {
+              lastHour: `${status.health[i.id].sent} sent, ${status.health[i.id].failed} failed${status.health[i.id].failing ? ': FAILING, needs a look' : ''}`,
+            }
+          : {}),
       }
     }),
     running: status.jobs.filter((j) => j.state === 'running').length,
@@ -690,7 +704,7 @@ export const FREE_TOOLS: McpEngineTool[] = [
   {
     name: 'free_status',
     description:
-      "The Free accounts: the person's own claude.ai and chatgpt.com free web logins in AgentHydra's Instances → Free (they are not Claude Code, Codex or HSwarm accounts). Each with its number, provider, signed in, busy (one operation at a time per account), usage (Claude: 5-hour and weekly %; ChatGPT: unlimited everyday text) and how many threads it holds. Read this before free_chat when it matters which account or provider answers.",
+      "The Free accounts: the person's own claude.ai and chatgpt.com free web logins in AgentHydra's Instances → Free (they are not Claude Code, Codex or HSwarm accounts). Each with its number, provider, plan (when the site reports one: ChatGPT free or go), signed in, busy (one operation at a time per account), usage (Claude: 5-hour and weekly %; ChatGPT: unlimited everyday text) and how many threads it holds. Read this before free_chat when it matters which account or provider answers.",
     inputSchema: S({}),
     run: () => freeStatus(),
   },

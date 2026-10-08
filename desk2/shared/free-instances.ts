@@ -129,10 +129,21 @@ export interface FreeJob {
 export interface FreeTokenParts { input: number; output: number; total: number }
 /** One account's estimate for its current 5-hour window, its current week and all time on this PC. */
 export interface FreeTokens { fiveHour: FreeTokenParts; week: FreeTokenParts; total: FreeTokenParts }
+/** How an account's messages (new chats and continuations) ended in the last hour (health.ts). */
+export interface FreeHealth {
+  sent: number
+  failed: number
+  /** At least 90% of at least 5 failed: the account needs a look. Anything less is a note, never a mark. */
+  failing: boolean
+  /** How many failed for each reason the provider or harness gave. */
+  reasons: Record<string, number>
+}
 export interface FreeStatus {
   ready: boolean
   /** Each account's estimate by its id (tokens.ts); an account that never chatted here has none. */
   tokens?: Record<string, FreeTokens>
+  /** Each account's last hour by its id (health.ts); an account that sent nothing in it has none. */
+  health?: Record<string, FreeHealth>
   instances: FreeInstance[]
   jobs: FreeJob[]
 }

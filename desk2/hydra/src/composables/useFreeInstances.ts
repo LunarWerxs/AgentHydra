@@ -1,5 +1,5 @@
 import { computed, reactive, ref, shallowRef } from 'vue'
-import type { FreeCommand, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
+import type { FreeCommand, FreeHealth, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
@@ -7,6 +7,12 @@ const instances = ref<FreeInstance[]>([])
 const threads = ref<FreeThread[]>([])
 /** Each account's token estimate by its id (server/src/free-instances/tokens.ts). */
 const tokens = shallowRef<Record<string, FreeTokens>>({})
+/** Each account's last hour of messages by its id (server/src/free-instances/health.ts). */
+const health = shallowRef<Record<string, FreeHealth>>({})
+/** The operations this page started (or a page before it, rememberedJob): only their failures are reported here.
+ *  Another caller's message failing (HSwarm's, an agent's) is the account's hour, not an error on its row (owner,
+ *  2026-10-08: a red mark on a working account for one refused send). */
+const mine = new Set<string>()
 const jobs = reactive<Record<string, FreeJob | undefined>>({})
 const errors = reactive<Record<string, string>>({})
 const loaded = ref(false)
@@ -36,6 +42,8 @@ async function snapshot(): Promise<void> {
   threads.value = keepUnchanged(threads.value, list)
   const estimate = status.tokens ?? {}
   if (JSON.stringify(estimate) !== JSON.stringify(tokens.value)) tokens.value = estimate
+  const hour = status.health ?? {}
+  if (JSON.stringify(hour) !== JSON.stringify(health.value)) health.value = hour
   // Desk's own reads (the rolling refresh, a keepalive nudge) show no spinner: only what someone started does.
   for (const job of status.jobs) if (job.state === 'running' && !job.auto) jobs[job.instanceId] = job
   loaded.value = true
@@ -53,6 +61,7 @@ async function readJob(id: string): Promise<FreeJob> {
 function follow(first: FreeJob): Promise<FreeResult | null> {
   const existing = followers.get(first.id)
   if (existing) return existing
+  const own = mine.has(first.id) || rememberedJob(first.instanceId) === first.id
   const task = (async () => {
     let job = first
     jobs[job.instanceId] = job
@@ -62,18 +71,18 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
         job = await readJob(job.id)
         jobs[job.instanceId] = job
       }
-      rememberedJob(job.instanceId, null)
-      if (!job.result?.ok) errors[job.instanceId] = job.result?.error?.message || 'The operation did not complete. Read the chat before sending again.'
+      if (own) rememberedJob(job.instanceId, null)
+      if (!job.result?.ok && own) errors[job.instanceId] = job.result?.error?.message || 'The operation did not complete. Read the chat before sending again.'
       // The job's own result stands: a list refresh that fails after it is no reason to call a finished check
       // interrupted (owner, 2026-10-07: an account showed a warning, then was fine on the next check).
       await snapshot().catch(() => {})
       return job.result ?? null
     } catch (error) {
-      errors[job.instanceId] = freeErrorText(error, 'Connection interrupted. Check the operation before sending again.')
+      if (own) errors[job.instanceId] = freeErrorText(error, 'Connection interrupted. Check the operation before sending again.')
       // A lost acknowledgement must not unlock Send or replay the POST.
-      if (error instanceof FreeApiError && error.status === 404) { delete jobs[job.instanceId]; rememberedJob(job.instanceId, null) }
+      if (error instanceof FreeApiError && error.status === 404) { delete jobs[job.instanceId]; if (own) rememberedJob(job.instanceId, null) }
       return null
-    } finally { followers.delete(first.id) }
+    } finally { followers.delete(first.id); mine.delete(first.id) }
   })()
   followers.set(first.id, task)
   return task
@@ -96,6 +105,7 @@ async function run(instance: FreeInstance, command: FreeCommand, options: Pick<F
   errors[instance.id] = ''
   const operation: FreeRequest = { ...options, instanceId: instance.id, provider: instance.provider, command, requestId: crypto.randomUUID() }
   rememberedJob(instance.id, operation.requestId)
+  mine.add(operation.requestId)
   jobs[instance.id] = { id: operation.requestId, instanceId: instance.id, provider: instance.provider, command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: operation.chatId }
   try { return await follow(await freeApi.start(operation)) }
   catch (error) {
@@ -184,6 +194,6 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
 }
 
 export function useFreeInstances() {
-  return { instances, threads, tokens, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, forgetThread, recover, refreshFree,
+  return { instances, threads, tokens, health, jobs, errors, loaded, loading, loadError, busy, run, logout, remove, forgetThread, recover, refreshFree,
     activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
 }

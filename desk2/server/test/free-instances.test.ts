@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { ServerContext } from '../src/context'
 import type { FreeInstance, FreeRequest, FreeUsage } from '../../shared/free-instances'
+import { addOutcome, HEALTH_WINDOW_MS, healthOf } from '../src/free-instances/health'
 import { nudgeDue } from '../src/free-instances/keepalive'
 import { type FreeRead, nextRead } from '../src/free-instances/refresh'
 import { addTokens, tokenWindows } from '../src/free-instances/tokens'
@@ -191,6 +192,26 @@ describe('Free jobs and routes', () => {
     expect(job.result?.error?.chat_id).toBe(CHAT)
     expect(JSON.stringify(job)).not.toContain('fake-secret')
     expect(calls).toBe(1)
+  })
+
+  // 2026-10-08: one refused send put a red mark on a working account. The row is marked only when the account fails
+  // nearly every message (FAILING_SHARE of at least FAILING_MIN_SENDS) in the last hour.
+  test("an account's last hour: a few failed messages are a note, nine in ten of five or more is failing, an hour on they are gone", async () => {
+    const replies: RunOutput[] = []
+    const { service, op, instance } = fixture(async () => replies.shift()!)
+    const send = async (reply: RunOutput) => {
+      replies.push(reply)
+      const job = service.start(op({ command: 'chat', prompt: 'synthetic prompt' }))
+      while (service.get(job.id).state !== 'done') await tick()
+    }
+    const refused = output({ ok: false, error: { code: 'rate_limited', message: 'Synthetic refusal' } }, 1)
+    await send(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' }))
+    for (let n = 0; n < 4; n++) await send(refused)
+    expect(service.status().health?.[instance.id]).toEqual({ sent: 5, failed: 4, failing: false, reasons: { 'Synthetic refusal': 4 } })
+    for (let n = 0; n < 5; n++) await send(refused)
+    expect(service.status().health?.[instance.id]).toMatchObject({ sent: 10, failed: 9, failing: true })
+    const hour = addOutcome(undefined, { at: 0, error: 'Synthetic refusal' }, 0)
+    expect([healthOf(hour, HEALTH_WINDOW_MS - 1)?.sent, healthOf(hour, HEALTH_WINDOW_MS)]).toEqual([1, null])
   })
 
   test('instances are isolated and callers cannot configure paths or override their provider', async () => {

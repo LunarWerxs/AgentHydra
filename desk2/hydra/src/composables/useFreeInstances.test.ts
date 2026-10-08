@@ -78,3 +78,29 @@ it('a check outlives one read Desk was too slow to answer, and a timeout never r
     globalThis.fetch = realFetch
   }
 })
+
+// 2026-10-08: a working ChatGPT account wore a red "Last operation failed" for one of HSwarm's sends the site refused.
+// Another caller's message counts in the account's hour (status.health); it is never an error on the row.
+it("another caller's failed message leaves the row unmarked; the page's own failed message is reported", async () => {
+  const other: FreeInstance = { ...account, id: '22222222-3333-4444-8555-666666666666', num: 2, provider: 'chatgpt' }
+  const theirs = { id: 'cccccccc-dddd-4eee-8fff-000000000000', instanceId: other.id, provider: 'chatgpt', command: 'chat', state: 'running', phase: 'working', startedAt: 1 }
+  const refused = { ok: false, error: { code: 'rate_limited', message: 'Synthetic refusal' } }
+  const realFetch = globalThis.fetch
+  let ended = false // their job, once read finished, is no longer in the status
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    const path = String(url)
+    if (init?.method === 'POST') return new Response(JSON.stringify({ ...theirs, id: JSON.parse(String(init.body)).requestId }), { status: 202 })
+    if (path.includes('/jobs/')) { ended = true; return new Response(JSON.stringify({ ...theirs, id: path.split('/jobs/')[1], state: 'done', phase: 'done', result: refused }), { status: 200 }) }
+    return new Response(path.endsWith('/threads') ? '[]' : JSON.stringify({ ready: true, instances: [other], jobs: ended ? [] : [theirs] }), { status: 200 })
+  }) as typeof fetch
+  try {
+    const free = useFreeInstances()
+    await free.refreshFree({ silent: true })
+    while (free.busy(other.id)) await new Promise(resolve => setTimeout(resolve, 50))
+    expect(free.errors[other.id] ?? '').toBe('')
+    expect(await free.run(other, 'chat', { prompt: 'synthetic prompt' })).toEqual(refused)
+    expect(free.errors[other.id]).toBe('Synthetic refusal')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})

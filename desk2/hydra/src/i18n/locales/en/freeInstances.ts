@@ -35,7 +35,14 @@ export default {
   signingIn: 'Sign in in the browser window. AgentHydra will verify the login and close that window automatically.',
   unlimited: 'Unlimited', unlimitedHint: 'Text messages on {model} have no usage limit on this account.',
   unlimitedPlanHint: 'Text messages on {model} have no usage limit on this {plan} account.',
-  working: 'Working…', failed: 'The last operation failed', recover: 'Check operation',
+  // A paid plan the site reports, beside the name (ChatGPT Go, read 2026-10-08: the same models as Free, more room).
+  planLabel: 'ChatGPT {plan}',
+  planHint: 'A paid plan, as ChatGPT reports it. AgentHydra sends it the same unlimited model as a Free account, and the plan gives each chat more room.',
+  working: 'Working…', recover: 'Check operation',
+  // The account's last hour (server/src/free-instances/health.ts): a note in the name's hover, a mark only when failing.
+  lastHour: 'last hour: {sent} sent, {failed} failed',
+  failing: 'Failing: {failed} of its last {sent} messages failed ({pct}%) in the past hour',
+  failingWhy: 'Mostly "{reason}" ({count}). Check it with Is it alive?, and sign in again if it is signed out.',
   newChat: 'New private chat', newChatShort: 'New chat', chatLocation: 'Opens under HSwarm → CliMayte.',
   privateHint: 'Incognito and Temporary Chats use HTTP. Sign-in is the only action that opens a browser.',
   name: 'Local chat name (optional)', uuid: 'Chat UUID', serverUuid: 'Server UUID', copy: 'Copy UUID', copyCode: 'Copy code',

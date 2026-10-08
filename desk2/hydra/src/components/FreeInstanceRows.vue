@@ -32,6 +32,7 @@ import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import LogoutInstanceDialog from '@/components/LogoutInstanceDialog.vue'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { TableBody } from '@/components/ui/table'
@@ -53,8 +54,25 @@ import IconTooltip from '@/shell/IconTooltip.vue'
 defineProps<{ columns: InstanceColumn[] }>()
 
 const { t } = useI18n()
-const { instances, tokens, jobs, errors, loaded, loadError, busy, run, logout, remove, recover, refreshFree } =
+const { instances, tokens, health, jobs, errors, loaded, loadError, busy, run, logout, remove, recover, refreshFree } =
   useFreeInstances()
+/** The account's last hour for its hover and its failing mark: how many messages went, how many failed. */
+function hourOf(id: string): { sent: number; failed: number; pct: number } {
+  const h = health.value[id]
+  const sent = h?.sent ?? 0
+  const failed = h?.failed ?? 0
+  return { sent, failed, pct: sent ? Math.round((failed / sent) * 100) : 0 }
+}
+/** The reason most of the hour's failures gave. */
+function topReason(id: string): string {
+  const reasons = Object.entries(health.value[id]?.reasons ?? {}).sort((a, b) => b[1] - a[1])
+  return reasons[0] ? t('freeInstances.failingWhy', { reason: reasons[0][0], count: reasons[0][1] }) : ''
+}
+/** The paid plan the site reports for this login ("Go"), or '' on the Free plan or when it reports none. */
+function paidPlan(i: FreeInstance): string {
+  const plan = i.usage?.plan
+  return plan && plan !== 'free' ? plan.charAt(0).toUpperCase() + plan.slice(1) : ''
+}
 // The table's column mode and clock (composables/useUsageMode.ts), the desktop table's: one mode for
 // every kind in the one table.
 const { now } = useUsageMode(true)
@@ -148,9 +166,15 @@ function rowModel(i: FreeInstance): InstanceRowModel {
           { full: i.name, shown, email: i.email, copyHint: t('instances.nameCopyHint') },
           clipped,
         )
+        const hour = health.value[i.id]
         return {
           label: tip.label,
-          description: `${providerName(i.provider)} · ${chatMode(i.provider)}`,
+          description: [
+            `${providerName(i.provider)} · ${chatMode(i.provider)}`,
+            hour && t('freeInstances.lastHour', hourOf(i.id)),
+          ]
+            .filter(Boolean)
+            .join(' · '),
           detail:
             tip.detail ??
             lastCheckLine(i) ??
@@ -168,11 +192,8 @@ function rowModel(i: FreeInstance): InstanceRowModel {
     ...(i.usage?.unlimited_text
       ? {
           noQuota:
-            i.usage.plan && i.usage.plan !== 'free'
-              ? t('freeInstances.unlimitedPlanHint', {
-                  model: i.usage.text_model ?? '',
-                  plan: i.usage.plan.charAt(0).toUpperCase() + i.usage.plan.slice(1),
-                })
+            paidPlan(i)
+              ? t('freeInstances.unlimitedPlanHint', { model: i.usage.text_model ?? '', plan: paidPlan(i) })
               : t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
           noQuotaLabel: t('freeInstances.unlimited'),
         }
@@ -268,10 +289,12 @@ async function checkOne(i: FreeInstance, withUsage: boolean): Promise<FreeVerdic
   lastCheck[i.id] = { ...verdict, at: Date.now() }
   return verdict
 }
+/** Red only for a login that is gone, the one thing to fix: a check that got no answer is a note (owner, 2026-10-08:
+ *  no warnings "if it's just a note"). */
 function toastVerdict(v: FreeVerdict) {
   if (v.state === 'alive') toast.success(v.text)
   else if (v.state === 'dead') toast.error(v.text)
-  else toast.warning(v.text)
+  else toast.info(v.text)
 }
 async function checkByHand(i: FreeInstance) {
   if (busy(i.id)) return
@@ -301,7 +324,8 @@ async function refreshAccounts() {
       const text =
         t('freeInstances.checkSummary', { alive: count('alive'), dead: count('dead') }) +
         (count('unknown') > 0 ? t('freeInstances.checkSummaryUnknown', { unknown: count('unknown') }) : '')
-      if (count('dead') + count('unknown') > 0) toast.warning(text)
+      if (count('dead') > 0) toast.error(text)
+      else if (count('unknown') > 0) toast.info(text)
       else toast.success(text)
     }
   } finally {
@@ -442,15 +466,25 @@ defineExpose({
       :row="rowModels.get(inst.id)!"
     >
       <template #name-extra>
-        <!-- The last operation failed: what the harness said, on the row it belongs to. -->
+        <!-- Only an account that is really failing is marked: 90% or more of its last hour's messages, out of 5 or
+             more (server/src/free-instances/health.ts). One refused send is a note in the name's hover, never a mark
+             (owner, 2026-10-08). A signed-out account says so with its dot. -->
         <IconTooltip
-          v-if="errors[inst.id]"
-          :label="$t('freeInstances.failed')"
-          :description="errors[inst.id]"
+          v-if="health[inst.id]?.failing"
+          :label="$t('freeInstances.failing', hourOf(inst.id))"
+          :description="topReason(inst.id)"
         >
-          <span class="inline-flex items-center" :aria-label="$t('freeInstances.failed')">
+          <span class="inline-flex items-center" :aria-label="$t('freeInstances.failing', hourOf(inst.id))">
             <TriangleAlert class="size-3.5 text-destructive" />
           </span>
+        </IconTooltip>
+        <!-- A paid plan the site reports (ChatGPT Go, owner 2026-10-08: "Is there a way to note their account status?"). -->
+        <IconTooltip
+          v-if="paidPlan(inst)"
+          :label="$t('freeInstances.planLabel', { plan: paidPlan(inst) })"
+          :description="$t('freeInstances.planHint', { plan: paidPlan(inst) })"
+        >
+          <Badge variant="outline" class="h-4 px-1 text-[10px]">{{ paidPlan(inst) }}</Badge>
         </IconTooltip>
       </template>
       <!-- The row's one primary action, as Open is on a desktop row. -->

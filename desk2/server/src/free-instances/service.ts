@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
 import { failure, parseResult } from './results'
@@ -68,6 +69,8 @@ export class FreeInstances {
   private refreshed = new Map<string, number>()
   /** Each operation's end: a person's operation waits for it while Desk's own read (FreeJob.auto) holds the account. */
   private runs = new Map<string, Promise<void>>()
+  /** Each account's messages in the last hour and how they ended (health.ts). Kept in memory: an hour is gone soon. */
+  private outcomes = new Map<string, SendOutcome[]>()
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
@@ -230,11 +233,14 @@ export class FreeInstances {
     this.prune()
     const now = Date.now()
     const tokens: Record<string, FreeTokens> = {}
+    const health: Record<string, FreeHealth> = {}
     for (const i of this.store.data.instances) {
       const ledger = this.store.data.tokens?.[i.id]
       if (ledger) tokens[i.id] = tokenWindows(ledger, i.usage, now)
+      const hour = healthOf(this.outcomes.get(i.id), now)
+      if (hour) health[i.id] = hour
     }
-    return { ready: this.runtime.ready(), tokens, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    return { ready: this.runtime.ready(), tokens, health, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   get(id: string): FreeJob {
     this.prune()
@@ -312,6 +318,9 @@ export class FreeInstances {
       this.markThread(r, 'failed', r.chatId, job.result.error!.message)
     } finally {
       job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
+      // A cancel is the asker's doing, not the account's.
+      if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted)
+        this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
       this.store.save()
     }
   }
