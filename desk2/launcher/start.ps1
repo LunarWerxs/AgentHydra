@@ -15,11 +15,12 @@
 #      add the server's bun pid to the pid file, when this run started the server.
 #
 # Safe to run twice: a named mutex serialises launches, and a second run only focuses the window.
-# The shortcut runs this through launcher/start.vbs so no console window ever flashes.
+# The shortcut runs this through launcher/start.vbs so no console window ever flashes. When the server
+# already answers, start.vbs runs the window host itself and then this with -NoWindow, for the tray.
 #
 #   -DryRun    print what it would do and exit 0, with no side effects
 #   -NoDialog  report a failure on stderr instead of a message box (tests)
-#   -NoWindow  start the server only (restart.ps1: the open window reconnects by itself)
+#   -NoWindow  start the server (and tray) only (restart.ps1: the open window reconnects by itself)
 #   -Port      server port (default $env:HYDRA_DESK_PORT, else 7798)
 param(
   [switch]$DryRun,
