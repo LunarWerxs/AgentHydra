@@ -97,8 +97,13 @@ async function regularDirectory(path: string): Promise<void> {
  *  verified the 3,749-file / 614 MB managed copy in 1.5-2.2s where the old loop took 5.5-8.8s on
  *  the same loaded box (measured 2026-09-25, identical hashes). */
 const HASH_CHUNK_BYTES = 1 << 20
+/** Files up to this size are read in one call. Nearly all of a Claude install's 3,900 files are
+ *  small, and a stream's setup cost more than reading them. */
+const WHOLE_READ_BYTES = 8 << 20
 /** How many files one verification hashes at the same time. */
-const HASH_CONCURRENCY = 8
+const HASH_CONCURRENCY = 16
+/** How many files a new copy copies at the same time. */
+const COPY_CONCURRENCY = 8
 
 /** Runs `fn` over every item, at most `limit` at once; the first failure stops new work starting
  *  and is what rejects. Every item is still checked unless an earlier one already failed. */
@@ -128,34 +133,56 @@ async function digest(path: string): Promise<{ size: number; sha256: string }> {
   if (!info.isFile() || info.isSymbolicLink()) throw Error(`Not a regular Claude file: ${path}`)
   const hash = createHash('sha256')
   let size = 0
-  for await (const chunk of createReadStream(path, { highWaterMark: HASH_CHUNK_BYTES })) {
-    hash.update(chunk)
-    size += chunk.length
+  if (info.size <= WHOLE_READ_BYTES) {
+    const bytes = await readFile(path)
+    hash.update(bytes)
+    size = bytes.length
+  } else {
+    for await (const chunk of createReadStream(path, { highWaterMark: HASH_CHUNK_BYTES })) {
+      hash.update(chunk)
+      size += chunk.length
+    }
   }
   if (size !== info.size) throw Error(`Claude file changed while reading: ${path}`)
   return { size, sha256: hash.digest('hex') }
 }
 
-async function filesIn(
+interface InventoryEntry {
+  path: string
+  size: number
+}
+
+const byPath = (a: InventoryEntry, b: InventoryEntry) =>
+  a.path < b.path ? -1 : a.path > b.path ? 1 : 0
+
+/** Every regular file under `root` with its size, sorted by path. Refuses links, junctions and
+ *  anything that is neither a file nor a folder. A folder's entries are looked at all at once: one
+ *  at a time, the 3,900 lstat calls of a Claude install were most of a launch's wait. */
+async function inventory(
   root: string,
   prefix = '',
   onDirectory?: (relativePath: string) => Promise<void>,
-): Promise<string[]> {
+): Promise<InventoryEntry[]> {
   await regularDirectory(join(root, prefix))
   if (onDirectory) await onDirectory(prefix)
-  const files: string[] = []
-  for (const item of await readdir(join(root, prefix), { withFileTypes: true })) {
-    const name = prefix ? `${prefix}/${item.name}` : item.name
-    const path = childPath(root, name)
-    const info = await lstat(path)
-    if (info.isSymbolicLink())
-      throw Error(`Claude copy refuses symbolic links or junctions: ${path}`)
-    if (info.isDirectory()) files.push(...(await filesIn(root, name, onDirectory)))
-    else if (info.isFile()) files.push(name)
-    else throw Error(`Claude copy contains an unsupported entry: ${path}`)
-  }
-  return files.sort()
+  const items = await readdir(join(root, prefix), { withFileTypes: true })
+  const found = await Promise.all(
+    items.map(async (item): Promise<InventoryEntry[]> => {
+      const name = prefix ? `${prefix}/${item.name}` : item.name
+      const path = childPath(root, name)
+      const info = await lstat(path)
+      if (info.isSymbolicLink())
+        throw Error(`Claude copy refuses symbolic links or junctions: ${path}`)
+      if (info.isDirectory()) return inventory(root, name, onDirectory)
+      if (info.isFile()) return [{ path: name, size: info.size }]
+      throw Error(`Claude copy contains an unsupported entry: ${path}`)
+    }),
+  )
+  return found.flat().sort(byPath)
 }
+
+const samePaths = (a: readonly { path: string }[], b: readonly { path: string }[]) =>
+  a.length === b.length && a.every((entry, index) => entry.path === b[index]?.path)
 
 /**
  * One streaming pass over the installed executable yields everything the managed copy needs:
@@ -173,7 +200,7 @@ async function scanInspectorFuse(
   let markers = 0
   let carry = Buffer.alloc(0)
   let position = 0
-  for await (const chunk of createReadStream(binary)) {
+  for await (const chunk of createReadStream(binary, { highWaterMark: HASH_CHUNK_BYTES })) {
     const bytes = chunk as Buffer
     source.update(bytes)
     // The marker can straddle a chunk boundary, so search it together with the previous tail.
@@ -264,8 +291,24 @@ export async function resolveClaudeNativeSource(binary: string): Promise<string>
   // Always the newest installed application, never the stub's own older neighbour.
   const source = apps.length ? join(parent, apps[0].name, 'claude.exe') : binary
   await regularDirectory(dirname(source))
-  await digest(source)
+  const info = await lstat(source)
+  if (!info.isFile() || info.isSymbolicLink()) throw Error(`Not a regular Claude file: ${source}`)
   return source
+}
+
+/** The build derived from each installed executable, kept while the file is the same one (its size,
+ *  times and file id). Deriving it reads all 250 MB of claude.exe, and Squirrel never rewrites a
+ *  finished app-<build> folder: an update is a new folder, so a new key. */
+const discovered = new Map<string, { stamp: string; build: Readonly<ClaudeManagedBuild> }>()
+
+async function currentBuild(sourceBinary: string): Promise<Readonly<ClaudeManagedBuild>> {
+  const info = await lstat(sourceBinary)
+  const stamp = `${info.size}:${info.mtimeMs}:${info.birthtimeMs}:${info.ino}`
+  const known = discovered.get(sourceBinary)
+  if (known?.stamp === stamp) return known.build
+  const build = await discoverClaudeBuild(sourceBinary)
+  discovered.set(sourceBinary, { stamp, build })
+  return build
 }
 
 /** Binding catches any existing IPv4 loopback or wildcard listener without contacting it. */
@@ -323,13 +366,12 @@ class StaleManagedCopy extends Error {}
  * after it was copied, which the per-file hashing during the copy already refuses.
  */
 async function assertMatchesSource(sourceDir: string, recorded: FileDigest[]): Promise<void> {
-  const current = await filesIn(sourceDir)
-  if (JSON.stringify(current) !== JSON.stringify(recorded.map((entry) => entry.path))) {
+  const current = await inventory(sourceDir)
+  if (!samePaths(current, recorded)) {
     throw new StaleManagedCopy('Installed Claude files differ from the managed copy')
   }
-  for (const entry of recorded) {
-    const info = await lstat(childPath(sourceDir, entry.path))
-    if (info.size !== entry.size) {
+  for (const [index, entry] of recorded.entries()) {
+    if (current[index]!.size !== entry.size) {
       throw new StaleManagedCopy(`Installed Claude file changed since the copy: ${entry.path}`)
     }
   }
@@ -356,13 +398,20 @@ async function verifyCopy(
   ) {
     throw Error('Invalid managed Claude copy manifest')
   }
-  const files = (await filesIn(target)).filter((path) => path !== MANIFEST)
-  if (JSON.stringify(files) !== JSON.stringify(manifest.files.map((entry) => entry.path))) {
+  const files = (await inventory(target)).filter((entry) => entry.path !== MANIFEST)
+  if (!samePaths(files, manifest.files)) {
     throw Error('Managed Claude copy file inventory changed')
   }
+  // The installed folder is listed while the copy is hashed; its verdict is still taken last (below).
+  const source = assertMatchesSource(dirname(sourceBinary), manifest.files).then(
+    () => null,
+    (error: unknown) => error,
+  )
   // Every file is still hashed and compared on every launch (the guard the runbook says never to
-  // weaken); only the reading is batched, because this runs before Claude is even started.
-  await forEachLimited(manifest.files, HASH_CONCURRENCY, async (expected) => {
+  // weaken); only the reading is arranged for speed, because this runs before Claude is even
+  // started: many files at once, the largest first so claude.exe does not finish alone at the end.
+  const largestFirst = [...manifest.files].sort((a, b) => b.size - a.size)
+  await forEachLimited(largestFirst, HASH_CONCURRENCY, async (expected) => {
     const actual = await digest(childPath(target, expected.path))
     if (actual.sha256 !== expected.sha256 || actual.size !== expected.size) {
       throw Error(`Managed Claude copy changed: ${expected.path}`)
@@ -374,10 +423,30 @@ async function verifyCopy(
     throw Error('Managed Claude copy is missing app resources')
   }
   // Last, so any sign of tampering above is still reported as tampering and fails closed.
-  await assertMatchesSource(dirname(sourceBinary), manifest.files)
+  const stale = await source
+  if (stale) throw stale
 }
 
+const copyName = (build: Readonly<ClaudeManagedBuild>) =>
+  `${build.version}-${build.sourceSha256.slice(0, 12)}`
+
 const preparing = new Map<string, Promise<string>>()
+
+/** prepareCopy, shared by every caller asking for the same copy while one is under way. */
+function sharedPrepare(
+  sourceBinary: string,
+  managedRoot: string,
+  build: Readonly<ClaudeManagedBuild>,
+): Promise<string> {
+  const key = `${managedRoot}\0${sourceBinary}`
+  const pending = preparing.get(key)
+  if (pending) return pending
+  const operation = prepareCopy(sourceBinary, managedRoot, build).finally(() => {
+    if (preparing.get(key) === operation) preparing.delete(key)
+  })
+  preparing.set(key, operation)
+  return operation
+}
 
 async function prepareCopy(
   sourceBinary: string,
@@ -392,7 +461,7 @@ async function prepareCopy(
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
-  const target = childPath(managedRoot, `${build.version}-${build.sourceSha256.slice(0, 12)}`)
+  const target = childPath(managedRoot, copyName(build))
   const sourceDir = dirname(sourceBinary)
   const sourceRelative = relative(sourceDir, managedRoot)
   if (!sourceRelative || (!sourceRelative.startsWith('..') && !isAbsolute(sourceRelative))) {
@@ -435,12 +504,15 @@ async function createCopy(
   // A crashed build stays in its uniquely named staging directory, never a runnable cache; a
   // refused one is removed, because each is a full copy of Claude and refusals can repeat.
   const staging = childPath(managedRoot, `.building-${randomUUID()}`)
-  await mkdir(staging)
+  building.add(samePath(staging))
   try {
+    await mkdir(staging)
     return await buildCopy(sourceBinary, staging, target, build)
   } catch (error) {
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)
     throw error
+  } finally {
+    building.delete(samePath(staging))
   }
 }
 
@@ -451,14 +523,19 @@ async function buildCopy(
   build: Readonly<ClaudeManagedBuild>,
 ): Promise<string> {
   const sourceDir = dirname(sourceBinary)
-  const files = await filesIn(sourceDir, '', async (path) => {
-    if (path) await mkdir(childPath(staging, path), { recursive: true })
-  })
+  const files = (
+    await inventory(sourceDir, '', async (path) => {
+      if (path) await mkdir(childPath(staging, path), { recursive: true })
+    })
+  ).map((entry) => entry.path)
   if (!files.includes('resources/app.asar') || files.includes(MANIFEST)) {
     throw Error('Unsupported Claude resource layout')
   }
-  const copied: FileDigest[] = []
-  for (const path of files) {
+  // Several files at once; each is still hashed before and after it is copied. The manifest keeps
+  // the sorted order, which is what verifyCopy compares against.
+  const copied: FileDigest[] = new Array(files.length)
+  await forEachLimited([...files.keys()], COPY_CONCURRENCY, async (index) => {
+    const path = files[index]!
     const source = childPath(sourceDir, path)
     const destination = childPath(staging, path)
     await mkdir(dirname(destination), { recursive: true })
@@ -468,8 +545,8 @@ async function buildCopy(
     if (before.sha256 !== after.sha256 || before.size !== after.size) {
       throw Error(`Claude source changed while copying: ${path}`)
     }
-    copied.push({ path, ...after })
-  }
+    copied[index] = { path, ...after }
+  })
   const executable = copied.find((entry) => entry.path.toLowerCase() === 'claude.exe')
   if (!executable || executable.sha256 !== build.sourceSha256) {
     throw Error('Claude source executable changed during copy')
@@ -540,54 +617,71 @@ async function directoryBytes(root: string): Promise<number> {
 
 const samePath = (path: string) => resolve(path).toLowerCase()
 
+/** Staging folders this process is writing a copy into right now. */
+const building = new Set<string>()
+/** A staging (.building-*) or set-aside (.stale-*) folder untouched this long was left by a build or
+ *  a removal that died with its daemon: each is most of a Claude install (two such, 962 MB, were
+ *  found 2026-10-08). A copy takes seconds to build. */
+const ABANDONED_MS = 60 * 60_000
+
 export interface ManagedCopyPrunePlan {
-  keep: { dir: string; bytes: number; reason: 'current' | 'previous' | 'in use' | 'unverified' }[]
+  keep: { dir: string; reason: 'current' | 'previous' | 'in use' | 'unverified' }[]
   remove: { dir: string; bytes: number }[]
 }
 
 /**
  * Which managed copies to keep. Kept: the current one, the newest other one (the previous), and
  * any a running process executes from. When the process table cannot be read nothing else is
- * removed. Reads only; `pruneManagedCopies` does the removal.
+ * removed. Abandoned staging and set-aside folders are removed too. Reads only;
+ * `pruneManagedCopies` does the removal.
  */
 export async function planManagedCopyPrune(
   managedRoot: string,
   currentTarget: string,
   runningPaths: () => Promise<string[] | null> = listRunningExecutablePaths,
+  now: number = Date.now(),
 ): Promise<ManagedCopyPrunePlan> {
   const current = samePath(currentTarget)
-  const copies: { dir: string; stamp: number; bytes: number }[] = []
+  const copies: { dir: string; stamp: number }[] = []
+  const abandoned: string[] = []
   for (const item of await readdir(managedRoot, { withFileTypes: true })) {
-    // Staging (.building-*) and aside (.stale-*) folders are not finished copies.
-    if (!item.isDirectory() || item.name.startsWith('.')) continue
+    if (!item.isDirectory()) continue
     const dir = childPath(managedRoot, item.name)
+    // Staging (.building-*) and aside (.stale-*) folders are not finished copies.
+    if (item.name.startsWith('.')) {
+      if (!/^\.(?:building|stale)-/.test(item.name) || building.has(samePath(dir))) continue
+      if (now - (await lstat(dir)).mtimeMs > ABANDONED_MS) abandoned.push(dir)
+      continue
+    }
     let stamp: number
     try {
       stamp = (await lstat(join(dir, MANIFEST))).mtimeMs
     } catch {
       continue
     }
-    copies.push({ dir, stamp, bytes: await directoryBytes(dir) })
+    copies.push({ dir, stamp })
   }
   copies.sort((a, b) => b.stamp - a.stamp)
   const plan: ManagedCopyPrunePlan = { keep: [], remove: [] }
+  const remove = async (dir: string) => plan.remove.push({ dir, bytes: await directoryBytes(dir) })
   let previousKept = false
   let running: string[] | null | undefined
   for (const copy of copies) {
     if (samePath(copy.dir) === current) {
-      plan.keep.push({ ...copy, reason: 'current' })
+      plan.keep.push({ dir: copy.dir, reason: 'current' })
     } else if (!previousKept) {
       previousKept = true
-      plan.keep.push({ ...copy, reason: 'previous' })
+      plan.keep.push({ dir: copy.dir, reason: 'previous' })
     } else {
       running ??= await runningPaths()
       const prefix = `${samePath(copy.dir)}${sep}`
-      if (!running) plan.keep.push({ ...copy, reason: 'unverified' })
+      if (!running) plan.keep.push({ dir: copy.dir, reason: 'unverified' })
       else if (running.some((path) => samePath(path).startsWith(prefix)))
-        plan.keep.push({ ...copy, reason: 'in use' })
-      else plan.remove.push({ dir: copy.dir, bytes: copy.bytes })
+        plan.keep.push({ dir: copy.dir, reason: 'in use' })
+      else await remove(copy.dir)
     }
   }
+  for (const dir of abandoned) await remove(dir)
   return plan
 }
 
@@ -633,20 +727,9 @@ export async function prepareClaudeNativeLaunch(
   // An update AgentHydra is applying writes the newest app-<build> folder; never copy it half-written.
   await desktopInstallSettled()
   const sourceBinary = await resolveClaudeNativeSource(binary)
-  const build = dependencies.build ?? (await discoverClaudeBuild(sourceBinary))
+  const build = dependencies.build ?? (await currentBuild(sourceBinary))
   const managedRoot = resolve(dependencies.managedRoot ?? join(DATA_DIR, 'claude-native'))
-  const key = `${managedRoot}\0${sourceBinary}`
-  let operation = preparing.get(key)
-  if (!operation) {
-    operation = prepareCopy(sourceBinary, managedRoot, build)
-    preparing.set(key, operation)
-  }
-  let managedBinary: string
-  try {
-    managedBinary = await operation
-  } finally {
-    if (preparing.get(key) === operation) preparing.delete(key)
-  }
+  const managedBinary = await sharedPrepare(sourceBinary, managedRoot, build)
   // The copy is verified (or just built): older ones can go. Best effort, after the checks above.
   await pruneManagedCopies(managedRoot, dirname(managedBinary), dependencies.runningExecutablePaths)
   // Copying may take seconds on the first launch. Recheck immediately before handing off.
@@ -663,4 +746,30 @@ export async function prepareClaudeNativeLaunch(
       signature: 'modified-copy',
     },
   }
+}
+
+/**
+ * Builds the managed copy of the newest installed Claude before an Open needs it. Copies used to be
+ * made only by the Open that found none, so the first Open after every Claude update waited for
+ * 600 MB to be copied and hashed (27 s on 2026-10-08, owner: "it's fucking taking a goddamn
+ * decade"). An existing copy is left alone here: the Open that uses it verifies it, as every Open
+ * does. Also derives the build, so the first Open after the daemon starts does not.
+ */
+export async function prewarmClaudeNativeCopy(
+  binary: string,
+  dependencies: Pick<ClaudeNativeLaunchDependencies, 'managedRoot' | 'runningExecutablePaths'> = {},
+): Promise<{ version: string; built: boolean }> {
+  await desktopInstallSettled()
+  const sourceBinary = await resolveClaudeNativeSource(binary)
+  const build = await currentBuild(sourceBinary)
+  const managedRoot = resolve(dependencies.managedRoot ?? join(DATA_DIR, 'claude-native'))
+  try {
+    await lstat(childPath(managedRoot, copyName(build)))
+    return { version: build.version, built: false }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  const managedBinary = await sharedPrepare(sourceBinary, managedRoot, build)
+  await pruneManagedCopies(managedRoot, dirname(managedBinary), dependencies.runningExecutablePaths)
+  return { version: build.version, built: true }
 }

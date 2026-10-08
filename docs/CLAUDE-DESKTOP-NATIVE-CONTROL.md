@@ -315,7 +315,8 @@ AgentHydra derives the build rather than recognizing a reviewed one, and verifie
 it structurally: the installed executable must carry exactly one Electron fuse wire
 with the expected layout and the inspector fuse off, and the copy must differ from
 the original by that one byte and nothing else. Every copied file is hashed into
-the copy's manifest and re-verified on later launches, alongside the exact
+the copy's manifest and re-verified on every later launch (many files at once,
+since 2026-10-08), alongside the exact
 profile/PID/executable, loopback connection and loaded Claude view. It rejects
 occupied ports, changed copies, an ambiguous or unreadable fuse wire, and an
 installed executable whose fuse is not in the expected off state. Inside the app,
@@ -325,9 +326,19 @@ the bundle file names and hashes that answered are recorded as evidence, not
 compared against constants. The managed copy omits the
 parent Squirrel updater; the live log confirmed its self-updater is disabled, which is why
 AgentHydra's version-drift pass updates the install instead (see above).
-Managed startups are serialized while global registrations are snapshotted and
-restored. Restoration waits for Claude's browser-host startup task, restores only
-values still owned by that launch, and preserves unrelated concurrent changes.
+Global registrations are snapshotted before a managed startup and restored after
+it. Startups of different profiles run side by side (since 2026-10-08; before, each
+waited for the previous one to be fully up): overlapping startups share one
+baseline, read before the first of them, and a new baseline is read only once every
+startup has ended and its restoration has finished (`claude-native-launch-registry.ts`).
+Restoration waits for Claude's browser-host startup task, restores only values
+still owned by that launch, and preserves unrelated concurrent changes.
+
+The copy for a newly installed Claude build is made ahead of time: the daemon looks
+once a minute and builds it as soon as the build is installed
+(`claude-native-prewarm.ts`), so the first Open after an update does not copy
+600 MB first. That Open still verifies the copy, as every Open does. Staging and
+set-aside folders a dead build left behind are removed after an hour.
 
 Ashley #15 was initially closed and signed in. Full startup automatically enabled
 port 19315, and native inspection confirmed the expected account and organization.

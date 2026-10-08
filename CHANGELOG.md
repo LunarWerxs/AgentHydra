@@ -13,12 +13,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A linked CLI login stays signed in while its desktop app is closed**
 - **A CliMayte worker's folder moves its chat too**
 - **A signed-out desktop profile signs in from its synced copy**
+- **Opening a desktop account starts Claude in under a second, and several open at once**
 
 **Everything in Unreleased**
 
 - **New shows your projects.** Clicking New opens a grid of the folders you work in, each with its logo, its path
   and whether its git checkout is up to date, behind, ahead or has uncommitted changes. Clicking one starts a new
   chat in that folder. The stats card moved behind a Stats tab.
+- **Opening a desktop account starts Claude in under a second, and several open at once.** The checks
+  AgentHydra runs before starting Claude now run side by side and check its files many at a time; every
+  file is still checked on every Open. A new Claude version is prepared in the background as soon as it
+  is installed, so the first Open after an update no longer waits for it. Opening a second account no
+  longer waits for the first to finish starting. The Open button spins while it works, and the row shows
+  the account running as soon as Claude has started.
 - **A linked CLI login stays signed in while its desktop app is closed.** AgentHydra refreshes a closed
   profile's Claude Code grant before it runs out, without opening a window. When a login has expired anyway,
   CliMayte names that account by number in its waiting reason and in the capacity answer.

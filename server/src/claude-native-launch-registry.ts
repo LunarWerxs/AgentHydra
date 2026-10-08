@@ -242,20 +242,13 @@ function validTree(value: unknown, path: string, recursive: boolean): value is R
   )
 }
 
-/** Snapshot before a managed launch; restore only registrations that still identify this launch. */
-export async function beginNativeLaunchRegistryGuard(
-  managedBinary: string,
-  profile: string,
-  deps: NativeLaunchRegistryDependencies = {},
-): Promise<{ restore(): Promise<NativeLaunchRegistryResult> }> {
-  if ((deps.platform ?? process.platform) !== 'win32')
-    throw Error('Native launch registry guard requires Windows')
-  for (const value of [managedBinary, profile]) {
-    if (!/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/i.test(value) || /["\r\n]/.test(value))
-      throw Error('Native launch registry guard requires absolute Windows paths')
-  }
-  const raw = await runJson(nativeRegistrySnapshotScript(), deps)
-  const snapshot = raw as Snapshot
+function assertWindowsPath(value: string): void {
+  if (!/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+)/i.test(value) || /["\r\n]/.test(value))
+    throw Error('Native launch registry guard requires absolute Windows paths')
+}
+
+async function readSnapshot(deps: NativeLaunchRegistryDependencies): Promise<Snapshot> {
+  const snapshot = (await runJson(nativeRegistrySnapshotScript(), deps)) as Snapshot
   if (
     !snapshot ||
     !validTree(snapshot.protocol, PROTOCOL, true) ||
@@ -266,26 +259,98 @@ export async function beginNativeLaunchRegistryGuard(
     )
   )
     throw Error('Malformed native launch registry snapshot')
-  let restored: Promise<NativeLaunchRegistryResult> | undefined
+  return snapshot
+}
+
+function restoreResult(raw: unknown): NativeLaunchRegistryResult {
+  const result = raw as NativeLaunchRegistryResult
+  if (
+    !result ||
+    !['restored', 'preserved', 'errors'].every((key) => {
+      const values = result[key as keyof NativeLaunchRegistryResult]
+      return Array.isArray(values) && values.every((value) => typeof value === 'string')
+    })
+  )
+    throw Error('Malformed native launch registry restore result')
+  return result
+}
+
+/** One managed launch's hold on the shared baseline. */
+export interface NativeLaunchRegistryLease {
+  /** Restore what remains registered to this launch (its app ran from `managedBinary`) to the
+   *  baseline, and end the lease. Never replayed: a second call answers the first's outcome. */
+  restore(managedBinary: string): Promise<NativeLaunchRegistryResult>
+  /** End the lease without restoring: this launch never started an app. */
+  release(): void
+}
+
+/**
+ * The registrations as they were before the managed launches now under way, shared by every launch
+ * that overlaps them. Each launch's app rewrites the claude:// handler and the browser hosts while it
+ * starts, so a baseline read while another managed launch is running would capture that launch's
+ * temporary registration as the thing to restore. Launches used to be run one at a time for that
+ * reason, each waiting for the one before it to be fully up (2026-10-08, owner: "Why are launching
+ * accounts in this fucking thing so slow?"). Now the first launch reads the baseline, every launch that
+ * begins while any is under way shares it, and a new one is read only once all of them have ended and
+ * their restorations have finished. Each launch still restores only what still names it.
+ */
+export function createNativeLaunchRegistryGuard(deps: NativeLaunchRegistryDependencies = {}): {
+  begin(profile: string): Promise<NativeLaunchRegistryLease>
+} {
+  let baseline: { snapshot: Promise<Snapshot>; leases: number } | null = null
+  const restoring = new Set<Promise<unknown>>()
   return {
-    restore() {
-      // Never replay an uncertain restore. The caller can report its failure and preserve evidence.
-      restored ??= runJson(
-        nativeRegistryRestoreScript(managedBinary, profile, snapshot),
-        deps,
-      ).then((raw) => {
-        const result = raw as NativeLaunchRegistryResult
-        if (
-          !result ||
-          !['restored', 'preserved', 'errors'].every((key) => {
-            const values = result[key as keyof NativeLaunchRegistryResult]
-            return Array.isArray(values) && values.every((value) => typeof value === 'string')
-          })
-        )
-          throw Error('Malformed native launch registry restore result')
-        return result
-      })
-      return restored
+    async begin(profile) {
+      if ((deps.platform ?? process.platform) !== 'win32')
+        throw Error('Native launch registry guard requires Windows')
+      assertWindowsPath(profile)
+      if (!baseline) {
+        const finishing = Promise.allSettled([...restoring])
+        const fresh = { snapshot: finishing.then(() => readSnapshot(deps)), leases: 0 }
+        // A baseline that could not be read is not kept: the next launch reads it again.
+        fresh.snapshot.catch(() => {
+          if (baseline === fresh) baseline = null
+        })
+        baseline = fresh
+      }
+      const shared = baseline
+      shared.leases++
+      let ended = false
+      const end = () => {
+        if (ended) return
+        ended = true
+        if (--shared.leases === 0 && baseline === shared) baseline = null
+      }
+      let snapshot: Snapshot
+      try {
+        snapshot = await shared.snapshot
+      } catch (error) {
+        end()
+        throw error
+      }
+      let restored: Promise<NativeLaunchRegistryResult> | undefined
+      return {
+        restore(managedBinary) {
+          // Never replay an uncertain restore. The caller can report its failure and preserve evidence.
+          if (restored) return restored
+          restored = Promise.resolve()
+            .then(() => {
+              assertWindowsPath(managedBinary)
+              return runJson(nativeRegistryRestoreScript(managedBinary, profile, snapshot), deps)
+            })
+            .then(restoreResult)
+          // Recorded before the lease ends, so a baseline read after the last lease waits for it.
+          const tracked = restored.catch(() => undefined)
+          restoring.add(tracked)
+          void tracked.then(() => restoring.delete(tracked))
+          end()
+          return restored
+        },
+        release: end,
+      }
     },
   }
 }
+
+/** The daemon's one guard: every managed launch from this process shares it. */
+export const nativeLaunchRegistryGuard = createNativeLaunchRegistryGuard()

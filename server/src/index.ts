@@ -23,6 +23,7 @@ import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import { startIdleSweep, stopIdleSweep } from './claude-native-idle'
+import { startClaudeNativePrewarm, stopClaudeNativePrewarm } from './claude-native-prewarm'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
@@ -1116,6 +1117,7 @@ function stopBackgroundTimers(): void {
   stopDesktopCliFeed()
   stopCliResetSweep()
   stopIdleSweep()
+  stopClaudeNativePrewarm()
   stopExtraUsageGuard()
   stopStallSentinel()
   stopCliMaytePing()
@@ -1371,7 +1373,8 @@ function spawnRelaunchSuccessor(): void {
 // (startAutoUpdate below), one interval out, so a fresh launch is never interrupted.
 loadAutoUpdateSettings()
 setAutoUpdateHooks({
-  // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in flight.
+  // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
+  // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
   relaunch: () => void relaunchDaemon(),
 })
@@ -1472,6 +1475,10 @@ startTitleSweep()
 // fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
 // See version-drift.ts.
 startVersionDriftWatch()
+
+// Every minute: builds the managed Claude copy as soon as a new Claude build is installed, so the
+// first Open after an update does not copy 600 MB first. See claude-native-prewarm.ts.
+startClaudeNativePrewarm()
 
 // Every 5 minutes: switches each managed app's own idle pause on (an off-screen idle chat gives
 // its ~260 MB engine back after claudeNativeIdleMinutes, default 10) and stops the prewarmed

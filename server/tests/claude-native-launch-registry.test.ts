@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
-  beginNativeLaunchRegistryGuard,
   CLAUDE_NATIVE_HOST_KEYS,
+  createNativeLaunchRegistryGuard,
   nativeRegistryRestoreScript,
   nativeRegistrySnapshotScript,
 } from '../src/claude-native-launch-registry'
@@ -45,13 +45,17 @@ function decodePayload(script: string): unknown {
   return JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
 }
 
+function begin(deps: Parameters<typeof createNativeLaunchRegistryGuard>[0], at = profile) {
+  return createNativeLaunchRegistryGuard(deps).begin(at)
+}
+
 describe('managed Claude launch registry guard', () => {
   test('accepts real protocol child keys separated by single backslashes', async () => {
     const baseline = snapshot()
     for (const suffix of ['shell', 'shell\\open', 'shell\\open\\command']) {
       baseline.protocol.keys.push({ path: `${protocol}\\${suffix}`, values: [] })
     }
-    const guard = await beginNativeLaunchRegistryGuard(binary, profile, {
+    const guard = await begin({
       platform: 'win32',
       run: async () => success(baseline),
     })
@@ -63,7 +67,7 @@ describe('managed Claude launch registry guard', () => {
     const calls: string[][] = []
     const baseline = snapshot()
     const expected = { restored: [protocol], preserved: CLAUDE_NATIVE_HOST_KEYS, errors: [] }
-    const guard = await beginNativeLaunchRegistryGuard(binary, profile, {
+    const guard = await begin({
       platform: 'win32',
       run: async (argv) => {
         calls.push(argv)
@@ -75,7 +79,7 @@ describe('managed Claude launch registry guard', () => {
       protocol,
       browsers: CLAUDE_NATIVE_HOST_KEYS,
     })
-    expect(await guard.restore()).toEqual(expected)
+    expect(await guard.restore(binary)).toEqual(expected)
     const payload = decodePayload(calls[1]!.at(-1)!) as RestorePayload
     expect(payload).toEqual({ managedBinary: binary, profile, snapshot: baseline })
     expect(payload.snapshot.protocol.keys[0]!.values[2]!.data).toBe('9223372036854775807')
@@ -85,7 +89,7 @@ describe('managed Claude launch registry guard', () => {
 
   test('restoration is never replayed after a lost response', async () => {
     let calls = 0
-    const guard = await beginNativeLaunchRegistryGuard(binary, profile, {
+    const guard = await begin({
       platform: 'win32',
       run: async () => {
         calls++
@@ -93,17 +97,17 @@ describe('managed Claude launch registry guard', () => {
         throw Error('transport lost')
       },
     })
-    const first = guard.restore()
-    const second = guard.restore()
+    const first = guard.restore(binary)
+    const second = guard.restore(binary)
     expect(second).toBe(first)
     await expect(first).rejects.toThrow('transport lost')
-    await expect(guard.restore()).rejects.toThrow('transport lost')
+    await expect(guard.restore(binary)).rejects.toThrow('transport lost')
     expect(calls).toBe(2)
   })
 
   test('snapshot failure refuses before a managed launch can be protected', async () => {
     await expect(
-      beginNativeLaunchRegistryGuard(binary, profile, {
+      begin({
         platform: 'win32',
         run: async () => ({ code: null, timedOut: true, stdout: '', stderr: '' }),
       }),
@@ -115,7 +119,7 @@ describe('managed Claude launch registry guard', () => {
       const baseline = snapshot()
       baseline.protocol.keys[0]!.path = path
       await expect(
-        beginNativeLaunchRegistryGuard(binary, profile, {
+        begin({
           platform: 'win32',
           run: async () => success(baseline),
         }),
@@ -124,7 +128,7 @@ describe('managed Claude launch registry guard', () => {
     const baseline = snapshot()
     baseline.protocol.keys.push(baseline.protocol.keys[0]!)
     await expect(
-      beginNativeLaunchRegistryGuard(binary, profile, {
+      begin({
         platform: 'win32',
         run: async () => success(baseline),
       }),
@@ -135,21 +139,65 @@ describe('managed Claude launch registry guard', () => {
     const run = async () => {
       throw Error('must not run')
     }
-    await expect(
-      beginNativeLaunchRegistryGuard(binary, profile, { platform: 'linux', run }),
-    ).rejects.toThrow('requires Windows')
-    await expect(
-      beginNativeLaunchRegistryGuard('claude.exe', profile, { platform: 'win32', run }),
-    ).rejects.toThrow('absolute Windows')
+    await expect(begin({ platform: 'linux', run })).rejects.toThrow('requires Windows')
+    await expect(begin({ platform: 'win32', run }, 'Profiles\\Ashley')).rejects.toThrow(
+      'absolute Windows',
+    )
+    let calls = 0
+    const guard = await begin({
+      platform: 'win32',
+      run: async () => {
+        if (++calls > 1) throw Error('must not run')
+        return success(snapshot())
+      },
+    })
+    await expect(guard.restore('claude.exe')).rejects.toThrow('absolute Windows')
+    expect(calls).toBe(1)
   })
 
   test('malformed restoration evidence does not report success', async () => {
     let calls = 0
-    const guard = await beginNativeLaunchRegistryGuard(binary, profile, {
+    const guard = await begin({
       platform: 'win32',
       run: async () => success(++calls === 1 ? snapshot() : { restored: true }),
     })
-    await expect(guard.restore()).rejects.toThrow('Malformed')
+    await expect(guard.restore(binary)).rejects.toThrow('Malformed')
+  })
+
+  test('overlapping launches share one baseline; the next is read once their restorations finish', async () => {
+    const calls: string[] = []
+    let finishRestore = () => {}
+    const guard = createNativeLaunchRegistryGuard({
+      platform: 'win32',
+      run: async (argv) => {
+        const payload = decodePayload(argv.at(-1)!) as Partial<RestorePayload>
+        if (!payload.snapshot) {
+          calls.push('snapshot')
+          return success(snapshot())
+        }
+        calls.push(`restore ${payload.profile}`)
+        await new Promise<void>((resolve) => {
+          finishRestore = resolve
+        })
+        return success({ restored: [], preserved: [], errors: [] })
+      },
+    })
+    const [a, b] = await Promise.all([guard.begin('C:\\A'), guard.begin('C:\\B')])
+    const restoring = a.restore(binary)
+    // B is still starting, so C reads no baseline of its own: one now could hold A's or B's
+    // temporary registration.
+    const c = await guard.begin('C:\\C')
+    expect(calls).toEqual(['snapshot', 'restore C:\\A'])
+    b.release()
+    c.release()
+    // Every launch has ended, but A's restoration is still writing: D's baseline waits for it.
+    const d = guard.begin('C:\\D')
+    await Bun.sleep(20)
+    expect(calls).toEqual(['snapshot', 'restore C:\\A'])
+    finishRestore()
+    await restoring
+    ;(await d).release()
+    expect(calls).toEqual(['snapshot', 'restore C:\\A', 'snapshot'])
   })
 })
 

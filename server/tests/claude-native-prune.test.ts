@@ -54,6 +54,16 @@ test('an unreadable process table removes nothing', async () => {
   ])
 })
 
+test('a staging or set-aside folder untouched for over an hour is removed; a fresh one is not', async () => {
+  const dir = await root(['a', 'b'])
+  for (const name of ['.building-old', '.stale-old', '.building-new']) await mkdir(join(dir, name))
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000)
+  for (const name of ['.building-old', '.stale-old'])
+    await utimes(join(dir, name), twoHoursAgo, twoHoursAgo)
+  const removed = await pruneManagedCopies(dir, join(dir, 'b'), async () => [])
+  expect(removed.map((p) => p.split(/[\\/]/).pop()).sort()).toEqual(['.building-old', '.stale-old'])
+})
+
 test('pruning deletes only the planned folders and leaves staging folders alone', async () => {
   const dir = await root(['a', 'b', 'c'])
   await mkdir(join(dir, '.building-x'))

@@ -21,8 +21,9 @@ import {
   prepareClaudeNativeLaunch,
 } from '../claude-native-launch'
 import {
-  beginNativeLaunchRegistryGuard,
+  type NativeLaunchRegistryLease,
   type NativeLaunchRegistryResult,
+  nativeLaunchRegistryGuard,
 } from '../claude-native-launch-registry'
 import { captureNativeLaunchLogCursor, waitForNativeLaunchReady } from '../claude-native-ready'
 import {
@@ -383,10 +384,11 @@ export function buildInstanceLaunch(
  * is left to the shell layer (out of scope for this app's browser+tray shell).
  */
 const nativeInstanceOpens = new Map<string, Promise<CMActionResult>>()
-// Packaged Electron startup rewrites per-user protocol/browser registrations. Serialize managed
-// startups so one profile cannot snapshot another profile's temporary registration as its baseline.
-let nativeInstanceOpenQueue: Promise<void> = Promise.resolve()
 
+// Managed opens of different profiles run side by side. Packaged Electron startup rewrites per-user
+// protocol/browser registrations; the guard every managed launch shares
+// (claude-native-launch-registry.ts) reads its baseline once for launches that overlap, so none can
+// take another's temporary registration for the original.
 export async function openInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
   let nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>
@@ -409,13 +411,7 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
   if (!nativeConfig?.launchDebugger) return openConfiguredInstance(normDir, nativeConfig)
   const pending = nativeInstanceOpens.get(normDir)
   if (pending) return pending
-  const operation = nativeInstanceOpenQueue.then(() =>
-    openConfiguredInstance(normDir, nativeConfig),
-  )
-  nativeInstanceOpenQueue = operation.then(
-    () => undefined,
-    () => undefined,
-  )
+  const operation = openConfiguredInstance(normDir, nativeConfig)
   nativeInstanceOpens.set(normDir, operation)
   try {
     return await operation
@@ -535,13 +531,16 @@ async function openConfiguredInstance(
 ): Promise<CMActionResult> {
   const running = await probeRunningInstance(normDir, nativeConfig)
   if (running) return running
-  for (const hook of beforeLaunchHooks.values()) await hook(normDir).catch(() => {})
-  launchStarts.set(pathKey(normDir, true), Date.now())
 
   const binary = await resolveLaunchBinaryOrNull()
   if (!binary) return await noLaunchBinaryResult(normDir)
 
   return dispatchConfiguredLaunch(normDir, binary, nativeConfig)
+}
+
+async function runBeforeLaunchHooks(normDir: string): Promise<void> {
+  // floor-ok: a hook is best-effort profile upkeep; none may stop the account opening.
+  for (const hook of beforeLaunchHooks.values()) await hook(normDir).catch(() => {})
 }
 
 /** The scratch one launch attempt carries: what we spawned (so a partial failure can name it) and
@@ -561,9 +560,14 @@ interface VerifiedLaunch {
 type NativeLaunchPlan = Awaited<ReturnType<typeof prepareClaudeNativeLaunch>>
 
 /**
- * Spawn the launch, wait for a managed profile to report ready, restore the registry guard, and
- * answer either the launch result or the (possibly partial) failure. Split out of
- * openConfiguredInstance; the spawn/verify/restore order and every side effect are unchanged.
+ * Prepare, spawn the launch, wait for a managed profile to report ready, restore the registry
+ * guard, and answer either the launch result or the (possibly partial) failure.
+ *
+ * The three things a launch needs first do not depend on each other, so they run at once (2026-10-08,
+ * owner: "This should take one second"): the profile's before-launch hooks, the managed copy (built,
+ * or verified file by file) and the registrations' baseline. Nothing is spawned until all three are
+ * done, and `launchStarts` is stamped only after the hooks, as before, so their own store writes are
+ * not refused as racing this launch.
  */
 async function dispatchConfiguredLaunch(
   normDir: string,
@@ -571,6 +575,13 @@ async function dispatchConfiguredLaunch(
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
 ): Promise<CMActionResult> {
   const attempt: LaunchAttempt = { dispatched: false }
+  const hooks = runBeforeLaunchHooks(normDir)
+  const leasing: Promise<NativeLaunchRegistryLease | null> =
+    nativeConfig?.launchDebugger === true
+      ? nativeLaunchRegistryGuard.begin(normDir)
+      : Promise.resolve(null)
+  // Read below, after the copy is ready; a launch that fails before then gives it back (finally).
+  leasing.catch(() => undefined)
   try {
     const plan = await prepareClaudeNativeLaunch(binary, nativeConfig)
     if (plan.nativeDebugger)
@@ -579,15 +590,15 @@ async function dispatchConfiguredLaunch(
       ...plan.extraArgs,
       ...launchArgs(normDir),
     ])
-    const registryGuard = plan.nativeDebugger
-      ? await beginNativeLaunchRegistryGuard(plan.binary, normDir)
-      : null
+    const lease = plan.nativeDebugger ? await leasing : null
+    await hooks
+    launchStarts.set(pathKey(normDir, true), Date.now())
     const verified = await spawnVerifyAndRestore({
       normDir,
       plan,
       argv,
       detached,
-      registryGuard,
+      lease,
       attempt,
     })
     // The world just changed under the cached snapshot — drop it so the poll tick that follows
@@ -612,6 +623,14 @@ async function dispatchConfiguredLaunch(
           }
         : {},
     }
+  } finally {
+    // A launch that restored has already ended its lease; one that failed before spawning ends it here.
+    void leasing.then(
+      (lease) => lease?.release(),
+      () => undefined,
+    )
+    // A failure answered while the hooks still ran would let a retry start them again beside them.
+    await hooks
   }
 }
 
@@ -651,10 +670,10 @@ async function spawnVerifyAndRestore(args: {
   plan: NativeLaunchPlan
   argv: string[]
   detached: boolean
-  registryGuard: { restore(): Promise<NativeLaunchRegistryResult> } | null
+  lease: NativeLaunchRegistryLease | null
   attempt: LaunchAttempt
 }): Promise<VerifiedLaunch> {
-  const { normDir, plan, argv, detached, registryGuard, attempt } = args
+  const { normDir, plan, argv, detached, lease, attempt } = args
   let pid = 0
   let launchError: unknown
   let restorationError: unknown
@@ -664,15 +683,16 @@ async function spawnVerifyAndRestore(args: {
   } catch (error) {
     launchError = error
   } finally {
-    if (registryGuard) {
-      try {
-        registryRestoration = await registryGuard.restore()
-      } catch (error) {
-        restorationError = error
-      }
+    if (lease) {
+      // The managed copy also aims Claude's Start-menu shortcut at itself; pointing it back at the
+      // install touches a file, not the registry, so the two repairs run at once.
+      const [restoration] = await Promise.allSettled([
+        lease.restore(plan.binary),
+        repointClaudeStartShortcut(),
+      ])
+      if (restoration.status === 'fulfilled') registryRestoration = restoration.value
+      else restorationError = restoration.reason
       if (attempt.nativeData) attempt.nativeData.registryRestoration = registryRestoration
-      // The managed copy aims Claude's Start-menu shortcut at itself; point it back at the install.
-      await repointClaudeStartShortcut()
     }
   }
   const failures = launchFailures(launchError, restorationError, registryRestoration, attempt)

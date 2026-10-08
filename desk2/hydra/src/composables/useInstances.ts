@@ -231,9 +231,22 @@ function showConfirmed(dir: string, running: boolean, pid: number | null) {
 
 /** Launch (open) an instance. Returns the action result (or undefined on hard failure) so
  *  the caller can surface the server's failure message (e.g. the MSIX-only explanation). */
+/** How often the list is re-read while an Open is under way. The server answers once Claude has
+ *  loaded claude.ai and its registrations are put back, seconds after its window appeared; the row
+ *  turns running as soon as the process is there instead. */
+const OPENING_POLL_MS = 1_000
+
 async function open(dir: string): Promise<api.CMActionResult | undefined> {
   setBusy(dir, true)
   openingDirs.value = toggled(openingDirs.value, dir, true)
+  let reading = false
+  const poll = setInterval(() => {
+    if (reading) return
+    reading = true
+    void refreshInstances({ silent: true }).finally(() => {
+      reading = false
+    })
+  }, OPENING_POLL_MS)
   try {
     const result = await guard(api.openInstance(dir))
     if (result?.ok) {
@@ -242,6 +255,7 @@ async function open(dir: string): Promise<api.CMActionResult | undefined> {
     }
     return result
   } finally {
+    clearInterval(poll)
     openingDirs.value = toggled(openingDirs.value, dir, false)
     setBusy(dir, false)
   }

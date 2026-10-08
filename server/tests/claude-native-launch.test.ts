@@ -9,6 +9,7 @@ import {
   type ClaudeManagedBuild,
   discoverClaudeBuild,
   prepareClaudeNativeLaunch,
+  prewarmClaudeNativeCopy,
   resolveClaudeNativeSource,
 } from '../src/claude-native-launch'
 
@@ -239,6 +240,21 @@ test('a refused copy leaves no staging folder behind', async () => {
     'Unsupported Claude resource layout',
   )
   expect(await readdir(f.deps.managedRoot)).toEqual([])
+})
+
+test('prewarm builds the copy a new build needs before any Open, and leaves an existing one alone', async () => {
+  const f = await fixture()
+  const stub = join(f.install, 'claude.exe')
+  const deps = { managedRoot: f.deps.managedRoot }
+  expect(await prewarmClaudeNativeCopy(stub, deps)).toEqual({ version: '2.2553.1', built: true })
+  const [copy] = await readdir(f.deps.managedRoot)
+  const manifest = join(f.deps.managedRoot, copy!, 'agenthydra-native-manifest.json')
+  const builtAt = (await stat(manifest)).mtimeMs
+  expect(await prewarmClaudeNativeCopy(stub, deps)).toEqual({ version: '2.2553.1', built: false })
+  const opened = await prepareClaudeNativeLaunch(stub, f.config, f.deps)
+  expect(dirname(opened.binary)).toBe(join(f.deps.managedRoot, copy!))
+  expect(await readFile(opened.binary)).toEqual(f.modified)
+  expect((await stat(manifest)).mtimeMs).toBe(builtAt)
 })
 
 test('refuses a preexisting parent updater instead of allowing the managed copy to update itself', async () => {
