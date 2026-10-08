@@ -51,7 +51,9 @@ def test_without_the_overlay_the_builtins_stand():
     #   which left this count at 39 and the assertion red)
     # + Cohere's Aya Expanse 32B (d94af6a): no `rank:` route, so it is in the list below and not in this count
     # + Haiku 5.5 direct at five efforts (2026-10-07)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 87
+    # + 18 ranked routes: GPT-6.1 Sol, Grok 4.3-4.7, GLM-5.1/5.2, DeepSeek-V4-Flash, Qwen and Kimi on Baseten, Together,
+    #   Chutes and Z.ai (2026-10-07)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 105
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",
@@ -185,7 +187,7 @@ def _index_slugs() -> set[str]:
 # so AUTO ranks it on a real number.
 def test_each_h1_ranked_route_names_an_indexed_slug_and_a_sourced_price():
     routes = [m for m in config.MODELS if m.startswith("rank:") and m.rsplit(":", 1)[1] in H1_PROVIDERS]
-    assert len(routes) == 33
+    assert len(routes) == 47
     slugs = _index_slugs()
     sourced = json.loads((DATA / "prices.json").read_text(encoding="utf-8"))["providers"]
     for name in routes:

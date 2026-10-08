@@ -67,3 +67,22 @@ max_out = 131072
 tools = true
 price_ref = "baseten/rank:glm-5-3-flash:baseten"
 cc_effort = false
+
+# GLM-5.2 and DeepSeek-V4-Flash: context, output limit and tool support from docs.baseten.co's model APIs overview; prices from baseten.co/pricing.
+[models."rank:glm-5-2:baseten"]
+api_id = "zai-org/GLM-5.2"
+benchmark_slug = "glm-5-2"
+ctx = 1048576
+max_out = 262144
+tools = true
+price_ref = "baseten/rank:glm-5-2:baseten"
+cc_effort = false
+
+[models."rank:deepseek-v4-flash:baseten"]
+api_id = "deepseek-ai/DeepSeek-V4-Flash-0731"
+benchmark_slug = "deepseek-v4-flash"
+ctx = 1048576
+max_out = 393216
+tools = true
+price_ref = "baseten/rank:deepseek-v4-flash:baseten"
+cc_effort = false

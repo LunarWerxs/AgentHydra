@@ -32,3 +32,57 @@ max_out = 65535
 tools = true
 price_ref = "chutes/rank:kimi-k3:chutes"
 cc_effort = false
+
+[models."rank:qwen3-5-397b-a17b:chutes"]
+api_id = "Qwen/Qwen3.5-397B-A17B-TEE"
+benchmark_slug = "qwen3-5-397b-a17b"
+ctx = 262144
+max_out = 65536
+tools = true
+price_ref = "chutes/rank:qwen3-5-397b-a17b:chutes"
+cc_effort = false
+
+[models."rank:qwen3-6-27b:chutes"]
+api_id = "Qwen/Qwen3.6-27B-TEE"
+benchmark_slug = "qwen3-6-27b"
+ctx = 262144
+max_out = 65536
+tools = true
+price_ref = "chutes/rank:qwen3-6-27b:chutes"
+cc_effort = false
+
+[models."rank:deepseek-v4-flash:chutes"]
+api_id = "deepseek-ai/DeepSeek-V4-Flash-0731-TEE"
+benchmark_slug = "deepseek-v4-flash"
+ctx = 1048576
+max_out = 131072
+tools = true
+price_ref = "chutes/rank:deepseek-v4-flash:chutes"
+cc_effort = false
+
+[models."rank:kimi-k2-6:chutes"]
+api_id = "moonshotai/Kimi-K2.6-TEE"
+benchmark_slug = "kimi-k2-6"
+ctx = 262144
+max_out = 65535
+tools = true
+price_ref = "chutes/rank:kimi-k2-6:chutes"
+cc_effort = false
+
+[models."rank:glm-5-1:chutes"]
+api_id = "zai-org/GLM-5.1-TEE"
+benchmark_slug = "glm-5-1"
+ctx = 202752
+max_out = 65535
+tools = true
+price_ref = "chutes/rank:glm-5-1:chutes"
+cc_effort = false
+
+[models."rank:glm-5-2:chutes"]
+api_id = "zai-org/GLM-5.2-TEE"
+benchmark_slug = "glm-5-2"
+ctx = 1048576
+max_out = 65535
+tools = true
+price_ref = "chutes/rank:glm-5-2:chutes"
+cc_effort = false

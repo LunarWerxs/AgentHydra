@@ -11,3 +11,37 @@ models_path = "/models"
 passthrough = ["xai:", "grok_xai:"]
 options = ["reasoning_effort"]
 anthropic_url = "facade"
+
+# Ranked routes (owner, 2026-10-07). Context, tool support and per-token prices come from docs.x.ai/developers/models/<model>.
+# Prompts of 200,000 tokens or more pay the higher rate for the whole request.
+[models."rank:grok-4-3:grok_xai"]
+api_id = "grok-4.3"
+benchmark_slug = "grok-4-3"
+ctx = 1000000
+tools = true
+price_ref = "grok_xai/rank:grok-4-3:grok_xai"
+cc_effort = false
+
+[models."rank:grok-4-5:grok_xai"]
+api_id = "grok-4.5"
+benchmark_slug = "grok-4-5"
+ctx = 500000
+tools = true
+price_ref = "grok_xai/rank:grok-4-5:grok_xai"
+cc_effort = false
+
+[models."rank:grok-4-6:grok_xai"]
+api_id = "grok-4.6"
+benchmark_slug = "grok-4-6"
+ctx = 500000
+tools = true
+price_ref = "grok_xai/rank:grok-4-6:grok_xai"
+cc_effort = false
+
+[models."rank:grok-4-7:grok_xai"]
+api_id = "grok-4.7"
+benchmark_slug = "grok-4-7"
+ctx = 500000
+tools = true
+price_ref = "grok_xai/rank:grok-4-7:grok_xai"
+cc_effort = false

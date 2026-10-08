@@ -67,3 +67,13 @@ tools = false
 price_ref = "openai/rank:gpt-6-sol-high:openai"
 default_reasoning_effort = "high"
 cc_effort = false
+
+# gpt-6.1-sol's context and output limit: developers.openai.com/api/docs/models/gpt-6.1-sol. Its over-272K tier is priced in prices.json.
+[models."rank:gpt-6-1-sol:openai"]
+api_id = "gpt-6.1-sol"
+benchmark_slug = "gpt-6-1-sol"
+ctx = 1050000
+max_out = 128000
+tools = false
+price_ref = "openai/rank:gpt-6-1-sol:openai"
+cc_effort = false

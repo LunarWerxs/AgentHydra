@@ -384,6 +384,20 @@
    "source": "https://inference.baseten.co/v1/models",
    "verified_at": "2026-10-07"
   },
+  "baseten/rank:glm-5-2:baseten": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.14,
+   "source": "https://www.baseten.co/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "baseten/rank:deepseek-v4-flash:baseten": {
+   "input": 0.13,
+   "output": 0.26,
+   "cache_read": 0.028,
+   "source": "https://www.baseten.co/pricing",
+   "verified_at": "2026-10-07"
+  },
   "cerebras/cerebras-gpt-oss-120b": {
    "input": 0.35,
    "output": 0.75,
@@ -402,6 +416,48 @@
    "input": 0.24,
    "output": 2.2,
    "cache_read": 0.024,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:qwen3-5-397b-a17b:chutes": {
+   "input": 0.45,
+   "output": 3,
+   "cache_read": 0.045,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:qwen3-6-27b:chutes": {
+   "input": 0.3,
+   "output": 2,
+   "cache_read": 0.03,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:deepseek-v4-flash:chutes": {
+   "input": 0.44,
+   "output": 1.32,
+   "cache_read": 0.044,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:kimi-k2-6:chutes": {
+   "input": 0.5,
+   "output": 2.85,
+   "cache_read": 0.05,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:glm-5-1:chutes": {
+   "input": 0.98,
+   "output": 3.08,
+   "cache_read": 0.098,
+   "source": "https://llm.chutes.ai/v1/models",
+   "verified_at": "2026-10-07"
+  },
+  "chutes/rank:glm-5-2:chutes": {
+   "input": 1.25,
+   "output": 3.95,
+   "cache_read": 0.125,
    "source": "https://llm.chutes.ai/v1/models",
    "verified_at": "2026-10-07"
   },
@@ -467,6 +523,58 @@
    "cache_read": 0.8,
    "source": "https://console.groq.com/docs/models (no prompt caching on this model, so hit = miss)",
    "verified_at": "2026-10-03"
+  },
+  "grok_xai/rank:grok-4-3:grok_xai": {
+   "input": 1.25,
+   "output": 2.5,
+   "cache_read": 0.2,
+   "over": {
+    "prompt_tokens": 199999,
+    "input": 2.5,
+    "output": 5,
+    "cache_read": 0.4
+   },
+   "source": "https://docs.x.ai/developers/models/grok-4.3",
+   "verified_at": "2026-10-07"
+  },
+  "grok_xai/rank:grok-4-5:grok_xai": {
+   "input": 2,
+   "output": 6,
+   "cache_read": 0.3,
+   "over": {
+    "prompt_tokens": 199999,
+    "input": 4,
+    "output": 12,
+    "cache_read": 0.6
+   },
+   "source": "https://docs.x.ai/developers/models/grok-4.5",
+   "verified_at": "2026-10-07"
+  },
+  "grok_xai/rank:grok-4-6:grok_xai": {
+   "input": 2,
+   "output": 6,
+   "cache_read": 0.5,
+   "over": {
+    "prompt_tokens": 199999,
+    "input": 4,
+    "output": 12,
+    "cache_read": 1
+   },
+   "source": "https://docs.x.ai/developers/models/grok-4.6",
+   "verified_at": "2026-10-07"
+  },
+  "grok_xai/rank:grok-4-7:grok_xai": {
+   "input": 2,
+   "output": 6,
+   "cache_read": 0.5,
+   "over": {
+    "prompt_tokens": 199999,
+    "input": 4,
+    "output": 12,
+    "cache_read": 1
+   },
+   "source": "https://docs.x.ai/developers/models/grok-4.7",
+   "verified_at": "2026-10-07"
   },
   "huggingface/rank:glm-5-3:huggingface": {
    "input": 0.9,
@@ -581,6 +689,19 @@
    "input": 2,
    "output": 10,
    "cache_read": 0.2,
+   "source": "https://developers.openai.com/api/docs/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "openai/rank:gpt-6-1-sol:openai": {
+   "input": 2,
+   "output": 10,
+   "cache_read": 0.1,
+   "over": {
+    "prompt_tokens": 272000,
+    "input": 4,
+    "output": 15,
+    "cache_read": 0.2
+   },
    "source": "https://developers.openai.com/api/docs/pricing",
    "verified_at": "2026-10-07"
   },
@@ -840,6 +961,24 @@
    "source": "https://www.together.ai/pricing",
    "verified_at": "2026-10-07"
   },
+  "together/rank:qwen3-7-plus:together": {
+   "input": 0.32,
+   "output": 1.28,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:qwen3-5-9b:together": {
+   "input": 0.17,
+   "output": 0.25,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "together/rank:glm-5-2:together": {
+   "input": 1.4,
+   "output": 4.4,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-07"
+  },
   "zhipu/rank:glm-5-3:zhipu": {
    "input": 1.4,
    "output": 4.4,
@@ -851,6 +990,19 @@
    "input": 0.15,
    "output": 0.5,
    "cache_read": 0.03,
+   "source": "https://docs.z.ai/guides/overview/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "zhipu/rank:glm-5-2:zhipu": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.26,
+   "source": "https://docs.z.ai/guides/overview/pricing",
+   "verified_at": "2026-10-07"
+  },
+  "zhipu/rank:glm-5-1:zhipu": {
+   "input": 1.4,
+   "output": 4.4,
    "source": "https://docs.z.ai/guides/overview/pricing",
    "verified_at": "2026-10-07"
   },

@@ -32,3 +32,21 @@ ctx = 1048576
 tools = false
 price_ref = "zhipu/rank:glm-5-3-flash:zhipu"
 cc_effort = false
+
+# GLM-5.1 and GLM-5.2: prices from docs.z.ai's pricing page; context, output limit and tool support from their model guides.
+[models."rank:glm-5-2:zhipu"]
+api_id = "glm-5.2"
+benchmark_slug = "glm-5-2"
+ctx = 1048576
+tools = true
+price_ref = "zhipu/rank:glm-5-2:zhipu"
+cc_effort = false
+
+[models."rank:glm-5-1:zhipu"]
+api_id = "glm-5.1"
+benchmark_slug = "glm-5-1"
+ctx = 200000
+max_out = 131072
+tools = true
+price_ref = "zhipu/rank:glm-5-1:zhipu"
+cc_effort = false
