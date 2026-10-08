@@ -1,10 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkoutOf, localFolderPath, subfolders, withoutPath, withPath } from '../../src/projects/choices'
+import { checkoutOf, folderKey, localFolderPath, subfolders, withoutPath, withPath } from '../../src/projects/choices'
 
 const base = () => mkdtempSync(join(tmpdir(), 'choices-'))
+
+describe('folderKey', () => {
+  test('a junction and the folder it points to are one key', () => {
+    const target = join(base(), 'Connections')
+    mkdirSync(target)
+    const link = join(base(), 'Connections')
+    symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir')
+    expect(folderKey(link)).toBe(folderKey(target))
+  })
+})
 
 describe('localFolderPath', () => {
   test('accepts an existing absolute folder and returns it resolved', () => {

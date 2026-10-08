@@ -1,15 +1,26 @@
 // The folders the New screen's grid is built from, as the user chose them (DeskSettings' projectFolders, projectRoots
 // and hiddenProjects): validating a folder on add, one level of a folder of projects, and one spelling per folder.
 
-import { readdirSync, statSync } from 'node:fs'
+import { readdirSync, realpathSync, statSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { ChatError } from '../engine/chat-manager'
 import { isRemotePath } from '../engine/reveal'
 
-/** One spelling per folder: Windows paths are the same folder in any case and with either slash. */
+const realPaths = new Map<string, string>()
+
+/** One spelling per folder: Windows paths are the same folder in any case and with either slash, and a junction or symlink is its target. */
 export function folderKey(path: string): string {
   const full = resolve(path)
-  return process.platform === 'win32' ? full.toLowerCase() : full
+  let real = realPaths.get(full)
+  if (real === undefined) {
+    try {
+      real = realpathSync.native(full)
+      realPaths.set(full, real)
+    } catch {
+      real = full
+    }
+  }
+  return process.platform === 'win32' ? real.toLowerCase() : real
 }
 
 /** The checkout holding `dir` (the nearest folder up with a .git), else `dir` itself. */

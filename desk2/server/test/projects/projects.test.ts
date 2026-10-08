@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { HydraRead } from '../../src/projects/hydra'
@@ -65,5 +65,27 @@ describe('ProjectList', () => {
     expect(byPath.get(tool)?.sources).toEqual(['chats', 'recent'])
     expect(byPath.get(tool)?.git).toBeNull()
     expect(res.hydra).toEqual({ found: true, root: base, placed: 2, problem: null })
+  })
+
+  test('a Hydra project reached through a junction is one row, and the chat that ran in its target joins it', async () => {
+    const target = resolve(base, 'Connections')
+    const link = resolve(base, 'shared', 'Connections')
+    mkdirSync(target)
+    mkdirSync(resolve(base, 'shared'))
+    symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir')
+
+    const list = new ProjectList({
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      readHydra: async () => ({ problem: null, projects: [{ key: 'connections', path: link, name: 'Connections', group: null, iconFile: null }] }),
+      recent: () => [],
+      chats: () => [{ cwd: target, updatedAt: 1_000 }],
+      git: async () => null,
+      tempDir: resolve(base, 'scratch'),
+    })
+
+    const res = await list.list()
+    expect(res.projects.length).toBe(1)
+    expect(res.projects[0]!.path).toBe(link)
+    expect(res.projects[0]!.sources).toEqual(['projecthydra', 'chats'])
   })
 })
