@@ -30,7 +30,7 @@ import { type AppView, useUiPrefs } from '@/composables/useUiPrefs'
 import { useUpdates } from '@/composables/useUpdates'
 import { hswarmNodeAsk, OPEN_VIEW } from '@/lib/app-view'
 import { freeThreadAsk } from '@/lib/free-instances'
-import { lazyView } from '@/lib/lazy-view'
+import { lazyView, prefetchViews } from '@/lib/lazy-view'
 import {
   deskInstanceAsk,
   deskWorkerAsk,
@@ -289,7 +289,10 @@ onMounted(startPolling)
 // browser is idle, so the window's own load is never slowed), then refresh about every 2 minutes
 // (lib/warm-data.ts). Opening a tab, or the Desk pane, refreshes what it shows right then.
 onMounted(() => {
-  const go = () => startWarmData()
+  const go = () => {
+    startWarmData()
+    prefetchViews()
+  }
   if ('requestIdleCallback' in window) window.requestIdleCallback(go, { timeout: 4000 })
   else setTimeout(go, 2000)
 })

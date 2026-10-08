@@ -1136,6 +1136,9 @@ impl Host {
                 if !self.smoke && !self.side {
                     save_placement(&self.state_file, &self.window);
                 }
+                // Gone from the screen at once: the exit then tears down the main WebView2 and one per
+                // browser pane, which held the window up visibly for as long as that took.
+                self.window.set_visible(false);
                 *flow = ControlFlow::Exit;
             }
             Event::NewEvents(_) | Event::MainEventsCleared => self.save_if_due(),

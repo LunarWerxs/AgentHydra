@@ -99,7 +99,8 @@ function splitJobs(list: SwarmJob[]): Pick<DeskStoreState, 'swarmJobs' | 'remote
 // Outside sessions and CliMayte workers start from this browser's last copy (lib/list-cache.ts), so a
 // reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
-  chats: [],
+  // The last chat list too (2026-10-08): it was the one sidebar list a reload drew empty until hello.
+  chats: readListCache<ChatSummary>('chats') ?? [],
   external: readListCache<ExternalSession>('external') ?? [],
   ...splitWorkers(readListCache<CliMayteWorker>('workers') ?? []),
   ...splitJobs([]),
@@ -321,6 +322,7 @@ type EventOf<T extends ServerEvent['type']> = Extract<ServerEvent, { type: T }>
 
 function onHello(event: EventOf<'hello'>) {
   store.chats = event.chats
+  cacheLater('chats', event.chats)
   store.settings = event.settings
   // Full reload: clear items cache
   itemsByChat.clear()
@@ -341,10 +343,12 @@ function onChatUpsert(event: EventOf<'chat.upsert'>) {
   } else {
     store.chats.push(event.chat)
   }
+  cacheLater('chats', store.chats)
 }
 
 function onChatRemoved(event: EventOf<'chat.removed'>) {
   store.chats = store.chats.filter((c) => c.id !== event.chatId)
+  cacheLater('chats', store.chats)
   itemsByChat.delete(event.chatId)
   indexes.delete(event.chatId)
   const gone = recentChats.indexOf(event.chatId)

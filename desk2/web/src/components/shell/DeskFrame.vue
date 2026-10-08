@@ -41,7 +41,7 @@ import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
-import { lazyPanel } from '@/lib/lazy-panel'
+import { lazyPanel, prefetchPanels } from '@/lib/lazy-panel'
 import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 import { requestedSection } from '@/components/panes/settings-request'
 import type { SettingsSection } from '@/components/panes/settings'
@@ -321,13 +321,18 @@ if (kept.hydra) {
 const onOpenHydra = () => toggleHydra(true)
 // The AgentHydra frame preloads once the sidebar has its first outside sessions (or 10 s passed), so its burst of
 // requests does not compete with the sidebar's first reads; pointing at or focusing its button starts it at once.
+// The lazy panels' chunks load then too, each while the window is idle (prefetchPanels).
 const sidebarReady = ref(false)
 const hydraIntent = ref(false)
-const readyTimer = setTimeout(() => (sidebarReady.value = true), 10_000)
+const readyTimer = setTimeout(() => {
+  sidebarReady.value = true
+  prefetchPanels()
+}, 10_000)
 const stopReadyWatch = watch(
   () => src.external.value,
   () => {
     sidebarReady.value = true
+    prefetchPanels()
     clearTimeout(readyTimer)
     stopReadyWatch()
   }

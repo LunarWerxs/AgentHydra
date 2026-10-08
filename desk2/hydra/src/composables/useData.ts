@@ -10,6 +10,7 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import {
   ARCHIVED_VALUES,
@@ -283,7 +284,10 @@ let stopSlow: (() => void) | null = null
 // at 2 s while live, and otherwise every 15 s as a safety net for edits made elsewhere.
 async function fastTick() {
   const s = scheduler.value
-  const busy = queueOpen.value || (s?.running_count ?? 0) > 0 || (s?.queued_count ?? 0) > 0
+  // A queued item cannot start while headless queueing is off (lib/headless.ts), so it is not work in flight:
+  // one stuck in the queue pinned this poll, and the queue's whole prompts, at 2 s for the pane's life.
+  const queued = HEADLESS_QUEUEING_ENABLED ? (s?.queued_count ?? 0) : 0
+  const busy = queueOpen.value || (s?.running_count ?? 0) > 0 || queued > 0
   if (!busy && Date.now() - lastSchedulerFetch < SLOW_MS) return
   lastSchedulerFetch = Date.now()
   const before = schedulerCounts()
