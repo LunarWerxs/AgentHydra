@@ -80,7 +80,10 @@ def test_a_server_that_just_started_does_not_restart_again(server):
 def test_a_due_restart_waits_for_running_jobs_but_not_for_ever(server):
     server.running = 2
     assert not shared._restart_due(server.state, NOW)
-    assert not shared._restart_due(server.state, NOW + shared.BUSY_HOLD_S - 1)
+    # Regression (2026-10-07): on a busy day a newer commit lands inside the hold; it restarted the hold, so a server that
+    # always had a job running never moved.
+    server.head = {"commit": "c2" * 20, "tree": "t2", "at": NOW - 600}
+    assert not shared._restart_due(server.state, NOW + shared.BUSY_HOLD_S - 1) and server.readied == ["t1", "t2"]
     assert shared._restart_due(server.state, NOW + shared.BUSY_HOLD_S)
     server.running = 0
     assert shared._restart_due({"started": NOW - 3600}, NOW)  # nothing running: at once

@@ -386,7 +386,8 @@ def _restart_due(state: dict, now: float) -> bool:
             print(f"[hswarm] commit {head['commit'][:12]} cannot be imported, so this server keeps running "
                   f"{'commit ' + mine['commit'][:12] if mine else 'the code it loaded'}", file=sys.stderr, flush=True)
             return False
-        state["ready"], state["ready_at"] = head["tree"], now
+        state["ready"] = head["tree"]
+        state.setdefault("ready_at", now)  # the hold counts from the first commit found ready, or a busy day's next one resets it
     return not _running_jobs() or now - state["ready_at"] >= BUSY_HOLD_S
 
 
