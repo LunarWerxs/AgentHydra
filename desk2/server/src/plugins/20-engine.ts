@@ -412,8 +412,9 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       roots: ctx.settings().projectRoots,
       hidden: ctx.settings().hiddenProjects,
     }),
+    cacheFile: join(ctx.home, 'projects.json'),
   })
-  app.get('/api/projects', (c) => answer(c, () => projects.list()))
+  app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1' })))
   const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
   for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
     const field = choiceFields[kind]

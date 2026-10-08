@@ -290,7 +290,8 @@ function demoProjects(): ProjectsResponse {
   return {
     projects: [row(C, 'connections', 'Work', ['projecthydra', 'chats'], git({ behind: 2 })), row(N, 'nexuscode-2d', null, ['chats'], git({ dirty: 3 })), row(P, 'audio-lab', null, ['recent'], git({ ahead: 1 }))],
     hydra: { found: true, root: null, placed: 1, problem: null },
-    choices: { folders: [], roots: [], hidden: [] }
+    choices: { folders: [], roots: [], hidden: [] },
+    pending: false
   }
 }
 

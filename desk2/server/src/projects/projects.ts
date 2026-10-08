@@ -3,10 +3,15 @@
 // always, from the folders this app's chats and Recent list use, rolled up to the checkout that holds them. Each
 // row's git state is read here with `git status` (never a fetch: `behind` is as fresh as the checkout's own last
 // fetch, which `fetchedAt` gives).
+//
+// The answer never waits on git (owner, 2026-10-08: "it needs to be fast as fuck"): reading every checkout cold took
+// 13 to 24 s for 111 projects on his PC, and the grid showed "Loading your projects…" all that time. It is built from
+// Project Hydra's last answer and each checkout's last git state, kept on disk so a restarted server has them too;
+// what is stale is read again behind the answer, which says so (`pending`).
 
-import { readFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import type { ProjectChoices, ProjectEntry, ProjectGit, ProjectSource, ProjectsResponse } from '@shared/protocol'
 import { isRemotePath } from '../engine/reveal'
 import { runGit } from '../git/git'
@@ -16,6 +21,9 @@ import type { HydraLocation, HydraProject, HydraRead } from './hydra'
 export interface GitFacts {
   git: ProjectGit
   lastCommitAt: string | null
+  /** The commit HEAD was on (git status's branch.oid, '(initial)' before the first commit), so a re-read whose HEAD
+   * has not moved keeps lastCommitAt instead of running `git log` again. */
+  head?: string | null
 }
 
 export interface ProjectDeps {
@@ -28,17 +36,20 @@ export interface ProjectDeps {
   chats(): { cwd: string; updatedAt: number }[]
   /** The folders the user added, the folders of projects and the hidden projects. Default: none. */
   choices?(): ProjectChoices
-  /** A checkout's git state, or null when it is not one. Default: readGit. */
-  git?(path: string): Promise<GitFacts | null>
+  /** A checkout's git state, or null when it is not one; `prev` is the last one read. Default: readGit. */
+  git?(path: string, prev: GitFacts | null): Promise<GitFacts | null>
   now?(): number
   /** The scratch folder whose chats are left out. Default: the OS temp folder. */
   tempDir?: string
+  /** Where Project Hydra's answer and the git states are kept for the next start. Default: nowhere. */
+  cacheFile?: string
 }
 
-/** How long Project Hydra's answer and where it is installed are reused. */
+/** How long Project Hydra's answer and where it is installed are trusted before it is read again. */
 const HYDRA_TTL_MS = 60_000
-/** How long one checkout's git state is reused while its index, HEAD and FETCH_HEAD stay as they were. */
-const GIT_TTL_MS = 20_000
+/** How long one checkout's git state is trusted while its index, HEAD and FETCH_HEAD stay as they were. A re-read is
+ * a git process per checkout, about a hundred for the owner, so not on every visit to New. */
+const GIT_TTL_MS = 60_000
 /** Checkouts read at once. */
 const GIT_PARALLEL = 8
 
@@ -82,18 +93,23 @@ export function parseStatus(out: string): Omit<ProjectGit, 'fetchedAt'> {
   return git
 }
 
-/** A checkout's git state, or null when `path` is not one (or git cannot read it). */
-export async function readGit(path: string): Promise<GitFacts | null> {
+/** A checkout's git state, or null when `path` is not one (or git cannot read it). `prev`, the last one read, gives
+ * the commit time while HEAD has not moved. */
+export async function readGit(path: string, prev: GitFacts | null = null): Promise<GitFacts | null> {
   const gitDir = gitDirOf(path)
   if (!gitDir) return null
   const status = await runGit(path, ['status', '--porcelain=v2', '--branch']).catch(() => null)
   if (!status || status.code !== 0) return null
-  const log = await runGit(path, ['log', '-1', '--format=%cI']).catch(() => null)
-  const fetched = mtime(join(gitDir, 'FETCH_HEAD'))
-  return {
-    git: { ...parseStatus(status.stdout.toString('utf8')), fetchedAt: fetched ? new Date(fetched).toISOString() : null },
-    lastCommitAt: log?.code === 0 ? log.stdout.toString('utf8').trim() || null : null,
+  const out = status.stdout.toString('utf8')
+  const head = /^# branch\.oid (\S+)/m.exec(out)?.[1] ?? null
+  let lastCommitAt: string | null = null
+  if (head && head === prev?.head) lastCommitAt = prev.lastCommitAt
+  else if (head && head !== '(initial)') {
+    const log = await runGit(path, ['log', '-1', '--format=%cI']).catch(() => null)
+    lastCommitAt = log?.code === 0 ? log.stdout.toString('utf8').trim() || null : null
   }
+  const fetched = mtime(join(gitDir, 'FETCH_HEAD'))
+  return { git: { ...parseStatus(out), fetchedAt: fetched ? new Date(fetched).toISOString() : null }, lastCommitAt, head }
 }
 
 /** What makes a cached git state stale before its time is up: a commit, a checkout, a stage or a fetch. */
@@ -101,14 +117,6 @@ function gitSignature(path: string): string {
   const dir = gitDirOf(path)
   if (!dir) return ''
   return ['index', 'HEAD', 'FETCH_HEAD'].map((f) => mtime(join(dir, f))).join(':')
-}
-
-async function inBatches<T>(items: T[], size: number, run: (item: T) => Promise<void>): Promise<void> {
-  let next = 0
-  const lane = async () => {
-    while (next < items.length) await run(items[next++]!)
-  }
-  await Promise.all(Array.from({ length: Math.min(size, items.length) }, lane))
 }
 
 interface Row {
@@ -121,17 +129,69 @@ interface Row {
   lastChatAt: number | null
 }
 
+interface HydraState {
+  at: number
+  location: HydraLocation | null
+  read: HydraRead | null
+}
+
+interface GitEntry {
+  at: number
+  sig: string
+  facts: GitFacts | null
+}
+
+/** What `cacheFile` holds: Project Hydra's last answer and the listed checkouts' git states, by folder key. */
+interface Snapshot {
+  hydra: HydraState | null
+  git: [string, GitEntry][]
+}
+
 export class ProjectList {
-  private hydraAt: { at: number; location: HydraLocation | null; read: HydraRead | null } | null = null
+  private hydraAt: HydraState | null = null
   private hydraLoading: Promise<void> | null = null
-  private readonly gitCache = new Map<string, { at: number; sig: string; facts: GitFacts | null }>()
+  private readonly gitCache = new Map<string, GitEntry>()
+  /** The git reads running or waiting for a slot, by folder key. */
+  private readonly gitReads = new Map<string, Promise<void>>()
+  private gitRunning = 0
+  private readonly gitQueue: (() => void)[] = []
+  /** The folder keys of the last list, the git states worth keeping on disk. */
+  private listed = new Set<string>()
   private readonly now: () => number
 
   constructor(private readonly deps: ProjectDeps) {
     this.now = deps.now ?? Date.now
+    this.load()
   }
 
-  private async hydra(): Promise<{ location: HydraLocation | null; read: HydraRead | null }> {
+  private load(): void {
+    if (!this.deps.cacheFile) return
+    try {
+      const kept = JSON.parse(readFileSync(this.deps.cacheFile, 'utf8')) as Partial<Snapshot> | null
+      if (typeof kept?.hydra?.at === 'number') this.hydraAt = kept.hydra
+      for (const [key, entry] of Array.isArray(kept?.git) ? kept.git : []) if (typeof key === 'string' && typeof entry?.at === 'number') this.gitCache.set(key, entry)
+    } catch {
+      // floor-ok: no snapshot (the first start, or a damaged file) means the first answer waits for Project Hydra
+    }
+  }
+
+  private save(): void {
+    const file = this.deps.cacheFile
+    if (!file) return
+    const git = [...this.gitCache].filter(([key]) => !this.listed.size || this.listed.has(key))
+    try {
+      mkdirSync(dirname(file), { recursive: true })
+      const tmp = `${file}.tmp`
+      writeFileSync(tmp, JSON.stringify({ hydra: this.hydraAt, git } satisfies Snapshot))
+      renameSync(tmp, file)
+    } catch {
+      // floor-ok: without the snapshot the next start waits for Project Hydra once, as it did before
+    }
+  }
+
+  /** Project Hydra's last answer at once. A stale one is read again behind it, awaited only with `wait` or when
+   * there is none yet. */
+  private async hydra(wait: boolean): Promise<HydraState> {
     if (!this.hydraAt || this.now() - this.hydraAt.at > HYDRA_TTL_MS) {
       this.hydraLoading ??= (async () => {
         const location = this.deps.findHydra()
@@ -139,10 +199,13 @@ export class ProjectList {
         // A failed read keeps the projects of the last good one; the problem is still said.
         const kept = read?.problem && !read.projects.length && this.hydraAt?.read?.projects.length ? { ...read, projects: this.hydraAt.read.projects } : read
         this.hydraAt = { at: this.now(), location, read: kept }
-      })().finally(() => (this.hydraLoading = null))
-      await this.hydraLoading
+        this.save()
+      })()
+        .catch(() => {})
+        .finally(() => (this.hydraLoading = null))
+      if (wait || !this.hydraAt) await this.hydraLoading
     }
-    return { location: this.hydraAt!.location, read: this.hydraAt!.read }
+    return this.hydraAt ?? { at: 0, location: null, read: null }
   }
 
   /** The logo file of a Project Hydra project, from the last answer; null when it has none. */
@@ -150,18 +213,48 @@ export class ProjectList {
     return this.hydraAt?.read?.projects.find((p) => p.key === key)?.iconFile ?? null
   }
 
-  private async gitOf(path: string): Promise<GitFacts | null> {
+  /** The checkout's last known git state, and the read that refreshes it when it is missing or stale. */
+  private gitOf(path: string): { facts: GitFacts | null; reading: Promise<void> | null } {
     const key = folderKey(path)
-    const sig = gitSignature(path)
     const hit = this.gitCache.get(key)
-    if (hit && hit.sig === sig && this.now() - hit.at < GIT_TTL_MS) return hit.facts
-    const facts = await (this.deps.git ?? readGit)(path)
-    this.gitCache.set(key, { at: this.now(), sig, facts })
-    return facts
+    const fresh = hit && hit.sig === gitSignature(path) && this.now() - hit.at < GIT_TTL_MS
+    return { facts: hit?.facts ?? null, reading: fresh ? null : this.readGitOnce(key, path) }
   }
 
-  async list(): Promise<ProjectsResponse> {
-    const { location, read } = await this.hydra()
+  private readGitOnce(key: string, path: string): Promise<void> {
+    let reading = this.gitReads.get(key)
+    if (!reading) {
+      reading = this.inGitSlot(async () => {
+        const sig = gitSignature(path)
+        const prev = this.gitCache.get(key)?.facts ?? null
+        const facts = await (this.deps.git ?? readGit)(path, prev).catch(() => null)
+        this.gitCache.set(key, { at: this.now(), sig, facts })
+      }).finally(() => {
+        this.gitReads.delete(key)
+        if (!this.gitReads.size) this.save()
+      })
+      this.gitReads.set(key, reading)
+    }
+    return reading
+  }
+
+  /** Runs `read` once fewer than GIT_PARALLEL git reads are running. */
+  private async inGitSlot(read: () => Promise<void>): Promise<void> {
+    if (this.gitRunning < GIT_PARALLEL) this.gitRunning++
+    else await new Promise<void>((go) => this.gitQueue.push(go)) // a finished read hands over its slot
+    try {
+      await read()
+    } finally {
+      const next = this.gitQueue.shift()
+      if (next) next()
+      else this.gitRunning--
+    }
+  }
+
+  /** The grid from what is known now; `wait` answers once Project Hydra and the stale git states are read again. */
+  async list(opts: { wait?: boolean } = {}): Promise<ProjectsResponse> {
+    const wait = opts.wait ?? false
+    const { location, read } = await this.hydra(wait)
     const rows = new Map<string, Row>()
     const hydraRows: { key: string; prefix: string; row: Row }[] = []
     for (const p of read?.projects ?? []) {
@@ -220,11 +313,14 @@ export class ProjectList {
 
     const hidden = new Set(choices.hidden.map(folderKey))
     const list = [...rows.values()].filter((row) => !hidden.has(folderKey(row.path)))
-    const facts = new Map<Row, GitFacts | null>()
-    await inBatches(list, GIT_PARALLEL, async (row) => void facts.set(row, await this.gitOf(row.path).catch(() => null)))
+    const keys = list.map((row) => folderKey(row.path))
+    this.listed = new Set(keys)
+    const known = list.map((row) => this.gitOf(row.path))
+    if (wait) await Promise.all(known.map((k) => k.reading))
+    const factsAt = (i: number) => (wait ? (this.gitCache.get(keys[i]!)?.facts ?? null) : known[i]!.facts)
 
-    const projects: ProjectEntry[] = list.map((row) => {
-      const f = facts.get(row) ?? null
+    const projects: ProjectEntry[] = list.map((row, i) => {
+      const f = factsAt(i)
       return {
         path: row.path,
         name: row.name,
@@ -242,6 +338,7 @@ export class ProjectList {
       projects,
       choices: { folders: choices.folders, roots: choices.roots, hidden: choices.hidden },
       hydra: { found: !!location, root: location?.root ?? null, placed: hydraRows.length, problem: read?.problem ?? null },
+      pending: !!this.hydraLoading || keys.some((key) => this.gitReads.has(key)),
     }
   }
 }

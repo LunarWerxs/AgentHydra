@@ -76,10 +76,10 @@ export interface ShellSource {
   cachedHomeStats?(range: HomeStatsRange): HomeStats | null
   /**
    * The New screen's project grid (GET /api/projects): Project Hydra's projects and the folders of the chats, each
-   * with its git sync state. `cachedProjects` is the last answer kept in this browser. Optional: without them the
-   * screen shows no grid.
+   * with its git sync state; `wait` answers once what was stale (`pending`) is read again. `cachedProjects` is the last
+   * answer kept in this browser. Optional: without them the screen shows no grid.
    */
-  projects?(): Promise<ProjectsResponse>
+  projects?(opts?: { wait?: boolean }): Promise<ProjectsResponse>
   cachedProjects?(): ProjectsResponse | null
   /**
    * The managed send queue (SPEC "Send queue"); null until the server reports one. Optional, like every

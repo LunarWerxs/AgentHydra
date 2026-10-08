@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Folder, FolderPlus } from '@lucide/vue'
-import type { ChatSummary, ProjectChoices, ProjectEntry } from '@shared/protocol'
+import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
@@ -31,18 +31,30 @@ function fail(err: unknown): void {
   actionProblem.value = err instanceof Error ? err.message : String(err)
 }
 
+// The server answers at once from what it knows; when part of that was stale (`pending`) it is shown, and a second
+// call waits for the fresh git states. A later load (a folder added or hidden) wins over an earlier one still waiting.
+let loads = 0
 function load(): void {
   if (!src.projects) return
+  const projects = (opts?: { wait?: boolean }) => src.projects!(opts)
+  const n = ++loads
+  const show = (res: ProjectsResponse) => {
+    if (n !== loads) return
+    answer.value = res
+    problem.value = null
+  }
   loading.value = true
-  src.projects().then(
-    (res) => {
-      answer.value = res
-      problem.value = null
-    },
-    (err: unknown) => {
-      problem.value = err instanceof Error ? err.message : String(err)
-    }
-  ).finally(() => (loading.value = false))
+  projects()
+    .then((res) => {
+      show(res)
+      return res.pending ? projects({ wait: true }).then(show) : undefined
+    })
+    .catch((err: unknown) => {
+      if (n === loads) problem.value = err instanceof Error ? err.message : String(err)
+    })
+    .finally(() => {
+      if (n === loads) loading.value = false
+    })
 }
 onMounted(load)
 

@@ -844,4 +844,7 @@ export interface ProjectsResponse {
   /** `found` false: Project Hydra is not installed here. `problem`: it is, but could not be read. */
   hydra: { found: boolean; root: string | null; placed: number; problem: string | null }
   choices: ProjectChoices
+  /** Project Hydra's answer or a listed checkout's git state is stale and being read again behind this answer;
+   * GET /api/projects?wait=1 answers once it is done. */
+  pending: boolean
 }

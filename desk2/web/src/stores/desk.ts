@@ -1050,9 +1050,10 @@ export function useDesk() {
       return kept?.range === range && Array.isArray(kept.heat) && kept.heat.every((c) => typeof c === 'object' && c !== null) && Array.isArray(kept.sources) && Array.isArray(kept.missing) ? kept : null
     },
 
-    /** The New screen's project grid (GET /api/projects); the answer is kept in this browser. */
-    async projects(): Promise<ProjectsResponse> {
-      const list = await fetchJson<ProjectsResponse>('/projects')
+    /** The New screen's project grid (GET /api/projects; `wait`: once its stale parts are read again); the answer is
+     * kept in this browser. */
+    async projects(opts: { wait?: boolean } = {}): Promise<ProjectsResponse> {
+      const list = await fetchJson<ProjectsResponse>(opts.wait ? '/projects?wait=1' : '/projects')
       writeCache('projects', list)
       return list
     },

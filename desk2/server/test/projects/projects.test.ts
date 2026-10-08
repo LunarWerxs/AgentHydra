@@ -54,7 +54,7 @@ describe('ProjectList', () => {
       tempDir: scratch,
     })
 
-    const res = await list.list()
+    const res = await list.list({ wait: true })
     const byPath = new Map(res.projects.map((p) => [p.path, p]))
     expect(res.projects.length).toBe(3)
     expect(byPath.get(app)?.sources).toEqual(['projecthydra', 'chats'])
@@ -83,9 +83,65 @@ describe('ProjectList', () => {
       tempDir: resolve(base, 'scratch'),
     })
 
-    const res = await list.list()
+    const res = await list.list({ wait: true })
     expect(res.projects.length).toBe(1)
     expect(res.projects[0]!.path).toBe(link)
     expect(res.projects[0]!.sources).toEqual(['projecthydra', 'chats'])
+  })
+
+  const facts = (behind: number): GitFacts => ({ git: { branch: 'main', upstream: 'origin/main', ahead: 0, behind, dirty: 0, fetchedAt: null }, lastCommitAt: null })
+
+  test('the grid answers before git does, says so, and wait answers with the fresh git state', async () => {
+    const app = resolve(base, 'app')
+    mkdirSync(app)
+    let release!: () => void
+    const gitDone = new Promise<void>((r) => (release = r))
+    const list = new ProjectList({
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      readHydra: async () => ({ problem: null, projects: [{ key: 'app', path: app, name: 'App', group: null, iconFile: null }] }),
+      recent: () => [],
+      chats: () => [],
+      git: async () => {
+        await gitDone
+        return facts(3)
+      },
+    })
+
+    const first = await list.list()
+    expect(first.projects.map((p) => p.name)).toEqual(['App'])
+    expect(first.projects[0]!.git).toBeNull()
+    expect(first.pending).toBe(true)
+
+    const waited = list.list({ wait: true })
+    release()
+    const fresh = await waited
+    expect(fresh.projects[0]!.git?.behind).toBe(3)
+    expect(fresh.pending).toBe(false)
+  })
+
+  test('a restarted server answers from the kept snapshot without waiting for Project Hydra or git', async () => {
+    const app = resolve(base, 'app')
+    mkdirSync(app)
+    const cacheFile = join(base, 'home', 'projects.json')
+    const deps = {
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      recent: () => [],
+      chats: () => [],
+      cacheFile,
+    }
+    const before = new ProjectList({
+      ...deps,
+      readHydra: async () => ({ problem: null, projects: [{ key: 'app', path: app, name: 'App', group: 'Work', iconFile: null }] }),
+      git: async () => facts(2),
+    })
+    await before.list({ wait: true })
+
+    // Started ten minutes later: everything kept is stale, so both are read again, behind the answer.
+    const never = new Promise<never>(() => {})
+    const after = new ProjectList({ ...deps, readHydra: () => never, git: () => never, now: () => Date.now() + 600_000 })
+    const res = await after.list()
+    expect(res.projects.map((p) => [p.name, p.group, p.git?.behind])).toEqual([['App', 'Work', 2]])
+    expect(res.hydra.found).toBe(true)
+    expect(res.pending).toBe(true)
   })
 })
