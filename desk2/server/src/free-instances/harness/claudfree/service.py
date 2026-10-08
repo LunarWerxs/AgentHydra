@@ -317,6 +317,7 @@ def _send_turn(args, registry, client, org, active_chat, conversation, model, pr
                 )
             except ClaudeError as error:
                 if error.code != "model_not_available" or i == len(tried) - 1:
+                    error.model = attempt
                     raise
     except ClaudeError as error:
         # Failure does not prove the server rejected the POST. Read before retrying.

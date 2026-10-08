@@ -9,14 +9,17 @@ const props = defineProps<{
   hours: Array<{ label: string; values: number[] }>
   series: Array<{ key: string; label: string; color: string }>
   heightClass?: string
+  /** How every number it prints is written (the max label and each tip); the plain number when absent. */
+  formatValue?: (n: number) => string
 }>()
 
 const totals = computed(() => props.hours.map((h) => h.values.reduce((a, b) => a + b, 0)))
 const max = computed(() => Math.max(1, ...totals.value))
+const fmt = (n: number) => (props.formatValue ? props.formatValue(n) : String(n))
 const tip = (i: number) => {
   const h = props.hours[i]
   if (!h) return ''
-  return `${h.label}: ${props.series.map((s, k) => `${h.values[k] ?? 0} ${s.label}`).join(', ')}`
+  return `${h.label}: ${props.series.map((s, k) => `${fmt(h.values[k] ?? 0)} ${s.label}`).join(', ')}`
 }
 </script>
 
@@ -40,7 +43,7 @@ const tip = (i: number) => {
     </div>
     <div class="mt-0.5 flex justify-between text-3xs text-muted-foreground tabular-nums">
       <span>{{ hours[0]?.label }}</span>
-      <span>↑{{ max }}</span>
+      <span>↑{{ fmt(max) }}</span>
       <span>{{ hours[hours.length - 1]?.label }}</span>
     </div>
   </div>

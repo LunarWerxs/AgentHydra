@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
+import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -9,8 +10,9 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const generic = (name: string): boolean => /^(claude|chatgpt)\s*#?\d*$/i.test(name.trim())
 /** `deleted`: local tombstones the sync still has to tell the store about; `settings`: the keepalive's (keepalive.ts);
  *  `tokens`: each account's token estimate by its id (tokens.ts), counts only; `forgotten`: the ids of threads someone
- *  forgot, so a later read of the account's private chats does not list them again. */
-interface Data { instances: FreeInstance[]; threads: FreeThread[]; deleted?: FreeDeleted[]; settings?: FreeSettings; tokens?: Record<string, TokenLedger>; forgotten?: string[] }
+ *  forgot, so a later read of the account's private chats does not list them again; `stats`: each day's messages by
+ *  account and model (stats.ts), counts only. */
+interface Data { instances: FreeInstance[]; threads: FreeThread[]; deleted?: FreeDeleted[]; settings?: FreeSettings; tokens?: Record<string, TokenLedger>; forgotten?: string[]; stats?: StatsData }
 
 /** Tolerate absent or damaged settings: fall back to the defaults. */
 function validSettings(s: Partial<FreeSettings> | undefined): FreeSettings {
@@ -35,6 +37,7 @@ function load(file: string): Data {
   if (!Array.isArray(value.instances) || !Array.isArray(value.threads) || value.instances.some(i => !UUID.test(i.id) || !['claude', 'chatgpt'].includes(i.provider))) throw new Error('Invalid Free account metadata')
   value.settings = validSettings(value.settings as Partial<FreeSettings> | undefined)
   value.tokens = validTokens(value.tokens)
+  value.stats = value.stats === undefined ? seedStats(value.tokens) : validStats(value.stats) ?? {}
   value.forgotten = Array.isArray(value.forgotten) ? value.forgotten.filter(f => typeof f === 'string') : []
   value.deleted = validDeleted(value.deleted)
   // Older records lack lastSignedInAt: a signed-in account was last signed in when it was last checked.
@@ -77,6 +80,7 @@ export class FreeStorage {
     this.data.threads = this.data.threads.filter(t => t.instanceId !== id)
     if (this.data.forgotten) this.data.forgotten = this.data.forgotten.filter(f => !f.startsWith(`${id}/`))
     if (this.data.tokens) delete this.data.tokens[id]
+    for (const day of Object.values(this.data.stats ?? {})) delete day[id]
     if (tombstone && instance) this.data.deleted = [...(this.data.deleted ?? []).filter(d => d.id !== id), { id, num: instance.num, provider: instance.provider, name: instance.name }]
     rmSync(join(this.home, 'free', 'instances', id), { recursive: true, force: true })
     this.save()

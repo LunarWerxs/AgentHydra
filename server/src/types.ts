@@ -426,6 +426,15 @@ export interface TokenBreakdown {
   total: number
 }
 
+/** The sources the Instances usage card draws, one bar segment each. */
+export type TokenDaySource = 'desktop' | 'cli' | 'climayte' | 'hswarm'
+
+/** Weighted tokens per local day, per source, for the Instances usage card (analytics.ts). */
+export interface TokensByDay {
+  /** Oldest day first, one entry per local day in the window. A day a source wrote nothing is 0. */
+  days: Array<{ key: string; bySource: Record<TokenDaySource, number> }>
+}
+
 export interface SpendReport {
   from: string | null
   to: string | null

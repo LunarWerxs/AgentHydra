@@ -14,6 +14,7 @@ import { parseResult } from '../src/free-instances/results'
 import { FreeInstances, validateRequest } from '../src/free-instances/service'
 import plugin from '../src/plugins/55-free-instances'
 import { nodeDependenciesReady, type FreeRuntime } from '../src/free-instances/runtime'
+import { dayOf } from '../src/free-instances/stats'
 import { FreeStorage } from '../src/free-instances/storage'
 
 const dirs: string[] = []
@@ -512,6 +513,31 @@ describe('Free jobs and routes', () => {
     expect(again.status().tokens?.[instance.id]?.total.total).toBe(220)
     await again.remove(instance.id)
     expect(again.status().tokens).toEqual({})
+  })
+
+  test("each day counts every message by account and model: answered, or failed on the model it was sent to, with its tokens; kept over a restart", async () => {
+    let fail = false
+    const { service, op, instance, home, runtime, app } = fixture(async () => fail
+      ? output({ ok: false, error: { code: 'rate_limited', message: 'Too many messages.', model: 'model-b' } }, 1)
+      : output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'r'.repeat(80), model: 'model-a' }))
+    service.start(op({ command: 'chat', prompt: 'p'.repeat(40) })); await tick()
+    fail = true
+    service.start(op({ command: 'chat', prompt: 'p'.repeat(40) })); await tick()
+    service.start(op({ command: 'usage' })); await tick()
+    const day = dayOf(Date.now())
+    const rows = [
+      { day, instanceId: instance.id, model: 'model-a', sent: 1, failed: 0, input: 10, output: 20 },
+      { day, instanceId: instance.id, model: 'model-b', sent: 1, failed: 1, input: 0, output: 0 },
+    ]
+    expect(await (await app.request('/api/free/stats?days=14')).json()).toEqual(rows)
+    const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
+    expect(again.stats(14)).toEqual(rows)
+    // A store from before the record starts with the week of tokens it holds, by day, as no messages sent.
+    const file = join(home, 'free', 'accounts.json')
+    const { stats: _, ...before } = JSON.parse(readFileSync(file, 'utf8'))
+    writeFileSync(file, JSON.stringify(before))
+    const seeded = new FreeInstances(home, async () => output({}), runtime); services.push(seeded)
+    expect(seeded.stats(14)).toEqual([{ day, instanceId: instance.id, model: '', sent: 0, failed: 0, input: 10, output: 20 }])
   })
   test('token windows cut where the account\'s own windows do: at a reset ahead or just passed, else rolling', () => {
     const NOW = Date.parse('2020-10-06T12:00:00Z')

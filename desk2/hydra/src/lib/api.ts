@@ -57,6 +57,7 @@ import type {
   SpendReport,
   SyncStatus,
   TailResult,
+  TokensByDay,
   TokenSinkReport,
   TranscriptSettings,
   TraySettings,
@@ -203,6 +204,9 @@ export const getSpend = (period: SessionPeriod = '30d', source?: string, pc?: 's
   j<SpendReport>(
     `/api/analytics/spend?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}${pc ? `&pc=${pc}` : ''}`,
   )
+/** Weighted tokens per local day over the last `days` days, per source: the Instances card's bars. */
+export const getTokensByDay = (days = 14) =>
+  j<TokensByDay>(`/api/analytics/tokens-by-day?days=${days}`)
 /** The fleet's pooled Claude usage per hour, oldest first; a null week or 5-hour figure is a gap. */
 export const getFleetUsageHistory = (hours = 168) =>
   j<FleetUsageHistory>(`/api/usage/history?hours=${hours}`)

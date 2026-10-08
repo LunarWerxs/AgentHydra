@@ -67,7 +67,8 @@ export interface FreeResult {
   usage?: FreeUsage
   incomplete?: boolean
   warnings?: string[]
-  error?: { code: string; message: string; chat_id?: string }
+  /** `model`: the model a failed message was sent to, when the harness got that far (stats.ts counts it there). */
+  error?: { code: string; message: string; chat_id?: string; model?: string }
 }
 export interface FreeInstance {
   id: string
@@ -142,6 +143,10 @@ export interface FreeHealth {
   /** How many failed for each reason the provider or harness gave. */
   reasons: Record<string, number>
 }
+/** One day's messages on one account and model (stats.ts). `model` is what the provider answered with ('unknown' when
+ *  a failure came before it was chosen); '' holds the tokens of messages from before Desk recorded models, with no
+ *  messages counted (`sent` 0), so they count in no success rate. */
+export interface FreeStatRow { day: string; instanceId: string; model: string; sent: number; failed: number; input: number; output: number }
 export interface FreeStatus {
   ready: boolean
   /** Each account's estimate by its id (tokens.ts); an account that never chatted here has none. */

@@ -1,4 +1,4 @@
-import type { FreeInstance, FreeJob, FreeResult, FreeProvider, FreeRequest, FreeSettings, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
+import type { FreeInstance, FreeJob, FreeResult, FreeProvider, FreeRequest, FreeSettings, FreeStatRow, FreeStatus, FreeThread, FreeUsage } from '@desk/shared/free-instances'
 import { ref } from 'vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
 import type { UsageLimit, UsageSnapshot } from '@/lib/api'
@@ -44,6 +44,7 @@ export const freeApi = {
   settings: () => request<FreeSettings>('settings'),
   updateSettings: (patch: Partial<FreeSettings>) => request<FreeSettings>('settings', 'PATCH', patch),
   threads: () => request<FreeThread[]>('threads'),
+  stats: (days: number) => request<FreeStatRow[]>(`stats?days=${days}`),
   forgetThread: (id: string) => request<{ ok: true }>(`threads/${encodeURIComponent(id)}`, 'DELETE'),
   start: (operation: FreeRequest) => request<FreeJob>('jobs', 'POST', operation),
   job: (id: string) => request<FreeJob>(`jobs/${encodeURIComponent(id)}`),

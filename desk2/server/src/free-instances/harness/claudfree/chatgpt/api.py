@@ -250,6 +250,7 @@ class ChatGPTClient(Client):
                 status=error.status,
                 retryable=error.retryable,
                 chat_id=entry["chat_id"],
+                model=model,
             ) from None
         registry.status(entry["chat_id"], "available")
         return {

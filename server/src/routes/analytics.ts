@@ -8,6 +8,7 @@ import {
   refreshAnalytics,
   sinkReport,
   spendReport,
+  tokensByDay,
   warmAnalyticsInBackground,
 } from '../analytics'
 import { mineCommandCorrections } from '../command-corrections'
@@ -69,6 +70,11 @@ app.get('/api/analytics/activity', (c) => {
   if (report.editSurvival.overdue > 0) warmAnalyticsInBackground()
   return c.json(report)
 })
+// Weighted tokens per local day per source, for the Instances usage card: one request where the card
+// used to make four 30-day spend reports (analytics.ts tokensByDay).
+app.get('/api/analytics/tokens-by-day', async (c) =>
+  c.json(await tokensByDay({ days: boundedQueryInt(c.req.query('days'), 14, 60) })),
+)
 // WHY a session was expensive: dead skill/MCP load, deep-context calls, subagent and cache-write
 // spend, ranked against one total (analytics.ts sinkReport).
 app.get('/api/analytics/sinks', (c) => c.json(sinkReport({ sinceMs: analyticsPeriod(c) })))

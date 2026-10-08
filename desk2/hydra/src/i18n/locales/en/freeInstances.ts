@@ -56,4 +56,25 @@ export default {
   // Forget: takes a thread off Desk's list; the token count stays.
   forgetThread: 'Forget', forgetThreadHint: 'Removes it from this list. It was a private chat, so it is not in the site\'s history either.',
   toastForgotten: 'Forgot {name}', forgetFailed: 'Could not forget this chat. Try again.',
+  // The Usage history card's Free part (components/FreeSummary.vue): tokens follow the table's Tokens window, messages
+  // and success come from Desk's daily record of the last {days} days.
+  stats: {
+    title: 'Free accounts',
+    headerLine: 'Free: {tokens} tokens, {answered} answered in {days} days',
+    allFree: 'All Free',
+    window5h: 'this 5-hour window', windowWeek: 'this week', windowTotal: 'all time',
+    tokensIn: 'tokens, {window}',
+    tokens: 'tokens',
+    answeredOf: 'answered of {sent} messages, {days} days',
+    ofSent: 'of {sent}',
+    messagesTip: '{sent} messages sent in the last {days} days, {failed} failed',
+    modelTip: '{model}: {sent} sent, {failed} failed, about {tokens} tokens in the last {days} days',
+    perAccount: 'Each account',
+    byModel: 'Answered by model, last {days} days',
+    perDay: 'Free tokens per day, last {days} days',
+    noMessages: 'No messages in {days} days',
+    noModels: 'No messages recorded yet. Each new message counts here with the model that answered it.',
+    noTokens: 'No Free tokens in this window yet',
+    unavailable: 'The Free numbers are unavailable right now',
+  },
 }

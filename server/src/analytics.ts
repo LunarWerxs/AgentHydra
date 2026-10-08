@@ -62,8 +62,10 @@ import type {
   SpendBucket,
   SpendReport,
   TokenBreakdown,
+  TokenDaySource,
   TokenSink,
   TokenSinkReport,
+  TokensByDay,
 } from './types'
 import {
   addTurn,
@@ -1407,6 +1409,12 @@ async function sessionProjects(): Promise<Map<string, string>> {
 }
 const PROJECTS_TTL_MS = 60_000
 let projectsCache: { at: number; map: Map<string, string> } | null = null
+
+/** Forget the session-to-project map spendReport reads for up to five minutes. For tests only: a test
+ *  that reads the spend report against its own database leaves an empty map behind otherwise. */
+export function resetSessionProjects(): void {
+  projectsCache = null
+}
 let projectsInflight: Promise<Map<string, string>> | null = null
 
 async function readSessionProjects(): Promise<Map<string, string>> {
@@ -1832,6 +1840,79 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     kitCoverage: res.coverage,
     notes,
   }
+}
+
+// --- the Instances card's daily tokens ---------------------------------------------------------
+// The per-source bars of the Instances usage card. The card used to ask spendReport for 30 days once
+// per source, and spendReport keeps ONE answer keyed by the store's write generation: the four asks
+// evicted each other, so every open rebuilt four 30-day reports to draw 14 bars. This reads the same
+// rows once, and keeps the answer for five minutes, because a day's total needs no fresher figure.
+
+const TOKEN_DAY_SOURCES: readonly TokenDaySource[] = ['desktop', 'cli', 'climayte', 'hswarm']
+const TOKENS_BY_DAY_TTL_MS = 5 * 60_000
+/** Keyed by the day count only. Process-wide, so tests that vary the store call resetTokensByDay. */
+const tokensByDayCache = new Map<number, { at: number; value: Promise<TokensByDay> }>()
+
+export interface TokensByDayOptions {
+  days: number
+  /** Test seams, as on SpendReportOptions. */
+  store?: KitStore
+  now?: number
+}
+
+/** Forget every answer. For tests only. */
+export function resetTokensByDay(): void {
+  tokensByDayCache.clear()
+}
+
+/**
+ * Weighted tokens per local day over the last `days` days, per source. The same figures spendReport's
+ * byDay holds for each source: same rows, same weighting, same source attribution (readSpendRow).
+ *
+ * A concurrent asker shares the computation in flight, and a failed one is not kept, so the next ask
+ * retries it.
+ */
+export function tokensByDay(opts: TokensByDayOptions): Promise<TokensByDay> {
+  const hit = tokensByDayCache.get(opts.days)
+  if (hit && Date.now() - hit.at < TOKENS_BY_DAY_TTL_MS) return hit.value
+  const value = buildTokensByDay(opts)
+  tokensByDayCache.set(opts.days, { at: Date.now(), value })
+  value.catch(() => {
+    if (tokensByDayCache.get(opts.days)?.value === value) tokensByDayCache.delete(opts.days)
+  })
+  return value
+}
+
+function isTokenDaySource(s: string): s is TokenDaySource {
+  return (TOKEN_DAY_SOURCES as readonly string[]).includes(s)
+}
+
+async function buildTokensByDay(opts: TokensByDayOptions): Promise<TokensByDay> {
+  const store = opts.store ?? sharedKitStore()
+  const now = new Date(opts.now ?? Date.now())
+  // Local midnights, so a day is the same day the chart's reader sees (the kit's day key is local too).
+  const dayStart = (ago: number) =>
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - ago).getTime()
+  const days = Array.from({ length: opts.days }, (_, i) => {
+    const key = dayKey(dayStart(opts.days - 1 - i))
+    return { key, bySource: { desktop: 0, cli: 0, climayte: 0, hswarm: 0 } }
+  })
+  const byKey = new Map(days.map((d) => [d.key, d]))
+  const res = await usageQueryAsync(
+    {
+      window: { from: Math.floor(dayStart(opts.days - 1) / 60_000) * 60_000 },
+      groupBy: ['day', 'model', 'source'],
+      measures: ['tokens', 'weighted'],
+    },
+    { store, now: opts.now },
+  )
+  for (const row of res.rows) {
+    const x = readSpendRow(row)
+    const day = byKey.get(row.day as string)
+    if (!x || !day || !isTokenDaySource(x.source)) continue
+    day.bySource[x.source] += x.r.weighted
+  }
+  return { days }
 }
 
 /** Below this share kept, a session is worth a second look: most of what it wrote is gone. */

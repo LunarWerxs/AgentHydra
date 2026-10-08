@@ -3,27 +3,41 @@
 // and "nearest their limit" list were current numbers he did not want; he wants historical charts only.
 // Collapsed (the default, remembered): one line, the fleet's weekly use over the last 7 days as a
 // sparkline. Expanded: the 7-day fleet chart (weekly and 5-hour use, with gaps where nothing was sampled)
-// and tokens per day over the last 14 days, stacked by source. The usage history is fetched once, for
-// the sparkline; the per-source spend is fetched only the first time the card is opened.
+// and tokens per day over the last 14 days, stacked by source. The usage history and the daily tokens are
+// both fetched on mount, so the chart is ready by the time the card is opened: the tokens are one request
+// for the 14 days, not one spend report per source. With the Free accounts on screen it shows theirs first (FreeSummary):
+// their token totals and success rate in the header, the totals, accounts, models and tokens per day when open.
 import type { FleetUsageHistory } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
 import { useElementSize, useStorage } from '@vueuse/core'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
-import { getFleetUsageHistory, getSpend } from '@/lib/api'
+import FreeSummary from '@/components/FreeSummary.vue'
+import { useFreeInstances } from '@/composables/useFreeInstances'
+import { FREE_STAT_DAYS, refreshFreeStats, useFreeStats } from '@/composables/useFreeStats'
+import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
+import { getFleetUsageHistory, getTokensByDay } from '@/lib/api'
 import { axisMax, seriesColor, ticks } from '@/lib/chart'
-import {
-  dailyTokens,
-  dayLabel,
-  formatAt,
-  lastDays,
-  type PlotBox,
-  segmentPaths,
-} from '@/lib/usage-history'
+import { answeredShare, summarizeFree } from '@/lib/free-stats'
+import { formatTokens } from '@/lib/kit'
+import { dayLabel, formatAt, type PlotBox, segmentPaths } from '@/lib/usage-history'
 
+const props = defineProps<{ /** The Free accounts are on screen. */ free?: boolean }>()
 const { t } = useI18n()
 const open = useStorage('agenthydra.instances.summaryOpen', false)
+
+// The Free record is read again whenever an account's numbers move (a message ended), while the Free rows show.
+const { instances: freeInstances, tokens: freeTokens, health: freeHealth } = useFreeInstances()
+const { rows: freeRows } = useFreeStats()
+const tokenWindow = useDesktopTokenWindow()
+watch([() => props.free, freeTokens, freeHealth], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
+const freeLine = computed(() => {
+  if (!props.free || !freeInstances.value.length) return ''
+  const all = summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, FREE_STAT_DAYS, Date.now()).totals.all
+  const share = answeredShare(all)
+  return t('freeInstances.stats.headerLine', { tokens: formatTokens(all.tokens), answered: share === null ? '–' : `${Math.round(share * 100)}%`, days: FREE_STAT_DAYS })
+})
 
 const TOKEN_SOURCES = ['desktop', 'cli', 'climayte', 'hswarm'] as const
 type TokenSource = (typeof TOKEN_SOURCES)[number]
@@ -41,7 +55,6 @@ const history = ref<FleetUsageHistory | null>(null)
 const historyFailed = ref(false)
 const tokenDays = ref<Array<{ key: string; values: number[] }> | null>(null)
 const tokensFailed = ref(false)
-let tokensRequested = false
 
 async function loadHistory() {
   try {
@@ -53,26 +66,20 @@ async function loadHistory() {
 
 async function loadTokens() {
   try {
-    const reports = await Promise.all(TOKEN_SOURCES.map((s) => getSpend('30d', s)))
-    tokenDays.value = dailyTokens(
-      TOKEN_SOURCES.map((_, i) => ({ byDay: reports[i]?.byDay ?? [] })),
-      lastDays(new Date(), 14),
-    )
+    const report = await getTokensByDay(14)
+    tokenDays.value = report.days.map((d) => ({
+      key: d.key,
+      values: TOKEN_SOURCES.map((s) => d.bySource[s]),
+    }))
   } catch {
     tokensFailed.value = true
   }
 }
 
-onMounted(loadHistory)
-watch(
-  open,
-  (v) => {
-    if (!v || tokensRequested) return
-    tokensRequested = true
-    void loadTokens()
-  },
-  { immediate: true },
-)
+onMounted(() => {
+  void loadHistory()
+  void loadTokens()
+})
 
 const points = computed(() => history.value?.points ?? [])
 const weekValues = computed(() => points.value.map((p) => p.week))
@@ -145,6 +152,7 @@ const tokensEmpty = computed(
         :class="{ 'rotate-90': open }"
       />
       <span class="text-xs font-semibold whitespace-nowrap">{{ $t('instances.summary.title') }}</span>
+      <span v-if="freeLine" class="truncate text-2xs text-muted-foreground tabular-nums">{{ freeLine }}</span>
       <svg
         v-if="sparkPaths.length"
         class="ms-auto shrink-0 overflow-visible text-primary"
@@ -169,6 +177,7 @@ const tokensEmpty = computed(
     </button>
 
     <div v-if="open" class="space-y-4 border-t p-3">
+      <FreeSummary v-if="free" />
       <div>
         <h3 class="mb-1 text-xs font-semibold">{{ $t('instances.summary.fleetTitle') }}</h3>
         <p v-if="historyFailed" class="py-6 text-center text-2xs text-muted-foreground">
@@ -261,7 +270,12 @@ const tokensEmpty = computed(
           {{ $t('instances.summary.noData') }}
         </p>
         <template v-else>
-          <HourBars :hours="tokenHours" :series="tokenSeries" height-class="h-32" />
+          <HourBars
+            :hours="tokenHours"
+            :series="tokenSeries"
+            height-class="h-32"
+            :format-value="formatTokens"
+          />
           <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
             <li v-for="s in tokenSeries" :key="s.key" class="flex items-center gap-1">
               <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>

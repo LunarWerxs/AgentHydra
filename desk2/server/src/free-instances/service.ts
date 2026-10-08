@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -9,7 +9,8 @@ import { runFree, type FreeRunner } from './runner'
 import { ManagedFreeRuntime, SetupRefused, type FreeRuntime } from './runtime'
 import { FreeStorage } from './storage'
 import type { FreeSyncHost } from './sync'
-import { addTokens, estimateTokens, tokenWindows } from './tokens'
+import { addStat, statRows } from './stats'
+import { addTokens, estimateTokens, type TokenEntry, tokenWindows } from './tokens'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export class FreeError extends Error {
@@ -244,6 +245,8 @@ export class FreeInstances {
     }
     return { ready: this.runtime.ready(), tokens, health, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
+  /** The last `days` days' messages by account and model (stats.ts). */
+  stats(days: number): FreeStatRow[] { return statRows(this.store.data.stats ?? {}, days, Date.now()) }
   get(id: string): FreeJob {
     this.prune()
     const job = this.jobs.get(id)
@@ -301,6 +304,7 @@ export class FreeInstances {
     this.store.save()
   }
   private async execute(job: FreeJob, r: FreeRequest, controller: AbortController, before?: Promise<void>): Promise<void> {
+    let spent: TokenEntry | null = null
     try {
       // Desk's own read on this account ends first: one operation per account at a time. A cancel ends the wait.
       if (before) await Promise.race([before, new Promise(resolve => controller.signal.addEventListener('abort', resolve, { once: true }))])
@@ -314,15 +318,18 @@ export class FreeInstances {
       const instance = this.instance(r.instanceId)
       if (r.command === 'auth' || r.command === 'login') await this.afterAuth(r, job.result, instance, config, controller.signal)
       if (r.command === 'nudge') await this.afterNudge(r, job.result, instance, config, controller.signal)
-      this.apply(r, job.result)
+      spent = this.apply(r, job.result)
     } catch {
       job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
       this.markThread(r, 'failed', r.chatId, job.result.error!.message)
     } finally {
       job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
       // A cancel is the asker's doing, not the account's.
-      if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted)
+      if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted) {
         this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
+        const ok = job.result?.ok === true
+        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, input: spent?.input ?? 0, output: spent?.output ?? 0 })
+      }
       this.store.save()
     }
   }
@@ -349,7 +356,8 @@ export class FreeInstances {
     // Read the quota again so the window the nudge started shows.
     if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal))) } catch { /* the nudge worked; the next refresh reads it */ }
   }
-  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): void {
+  /** Returns the message's token estimate, or null for anything that was not an answered message. */
+  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
     const instance = this.instance(r.instanceId)
     if (result.usage) instance.usage = result.usage
     if (r.command === 'usage') instance.usageReadAt = Date.now()
@@ -367,22 +375,25 @@ export class FreeInstances {
       if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
       this.markThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
     }
-    if (result.ok) this.countTokens(r, result)
+    const spent = result.ok ? this.countTokens(r, result) : null
     this.store.save()
+    return spent
   }
   /** A message adds to the account's token estimate (tokens.ts): what it sent, the thread it continues included, and
    *  the reply. A chat that was read gives its thread's length, so a later continuation counts what it holds. */
-  private countTokens(r: FreeRequest, result: FreeResult): void {
+  private countTokens(r: FreeRequest, result: FreeResult): TokenEntry | null {
     const chatId = result.chat_id ?? r.chatId
     const thread = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
     if (r.command === 'read' && thread && result.messages) thread.contextChars = result.messages.reduce((n, m) => n + (m.text?.length ?? 0), 0)
-    if (r.command !== 'chat' && r.command !== 'resume') return
+    if (r.command !== 'chat' && r.command !== 'resume') return null
     const context = r.command === 'resume' ? thread?.contextChars ?? 0 : 0
     const sent = r.prompt?.length ?? 0
     const reply = result.response?.length ?? 0
     const ledgers = (this.store.data.tokens ??= {})
-    ledgers[r.instanceId] = addTokens(ledgers[r.instanceId], { at: Date.now(), input: estimateTokens(context + sent), output: estimateTokens(reply) })
+    const entry: TokenEntry = { at: Date.now(), input: estimateTokens(context + sent), output: estimateTokens(reply) }
+    ledgers[r.instanceId] = addTokens(ledgers[r.instanceId], entry)
     if (thread) thread.contextChars = context + sent + reply
+    return entry
   }
   stop(): void { this.stopping = true; clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher); for (const controller of this.controllers.values()) controller.abort() }
 }

@@ -37,6 +37,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   })
   router.use('*', bodyLimit({ maxSize: 450_000, onError: c => c.json({ error: 'Request is too large.' }, 413) }))
   router.get('/status', c => c.json(service.status()))
+  router.get('/stats', c => c.json(service.stats(Number(c.req.query('days')) || 14)))
   router.get('/sync', c => c.json(sync?.status() ?? { on: false, lastSyncAt: null, lastError: null, shared: 0 }))
   router.post('/instances', async c => c.json(service.create(await c.req.json().catch(() => null)), 201))
   router.patch('/instances/:id', async c => c.json(service.rename(c.req.param('id'), await c.req.json().catch(() => null))))

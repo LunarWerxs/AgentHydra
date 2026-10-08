@@ -11,8 +11,8 @@ const address = (value: unknown): string | null => {
 }
 const percent = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null
 
-export function failure(code: string, message: string, chatId?: string): FreeResult {
-  return { ok: false, error: { code, message, ...(chatId ? { chat_id: chatId } : {}) } }
+export function failure(code: string, message: string, chatId?: string, model?: string): FreeResult {
+  return { ok: false, error: { code, message, ...(chatId ? { chat_id: chatId } : {}), ...(model ? { model } : {}) } }
 }
 
 function message(value: unknown): FreeMessage {
@@ -37,7 +37,7 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
   catch { return failure('harness_failed', 'The harness did not return a result. Check the saved login and read the chat before sending again.') }
   if (r.ok !== true || output.code !== 0) {
     const e = object(r.error)
-    return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined)
+    return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined, str(e.model, 100) || undefined)
   }
   if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null, account_email: address(r.account_email) }
   if (command === 'nudge') return { ok: true }
