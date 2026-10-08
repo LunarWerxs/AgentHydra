@@ -196,6 +196,41 @@ test("a message revives a finished worker: its file goes, and a stale one loses 
   expect(rows[0]?.[2]).toBe(1)
 }, 60_000)
 
+test('a load while done/ is still being read takes the work in flight now and every finished worker after, the newer copy winning', async () => {
+  const { home, corch } = install('preload')
+  mkdirSync(join(corch, 'done'), { recursive: true })
+  const finished = [
+    worker('w-a', 'done', home, { createdAt: 1_000 }),
+    worker('w-b', 'failed', home, { createdAt: 1_002 }),
+    worker('w-c', 'done', home, { createdAt: 1_004 }),
+    // A revived worker's stale file: workers.json's queued copy must win over it.
+    worker('w-revived', 'done', home, { createdAt: 1_003 }),
+  ]
+  for (const w of finished) writeFileSync(join(corch, 'done', `${w.id}.json`), JSON.stringify(w))
+  const hot = [
+    worker('w-waiting', 'waiting', home, { createdAt: 1_001 }),
+    worker('w-revived', 'queued', home, { createdAt: 1_003, pending: ['again'] }),
+  ]
+  writeFileSync(join(corch, 'workers.json'), JSON.stringify({ workers: hot, perAccount: {} }))
+
+  const core = pathToFileURL(resolve(import.meta.dir, '../src/climayte-core.ts')).href
+  const seen = (await start(
+    home,
+    `const core = await import(${JSON.stringify(core)})
+     const preload = core.preloadDone()
+     c.climayteRunningCount()
+     const during = [...core.workers.keys()]
+     await preload
+     return { during, after: [...core.workers.keys()], revived: core.workers.get('w-revived').status }`,
+  )) as { during: string[]; after: string[]; revived: string }
+  expect(seen.during).toEqual(['w-waiting', 'w-revived'])
+  expect(seen.after).toEqual(['w-a', 'w-waiting', 'w-b', 'w-revived', 'w-c'])
+  expect(seen.revived).toBe('queued')
+  // The next start, done/ read the ordinary way, sees the same store.
+  const again = (await start(home, 'return c.climayteList().length')) as number
+  expect(again).toBe(5)
+}, 60_000)
+
 test("a finished attempt's log is packed a day on and reads the same; a cancelled one whose runner still lives is left", async () => {
   const { home, corch } = install('pack')
   const logs = join(corch, 'logs')

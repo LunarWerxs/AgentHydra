@@ -486,6 +486,12 @@ export function setCliMayteMemoryReader(fn: (() => MachineMemory | null) | null)
  *  the boot stall the tray watchdog killed daemons for, 2026-10-08). Only save() writes done/, and
  *  it writes nothing before load(), so the preloaded copy is what the files hold. */
 let preloadedDone: CliMayteWorker[] | null = null
+/** A preloadDone is reading. A load() before it lands (a boot step asking for capacity or the running
+ *  count) takes workers.json alone, the unfinished workers those answers need, and marks done/ pending
+ *  for preloadDone to merge (mergeDone): that load used to read all of done/ synchronously anyway, the
+ *  boot freeze the profile put at readDone (2026-10-08). */
+let preloading = false
+let donePending = false
 
 /** A done/ file's worker, or a throw when it names another worker than its file or is no worker. */
 function doneWorker(name: string, text: string): CliMayteWorker {
@@ -498,21 +504,50 @@ function doneWorker(name: string, text: string): CliMayteWorker {
  *  to requests between files), for the first load() (readDone) to take. A no-op once loaded. */
 export async function preloadDone(): Promise<void> {
   if (loaded || preloadedDone) return
-  let names: string[]
+  preloading = true
   try {
-    names = (await readdirAsync(DONE)).filter((n) => n.endsWith('.json'))
-  } catch {
-    return
-  }
-  const read = await mapPool(names, 32, async (name) => {
+    let names: string[]
     try {
-      return doneWorker(name, await readFileAsync(join(DONE, name), 'utf8'))
-    } catch (err) {
-      console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
-      return null
+      names = (await readdirAsync(DONE)).filter((n) => n.endsWith('.json'))
+    } catch {
+      return
     }
-  })
-  if (!loaded) preloadedDone = read.filter((w): w is CliMayteWorker => w !== null)
+    const read = await mapPool(names, 32, async (name) => {
+      try {
+        return doneWorker(name, await readFileAsync(join(DONE, name), 'utf8'))
+      } catch (err) {
+        console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
+        return null
+      }
+    })
+    const found = read.filter((w): w is CliMayteWorker => w !== null)
+    if (donePending) mergeDone(found)
+    else if (!loaded) preloadedDone = found
+  } finally {
+    preloading = false
+    // A read that failed part way: done/ the blocking way, once, rather than never.
+    if (donePending) mergeDone(readDone())
+  }
+}
+
+/** done/'s workers into a store load() began without them. The copy already in memory wins (it is
+ *  workers.json's, or newer), the order goes back to oldest first, and the load-time passes that read
+ *  every worker run again now that they can. */
+function mergeDone(found: CliMayteWorker[]): void {
+  donePending = false
+  for (const w of found) {
+    filed.add(w.id)
+    if (!workers.has(w.id)) workers.set(w.id, w)
+  }
+  const sorted = [...workers.values()].sort((a, b) => a.createdAt - b.createdAt)
+  workers.clear()
+  for (const w of sorted) workers.set(w.id, w)
+  if (backfillTokens()) save()
+  try {
+    if (orgWallsFromAttempts()) saveWalls()
+  } catch (err) {
+    console.error('[climayte] could not save walls:', err)
+  }
 }
 
 /** Every readable worker file under done/. One that cannot be read, or that names another worker
@@ -548,10 +583,12 @@ function readDone(): CliMayteWorker[] {
  *  layout, which load's save then carries over. */
 function loadWorkers(hot: CliMayteWorker[]): void {
   const all = new Map<string, CliMayteWorker>()
-  for (const w of readDone()) {
-    all.set(w.id, w)
-    filed.add(w.id)
-  }
+  if (preloading) donePending = true
+  else
+    for (const w of readDone()) {
+      all.set(w.id, w)
+      filed.add(w.id)
+    }
   for (const w of hot) {
     all.set(w.id, w)
     if (isFinished(w)) dirty.add(w.id)
