@@ -72,8 +72,8 @@ export interface ChatManagerOptions {
   /** A move to another account starts a fresh session from a condensed handoff above this many tokens of
    *  session (SPEC "Account failover"). Default HYDRA_DESK_HANDOFF_TOKENS, else HANDOFF_TOKENS. */
   handoffTokens?: number
-  /** Hydra Desk's own address, which a handoff names for the full transcript. */
-  deskUrl?: string
+  /** Hydra Desk's own address, which a handoff names for the full transcript and each chat's move line. */
+  deskUrl?: () => string
   emit(event: ServerEvent): void
   settings: () => DeskSettings
   bridge: ManagerBridge
@@ -265,7 +265,7 @@ interface ResolvedAccount {
 }
 
 /** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown }
+type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown }
 
 export class ChatManager {
   readonly store: ChatStore
@@ -281,7 +281,7 @@ export class ChatManager {
   private readonly bridge: ManagerBridge
   private readonly claudeHome: string | undefined
   private readonly handoffTokens: number
-  private readonly deskUrl: string
+  private readonly deskUrl: () => string
   private readonly queryImpl: QueryImpl
   private readonly env?: Record<string, string | undefined>
   private readonly agentHydraMcp?: McpServerConfig | null
@@ -308,7 +308,7 @@ export class ChatManager {
     this.bridge = o.bridge
     this.claudeHome = o.claudeHome
     this.handoffTokens = o.handoffTokens ?? (Number(process.env.HYDRA_DESK_HANDOFF_TOKENS) || HANDOFF_TOKENS)
-    this.deskUrl = o.deskUrl ?? `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
+    this.deskUrl = o.deskUrl ?? (() => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`)
     // A host outlives the server; with no server it ends after the idle-close minutes once its chat is not working.
     this.queryImpl = o.queryImpl ?? chatQueryImpl({ home: o.home, orphanMinutes: () => o.settings().idleCloseMinutes })
     this.env = o.env
@@ -746,8 +746,8 @@ export class ChatManager {
     // A worker started before the connectors' first probe pass lands would run without their MCP servers.
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte))
-    e.workerCwd = chat.cwd
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }))
+    this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
 
@@ -758,7 +758,7 @@ export class ChatManager {
     try {
       const connectors = connectorsPending()
       if (connectors) await connectors
-      const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte) })
+      const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }) })
       e.workerCwd = chat.cwd
       chat.workerId = w.id
       chat.sessionId = w.sessionId
@@ -1349,6 +1349,7 @@ export class ChatManager {
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
     // A finished worker's process is gone, and every background task it started with it.
     if (!e.workerLive) this.endTasks(e)
+    this.adoptWorkerCwd(e, w)
     // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
     if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
       this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
@@ -1362,6 +1363,31 @@ export class ChatManager {
     if (!chatDiffers(before, chat)) return
     chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
     this.changed(chat)
+  }
+
+  /**
+   * The folder AgentHydra has for the worker (its pending one, else where it runs) moves the chat, at once, when the
+   * chat still sits where the worker was last started or sent. A folder the Desk side set first is passed to the
+   * worker by the next send instead, so it is never undone here.
+   */
+  private adoptWorkerCwd(e: Entry, w: AhWorker): void {
+    const chat = e.chat
+    const known = e.workerCwd ?? w.cwd
+    if (!sameFolder(chat.cwd, known)) return
+    const reported = w.pendingCwd ?? w.cwd
+    if (!reported || !isAbsolute(reported) || isUncOrDevicePath(reported) || sameFolder(reported, known)) return
+    const target = resolve(reported)
+    if (!isFolder(target)) return
+    chat.cwd = target
+    this.setWorkerCwd(e, target)
+    this.systemLine(chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
+    this.changed(chat)
+  }
+
+  private setWorkerCwd(e: Entry, cwd: string): void {
+    if (e.workerCwd !== undefined && sameFolder(e.workerCwd, cwd)) return
+    e.workerCwd = cwd
+    this.store.saveChats(this.stored())
   }
 
   /** The worker runs on another account than the chat says: the chat follows, and a move is said in the transcript. */
@@ -1546,6 +1572,7 @@ export class ChatManager {
     e.runtime = new ChatRuntime({
       chat: e.chat,
       store: this.store,
+      deskUrl: this.deskUrl,
       emit: (event) => this.onRuntimeEvent(event),
       queryImpl: (params) => {
         const q = this.queryImpl(params)
@@ -1717,7 +1744,7 @@ export class ChatManager {
       sessions: [big.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
       tokens: big.tokens,
       why,
-      deskUrl: this.deskUrl,
+      deskUrl: this.deskUrl(),
     })
     e.pastSessions = [...(e.pastSessions ?? []), big.sessionId]
     chat.sessionId = null
@@ -1820,11 +1847,12 @@ export class ChatManager {
 
   private stored(): ChatSummary[] {
     return [...this.chats.values()].map((e) => {
-      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions) return e.chat
+      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions && e.workerCwd === undefined) return e.chat
       const record: StoredRecord = { ...e.chat }
       if (e.forkAt) record.forkAt = e.forkAt
       if (e.ranIn !== undefined) record.ranIn = e.ranIn
       if (e.pastSessions) record.pastSessions = e.pastSessions
+      if (e.workerCwd !== undefined) record.workerCwd = e.workerCwd
       return record
     })
   }
@@ -2014,7 +2042,7 @@ const UNDO_NOT_FOUND = 'Could not find this message in its session file, so ther
 
 /** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
 function entryOf(stored: StoredRecord): Entry {
-  const { forkAt, ranIn, pastSessions, ...chat } = stored
+  const { forkAt, ranIn, pastSessions, workerCwd, ...chat } = stored
   return {
     chat,
     runtime: null,
@@ -2022,6 +2050,7 @@ function entryOf(stored: StoredRecord): Entry {
     forkAt: typeof forkAt === 'string' ? forkAt : undefined,
     ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
     pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
+    workerCwd: typeof workerCwd === 'string' ? workerCwd : undefined,
   }
 }
 
@@ -2053,6 +2082,10 @@ export function endedTask(item: TranscriptItem, at?: number): TranscriptItem {
   if (item.kind !== 'task' || item.status !== 'running' || isLongLived(item)) return item
   return { ...item, status: 'stopped', summary: TASK_SESSION_ENDED, ...(at !== undefined ? { durationMs: Math.max(0, at - item.ts) } : {}) }
 }
+
+const sameFolder = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase()
+
+const isFolder = (p: string): boolean => existsSync(p) && statSync(p).isDirectory()
 
 export function checkCwd(cwd: string): string {
   if (!isAbsolute(cwd)) throw new ChatError(400, `cwd must be an absolute path, got ${JSON.stringify(cwd)}`)

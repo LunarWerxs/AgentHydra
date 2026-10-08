@@ -194,6 +194,10 @@ becomes X, and later turns run in X with X's instructions and MCP servers.
     there. Otherwise the folder is only remembered as pending.
 - **Put back by hand:** `PATCH /api/chats/:id { "cwd": "<folder>" }` (an existing local directory, never
   UNC or device) moves a chat; a live process ends once idle and the next turn resumes there.
+- **A chat moves itself.** Every chat's instructions (`chatAddOns`, desk-prompt.ts) carry one line with its own
+  Desk id and that PATCH, naming the base URL the server actually listens on (`ServerContext.url`, the bound
+  port, not a fixed 7798). The line goes to the in-process chat (`buildOptions`) and to a CliMayte worker on its
+  start and on every send, so a chat with no id gets none. The answer's `cwd` is what the chat checks.
 - **On a move:** the chat's stored `cwd` changes (chats.json), one muted system line `Moved this chat to
   <folder>.` is added, and `chat.upsert` goes out, so the sidebar puts the chat in that folder's group
   (creating the group as for any new folder).
@@ -204,10 +208,13 @@ becomes X, and later turns run in X with X's instructions and MCP servers.
   its sidecar folder) is copied under the new folder's name; the original stays, an older copy there (the
   chat went back) is refreshed. `buildOptions` then reads `chat.cwd` again, so `cwd`, the folder's project
   settings and the main-config MCP servers (mcp-servers.ts) are the new folder's.
-- **Worker chats.** The sidebar move happens, and the next send to the worker passes the chat's folder as
-  `cwd` (`POST /api/corch/workers/:id/send`): AgentHydra copies the worker's session into that folder's project
-  dir on its account and resumes there. Desk remembers the folder it last started or sent the worker into
-  (`workerCwd`, else the worker's own `cwd`); only a differing chat folder is passed, once.
+- **Worker chats, both ways.** A folder AgentHydra gives the worker (its `pendingCwd` from a `climayte_send`
+  with `cwd`, else the worker's own `cwd`) moves the chat at once, with the same muted line, when the chat still
+  sits where the worker was last started or sent (`workerCwd`, saved with the chat, so a restart keeps it). A
+  folder the Desk side sets first is never undone: the next send passes the chat's folder to the worker as `cwd`
+  (`POST /api/corch/workers/:id/send`), only when it differs, once. AgentHydra copies the worker's session into
+  that folder's project dir on its account and resumes there. A UNC or device path, or a folder that does not
+  exist, moves nothing.
 
 ### Chat hosts (server/src/host)
 

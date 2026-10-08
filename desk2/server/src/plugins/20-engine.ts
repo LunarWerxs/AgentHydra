@@ -108,6 +108,7 @@ function createManager(ctx: ServerContext, toQueue: { fn: (event: ServerEvent) =
       }
     },
     settings: ctx.settings,
+    deskUrl: () => ctx.url(),
     bridge: (deps.bridge as ManagerBridge | undefined) ?? bridge(),
     queryImpl: deps.queryImpl as QueryImpl | undefined,
     env: deps.env as Record<string, string | undefined> | undefined,

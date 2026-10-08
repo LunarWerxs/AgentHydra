@@ -140,9 +140,11 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const routeOf = (ws: WsClient) => (ws.data as { route: WsRoute; data: unknown } | undefined) ?? null
   let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, chats: [], settings: settings.get() })
 
+  let base = `http://127.0.0.1:${opts.port}`
   const ctx: ServerContext = {
     home,
     version: VERSION,
+    url: () => base,
     broadcast: hub.broadcast,
     settings: settings.get,
     registerHello: (fn) => {
@@ -262,8 +264,9 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   })
 
   const port = server.port as number
+  base = `http://127.0.0.1:${port}`
   return {
-    url: `http://127.0.0.1:${port}`,
+    url: base,
     port,
     ctx,
     async stop() {

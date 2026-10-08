@@ -147,6 +147,8 @@ export interface AhWorker {
   group: string
   title: string
   cwd: string
+  /** The folder a `climayte_send` with `cwd` set for its next launch; absent when none is pending. */
+  pendingCwd?: string
   prompt: string
   status: string
   sessionId: string | null

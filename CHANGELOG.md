@@ -10,12 +10,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 **TL;DR**
 
 - **A linked CLI login stays signed in while its desktop app is closed**
+- **A CliMayte worker's folder moves its chat too**
 
 **Everything in Unreleased**
 
 - **A linked CLI login stays signed in while its desktop app is closed.** AgentHydra refreshes a closed
   profile's Claude Code grant before it runs out, without opening a window. When a login has expired anyway,
   CliMayte names that account by number in its waiting reason and in the capacity answer.
+- **A CliMayte worker's folder moves its chat.** When AgentHydra gives a worker a new folder, the chat moves
+  there at once, with the same line as a move made in the sidebar, and it stays there after a restart. A
+  folder set in the sidebar still reaches the worker with the next message, and a UNC path or a folder that
+  does not exist moves nothing. A chat can now also move itself to another folder when asked: it is told its
+  own Desk id and the one call that moves it.
 
 ## [2.0.1] - 2026-10-08
 

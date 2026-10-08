@@ -93,6 +93,8 @@ export interface ChatRuntimeDeps {
   onTurnEnd?(): void
   /** Every live SDK message, before it is handled (speed tracking); never one replayed from a host's journal. */
   onMessage?(msg: SDKMessage): void
+  /** The Desk base URL this chat's move line names; without it the line is left out. */
+  deskUrl?(): string
 }
 
 type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>
@@ -259,6 +261,7 @@ export class ChatRuntime {
   private readonly forkAt?: () => string | null
   private readonly onTurnEnd?: () => void
   private readonly onMessage?: (msg: SDKMessage) => void
+  private readonly deskUrl?: () => string
 
   private q: Query | null = null
   /** The account the process was started under; kept after it ends (the account the chat last ran on). */
@@ -344,6 +347,7 @@ export class ChatRuntime {
     this.forkAt = deps.forkAt
     this.onTurnEnd = deps.onTurnEnd
     this.onMessage = deps.onMessage
+    this.deskUrl = deps.deskUrl
   }
 
   get running(): boolean {
@@ -371,7 +375,7 @@ export class ChatRuntime {
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
     else delete env.CLAUDE_CONFIG_DIR
     pinHaikuModel(env)
-    const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte)
+    const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const options: Options = {
       cwd: chat.cwd,
       env,

@@ -48,6 +48,8 @@ export interface ServerContext {
   wsRoute<T>(path: string, route: WsRoute<T>): void
   /** Serves every request whose Host header `route.match`es, HTTP and websocket, ahead of everything else. */
   hostRoute(route: HostRoute): void
+  /** The base URL this server listens on (http://127.0.0.1:<bound port>), once it is bound. */
+  url(): string
   /** Runs fn when the server stops (close runtimes, stop pollers). */
   onStop(fn: () => void | Promise<void>): void
   /** Whatever createServer({ deps }) was given: tests inject fakes here, plugins read them first. */

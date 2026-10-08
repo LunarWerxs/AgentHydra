@@ -38,8 +38,20 @@ export function deskAppend(delegate: boolean): string {
   return delegate ? DESK_APPEND : DESK_APPEND_NO_DELEGATE
 }
 
+/** The chat's own Desk id and the Desk base URL it listens on: what its move line names. */
+export interface DeskSelf {
+  id: string
+  base: string
+}
+
+/** How a chat moves itself: one PATCH to its own route, named by its Desk id. */
+export function moveLine(self: DeskSelf): string {
+  return `This is Desk chat ${self.id}. To move this chat to another folder (its sidebar group), PATCH ${self.base}/api/chats/${self.id} with JSON {"cwd":"<absolute folder>"}; check the answer's cwd. Never move it by cd, climayte_send or a Connections workspace.`
+}
+
 /** What a chat in `cwd` gets beyond Claude Code's own prompt and tools, in-process or as a CliMayte worker: the one place that decides it. */
-export function chatAddOns(cwd: string, delegate: boolean): { append: string; mcpServers: Record<string, McpServerConfig> } {
+export function chatAddOns(cwd: string, delegate: boolean, self?: DeskSelf): { append: string; mcpServers: Record<string, McpServerConfig> } {
   const { mcpServers, prompts } = connectorsForChat(cwd)
-  return { append: deskAppend(delegate) + prompts.map((p) => `\n\n${p}`).join(''), mcpServers }
+  const move = self ? ` ${moveLine(self)}` : ''
+  return { append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''), mcpServers }
 }
