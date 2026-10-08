@@ -11,6 +11,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **A linked CLI login stays signed in while its desktop app is closed**
 - **A CliMayte worker's folder moves its chat too**
+- **A signed-out desktop profile signs in from its synced copy**
 
 **Everything in Unreleased**
 
@@ -22,6 +23,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   folder set in the sidebar still reaches the worker with the next message, and a UNC path or a folder that
   does not exist moves nothing. A chat can now also move itself to another folder when asked: it is told its
   own Desk id and the one call that moves it.
+- **A signed-out desktop profile signs in from its synced copy.** A closed desktop profile that its app shows
+  signed out takes its account's copy from another PC when that copy is still signed in, so its linked CLI
+  account stops being refused. A profile still signed in is never replaced, and a copy that is itself signed out
+  is never taken.
 
 ## [2.0.1] - 2026-10-08
 

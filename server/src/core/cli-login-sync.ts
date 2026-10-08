@@ -1369,7 +1369,9 @@ function makeDesktopLogin(
       ? 'own'
       : desktopNotes.waiting.has(p.uuid!)
         ? 'waiting'
-        : null,
+        : p.hasSessionKey === false
+          ? 'signedOut'
+          : null,
   }
 }
 

@@ -113,6 +113,9 @@ export interface DesktopProfile {
   num: number | null
   /** The account it is signed in to; null when signed out or never signed in. */
   uuid: string | null
+  /** Whether its claude.ai sign-in cookie is here: the app is signed in on the web only with it, and a
+   *  grant without it is not a working login. Null when the cookie database cannot be read. */
+  hasSessionKey: boolean | null
 }
 
 function readJson(path: string): Record<string, unknown> | null {
@@ -170,12 +173,25 @@ export function listDesktopProfiles(): DesktopProfile[] {
     const signedIn =
       typeof cfg?.['oauth:tokenCacheV2'] === 'string' ||
       typeof cfg?.['oauth:tokenCache'] === 'string'
+    const linked = signedIn && typeof uuid === 'string' && UUID_RE.test(uuid) ? uuid : null
     return {
       ...d,
       num: nums.get(instanceRef('desktop', d.dir)) ?? null,
-      uuid: signedIn && typeof uuid === 'string' && UUID_RE.test(uuid) ? uuid : null,
+      uuid: linked,
+      hasSessionKey: linked ? hasSessionKey(d.dir) : null,
     }
   })
+}
+
+/** Whether the profile holds a claude.ai sign-in cookie. Reads the cookie names only, through a copy:
+ *  nothing is decrypted. Null when the database cannot be copied or read (the app holds it). */
+export function hasSessionKey(dir: string): boolean | null {
+  if (!existsSync(cookieDb(dir))) return false
+  return withCookieCopy(dir, (d) =>
+    (d.query('select host_key, name from cookies').all() as Array<Record<string, unknown>>).some(
+      (r) => CLAUDE_HOST.test(String(r.host_key)) && String(r.name).startsWith('sessionKey'),
+    ),
+  )
 }
 
 /** The profile's token caches, decrypted with its own key; null when it holds none that open. */
@@ -795,6 +811,29 @@ async function meetSignOut(
   ctx.note(look.p.num, 'signedOut', 'Logged out on another PC, so signed out here too.')
 }
 
+/** A signed-in store copy: a sign-in cookie and a grant with time left. */
+const isSignedInLogin = (l: PortableDesktopLogin): boolean =>
+  !!l.cookies?.some((c) => c.name.startsWith('sessionKey')) &&
+  tokenExpiry(l.tokenCacheV2, l.tokenCache) > Date.now()
+
+/** A profile holding a grant but no sign-in cookie is signed out in the app: it takes the store's copy
+ *  only when that copy is signed in, the app is closed, and nothing is uploaded from it. */
+async function syncSignedOutProfile(
+  pass: DesktopPass,
+  uuid: string,
+  p: DesktopProfile & { uuid: string },
+  remote: DesktopStoreRow | undefined,
+): Promise<void> {
+  if (!remote || remote.signedOut) return
+  const theirs = await pass.ctx.download(uuid)
+  if (!theirs || !isSignedInLogin(theirs)) return
+  if (!isClosedDir(await pass.running(), p.dir)) {
+    pass.waiting.add(uuid)
+    return
+  }
+  await landFromStore(pass, theirs, p, remote.version)
+}
+
 /** One profile signed in on this PC against the store's copy of its account. */
 async function syncProfile(
   pass: DesktopPass,
@@ -809,6 +848,10 @@ async function syncProfile(
   const tokens = await readDesktopTokens(p.dir)
   if (!tokens) {
     ctx.out.problems.push(`#${p.num}: its desktop login does not open on this PC.`)
+    return
+  }
+  if (p.hasSessionKey === false) {
+    await syncSignedOutProfile(pass, uuid, p, remote)
     return
   }
   const look: ProfileLook = {
@@ -877,14 +920,17 @@ async function syncStoreOnlyAccounts(
 }
 
 /** The desktop half of one sync pass (see the header). */
-export async function syncDesktopLogins(ctx: DesktopSyncContext): Promise<void> {
+export async function syncDesktopLogins(
+  ctx: DesktopSyncContext,
+  scanRunning: () => Promise<Set<string> | null> = runningDesktopDirs,
+): Promise<void> {
   if (process.platform !== 'win32') return
   const profiles = listDesktopProfiles()
   let scan: Promise<Set<string> | null> | null = null
   const pass: DesktopPass = {
     ctx,
     profiles,
-    running: () => (scan ??= runningDesktopDirs()),
+    running: () => (scan ??= scanRunning()),
     own: new Set<string>(),
     waiting: new Set<string>(),
   }

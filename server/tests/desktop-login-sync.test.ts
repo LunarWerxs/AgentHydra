@@ -41,10 +41,13 @@ import {
 import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
 import { feedCliFromDesktop, feedLinkedCliLogins } from '../src/core/desktop-cli-feed'
 import {
+  type DesktopSyncContext,
+  desktopNotes,
   listDesktopProfiles,
   type PortableDesktopLogin,
   readAuthCookies,
   readDesktopTokens,
+  syncDesktopLogins,
   tokenExpiry,
 } from '../src/core/desktop-login-sync'
 import { instancesRoot } from '../src/core/paths'
@@ -56,11 +59,11 @@ const grants = (expiresAt: number) =>
   JSON.stringify({
     'client:org:https://api:user:inference': { token: `t-${expiresAt}`, expiresAt },
   })
-const cookie = (value: string) => ({
+const cookie = (value: string, name = 'sessionKey') => ({
   creation_utc: '13400000000000000',
   host_key: HOST,
   top_frame_site_key: '',
-  name: 'sessionKey',
+  name,
   value,
   path: '/',
   expires_utc: '13500000000000000',
@@ -80,7 +83,13 @@ const cookie = (value: string) => ({
 
 /** A signed-in desktop profile as Claude Desktop leaves one: its key in Local State, its token cache
  *  in config.json and its sign-in cookie in a version-24 cookie database, all under that key. */
-async function profile(name: string, uuid: string, expiresAt: number, session: string) {
+async function profile(
+  name: string,
+  uuid: string,
+  expiresAt: number,
+  session: string,
+  cookieName = 'sessionKey',
+) {
   const dir = join(instancesRoot(), name)
   mkdirSync(join(dir, 'Network'), { recursive: true })
   const key = (await ensureWindowsMasterKey(dir))!
@@ -101,7 +110,7 @@ async function profile(name: string, uuid: string, expiresAt: number, session: s
     'CREATE UNIQUE INDEX cookies_unique_index ON cookies(host_key, top_frame_site_key, has_cross_site_ancestor, name, path, source_scheme, source_port)',
   )
   d.run("insert into meta values ('version', '24'), ('last_compatible_version', '24')")
-  const c = cookie(session)
+  const c = cookie(session, cookieName)
   const sealed = await encryptV10Gcm(
     key,
     new Uint8Array([
@@ -334,5 +343,149 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       deleteCliInstance(id, getCliInstance(id)?.name)
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
+  })
+
+  describe('a profile with no claude.ai sign-in cookie is signed out', () => {
+    const future = () => Date.now() + 10 * 86_400_000
+    const suffix = () => randomUUID().slice(0, 8)
+    const sessionOf = async (dir: string) =>
+      (await readAuthCookies(dir))?.find((c) => c.name === 'sessionKey')?.value
+    /** The other PC's copy of `id` in the store, sealed with this PC's sync key. */
+    async function putStoreCopy(
+      id: string,
+      name: string,
+      num: number,
+      expiresAt: number,
+      session: string,
+    ) {
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const login: PortableDesktopLogin = {
+        kind: 'desktop',
+        id,
+        num,
+        name,
+        tokenCacheV2: grants(expiresAt),
+        tokenCache: null,
+        cookies: [cookie(session)],
+        expiresAt,
+      }
+      const meta = ((await store('GET', '/v1/logins')).json.logins as any[]).find(
+        (r) => r.id === id,
+      )
+      const r = await store('PUT', `/v1/logins/${id}`, {
+        version: meta?.version ?? 0,
+        blob: sealLogin(key, login),
+        meta: { kind: 'desktop', num, name, expiresAt },
+      })
+      expect(r.status).toBe(200)
+    }
+    /** A sync pass's context over a store holding one row, `login` as its copy (for passes that need no store). */
+    function stubSync(
+      id: string,
+      signedOut: boolean,
+      login: PortableDesktopLogin,
+    ): DesktopSyncContext {
+      return {
+        store: new Map([
+          [
+            id,
+            {
+              version: 3,
+              num: login.num,
+              kind: 'desktop',
+              name: login.name,
+              signedOut,
+              at: Date.now(),
+            },
+          ],
+        ]),
+        state: {},
+        excluded: new Set<string>(),
+        out: { pushed: 0, landed: 0, unchanged: 0, problems: [] },
+        upload: async () => null,
+        download: async (uuid: string) => (uuid === id ? login : null),
+        markSignedOut: async () => null,
+        confirmGone: () => false,
+        clearGone: () => {},
+        dropUsage: () => {},
+        note: () => {},
+      } as unknown as DesktopSyncContext
+    }
+    const copyOf = (id: string, session: string, expiresAt: number): PortableDesktopLogin => ({
+      kind: 'desktop',
+      id,
+      num: 9,
+      name: 'copy',
+      tokenCacheV2: grants(expiresAt),
+      tokenCache: null,
+      cookies: [cookie(session)],
+      expiresAt,
+    })
+
+    test('a closed profile with no sign-in cookie takes its account’s signed-in store copy', async () => {
+      const id = randomUUID()
+      const dir = await profile(`nokey-${suffix()}`, id, 100, 'org-id', 'lastActiveOrg')
+      try {
+        expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+        await runLoginSync()
+        const expiresAt = future()
+        await putStoreCopy(id, 'nokey', 7, expiresAt, 'sk-landed')
+        await runLoginSync()
+        expect(await sessionOf(dir)).toBe('sk-landed')
+        expect(tokenExpiry((await readDesktopTokens(dir))?.v2 ?? null)).toBe(expiresAt)
+        expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBeNull()
+      } finally {
+        disconnectLoginSync()
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 120_000)
+
+    test('a profile with a sign-in cookie keeps its own sign-in, whatever the store copy’s expiry', async () => {
+      const id = randomUUID()
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      await putStoreCopy(id, 'keyed', 8, future() + 86_400_000, 'sk-theirs')
+      const dir = await profile(`keyed-${suffix()}`, id, future(), 'sk-mine')
+      try {
+        await runLoginSync()
+        expect(await sessionOf(dir)).toBe('sk-mine')
+        expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBe('own')
+      } finally {
+        disconnectLoginSync()
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    }, 120_000)
+
+    test('never lands while its app runs', async () => {
+      const id = randomUUID()
+      const dir = await profile(`running-${suffix()}`, id, 100, 'org-run', 'lastActiveOrg')
+      try {
+        const ctx = stubSync(id, false, copyOf(id, 'sk-run', future()))
+        await syncDesktopLogins(ctx, async () => new Set(listDesktopProfiles().map((p) => p.dir)))
+        expect(ctx.out.landed).toBe(0)
+        expect(await sessionOf(dir)).toBeUndefined()
+        expect(desktopNotes.waiting.has(id)).toBe(true)
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    })
+
+    test('never lands a signed-out store copy, even one with a sign-in and a grant', async () => {
+      const id = randomUUID()
+      const dir = await profile(`signedout-${suffix()}`, id, 100, 'org-out', 'lastActiveOrg')
+      try {
+        const ctx = stubSync(id, true, copyOf(id, 'sk-out', future()))
+        await syncDesktopLogins(ctx, async () => new Set<string>())
+        expect(ctx.out.landed).toBe(0)
+        expect(await sessionOf(dir)).toBeUndefined()
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      }
+    })
   })
 })
