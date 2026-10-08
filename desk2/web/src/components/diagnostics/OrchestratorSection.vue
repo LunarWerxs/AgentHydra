@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import type { OrchestratorMove, OrchestratorPlan } from '@shared/orchestrator'
+import type { OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
+import type { View } from '@/components/shell/logic'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 
@@ -40,11 +41,16 @@ onMounted(() => load())
 const rows = computed(() => (plan.value?.rows ?? []).filter((r) => !QUIET.includes(r.move)))
 const quiet = computed(() => QUIET.map((m) => `${plan.value?.counts[m] ?? 0} ${m === 'watch' ? 'working or queued' : 'done'}`).join(' · '))
 const knownIds = computed(() => new Set(src.chats.value.map((c) => c.id)))
+/** Where a row opens: a Desk chat this window lists, or any outside session (the shell opens its transcript). */
+const target = (r: OrchestratorRow): View | null =>
+  r.source !== 'desk' ? { kind: 'external', id: r.id } : knownIds.value.has(r.id) ? { kind: 'chat', id: r.id } : null
+const SOURCE: Record<OrchestratorRow['source'], string> = { desk: '', desktop: 'Claude Desktop', cli: 'CLI', climayte: 'CliMayte', codex: 'Codex', other: 'outside' }
+const where = (r: OrchestratorRow): string => [SOURCE[r.source], r.account].filter(Boolean).join(' ')
 const verdictText = (v: string): string => (v === 'decide' ? 'The owner would say' : v === 'reversible' ? 'Take the reversible option' : 'Only the owner can answer')
 </script>
 
 <template>
-  <div class="text-[13px] leading-[19px]" data-testid="orchestrator">
+  <div class="text-[13px] leading-4.75" data-testid="orchestrator">
     <p class="text-text-muted">What the orchestrator would do next in each open chat. Shadow: it only plans, nothing is sent.</p>
     <p v-if="error" class="mt-2 text-danger-text">Could not load the plan: {{ error }}</p>
     <p v-else-if="!plan" class="mt-2 text-text-muted">Loading…</p>
@@ -54,7 +60,7 @@ const verdictText = (v: string): string => (v === 'decide' ? 'The owner would sa
         <button
           v-if="plan.creaitor"
           type="button"
-          class="ml-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
+          class="ms-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
           :disabled="asking"
           @click="load(true)"
         >
@@ -67,15 +73,17 @@ const verdictText = (v: string): string => (v === 'decide' ? 'The owner would sa
           <div class="flex flex-wrap items-baseline gap-x-3">
             <span class="text-text">{{ LABEL[r.move] }}</span>
             <span class="text-text-muted">{{ r.reason }}</span>
+            <span v-if="r.source !== 'desk'" class="ms-auto text-text-muted">{{ where(r) }}</span>
             <button
-              v-if="knownIds.has(r.id)"
+              v-if="target(r)"
               type="button"
-              class="ml-auto cursor-default truncate text-text-2 underline-offset-2 hover:text-text hover:underline"
-              @click="src.select({ kind: 'chat', id: r.id })"
+              class="cursor-default truncate text-text-2 underline-offset-2 hover:text-text hover:underline"
+              :class="{ 'ms-auto': r.source === 'desk' }"
+              @click="src.select(target(r)!)"
             >
               {{ r.title || 'Open chat' }}
             </button>
-            <span v-else class="ml-auto truncate text-text-muted">{{ r.title }}</span>
+            <span v-else class="ms-auto truncate text-text-muted">{{ r.title }}</span>
           </div>
           <div v-if="r.question" class="mt-0.5 truncate text-text-2" :title="r.question">{{ r.question }}</div>
           <div v-if="r.options?.length" class="mt-0.5 truncate text-text-muted">{{ r.options.join(' · ') }}</div>

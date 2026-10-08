@@ -27,10 +27,12 @@ export interface CreaitorAnswer {
 }
 
 export interface OrchestratorRow {
-  id: string
+  id: string // a Desk chat id, or an outside session's id (source other than 'desk')
   title: string
   cwd: string
   account: string
+  /** Which app runs it: a Desk chat, or an outside session AgentHydra knows (ExternalSession.source). */
+  source: 'desk' | 'desktop' | 'cli' | 'climayte' | 'codex' | 'other'
   status: string // the chat's ChatStatus
   updatedAt: number
   move: OrchestratorMove
@@ -45,7 +47,7 @@ export interface OrchestratorRow {
 export interface OrchestratorPlan {
   at: number
   mode: 'shadow'
-  days: number // chats active in the last `days` days
+  days: number // chats and outside sessions active in the last `days` days
   creaitor: boolean // this machine has the CreAitor
   rows: OrchestratorRow[]
   counts: Partial<Record<OrchestratorMove, number>>

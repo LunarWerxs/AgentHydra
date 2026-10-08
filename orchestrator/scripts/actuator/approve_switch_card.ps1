@@ -241,12 +241,19 @@ function Window-Inventory([int]$procId) {
   return $out
 }
 
-$hwnd = (Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue).MainWindowHandle
-if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
-  $best = @(Window-Inventory $proc.ProcId | Where-Object { -not $_.Offscreen -and $_.Area -gt 0 } |
+# The instance's window: its main window, else its largest visible top-level one; zero when it has none.
+function Find-Window([int]$procId) {
+  $main = (Get-Process -Id $procId -ErrorAction SilentlyContinue).MainWindowHandle
+  if ($main -and $main -ne [IntPtr]::Zero) { return $main }
+  $best = @(Window-Inventory $procId | Where-Object { -not $_.Offscreen -and $_.Area -gt 0 } |
             Sort-Object Area -Descending) | Select-Object -First 1
-  if ($best) { $hwnd = [IntPtr]$best.Hwnd }
+  if ($best) { return [IntPtr]$best.Hwnd }
+  return [IntPtr]::Zero
 }
+
+# The pid and its start time name the instance: a pid Windows hands to another process later is not it.
+$started = (Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue).StartTime
+$hwnd = Find-Window $proc.ProcId
 if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
   Write-Log "FAIL: that instance has no window (pid $($proc.ProcId))"
   exit 1
@@ -459,15 +466,22 @@ try {
       # The window is cached at start. When the instance quits (an app restart gives it a new pid), every
       # scan fails on the dead window forever, and while this runs the supervisor counts the instance as
       # watched, so no fresh watcher starts (six of eight, 2026-10-04 to 10-07). Exit instead; the
-      # supervisor's next run starts one on the new process. A recreated window is followed in place.
+      # supervisor's next run starts one on the new process. A recreated window is followed in place,
+      # found the way the start found it; a pid reused by another process is not followed, since its
+      # windows are some other app's and the next scan would press an Allow there.
       $live = Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue
-      if (-not $live) {
+      if (-not $live -or $live.StartTime -ne $started) {
         Write-Log "instance pid $($proc.ProcId) is gone - exiting so the supervisor starts a fresh watcher"
         break
       }
-      if ($live.MainWindowHandle -ne [IntPtr]::Zero -and $live.MainWindowHandle -ne $hwnd) {
-        Write-Log "window changed: $hwnd -> $($live.MainWindowHandle)"
-        $hwnd = $live.MainWindowHandle
+      $found = Find-Window $proc.ProcId
+      if ($found -eq [IntPtr]::Zero) {
+        Write-Log "instance pid $($proc.ProcId) has no window - exiting so the supervisor starts a fresh watcher"
+        break
+      }
+      if ($found -ne $hwnd) {
+        Write-Log "window changed: $hwnd -> $found"
+        $hwnd = $found
       }
     }
     if ($Once) { break }
