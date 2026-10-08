@@ -156,7 +156,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   now comes back unanswered with Jev's error, so your own fallback can answer it.
 - **Cloudflare's Clef stands in for Jev.** When no TypeSafe key works, HSwarm asks Clef on Workers AI
   instead, free up to Cloudflare's daily allowance. Clef's answers are held to its own confidence scale,
-  and its cost is booked under Cloudflare.
+  and its cost is booked under Cloudflare. It needs no Cloudflare API token: a small Worker that ships with
+  HSwarm can reach Clef for you, and the key list carries it to your other PCs.
 - **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call.** `hswarm keys`
   used to list such a key as ready, so nothing showed that Jev was down. Now it is marked out of credit, every
   later call skips it, and it gets one try a day so a topped-up key comes back by itself.
