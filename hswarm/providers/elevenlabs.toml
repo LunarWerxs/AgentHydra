@@ -9,6 +9,12 @@ auth_header = "xi-api-key"
 auth_prefix = ""
 capabilities = ["text-to-speech", "voices", "account"]
 
+# Concurrent requests by plan: Free 2, Starter 3, Creator 5, Pro 10, Scale 15, Business 15. The plan is not known
+# here, so the Free figure is set: never over the limit, possibly under it on a paid plan.
+# Source: https://elevenlabs.io/docs/help-center/technical/api-error-code-429
+[limits]
+key_concurrency = 2
+
 [operations.synthesize]
 method = "POST"
 path = "/v1/text-to-speech/{voice_id}"

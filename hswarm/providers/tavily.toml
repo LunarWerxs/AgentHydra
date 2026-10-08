@@ -9,6 +9,11 @@ auth_header = "Authorization"
 auth_prefix = "Bearer "
 capabilities = ["search"]
 
+# Development keys: 100 requests a minute; production keys get 1,000. The lower figure is set.
+# Source: https://docs.tavily.com/documentation/rate-limits.md
+[limits]
+key_rpm = 100
+
 [operations.search]
 method = "POST"
 path = "/search"

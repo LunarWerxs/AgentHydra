@@ -8,6 +8,12 @@ key_billing = "unknown"  # a trial key and a paid key look alike: the ledger lea
 models_path = "/models"
 docs = "https://docs.cohere.com/docs/compatibility-api"
 
+# Trial keys: 20 chat requests a minute (Chat, trial column). Production keys get 500, so this is the conservative
+# figure. Source: https://docs.cohere.com/docs/rate-limits. Cohere states no concurrency limit, so none is set.
+# Trial keys also have a 1,000-calls-a-month cap, which hswarm does not count.
+[limits]
+key_rpm = 20
+
 # Tested 2026-09-26 on trial keys through the compatibility endpoint; both answer cleanly (Command A Plus and Command A
 # Reasoning put their thinking into the answer text there, so they are left out). No published test scores, so AUTO
 # never picks them: a task reaches them by name (model: "command-a") or through a role.

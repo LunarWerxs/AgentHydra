@@ -30,8 +30,7 @@ ctx = 1000000
 max_out = 384000
 # DeepInfra host price (HF router listing, 2026-10-03); OpenRouter reports the real cost per call.
 price = {hit = 0.006, miss = 0.2, out = 0.6}
-concurrency_limit = 2500
-extra = {provider = {order = ["deepinfra"], allow_fallbacks = true}}
+extra ={provider = {order = ["deepinfra"], allow_fallbacks = true}}
 fallback = true
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in

@@ -19,7 +19,7 @@ import time
 
 import httpx
 
-from . import config
+from . import config, keylimits
 from .client import ChatClient, KeyPool
 
 
@@ -102,6 +102,9 @@ def report(only: str | None = None, *, verbose: bool = True, counts_only: bool =
             "disabled": sum(1 for r in rows if r["disabled"]),
             "free_only": sum(1 for r in rows if r["free_only"]),
         }
+        entry["limits"] = keylimits.describe(name)
+        if entry["limits"]:
+            entry["keys_at_limit"] = keylimits.keys_at_limit(name, keys)
         if counts_only:
             pass  # the counts above are the whole entry
         elif verbose:

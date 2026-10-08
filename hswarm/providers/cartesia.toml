@@ -10,6 +10,11 @@ auth_header = "Authorization"
 auth_prefix = "Bearer "
 capabilities = ["text-to-speech", "voices"]
 
+# Concurrent TTS requests by plan: Free 2, Pro 3, Startup 5. The plan is not known here, so the Free figure is set.
+# Source: https://docs.cartesia.ai/use-the-api/concurrency-limits-and-timeouts
+[limits]
+key_concurrency = 2
+
 [headers]
 Cartesia-Version = "2026-08-14"
 

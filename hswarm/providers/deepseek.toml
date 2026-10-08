@@ -19,8 +19,7 @@ docs = "https://api-docs.deepseek.com"
 ctx = 1000000
 max_out = 384000
 price_ref = "deepseek-flash"
-concurrency_limit = 2500
-aliases = ["deepseek-chat", "deepseek-v4-flash", "deepseek-v4.1-flash", "flash"]
+aliases =["deepseek-chat", "deepseek-v4-flash", "deepseek-v4.1-flash", "flash"]
 route = ["deepseek-flash", "deepseek-flash-or", "deepseek-flash-hf"]
 route_cc = ["deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or"]
 
@@ -28,8 +27,7 @@ route_cc = ["deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or"]
 ctx = 1000000
 max_out = 384000
 price_ref = "deepseek-v4-pro"
-concurrency_limit = 500
-aliases = ["deepseek-reasoner", "pro"]
+aliases =["deepseek-reasoner", "pro"]
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
 # data/published-models.json. `inherits` copies another model's settings; the lines below it

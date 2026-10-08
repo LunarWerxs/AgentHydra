@@ -26,7 +26,6 @@ api_id = "deepseek-ai/DeepSeek-V4.1-Flash:deepinfra"
 ctx = 1000000
 max_out = 384000
 price = {hit = 0.006, miss = 0.2, out = 0.6}
-concurrency_limit = 2500
 fallback = true
 
 # Ranked routes (owner, 2026-10-07): each benchmarked model pinned to one Hugging Face host with the id suffix, as
