@@ -263,7 +263,9 @@ export const shellGlyphs = {
     ['path', { d: 'M11 6.7A3.5 3.5 0 0 1 13.5 10V13.5H10A3.5 3.5 0 0 1 7.6 12.5' }]
   ]),
   modeCode: hairline([['path', { d: 'M5 4.2L1.6 8L5 11.8M11 4.2L14.4 8L11 11.8M8.6 3L7 13' }]], 1.4),
-  newPlus: hairline([['path', { d: 'M8 4V12.5M3.5 8.5H12.5' }]]),
+  // A plus as tall as it is wide, its arms crossing at their middles (owner, 2026-10-08: "not in the shape of a plus.
+  // They are too wide": this one was 9 wide and 8.5 tall, groupNew 11 by 10).
+  newPlus: hairline([['path', { d: 'M8 4V13M3.5 8.5H12.5' }]]),
   projects: hairline([['path', { d: 'M4 2.5H12M2.5 5.5H13.5V10.5A2 2 0 0 1 11.5 12.5H4.5A2 2 0 0 1 2.5 10.5Z' }]]),
   artifacts: hairline([
     ['path', { d: 'M11.46 6.5A3.5 3.5 0 1 0 9.5 9.16' }],
@@ -272,7 +274,7 @@ export const shellGlyphs = {
   ]),
   customize: hairline([['path', { d: 'M5.5 5.5V3.5H10.5V5.5M2.5 5.5H13.5V12.5H2.5ZM2.5 8.5H13.5' }]]),
   more: hairline([['path', { d: 'M3.5 5.5L8 10L12.5 5.5' }]], 1.1),
-  groupNew: hairline([['path', { d: 'M8 3V13M2.5 8H13.5' }]]),
+  groupNew: hairline([['path', { d: 'M8 3.5V12.5M3.5 8H12.5' }]]),
   search: hairline([
     ['circle', { cx: 7, cy: 7, r: 4.5 }],
     ['path', { d: 'M10.2 10.2L13.6 13.6' }]

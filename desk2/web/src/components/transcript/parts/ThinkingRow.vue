@@ -12,6 +12,9 @@ import Collapse from './Collapse.vue'
 const props = defineProps<{ id: string; text: string; streaming?: boolean; step?: boolean }>()
 const ctx = useTranscript()
 const label = computed(() => (props.streaming ? 'Thinking' : 'Thought process'))
+// Blank lines at either end of the text would show as empty space in the box (pre-wrap keeps them; owner, 2026-10-08:
+// "an extra empty space below them for no reason").
+const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
 </script>
 
 <template>
@@ -32,8 +35,8 @@ const label = computed(() => (props.streaming ? 'Thinking' : 'Thought process'))
       <span :class="streaming && 'tx-shimmer'">{{ label }}</span>
     </StatusRow>
     <Collapse :open="ctx.isOpen(id)">
-      <div v-if="step" class="whitespace-pre-wrap border-t border-border px-3 py-2 text-[14px] leading-5 text-text-muted">{{ text }}<span v-if="streaming" class="stream-cursor" /></div>
-      <div v-else class="tx-steps mb-1 mt-1.5 whitespace-pre-wrap px-3 py-2 text-[14px] leading-5 text-text-muted">{{ text }}<span v-if="streaming" class="stream-cursor" /></div>
+      <div v-if="step" class="whitespace-pre-wrap border-t border-border px-3 py-2 text-[14px] leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
+      <div v-else class="tx-steps mb-1 mt-1.5 whitespace-pre-wrap px-3 py-2 text-[14px] leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
     </Collapse>
   </div>
 </template>
