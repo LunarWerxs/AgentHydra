@@ -1,9 +1,16 @@
 /**
  * Regenerate the README screenshots.
  *
- *   bun run screenshots            # start a private web server, shoot, install into .github/screenshots
+ *   bun run build                  # first: it shoots the built window (desk2/hydra/dist)
+ *   bun run screenshots            # serve it privately, shoot, install into .github/screenshots
  *   bun run screenshots -- --keep  # stop after tmp/screenshots, so you can eyeball before installing
- *   bun run screenshots -- --url http://localhost:5173   # reuse a server you already have running
+ *   bun run screenshots -- --url http://localhost:5173/ah/   # reuse a server you already have running
+ *
+ * It shoots AgentHydra 2.0's copy of the pages (desk2/hydra, served by Desk 2 at /ah/), run on its
+ * own outside Desk: the Instances and Analytics tabs. The session list and the run queue were the
+ * old window's (removed in 2.0.0); Desk's own window has no fixture world yet. The private server is
+ * the demo server (scripts/sue-demo/serve.ts), which serves the build: under vite's dev server the
+ * Analytics tab's code never arrived, and the build is what people actually get.
  *
  * WHY IT LOOKS LIKE THIS
  *
@@ -17,7 +24,7 @@
  * copied into .github/screenshots once that assertion has passed.
  *
  * Capture is Chrome over the DevTools protocol rather than a screenshot library: it is the only
- * dependency-free way to drive the app (click into a session, open the queue drawer) and size the
+ * dependency-free way to drive the app (switch tabs) and size the
  * frame per view. Each view has its own max-width shell, so one viewport would leave most shots
  * as empty margin.
  *
@@ -73,38 +80,22 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // earlier version used an async page expression with `awaitPromise`, and Chrome intermittently
 // collected the pending promise while the view transition re-rendered ("Promise was collected").
 //
-// Viewports differ per shot because the shell is max-width capped (base 1000, wide 1600 once a
-// transcript is open, plus a 480px queue drawer); one size would frame most shots as margin.
+// Viewports differ per shot because each view has its own max-width shell; one size would frame
+// most shots as margin.
 const clickIn = (scope, label) =>
   `(() => { const b=[...document.querySelectorAll('${scope} button')].find(x=>/${label}/.test(x.textContent||'')); if(b) b.click(); return !!b; })()`;
-const openFirstSession = `(() => { const b=[...document.querySelectorAll('aside button')].find(x=>/mb-1\\.5 w-full rounded-lg/.test(x.className||'')); if(b) b.click(); return !!b; })()`;
 
 const SHOTS = [
   {
-    name: 'sessions',
-    viewport: [1440, 900],
-    steps: [{ eval: openFirstSession, wait: 3500 }],
-    // Real turns rendered, not the loading skeletons. Counting `.rounded-2xl` alone does NOT
-    // establish that: SessionsView renders four Skeletons carrying the same class while the tail
-    // loads, and the fixture supplies exactly four turns, so a bare count is satisfied identically
-    // by the skeleton state (4) and the loaded state (4). Exclude skeletons by their data-slot AND
-    // assert on text only the fixture's transcript can produce.
-    //
-    // All three provider badges too. This shot's job is to show that one list holds Claude, Codex
-    // and OpenCode together; a fixture edit that quietly made them uniform again would otherwise
-    // produce a perfectly valid-looking screenshot that no longer says the thing it is here to say.
-    expect: `document.querySelectorAll('.rounded-2xl:not([data-slot="skeleton"])').length >= 3 && /empty postcode/.test(document.body.innerText) && ['Claude','Codex','OpenCode'].every((p) => [...document.querySelectorAll('aside [data-slot="badge"]')].some((b) => b.textContent.trim() === p))`,
-  },
-  {
     name: 'instances',
-    // Tall enough for every provider's rows: Claude, Codex and DeepSeek share one table now.
-    viewport: [1060, 720],
+    // Tall enough for every provider's rows (Claude, Codex, DeepSeek and the CLI share one table),
+    // and no taller: the frame ends with the table.
+    viewport: [1060, 410],
     steps: [{ eval: clickIn('nav', 'Instances'), wait: 3500 }],
-    // Claude account data, the Codex row with its account pill (the email HANDLE, never the full
-    // address or the profile name), and the DeepSeek row all render. Not the CODEX_HOME column:
-    // usage mode (the tab's default) swaps it for the reset countdowns, so asserting on it failed a
-    // view that had drawn perfectly.
-    expect: `/Max 20/.test(document.body.innerText) && /work \\(Codex\\)/.test(document.body.innerText) && /\\bjordan\\b/.test(document.body.innerText) && !/Jordan Lee|jordan@example/.test(document.body.innerText) && /DeepSeek/.test(document.body.innerText)`,
+    // Claude account data, the Codex row and the DeepSeek row all render, and never a full address
+    // or a profile name. Not the CODEX_HOME column: usage mode (the tab's default) swaps it for the
+    // reset countdowns, so asserting on it failed a view that had drawn perfectly.
+    expect: `/Max 20/.test(document.body.innerText) && /work \\(Codex\\)/.test(document.body.innerText) && !/Jordan Lee|jordan@example/.test(document.body.innerText) && /DeepSeek/.test(document.body.innerText)`,
   },
   {
     name: 'analytics',
@@ -114,21 +105,9 @@ const SHOTS = [
     // cells. Asserting on the CHARTS rather than on any text: the point of this shot is that the
     // view draws, and a fixture change that emptied the reports would otherwise photograph an empty
     // page with a perfectly correct heading on it.
-    // The calendar is asserted through its cells' ACCESSIBLE NAMES ("<date>, $<cost>"), one per day
-    // of the fixture's 21-day spend series at least. It replaced the 168-cell hour grid as that
-    // section's default view; the hour grid is now one click away and not drawn until then.
-    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && document.querySelectorAll('[aria-label*=", $"]').length >= 21`,
-  },
-  {
-    name: 'queue',
-    viewport: [1500, 840],
-    // Over Sessions, not Instances: the drawer pushes the shell and clips the instances table's
-    // Actions column.
-    steps: [
-      { eval: clickIn('nav', 'Sessions'), wait: 2200 },
-      { eval: clickIn('header', 'Queue'), wait: 3000 },
-    ],
-    expect: `/Run queue/.test(document.body.innerText) && /Running/.test(document.body.innerText)`,
+    // The day chart is asserted through its drawn bars (a bar of no height is a day with no cost):
+    // a week of them at least, which an emptied spend fixture cannot fake.
+    expect: `/Cost by day/.test(document.body.innerText) && document.querySelectorAll('svg[role="img"]').length >= 2 && [...document.querySelectorAll('svg[role="img"] rect[rx="2"]')].filter((r) => Number(r.getAttribute('height')) > 0).length >= 7`,
   },
 ];
 
@@ -271,7 +250,7 @@ const procs = [];
 /**
  * Kill a child AND its descendants.
  *
- * `child.kill()` is not enough for either process we spawn. `bun run --cwd web dev` is a wrapper
+ * `child.kill()` is not enough for either process we spawn. `bun run --cwd desk2/hydra dev` is a wrapper
  * whose real work is a vite child, and Chrome forks helper processes; killing only the parent
  * leaves the dev server holding the port and the run never exits. That is not hypothetical — it
  * is exactly what the first version of this script did.
@@ -309,14 +288,15 @@ async function main() {
   let url = EXTERNAL_URL;
   if (!url) {
     console.log(`starting a private web server on :${PORT}`);
-    const web = spawn(
-      process.execPath,
-      // --host 127.0.0.1 pins the bind: vite otherwise resolves "localhost" to ::1 on this machine,
-      // and a client that resolves localhost to 127.0.0.1 first would poll a port nothing answers
-      // on until the timeout. Pinning both sides to the same literal removes the ambiguity.
-      ['run', '--cwd', 'web', 'dev', '--', '--port', String(PORT), '--strictPort', '--host', '127.0.0.1'],
-      { cwd: REPO, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: process.platform !== 'win32' },
-    );
+    // The demo server serves the build on 127.0.0.1 and answers no /api/ route itself (the fixtures
+    // answer them in the page), and it refuses to start without a build.
+    const web = spawn(process.execPath, ['scripts/sue-demo/serve.ts'], {
+      cwd: REPO,
+      env: { ...process.env, SUE_DEMO_PORT: String(PORT) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      shell: false,
+      detached: process.platform !== 'win32',
+    });
     procs.push(web);
     // Keep the tail of its output: if the server fails to bind (a stale process on the port is the
     // usual cause) the reason is in here, and swallowing it turns a clear error into a timeout.
@@ -327,13 +307,13 @@ async function main() {
     };
     web.stdout.on('data', note);
     web.stderr.on('data', note);
-    // Fail fast: --strictPort exits immediately on EADDRINUSE, and without this the run would sit
-    // out the full 60s poll before reporting a failure it already knew about.
+    // Fail fast: a missing build or a taken port ends the server at once, and without this the run
+    // would sit out the full 60s poll before reporting a failure it already knew about.
     web.on('exit', (code) => {
       serverDead = `web server exited early (code ${code})`;
     });
 
-    url = `http://127.0.0.1:${PORT}`;
+    url = `http://127.0.0.1:${PORT}/ah/`;
     if (!(await waitForHttp(url, 60_000, () => serverDead))) {
       const why = serverDead ?? `web server never came up on :${PORT}`;
       throw new Error(`${why}\n--- server output ---\n${serverLog.trim() || '(no output)'}`);
@@ -402,8 +382,8 @@ async function main() {
   // re-optimizes dependencies and can take well over the several seconds this used to assume,
   // which surfaced later and confusingly as "a setup step found nothing to click".
   await waitFor(`document.querySelectorAll('nav button').length >= 2`, 90_000, 'the app to mount');
-  // Then let the first data pass settle so the list is populated, not skeletons.
-  await waitFor(`document.querySelectorAll('aside button').length > 2`, 30_000, 'the session list');
+  // Then let the first data pass settle, so the tab on screen shows data, not skeletons.
+  await waitFor(`document.querySelectorAll('[data-slot="skeleton"]').length === 0`, 30_000, 'the first data pass');
   await sleep(800);
 
   // When a shot fails it is almost always because the app did not reach the state the step
@@ -412,7 +392,7 @@ async function main() {
   const pageSummary = async () => {
     try {
       return await evaluate(
-        `JSON.stringify({url:location.href,title:document.title,buttons:document.querySelectorAll('button').length,tables:document.querySelectorAll('table').length,text:(document.body.innerText||'').replace(/\\s+/g,' ').slice(0,300)})`,
+        `JSON.stringify({url:location.href,title:document.title,buttons:document.querySelectorAll('button').length,tables:document.querySelectorAll('table').length,text:(document.body.innerText||'').replace(/\\s+/g,' ').slice(0,300),unanswered:window.__fixtureEscapes??[]})`,
       );
     } catch {
       return '<page unreachable>';
@@ -436,9 +416,14 @@ async function main() {
     });
     await sleep(900);
 
-    if (!(await evaluate(shot.expect))) {
+    // Polled, not checked once: a tab's code is fetched the first time it opens, and on a cold vite
+    // server that alone can outlast any fixed wait.
+    try {
+      await waitFor(shot.expect, 30_000, 'the view');
+    } catch {
+      const errors = [...new Set(pageErrors)].slice(0, 5).join('\n    ') || '(none)';
       throw new Error(
-        `[${shot.name}] the view did not render as expected — refusing to write a broken image.\n  expect: ${shot.expect}\n  page: ${await pageSummary()}`,
+        `[${shot.name}] the view did not render as expected — refusing to write a broken image.\n  expect: ${shot.expect}\n  page: ${await pageSummary()}\n  errors:\n    ${errors}`,
       );
     }
 

@@ -751,14 +751,17 @@ orchestrator/README.md, "Moving a machine off the standalone checkout".
 The README's Instances and Analytics images are generated, not hand-taken:
 
 ```
+bun run build                       # first: it shoots the built window
 bun run screenshots                 # shoot and install into .github/screenshots/
 bun run screenshots -- --keep       # write to tmp/screenshots/ instead, to eyeball first
 bun run screenshots -- --url <url>  # reuse a server you already have running
 ```
 
-It starts a dev server of AgentHydra 2.0's copy of the pages (`desk2/hydra`, at `/ah/`) on a
-private port (5199, so an open dev session on 5173 is neither disturbed nor photographed), drives headless Chrome over the DevTools protocol, and writes one PNG
-per view at a viewport sized to that view's max-width shell.
+It serves the build of AgentHydra 2.0's copy of the pages (`desk2/hydra/dist`, at `/ah/`) through
+the demo server (`scripts/sue-demo/serve.ts`) on a private port (5199, so an open dev session on
+5173 is neither disturbed nor photographed), drives headless Chrome over the DevTools protocol, and
+writes one PNG per view at a viewport sized to that view's max-width shell. Not vite's dev server:
+under it the Analytics tab's code never arrived, and the build is what people get.
 
 **Nothing real is ever in frame.** These images are public, so instead of pointing a daemon at a
 synthetic home directory, `scripts/screenshots/page-fixtures.js` replaces `window.fetch` before the

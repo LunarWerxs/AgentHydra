@@ -69,7 +69,7 @@ The old run queue stays as a read-only record. Starting a new headless run is re
 
 ### Where the time and the money went
 
-![The analytics view: headline cost, session and agent-hour tiles above where the tokens went, tokens by tool across Claude, Codex, OpenCode and Hermes, a cost-by-day bar chart, and cost broken down by model and project](.github/screenshots/analytics.png)
+![The analytics view: tiles for tokens used, cost at API rates, HSwarm savings and the busiest model above a cost-by-day bar chart, cost by model, project and account, and sessions and tokens by tool across Claude, Codex, OpenCode and Hermes](.github/screenshots/analytics.png)
 
 <sub>Screenshots use demo data.</sub>
 
@@ -85,7 +85,7 @@ The old run queue stays as a read-only record. Starting a new headless run is re
 
 ### Every account, in one table
 
-![The instances view: four isolated Claude Desktop instances, each with its account, plan and remaining five-hour and weekly quota, above the CLI instances table with its add-by-email box and the Codex instances table](.github/screenshots/instances.png)
+![The instances view: Claude Desktop accounts, a Codex account, a DeepSeek instance and a CLI account in one table, each with its five-hour and weekly usage, when they reset, its plan and when it was last active](.github/screenshots/instances.png)
 
 - Each Claude Desktop instance with its account, plan, quota and process. Open, focus, quit,
   create and delete them, and give each a name, icon and colour.

@@ -119,7 +119,7 @@
     {
       role: 'assistant',
       kind: 'text',
-      // Carries markdown on purpose: the transcript pane renders it now (web/src/lib/markdown.ts),
+      // Carries markdown on purpose: the transcript pane renders it,
       // and a shot of plain prose would photograph a product feature that is not there. Still
       // entirely invented content.
       text: [
@@ -685,6 +685,40 @@
     [/\/api\/notifications\/events/, () => []],
     [/\/api\/monitor/, () => ({ accounts: [], enabled: false })],
     [/\/api\/update/, () => ({ status: 'idle', distribution: 'compiled' })],
+    // What 2.0's window keeps warm in the background for its other tabs (desk2/hydra's
+    // lib/warm-kinds.ts). None of those tabs is photographed, so each read gets its quiet state: no
+    // per-account tokens yet, no Free logins, HSwarm not running, no CliMayte work, and no routing
+    // model loaded.
+    [/\/api\/desktop-instance-tokens/, () => ({})],
+    [/\/api\/free\/status/, () => ({ ready: false, instances: [], jobs: [] })],
+    [/\/api\/free\/threads/, () => []],
+    [/\/api\/hswarm-status/, () => ({ running: false })],
+    [/\/api\/hswarm-accounts/, () => ({})],
+    [
+      /\/api\/hswarm\/api\/stats/,
+      () => ({
+        source: 'none',
+        empty: true,
+        total: { saved_usd: null },
+        days: [],
+        today: { saved_usd: null, tasks: 0, est_tokens: null },
+      }),
+    ],
+    [/\/api\/kit\/usage/, () => ({ rows: [], totals: {}, coverage: { sources: {} } })],
+    [
+      /\/api\/corch\/totals/,
+      () => ({
+        tasks: 0,
+        sessions: 0,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        costUsd: 0,
+      }),
+    ],
+    [/\/api\/corch\/workers/, () => []],
+    [/\/api\/corch\/scorecard/, () => ({ unitsPerPercent: 0, rows: [] })],
+    [/\/api\/corch\/remote/, () => ({ enabled: false, pcs: [] })],
+    [/\/api\/corch\/waves/, () => ({ waves: [] })],
+    [/\/api\/routing\/cost-model/, () => null],
   ]
 
   window.__fixtureEscapes = []
