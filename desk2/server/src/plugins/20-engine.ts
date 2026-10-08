@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type { Context, Hono } from 'hono'
-import type { ServerEvent } from '@shared/protocol'
+import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { bridge } from '../bridge'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
@@ -41,6 +41,7 @@ import { MEDIA_ROUTE, mediaCache } from '../media/cache'
 import { nativeFolderPicker, PickError, type PickFolder } from '../folders/pick'
 import { RecentFolders } from '../folders/recent'
 import { findHydra, readHydra, type HydraLocation, type HydraRead } from '../projects/hydra'
+import { localFolderPath, withPath, withoutPath } from '../projects/choices'
 import { ProjectList } from '../projects/projects'
 
 /** How often climayteActive is re-read from the bridge poller's last worker list. */
@@ -406,8 +407,32 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
     recent,
     chats: () => manager.list({ archived: true }).map((c) => ({ cwd: c.cwd, updatedAt: c.updatedAt })),
+    choices: () => ({
+      folders: ctx.settings().projectFolders,
+      roots: ctx.settings().projectRoots,
+      hidden: ctx.settings().hiddenProjects,
+    }),
   })
   app.get('/api/projects', (c) => answer(c, () => projects.list()))
+  const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
+  for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
+    const field = choiceFields[kind]
+    app.post(`/api/projects/${kind}`, (c) =>
+      answer(c, async () => {
+        const path = localFolderPath(((await body(c)) as { path?: unknown } | null)?.path)
+        ctx.updateSettings({ [field]: withPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
+        return { ok: true }
+      }),
+    )
+    app.delete(`/api/projects/${kind}`, (c) =>
+      answer(c, () => {
+        const path = c.req.query('path') ?? ''
+        if (!path) throw new ChatError(400, 'path is required')
+        ctx.updateSettings({ [field]: withoutPath(ctx.settings()[field], path) } as Partial<DeskSettings>)
+        return { ok: true }
+      }),
+    )
+  }
   app.get('/api/projects/icon', (c) => {
     const file = projects.iconFile(c.req.query('key') ?? '')
     return file ? new Response(Bun.file(file)) : c.notFound()

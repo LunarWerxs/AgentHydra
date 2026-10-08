@@ -147,6 +147,11 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     url: () => base,
     broadcast: hub.broadcast,
     settings: settings.get,
+    updateSettings: (patch) => {
+      const next = settings.update(patch)
+      hub.broadcast({ type: 'settings.update', settings: next })
+      return next
+    },
     registerHello: (fn) => {
       hello = fn
     },

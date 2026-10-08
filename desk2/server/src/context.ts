@@ -35,6 +35,8 @@ export interface ServerContext {
   version: string
   broadcast(event: ServerEvent): void
   settings(): DeskSettings
+  /** Saves a change to some settings, broadcasts the new settings to every window, and returns them. */
+  updateSettings(patch: Partial<DeskSettings>): DeskSettings
   /** Replaces the provider of the `hello` event each window gets on connect (the engine registers one). */
   registerHello(fn: HelloProvider): void
   wsClientCount(): number

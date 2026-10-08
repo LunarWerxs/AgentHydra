@@ -250,6 +250,9 @@ describe('a chat without the binary', () => {
     delegateToCliMayte: true,
     idleCloseMinutes: 30,
     notifications: true,
+    projectFolders: [],
+    projectRoots: [],
+    hiddenProjects: [],
   }
 
   /** A Query that does nothing until it is closed. */

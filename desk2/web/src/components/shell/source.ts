@@ -10,6 +10,7 @@ import type {
   ExternalSession,
   HomeStats,
   HomeStatsRange,
+  ProjectChoiceKind,
   ProjectsResponse,
   QueueAddRequest,
   QueueItem,
@@ -60,6 +61,10 @@ export interface ShellSource {
   standInOf?(sessionId: string): ChatSummary | null
   /** Open in > File Explorer. */
   revealFolder(path: string): Promise<unknown>
+  /** The native folder picker (POST /api/folders/pick); null when cancelled. Optional: a fixture source has none. */
+  pickFolder?(): Promise<string | null>
+  /** Adds (`on`) or removes a folder of the New screen's grid (POST or DELETE /api/projects/:kind). Optional, like pickFolder. */
+  changeProjectChoice?(kind: ProjectChoiceKind, path: string, on: boolean): Promise<unknown>
   /** AgentHydra's transcript search (GET /api/search); rejects with a SearchError. */
   search(query: string): Promise<SearchHit[]>
   /**

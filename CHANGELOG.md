@@ -9,6 +9,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
+- **Right-click a project to open its folder; choose which folders New shows**
 - **New shows your projects, each with its git sync state**
 - **A linked CLI login stays signed in while its desktop app is closed**
 - **A CliMayte worker's folder moves its chat too**
@@ -17,6 +18,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **Right-click a project to open its folder; choose which folders New shows.** A project tile's right-click menu
+  opens its file location, starts a new chat there, copies its path or hides it from the grid. The folder button
+  by the filter adds a single project folder, or a folder whose subfolders each become a tile, and Manage folders
+  lists what is shown and hidden, with Remove or Unhide for each.
 - **New shows your projects.** Clicking New opens a grid of the folders you work in, each with its logo, its path
   and whether its git checkout is up to date, behind, ahead or has uncommitted changes. Clicking one starts a new
   chat in that folder. The stats card moved behind a Stats tab.

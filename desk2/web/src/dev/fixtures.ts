@@ -587,5 +587,8 @@ export const settingsFixtures: DeskSettings = {
   defaultAccountId: 'auto',
   delegateToCliMayte: true,
   idleCloseMinutes: 30,
-  notifications: true
+  notifications: true,
+  projectFolders: [],
+  projectRoots: [],
+  hiddenProjects: []
 }

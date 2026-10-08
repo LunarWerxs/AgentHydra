@@ -4,6 +4,7 @@ import type {
   TranscriptItem,
   ExternalSession,
   HomeStats,
+  ProjectChoiceKind,
   ProjectsResponse,
   HomeStatsRange,
   CliMayteWorker,
@@ -976,6 +977,26 @@ export function useDesk() {
 
     async revealFolder(path: string): Promise<{ path: string }> {
       return fetchJson('/folders/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path })
+      })
+    },
+
+    /** The native folder picker; null when it was cancelled. */
+    async pickFolder(): Promise<string | null> {
+      const res = await fetchJson<{ path: string | null }>('/folders/pick', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current: null })
+      })
+      return res.path
+    },
+
+    /** Adds (`on`) or removes a folder on the New screen's grid: folders, roots (folders of projects) or hidden. */
+    async changeProjectChoice(kind: ProjectChoiceKind, path: string, on: boolean): Promise<unknown> {
+      if (!on) return fetchJson(`/projects/${kind}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
+      return fetchJson(`/projects/${kind}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path })

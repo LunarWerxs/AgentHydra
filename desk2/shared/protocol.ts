@@ -462,6 +462,12 @@ export interface DeskSettings {
   delegateToCliMayte: boolean
   idleCloseMinutes: number // close a live runtime after this long idle (its chat goes 'closed')
   notifications: boolean
+  /** Folders added to the New screen's project grid, each one a tile (absolute paths). */
+  projectFolders: string[]
+  /** Folders whose subfolders each become a tile in the New screen's grid (absolute paths). */
+  projectRoots: string[]
+  /** Projects taken off the New screen's grid (absolute paths). */
+  hiddenProjects: string[]
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)
@@ -807,7 +813,16 @@ export interface ProjectGit {
   fetchedAt: string | null
 }
 
-export type ProjectSource = 'projecthydra' | 'chats' | 'recent'
+export type ProjectSource = 'projecthydra' | 'chats' | 'recent' | 'added' | 'folder'
+
+/** The folder choices the New screen's grid is built from (DeskSettings' lists, as the server keeps them). */
+export interface ProjectChoices {
+  folders: string[]
+  roots: string[]
+  hidden: string[]
+}
+
+export type ProjectChoiceKind = keyof ProjectChoices
 
 export interface ProjectEntry {
   path: string
@@ -828,4 +843,5 @@ export interface ProjectsResponse {
   projects: ProjectEntry[]
   /** `found` false: Project Hydra is not installed here. `problem`: it is, but could not be read. */
   hydra: { found: boolean; root: string | null; placed: number; problem: string | null }
+  choices: ProjectChoices
 }

@@ -12,6 +12,9 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   delegateToCliMayte: true,
   idleCloseMinutes: 30,
   notifications: true,
+  projectFolders: [],
+  projectRoots: [],
+  hiddenProjects: [],
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -26,6 +29,13 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   delegateToCliMayte: [(v) => typeof v === 'boolean', 'true or false'],
   idleCloseMinutes: [(v) => typeof v === 'number' && Number.isFinite(v) && v >= 1, 'a number of minutes, at least 1'],
   notifications: [(v) => typeof v === 'boolean', 'true or false'],
+  projectFolders: [isPathList, 'a list of folder paths'],
+  projectRoots: [isPathList, 'a list of folder paths'],
+  hiddenProjects: [isPathList, 'a list of folder paths'],
+}
+
+function isPathList(v: unknown): boolean {
+  return Array.isArray(v) && v.every((p) => typeof p === 'string' && p.length > 0)
 }
 
 /** Checks a partial DeskSettings from a PUT. Returns the reason it is invalid, or null when it is fine. */

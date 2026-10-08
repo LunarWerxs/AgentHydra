@@ -30,6 +30,9 @@ const SETTINGS: DeskSettings = {
   delegateToCliMayte: true,
   idleCloseMinutes: 30,
   notifications: true,
+  projectFolders: [],
+  projectRoots: [],
+  hiddenProjects: [],
 }
 
 /** A Query whose messages the test pushes; records every control call and every prompt it reads. */

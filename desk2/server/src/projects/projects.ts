@@ -6,10 +6,11 @@
 
 import { readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
-import type { ProjectEntry, ProjectGit, ProjectSource, ProjectsResponse } from '@shared/protocol'
+import { basename, isAbsolute, join, resolve, sep } from 'node:path'
+import type { ProjectChoices, ProjectEntry, ProjectGit, ProjectSource, ProjectsResponse } from '@shared/protocol'
 import { isRemotePath } from '../engine/reveal'
 import { runGit } from '../git/git'
+import { checkoutOf, folderKey, isDir, subfolders } from './choices'
 import type { HydraLocation, HydraProject, HydraRead } from './hydra'
 
 export interface GitFacts {
@@ -25,6 +26,8 @@ export interface ProjectDeps {
   recent(): string[]
   /** The chats' folders and when each chat was last active (epoch ms). */
   chats(): { cwd: string; updatedAt: number }[]
+  /** The folders the user added, the folders of projects and the hidden projects. Default: none. */
+  choices?(): ProjectChoices
   /** A checkout's git state, or null when it is not one. Default: readGit. */
   git?(path: string): Promise<GitFacts | null>
   now?(): number
@@ -38,35 +41,6 @@ const HYDRA_TTL_MS = 60_000
 const GIT_TTL_MS = 20_000
 /** Checkouts read at once. */
 const GIT_PARALLEL = 8
-
-/** One spelling per folder: Windows paths are the same folder in any case and with either slash. */
-export function folderKey(path: string): string {
-  const full = resolve(path)
-  return process.platform === 'win32' ? full.toLowerCase() : full
-}
-
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
-}
-
-/** The checkout holding `dir` (the nearest folder up with a .git), else `dir` itself. */
-export function checkoutOf(dir: string): string {
-  let at = resolve(dir)
-  for (;;) {
-    try {
-      statSync(join(at, '.git'))
-      return at
-    } catch {
-      const up = dirname(at)
-      if (up === at) return resolve(dir)
-      at = up
-    }
-  }
-}
 
 /** The repo's git folder: `.git`, or where a worktree's `.git` file points. */
 function gitDirOf(path: string): string | null {
@@ -201,6 +175,20 @@ export class ProjectList {
     // The longest folder first, so a project nested in another one (a package in a monorepo) takes its own chats.
     hydraRows.sort((a, b) => b.key.length - a.key.length)
 
+    const choices = this.deps.choices?.() ?? { folders: [], roots: [], hidden: [] }
+    const addFolder = (path: string, source: ProjectSource) => {
+      if (isRemotePath(path) || !isDir(path)) return
+      const key = folderKey(path)
+      let row = rows.get(key)
+      if (!row) {
+        row = { path: resolve(path), name: basename(path) || path, group: null, icon: null, hydraKey: null, sources: new Set(), lastChatAt: null }
+        rows.set(key, row)
+      }
+      row.sources.add(source)
+    }
+    for (const folder of choices.folders) addFolder(folder, 'added')
+    for (const root of choices.roots) for (const folder of subfolders(root)) addFolder(folder, 'folder')
+
     // A chat or Recent folder inside a Hydra project counts for that project; any other is its own row, as the
     // checkout that holds it.
     const temp = folderKey(this.deps.tempDir ?? tmpdir()) + sep
@@ -230,7 +218,8 @@ export class ProjectList {
     }
     for (const dir of this.deps.recent()) own(dir)?.sources.add('recent')
 
-    const list = [...rows.values()]
+    const hidden = new Set(choices.hidden.map(folderKey))
+    const list = [...rows.values()].filter((row) => !hidden.has(folderKey(row.path)))
     const facts = new Map<Row, GitFacts | null>()
     await inBatches(list, GIT_PARALLEL, async (row) => void facts.set(row, await this.gitOf(row.path).catch(() => null)))
 
@@ -251,6 +240,7 @@ export class ProjectList {
     projects.sort((a, b) => newest(b) - newest(a) || a.name.localeCompare(b.name))
     return {
       projects,
+      choices: { folders: choices.folders, roots: choices.roots, hidden: choices.hidden },
       hydra: { found: !!location, root: location?.root ?? null, placed: hydraRows.length, problem: read?.problem ?? null },
     }
   }

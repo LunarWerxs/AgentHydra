@@ -172,6 +172,8 @@ export function sceneSource(scene: ParityScene): ShellSource {
     forkExternal: async () => chats.value[0]!,
     updateSessionMeta: async () => {},
     revealFolder: async () => {},
+    pickFolder: async () => null,
+    changeProjectChoice: async () => {},
     search: async () => []
   }
 }

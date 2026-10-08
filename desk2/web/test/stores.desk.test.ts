@@ -134,7 +134,10 @@ describe('useDesk store', () => {
         defaultAccountId: 'auto',
         delegateToCliMayte: true,
         idleCloseMinutes: 30,
-        notifications: true
+        notifications: true,
+        projectFolders: [],
+        projectRoots: [],
+        hiddenProjects: []
       }
     }
 

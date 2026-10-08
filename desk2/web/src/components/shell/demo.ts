@@ -256,6 +256,8 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
       external.value = external.value.map((s) => (s.id === sessionId ? { ...s, ...p, title: p.title ?? s.title } : s))
     },
     revealFolder: async () => {},
+    pickFolder: async () => null,
+    changeProjectChoice: async () => {},
     // The Gallery lists every outside session it has; an older search hit stays the read-only fallback.
     ensureExternal: async () => {},
     search: async (query) => {
@@ -287,7 +289,8 @@ function demoProjects(): ProjectsResponse {
   })
   return {
     projects: [row(C, 'connections', 'Work', ['projecthydra', 'chats'], git({ behind: 2 })), row(N, 'nexuscode-2d', null, ['chats'], git({ dirty: 3 })), row(P, 'audio-lab', null, ['recent'], git({ ahead: 1 }))],
-    hydra: { found: true, root: null, placed: 1, problem: null }
+    hydra: { found: true, root: null, placed: 1, problem: null },
+    choices: { folders: [], roots: [], hidden: [] }
   }
 }
 
