@@ -1,16 +1,16 @@
-// A note card (parts/NoteRow.vue) while it is closed: one line. An AgentHydra ping's group tallies summed
+// A note's status line (parts/NoteRow.vue) while it is closed. An AgentHydra ping's group tallies summed
 // ("1 done, 0 running, 0 waiting": server/src/climayte-ping.ts pingMessage writes one `Group <id>: ...` line
 // per group), else the note's first line.
 
 /** What every ping said before 2026-10-06, still in older transcripts: never shown. */
 const NOBODY_TYPED = /^Automatic status note, nobody typed this\.\s*/
 
-/** A note's text as the open card shows it. */
+/** A note's text as it shows when opened. */
 export const noteBody = (text: string): string => text.replace(NOBODY_TYPED, '')
 
 const TALLY = /^Group [^:\n]+: (\d+) done, (\d+) failed(?:, (\d+) cancelled)?, (\d+) running, (\d+) waiting\.$/gm
 
-/** The closed card's one line. Failed and cancelled are named only when there are any. */
+/** The closed line's tally. Failed and cancelled are named only when there are any. */
 export function noteSummary(text: string): string {
   const sum = [0, 0, 0, 0, 0]
   let groups = 0

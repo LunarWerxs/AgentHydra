@@ -14,7 +14,7 @@ const live = transcriptStates.slice(split)
 // Tool runs fold into one status row with id `tools:<first id>`; the ids after it open rows inside it.
 const open = ['th1', 'tools:r1', 'r1', 'b-ok', 'b-err', 'cm1', 'mcp1', 'tw1', 'plan-done']
 const markdownItems = markdownGalleryItems()
-// An AgentHydra ping as its note card: one closed line, the whole text under Show more.
+// An AgentHydra ping as its note: one muted status line, the whole text under its chevron.
 const pingItems: TranscriptItem[] = [
   { id: 'gu', ts: Date.now() - 120_000, kind: 'user', text: 'Send the docs and the events fix to CliMayte.' },
   { id: 'ga', ts: Date.now() - 110_000, kind: 'assistant_text', text: 'Both are dispatched.' },

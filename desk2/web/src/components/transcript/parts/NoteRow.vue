@@ -1,31 +1,34 @@
 <script setup lang="ts">
-// A note another program typed into the session as a user turn (an AgentHydra ping): a muted one-line strip
-// on the left, never the person's bubble on the right: who sent it, when, and its tally (lib/note.ts). The
-// whole text opens under it with Show more (owner, 2026-10-06: pings come so often they must stay small).
-import { computed, ref } from 'vue'
+// A note another program typed into the session as a user turn (an AgentHydra ping): a muted status line in the
+// reply's flow, like "CliMayte moved this chat ..." and "Thought process", never a card or the person's bubble.
+// Who sent it and its tally (lib/note.ts); the chevron opens the whole text under it. Owner, 2026-10-06: pings
+// come so often they must stay small; 2026-10-08: "treated like a little notification", not a box.
+import { computed } from 'vue'
 import { Bot } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
+import { useTranscript } from '../context'
 import { noteBody, noteSummary } from '../lib/note'
+import StatusRow from './StatusRow.vue'
 
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'note' }> }>()
 
-const expanded = ref(false)
+const ctx = useTranscript()
+const open = computed(() => ctx.isOpen(props.item.id))
 const body = computed(() => noteBody(props.item.text))
 const summary = computed(() => noteSummary(props.item.text))
-const time = computed(() => new Date(props.item.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false }))
+const when = computed(() => new Date(props.item.ts).toLocaleString(undefined, { hour12: false }))
 </script>
 
 <template>
-  <div class="tx-card max-w-[72%] self-start px-2.5 py-1 text-[12px] leading-5">
-    <div class="flex items-center gap-1.5 text-text-muted">
-      <Bot class="size-3.5 shrink-0" />
-      <span class="truncate text-text-2">{{ item.from }}</span>
-      <span class="tnum shrink-0">{{ time }}</span>
-      <span v-if="summary" class="min-w-0 flex-1 truncate">{{ summary }}</span>
-      <button v-if="body" type="button" class="ms-auto shrink-0 ps-2 hover:text-text" :aria-expanded="expanded" @click="expanded = !expanded">
-        {{ expanded ? 'Show less' : 'Show more' }}
-      </button>
+  <div class="text-text-muted">
+    <StatusRow v-if="body" :open="open" :title="when" @toggle="ctx.toggle(item.id)">
+      <Bot class="size-4 shrink-0" />
+      <span class="min-w-0 truncate">{{ item.from }}<template v-if="summary"> · {{ summary }}</template></span>
+    </StatusRow>
+    <div v-else class="flex h-6 items-center gap-1.5 px-1 text-[14px]" :title="when">
+      <Bot class="size-4 shrink-0" />
+      <span class="min-w-0 truncate">{{ item.from }}</span>
     </div>
-    <p v-if="expanded && body" class="mt-1 whitespace-pre-wrap wrap-break-word text-text-2">{{ body }}</p>
+    <div v-if="open && body" class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap wrap-break-word border-s border-border ps-3 text-[13px] leading-5">{{ body }}</div>
   </div>
 </template>

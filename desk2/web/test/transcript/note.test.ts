@@ -5,7 +5,7 @@ import { noteBody, noteSummary } from '../../src/components/transcript/lib/note'
 // after desk2's noteOf has cut its `[from] Not from the user.` prefix.
 const ping = (...tallies: string[]) => ['Ping 3-4, 2 updates since 09:00:', '• w-1a2b3c4d "Docs": done on #84, check passed.', ...tallies, 'Next: climayte_status {group:"g-a", report:true}, then climayte_verdict.'].join('\n')
 
-describe('a closed note card', () => {
+describe('a closed note line', () => {
   test("sums a ping's group tallies, naming failed and cancelled only when there are any", () => {
     expect(noteSummary(ping('Group g-a: 1 done, 0 failed, 0 running, 0 waiting.'))).toBe('1 done, 0 running, 0 waiting')
     expect(noteSummary(ping('Group g-a: 1 done, 1 failed, 0 running, 0 waiting.', 'Group g-b: 1 done, 0 failed, 1 cancelled, 1 running, 1 waiting.'))).toBe('2 done, 1 failed, 1 cancelled, 1 running, 1 waiting')
