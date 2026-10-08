@@ -26,8 +26,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\live-checkout.ps1 -P
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\live-checkout.ps1 -Apply   # makes them; safe to rerun
 ```
 
-`-Apply` creates the worktree, runs `bun install` and the web build there (through `fairjob` when it is
-installed), moves the state, sets the variable, rewrites the job wrappers, the tasks and the shortcuts.
+`-Apply` creates the worktree, runs `bun install` and the web build there, then the same two in its
+`desk2\` (Desk 2, the window, has its own packages), all through `fairjob` when it is installed. It moves the state, sets the variable, rewrites the job wrappers, the tasks and the shortcuts.
 It never stops or restarts anything. It ends by printing the one restart step:
 
 ```powershell
@@ -42,8 +42,8 @@ dashboard keeps its log open), `-Apply` stops before the move, names the process
 
 1. Land the change on `main` and push it (`cycle.py --land`).
 2. Then either let the updater take it (Settings, or auto-update: `git pull --ff-only origin main` in
-   `live/`, `bun install`, the web build, restart), or pull and restart by hand:
-   `git -C <workspace>\live pull --ff-only`, then the restart step above.
+   `live/`, `bun install`, then `bun install` and `bun run build` in `live/desk2`, restart), or rerun
+   `-Apply`, which pulls and builds the same way, then the restart step above.
 
 Never edit files in `live/`. If it has local edits, `-Plan` reports a problem and the updater refuses
 the pull.

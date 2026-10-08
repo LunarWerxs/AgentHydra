@@ -249,14 +249,24 @@ $haveBun = (Test-Path -LiteralPath (Join-Path $bunDir 'bun.exe')) -or [bool](Get
 if ($Direction -eq 'forward') {
   if (-not $haveBun) { Problem 'bun was not found (~\.bun\bin\bun.exe or PATH).' }
   $via = if (Test-Path -LiteralPath $Fairjob) { 'fairjob.cmd -Weight 3 -Run' } else { 'directly (fairjob.cmd not installed)' }
+  # Desk 2 (desk2\) is AgentHydra 2.0's window, with its own packages and build: the daemon starts it from
+  # the live checkout, and the updater installs and builds it there (server\src\updater.ts). Before
+  # 2026-10-08 this script left live\desk2 with no node_modules and no web\dist.
+  $LiveDesk = Join-Path $Live 'desk2'
   Step "bun install          in $Live   via $via   (when HEAD moved or node_modules is missing)"
   Step "bun run build        in $Live   via $via   (web\dist; when HEAD moved or it is missing)"
+  Step "bun install          in $LiveDesk   via $via   (Desk 2; when HEAD moved or node_modules is missing)"
+  Step "bun run build        in $LiveDesk   via $via   (Desk 2's web\dist and hydra; when HEAD moved or web\dist is missing)"
   if (-not $DryRun -and $script:Problems.Count -eq 0) {
     if (Test-Path -LiteralPath $bunDir) { $env:Path = "$bunDir;$env:Path" }
     $headAfter = (Invoke-Git @('rev-parse', 'HEAD') $Live).Out
     $moved = ($headBefore -ne $headAfter)
     if ($moved -or -not (Test-Path -LiteralPath (Join-Path $Live 'node_modules'))) { Invoke-Heavy 'bun install' $Live } else { Info '[skip] bun install: up to date' }
     if ($moved -or -not (Test-Path -LiteralPath (Join-Path $Live 'web\dist\index.html'))) { Invoke-Heavy 'bun run build' $Live } else { Info '[skip] web build: up to date' }
+    if (Test-Path -LiteralPath (Join-Path $LiveDesk 'package.json')) {
+      if ($moved -or -not (Test-Path -LiteralPath (Join-Path $LiveDesk 'node_modules'))) { Invoke-Heavy 'bun install' $LiveDesk } else { Info '[skip] Desk 2 bun install: up to date' }
+      if ($moved -or -not (Test-Path -LiteralPath (Join-Path $LiveDesk 'web\dist\index.html'))) { Invoke-Heavy 'bun run build' $LiveDesk } else { Info '[skip] Desk 2 build: up to date' }
+    }
   }
 } else { Info 'nothing to undo.' }
 
