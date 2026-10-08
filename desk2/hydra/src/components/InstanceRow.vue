@@ -150,7 +150,7 @@ function onContextMenu(e: MouseEvent): void {
             row.badge.label
           }}</Badge>
           <slot name="name-extra" />
-          <span v-if="row.account.note" class="min-w-0 shrink-[8] truncate text-2xs font-normal text-muted-foreground">{{
+          <span v-if="row.account.note" class="min-w-0 shrink-8 truncate text-2xs font-normal text-muted-foreground">{{
             row.account.note
           }}</span>
           <span
@@ -297,7 +297,7 @@ function onContextMenu(e: MouseEvent): void {
                 <EllipsisVertical />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" :class="row.menu.class ?? 'max-w-56'">
+            <DropdownMenuContent align="end" :width="row.menu.width ?? 'md'">
               <!-- The menu leads with WHICH instance it belongs to, by number: on a table of
                    near-identically named rows an open menu is otherwise detached from its row. -->
               <InstanceMenuHeader :num="row.num" :name="row.menu.name" :actions="row.menu.actions" />

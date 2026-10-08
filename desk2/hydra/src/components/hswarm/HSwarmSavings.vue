@@ -40,7 +40,7 @@ interface Table {
   folded?: number
 }
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { fetchStats, fetchAccountNames } = useHswarmApi()
 
 const WINDOWS = [7, 14, 30]
@@ -137,7 +137,7 @@ const totals = computed(() => (plan.value ? (stats.value?.plan ?? {}) : (stats.v
 const usd = (n: number | null | undefined) => formatUsd(n, { style: 'whole' })
 const axisUsd = (n: number) => formatUsd(n, { style: 'axis' })
 const compact = (n: number | null | undefined) => formatTokens(Number(n) || 0)
-const int = (n: number | null | undefined) => Math.round(Number(n) || 0).toLocaleString('en-US')
+const int = (n: number | null | undefined) => Math.round(Number(n) || 0).toLocaleString(locale.value)
 const pct = (n: number | null | undefined) => `${Math.round((Number(n) || 0) * 100)}%`
 const dayOf = (iso: string | undefined) => (iso ? iso.slice(0, 10) : '—')
 
@@ -552,7 +552,7 @@ const ariaSort = (tid: string, key: string) => {
         <span class="text-sm tabular-nums" :class="(totals[F.saved] ?? 0) < 0 ? 'text-destructive' : 'text-success'"><b>{{ hero.saved }}</b> <span class="text-muted-foreground">{{ t('hswarm.v.savings.saved') }}</span></span>
         <span class="text-sm tabular-nums"><b>{{ hero.share }}</b> <span class="text-muted-foreground">{{ t('hswarm.v.savings.ofTheWork') }}</span></span>
         <span class="text-sm text-muted-foreground tabular-nums">{{ hero.runs }} {{ t('hswarm.v.savings.runs') }} · {{ hero.tasks }} {{ t('hswarm.v.savings.tasks') }} · {{ t('hswarm.v.savings.since', { day: hero.since }) }}</span>
-        <span v-if="stats.source === 'zswarm'" class="rounded-full border px-1.5 text-[11px] text-muted-foreground">{{ t('hswarm.v.savings.fromZswarm') }}</span>
+        <span v-if="stats.source === 'zswarm'" class="rounded-full border px-1.5 text-2xs text-muted-foreground">{{ t('hswarm.v.savings.fromZswarm') }}</span>
       </div>
 
       <!-- Tiles -->
@@ -578,7 +578,7 @@ const ariaSort = (tid: string, key: string) => {
           <p v-if="g.empty" class="py-4 text-center text-xs text-muted-foreground">{{ t('hswarm.v.savings.noBars') }}</p>
           <template v-else>
             <div class="flex gap-1.5">
-              <div class="flex w-10 shrink-0 flex-col justify-between text-end text-[10px] leading-none text-muted-foreground tabular-nums">
+              <div class="flex w-10 shrink-0 flex-col justify-between text-end text-3xs leading-none text-muted-foreground tabular-nums">
                 <span>{{ axisUsd(g.top) }}</span>
                 <span v-if="g.bottom < 0">{{ g.bottom < 0 ? `−${axisUsd(-g.bottom)}` : '' }}</span>
                 <span v-else>$0</span>
@@ -588,13 +588,13 @@ const ariaSort = (tid: string, key: string) => {
                 <rect v-for="(r, i) in g.rects" :key="i" :x="r.x" :y="r.y" :width="r.w" :height="r.h" :fill="r.fill"><title>{{ r.tip }}</title></rect>
               </svg>
             </div>
-            <div class="ms-[46px] mt-0.5 flex justify-between text-[10px] text-muted-foreground tabular-nums">
+            <div class="ms-11.5 mt-0.5 flex justify-between text-3xs text-muted-foreground tabular-nums">
               <span>{{ c.labels[0]?.slice(5) }}</span>
               <span>{{ c.labels[c.labels.length - 1]?.slice(5) }}</span>
             </div>
-            <div v-if="c.series.length > 1" class="mt-1 flex flex-wrap gap-x-2.5 text-[11px] text-muted-foreground">
+            <div v-if="c.series.length > 1" class="mt-1 flex flex-wrap gap-x-2.5 text-2xs text-muted-foreground">
               <span v-for="s in c.series" :key="s.key" class="inline-flex items-center gap-1">
-                <span class="size-2 rounded-sm" :style="{ background: s.color }" />{{ s.label }}
+                <span class="size-2 rounded-sm bg-(--series-color)" :style="{ '--series-color': s.color }" />{{ s.label }}
               </span>
             </div>
           </template>
@@ -607,7 +607,7 @@ const ariaSort = (tid: string, key: string) => {
           <span>{{ t('hswarm.v.savings.ruleCheck') }}</span>
           <InfoHint :text="t('hswarm.v.savings.ruleCheckHint')" />
           <span class="text-xs font-normal text-muted-foreground tabular-nums">{{ rule.day }}</span>
-          <span v-if="rule.partial" class="rounded-full border border-warning/50 px-1.5 text-[11px] font-normal text-warning">{{ t('hswarm.v.savings.stillRunning') }}</span>
+          <span v-if="rule.partial" class="rounded-full border border-warning/50 px-1.5 text-2xs font-normal text-warning">{{ t('hswarm.v.savings.stillRunning') }}</span>
         </div>
         <div class="grid grid-cols-2 gap-2 sm:grid-cols-5">
           <div v-for="r in rule.tiles" :key="r.k" class="min-w-0 rounded-md border px-2 py-1">
@@ -636,7 +636,7 @@ const ariaSort = (tid: string, key: string) => {
                   :class="[col.num ? 'w-px text-end' : 'text-start', ci === 0 ? '' : '']"
                 >
                   <button type="button" class="inline-flex items-center gap-0.5 hover:text-foreground" @click="sortBy(tb.id, col)">
-                    {{ col.label }}<span class="text-[9px]" aria-hidden="true">{{ sortState[tb.id]?.key === col.key ? (sortState[tb.id]!.dir === 1 ? '▲' : '▼') : '' }}</span>
+                    {{ col.label }}<span class="text-3xs" aria-hidden="true">{{ sortState[tb.id]?.key === col.key ? (sortState[tb.id]!.dir === 1 ? '▲' : '▼') : '' }}</span>
                   </button>
                 </th>
               </tr>

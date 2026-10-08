@@ -198,7 +198,7 @@ function rowModel(i: FreeInstance): InstanceRowModel {
       breakdown: t('freeInstances.tokensBreakdown', { output: formatTokens(used.output), input: formatTokens(used.input) }),
       source: t('freeInstances.tokensSource'),
     },
-    menu: { name: i.name, actions: menuActionsFor(i), class: 'max-w-56' },
+    menu: { name: i.name, actions: menuActionsFor(i), width: 'md' },
   }
 }
 const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))

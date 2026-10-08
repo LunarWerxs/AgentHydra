@@ -21,7 +21,7 @@ defineProps<{
   items: readonly { value: string; label: string }[]
   selected: readonly string[]
   disabled?: boolean
-  contentClass?: string
+  width?: 'sm' | 'md' | 'lg'
 }>()
 
 defineEmits<{
@@ -38,7 +38,7 @@ defineEmits<{
       {{ label }}
       <span class="ms-auto max-w-24 truncate ps-2 text-2xs text-muted-foreground">{{ summary }}</span>
     </DropdownMenuSubTrigger>
-    <DropdownMenuSubContent :class="contentClass ?? 'max-w-52'">
+    <DropdownMenuSubContent :width="width ?? 'sm'">
       <!-- @select.prevent keeps the menu open so several boxes can be flipped in one visit. -->
       <DropdownMenuItem @select.prevent="$emit('all')">{{ $t('sessions.selectionAll') }}</DropdownMenuItem>
       <DropdownMenuItem @select.prevent="$emit('none')">{{ $t('sessions.selectionNone') }}</DropdownMenuItem>

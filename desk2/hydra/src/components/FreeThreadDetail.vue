@@ -84,7 +84,7 @@ watch([instance, blocked], () => { if (currentId.value && !attemptedRead.value &
         <p v-if="!messages.length" class="py-6 text-center text-xs text-muted-foreground">{{ $t(blocked ? 'freeInstances.working' : 'freeInstances.empty') }}</p>
         <article v-for="(message, index) in messages" :key="message.id || index" class="flex flex-col gap-1.5 rounded-md border p-3">
           <span class="text-2xs font-medium text-muted-foreground">{{ $t(message.role === 'user' ? 'freeInstances.user' : 'freeInstances.assistant') }}</span>
-          <pre class="whitespace-pre-wrap break-words font-sans text-sm">{{ message.text }}</pre>
+          <pre class="whitespace-pre-wrap wrap-break-word font-sans text-sm">{{ message.text }}</pre>
           <details v-if="message.code_blocks.length" class="mt-1"><summary class="cursor-pointer text-xs text-muted-foreground">{{ $t('freeInstances.code') }}</summary>
             <div v-for="(block, i) in message.code_blocks" :key="i" class="mt-2 rounded-md bg-muted p-2">
               <div class="flex items-center justify-between text-2xs"><span>{{ block.language }}</span><Button size="icon-sm" variant="ghost" :aria-label="$t('freeInstances.copyCode')" @click="copy(block.code)"><Copy /></Button></div>

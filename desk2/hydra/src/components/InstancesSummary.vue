@@ -147,7 +147,7 @@ const tokensEmpty = computed(
       <span class="text-xs font-semibold whitespace-nowrap">{{ $t('instances.summary.title') }}</span>
       <svg
         v-if="sparkPaths.length"
-        class="ml-auto shrink-0 overflow-visible text-primary"
+        class="ms-auto shrink-0 overflow-visible text-primary"
         width="120"
         height="24"
         :viewBox="`0 0 ${SPARK.width} 24`"
@@ -168,7 +168,7 @@ const tokensEmpty = computed(
       </svg>
     </button>
 
-    <div v-if="open" class="space-y-4 border-t px-3 py-3">
+    <div v-if="open" class="space-y-4 border-t p-3">
       <div>
         <h3 class="mb-1 text-xs font-semibold">{{ $t('instances.summary.fleetTitle') }}</h3>
         <p v-if="historyFailed" class="py-6 text-center text-2xs text-muted-foreground">
@@ -211,7 +211,8 @@ const tokensEmpty = computed(
               fill="none"
               stroke-width="1.75"
               stroke-linejoin="round"
-              :style="{ stroke: seriesColor('week', FLEET_ORDER) }"
+              class="stroke-(--line-c)"
+              :style="{ '--line-c': seriesColor('week', FLEET_ORDER) }"
             />
             <path
               v-for="(d, k) in sessionPaths"
@@ -220,7 +221,8 @@ const tokensEmpty = computed(
               fill="none"
               stroke-width="1.75"
               stroke-linejoin="round"
-              :style="{ stroke: seriesColor('session', FLEET_ORDER) }"
+              class="stroke-(--line-c)"
+              :style="{ '--line-c': seriesColor('session', FLEET_ORDER) }"
             />
             <rect
               v-for="(h, i) in fleetHits"
@@ -234,13 +236,13 @@ const tokensEmpty = computed(
               <title>{{ h.tip }}</title>
             </rect>
           </svg>
-          <div class="mt-0.5 flex justify-between ps-[34px] text-3xs text-muted-foreground tabular-nums">
+          <div class="mt-0.5 flex justify-between ps-8.5 text-3xs text-muted-foreground tabular-nums">
             <span>{{ fleetSpan.first }}</span>
             <span>{{ fleetSpan.last }}</span>
           </div>
           <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
             <li v-for="l in fleetLegend" :key="l.key" class="flex items-center gap-1">
-              <span class="inline-block size-2 rounded-sm" :style="{ background: l.color }"></span>
+              <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': l.color }"></span>
               {{ l.label }}
             </li>
           </ul>
@@ -262,7 +264,7 @@ const tokensEmpty = computed(
           <HourBars :hours="tokenHours" :series="tokenSeries" height-class="h-32" />
           <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
             <li v-for="s in tokenSeries" :key="s.key" class="flex items-center gap-1">
-              <span class="inline-block size-2 rounded-sm" :style="{ background: s.color }"></span>
+              <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>
               {{ s.label }}
             </li>
           </ul>

@@ -213,7 +213,7 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
   <Card size="sm">
     <CardHeader>
       <div class="flex items-center justify-between gap-2">
-        <CardTitle class="text-base">{{ t('hswarm.v.overview.results.title') }}</CardTitle>
+        <CardTitle size="lg">{{ t('hswarm.v.overview.results.title') }}</CardTitle>
         <div class="flex gap-1">
           <Button
             v-for="n in [14, 30]"
@@ -236,7 +236,7 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
       <div v-else class="grid items-start gap-4 sm:grid-cols-2">
         <section class="space-y-1.5">
           <h3 class="flex items-center gap-1.5 text-xs font-semibold">
-            <ThumbsUp class="size-3.5 text-green-600" /><ThumbsDown class="size-3.5 text-red-600" />
+            <ThumbsUp class="size-3.5 text-success" /><ThumbsDown class="size-3.5 text-destructive" />
             {{ t('hswarm.v.overview.results.outcomes') }}
           </h3>
           <ul class="space-y-1.5">
@@ -248,9 +248,9 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
                 </span>
               </div>
               <div class="mt-0.5 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div class="flex h-full" :style="{ width: `${Math.max(1.5, (m.tasks / outcomeMax) * 100)}%` }">
-                  <div class="h-full bg-green-500" :style="{ width: `${(m.ok / m.tasks) * 100}%` }"></div>
-                  <div class="h-full bg-red-500" :style="{ width: `${(m.failed / m.tasks) * 100}%` }"></div>
+                <div class="flex h-full w-(--bar-w)" :style="{ '--bar-w': `${Math.max(1.5, (m.tasks / outcomeMax) * 100)}%` }">
+                  <div class="h-full w-(--ok-w) bg-success" :style="{ '--ok-w': `${(m.ok / m.tasks) * 100}%` }"></div>
+                  <div class="h-full w-(--failed-w) bg-destructive" :style="{ '--failed-w': `${(m.failed / m.tasks) * 100}%` }"></div>
                 </div>
               </div>
             </li>
@@ -279,19 +279,20 @@ const colorOf = (name: string) => seriesColor(name, dailyTop.value)
               class="flex h-full min-w-0 flex-1 flex-col-reverse"
               :title="`${d.date}: ${dayTotal(d)}`"
             >
-              <div class="flex flex-col-reverse" :style="{ height: `${(dayTotal(d) / dayMax) * 100}%` }">
+              <div class="flex flex-col-reverse h-(--day-h)" :style="{ '--day-h': `${(dayTotal(d) / dayMax) * 100}%` }">
                 <div
                   v-for="name in dailyTop"
                   :key="name"
-                  :style="{ flexGrow: d.models[name] || 0, background: colorOf(name) }"
+                  class="grow-(--grow) bg-(--series-color)"
+                  :style="{ '--grow': d.models[name] || 0, '--series-color': colorOf(name) }"
                 ></div>
-                <div class="bg-muted-foreground/40" :style="{ flexGrow: d.other }"></div>
+                <div class="grow-(--grow) bg-muted-foreground/40" :style="{ '--grow': d.other }"></div>
               </div>
             </div>
           </div>
           <ul class="flex flex-wrap gap-x-3 gap-y-0.5 text-2xs text-muted-foreground">
             <li v-for="name in dailyTop" :key="name" class="flex items-center gap-1">
-              <span class="size-2 rounded-sm" :style="{ background: colorOf(name) }"></span>{{ name }}
+              <span class="size-2 rounded-sm bg-(--series-color)" :style="{ '--series-color': colorOf(name) }"></span>{{ name }}
             </li>
             <li v-if="daily.some((d) => d.other > 0)" class="flex items-center gap-1">
               <span class="size-2 rounded-sm bg-muted-foreground/40"></span>{{ t('hswarm.v.overview.results.other') }}

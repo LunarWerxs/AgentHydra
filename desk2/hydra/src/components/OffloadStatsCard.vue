@@ -131,7 +131,7 @@ const listOpen = ref(false)
           <button type="button" class="text-xs font-semibold hover:underline" @click="$emit('open')">
             {{ $t('swarmStats.hswarmTitle') }}
           </button>
-          <Badge variant="secondary" class="text-[10px] text-muted-foreground">
+          <Badge variant="muted">
             {{ fromHistory ? $t('swarmStats.fromZswarm') : $t('swarmStats.fromHswarm') }}
           </Badge>
         </div>

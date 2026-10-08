@@ -195,25 +195,25 @@ onMounted(() => {
     <!-- Tab navigation -->
     <div class="flex gap-1 border-b">
       <Button
-        variant="ghost"
+        variant="tab"
         size="sm"
-        :class="{ 'border-b-2 border-primary': activeTab === 'ask' }"
+        :data-active="activeTab === 'ask'"
         @click="activeTab = 'ask'"
       >
         {{ t('hswarm.v.tools.tabAsk') }}
       </Button>
       <Button
-        variant="ghost"
+        variant="tab"
         size="sm"
-        :class="{ 'border-b-2 border-primary': activeTab === 'doctor' }"
+        :data-active="activeTab === 'doctor'"
         @click="activeTab = 'doctor'"
       >
         {{ t('hswarm.v.tools.tabDoctor') }}
       </Button>
       <Button
-        variant="ghost"
+        variant="tab"
         size="sm"
-        :class="{ 'border-b-2 border-primary': activeTab === 'help' }"
+        :data-active="activeTab === 'help'"
         @click="activeTab = 'help'"
       >
         {{ t('hswarm.v.tools.tabHelp') }}
@@ -229,7 +229,7 @@ onMounted(() => {
             <CardTitle>{{ t('hswarm.v.tools.askTitle') }}</CardTitle>
             <CardDescription>{{ t('hswarm.v.tools.askDesc') }}</CardDescription>
           </CardHeader>
-          <CardContent class="space-y-2">
+          <CardContent stack="sm">
             <div class="space-y-2">
               <Label for="ask-prompt">{{ t('hswarm.v.tools.askPromptLabel') }}</Label>
               <Textarea
@@ -262,7 +262,6 @@ onMounted(() => {
               <Button
                 :disabled="!hasReadyKey || askLoading"
                 @click="handleAsk"
-                class="gap-2"
               >
                 <Play v-if="!askLoading" class="size-4" />
                 <Loader2 v-else class="size-4 animate-spin" />
@@ -279,7 +278,7 @@ onMounted(() => {
               </Button>
             </div>
 
-            <div v-if="!hasReadyKey" class="flex gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
+            <div v-if="!hasReadyKey" class="flex gap-2 rounded-md bg-warning/10 p-3 text-sm text-warning">
               <AlertCircle class="size-4 shrink-0 mt-0.5" />
               <span>{{ t('hswarm.v.tools.noReadyKey') }}</span>
             </div>
@@ -287,15 +286,17 @@ onMounted(() => {
         </Card>
 
         <!-- Ask result -->
-        <Card size="sm" v-if="askResult && !askLoading" :class="{ 'border-red-200 bg-red-50': askResult.error && !askResult.answer }">
+        <Card size="sm" v-if="askResult && !askLoading" :tone="askResult.error && !askResult.answer ? 'error' : 'default'">
           <CardHeader>
-            <CardTitle class="flex items-center gap-2">
-              <span v-if="askResult.error && !askResult.answer" class="text-red-600">
-                {{ t('hswarm.v.tools.askError') }}
-              </span>
-              <span v-else class="text-green-600 flex items-center gap-1">
-                <Check class="size-4" />
-                {{ t('hswarm.v.tools.askAnswered') }}
+            <CardTitle>
+              <span class="flex items-center gap-2">
+                <span v-if="askResult.error && !askResult.answer" class="text-destructive">
+                  {{ t('hswarm.v.tools.askError') }}
+                </span>
+                <span v-else class="flex items-center gap-1 text-success">
+                  <Check class="size-4" />
+                  {{ t('hswarm.v.tools.askAnswered') }}
+                </span>
               </span>
             </CardTitle>
             <CardDescription v-if="askResult.model || askResult.seconds || askResult.cost_usd">
@@ -304,7 +305,7 @@ onMounted(() => {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <pre class="max-h-96 overflow-auto rounded-md bg-slate-100 p-3 text-sm">{{ askResult.answer || askResult.error || JSON.stringify(askResult, null, 2) }}</pre>
+            <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm">{{ askResult.answer || askResult.error || JSON.stringify(askResult, null, 2) }}</pre>
           </CardContent>
         </Card>
       </div>
@@ -320,7 +321,6 @@ onMounted(() => {
             <Button
               :disabled="doctorLoading"
               @click="handleDoctor"
-              class="gap-2"
             >
               <RotateCcw v-if="!doctorLoading" class="size-4" />
               <Loader2 v-else class="size-4 animate-spin" />
@@ -331,12 +331,12 @@ onMounted(() => {
 
         <!-- Doctor result -->
         <div v-if="doctorResult && !doctorLoading" class="space-y-2">
-          <div v-if="doctorResult.error" class="rounded-md border border-red-200 bg-red-50 p-4">
+          <div v-if="doctorResult.error" class="rounded-md border border-destructive/50 bg-destructive/10 p-4">
             <div class="flex gap-2">
-              <AlertCircle class="size-5 text-red-600 shrink-0" />
+              <AlertCircle class="size-5 text-destructive shrink-0" />
               <div>
-                <div class="font-semibold text-red-600">{{ t('hswarm.v.tools.doctorFailed') }}</div>
-                <div class="text-sm text-red-600">{{ doctorResult.error }}</div>
+                <div class="font-semibold text-destructive">{{ t('hswarm.v.tools.doctorFailed') }}</div>
+                <div class="text-sm text-destructive">{{ doctorResult.error }}</div>
               </div>
             </div>
           </div>
@@ -344,8 +344,8 @@ onMounted(() => {
           <div v-else class="space-y-2">
             <div v-for="([ok, title, value], idx) in doctorChecks" :key="idx" class="flex gap-3 rounded-md border p-3">
               <div class="shrink-0 mt-0.5">
-                <Check v-if="ok" class="size-5 text-green-600" />
-                <AlertCircle v-else class="size-5 text-amber-600" />
+                <Check v-if="ok" class="size-5 text-success" />
+                <AlertCircle v-else class="size-5 text-warning" />
               </div>
               <div class="min-w-0 flex-1">
                 <div class="font-semibold text-sm">{{ title }}</div>
@@ -357,7 +357,7 @@ onMounted(() => {
               <summary class="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
                 {{ t('hswarm.v.tools.doctorFullReport') }}
               </summary>
-              <pre class="max-h-96 overflow-auto rounded-md bg-slate-100 p-3 text-xs mt-2">{{ JSON.stringify(doctorResult.data, null, 2) }}</pre>
+              <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs mt-2">{{ JSON.stringify(doctorResult.data, null, 2) }}</pre>
             </details>
           </div>
         </div>
@@ -369,7 +369,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpWhatIsHswarm.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpWhatIsHswarm.body1') }}</p>
             <p>{{ t('hswarm.v.tools.helpWhatIsHswarm.body2') }}</p>
           </CardContent>
@@ -379,12 +379,12 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpApiKey.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="space-y-2 prose prose-sm max-w-none">
+          <CardContent stack="sm" class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpApiKey.body') }}</p>
-            <div v-if="freeProviders.length" class="bg-blue-50 border border-blue-200 rounded p-3">
+            <div v-if="freeProviders.length" class="bg-info/10 border border-info/50 rounded p-3">
               <p class="text-sm font-semibold">{{ t('hswarm.v.tools.helpApiKey.freeTiers') }}</p>
               <ul class="text-sm list-disc list-inside">
-                <li v-for="p in freeProviders" :key="p.name" class="text-blue-900">
+                <li v-for="p in freeProviders" :key="p.name" class="text-info">
                   {{ p.name }}
                   <a v-if="p.key_url" :href="p.key_url" target="_blank" rel="noopener noreferrer"
                     class="underline">({{ t('hswarm.v.tools.helpApiKey.getKey') }})</a>
@@ -398,7 +398,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpFreeTier.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpFreeTier.body') }}</p>
           </CardContent>
         </Card>
@@ -407,7 +407,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpToken.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpToken.body1') }}</p>
             <p>{{ t('hswarm.v.tools.helpToken.body2') }}</p>
           </CardContent>
@@ -417,7 +417,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpWhichModel.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpWhichModel.body') }}</p>
           </CardContent>
         </Card>
@@ -426,7 +426,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpRoles.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpRoles.body') }}</p>
           </CardContent>
         </Card>
@@ -435,7 +435,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpConnect.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpConnect.body') }}</p>
           </CardContent>
         </Card>
@@ -444,7 +444,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle>{{ t('hswarm.v.tools.helpQuestion.title') }}</CardTitle>
           </CardHeader>
-          <CardContent class="prose prose-sm max-w-none">
+          <CardContent class="max-w-none">
             <p>{{ t('hswarm.v.tools.helpQuestion.body') }}</p>
           </CardContent>
         </Card>

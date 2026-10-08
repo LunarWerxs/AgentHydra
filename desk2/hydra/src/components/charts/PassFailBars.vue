@@ -40,11 +40,11 @@ const share = (r: { pass: number; fail: number; credit?: number }) => {
       <span class="w-20 shrink-0 truncate text-muted-foreground" :title="r.label">{{ r.label }}</span>
       <div class="flex h-2 min-w-0 flex-1 items-center">
         <div
-          class="flex h-full overflow-hidden rounded-full bg-muted"
-          :style="{ width: `${Math.max(4, ((r.pass + r.fail) / max) * 100)}%` }"
+          class="flex h-full w-(--bar-w) overflow-hidden rounded-full bg-muted"
+          :style="{ '--bar-w': `${Math.max(4, ((r.pass + r.fail) / max) * 100)}%` }"
         >
-          <div class="h-full bg-success" :style="{ flexGrow: credit(r) }" />
-          <div class="h-full bg-destructive" :style="{ flexGrow: r.pass + r.fail - credit(r) }" />
+          <div class="h-full grow-(--grow) bg-success" :style="{ '--grow': credit(r) }" />
+          <div class="h-full grow-(--grow) bg-destructive" :style="{ '--grow': r.pass + r.fail - credit(r) }" />
         </div>
       </div>
       <span class="shrink-0 tabular-nums">

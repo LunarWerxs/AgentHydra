@@ -155,17 +155,16 @@ function jobDot(state: string): 'run' | 'ok' | 'bad' | 'off' {
   return 'off'
 }
 
-function getStateColor(state: string) {
-  const dot = jobDot(state)
-  switch (dot) {
+function stateVariant(state: string): 'info' | 'success' | 'destructive' | 'muted' {
+  switch (jobDot(state)) {
     case 'run':
-      return 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-100'
+      return 'info'
     case 'ok':
-      return 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-100'
+      return 'success'
     case 'bad':
-      return 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-100'
+      return 'destructive'
     default:
-      return 'bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-100'
+      return 'muted'
   }
 }
 
@@ -633,7 +632,7 @@ onBeforeUnmount(() => {
 
     <!-- Error Alert -->
     <Alert v-if="error" variant="destructive">
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
     </Alert>
@@ -669,16 +668,16 @@ onBeforeUnmount(() => {
           </span>
         </h3>
         <div class="border rounded-lg overflow-x-auto">
-          <Table class="[&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
+          <Table rows="dense">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t('hswarm.v.jobs.table.jobId') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.label') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.state') }}</TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.tasks') }}
                 </TableHead>
-                <TableHead class="text-right">
+                <TableHead class="text-end">
                   {{ t('hswarm.v.jobs.table.cost') }}
                 </TableHead>
                 <TableHead>{{ t('hswarm.v.jobs.table.created') }}</TableHead>
@@ -689,10 +688,10 @@ onBeforeUnmount(() => {
               <template v-for="job in section.jobs" :key="job.job_id">
                 <!-- A click anywhere on the row toggles it; its button carries the open state (and tints the row) for the keyboard -->
                 <TableRow
-                  class="cursor-pointer hover:bg-muted/50"
+                  class="cursor-pointer"
                   @click="toggleJob(job.job_id, section.key)"
                 >
-                  <TableCell class="font-mono text-sm">
+                  <TableCell mono>
                     <button
                       type="button"
                       class="inline-flex items-center gap-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
@@ -710,18 +709,18 @@ onBeforeUnmount(() => {
                   </TableCell>
                   <TableCell>{{ job.label || '–' }}</TableCell>
                   <TableCell>
-                    <Badge :class="getStateColor(job.state)">
+                    <Badge :variant="stateVariant(job.state)">
                       {{ job.state }}
                     </Badge>
                   </TableCell>
-                  <TableCell class="text-right text-sm">
+                  <TableCell align="end" size="sm">
                     {{ tallyText(job.counts) }}
                   </TableCell>
-                  <TableCell class="text-right font-mono text-sm">
+                  <TableCell align="end" mono size="sm">
                     {{ formatTokens(job.tokens) }}
                     <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
                   </TableCell>
-                  <TableCell class="text-sm text-muted-foreground">
+                  <TableCell size="sm" muted>
                     {{ formatDate(job.created) }}
                   </TableCell>
                   <TableCell class="w-12">
@@ -748,14 +747,14 @@ onBeforeUnmount(() => {
                   <td colspan="7" class="p-0! text-base whitespace-normal">
                     <!-- w-0 min-w-full: the detail spans the table without widening its columns. It grows
                          open from zero height in CSS alone (starting: is @starting-style), with no measuring. -->
-                    <div class="grid w-0 min-w-full grid-rows-[1fr] transition-[grid-template-rows] duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
+                    <div class="grid w-0 min-w-full grid-rows-[1fr] transition-all duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
                       <div class="min-h-0 overflow-hidden">
                         <div class="flex flex-col gap-2 px-3 py-2">
                           <div class="flex items-start gap-2">
                             <div class="min-w-0 flex-1">
                               <!-- Detail Error -->
                               <Alert v-if="detailError" variant="destructive">
-                                <AlertCircle class="h-4 w-4" />
+                                <AlertCircle class="size-4" />
                                 <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
                                 <AlertDescription>{{ detailError }}</AlertDescription>
                               </Alert>
@@ -767,7 +766,7 @@ onBeforeUnmount(() => {
                               <template v-else>
                                 <div class="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
                                   <span class="min-w-0 max-w-full truncate text-sm font-medium" :title="job.job_id">{{ summary.label || job.job_id }}</span>
-                                  <Badge :class="getStateColor(summary.state)">{{ summary.state || '–' }}</Badge>
+                                  <Badge :variant="stateVariant(summary.state)">{{ summary.state || '–' }}</Badge>
                                   <span
                                     class="inline-flex flex-wrap gap-x-2 tabular-nums"
                                     :title="summary.total != null ? t('hswarm.v.jobs.countsHint', { n: summary.total }) : undefined"
@@ -815,11 +814,11 @@ onBeforeUnmount(() => {
 
                           <!-- Task results: one line per task under a heading that folds them (folded past
                                FOLD_AT tasks), in a box that scrolls instead of growing the page -->
-                          <Collapsible
+                          <div
                             v-if="jobDetail?.results && !detailError && !isLoadingDetail"
-                            v-model:open="resultsOpen"
                             class="flex flex-col gap-1.5 border-t pt-2"
                           >
+                          <Collapsible v-model:open="resultsOpen">
                             <div class="flex min-w-0 items-center gap-1.5">
                               <CollapsibleTrigger as-child>
                                 <button
@@ -888,6 +887,7 @@ onBeforeUnmount(() => {
                               </template>
                             </CollapsibleContent>
                           </Collapsible>
+                          </div>
                         </div>
                       </div>
                     </div>

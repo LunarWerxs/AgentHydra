@@ -2,7 +2,7 @@
 // GET /api/kit/usage), a shared ref-counted poll, and the one token and USD formatter set.
 // docs/ANALYTICS-PLAN.md section 4.7 and piece 16.
 import { computed, getCurrentScope, onScopeDispose, shallowReactive } from 'vue'
-import { t } from '@/i18n'
+import { i18n, t } from '@/i18n'
 import { j } from '@/lib/api'
 import { sameData } from '@/lib/reconcile'
 import { visibleInterval } from '@/lib/visible-poll'
@@ -240,7 +240,7 @@ export function formatUsd(n: number | null | undefined, opts: UsdOptions = {}): 
   }
   if (style === 'whole') {
     const a = Math.abs(n)
-    const s = a >= 100 ? Math.round(a).toLocaleString('en-US') : a.toFixed(2)
+    const s = a >= 100 ? Math.round(a).toLocaleString(i18n.global.locale.value) : a.toFixed(2)
     return `${n < 0 ? '−' : ''}$${s}`
   }
   if (style === 'fine') {

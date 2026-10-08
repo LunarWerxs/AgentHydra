@@ -107,7 +107,9 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
             type="number"
             min="1"
             step="0.5"
-            class="h-7 w-20 text-xs tabular-nums"
+            variant="numeric"
+            text-size="xs"
+            class="h-7 w-20"
             :model-value="settings.closeRatio"
             @change="onRatio"
           />
@@ -128,7 +130,9 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
               min="0"
               max="100"
               step="1"
-              class="h-7 w-16 text-xs tabular-nums"
+              variant="numeric"
+              text-size="xs"
+              class="h-7 w-16"
               :model-value="settings.discounts[k]"
               @change="onDiscount(k, $event)"
             />
@@ -141,7 +145,7 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
     <div v-if="model" class="rounded-lg border bg-card px-3 py-1.5">
       <div class="mb-1 text-xs font-semibold">{{ $t('routingCost.plansTitle') }}</div>
       <table class="w-full text-xs tabular-nums">
-        <thead class="text-start text-[11px] text-muted-foreground">
+        <thead class="text-start text-2xs text-muted-foreground">
           <tr>
             <th class="py-0.5 text-start font-normal">{{ $t('routingCost.colPlan') }}</th>
             <th class="py-0.5 text-end font-normal">{{ $t('routingCost.colPrice') }}</th>
@@ -170,7 +174,7 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
     <div v-if="model" class="rounded-lg border bg-card px-3 py-1.5">
       <div class="mb-1 text-xs font-semibold">{{ $t('routingCost.modelsTitle') }}</div>
       <table class="w-full text-xs tabular-nums">
-        <thead class="text-start text-[11px] text-muted-foreground">
+        <thead class="text-start text-2xs text-muted-foreground">
           <tr>
             <th class="py-0.5 text-start font-normal">{{ $t('routingCost.colModel') }}</th>
             <th class="py-0.5 text-end font-normal">{{ $t('routingCost.colList') }}</th>
@@ -191,7 +195,7 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
           </tr>
         </tbody>
       </table>
-      <p v-if="model.pricesAsOf" class="mt-1 text-[11px] text-muted-foreground">
+      <p v-if="model.pricesAsOf" class="mt-1 text-2xs text-muted-foreground">
         {{ $t('routingCost.asOf', { date: model.pricesAsOf }) }}
       </p>
     </div>

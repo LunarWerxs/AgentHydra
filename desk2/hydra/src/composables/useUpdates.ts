@@ -19,6 +19,7 @@ import { computed, ref } from 'vue'
 import type { UpdateApplyResult, UpdateStatusWithDistribution } from '@/lib/api'
 import * as api from '@/lib/api'
 import { useSelfUpdate } from '@/lib/useSelfUpdate'
+import { visibleInterval } from '@/lib/visible-poll'
 
 const { updateStatus, updateChecking, updateApplying, checkForUpdate, applyUpdate } = useSelfUpdate<
   UpdateStatusWithDistribution,
@@ -88,17 +89,17 @@ async function refreshAvailability(): Promise<void> {
  * instead of waiting out a full interval.
  */
 const AVAILABILITY_POLL_MS = 60 * 60 * 1000
-let availabilityTimer: number | null = null
+let stopAvailability: (() => void) | null = null
 
 function startAvailabilityPolling(): void {
-  if (availabilityTimer !== null) return
+  if (stopAvailability !== null) return
   void refreshAvailability()
-  availabilityTimer = window.setInterval(() => void refreshAvailability(), AVAILABILITY_POLL_MS)
+  stopAvailability = visibleInterval(() => void refreshAvailability(), AVAILABILITY_POLL_MS)
 }
 
 function stopAvailabilityPolling(): void {
-  if (availabilityTimer !== null) window.clearInterval(availabilityTimer)
-  availabilityTimer = null
+  stopAvailability?.()
+  stopAvailability = null
 }
 
 // --- apply progress ------------------------------------------------------------------------------

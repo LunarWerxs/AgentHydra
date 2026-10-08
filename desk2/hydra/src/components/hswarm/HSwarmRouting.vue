@@ -150,9 +150,11 @@ async function handlePreview() {
     <!-- Spending Limit -->
     <Card size="sm">
       <CardHeader>
-        <CardTitle class="flex items-center gap-2">
-          <Route class="h-4 w-4" />
-          {{ t('hswarm.v.routing.spendingLimit') }}
+        <CardTitle>
+          <span class="flex items-center gap-2">
+            <Route class="size-4" />
+            {{ t('hswarm.v.routing.spendingLimit') }}
+          </span>
         </CardTitle>
         <CardDescription>
           {{ t('hswarm.v.routing.spendingLimitDesc') }}
@@ -207,7 +209,7 @@ async function handlePreview() {
           >
             <div class="flex items-center justify-between gap-2">
               <div class="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-3">
-                <Label :for="`role-${roleName}`" class="font-mono text-sm">
+                <Label :for="`role-${roleName}`" variant="mono">
                   {{ roleName }}
                 </Label>
                 <p v-if="ROLE_INFO[roleName]" class="truncate text-xs text-muted-foreground">
@@ -251,7 +253,7 @@ async function handlePreview() {
           {{ t('hswarm.v.routing.previewAutoDesc') }}
         </CardDescription>
       </CardHeader>
-      <CardContent class="space-y-2">
+      <CardContent stack="sm">
         <div class="grid grid-cols-2 gap-2 max-w-xl">
           <div class="space-y-2">
             <Label for="profile">{{ t('hswarm.v.routing.taskProfile') }}</Label>
@@ -295,7 +297,7 @@ async function handlePreview() {
         <!-- Preview Results -->
         <div v-if="previewError" class="mt-2">
           <Alert variant="destructive">
-            <AlertCircle class="h-4 w-4" />
+            <AlertCircle class="size-4" />
             <AlertTitle>{{ t('hswarm.v.routing.previewError') }}</AlertTitle>
             <AlertDescription>{{ previewError }}</AlertDescription>
           </Alert>
@@ -305,10 +307,10 @@ async function handlePreview() {
           <table class="w-full text-sm">
             <thead>
               <tr class="border-b">
-                <th class="text-right py-2 px-2">#</th>
-                <th class="text-left py-2 px-2">{{ t('hswarm.v.routing.model') }}</th>
-                <th class="text-left py-2 px-2">{{ t('hswarm.v.routing.provider') }}</th>
-                <th class="text-right py-2 px-2">
+                <th class="text-end p-2">#</th>
+                <th class="text-start p-2">{{ t('hswarm.v.routing.model') }}</th>
+                <th class="text-start p-2">{{ t('hswarm.v.routing.provider') }}</th>
+                <th class="text-end p-2">
                   {{ t('hswarm.v.routing.testCost') }}
                 </th>
               </tr>
@@ -319,18 +321,18 @@ async function handlePreview() {
                 :key="`${candidate.model}-${candidate.provider}`"
                 class="border-b hover:bg-muted/50"
               >
-                <td class="text-right py-2 px-2 font-mono text-xs">{{ idx + 1 }}</td>
-                <td class="text-left py-2 px-2">
+                <td class="text-end p-2 font-mono text-xs">{{ idx + 1 }}</td>
+                <td class="text-start p-2">
                   <span class="font-mono">{{ candidate.model }}</span>
                   <span
                     v-if="candidate.unevidenced"
-                    class="text-xs text-muted-foreground ml-2"
+                    class="text-xs text-muted-foreground ms-2"
                   >
                     {{ t('hswarm.v.routing.backupModel') }}
                   </span>
                 </td>
-                <td class="text-left py-2 px-2">{{ candidate.provider }}</td>
-                <td class="text-right py-2 px-2 font-mono text-xs">
+                <td class="text-start p-2">{{ candidate.provider }}</td>
+                <td class="text-end p-2 font-mono text-xs">
                   {{ formatUsd(candidate.benchmark_cost_usd, { style: 'fine' }) }}
                 </td>
               </tr>
@@ -345,18 +347,20 @@ async function handlePreview() {
       <Collapsible v-model:open="routingAdvancedOpen">
         <CardHeader>
           <CollapsibleTrigger as-child>
-            <button class="w-full text-left hover:bg-muted/50 rounded-lg p-2 -m-2">
-              <CardTitle class="flex items-center gap-2">
-                {{ t('hswarm.v.routing.advanced') }}
-                <span class="ml-auto text-muted-foreground text-sm">
-                  {{ routingAdvancedOpen ? t('hswarm.v.routing.collapse') : t('hswarm.v.routing.expand') }}
+            <button class="w-full text-start hover:bg-muted/50 rounded-lg p-2 -m-2">
+              <CardTitle>
+                <span class="flex items-center gap-2">
+                  {{ t('hswarm.v.routing.advanced') }}
+                  <span class="ms-auto text-muted-foreground text-sm">
+                    {{ routingAdvancedOpen ? t('hswarm.v.routing.collapse') : t('hswarm.v.routing.expand') }}
+                  </span>
                 </span>
               </CardTitle>
             </button>
           </CollapsibleTrigger>
         </CardHeader>
         <CollapsibleContent>
-          <CardContent class="space-y-2">
+          <CardContent stack="sm">
             <!-- Price Routing Toggle -->
             <div class="flex items-center justify-between gap-2">
               <div class="flex-1">

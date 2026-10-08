@@ -58,7 +58,7 @@ const colorFor = (key: string) => {
       <!-- 6px track, 4px rounded end anchored at the baseline: a thin mark, per the mark spec -->
       <div class="mt-0.5 h-1.5 w-full overflow-hidden rounded-full bg-muted">
         <div
-          class="h-full w-full origin-left scale-x-(--bar-w) rounded-full bg-(--bar-color) transition-transform duration-300"
+          class="size-full origin-left scale-x-(--bar-w) rounded-full bg-(--bar-color) transition-transform duration-300"
           :style="{ '--bar-w': Math.max(0.015, row.value / max), '--bar-color': colorFor(row.key) }"
         ></div>
       </div>

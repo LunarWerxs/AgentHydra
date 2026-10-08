@@ -21,6 +21,11 @@ export const badgeVariants = cva(
       size: {
         default: '',
         sm: 'px-1',
+        md: 'text-xs',
+      },
+      tabular: {
+        true: 'tabular-nums',
+        false: '',
       },
       dimmed: {
         true: 'opacity-60',
@@ -44,6 +49,7 @@ export const badgeVariants = cva(
     defaultVariants: {
       variant: "default",
       size: "default",
+      tabular: false,
       dimmed: false,
       interactive: false,
     },

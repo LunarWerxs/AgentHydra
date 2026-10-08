@@ -106,9 +106,9 @@ function getStatus(client: Client) {
 
 function getStatusClass(client: Client) {
   if (client.registered === null)
-    return 'bg-yellow-50 text-yellow-900 dark:bg-yellow-950 dark:text-yellow-200'
-  if (client.registered) return 'bg-green-50 text-green-900 dark:bg-green-950 dark:text-green-200'
-  return 'bg-gray-50 text-gray-900 dark:bg-gray-800 dark:text-gray-200'
+    return 'bg-warning/10 text-warning'
+  if (client.registered) return 'bg-success/10 text-success'
+  return 'bg-muted text-muted-foreground'
 }
 
 function confirmRemove(client: Client) {
@@ -131,7 +131,7 @@ onMounted(() => {
         <CardTitle>{{ t('hswarm.v.clients.title') }}</CardTitle>
         <CardDescription>{{ t('hswarm.v.clients.description') }}</CardDescription>
       </CardHeader>
-      <CardContent class="space-y-2">
+      <CardContent stack="sm">
         <!-- Instructions checkbox -->
         <label class="flex cursor-pointer items-center gap-2">
           <input v-model="includeInstructions" type="checkbox" class="size-4 accent-current" />
@@ -145,7 +145,7 @@ onMounted(() => {
 
     <!-- Error state -->
     <Alert v-if="error" variant="destructive">
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertTitle>{{ t('hswarm.v.clients.loadError') }}</AlertTitle>
       <AlertDescription>{{ error }}</AlertDescription>
       <Button
@@ -160,7 +160,7 @@ onMounted(() => {
 
     <!-- Clients table -->
     <Card size="sm" v-if="!error && (clients.length || !loading)">
-      <CardHeader class="flex flex-row items-center justify-between space-y-0 pb-2">
+      <CardHeader compact class="flex flex-row items-center justify-between">
         <div>
           <CardTitle>{{ t('hswarm.v.clients.agents') }}</CardTitle>
         </div>
@@ -176,13 +176,13 @@ onMounted(() => {
       </CardHeader>
       <CardContent>
         <div class="border rounded-lg overflow-hidden">
-          <Table class="[&_td]:py-1 [&_th]:h-8 [&_th]:py-0">
+          <Table rows="dense">
             <TableHeader>
               <TableRow>
                 <TableHead>{{ t('hswarm.v.clients.client') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.clients.status') }}</TableHead>
                 <TableHead>{{ t('hswarm.v.clients.configFile') }}</TableHead>
-                <TableHead class="text-right">{{ t('hswarm.v.clients.actions') }}</TableHead>
+                <TableHead class="text-end">{{ t('hswarm.v.clients.actions') }}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -206,24 +206,26 @@ onMounted(() => {
                     {{ client.exists ? t('hswarm.v.clients.exists') : t('hswarm.v.clients.notExists') }}
                   </div>
                 </TableCell>
-                <TableCell class="text-right space-x-2">
-                  <Button
-                    size="sm"
-                    :variant="client.registered ? 'outline' : 'default'"
-                    :disabled="installing.has(client.client)"
-                    @click="installClient(client.client)"
-                  >
-                    {{ client.registered ? t('hswarm.v.clients.reinstall') : t('hswarm.v.clients.install') }}
-                  </Button>
-                  <Button
-                    v-if="client.registered"
-                    size="sm"
-                    variant="destructive"
-                    :disabled="installing.has(client.client)"
-                    @click="confirmRemove(client)"
-                  >
-                    {{ t('hswarm.v.clients.remove') }}
-                  </Button>
+                <TableCell align="end">
+                  <div class="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      :variant="client.registered ? 'outline' : 'default'"
+                      :disabled="installing.has(client.client)"
+                      @click="installClient(client.client)"
+                    >
+                      {{ client.registered ? t('hswarm.v.clients.reinstall') : t('hswarm.v.clients.install') }}
+                    </Button>
+                    <Button
+                      v-if="client.registered"
+                      size="sm"
+                      variant="destructive"
+                      :disabled="installing.has(client.client)"
+                      @click="confirmRemove(client)"
+                    >
+                      {{ t('hswarm.v.clients.remove') }}
+                    </Button>
+                  </div>
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -240,7 +242,7 @@ onMounted(() => {
     <!-- Install log -->
     <Card size="sm" v-if="installLog">
       <CardHeader>
-        <CardTitle class="text-sm">{{ t('hswarm.v.clients.installLog') }}</CardTitle>
+        <CardTitle>{{ t('hswarm.v.clients.installLog') }}</CardTitle>
       </CardHeader>
       <CardContent>
         <pre class="bg-muted p-4 rounded-lg text-xs overflow-auto max-h-64">{{ installLog }}</pre>
@@ -250,7 +252,7 @@ onMounted(() => {
     <!-- API Documentation section -->
     <Card size="sm">
       <CardHeader>
-        <CardTitle class="text-sm">{{ t('hswarm.v.clients.apiTitle') }}</CardTitle>
+        <CardTitle>{{ t('hswarm.v.clients.apiTitle') }}</CardTitle>
         <CardDescription>{{ t('hswarm.v.clients.apiDescription') }}</CardDescription>
       </CardHeader>
       <CardContent>

@@ -354,13 +354,14 @@ onUnmounted(stopAvailabilityPolling)
       '--shell-max': fullWidth ? '100vw' : `${SHELL_BASE_MAX}px`,
       '--push-shift': `${shiftPx}px`,
       '--header-pe': `calc(${shiftPx}px + 1rem)`,
+      '--header-ps': 'max(1rem, var(--desk-pad-left, 0px))',
     }"
   >
     <!-- top bar (borderless: the content columns carry their own separators). Shares the
          push-panel padding shift with the main content, or an open drawer would cover the
          right-side buttons instead of nudging them over. -->
     <header
-      class="flex shrink-0 items-center gap-3 bg-sidebar ps-[max(1rem,var(--desk-pad-left,0px))] pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
+      class="flex shrink-0 items-center gap-3 bg-sidebar ps-(--header-ps) pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
     >
       <!-- view tabs (no logo or title: Desk's pane already says where you are, owner 2026-10-05) -->
       <nav class="flex items-start gap-1" :aria-label="$t('app.navLabel')">

@@ -318,7 +318,7 @@ onMounted(() => {
       v-if="readyProviders.size === 0"
       variant="destructive"
     >
-      <AlertCircle class="h-4 w-4" />
+      <AlertCircle class="size-4" />
       <AlertDescription>
         {{ t('hswarm.v.models.noKeyCallout') }}
       </AlertDescription>
@@ -379,18 +379,18 @@ onMounted(() => {
         size="sm"
         @click="addModel"
       >
-        <Plus class="mr-1 h-4 w-4" />
+        <Plus class="me-1 size-4" />
         {{ t('hswarm.addModel') }}
       </Button>
     </div>
 
     <!-- Add model form (the console's "Add model" page) -->
-    <Card size="sm" v-if="showAddModel" class="border-primary/50">
+    <Card size="sm" v-if="showAddModel" tone="primary">
       <CardHeader>
         <CardTitle>{{ t('hswarm.addModel') }}</CardTitle>
         <CardDescription>{{ t('hswarm.v.models.addModelDesc') }}</CardDescription>
       </CardHeader>
-      <CardContent class="space-y-2">
+      <CardContent stack="sm">
         <div class="grid gap-2 sm:grid-cols-3">
           <div class="space-y-2">
             <Label for="nm-name">{{ t('hswarm.v.models.newName') }}</Label>
@@ -408,35 +408,35 @@ onMounted(() => {
           </div>
           <div class="space-y-2">
             <Label for="nm-api">{{ t('hswarm.v.models.newApiId') }}</Label>
-            <Input id="nm-api" v-model="newModel.api_id" class="font-mono" :placeholder="t('hswarm.v.models.newApiIdPlaceholder')" />
+            <Input id="nm-api" v-model="newModel.api_id" variant="mono" :placeholder="t('hswarm.v.models.newApiIdPlaceholder')" />
           </div>
         </div>
         <div class="grid gap-2 sm:grid-cols-4">
           <div class="space-y-2">
             <Label for="nm-ctx">{{ t('hswarm.v.models.newCtx') }}</Label>
-            <Input id="nm-ctx" v-model="newModel.ctx" class="font-mono" inputmode="numeric" placeholder="131072" />
+            <Input id="nm-ctx" v-model="newModel.ctx" variant="mono" inputmode="numeric" placeholder="131072" />
           </div>
           <div class="space-y-2">
             <Label for="nm-hit">{{ t('hswarm.v.models.newPriceHit') }}</Label>
-            <Input id="nm-hit" v-model="newModel.hit" class="font-mono" inputmode="decimal" />
+            <Input id="nm-hit" v-model="newModel.hit" variant="mono" inputmode="decimal" />
           </div>
           <div class="space-y-2">
             <Label for="nm-miss">{{ t('hswarm.v.models.newPriceIn') }}</Label>
-            <Input id="nm-miss" v-model="newModel.miss" class="font-mono" inputmode="decimal" />
+            <Input id="nm-miss" v-model="newModel.miss" variant="mono" inputmode="decimal" />
           </div>
           <div class="space-y-2">
             <Label for="nm-out">{{ t('hswarm.v.models.newPriceOut') }}</Label>
-            <Input id="nm-out" v-model="newModel.out" class="font-mono" inputmode="decimal" />
+            <Input id="nm-out" v-model="newModel.out" variant="mono" inputmode="decimal" />
           </div>
         </div>
         <div class="flex flex-wrap items-center gap-2">
           <div class="flex items-center gap-2">
             <input id="nm-vis" v-model="newModel.vision" type="checkbox" class="size-4 accent-current" />
-            <Label for="nm-vis" class="cursor-pointer text-sm font-normal">{{ t('hswarm.v.models.badgeVision') }}</Label>
+            <Label for="nm-vis" variant="inline" clickable>{{ t('hswarm.v.models.badgeVision') }}</Label>
           </div>
           <div class="flex items-center gap-2">
             <input id="nm-tools" v-model="newModel.tools" type="checkbox" class="size-4 accent-current" />
-            <Label for="nm-tools" class="cursor-pointer text-sm font-normal">{{ t('hswarm.v.models.newTools') }}</Label>
+            <Label for="nm-tools" variant="inline" clickable>{{ t('hswarm.v.models.newTools') }}</Label>
           </div>
           <div class="ms-auto flex gap-2">
             <Button variant="outline" @click="showAddModel = false">{{ t('hswarm.cancel') }}</Button>
@@ -452,7 +452,7 @@ onMounted(() => {
         <div class="flex-1">
           <Label
             for="model-search"
-            class="text-sm"
+            variant="text"
           >
             {{ t('hswarm.v.models.filterLabel') }}
           </Label>
@@ -476,7 +476,8 @@ onMounted(() => {
           />
           <Label
             for="with-keys"
-            class="cursor-pointer text-sm font-normal"
+            variant="inline"
+            clickable
           >
             {{ t('hswarm.v.models.onlyWithKeys') }}
           </Label>
@@ -491,17 +492,18 @@ onMounted(() => {
           />
           <Label
             for="auto-ranked"
-            class="cursor-pointer text-sm font-normal"
+            variant="inline"
+            clickable
             :title="t('hswarm.v.models.autoRankedTitle')"
           >
             {{ t('hswarm.v.models.onlyAutoRanked') }}
           </Label>
         </div>
 
-        <div class="ml-auto flex items-center gap-3">
+        <div class="ms-auto flex items-center gap-3">
           <Label
             for="order-by"
-            class="text-sm font-normal"
+            variant="inline"
           >
             {{ t('hswarm.v.models.orderLabel') }}
           </Label>
@@ -514,7 +516,7 @@ onMounted(() => {
             <option value="name">{{ t('hswarm.v.models.orderName') }}</option>
           </select>
 
-          <div class="ml-auto text-sm text-muted-foreground">
+          <div class="ms-auto text-sm text-muted-foreground">
             {{ filteredModels.length }} {{ t('hswarm.v.models.of') }} {{ allModels.length }}
           </div>
         </div>
@@ -522,7 +524,7 @@ onMounted(() => {
     </div>
 
     <!-- Models table -->
-    <InstanceCard class="!m-0">
+    <InstanceCard class="m-0!">
       <InstanceTable
         :columns="hswarmModelColumns"
         :indicator-for="() => null"
@@ -557,7 +559,7 @@ onMounted(() => {
     </InstanceCard>
 
     <!-- Typed models section -->
-    <InstanceCard v-if="typedModels.length > 0" class="!m-0">
+    <InstanceCard v-if="typedModels.length > 0" class="m-0!">
       <div class="p-3 space-y-2">
         <h3 class="text-sm font-semibold">{{ t('hswarm.v.models.helpersTitle') }}</h3>
         <p class="text-sm text-muted-foreground">{{ t('hswarm.v.models.helpersDesc') }}</p>

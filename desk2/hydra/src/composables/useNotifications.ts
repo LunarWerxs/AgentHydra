@@ -111,6 +111,9 @@ function raiseSummary(batch: ResetEvent[], t: Translate): void {
  *  whole batch as toasted UP FRONT, so the 30s poll that lands mid-stagger can't re-raise a card
  *  this one has not got to yet. */
 async function raiseBatch(batch: ResetEvent[], t: Translate): Promise<void> {
+  // An id the daemon no longer lists cannot be re-listed, so forgetting it keeps the set to the open events.
+  const listed = new Set(batch.map((ev) => ev.id))
+  for (const id of toasted) if (!listed.has(id)) toasted.delete(id)
   const fresh = batch.filter((ev) => !ev.acknowledged && !toasted.has(ev.id))
   if (fresh.length === 0) return
   for (const ev of fresh) toasted.add(ev.id)

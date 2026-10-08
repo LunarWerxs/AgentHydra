@@ -143,15 +143,17 @@ onMounted(load)
 <template>
   <Card size="sm" class="shrink-0">
     <CardHeader>
-      <CardTitle class="flex items-center gap-2">
-        {{ t('hswarm.v.providers.storage.title') }}
-        <Badge v-if="status" :variant="inVault ? 'default' : 'secondary'" class="text-xs">
-          {{ inVault ? t('hswarm.v.providers.storage.modeVault') : t('hswarm.v.providers.storage.modeFolder') }}
-        </Badge>
+      <CardTitle>
+        <span class="flex items-center gap-2">
+          {{ t('hswarm.v.providers.storage.title') }}
+          <Badge v-if="status" :variant="inVault ? 'default' : 'secondary'" size="md">
+            {{ inVault ? t('hswarm.v.providers.storage.modeVault') : t('hswarm.v.providers.storage.modeFolder') }}
+          </Badge>
+        </span>
       </CardTitle>
       <CardDescription>{{ t('hswarm.v.providers.storage.desc') }}</CardDescription>
     </CardHeader>
-    <CardContent v-if="status" class="space-y-3 text-sm">
+    <CardContent v-if="status" stack="md" text="sm">
       <div class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         <span class="text-muted-foreground">{{ t('hswarm.v.providers.storage.folder') }}</span>
         <span class="font-mono break-all">
@@ -171,11 +173,11 @@ onMounted(load)
           <span>{{ status.pending_requests ?? 0 }}</span>
         </template>
       </div>
-      <p v-if="status.vault_error" class="text-destructive break-words">{{ status.vault_error }}</p>
+      <p v-if="status.vault_error" class="text-destructive wrap-break-word">{{ status.vault_error }}</p>
 
       <!-- This machine asked a vault for access and waits for the grant -->
       <div v-if="status.request && !inVault" class="rounded-md border border-border p-2 space-y-1">
-        <p v-if="status.request.error" class="text-destructive break-words">{{ status.request.error }}</p>
+        <p v-if="status.request.error" class="text-destructive wrap-break-word">{{ status.request.error }}</p>
         <template v-else>
           <p>{{ t('hswarm.v.providers.storage.requestWaiting') }}</p>
           <p>
@@ -194,12 +196,13 @@ onMounted(load)
             <span class="font-mono">{{ r.machine }}</span>
             <span class="text-muted-foreground"> · {{ r.at || '—' }} · </span>
             <span class="font-mono">{{ r.fingerprint || r.error }}</span>
-            <Badge v-if="r.granted" variant="secondary" class="ms-2 text-xs">{{ t('hswarm.v.providers.storage.granted') }}</Badge>
+            <Badge v-if="r.granted" variant="secondary" size="md" class="ms-2">{{ t('hswarm.v.providers.storage.granted') }}</Badge>
           </p>
           <div v-if="!r.error && !r.granted" class="flex items-center gap-2">
             <Input
               v-model="typedFingerprint[r.machine]"
-              class="font-mono max-w-64"
+              variant="mono"
+              class="max-w-64"
               autocomplete="off"
               :aria-label="t('hswarm.v.providers.storage.fullFingerprint')"
               :placeholder="t('hswarm.v.providers.storage.fullFingerprint')"
@@ -263,7 +266,7 @@ onMounted(load)
       <!-- Join with a pairing code: typed, sent to the local console, then dropped -->
       <form v-if="!inVault && panel === 'join'" class="space-y-2" autocomplete="off" @submit.prevent="join">
         <Label for="vs-code">{{ t('hswarm.v.providers.storage.pairingCode') }}</Label>
-        <Input id="vs-code" v-model="code" type="password" autocomplete="off" class="font-mono max-w-xl" :placeholder="t('hswarm.v.providers.storage.phCode')" />
+        <Input id="vs-code" v-model="code" type="password" autocomplete="off" variant="mono" class="max-w-xl" :placeholder="t('hswarm.v.providers.storage.phCode')" />
         <Button size="sm" type="submit" :disabled="busy || !code">{{ t('hswarm.v.providers.storage.joinVault') }}</Button>
       </form>
     </CardContent>

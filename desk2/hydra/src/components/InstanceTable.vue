@@ -49,15 +49,16 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
 
 <template>
   <!-- Rows about a third shorter (owner, 2026-10-06): 41px became ~27: py-px cells around the 24px
-       buttons, and a h-7 header. Set here, not in the shared table kit, so only these tables shrink. -->
-  <Table :density="density" class="[&_td]:py-px [&_th]:h-7">
+       buttons, and a h-7 header: the kit's tight rows, which only these tables ask for. -->
+  <Table :density="density" rows="tight">
     <TableHeader sticky>
       <TableRow>
         <TableHead
           v-for="col in columns"
           :key="col.key"
+          class="w-(--col-w)"
           :class="col.headClass"
-          :style="{ width: widths?.[col.key] }"
+          :style="{ '--col-w': widths?.[col.key] }"
           :title="col.title && tooltipsEnabled ? $t(col.title) : undefined"
         >
           <span v-if="!col.sortable" class="inline-flex items-center gap-0.5">{{ $t(col.label) }}</span>
@@ -80,8 +81,8 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
           <div
             v-if="widths?.[col.key]"
             aria-hidden="true"
-            class="h-0"
-            :style="{ width: `calc(${widths[col.key]} - ${density === 'compact' ? '0.75rem' : '1rem'})` }"
+            class="h-0 w-(--strut-w)"
+            :style="{ '--strut-w': `calc(${widths[col.key]} - ${density === 'compact' ? '0.75rem' : '1rem'})` }"
           />
         </TableHead>
       </TableRow>
