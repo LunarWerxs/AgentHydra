@@ -104,22 +104,39 @@ export function hswarmAccountMap(src: HSwarmAccountSources): Record<string, HSwa
   return out
 }
 
+/** How long one account map is reused. It names accounts for display, and they change only at a
+ *  login, while each read lists every instance and reads every login history (0.3 s, 2026-10-08,
+ *  and in the boot freeze's profile): the HSwarm view, Home and the MCP session tools all ask. */
+const ACCOUNT_MAP_FRESH_MS = 30_000
+let accountMap: { at: number; map: Promise<Record<string, HSwarmAccountRef>> } | null = null
+
+async function readAccountMap(): Promise<Record<string, HSwarmAccountRef>> {
+  const desktop = await fleetInstances()
+  return hswarmAccountMap({
+    desktop,
+    cli: listCliInstances(),
+    cliUuid: cliAccountUuid,
+    known: readKnownAccounts(),
+    pastLogins: (dir) =>
+      readLoginHistory(dir).entries.map((e) => ({
+        accountUuid: e.accountUuid,
+        lastSeenAt: e.lastSeenAt,
+      })),
+  })
+}
+
 app.get('/api/hswarm-accounts', async (c) => {
+  let entry = accountMap
+  if (!entry || Date.now() - entry.at >= ACCOUNT_MAP_FRESH_MS) {
+    const fresh = { at: Date.now(), map: readAccountMap() }
+    accountMap = entry = fresh
+    // A failed read is not kept: the next caller tries again.
+    fresh.map.catch(() => {
+      if (accountMap === fresh) accountMap = null
+    })
+  }
   try {
-    const desktop = await fleetInstances()
-    return c.json(
-      hswarmAccountMap({
-        desktop,
-        cli: listCliInstances(),
-        cliUuid: cliAccountUuid,
-        known: readKnownAccounts(),
-        pastLogins: (dir) =>
-          readLoginHistory(dir).entries.map((e) => ({
-            accountUuid: e.accountUuid,
-            lastSeenAt: e.lastSeenAt,
-          })),
-      }),
-    )
+    return c.json(await entry.map)
   } catch {
     return c.json({})
   }
