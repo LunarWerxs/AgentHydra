@@ -39,7 +39,7 @@ const wrote = (ago: number): TranscriptItem => ({ id: `u${ago}`, ts: NOW - ago, 
 
 const CHATS: [ChatSummary, TranscriptItem[]][] = [
   [chat('card', { status: 'needs_you', sessionId: 'sess-card' }), [{ id: 'q', ts: NOW - 3_600_000, kind: 'question', state: 'pending', questions: [{ question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'S3' }, { label: 'Disk' }] }] }]],
-  [chat('need'), [said('Done the rest.\n\n🔴 NEED: Ship the release now? A) Ship it ★ B) Wait a day')]],
+  [chat('need'), [said('Done the rest.\n\n🔴 NEED: Ship the release now? A) Wait a day ★ B) --force')]],
   [chat('asks'), [said('All green. Want me to deploy it to the box too?')]],
   [chat('person'), [said('🔴 NEED: Pick one? A) x B) y', 3_000_000), wrote(120_000)]],
   [chat('permission', { status: 'needs_you' }), [{ id: 'p', ts: NOW - 3_600_000, kind: 'permission', toolName: 'Bash', input: {}, canAlwaysAllow: false, state: 'pending' }]],
@@ -150,7 +150,7 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect([by.card.question, by.card.options]).toEqual(['Which store?', ['S3', 'Disk']])
   expect([by['o-ask'].question, by['o-ask'].options, by['o-ask'].account]).toEqual(['Which region?', ['East', 'West'], '#2'])
   expect([by['o-cut'].question, by['o-cut'].options]).toEqual(['Keep the "old" cache?', ['Keep', 'Drop']])
-  expect([by.need.question, by.need.options]).toEqual(['Ship the release now?', ['Ship it', 'Wait a day']])
+  expect([by.need.question, by.need.options]).toEqual(['Ship the release now?', ['Wait a day', '--force']])
   expect([by['o-need'].question, by['o-need'].options]).toEqual(['Merge it?', ['Merge', 'Hold']])
   expect(by.asks.question).toBe('Want me to deploy it to the box too?')
   expect(by.continued.reason).toBe('the orchestrator continued it 2 min ago')
@@ -208,8 +208,11 @@ test('?ask=1 hands each waiting question and its choices to the CreAitor and sho
   const dir = mkdtempSync(join(tmpdir(), 'desk-creaitor-'))
   temps.push(dir)
   const tool = join(dir, 'creaitor.js')
-  // Answers with the last --option it was given, so the row shows the choices arrived.
-  writeFileSync(tool, `const a = process.argv.slice(2); const o = a.filter((x, i) => a[i - 1] === '--option'); console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: a[1], confidence: 0.9, basis: ['--session', '--via'].filter((f) => a.includes(f)).map((f) => a[a.indexOf(f) + 1]), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
+  // Reads its command line as strictly as the CreAitor's argparse (a choice that starts with a dash and is not passed
+  // as --option=value is refused) and answers with the last choice, so the row shows the choices arrived intact.
+  const flags = { repo: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
+  const options = Object.fromEntries(Object.entries(flags).map(([k, t]) => [k, { type: t === 'b' ? 'boolean' : 'string', multiple: t === 'm' }]))
+  writeFileSync(tool, `const { values: v, positionals: p } = require('node:util').parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: ${JSON.stringify(options)} }); const o = v.option ?? []; console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: p[1], confidence: 0.9, basis: [v.session, v.via].filter(Boolean), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
   process.env.HYDRA_DESK_CREAITOR = tool
   process.env.HYDRA_DESK_PYTHON = process.execPath
   const { app, sent } = desk()
@@ -218,7 +221,7 @@ test('?ask=1 hands each waiting question and its choices to the CreAitor and sho
   // basis echoes --session and --via: an ask carries its chat's session, so the shadow log can be graded against
   // the owner's own reply there (claude-memory bench.py --shadow)
   expect(by.card).toMatchObject({ verdict: 'decide', option: 'Disk', answer: 'Which store?', basis: ['sess-card', 'orchestrator'] })
-  expect(by.need).toMatchObject({ verdict: 'decide', option: 'Wait a day' })
+  expect(by.need).toMatchObject({ verdict: 'decide', option: '--force' })
   expect(by.asks).toMatchObject({ verdict: 'escalate', needLine: '🔴 NEED: x' })
   expect(by['o-ask']).toMatchObject({ verdict: 'decide', option: 'West', answer: 'Which region?', basis: ['o-ask', 'orchestrator'] })
   expect(by['o-need']).toMatchObject({ verdict: 'decide', option: 'Hold' })
