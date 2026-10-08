@@ -3,15 +3,16 @@
 // headless Edge through CDP, and checks: a reply growing under someone reading higher up never moves them (touchpad-sized wheel
 // steps, a scrollbar drag, a keyboard Page Up, each WHILE it streams); the jump-to-bottom button shows in the bottom-right corner
 // once they are well up and takes them down; a send (the composer's chat-sent event) takes them down; at the bottom it follows.
-// Starts the web Vite dev server hidden on E2E_PORT (default 4817) and stops it afterwards. Prints PASS/FAIL per case; exits 1 on
+// Starts the web Vite dev server hidden on E2E_PORT (default a free port) and stops it afterwards. Prints PASS/FAIL per case; exits 1 on
 // any FAIL.
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { portFrom } from './lib/free-port'
 
 const DESK = resolve(import.meta.dir, '..')
-const PORT = Number(process.env.E2E_PORT) || 4817
-const CDP = Number(process.env.E2E_CDP_PORT) || 9447
+const PORT = portFrom(process.env.E2E_PORT)
+const CDP = portFrom(process.env.E2E_CDP_PORT)
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const BASE = `http://127.0.0.1:${PORT}`
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -24,12 +25,14 @@ const vite = Bun.spawn([process.execPath, 'node_modules/vite/bin/vite.js', '--po
 })
 let edge: ReturnType<typeof Bun.spawn> | null = null
 const lines: { ok: boolean; line: string }[] = []
+const profile = mkdtempSync(join(tmpdir(), 'desk2-scroll-edge-'))
+const sockets: WebSocket[] = []
 
 try {
   let up = false
   for (let t = 0; t < 120 && !up; t++) if (!(up = await answers(BASE))) await sleep(500)
   if (!up) throw new Error(`the Vite dev server did not answer on ${PORT}`)
-  edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${mkdtempSync(join(tmpdir(), 'desk2-scroll-edge-'))}`,
+  edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${CDP}`, `--user-data-dir=${profile}`,
     '--no-first-run', '--no-default-browser-check', '--window-size=1000,600', '--disable-features=CalculateNativeWinOcclusion',
     '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
   let list: { type: string; webSocketDebuggerUrl: string }[] = []
@@ -40,6 +43,7 @@ try {
   const page = list.find((t) => t.type === 'page')
   if (!page) throw new Error(`no Edge page on CDP port ${CDP}`)
   const ws = new WebSocket(page.webSocketDebuggerUrl)
+  sockets.push(ws)
   await new Promise((r) => (ws.onopen = r))
   let id = 0
   const pending = new Map<number, (v: any) => void>()
@@ -174,9 +178,12 @@ try {
     await new Promise((r) => (b.onopen = r))
     b.send(JSON.stringify({ id: 1, method: 'Browser.close' }))
     await sleep(300)
+    b.close()
   } catch {}
+  for (const s of sockets) s.close()
   edge?.kill()
   vite.kill()
+  try { rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
 }
 
 for (const l of lines) console.log(l.line)

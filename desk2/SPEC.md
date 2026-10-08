@@ -68,7 +68,7 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   - `settingSources: ['user', 'project', 'local']` so CLAUDE.md files, hooks and MCP servers load as in
     Claude Code.
   - `systemPrompt: { type: 'preset', preset: 'claude_code', append: DESK_APPEND }` (below).
-  - `mcpServers`: what plain `claude` gets in the chat's folder under Jacob's MAIN `~/.claude.json`, whatever
+  - `mcpServers`: what plain `claude` gets in the chat's folder under Jacob's MAIN `~/.claude.json` (never logged: CLAUDE.md), whatever
     account the chat runs on: its user-level `mcpServers` (agenthydra, connections, any other) plus the
     folder's local-scope servers (`projects[<folder>].mcpServers`; the folder matches case-insensitively and
     with / or \ , a parent folder's entry is not applied, as in Claude Code), passed VERBATIM (never log a

@@ -158,16 +158,28 @@ const timings: Record<string, number | null> = {}
 async function main(): Promise<void> {
   info(`temp folder ${root}`)
   await boot()
+  const acct = await pickAccount()
+  if (!acct) return
+  const { id, sessionId } = await firstTurn(acct)
+  await permissionTurn(id)
+  await interruptTurn(id)
+  const chat = await restartAndResume(id, sessionId)
+  await checkDelegation(chat)
+  timings.costUsd = chat.costUsd
+  info(`timings ${JSON.stringify(timings)}`)
+  await api('DELETE', `/api/chats/${id}`).catch(() => {})
+}
 
-  // Step 1: the account
+async function pickAccount(): Promise<AccountInfo | null> {
   const accounts = await api<AccountInfo[]>('GET', '/api/accounts')
   const pro = accounts.filter((a) => a.id !== 'default' && a.plan === 'Pro' && a.signedIn && !a.inUse && a.fiveHourPct !== null && a.weeklyPct !== null)
   pro.sort((a, b) => a.fiveHourPct! - b.fiveHourPct! || a.weeklyPct! - b.weeklyPct!)
   const acct = pro[0]
   check('1 account', !!acct, `a signed-in Pro account with no live sessions (${pro.length} of ${accounts.length} qualify)`, acct ? `#${acct.number} 5h ${acct.fiveHourPct}% week ${acct.weeklyPct}%` : 'none')
-  if (!acct) return
+  return acct ?? null
+}
 
-  // Step 2: create + first turn
+async function firstTurn(acct: AccountInfo): Promise<{ id: string; sessionId: string | null }> {
   let from = events.length
   let t0 = Date.now()
   const created = await api<ChatSummary>('POST', '/api/chats', {
@@ -193,12 +205,13 @@ async function main(): Promise<void> {
   chat = await waitFor(() => { const c = lastChat(id); return c && c.contextPct !== null && c.costUsd > 0 ? c : null }, 20_000, 'costUsd and contextPct').catch(() => lastChat(id)!)
   check('2 cost/context', chat.costUsd > 0 && chat.contextPct !== null, 'costUsd and contextPct set', { costUsd: chat.costUsd, contextPct: chat.contextPct })
   check('2 no tools', strays.length === 0 && !items.some((i) => i.kind === 'tool_use'), 'no tool was used', { strays, toolUses: items.filter((i) => i.kind === 'tool_use').map((i) => (i as { name: string }).name) })
-  const sessionId1 = chat.sessionId
   info(`first token ${timings.firstTokenMs1} ms, turn ${timings.turnMs1} ms (includes the CLI start)`)
+  return { id, sessionId: chat.sessionId }
+}
 
-  // Step 3: a permission round trip
-  from = events.length
-  t0 = Date.now()
+async function permissionTurn(id: string): Promise<void> {
+  let from = events.length
+  let t0 = Date.now()
   await api('POST', `/api/chats/${id}/messages`, { text: 'Create a file hello.txt in the current folder containing the word hi.' })
   const perm = await waitFor(
     () => itemsFrom(id, from).find((i): i is Extract<TranscriptItem, { kind: 'permission' }> => i.kind === 'permission' && i.state === 'pending' && /^(Write|Edit|Bash|PowerShell)$/.test(i.toolName)),
@@ -209,28 +222,30 @@ async function main(): Promise<void> {
   check('3 permission', perm.state === 'pending', 'a permission item, state pending', { toolName: perm.toolName, state: perm.state })
   check('3 needs_you', atPerm.status === 'needs_you' && atPerm.pendingCount === 1, 'chat status needs_you, pendingCount 1', { status: atPerm.status, pendingCount: atPerm.pendingCount })
   await api('POST', `/api/chats/${id}/permission/${perm.id}`, { decision: 'allow' })
-  chat = await settle(id, from, ['idle', 'error', 'limited', 'stopped'], TURN_MS, perm.id)
+  const chat = await settle(id, from, ['idle', 'error', 'limited', 'stopped'], TURN_MS, perm.id)
   timings.turnMs2 = Date.now() - t0
   const file = join(work, 'hello.txt')
   const content = existsSync(file) ? readFileSync(file, 'utf8') : null
   check('3 file', content !== null && /hi/i.test(content), 'hello.txt on disk containing hi', content === null ? 'missing' : content.trim())
   const permAfter = itemsFrom(id, from).find((i) => i.id === perm.id)
   check('3 idle', chat.status === 'idle' && chat.pendingCount === 0 && (permAfter as { state?: string })?.state === 'allowed', 'status back to idle, the request allowed', { status: chat.status, pendingCount: chat.pendingCount, state: (permAfter as { state?: string })?.state })
+}
 
-  // Step 4: interrupt a long turn
-  from = events.length
+async function interruptTurn(id: string): Promise<void> {
+  let from = events.length
   await api('POST', `/api/chats/${id}/messages`, { text: 'Run the shell command: sleep 60, then say done' })
   const tool = await waitFor(() => itemsFrom(id, from).find((i) => i.kind === 'tool_use'), TURN_MS, 'the first tool_use')
   const tInt = Date.now()
   await api('POST', `/api/chats/${id}/interrupt`)
-  chat = await waitFor(() => { const c = lastChat(id); return c && c.status === 'stopped' ? c : null }, 10_000, 'stopped').catch(() => lastChat(id)!)
+  let chat = await waitFor(() => { const c = lastChat(id); return c && c.status === 'stopped' ? c : null }, 10_000, 'stopped').catch(() => lastChat(id)!)
   timings.interruptMs = Date.now() - tInt
   await Bun.sleep(5000) // whatever the SDK sends after the interrupt must not turn it into an error
   chat = lastChat(id)!
   const errs = itemsFrom(id, from).filter((i) => i.kind === 'system' && i.level === 'error')
   check('4 interrupt', chat.status === 'stopped' && chat.lastError === null && errs.length === 0, 'status stopped, no error', { tool: (tool as { name: string }).name, status: chat.status, lastError: chat.lastError, errorItems: errs.length, ms: timings.interruptMs })
+}
 
-  // Step 5: restart and resume
+async function restartAndResume(id: string, sessionId1: string | null): Promise<ChatSummary> {
   const before = await api<TranscriptItem[]>('GET', `/api/chats/${id}/items`)
   await shutdown()
   const nQueries = queries.length
@@ -238,10 +253,10 @@ async function main(): Promise<void> {
   const back = await api<ChatSummary>('GET', `/api/chats/${id}`)
   const kept = await api<TranscriptItem[]>('GET', `/api/chats/${id}/items`)
   check('5 reload', back.status === 'closed' && kept.length === before.length && kept.length > 0, 'the chat comes back closed with its items', { status: back.status, items: kept.length, before: before.length })
-  from = events.length
-  t0 = Date.now()
+  let from = events.length
+  let t0 = Date.now()
   await api('POST', `/api/chats/${id}/messages`, { text: 'What single word did you reply with first?' })
-  chat = await settle(id, from, ['idle', 'error', 'limited', 'stopped'])
+  const chat = await settle(id, from, ['idle', 'error', 'limited', 'stopped'])
   timings.turnMs3 = Date.now() - t0
   const ft3 = firstTokenAt(id, from)
   timings.firstTokenMs3 = ft3 ? ft3 - t0 : null
@@ -249,8 +264,10 @@ async function main(): Promise<void> {
   check('5 resume', !!sessionId1 && resumed === sessionId1, 'the new runtime resumes the stored sessionId', { stored: sessionId1, resume: resumed ?? null })
   const reply3 = textOf(itemsFrom(id, from))
   check('5 answer', chat.status === 'idle' && /pong/i.test(reply3), 'the answer contains pong', { status: chat.status, reply: reply3.slice(0, 80) })
+  return chat
+}
 
-  // Step 6: CliMayte delegation options (no model turn)
+async function checkDelegation(chat: ChatSummary): Promise<void> {
   const settings = await api<{ delegateToCliMayte: boolean }>('GET', '/api/settings')
   const opts = queries[0]?.options
   const sp = opts?.systemPrompt
@@ -261,10 +278,6 @@ async function main(): Promise<void> {
     'delegateToCliMayte default on: Agent and Task disallowed, append names climayte_run',
     { setting: settings.delegateToCliMayte, chat: chat.delegateToCliMayte, disallowedTools: opts?.disallowedTools, appendMentionsClimayteRun: append.includes('climayte_run') },
   )
-
-  timings.costUsd = chat.costUsd
-  info(`timings ${JSON.stringify(timings)}`)
-  await api('DELETE', `/api/chats/${id}`).catch(() => {})
 }
 
 let crashed: unknown = null

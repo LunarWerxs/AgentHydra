@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "bun run check:i18n && vite build",
+    "build": "bun run check:i18n && bun ../scripts/build-dist.ts",
     "typecheck": "vue-tsc --noEmit",
     "check:i18n": "bun run scripts/check-i18n.ts"
   },

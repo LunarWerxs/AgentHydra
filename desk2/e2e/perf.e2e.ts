@@ -12,7 +12,7 @@
 //            nowindow: no page at all), over PERF_IDLE_S seconds: the page's requests, bytes and main-thread ms, and the
 //            server's CPU ms, processes started, outbound requests (counted by e2e/lib/perf-preload.ts) and memory
 //   localhost the /dw/localhost scan: ms and processes started per call
-// Prints the summary; PERF_ONLY=bundle,startup,page,idle,localhost picks phases.
+// Prints the summary; PERF_ONLY=bundle,startup,page,idle,localhost,service picks phases.
 
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -23,7 +23,7 @@ const DESK = resolve(process.env.PERF_DESK || resolve(import.meta.dir, '..'))
 const OUT = resolve(process.env.PERF_OUT || join(import.meta.dir, '..', 'tmp', 'perf.json'))
 const RUNS = Number(process.env.PERF_RUNS) || 5
 const IDLE_S = Number(process.env.PERF_IDLE_S) || 60
-const ONLY = new Set((process.env.PERF_ONLY || 'bundle,startup,page,idle,localhost').split(','))
+const ONLY = new Set((process.env.PERF_ONLY || 'bundle,startup,page,idle,localhost,service').split(','))
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const PRELOAD = join(import.meta.dir, 'lib', 'perf-preload.ts')
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -99,8 +99,9 @@ function killQuietly(pid: number) {
 }
 
 interface Desk { port: number; home: string; pid: number; counts: string; startedMs: number; proc: ReturnType<typeof Bun.spawn> }
-async function startDesk(tag: string): Promise<Desk> {
+async function startDesk(tag: string, seed?: (home: string) => void): Promise<Desk> {
   const home = mkdtempSync(join(tmpdir(), `desk2-perf-${tag}-`))
+  seed?.(home)
   const counts = join(home, 'perf-counts.jsonl')
   const port = freePort()
   const t0 = performance.now()
@@ -347,20 +348,87 @@ try {
     }
 
     if (ONLY.has('localhost')) {
-      const calls: { ms: number; spawns: number; status: number }[] = []
-      for (let i = 0; i < 3; i++) {
-        const since = Date.now()
+      // A first call, three at once (the Dev list and a pane asking together) after any cache has run out, then one more.
+      const call = async () => {
         const t = performance.now()
         const r = await fetch(`http://127.0.0.1:${d.port}/dw/localhost`)
         await r.arrayBuffer()
-        calls.push({ ms: Math.round(performance.now() - t), spawns: countsSince(d, since).spawns, status: r.status })
-        await sleep(1000)
+        return { ms: Math.round(performance.now() - t), status: r.status }
       }
-      result.localhost = calls
-      console.log('localhost', JSON.stringify(calls))
+      const timed = async (run: () => Promise<{ ms: number; status: number }[]>) => {
+        const since = Date.now()
+        const calls = await run()
+        return { ms: Math.max(...calls.map((c) => c.ms)), spawns: countsSince(d, since).spawns, status: calls.map((c) => c.status) }
+      }
+      const cold = await timed(async () => [await call()])
+      await sleep(11_000)
+      const together = await timed(() => Promise.all([call(), call(), call()]))
+      const again = await timed(async () => [await call()])
+      result.localhost = { cold, together, again }
+      console.log('localhost', JSON.stringify(result.localhost))
     }
     const mem1 = (await procStats([d.pid]))[d.pid]
     result.serverAtEnd = { workingSetMB: round((mem1?.workingSet ?? NaN) / 1048576), privateMB: round((mem1?.privateBytes ?? NaN) / 1048576) }
+  }
+
+  if (ONLY.has('service')) {
+    // The dev-servers service with a found list the size of a real one (440 folders, every one on disk), polled the way
+    // the open Dev servers list polls it (servers/store.ts: status, projects and found every 2 s), then left alone.
+    const FOUND = 440
+    const d = await startDesk('svc', (home) => {
+      const items = []
+      for (let i = 0; i < FOUND; i++) {
+        const dir = join(home, 'seed', `app-${i}`)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `app-${i}`, scripts: { dev: 'vite' } }))
+        items.push({ kind: 'detected', path: dir, name: `app-${i}`, processes: 0, framework: 'vite', foundAt: Date.now() })
+      }
+      mkdirSync(join(home, 'devservers'), { recursive: true })
+      writeFileSync(join(home, 'devservers', 'found.json'), JSON.stringify({ items, lastScan: null }))
+    })
+    cleanup.push(() => stopDesk(d))
+    const base = `http://127.0.0.1:${d.port}`
+    const t0 = performance.now()
+    await fetch(`${base}/dw/service`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'start' }) }).then((r) => r.arrayBuffer())
+    let ready = false
+    while (!ready && performance.now() - t0 < 60_000) {
+      ready = servicePid(d.home) > 0 && (await fetch(`${base}/dw/api/found`, { headers: { 'x-dw-no-start': '1' } }).then((r) => r.ok, () => false))
+      if (!ready) await sleep(250)
+    }
+    if (!ready) throw new Error('the dev-servers service did not answer within 60 s')
+    const svc = servicePid(d.home)
+    const startMs = Math.round(performance.now() - t0)
+    await sleep(5000)
+    const span = async (poll: boolean) => {
+      const before = await procStats([d.pid, svc])
+      const since = Date.now()
+      const ticks: number[] = []
+      const end = performance.now() + IDLE_S * 1000
+      while (performance.now() < end) {
+        if (poll) {
+          const t = performance.now()
+          await fetch(`${base}/dw/status`).then((r) => r.arrayBuffer())
+          await Promise.all(['projects', 'found'].map((route) => fetch(`${base}/dw/api/${route}`, { headers: { 'x-dw-no-start': '1' } }).then((r) => r.arrayBuffer())))
+          ticks.push(performance.now() - t)
+        }
+        await sleep(2000)
+      }
+      const after = await procStats([d.pid, svc])
+      const c = countsSince(d, since)
+      return {
+        serviceCpuMs: round((after[svc]?.cpuMs ?? NaN) - (before[svc]?.cpuMs ?? NaN)),
+        serverCpuMs: round((after[d.pid]?.cpuMs ?? NaN) - (before[d.pid]?.cpuMs ?? NaN)),
+        serviceWorkingSetMB: round((after[svc]?.workingSet ?? NaN) / 1048576),
+        servicePrivateMB: round((after[svc]?.privateBytes ?? NaN) / 1048576),
+        serverSpawns: c.spawns,
+        ...(poll ? { polls: ticks.length, pollMsMedian: round(median(ticks)) } : {}),
+      }
+    }
+    const polled = await span(true)
+    console.log('service polled', JSON.stringify(polled))
+    const quiet = await span(false)
+    console.log('service quiet', JSON.stringify(quiet))
+    result.service = { found: FOUND, startMs, polled, quiet }
   }
 } finally {
   for (const fn of cleanup) {
