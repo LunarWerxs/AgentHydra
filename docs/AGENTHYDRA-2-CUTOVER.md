@@ -38,8 +38,13 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   sign-in's return included, goes on to Desk 2 when it answers; when it does not, the daemon starts it and shows a
   "Starting AgentHydra" page that moves on by itself or names the log, never a dead port. A release exe's
   double-click and boot open Desk 2 (Windows: its `start.vbs`; elsewhere its server and the default browser), and
-  a checkout's self-update builds `desk2`. `/api` is untouched. Only an install with no `desk2/` still serves `web/`,
-  plus the quick-instances page (below).
+  a checkout's self-update builds `desk2`. `/api` is untouched. Only an install with no `desk2/` still serves `web/`.
+- **The quick-instances window is Desk 2's copy (2026-10-08).** The "AgentHydra Instances" shortcut still starts the
+  light daemon (`server/src/instance-mode.ts`), or opens `/instances` on a full daemon that is already up, and
+  both now serve `desk2/hydra`'s page from `desk2/hydra/dist` (`server/src/quick-instances-page.ts`: the page at
+  `/instances`, its files under `/ah/`, and its `/ah/api/*` answered by the daemon's own guarded `/api/*`). A
+  checkout's launcher (`misc/Instance-Launch.vbs`) builds Desk 2 when that build is missing, and Desk's Settings,
+  Instances, Desktop has the Add to Desktop button the old Settings had.
 - **The old window's table settings moved too.** Desk's Settings has an Instances section (CLI, Desktop, Free)
   holding what the tables' gears held; see `desk2/README.md`.
 - **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` was
@@ -52,10 +57,8 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
 | Where | What it does | At cutover |
 | --- | --- | --- |
 | `server/src/config.ts:354` `WEB_DIST_CANDIDATES` | where the built old window is | drop |
-| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the release bundle's embedded copy (`app/server.js`) or from `web/dist`, only where `desk2/` is missing, and the quick-instances page `/instances` | drop the static serving; `/api/*` stays |
+| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the release bundle's embedded copy (`app/server.js`) or from `web/dist`, only where `desk2/` is missing | drop the static serving; `/api/*` stays |
 | `server/src/index.ts:839` `/api/portable-window`, `:232-235` `portable_mode` | the chromeless "portable" window of the old UI | drop with the setting (Desk 2 left portable mode behind) |
-| `server/src/instance-mode-window.ts:7`, `server/src/instance-mode.ts:296` | the quick-instances window (`/instances`) and the light daemon that serves it | retarget to Desk 2's copy (`desk2/hydra/src/QuickInstancesApp.vue`) or retire. Desk 2's copy is built for base `/ah/` and picks the quick app only on the exact path `/instances`, which Desk 2 does not route yet |
-| `server/src/core/instance-mode-shortcut.ts:50`, `server/src/routes/instances.ts:173` | creates the quick-instances shortcut (`--instances`) | retire with the window, or retarget |
 
 ### Build, packaging and release
 
@@ -66,7 +69,7 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   install with no `desk2/`.
 - `.github/workflows/ci.yml:103` `check:i18n` on `web`, `:207` builds it.
 - The tray's first run builds `web\dist` (`misc/AgentHydra-Tray.json:44`; the legacy host
-  `misc/AgentHydra-Tray.ps1:73`), and `misc/Instance-Launch.vbs:27` checks for it.
+  `misc/AgentHydra-Tray.ps1:73`).
 - `scripts/live-checkout.ps1:253,259` rebuilds `web` for the live checkout.
 
 ### Scripts, checks and tests
@@ -89,8 +92,8 @@ and stay.
 
 ### What the old window has that Desk 2 left out on purpose
 
-Shut down (the daemon is Desk 2's engine), the theme picker (Desk has one theme), portable mode, and the
-quick-instances shortcut (`desk2/web/src/components/panes/agenthydra.ts:6-7`). Desk 2 has the rest:
+Shut down (the daemon is Desk 2's engine), the theme picker (Desk has one theme) and portable mode
+(`desk2/web/src/components/panes/agenthydra.ts:6-8`). Desk 2 has the rest:
 updates (`agenthydra.ts:214`), transcript export (`desk2/web/src/components/session-header/ah.ts:43`),
 the queue, Free instances, notifications and the shortcut sheet.
 
@@ -99,11 +102,12 @@ the queue, Free instances, notifications and the shortcut sheet.
 1. **Ship Desk 2 in the release.** Done 2026-10-06 (above): every bundle carries `desk2/` and runs it on the Bun the launcher downloads,
    the updater installs and repairs it, and a 2.0 tag does not publish without it.
 2. **Point the daemon's openers at Desk 2.** Done 2026-10-06 (above) for every page, the boot and double-click
-   openers and a checkout's self-update. Still open: the quick-instances window and its shortcut (table above).
+   openers and a checkout's self-update; the quick-instances window and its shortcut on 2026-10-08.
 3. **Rename Hydra Desk 2 to AgentHydra.** User-facing: done 2026-10-06 (above). Internal, each needing a
    migration if renamed: `HydraDesk2.exe`, the mutexes `Local\HydraDesk2Launcher` and `Local\HydraDesk2Host`,
    `~/.hydra-desk-2/`, `%LOCALAPPDATA%\HydraDesk2`, port 7798 and the `desk2/` folder.
 4. **Remove `web/`**: the static serving and embedding, the workspace and scripts, the CI steps, the checks
-   and tests above, the docs, then the folder. Not done 2026-10-07: `web/` still serves the quick-instances
-   page (`/instances`) and `orchestrator/web/` the remote gateway, so both stay until those move.
+   and tests above, the docs, then the folder. Nothing in 2.0 needs `web/` since 2026-10-08 (the quick-instances
+   window moved, above); it goes when 2.0.0 ships. `orchestrator/web/`, the remote gateway, is a separate
+   interface and stays.
 5. **`desk/`**: removed 2026-10-07 (the owner's call; history keeps it).

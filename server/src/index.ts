@@ -40,6 +40,7 @@ import {
   noAutoOpen,
   PORT,
   PORTABLE_WINDOW_SIZE,
+  QUICK_INSTANCES_DIST,
   SERVICE_NAME,
   VERSION,
   WEB_DIST_CANDIDATES,
@@ -141,6 +142,7 @@ import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
+import { serveQuickInstancesPage } from './quick-instances-page'
 import { relaunchWithHandoff, takeOverFromPredecessor, writeRelaunchAck } from './relaunch-handoff'
 import { planRelaunchSuccessor, relaunchRefusal } from './relaunch-identity'
 import {
@@ -974,18 +976,9 @@ app.get('/api/desk2/status', async (c) => c.json(await desk2.status()))
 // (tests, manual folder deletion, or a corrupt install directory).
 const desk2Wanted = desk2.present() || (IS_RELEASE && missingComponents(APP_ROOT).includes('desk2'))
 if (desk2Wanted) {
-  // The quick-instances window (/instances) is not Desk 2's yet (Desk 2's copy of it only answers under
-  // /ah/, where its entry reads the path as the full window), so where the old build is, the daemon still
-  // serves that one page and its assets. Every other page goes to Desk 2.
-  if (embeddedWeb) {
-    app.get('/instances', serveEmbeddedWeb)
-    app.get('/assets/*', serveEmbeddedWeb)
-  } else if (dist) {
-    const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
-    app.use('/assets/*', serveStatic({ root }))
-    app.get('/assets/*', (c) => c.text('not found', 404, { 'cache-control': 'no-store' }))
-    app.get('/instances', serveStatic({ path: `${root}/index.html` }))
-  }
+  // The quick-instances window (/instances) is AgentHydra 2.0's copy of it, which this daemon serves
+  // itself (quick-instances-page.ts). Every other page goes to Desk 2.
+  serveQuickInstancesPage(app, QUICK_INSTANCES_DIST)
   app.get('/*', async (c) => {
     const url = new URL(c.req.url)
     if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)

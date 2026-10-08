@@ -42,6 +42,7 @@ export type SettingsRowId =
   | 'ahInterval'
   | 'ahRepeats'
   | 'ahTest'
+  | 'ahQuickShortcut'
   | 'ahEmail'
   | 'ahEmailTo'
   | 'ahEmailFrom'
@@ -347,6 +348,13 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'CLI logins',
     label: 'Give each account a CLI login',
     description: 'On by default. Every Claude account signed in to Desktop on this PC gets a linked CLI login that signs in from Desktop. Delete one and it stays deleted.'
+  },
+  {
+    id: 'ahQuickShortcut',
+    section: 'desktop',
+    group: 'Quick Instances',
+    label: 'Quick Instances shortcut',
+    description: 'Adds a small launcher to your Desktop that opens only the account chooser. Windows only.'
   },
   {
     id: 'ahExtraUsage',

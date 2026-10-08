@@ -360,6 +360,10 @@ export const SERVICE_NAME = 'agenthydra'
  *  the release zip). Kept as a candidate list so a future layout can add entries, not re-plumb. */
 export const WEB_DIST_CANDIDATES = [join(APP_ROOT, 'web', 'dist')]
 
+/** The quick-instances window's build: AgentHydra 2.0's copy (desk2/hydra), under APP_ROOT in both modes;
+ *  a release ships it built (scripts/package-release.ts). Served by quick-instances-page.ts. */
+export const QUICK_INSTANCES_DIST = join(APP_ROOT, 'desk2', 'hydra', 'dist')
+
 /**
  * First-run outer size of the portable app window (what Chromium's `--window-size` takes).
  * Only applies to a window the dedicated profile has NEVER seen — the kit's

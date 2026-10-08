@@ -3,12 +3,9 @@
 // This entry intentionally does NOT import index.ts. That keeps sessions/transcripts, sqlite,
 // queue dispatch/recovery, scheduler, monitor, usage refresh, Connections, and auto-update out of
 // the process entirely. It serves only the small API needed to list/start/focus/stop managed
-// Claude/Codex instances plus the same built web assets at the dedicated `/instances` path.
-import { existsSync } from 'node:fs'
-import { relative } from 'node:path'
+// Claude/Codex instances plus AgentHydra 2.0's quick-instances page at `/instances`.
 import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
-import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { streamSSE } from 'hono/streaming'
 import { apiOriginAllowlist } from './api-origins'
@@ -18,8 +15,8 @@ import {
   INSTANCE_MODE_PORT,
   IS_RELEASE,
   noAutoOpen,
+  QUICK_INSTANCES_DIST,
   VERSION,
-  WEB_DIST_CANDIDATES,
 } from './config'
 import { launchCliInstance, listCliInstances } from './core/cli-instances'
 import {
@@ -45,6 +42,7 @@ import { instanceModeUrl, openInstanceModeWindow } from './instance-mode-window'
 import { initFileLogging } from './log-file.mjs'
 import { createLoopbackGuard } from './loopback-guard.mjs'
 import { openUi } from './open-ui'
+import { serveQuickInstancesPage } from './quick-instances-page'
 
 // Prefer an already-running full daemon: it exposes the same instance routes, so opening its
 // `/instances` surface is even cheaper than keeping a second (albeit tiny) server process.
@@ -287,48 +285,9 @@ app.post('/api/instance-mode/shutdown', (c) => {
   return c.json({ ok: true })
 })
 
-// Serve the same build, whose tiny entrypoint dynamically selects QuickInstancesApp for this path.
-const embeddedWeb = (
-  globalThis as {
-    __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
-  }
-).__AGENTHYDRA_EMBEDDED_WEB__
-const dist = WEB_DIST_CANDIDATES.find((path) => existsSync(path))
-if (embeddedWeb) {
-  app.get('/*', async (c) => {
-    let pathname = decodeURIComponent(new URL(c.req.url).pathname)
-    if (pathname === '/' || pathname === '') pathname = '/index.html'
-    const lastSegment = pathname.slice(pathname.lastIndexOf('/') + 1)
-    const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSegment)
-    const embeddedPath = embeddedWeb[pathname]
-    if (embeddedPath) {
-      return new Response(Bun.file(embeddedPath), {
-        headers: {
-          'cache-control': pathname.startsWith('/assets/')
-            ? 'public, max-age=31536000, immutable'
-            : 'no-cache',
-        },
-      })
-    }
-    if (isAsset) return c.text('not found', 404, { 'cache-control': 'no-store' })
-    return new Response(Bun.file(embeddedWeb['/index.html']!), {
-      headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
-    })
-  })
-} else if (dist) {
-  const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
-  app.use('/assets/*', serveStatic({ root }))
-  app.get('/assets/*', (c) => c.text('not found', 404, { 'cache-control': 'no-store' }))
-  app.use('/*', serveStatic({ root }))
-  app.get('/*', serveStatic({ path: `${root}/index.html` }))
-} else {
-  app.get('/*', (c) =>
-    c.html(
-      '<main style="font:16px system-ui;padding:2rem"><h1>Quick Instances is not built yet</h1><p>Run <code>bun run build</code>, then launch instance mode again.</p></main>',
-      503,
-    ),
-  )
-}
+// The window's page is AgentHydra 2.0's copy of it (quick-instances-page.ts).
+serveQuickInstancesPage(app, QUICK_INSTANCES_DIST)
+app.get('/', (c) => c.redirect('/instances'))
 
 // The port probe itself is a named failure mode this watchdog exists for (findFreePort retries up
 // to 50 loopback binds; a hung one would otherwise wedge here silently) - renew right before it,

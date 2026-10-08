@@ -218,6 +218,8 @@ function onVersion() {
 
   <button v-else-if="id === 'ahTest'" type="button" :class="BUTTON" @click="ah.sendTest()">Send</button>
 
+  <button v-else-if="id === 'ahQuickShortcut'" type="button" :class="BUTTON" @click="ah.createQuickShortcut()">Add to Desktop</button>
+
   <button v-else-if="id === 'ahRepair'" type="button" :class="BUTTON" :disabled="ah.applying.value" @click="ah.repair()">
     {{ ah.applying.value ? 'Repairing…' : 'Repair' }}
   </button>

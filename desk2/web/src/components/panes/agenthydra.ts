@@ -3,8 +3,9 @@
 // Desk's /ah/api proxy with the calls the pane made (the daemon's routes in server/src/index.ts). The
 // two pane-only preferences, tooltips and privacy mode, are the pane's own localStorage keys: this
 // window is the same origin, so the pane follows a change at once through the storage event.
-// Left behind with the retired AgentHydra window: portable mode, the quick-instances shortcut, the
-// theme picker (Desk has one theme) and Shut down (the daemon is Desk's engine).
+// Left behind with the retired AgentHydra window: portable mode, the theme picker (Desk has one theme)
+// and Shut down (the daemon is Desk's engine). The Quick Instances shortcut came along (2026-10-08): its
+// window is this copy's page, served by the daemon (server/src/quick-instances-page.ts).
 import { useStorage } from '@vueuse/core'
 import { computed, reactive, ref, watch } from 'vue'
 import { tellHydra } from '@/components/hydra/api'
@@ -111,7 +112,7 @@ export function useAgentHydraSettings(api: PaneApi) {
   const error = ref<string | null>(null)
   /** When a setting last saved, for the dialog's "Saved". */
   const savedAt = ref(0)
-  const notes = reactive<Partial<Record<'test' | 'repair' | 'sync', string>>>({})
+  const notes = reactive<Partial<Record<'test' | 'repair' | 'sync' | 'shortcut', string>>>({})
 
   const tooltips = useStorage(TOOLTIPS_KEY, true)
   const privacy = useStorage(PRIVACY_KEY, false)
@@ -156,6 +157,16 @@ export function useAgentHydraSettings(api: PaneApi) {
       notes.test = said.join(' ') || 'No delivery is on, so nothing was sent.'
     } catch (e) {
       notes.test = `Not sent: ${message(e)}`
+    }
+  }
+
+  async function createQuickShortcut() {
+    notes.shortcut = 'Adding…'
+    try {
+      const r = await api.agentHydra<{ ok: boolean; message?: string }>('/instance-mode/shortcut', { method: 'POST' })
+      notes.shortcut = r.ok ? 'Added to your Desktop.' : `Not added: ${r.message ?? 'no reason given'}`
+    } catch (e) {
+      notes.shortcut = `Not added: ${message(e)}`
     }
   }
 
@@ -414,6 +425,8 @@ export function useAgentHydraSettings(api: PaneApi) {
         return repairNotes()
       case 'ahTest':
         return notes.test ? [notes.test] : []
+      case 'ahQuickShortcut':
+        return notes.shortcut ? [notes.shortcut] : []
       case 'ahSmtpPass':
         return settings.value?.notifySmtpPassSet ? ['A password is stored.'] : []
       case 'ahSync':
@@ -435,6 +448,7 @@ export function useAgentHydraSettings(api: PaneApi) {
     load,
     save,
     sendTest,
+    createQuickShortcut,
     update,
     updateState,
     autoUpdate,
