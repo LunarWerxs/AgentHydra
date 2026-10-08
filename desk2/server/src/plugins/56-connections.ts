@@ -14,7 +14,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { Hono } from 'hono'
+import type { Context, Hono } from 'hono'
 import {
   CONNECTIONS_COMPANIES,
   CONNECTIONS_DEFAULT,
@@ -113,17 +113,26 @@ export class DefaultsStore {
   }
 }
 
-export default function plugin(app: Hono, ctx: ServerContext): void {
-  const client =
-    (ctx.deps.connections as ConnectionsClient | undefined) ??
-    new ConnectionsClient(mainConfigFile(ctx.deps.mainClaudeJson as string | null | undefined, ctx.deps.agentHydraMcp))
-  ctx.onStop(() => client.closeAll())
-  const defaults = new DefaultsStore(join(ctx.home, 'connections-defaults.json'))
-  const cache = new Map<string, { at: number; value: ConnectionsWorkspace }>()
+type Target = CallTarget & { createdAt: number | null }
+
+const companiesOf = (answer: string): ConnectionsCompany[] => {
+  const j = jsonAnswer(answer)
+  return (Array.isArray(j?.companies) ? j.companies : []).map(companyOf).filter((c): c is ConnectionsCompany => c !== null)
+}
+
+/** The chip's routes over one Connections client, Desk's folder defaults and a 30 s whoami cache per chat. */
+class ConnectionsChip {
+  private cache = new Map<string, { at: number; value: ConnectionsWorkspace }>()
+
+  constructor(
+    private app: Hono,
+    private client: ConnectionsClient,
+    private defaults: DefaultsStore
+  ) {}
 
   /** The chat's folder, Claude session id and creation time, asked of the engine's own route. */
-  async function target(chat: string): Promise<CallTarget & { createdAt: number | null }> {
-    const res = await app.request(`/api/chats/${encodeURIComponent(chat)}`)
+  async target(chat: string): Promise<Target> {
+    const res = await this.app.request(`/api/chats/${encodeURIComponent(chat)}`)
     if (!res.ok) throw new HttpError(404, 'no such chat')
     const c = (await res.json()) as { cwd?: unknown; sessionId?: unknown; createdAt?: unknown }
     const cwd = str(c.cwd)
@@ -131,41 +140,110 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return { cwd, sessionId: str(c.sessionId), createdAt: typeof c.createdAt === 'number' ? c.createdAt : null }
   }
 
+  /** The chat's own folder when the page names one; else any folder will do. */
+  private async anyTarget(chat: string | null | undefined): Promise<CallTarget> {
+    return chat ? this.target(chat) : { cwd: process.cwd(), sessionId: null }
+  }
+
   /**
    * The folder's default for new chats, applied once: a chat created after the default was set is pinned to it the first
    * time it is read with a session id, unless it already has a pin. Either way the session is recorded, so a later change
    * by hand (even clearing the pin) is never overridden, and chats older than the default are never touched.
    */
-  async function applyDefault(t: Awaited<ReturnType<typeof target>>, seen: ConnectionsWorkspace): Promise<ConnectionsWorkspace> {
-    const d = defaults.get(t.cwd)
+  private async applyDefault(t: Target, seen: ConnectionsWorkspace): Promise<ConnectionsWorkspace> {
+    const d = this.defaults.get(t.cwd)
     if (!d || !t.sessionId || !seen.signedIn || t.createdAt === null || t.createdAt <= d.setAt || d.applied.includes(t.sessionId)) return seen
-    defaults.markApplied(t.cwd, t.sessionId)
+    this.defaults.markApplied(t.cwd, t.sessionId)
     if (seen.scope === 'chat') return seen
     try {
-      await client.call(t, 'connections_use_workspace', { company: d.companyId })
+      await this.client.call(t, 'connections_use_workspace', { company: d.companyId })
     } catch {
       return seen
     }
-    return workspaceOf(await client.call(t, 'connections_whoami'))
+    return workspaceOf(await this.client.call(t, 'connections_whoami'))
   }
 
   /** What the page gets: the cached whoami reading with the folder's default laid over it (that changes without a re-read). */
-  const withDefault = (value: ConnectionsWorkspace, cwd: string): ConnectionsWorkspace => {
-    const d = defaults.get(cwd)
+  private withDefault(value: ConnectionsWorkspace, cwd: string): ConnectionsWorkspace {
+    const d = this.defaults.get(cwd)
     return d ? { ...value, defaultCompanyId: d.companyId } : value
   }
 
-  const workspace = async (chat: string, fresh = false): Promise<ConnectionsWorkspace> => {
-    const t = await target(chat)
-    const hit = cache.get(chat)
-    if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return withDefault(hit.value, t.cwd)
-    const value = await applyDefault(t, workspaceOf(await client.call(t, 'connections_whoami')))
-    cache.set(chat, { at: Date.now(), value })
-    return withDefault(value, t.cwd)
+  async workspace(chat: string, fresh = false): Promise<ConnectionsWorkspace> {
+    const t = await this.target(chat)
+    const hit = this.cache.get(chat)
+    if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return this.withDefault(hit.value, t.cwd)
+    const value = await this.applyDefault(t, workspaceOf(await this.client.call(t, 'connections_whoami')))
+    // Expired readings go as a new one lands, so chats that were read once and never again do not pile up.
+    for (const [k, v] of this.cache) if (Date.now() - v.at >= CACHE_MS) this.cache.delete(k)
+    this.cache.set(chat, { at: Date.now(), value })
+    return this.withDefault(value, t.cwd)
   }
 
-  /** Runs a route body: refuses another page, answers an HttpError as its status, a dead server as 503. */
-  const route = (run: (req: Request, query: (k: string) => string | undefined) => Promise<unknown>) => async (c: import('hono').Context) => {
+  async companies(chat: string | undefined): Promise<{ companies: ConnectionsCompany[] }> {
+    const t = await this.anyTarget(chat)
+    return { companies: companiesOf(await this.client.call(t, 'connections_list_companies')) }
+  }
+
+  async switchTo(req: Request): Promise<ConnectionsWorkspace> {
+    const b = (await req.json().catch(() => null)) as Partial<ConnectionsSwitch> | null
+    const chat = str(b?.chat)
+    if (!chat || (b?.scope !== 'chat' && b?.scope !== 'folder') || (b.company !== null && !str(b.company))) throw new HttpError(400, 'chat, company and scope required')
+    const t = await this.target(chat)
+    if (b.scope === 'chat') await this.pinChat(t, b.company)
+    else await this.switchFolder(t, b.company)
+    this.cache.delete(chat)
+    // Folder switches move every chat of the folder: their cached answers are as old as this one.
+    if (b.scope === 'folder') this.cache.clear()
+    const now = await this.workspace(chat, true)
+    // The tools answer a refusal in words, so what the chat acts as now is the proof the switch took.
+    const want = b.company
+    const took = want === null ? now.scope !== 'chat' : now.company !== null && [now.company.companyId, now.company.projectId, now.company.name].includes(want)
+    if (!took) throw new HttpError(502, 'Connections did not switch the workspace')
+    return now
+  }
+
+  private async pinChat(t: Target, company: string | null | undefined): Promise<void> {
+    if (!t.sessionId) throw new HttpError(409, "this chat has no Claude session yet: send a message first, or switch the whole folder's workspace instead")
+    await this.client.call(t, 'connections_use_workspace', company === null ? { clear: true } : { company })
+  }
+
+  private async switchFolder(t: Target, company: string | null | undefined): Promise<void> {
+    if (company === null) throw new HttpError(400, "a folder's workspace cannot be cleared here: pick one, or switch this chat alone")
+    await this.client.call(t, 'connections_switch_workspace', { company, remember: false })
+  }
+
+  async setDefault(req: Request): Promise<ConnectionsWorkspace> {
+    const b = (await req.json().catch(() => null)) as Partial<ConnectionsDefaultSet> | null
+    const chat = str(b?.chat)
+    if (!chat || (b?.company !== null && !str(b?.company))) throw new HttpError(400, 'chat and company required')
+    const t = await this.target(chat)
+    if (b?.company === null) this.defaults.clear(t.cwd)
+    else {
+      const all = companiesOf(await this.client.call(t, 'connections_list_companies'))
+      const want = b?.company as string
+      const found = all.find((c) => [c.companyId, c.projectId, c.name].includes(want))
+      if (!found) throw new HttpError(404, 'no such workspace')
+      this.defaults.set(t.cwd, found)
+    }
+    // Only the default changed: no chat's pin or folder binding was written.
+    return this.workspace(chat)
+  }
+
+  async signin(req: Request): Promise<ConnectionsSignin> {
+    const chat = str(((await req.json().catch(() => null)) as { chat?: unknown } | null)?.chat)
+    const t = await this.anyTarget(chat)
+    const text = await this.client.call(t, 'connections_signin')
+    this.cache.clear()
+    const url = text.match(/https?:\/\/[^\s)"'<>]+/)?.[0] ?? null
+    return { url, opened: url !== null && /also opened it|opened it for you/i.test(text), signedIn: url === null && /already signed in|signed in/i.test(text) }
+  }
+}
+
+/** Runs a route body: refuses another page, answers an HttpError as its status, a dead server as 503. */
+const route =
+  (client: ConnectionsClient, run: (req: Request, query: (k: string) => string | undefined) => Promise<unknown>) =>
+  async (c: Context): Promise<Response> => {
     const why = notOwnPage(c.req.raw.headers, "the Connections chip's API")
     if (why) return c.json({ error: why }, 403)
     if (!client.available()) return c.json({ error: 'Connections is not installed on this machine' }, 503)
@@ -178,84 +256,21 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     }
   }
 
-  app.get(
-    CONNECTIONS_WORKSPACE,
-    route(async (_req, q) => {
-      const chat = q('chat')
-      if (!chat) throw new HttpError(400, 'chat required')
-      return workspace(chat)
-    })
-  )
+async function readWorkspace(chip: ConnectionsChip, chat: string | undefined): Promise<ConnectionsWorkspace> {
+  if (!chat) throw new HttpError(400, 'chat required')
+  return chip.workspace(chat)
+}
 
-  app.get(
-    CONNECTIONS_COMPANIES,
-    route(async (_req, q) => {
-      const chat = q('chat')
-      // Any folder will do for the list; the chat's own is used when the page names it.
-      const t = chat ? await target(chat) : { cwd: process.cwd(), sessionId: null }
-      const j = jsonAnswer(await client.call(t, 'connections_list_companies'))
-      const list = Array.isArray(j?.companies) ? j.companies : []
-      return { companies: list.map(companyOf).filter((c): c is ConnectionsCompany => c !== null) }
-    })
-  )
+export default function plugin(app: Hono, ctx: ServerContext): void {
+  const client =
+    (ctx.deps.connections as ConnectionsClient | undefined) ??
+    new ConnectionsClient(mainConfigFile(ctx.deps.mainClaudeJson as string | null | undefined, ctx.deps.agentHydraMcp))
+  ctx.onStop(() => client.closeAll())
+  const chip = new ConnectionsChip(app, client, new DefaultsStore(join(ctx.home, 'connections-defaults.json')))
 
-  app.post(
-    CONNECTIONS_SWITCH,
-    route(async (req) => {
-      const b = (await req.json().catch(() => null)) as Partial<ConnectionsSwitch> | null
-      const chat = str(b?.chat)
-      if (!chat || (b?.scope !== 'chat' && b?.scope !== 'folder') || (b.company !== null && !str(b.company))) throw new HttpError(400, 'chat, company and scope required')
-      const t = await target(chat)
-      if (b.scope === 'chat') {
-        if (!t.sessionId) throw new HttpError(409, "this chat has no Claude session yet: send a message first, or switch the whole folder's workspace instead")
-        await client.call(t, 'connections_use_workspace', b.company === null ? { clear: true } : { company: b.company })
-      } else {
-        if (b.company === null) throw new HttpError(400, "a folder's workspace cannot be cleared here: pick one, or switch this chat alone")
-        await client.call(t, 'connections_switch_workspace', { company: b.company, remember: false })
-      }
-      cache.delete(chat)
-      // Folder switches move every chat of the folder: their cached answers are as old as this one.
-      if (b.scope === 'folder') for (const k of [...cache.keys()]) cache.delete(k)
-      const now = await workspace(chat, true)
-      // The tools answer a refusal in words, so what the chat acts as now is the proof the switch took.
-      const want = b.company
-      const took = want === null ? now.scope !== 'chat' : now.company !== null && [now.company.companyId, now.company.projectId, now.company.name].includes(want)
-      if (!took) throw new HttpError(502, 'Connections did not switch the workspace')
-      return now
-    })
-  )
-
-  app.post(
-    CONNECTIONS_DEFAULT,
-    route(async (req) => {
-      const b = (await req.json().catch(() => null)) as Partial<ConnectionsDefaultSet> | null
-      const chat = str(b?.chat)
-      if (!chat || (b?.company !== null && !str(b?.company))) throw new HttpError(400, 'chat and company required')
-      const t = await target(chat)
-      if (b?.company === null) defaults.clear(t.cwd)
-      else {
-        const list = jsonAnswer(await client.call(t, 'connections_list_companies'))
-        const all = (Array.isArray(list?.companies) ? list.companies : []).map(companyOf).filter((c): c is ConnectionsCompany => c !== null)
-        const want = b?.company as string
-        const found = all.find((c) => [c.companyId, c.projectId, c.name].includes(want))
-        if (!found) throw new HttpError(404, 'no such workspace')
-        defaults.set(t.cwd, found)
-      }
-      // Only the default changed: no chat's pin or folder binding was written.
-      return workspace(chat)
-    })
-  )
-
-  app.post(
-    CONNECTIONS_SIGNIN,
-    route(async (req) => {
-      const chat = str(((await req.json().catch(() => null)) as { chat?: unknown } | null)?.chat)
-      const t = chat ? await target(chat) : { cwd: process.cwd(), sessionId: null }
-      const text = await client.call(t, 'connections_signin')
-      cache.clear()
-      const url = text.match(/https?:\/\/[^\s)"'<>]+/)?.[0] ?? null
-      const out: ConnectionsSignin = { url, opened: url !== null && /also opened it|opened it for you/i.test(text), signedIn: url === null && /already signed in|signed in/i.test(text) }
-      return out
-    })
-  )
+  app.get(CONNECTIONS_WORKSPACE, route(client, (_req, q) => readWorkspace(chip, q('chat'))))
+  app.get(CONNECTIONS_COMPANIES, route(client, (_req, q) => chip.companies(q('chat'))))
+  app.post(CONNECTIONS_SWITCH, route(client, (req) => chip.switchTo(req)))
+  app.post(CONNECTIONS_DEFAULT, route(client, (req) => chip.setDefault(req)))
+  app.post(CONNECTIONS_SIGNIN, route(client, (req) => chip.signin(req)))
 }

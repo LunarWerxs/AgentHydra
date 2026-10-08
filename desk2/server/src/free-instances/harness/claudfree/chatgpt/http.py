@@ -23,6 +23,16 @@ UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include e
 
 def visible_messages(conversation):
     """Follow the selected branch and allow only visible user/assistant text."""
+    result = []
+    for message in reversed(_branch(conversation)):
+        if isinstance(message, dict):
+            visible = _visible_message(message)
+            if visible:
+                result.append(visible)
+    return result
+
+
+def _branch(conversation):
     mapping = conversation.get("mapping")
     current = conversation.get("current_node")
     if not isinstance(mapping, dict) or not isinstance(current, str):
@@ -35,72 +45,73 @@ def visible_messages(conversation):
         node = mapping[current]
         branch.append(node.get("message"))
         current = node.get("parent")
-    result = []
-    for message in reversed(branch):
-        if not isinstance(message, dict):
-            continue
-        author, content = message.get("author", {}), message.get("content", {})
-        metadata = message.get("metadata") or {}
-        if (
-            not isinstance(author, dict)
-            or not isinstance(content, dict)
-            or not isinstance(metadata, dict)
-        ):
-            raise ClaudeError("Invalid ChatGPT message format.", code="invalid_response")
-        role = author.get("role")
-        if (
-            role not in {"user", "assistant"}
-            or message.get("channel") not in {None, "final"}
-            or message.get("recipient") not in {None, "all"}
-            or metadata.get("is_visually_hidden_from_conversation")
-            or content.get("content_type") not in {"text", "multimodal_text"}
-        ):
-            continue
-        parts = content.get("parts", [])
-        if not isinstance(parts, list):
-            raise ClaudeError("Invalid ChatGPT text format.", code="invalid_response")
-        text = "".join(part for part in parts if isinstance(part, str))
-        if not text:
-            continue
-        # The web app's visible link token is rendered as an ordinary Markdown
-        # link. Its private-use delimiters must not become part of a source URL.
-        text = re.sub(
-            r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201",
-            r"[\1](\2)",
-            text,
-        )
-        citations, urls = [], set()
+    return branch
 
-        def add(url, title=None):
-            if isinstance(url, str) and url.startswith(("https://", "http://")) and url not in urls:
-                urls.add(url)
-                citations.append({"url": url, "title": title if isinstance(title, str) else url})
 
-        # Only expose documented-looking public link fields, never raw metadata/tokens.
-        for key in ("citations", "content_references"):
-            for reference in metadata.get(key, []) or []:
-                if isinstance(reference, dict):
-                    add(reference.get("url"), reference.get("title"))
-                    nested = reference.get("metadata")
-                    if isinstance(nested, dict):
-                        add(nested.get("url"), nested.get("title"))
-        for url in re.findall(r"https?://[^\s<>\]\)\"'\ue000-\uf8ff]+", text):
-            add(url.rstrip(".,;:!"))
-        result.append(
-            {
-                "id": message.get("id"),
-                "role": role,
-                "text": text,
-                "model": metadata.get("model_slug") or metadata.get("resolved_model_slug"),
-                "incomplete": message.get("status") != "finished_successfully",
-                "content": [{"type": "text", "text": text}],
-                "code_blocks": code_blocks(text),
-                "citations": citations,
-                "tool_calls": [],
-                "tool_results": [],
-            }
-        )
-    return result
+def _visible_message(message):
+    author, content = message.get("author", {}), message.get("content", {})
+    metadata = message.get("metadata") or {}
+    if (
+        not isinstance(author, dict)
+        or not isinstance(content, dict)
+        or not isinstance(metadata, dict)
+    ):
+        raise ClaudeError("Invalid ChatGPT message format.", code="invalid_response")
+    role = author.get("role")
+    if (
+        role not in {"user", "assistant"}
+        or message.get("channel") not in {None, "final"}
+        or message.get("recipient") not in {None, "all"}
+        or metadata.get("is_visually_hidden_from_conversation")
+        or content.get("content_type") not in {"text", "multimodal_text"}
+    ):
+        return None
+    parts = content.get("parts", [])
+    if not isinstance(parts, list):
+        raise ClaudeError("Invalid ChatGPT text format.", code="invalid_response")
+    text = "".join(part for part in parts if isinstance(part, str))
+    if not text:
+        return None
+    # The web app's visible link token is rendered as an ordinary Markdown
+    # link. Its private-use delimiters must not become part of a source URL.
+    text = re.sub(
+        r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201",
+        r"[\1](\2)",
+        text,
+    )
+    return {
+        "id": message.get("id"),
+        "role": role,
+        "text": text,
+        "model": metadata.get("model_slug") or metadata.get("resolved_model_slug"),
+        "incomplete": message.get("status") != "finished_successfully",
+        "content": [{"type": "text", "text": text}],
+        "code_blocks": code_blocks(text),
+        "citations": _citations(metadata, text),
+        "tool_calls": [],
+        "tool_results": [],
+    }
+
+
+def _citations(metadata, text):
+    citations, urls = [], set()
+    # Only expose documented-looking public link fields, never raw metadata/tokens.
+    for key in ("citations", "content_references"):
+        for reference in metadata.get(key, []) or []:
+            if isinstance(reference, dict):
+                _add_citation(citations, urls, reference.get("url"), reference.get("title"))
+                nested = reference.get("metadata")
+                if isinstance(nested, dict):
+                    _add_citation(citations, urls, nested.get("url"), nested.get("title"))
+    for url in re.findall(r"https?://[^\s<>\]\)\"'\ue000-\uf8ff]+", text):
+        _add_citation(citations, urls, url.rstrip(".,;:!"))
+    return citations
+
+
+def _add_citation(citations, urls, url, title=None):
+    if isinstance(url, str) and url.startswith(("https://", "http://")) and url not in urls:
+        urls.add(url)
+        citations.append({"url": url, "title": title if isinstance(title, str) else url})
 
 
 class ChatGPTHttp:
@@ -278,19 +289,8 @@ class ChatGPTHttp:
         """Verify Free access and report text policy, without sending a message."""
         accounts = self._json("GET", "/backend-api/accounts/check/v4-2023-04-27")
         models = self._json("GET", "/backend-api/models?history_and_training_disabled=true")
-        records = accounts.get("accounts", {})
-        records = list(records.values()) if isinstance(records, dict) else []
-        plans = []
-        for item in records:
-            if isinstance(item, dict) and item.get("can_access_with_session") is False:
-                continue
-            account = item.get("account") if isinstance(item, dict) else None
-            plans.append(account.get("plan_type") if isinstance(account, dict) else None)
-        advertised = models.get("models", [])
-        luna = any(isinstance(model, dict) and model.get("slug") == TEXT_MODEL
-                   and model.get("title") == TEXT_MODEL_NAME and model.get("reasoning_type") == "none"
-                   for model in advertised) if isinstance(advertised, list) else False
-        unlimited = bool(plans) and all(p in UNLIMITED_PLANS for p in plans) and luna
+        plans = _plans(accounts)
+        unlimited = bool(plans) and all(p in UNLIMITED_PLANS for p in plans) and _offers_luna(models)
         plan = plans[0] if plans and all(p == plans[0] for p in plans) else None
         return {
             "plan": plan,
@@ -307,15 +307,7 @@ class ChatGPTHttp:
             "is_snapshot": False,
             "windows": [],
             "exact_remaining_messages": None,
-            "note": (
-                "GPT-5.6 Luna: unlimited everyday text on the Free plan, subject to abuse safeguards. "
-                "Uploads, images, voice and other tools have separate limits. This is a verified plan policy, not a remaining-message counter."
-                if unlimited and plan == "free" else
-                f"GPT-5.6 Luna: unlimited everyday text on the {plan.capitalize() if plan else 'paid'} plan, which includes everything in Free, subject to abuse safeguards. "
-                "Uploads, images, voice and other tools have separate limits. This is a plan policy, not a remaining-message counter."
-                if unlimited else
-                "An unlimited Free text allowance could not be verified for this login. No remaining-message counter was returned."
-            ),
+            "note": _usage_note(unlimited, plan),
         }
 
     def send(self, prompt, *, existing=None, on_id=None):
@@ -325,25 +317,8 @@ class ChatGPTHttp:
         if existing is not None and existing.get("is_temporary_chat") is not True:
             raise ClaudeError("Temporary Chat is not verified.", code="privacy_not_verified")
         previous = {m["id"] for m in visible_messages(existing)} if existing else set()
-        payload = {
-            "action": "next",
-            "messages": [
-                {
-                    "id": str(uuid4()),
-                    "author": {"role": "user"},
-                    "content": {"content_type": "text", "parts": [prompt]},
-                }
-            ],
-            "parent_message_id": valid_uuid(existing["current_node"]) if existing else str(uuid4()),
-            "model": TEXT_MODEL,
-            "history_and_training_disabled": True,
-        }
-        server_id = valid_uuid(existing["conversation_id"]) if existing else None
-        if existing:
-            payload["conversation_id"] = server_id
-        else:
-            # The service rejects this field on continuations (HTTP 422).
-            payload["temporary_chat_requests_personalization"] = False
+        payload = _send_payload(prompt, existing)
+        server_id = payload.get("conversation_id")
         headers = {"Accept": "text/event-stream"}
         if self.preparations is not None:
             headers.update(self.preparations.take(self.account_key))
@@ -354,44 +329,7 @@ class ChatGPTHttp:
             stream=True,
             headers=headers,
         )
-        complete = False
-        try:
-            if "text/event-stream" not in response.headers.get("content-type", ""):
-                raise ClaudeError(
-                    "ChatGPT did not return a message stream.", code="invalid_response"
-                )
-            for event in events(response.iter_lines(chunk_size=1024)):
-                if event.get("type") == "error" or event.get("error"):
-                    raise ClaudeError(
-                        "ChatGPT generation failed; read the chat before sending again.",
-                        code="generation_error",
-                    )
-                candidate = event.get("conversation_id")
-                if candidate:
-                    candidate = valid_uuid(candidate)
-                    if server_id and candidate != server_id:
-                        raise ClaudeError(
-                            "The reply belongs to a different conversation.",
-                            code="invalid_response",
-                        )
-                    if not server_id:
-                        server_id = candidate
-                        if on_id:
-                            on_id(server_id)
-                if event.get("type") == "message_stream_complete":
-                    complete = True
-        except (requests.RequestException, UnicodeError):
-            raise ClaudeError(
-                "The reply stream was interrupted. Read the chat; do not resend automatically.",
-                code="stream_interrupted",
-            ) from None
-        finally:
-            response.close()
-        if not server_id:
-            raise ClaudeError(
-                "No server UUID was confirmed. Do not automatically resend.",
-                code="response_pending",
-            )
+        server_id, complete = _read_stream(response, server_id, on_id)
         body = self.read(server_id)
         messages = visible_messages(body)
         fresh = [m for m in messages if m["role"] == "assistant" and m["id"] not in previous]
@@ -401,6 +339,110 @@ class ChatGPTHttp:
                 code="response_pending",
             )
         return body, messages, fresh[-1], complete
+
+
+def _plans(accounts):
+    records = accounts.get("accounts", {})
+    records = list(records.values()) if isinstance(records, dict) else []
+    plans = []
+    for item in records:
+        if isinstance(item, dict) and item.get("can_access_with_session") is False:
+            continue
+        account = item.get("account") if isinstance(item, dict) else None
+        plans.append(account.get("plan_type") if isinstance(account, dict) else None)
+    return plans
+
+
+def _offers_luna(models):
+    advertised = models.get("models", [])
+    if not isinstance(advertised, list):
+        return False
+    return any(isinstance(model, dict) and model.get("slug") == TEXT_MODEL
+               and model.get("title") == TEXT_MODEL_NAME and model.get("reasoning_type") == "none"
+               for model in advertised)
+
+
+def _usage_note(unlimited, plan):
+    if unlimited and plan == "free":
+        return (
+            "GPT-5.6 Luna: unlimited everyday text on the Free plan, subject to abuse safeguards. "
+            "Uploads, images, voice and other tools have separate limits. This is a verified plan policy, not a remaining-message counter."
+        )
+    if unlimited:
+        return (
+            f"GPT-5.6 Luna: unlimited everyday text on the {plan.capitalize() if plan else 'paid'} plan, which includes everything in Free, subject to abuse safeguards. "
+            "Uploads, images, voice and other tools have separate limits. This is a plan policy, not a remaining-message counter."
+        )
+    return "An unlimited Free text allowance could not be verified for this login. No remaining-message counter was returned."
+
+
+def _send_payload(prompt, existing):
+    payload = {
+        "action": "next",
+        "messages": [
+            {
+                "id": str(uuid4()),
+                "author": {"role": "user"},
+                "content": {"content_type": "text", "parts": [prompt]},
+            }
+        ],
+        "parent_message_id": valid_uuid(existing["current_node"]) if existing else str(uuid4()),
+        "model": TEXT_MODEL,
+        "history_and_training_disabled": True,
+    }
+    if existing:
+        payload["conversation_id"] = valid_uuid(existing["conversation_id"])
+    else:
+        # The service rejects this field on continuations (HTTP 422).
+        payload["temporary_chat_requests_personalization"] = False
+    return payload
+
+
+def _read_stream(response, server_id, on_id):
+    """Return the confirmed server UUID and whether the stream completed."""
+    complete = False
+    try:
+        if "text/event-stream" not in response.headers.get("content-type", ""):
+            raise ClaudeError(
+                "ChatGPT did not return a message stream.", code="invalid_response"
+            )
+        for event in events(response.iter_lines(chunk_size=1024)):
+            server_id = _stream_event(event, server_id, on_id)
+            if event.get("type") == "message_stream_complete":
+                complete = True
+    except (requests.RequestException, UnicodeError):
+        raise ClaudeError(
+            "The reply stream was interrupted. Read the chat; do not resend automatically.",
+            code="stream_interrupted",
+        ) from None
+    finally:
+        response.close()
+    if not server_id:
+        raise ClaudeError(
+            "No server UUID was confirmed. Do not automatically resend.",
+            code="response_pending",
+        )
+    return server_id, complete
+
+
+def _stream_event(event, server_id, on_id):
+    if event.get("type") == "error" or event.get("error"):
+        raise ClaudeError(
+            "ChatGPT generation failed; read the chat before sending again.",
+            code="generation_error",
+        )
+    candidate = event.get("conversation_id")
+    if not candidate:
+        return server_id
+    candidate = valid_uuid(candidate)
+    if server_id and candidate != server_id:
+        raise ClaudeError(
+            "The reply belongs to a different conversation.",
+            code="invalid_response",
+        )
+    if not server_id and on_id:
+        on_id(candidate)
+    return candidate
 
 
 @contextmanager

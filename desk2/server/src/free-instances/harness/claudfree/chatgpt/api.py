@@ -1,5 +1,6 @@
 """ChatGPT Temporary Chats over HTTP; only manual login opens a browser."""
 
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +11,22 @@ from ..results import brief_result, export_results
 from .http import connection, visible_messages
 from .registry import ChatGPTRegistry
 from .state import ChatGPTState
+
+
+def _check_chat(http, registry, entry):
+    if not entry["server_conversation_id"]:
+        entry.update(checked=True, readable=False, status="server_id_unknown")
+        return
+    try:
+        http.read(entry["server_conversation_id"])
+        entry.update(checked=True, readable=True, status="available")
+    except ClaudeError as error:
+        entry.update(
+            checked=True,
+            readable=False if error.code == "not_found" else None,
+            status=error.code,
+        )
+    registry.status(entry["chat_id"], entry["status"])
 
 
 class ChatGPTClient(Client):
@@ -138,43 +155,9 @@ class ChatGPTClient(Client):
         command = args.command
         try:
             if command == "chats":
-                entries = [registry.metadata(entry) for entry in registry.list()]
-                if args.check_chats and entries:
-                    with connection(self._state, args.request_timeout) as http:
-                        for entry in entries:
-                            if not entry["server_conversation_id"]:
-                                entry.update(
-                                    checked=True, readable=False, status="server_id_unknown"
-                                )
-                                continue
-                            try:
-                                http.read(entry["server_conversation_id"])
-                                entry.update(checked=True, readable=True, status="available")
-                            except ClaudeError as error:
-                                entry.update(
-                                    checked=True,
-                                    readable=False if error.code == "not_found" else None,
-                                    status=error.code,
-                                )
-                            registry.status(entry["chat_id"], entry["status"])
-                return {"chats": entries}
-            if args.name:
-                valid_name(args.name)
-            new = command == "chat" and not (args.identifier or args.chat_id)
-            if new:
-                if args.name and registry.by_name(args.name):
-                    raise ClaudeError("That name already identifies a chat.", code="name_conflict")
-                entry, server_id = {"chat_id": str(uuid4()), "name": args.name}, None
-            else:
-                entry, server_id = registry.resolve(
-                    args.identifier or args.chat_id or "last", allow_unknown=True
-                )
-                if not server_id:
-                    raise ClaudeError(
-                        "No server UUID was confirmed for this handle. Do not automatically resend.",
-                        code="server_id_unknown",
-                        chat_id=entry["chat_id"],
-                    )
+                return {"chats": self._list_chats(registry, args)}
+            entry, server_id = self._resolve(registry, args)
+            pool = None
             if command in {"chat", "resume"}:
                 from .preparation import Preparations
 
@@ -185,70 +168,103 @@ class ChatGPTClient(Client):
             with connection(self._state, args.request_timeout) as http:
                 body = http.read(server_id) if server_id else None
                 if command in {"read", "track"}:
-                    messages = visible_messages(body)
-                    entry = registry.record(
-                        entry["chat_id"], "chatgpt", name=args.name or entry["name"], temporary=True
-                    )
-                    registry.link(entry["chat_id"], server_id)
-                    if command == "track":
-                        return {
-                            **registry.metadata(entry),
-                            "chat_name": entry["name"],
-                            "checked": True,
-                            "readable": True,
-                        }
-                    return self._read_result(entry, server_id, messages)
-                # Verify the reference and privacy before preparing. Reuse this
-                # authenticated connection for preparation, POST and readback.
-                measurements = []
-                if self.auto_prepare and not pool.status()["ready_messages"]:
-                    from .runtime import collect
-
-                    entries, measurements = collect(http, 1)
-                    pool.replace(http.account_key, entries)
-                entry = registry.record(
-                    entry["chat_id"],
-                    "chatgpt",
-                    name=entry["name"],
-                    temporary=True,
-                    status="pending",
-                )
-                if server_id:
-                    registry.link(entry["chat_id"], server_id)
-                try:
-                    body, messages, reply, complete = http.send(
-                        args.prompt,
-                        existing=body,
-                        on_id=lambda identifier: registry.link(entry["chat_id"], identifier),
-                    )
-                except ClaudeError as error:
-                    registry.status(entry["chat_id"], error.code)
-                    raise ClaudeError(
-                        str(error),
-                        code=error.code,
-                        status=error.status,
-                        retryable=error.retryable,
-                        chat_id=entry["chat_id"],
-                    ) from None
-                registry.status(entry["chat_id"], "available")
-                return {
-                    **self._read_result(entry, body["conversation_id"], messages),
-                    "response": reply["text"],
-                    "model": reply["model"],
-                    "message_id": reply["id"],
-                    "citations": reply["citations"],
-                    "code_blocks": reply["code_blocks"],
-                    "incomplete": not complete or reply["incomplete"],
-                    "tools_used": [],
-                    "warnings": [],
-                    "preparation": {
-                        "automatic": bool(measurements),
-                        "runtime_closed": True,
-                        "runtime_measurements": measurements,
-                    },
-                }
+                    return self._read_or_track(registry, args, entry, server_id, body)
+                return self._send(http, registry, pool, args.prompt, entry, server_id, body)
         finally:
             registry.close()
+
+    def _list_chats(self, registry, args):
+        entries = [registry.metadata(entry) for entry in registry.list()]
+        if args.check_chats and entries:
+            with connection(self._state, args.request_timeout) as http:
+                for entry in entries:
+                    _check_chat(http, registry, entry)
+        return entries
+
+    @staticmethod
+    def _resolve(registry, args):
+        if args.name:
+            valid_name(args.name)
+        if args.command == "chat" and not (args.identifier or args.chat_id):
+            if args.name and registry.by_name(args.name):
+                raise ClaudeError("That name already identifies a chat.", code="name_conflict")
+            return {"chat_id": str(uuid4()), "name": args.name}, None
+        entry, server_id = registry.resolve(
+            args.identifier or args.chat_id or "last", allow_unknown=True
+        )
+        if not server_id:
+            raise ClaudeError(
+                "No server UUID was confirmed for this handle. Do not automatically resend.",
+                code="server_id_unknown",
+                chat_id=entry["chat_id"],
+            )
+        return entry, server_id
+
+    def _read_or_track(self, registry, args, entry, server_id, body):
+        messages = visible_messages(body)
+        entry = registry.record(
+            entry["chat_id"], "chatgpt", name=args.name or entry["name"], temporary=True
+        )
+        registry.link(entry["chat_id"], server_id)
+        if args.command == "track":
+            return {
+                **registry.metadata(entry),
+                "chat_name": entry["name"],
+                "checked": True,
+                "readable": True,
+            }
+        return self._read_result(entry, server_id, messages)
+
+    def _send(self, http, registry, pool, prompt, entry, server_id, body):
+        # Verify the reference and privacy before preparing. Reuse this
+        # authenticated connection for preparation, POST and readback.
+        measurements = []
+        if self.auto_prepare and not pool.status()["ready_messages"]:
+            from .runtime import collect
+
+            entries, measurements = collect(http, 1)
+            pool.replace(http.account_key, entries)
+        entry = registry.record(
+            entry["chat_id"],
+            "chatgpt",
+            name=entry["name"],
+            temporary=True,
+            status="pending",
+        )
+        if server_id:
+            registry.link(entry["chat_id"], server_id)
+        try:
+            body, messages, reply, complete = http.send(
+                prompt,
+                existing=body,
+                on_id=partial(registry.link, entry["chat_id"]),
+            )
+        except ClaudeError as error:
+            registry.status(entry["chat_id"], error.code)
+            raise ClaudeError(
+                str(error),
+                code=error.code,
+                status=error.status,
+                retryable=error.retryable,
+                chat_id=entry["chat_id"],
+            ) from None
+        registry.status(entry["chat_id"], "available")
+        return {
+            **self._read_result(entry, body["conversation_id"], messages),
+            "response": reply["text"],
+            "model": reply["model"],
+            "message_id": reply["id"],
+            "citations": reply["citations"],
+            "code_blocks": reply["code_blocks"],
+            "incomplete": not complete or reply["incomplete"],
+            "tools_used": [],
+            "warnings": [],
+            "preparation": {
+                "automatic": bool(measurements),
+                "runtime_closed": True,
+                "runtime_measurements": measurements,
+            },
+        }
 
     @staticmethod
     def _read_result(entry, server_id, messages):

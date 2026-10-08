@@ -10,7 +10,7 @@
 
 import { type ChildProcessByStdio, spawn } from 'node:child_process'
 import type { Readable, Writable } from 'node:stream'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type HttpServerConfig, HttpMcpError, HttpSession, HTTP_IDLE_MS, httpConfig } from './connections-http'
@@ -32,11 +32,23 @@ export class ConnectionsError extends Error {}
 /** The main Claude config to read: HYDRA_DESK_MAIN_CLAUDE_JSON (tests), else ~/.claude.json. */
 export const defaultConfigFile = (): string => process.env.HYDRA_DESK_MAIN_CLAUDE_JSON || join(homedir(), '.claude.json')
 
+const parsed = new Map<string, { mtimeMs: number; size: number; json: unknown }>()
+
+/** The parsed config, read again only when its mtime or size changed; throws when it is missing or not JSON. */
+function readConfig(file: string): unknown {
+  const st = statSync(file)
+  const hit = parsed.get(file)
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.json
+  const json: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  parsed.set(file, { mtimeMs: st.mtimeMs, size: st.size, json })
+  return json
+}
+
 /** The `connections` stdio server of a main Claude config, or null when it has none (or the file is unreadable). */
 export function connectionsServer(file: string = defaultConfigFile()): ConnectionsServer | null {
   let json: unknown
   try {
-    json = JSON.parse(readFileSync(file, 'utf8'))
+    json = readConfig(file)
   } catch {
     return null
   }
@@ -62,7 +74,7 @@ export function connectionsEntry(file: string = defaultConfigFile()): Connection
 
 function rawEntry(file: string): Record<string, unknown> | null {
   try {
-    const servers = (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: Record<string, unknown> } | null)?.mcpServers
+    const servers = (readConfig(file) as { mcpServers?: Record<string, unknown> } | null)?.mcpServers
     const s = servers && typeof servers === 'object' ? servers.connections : undefined
     return s && typeof s === 'object' ? (s as Record<string, unknown>) : null
   } catch {

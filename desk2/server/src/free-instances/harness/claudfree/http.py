@@ -382,162 +382,28 @@ class ClaudeHttp:
         """
         org = valid_uuid(organization_id)
         self.last_usage = None
-        if not re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model):
-            raise HttpError("Specify a Claude model identifier with --model.")
-        if not prompt.strip():
-            raise HttpError("The message is empty.")
-        if chat_id and new_chat_id:
-            raise HttpError("Choose an existing chat or a new chat ID.", code="invalid_arguments")
-        if existing is not None and (not chat_id or existing.get("uuid", chat_id) != chat_id):
-            raise HttpError(
-                "The provided conversation does not match this chat.", code="invalid_chat_id"
-            )
+        _check_send_arguments(model, prompt, chat_id, new_chat_id, existing)
         existing = (
             existing if existing is not None else self.read(org, chat_id) if chat_id else None
         )
         # The prior IDs distinguish this turn from a previously identical answer.
-        previous_ids = (
-            {
-                str(m.get("uuid", m.get("id", "")))
-                for m in existing.get("chat_messages", existing.get("messages", []))
-                if isinstance(m, dict)
-            }
-            if existing is not None
-            else set()
-        )
+        previous_ids = _message_ids(existing) if existing is not None else set()
         if existing is not None and temporary and existing.get("is_temporary") is not True:
             raise HttpError("This is a regular chat. Pass --regular explicitly to continue it.")
         chat = valid_uuid(chat_id or new_chat_id) if chat_id or new_chat_id else str(uuid4())
-        assistant_id = str(uuid4())
-        payload = {
-            "prompt": prompt,
-            "model": model,
-            "timezone": timezone,
-            "locale": locale,
-            "attachments": [],
-            "files": [],
-            "sync_sources": [],
-            "tools": [{"type": "web_search_v0", "name": "web_search"}] if web_search else [],
-            "rendering_mode": "messages",
-            "turn_message_uuids": {
-                "human_message_uuid": str(uuid4()),
-                "assistant_message_uuid": assistant_id,
-            },
-            "completion_request_id": str(uuid4()),
-        }
-        if existing is None:
-            # Creation and the first message share one POST and one recovery UUID.
-            payload["create_conversation_params"] = {
-                "name": "",
-                "model": model,
-                "is_temporary": temporary,
-            }
-            if web_search:
-                payload["create_conversation_params"]["enabled_web_search"] = True
-        elif existing.get("current_leaf_message_uuid"):
-            # Continuing the current leaf preserves the server's conversation branch.
-            payload["parent_message_uuid"] = valid_uuid(existing["current_leaf_message_uuid"])
+        payload = _completion_payload(
+            prompt, model, timezone, locale, web_search, temporary, existing
+        )
         path = f"/api/organizations/{org}/chat_conversations/{chat}/completion"
         response = self._request(
             "POST", path, json=payload, stream=True, headers={"Accept": "text/event-stream"}
         )
-        chunks: list[str] = []
-        server_message_id: str | None = None
-        event_types: set[str] = set()
-        stream_finished = False
-        try:
-            if "text/event-stream" not in response.headers.get("content-type", ""):
-                raise HttpError("Claude did not return a chat event stream.")
-            for event in events(response.iter_lines(chunk_size=128)):
-                kind = event.get("type")
-                if isinstance(kind, str):
-                    event_types.add(kind)
-                if kind == "message_start" and isinstance(event.get("message"), dict):
-                    server_message_id = event["message"].get("uuid")
-                if kind == "message_limit":
-                    # Usage can arrive before a later generation error; keep the observation.
-                    from .usage import from_stream
-
-                    observed = from_stream(event.get("message_limit"))
-                    if observed:
-                        self.last_usage = observed
-                if kind == "error" or event.get("error"):
-                    raise HttpError(
-                        "Claude reported an error while generating the reply. Read the chat before sending again.",
-                        code="generation_error",
-                        chat_id=chat,
-                    )
-                text = event.get("completion", "")
-                # Only visible text reaches callbacks; tool JSON remains in stored content.
-                if not isinstance(text, str):
-                    text = ""
-                block = event.get("content_block", {})
-                if (
-                    kind == "content_block_start"
-                    and isinstance(block, dict)
-                    and block.get("type") == "text"
-                ):
-                    initial = block.get("text", "")
-                    if isinstance(initial, str):
-                        text += initial
-                delta = event.get("delta", {})
-                if isinstance(delta, dict) and delta.get("type") == "text_delta":
-                    delta_text = delta.get("text", "")
-                    if isinstance(delta_text, str):
-                        text += delta_text
-                if text:
-                    chunks.append(text)
-                    if on_text:
-                        on_text(text)
-                if kind in {"done", "message_stop"}:
-                    # A terminal event is stronger evidence than an ordinary socket EOF.
-                    stream_finished = True
-                    break
-        except HttpError:
-            raise
-        except Exception:
-            raise HttpError(
-                f"The reply stream was interrupted. Read chat {chat} to check its contents; the message was not resent.",
-                code="stream_interrupted",
-                chat_id=chat,
-            ) from None
-        finally:
-            response.close()
-        # Claude can assign its own message UUIDs. Identify the newly stored answer
-        # using the pre-request transcript, and allow a brief persistence delay.
-        streamed = "".join(chunks)
-        assistant = None
-        for attempt in range(10):
-            # Poll only GETs for persistence; never repeat the message POST.
-            conversation = self.read(org, chat)
-            if temporary and conversation.get("is_temporary") is not True:
-                raise HttpError("Claude did not confirm that this chat is temporary.")
-            candidate = next(
-                # When provided, the server's UUID wins over the proposed message ID.
-                (
-                    m
-                    for m in reversed(
-                        conversation.get("chat_messages", conversation.get("messages", []))
-                    )
-                    if isinstance(m, dict)
-                    and m.get("sender", m.get("role")) == "assistant"
-                    and str(m.get("uuid", m.get("id", ""))) not in previous_ids
-                    and (not server_message_id or m.get("uuid", m.get("id")) == server_message_id)
-                    and (not streamed or message_text(m) == streamed)
-                ),
-                None,
-            )
-            assistant = message_details(candidate) if candidate is not None else None
-            if assistant is not None:
-                break
-            if attempt < 9:
-                time.sleep(0.2)
-        if assistant is None:
-            raise HttpError(
-                f"Claude did not confirm a stored answer yet. Read chat {chat}; the message was not resent.",
-                code="answer_not_confirmed",
-                chat_id=chat,
-            )
+        streamed, server_message_id, event_types, stream_finished = self._read_reply_stream(
+            response, chat, on_text
+        )
+        conversation, assistant = self._confirm_answer(
+            org, chat, temporary, previous_ids, server_message_id, streamed
+        )
         return {
             "chat_id": chat,
             "organization_id": org,
@@ -568,3 +434,162 @@ class ClaudeHttp:
             "event_types": sorted(event_types),
             "usage": self.last_usage,
         }
+
+    def _read_reply_stream(self, response, chat, on_text):
+        """Return the streamed text, server message UUID, event types and terminal flag."""
+        chunks: list[str] = []
+        server_message_id: str | None = None
+        event_types: set[str] = set()
+        stream_finished = False
+        try:
+            if "text/event-stream" not in response.headers.get("content-type", ""):
+                raise HttpError("Claude did not return a chat event stream.")
+            for event in events(response.iter_lines(chunk_size=128)):
+                kind = event.get("type")
+                if isinstance(kind, str):
+                    event_types.add(kind)
+                if kind == "message_start" and isinstance(event.get("message"), dict):
+                    server_message_id = event["message"].get("uuid")
+                if kind == "message_limit":
+                    self._observe_limit(event)
+                if kind == "error" or event.get("error"):
+                    raise HttpError(
+                        "Claude reported an error while generating the reply. Read the chat before sending again.",
+                        code="generation_error",
+                        chat_id=chat,
+                    )
+                text = _event_text(event, kind)
+                chunks.append(text)
+                if text and on_text:
+                    on_text(text)
+                if kind in {"done", "message_stop"}:
+                    # A terminal event is stronger evidence than an ordinary socket EOF.
+                    stream_finished = True
+                    break
+        except HttpError:
+            raise
+        except Exception:
+            raise HttpError(
+                f"The reply stream was interrupted. Read chat {chat} to check its contents; the message was not resent.",
+                code="stream_interrupted",
+                chat_id=chat,
+            ) from None
+        finally:
+            response.close()
+        return "".join(chunks), server_message_id, event_types, stream_finished
+
+    def _observe_limit(self, event):
+        # Usage can arrive before a later generation error; keep the observation.
+        from .usage import from_stream
+
+        observed = from_stream(event.get("message_limit"))
+        if observed:
+            self.last_usage = observed
+
+    def _confirm_answer(self, org, chat, temporary, previous_ids, server_message_id, streamed):
+        # Claude can assign its own message UUIDs. Identify the newly stored answer
+        # using the pre-request transcript, and allow a brief persistence delay.
+        for attempt in range(10):
+            # Poll only GETs for persistence; never repeat the message POST.
+            conversation = self.read(org, chat)
+            if temporary and conversation.get("is_temporary") is not True:
+                raise HttpError("Claude did not confirm that this chat is temporary.")
+            candidate = _new_answer(conversation, previous_ids, server_message_id, streamed)
+            if candidate is not None:
+                assistant = message_details(candidate)
+                if assistant is not None:
+                    return conversation, assistant
+            if attempt < 9:
+                time.sleep(0.2)
+        raise HttpError(
+            f"Claude did not confirm a stored answer yet. Read chat {chat}; the message was not resent.",
+            code="answer_not_confirmed",
+            chat_id=chat,
+        )
+
+
+def _message_ids(conversation):
+    return {
+        str(m.get("uuid", m.get("id", "")))
+        for m in conversation.get("chat_messages", conversation.get("messages", []))
+        if isinstance(m, dict)
+    }
+
+
+def _check_send_arguments(model, prompt, chat_id, new_chat_id, existing):
+    if not re.fullmatch(r"claude-[a-zA-Z0-9._-]+", model):
+        raise HttpError("Specify a Claude model identifier with --model.")
+    if not prompt.strip():
+        raise HttpError("The message is empty.")
+    if chat_id and new_chat_id:
+        raise HttpError("Choose an existing chat or a new chat ID.", code="invalid_arguments")
+    if existing is not None and (not chat_id or existing.get("uuid", chat_id) != chat_id):
+        raise HttpError(
+            "The provided conversation does not match this chat.", code="invalid_chat_id"
+        )
+
+
+def _completion_payload(prompt, model, timezone, locale, web_search, temporary, existing):
+    payload = {
+        "prompt": prompt,
+        "model": model,
+        "timezone": timezone,
+        "locale": locale,
+        "attachments": [],
+        "files": [],
+        "sync_sources": [],
+        "tools": [{"type": "web_search_v0", "name": "web_search"}] if web_search else [],
+        "rendering_mode": "messages",
+        "turn_message_uuids": {
+            "human_message_uuid": str(uuid4()),
+            "assistant_message_uuid": str(uuid4()),
+        },
+        "completion_request_id": str(uuid4()),
+    }
+    if existing is None:
+        # Creation and the first message share one POST and one recovery UUID.
+        payload["create_conversation_params"] = {
+            "name": "",
+            "model": model,
+            "is_temporary": temporary,
+        }
+        if web_search:
+            payload["create_conversation_params"]["enabled_web_search"] = True
+    elif existing.get("current_leaf_message_uuid"):
+        # Continuing the current leaf preserves the server's conversation branch.
+        payload["parent_message_uuid"] = valid_uuid(existing["current_leaf_message_uuid"])
+    return payload
+
+
+def _event_text(event, kind):
+    text = event.get("completion", "")
+    # Only visible text reaches callbacks; tool JSON remains in stored content.
+    if not isinstance(text, str):
+        text = ""
+    block = event.get("content_block", {})
+    if kind == "content_block_start" and isinstance(block, dict) and block.get("type") == "text":
+        initial = block.get("text", "")
+        if isinstance(initial, str):
+            text += initial
+    delta = event.get("delta", {})
+    if isinstance(delta, dict) and delta.get("type") == "text_delta":
+        delta_text = delta.get("text", "")
+        if isinstance(delta_text, str):
+            text += delta_text
+    return text
+
+
+def _new_answer(conversation, previous_ids, server_message_id, streamed):
+    # When provided, the server's UUID wins over the proposed message ID.
+    return next(
+        (
+            m
+            for m in reversed(conversation.get("chat_messages", conversation.get("messages", [])))
+            if isinstance(m, dict)
+            and m.get("sender", m.get("role")) == "assistant"
+            and str(m.get("uuid", m.get("id", ""))) not in previous_ids
+            and (not server_message_id or m.get("uuid", m.get("id")) == server_message_id)
+            and (not streamed or message_text(m) == streamed)
+        ),
+        None,
+    )

@@ -38,6 +38,7 @@ const SIGN_IN: Record<FreeProvider, (name: string) => boolean> = {
 }
 const FIRST_PASS_MS = 15_000
 const EVERY_MS = 120_000
+const HIDDEN_EVERY_MS = 10 * 60_000
 const NUDGE_MS = 2_000
 const CREDS_KEEP_MS = 10 * 60_000
 
@@ -70,6 +71,7 @@ export interface FreeSyncHost {
   remove(id: string): Promise<void>
 }
 
+const message = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 
 function describe(provider: FreeProvider, cookies: Cookie[]): FreeLogin | null {
@@ -160,22 +162,35 @@ export class FreeSync {
   private running: Promise<void> | null = null
   private stopped = false
   private last: FreeSyncStatus = { on: false, lastSyncAt: null, lastError: null, shared: 0 }
+  private passAt = 0
+  /** What sync.json holds now: a pass that changed nothing does not write it again. */
+  private saved: string
 
-  constructor(home: string, private host: FreeSyncHost, private source: () => Promise<StoreCreds | null>) {
+  /** `visible`: a window is on screen; with none, a pass runs every 10 min instead of every 2. */
+  constructor(home: string, private host: FreeSyncHost, private source: () => Promise<StoreCreds | null>, private visible: () => boolean = () => true) {
     this.file = join(home, 'free', 'sync.json')
-    try { this.agreed = (JSON.parse(readFileSync(this.file, 'utf8')) as { rows?: Record<string, Agreed> }).rows ?? {} } catch { this.agreed = {} }
+    // A missing or damaged file counts as unsaved, so the first pass writes it.
+    try {
+      this.agreed = (JSON.parse(readFileSync(this.file, 'utf8')) as { rows?: Record<string, Agreed> }).rows ?? {}
+      this.saved = JSON.stringify({ rows: this.agreed })
+    } catch {
+      this.agreed = {}
+      this.saved = ''
+    }
   }
 
   start(): void { this.schedule(FIRST_PASS_MS) }
   stop(): void { this.stopped = true; if (this.timer) clearTimeout(this.timer) }
   /** A sign-in or a log out here: sync soon rather than at the next tick. */
   nudge(): void { this.schedule(NUDGE_MS) }
+  /** A window came on screen: the next pass comes at the visible pace, now if the last one is that old (a pass running reschedules itself). */
+  wake(): void { if (this.passAt && !this.running) this.schedule(Math.max(0, EVERY_MS - (Date.now() - this.passAt))) }
   status(): FreeSyncStatus { return { ...this.last } }
 
   private schedule(ms: number): void {
     if (this.stopped) return
     if (this.timer) clearTimeout(this.timer)
-    this.timer = setTimeout(() => void this.pass().finally(() => this.schedule(EVERY_MS)), ms)
+    this.timer = setTimeout(() => void this.pass().finally(() => this.schedule(this.visible() ? EVERY_MS : HIDDEN_EVERY_MS)), ms)
     this.timer.unref?.()
   }
 
@@ -203,44 +218,72 @@ export class FreeSync {
 
   private async run(): Promise<void> {
     const before = this.last.lastError
+    this.passAt = Date.now()
     try {
-      const c = await this.store()
-      if (!c) { this.last = { ...this.last, on: false, lastError: null }; return }
-      const list = await this.call(c, 'GET', '/v1/free')
-      if (list.status !== 200 || !Array.isArray(list.json?.free)) throw new Error(`the store answered ${list.status} to the Free list`)
-      const rows = new Map<string, Row>((list.json.free as Row[]).filter(r => UUID.test(r.id)).map(r => [r.id, r]))
-      const problems: string[] = []
-      // Taken before the tombstones settle: this pass's list still shows their rows as live.
-      const tombs = new Set(this.host.deleted().map(d => d.id))
-      for (const t of this.host.deleted()) {
-        try {
-          const row = rows.get(t.id)
-          if (!row || row.meta?.deleted) { this.host.settled(t.id); delete this.agreed[t.id]; continue }
-          const { id, num, provider, name } = t
-          // A 409 leaves the tombstone for the next pass; a write that landed settles it.
-          if (await this.put(c, id, row.version, seal(c.key, { id, num, provider, name, auth: '', deleted: true }), { deleted: true }, { auth: null, exp: null })) { this.host.settled(id); delete this.agreed[id] }
-        } catch (e) { problems.push(`${t.id.slice(0, 8)}: ${e instanceof Error ? e.message : String(e)}`) }
-      }
-      for (const instance of [...this.host.list()]) {
-        if (this.host.busy(instance.id)) continue
-        if (rows.get(instance.id)?.meta?.deleted) {
-          try { await this.host.remove(instance.id); delete this.agreed[instance.id] } catch (e) { problems.push(`#${instance.num}: ${e instanceof Error ? e.message : String(e)}`) }
-          continue
-        }
-        try { await this.one(c, instance, rows.get(instance.id)) } catch (e) { problems.push(`#${instance.num}: ${e instanceof Error ? e.message : String(e)}`) }
-      }
-      const here = new Set(this.host.list().map(i => i.id))
-      for (const row of rows.values()) {
-        if (here.has(row.id) || row.meta?.signedOut || row.meta?.deleted || tombs.has(row.id)) continue
-        try { await this.adopt(c, row) } catch (e) { problems.push(`${row.id.slice(0, 8)}: ${e instanceof Error ? e.message : String(e)}`) }
-      }
-      this.save()
-      this.last = { on: true, lastSyncAt: Date.now(), lastError: problems.length ? problems.join('; ') : null, shared: rows.size }
+      await this.syncAll()
     } catch (e) {
-      this.last = { ...this.last, on: true, lastError: e instanceof Error ? e.message : String(e) }
+      this.last = { ...this.last, on: true, lastError: message(e) }
     }
     // Said once per new error, not every two minutes while it lasts.
     if (this.last.lastError && this.last.lastError !== before) console.error(`[free-sync] ${this.last.lastError}`)
+  }
+
+  private async syncAll(): Promise<void> {
+    const c = await this.store()
+    if (!c) { this.last = { ...this.last, on: false, lastError: null }; return }
+    const list = await this.call(c, 'GET', '/v1/free')
+    if (list.status !== 200 || !Array.isArray(list.json?.free)) throw new Error(`the store answered ${list.status} to the Free list`)
+    const rows = new Map<string, Row>((list.json.free as Row[]).filter(r => UUID.test(r.id)).map(r => [r.id, r]))
+    const problems: string[] = []
+    // Taken before the tombstones settle: this pass's list still shows their rows as live.
+    const tombs = new Set(this.host.deleted().map(d => d.id))
+    await this.settleDeleted(c, rows, problems)
+    await this.reconcileLocal(c, rows, problems)
+    await this.adoptRemote(c, rows, tombs, problems)
+    this.save()
+    this.last = { on: true, lastSyncAt: Date.now(), lastError: problems.length ? problems.join('; ') : null, shared: rows.size }
+  }
+
+  /** Accounts deleted here: their rows become deleted markers, and a tombstone the store knows of is dropped. */
+  private async settleDeleted(c: StoreCreds, rows: Map<string, Row>, problems: string[]): Promise<void> {
+    for (const t of this.host.deleted()) {
+      try {
+        await this.settleOne(c, t, rows.get(t.id))
+      } catch (e) { problems.push(`${t.id.slice(0, 8)}: ${message(e)}`) }
+    }
+  }
+
+  private async settleOne(c: StoreCreds, t: Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>, row: Row | undefined): Promise<void> {
+    const { id, num, provider, name } = t
+    // A 409 leaves the tombstone for the next pass; a write that landed settles it.
+    if (row && !row.meta?.deleted && !(await this.put(c, id, row.version, seal(c.key, { id, num, provider, name, auth: '', deleted: true }), { deleted: true }, { auth: null, exp: null }))) return
+    this.host.settled(id)
+    delete this.agreed[id]
+  }
+
+  /** Each instance here against its row: removed when another PC deleted it, else its login synced. */
+  private async reconcileLocal(c: StoreCreds, rows: Map<string, Row>, problems: string[]): Promise<void> {
+    for (const instance of [...this.host.list()]) {
+      if (this.host.busy(instance.id)) continue
+      try {
+        await this.reconcileOne(c, instance, rows.get(instance.id))
+      } catch (e) { problems.push(`#${instance.num}: ${message(e)}`) }
+    }
+  }
+
+  private async reconcileOne(c: StoreCreds, instance: FreeInstance, row: Row | undefined): Promise<void> {
+    if (!row?.meta?.deleted) return this.one(c, instance, row)
+    await this.host.remove(instance.id)
+    delete this.agreed[instance.id]
+  }
+
+  /** Rows with no instance here that are live and not deleted here become instances. */
+  private async adoptRemote(c: StoreCreds, rows: Map<string, Row>, tombs: Set<string>, problems: string[]): Promise<void> {
+    const here = new Set(this.host.list().map(i => i.id))
+    for (const row of rows.values()) {
+      if (here.has(row.id) || row.meta?.signedOut || row.meta?.deleted || tombs.has(row.id)) continue
+      try { await this.adopt(c, row) } catch (e) { problems.push(`${row.id.slice(0, 8)}: ${message(e)}`) }
+    }
   }
 
   /** One instance of this PC against its row (none when it was never shared). */
@@ -250,30 +293,44 @@ export class FreeSync {
     // A file that is there but does not open (mid-write, damaged, signed out by the site) says nothing:
     // it is neither sent up nor taken for a log out.
     if (!local && existsSync(file)) throw new Error('its saved login does not open here')
-    const agreed = this.agreed[instance.id]
     if (!row) {
       if (local) await this.upload(c, instance, local, 0)
       return
     }
-    if (agreed && agreed.version === row.version) {
-      // The store has not moved since this PC and it agreed: a sign-in here goes up, a log out here
-      // marks the row. An older login back here (written by an operation that started before a landing)
-      // falls through, so the store's newer one lands again.
-      if (!local) {
-        if (agreed.auth && !row.meta?.signedOut) await this.signOut(c, instance, agreed.auth, row.version)
-        return
-      }
-      if (local.auth === agreed.auth) return
-      if (agreed.exp == null || local.exp >= agreed.exp) return this.upload(c, instance, local, row.version)
-    }
+    if (await this.sinceAgreed(c, instance, row, local)) return
     const shared = await this.read(c, instance.id)
     if (!shared) return
-    if (shared.value.signedOut) {
-      if (local && local.auth === shared.value.auth) await this.host.forget(instance.id)
-      else if (local) return this.upload(c, instance, local, shared.version)
-      this.agreed[instance.id] = { version: shared.version, auth: null }
-      return
+    if (shared.value.signedOut) return this.signedOutThere(c, instance, local, shared)
+    await this.landNewer(c, instance, file, local, shared)
+  }
+
+  /**
+   * The store has not moved since this PC and it agreed: a sign-in here goes up, a log out here marks the row. An
+   * older login back here (written by an operation that started before a landing) falls through (false), so the
+   * store's newer one lands again. True when the instance is settled.
+   */
+  private async sinceAgreed(c: StoreCreds, instance: FreeInstance, row: Row, local: FreeLogin | null): Promise<boolean> {
+    const agreed = this.agreed[instance.id]
+    if (!agreed || agreed.version !== row.version) return false
+    if (!local) {
+      if (agreed.auth && !row.meta?.signedOut) await this.signOut(c, instance, agreed.auth, row.version)
+      return true
     }
+    if (local.auth === agreed.auth) return true
+    if (agreed.exp != null && local.exp < agreed.exp) return false
+    await this.upload(c, instance, local, row.version)
+    return true
+  }
+
+  /** The row is a signed-out marker: this PC logs out of that same login, or sends up the one it signed in since. */
+  private async signedOutThere(c: StoreCreds, instance: FreeInstance, local: FreeLogin | null, shared: { value: Shared; version: number }): Promise<void> {
+    if (local && local.auth === shared.value.auth) await this.host.forget(instance.id)
+    else if (local) return this.upload(c, instance, local, shared.version)
+    this.agreed[instance.id] = { version: shared.version, auth: null }
+  }
+
+  /** Of the store's login and this PC's, the newer wins: written here, or sent up. */
+  private async landNewer(c: StoreCreds, instance: FreeInstance, file: string, local: FreeLogin | null, shared: { value: Shared; version: number }): Promise<void> {
     const theirs = describe(instance.provider, shared.value.cookies ?? [])
     if (!theirs) throw new Error('the store holds a login without its sign-in')
     if (!local || (theirs.auth !== local.auth && newer(theirs, local))) {
@@ -327,9 +384,12 @@ export class FreeSync {
   }
 
   private save(): void {
+    const json = JSON.stringify({ rows: this.agreed })
+    if (json === this.saved && existsSync(this.file)) return
     mkdirSync(dirname(this.file), { recursive: true })
-    writeFileSync(`${this.file}.tmp`, JSON.stringify({ rows: this.agreed }), { mode: 0o600 })
+    writeFileSync(`${this.file}.tmp`, json, { mode: 0o600 })
     renameSync(`${this.file}.tmp`, this.file)
+    this.saved = json
   }
 }
 

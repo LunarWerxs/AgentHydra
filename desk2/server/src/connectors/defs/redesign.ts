@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConnectorDef, ConnectorFactory, Detected } from '../types'
-import { installedApp, installFromRelease, startHidden } from '../release'
+import { installedApp, installFromRelease, startHidden, whichOnce } from '../release'
 
 const ASSET = 'redesign-windows-x64.exe'
 const PROBE_MS = 1500
@@ -72,7 +72,7 @@ const factory: ConnectorFactory = ({ home }): ConnectorDef => {
   const exe = (): { file: string; version: string | null } | null => {
     const own = installedApp(dest)
     if (own) return own
-    const named = process.env.REDESIGN_EXE?.trim() || Bun.which('redesign')
+    const named = process.env.REDESIGN_EXE?.trim() || whichOnce('redesign')
     return named && existsSync(named) ? { file: named, version: null } : null
   }
 
