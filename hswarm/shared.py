@@ -110,9 +110,12 @@ def behind() -> str | None:
     if not changed:
         return None
     names = ", ".join(changed[:6]) + (f" and {len(changed) - 6} more" if len(changed) > 6 else "")
+    how = (f"this shared server moves onto the clone's last commit by itself once that commit is {SETTLE_S / 60:.0f} min "
+           f"old (the next server on port {SERVING_PORT} carries its running jobs on), and an edit nobody committed never "
+           "runs there" if SERVING_PORT and livecode.source() else "restart this hswarm process to load them")
     return (f"this hswarm process (pid {os.getpid()}, {__version__}, code from {code_stamp()['code_at']}) runs the code it "
             f"loaded, and {len(changed)} source file(s) changed on disk since ({names}): a fix in them is not running "
-            "here; restart this hswarm process to load them")
+            f"here; {how}")
 
 
 def process_started(pid: int) -> int | None:
@@ -365,21 +368,23 @@ def _running_jobs() -> int:
 
 
 def _restart_due(state: dict, now: float) -> bool:
-    """One look by the shared server's watcher: True when it should hand over to a successor now. Only a server that
-    runs a committed copy follows the clone: one started by hand in the clone runs what it was started on. `state` is
-    the watcher's memory between looks: when the server started, the tree it refused, the one it found ready."""
+    """One look by the shared server's watcher: True when it should hand over to a successor now. The successor runs
+    the clone's newest commit (livecode.target), so every chat's server ends up on committed code: a copy moves onto a
+    newer commit, and a server on a clone's working tree (started by hand, or by a chat whose connect predates the
+    copies) moves onto that clone's commit. An install with no clone beside it has nothing to follow. `state` is the
+    watcher's memory between looks: when the server started, the tree it refused, the one it found ready."""
     mine = livecode.running()
-    if not mine or now - state["started"] < MIN_UP_S:
+    src = Path(mine["source"]) if mine else livecode.source()
+    if src is None or now - state["started"] < MIN_UP_S:
         return False
-    src = Path(mine["source"])
     head = livecode.head(src)
-    if not head or head["tree"] in (mine["tree"], state.get("refused")) or now - head["at"] < SETTLE_S:
+    if not head or head["tree"] in ((mine or {}).get("tree"), state.get("refused")) or now - head["at"] < SETTLE_S:
         return False
     if state.get("ready") != head["tree"]:
         if livecode.ready(src, head) is None:
             state["refused"] = head["tree"]  # said once per tree: the next commit is looked at afresh
-            print(f"[hswarm] commit {head['commit'][:12]} cannot be imported, so this server keeps running commit "
-                  f"{mine['commit'][:12]}", file=sys.stderr, flush=True)
+            print(f"[hswarm] commit {head['commit'][:12]} cannot be imported, so this server keeps running "
+                  f"{'commit ' + mine['commit'][:12] if mine else 'the code it loaded'}", file=sys.stderr, flush=True)
             return False
         state["ready"], state["ready_at"] = head["tree"], now
     return not _running_jobs() or now - state["ready_at"] >= BUSY_HOLD_S
@@ -460,8 +465,8 @@ def _answer(h: dict, port: int, state: str) -> dict:
     if (h.get("version"), h.get("code_at")) != (mine["version"], mine["code_at"]):
         out["behind"] = (f"the running server runs {h.get('version') or 'code from before code stamps'} (code from "
                          f"{h.get('code_at') or '?'}), the code on disk is {mine['version']} (code from {mine['code_at']}): "
-                         "a server started from a working tree runs what it loaded until it is restarted (the AgentHydra "
-                         "daemon's server follows the clone's commits by itself)")
+                         "the shared server moves onto the clone's last commit by itself once that commit is "
+                         f"{SETTLE_S / 60:.0f} min old, and the next server on this port carries its running jobs on")
     return out
 
 

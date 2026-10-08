@@ -48,10 +48,15 @@ def test_a_server_behind_the_clones_last_commit_restarts_onto_it_once_that_commi
     assert shared._restart_due(state, NOW + shared.SETTLE_S)  # the same commit, left alone since
 
 
-# Contract: a server started by hand in the clone runs what it was started on: it never swaps itself for a copy.
-def test_a_server_run_from_the_clone_never_restarts_itself(server, monkeypatch):
+# Contract: every chat's server ends up on committed code. One on a clone's working tree (started by hand, or by a chat
+# whose connect predates the copies: 2026-10-07, such chats stay open for days) moves onto that clone's commit; an
+# install with no clone beside it has nothing to follow and never restarts.
+def test_a_server_on_a_working_tree_moves_onto_its_clones_commit_and_an_install_never_restarts(server, monkeypatch):
     monkeypatch.setattr(livecode, "running", lambda: None)
-    assert not shared._restart_due(server.state, NOW + 86_400) and server.readied == []
+    monkeypatch.setattr(livecode, "source", lambda: Path("C:/Users/me/clone"))
+    assert shared._restart_due(server.state, NOW) and server.readied == ["t1"]
+    monkeypatch.setattr(livecode, "source", lambda: None)
+    assert not shared._restart_due({"started": NOW - 3600}, NOW + 86_400)
 
 
 def test_a_commit_that_cannot_be_imported_is_never_restarted_onto_and_is_asked_about_once(server):
