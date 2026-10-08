@@ -11,6 +11,7 @@ import { join } from 'node:path'
 import {
   climayteCancel,
   climayteRun,
+  climayteVerdict,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -118,5 +119,27 @@ describe('sealed tasks', () => {
     )
     expect(() => run({ sealed })).toThrow('task 1: prompt is empty')
     expect(workers.size).toBe(before)
+  })
+
+  // A sealed task is one visit of a series: sent back a rung up, its next turn would run on a
+  // setting it never named, the very switch its hold exists to stop (review of 778ca1e8, 2026-10-07).
+  test('a failed sealed task is recorded and never sent back up the ladder', () => {
+    const reply = climayteRun({
+      group: 'sealed-test',
+      tasks: [
+        {
+          sealed: { ...sealed, prompt: 'Visit the page' },
+          model: 'claude-sonnet-5-5',
+          modelWhy: 'visitors run on Sonnet',
+        } as unknown as { prompt: string; cwd: string },
+      ],
+    })
+    const id = reply.workers[0]?.id ?? ''
+    climayteCancel({ id }) // a stopped worker can be judged
+    const judged = climayteVerdict(id, { verdict: 'fail', note: 'she never reached the page' })
+    expect(judged).toMatchObject({ ok: true, next: null })
+    expect(judged.message).toContain('not sent back')
+    const w = workers.get(id)
+    expect([w?.model, w?.effort, w?.pending.length]).toEqual(['claude-sonnet-5-5', null, 0])
   })
 })

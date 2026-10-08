@@ -3268,7 +3268,8 @@ function sendBack(
  *  it does not, it reports the failure, and what model it tries next"). The verdict is kept with the
  *  setting that produced the result and what that work cost, and the scorecard learns from it. A
  *  fail (with `note`, required: the worker gets it) sends the task back to the same session one
- *  rung up the ladder unless `retry` is false. `kind` tags a task dispatched without one. */
+ *  rung up the ladder unless `retry` is false or the task is sealed. `kind` tags a task dispatched
+ *  without one. */
 /** The longest verdict note kept. The note is the fix instruction a worker receives with a fail, so a
  *  longer one is refused, never cut (three fail notes reached their workers cut mid-word, 2026-10-04). */
 export const VERDICT_NOTE_MAX = 8000
@@ -3329,7 +3330,10 @@ export function climayteVerdict(
   w.verdicts = [...(w.verdicts ?? []), verdict]
   let next: { model: string; effort: string | null } | null = null
   let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
-  if (verdict.verdict === 'fail' && input.retry !== false)
+  // A sealed task is one visit of a series: a rung up, its next turn would run on a setting it never named.
+  if (verdict.verdict === 'fail' && w.sealed)
+    message = 'Recorded a fail; not sent back: a sealed task holds the setting it names.'
+  else if (verdict.verdict === 'fail' && input.retry !== false)
     ({ next, message } = sendBack(id, verdict, note))
   journal(w, 'verdict', {
     verdict: verdict.verdict,

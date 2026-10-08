@@ -581,7 +581,9 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 **The model and effort a sealed task names are held** (`runSetting`), at any rung and with no
 `ownerWords`: a sealed task is a measurement (a simulated visitor in a series), so the scorecard
 never trials a cheaper setting on it, and with no `kind` it is no kind's sample (`scoreRows` skips a
-kindless task). Its reason reads `named by a sealed task: <modelWhy>`. Why (2026-10-07): 624 SUE
+kindless task). A fail on one is recorded and never sent back up the ladder (`climayteVerdict`):
+its next turn would run on a setting it never named. Its reason reads
+`named by a sealed task: <modelWhy>`. Why (2026-10-07): 624 SUE
 visits that day were sent sealed naming Sonnet 5.5 with a `modelWhy`; none held, every one was scored
 as `code`, and they ran on code's pick, 469 at Sonnet low, 150 on Haiku 4.5 and 5 on a Haiku 5.5 trial,
 while SUE recorded Sonnet 5.5 for all of them. A Haiku visit beside a Sonnet one is a second variable
