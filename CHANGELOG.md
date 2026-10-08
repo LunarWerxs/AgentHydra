@@ -92,6 +92,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   closed it stops asking for updates nobody would see, its pages refresh only what the page on screen shows, and a
   list of local servers asked for twice in a row is scanned once. It also starts with less in memory and loads a
   little less code when it opens.
+- **Sidebar rows glide to their new place when the list reorders.** A chat that moves up or down slides there
+  instead of jumping, unless your system asks for reduced motion.
 
 ### Fixed
 

@@ -90,16 +90,36 @@ Memory (two runs a side):
 | server private bytes right after start | 251.8 / 258.7 MB | 237.9 / 239.8 MB |
 | server working set while idle, window hidden | 115.0 / 119.3 MB | 102.3 / 99.1 MB |
 
-Timings (two runs a side; the verdict is the rule above):
+Timings and page counts (four runs a side, two interleaved rounds; the verdict is the rule above, with every new
+run outside every base run):
 
 | metric | before | after | verdict |
 | --- | --- | --- | --- |
-| server CPU per idle minute, window hidden | 375 / 594 ms | 266 / 203 ms | better |
-| server CPU per idle minute, no window | 219 / 172 ms | 109 / 94 ms | better |
-| server CPU per idle minute, window visible | 516 / 438 ms | 734 / 500 ms | inside the noise |
-| server CPU per idle minute, AgentHydra pane | 469 / 734 ms | 500 / 359 ms | inside the noise |
-| startup to first health answer (median of 5) | 250 / 209 ms | 453 / 177 ms | inside the noise |
-| first contentful paint | 464 / 268 ms | 580 / 352 ms | inside the noise |
-| style recalcs per idle minute, window visible | 124 / 134 | 276 / 145 | inside the noise |
+| server CPU per idle minute, window hidden | 375 / 594 / 594 / 453 ms | 266 / 203 / 219 / 219 ms | better |
+| server CPU per idle minute, no window | 219 / 172 / 219 / 328 ms | 109 / 94 / 109 / 94 ms | better |
+| server CPU per idle minute, window visible | 516 / 438 / 469 / 844 ms | 734 / 500 / 609 / 531 ms | inside the noise |
+| server CPU per idle minute, AgentHydra pane | 469 / 734 / 438 / 578 ms | 500 / 359 / 438 / 547 ms | inside the noise |
+| startup to first health answer (median of 5) | 250 / 209 / 320 / 296 ms | 453 / 177 / 253 / 187 ms | inside the noise |
+| first contentful paint | 464 / 268 / 296 / 328 ms | 580 / 352 / 484 / 368 ms | inside the noise |
+| shell drawn | 257 / 176 / 222 / 198 ms | 485 / 291 / 377 / 297 ms | worse here, not reproduced (below) |
+| style recalcs per idle minute, window visible | 124 / 134 / 44 / 163 | 276 / 145 / 390 / 350 | worse: the row glide (below) |
+| style recalcs per idle minute, AgentHydra pane | 218 / 148 / 97 / 166 | 458 / 235 / 377 / 400 | worse: the row glide |
+| style recalcs per idle minute, window hidden | 59 / 93 / 39 / 110 | 35 / 26 / 39 / 37 | inside the noise (39 on both) |
 
 The dev-servers service used no CPU in any idle state on either side.
+
+**What restyles while idle.** A second probe on the same two trees injects counters into every frame before the
+page's own scripts (mutations by element shape and attribute, never text; timers; animation frames; WebSocket
+message types) and reads 20 s idle with the window visible, then with the AgentHydra pane open. The rise has one
+cause: 8df6a007 gave Vue's TransitionGroup a `.v-move` rule, the move transition the Architect's
+`transitiongroup-flip-move-integrity` check asks for (it gates a list whose reorders snap). With it, each
+outside-session update that reorders the sidebar or the cloud list glides the rows that moved: transform style and
+class writes on them (15 to 25 per 20 s here), and a restyle each frame while the 150 ms glide plays. With the rule
+taken out of the new tree, its restyles per 20 s matched the base (visible 28 / 66 against 35 / 47, pane 19 / 53
+against 50 / 38); with it, the pane read 88 / 119 against 49 / 56. Both trees got the same WebSocket traffic (4 to
+7 outside-session updates per 20 s) and ran the same timers. The glide stays, since the check asks for it, and it
+only runs while rows move. These counts swing run to run because the sidebar lists the live AgentHydra sessions: how
+many rows reorder depends on what the other chats are doing at the time.
+
+The shell-drawn rise did not reproduce. In the restyle probe's runs on the same builds (6 a side, run to the same
+point), the shell was drawn in 193 to 693 ms on the base and 195 to 343 ms on the new tree.
