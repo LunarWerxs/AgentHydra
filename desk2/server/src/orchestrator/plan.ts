@@ -1,10 +1,10 @@
-// The orchestrator's planner (phase A, shadow): each open chat's one next move, read from its summary and its
-// transcript. A chat is a Desk chat or an outside session (a Claude Desktop, CLI, CliMayte or Codex session
-// AgentHydra knows): both become a Subject first. Pure: the plugin (plugins/70-orchestrator.ts) fetches, this
-// decides, nothing is sent.
+// The orchestrator's planner: each open chat's one next move, read from its summary and its transcript. A chat is a
+// Desk chat or an outside session (a Claude Desktop, CLI, CliMayte or Codex session AgentHydra knows): both become a
+// Subject first. Pure: the plugin (plugins/70-orchestrator.ts) fetches, this decides, and only the armed
+// orchestrator (act.ts) sends anything.
 
 import type { ChatStatus, ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
-import { ORCHESTRATOR_MOVES, type OrchestratorRow } from '@shared/orchestrator'
+import { ORCHESTRATOR_FROM, ORCHESTRATOR_MOVES, type OrchestratorRow } from '@shared/orchestrator'
 
 /** A person wrote in the chat this recently: it is theirs, and the orchestrator leaves it alone. */
 export const PERSON_QUIET_MS = 10 * 60_000
@@ -115,6 +115,10 @@ export function classify(chat: Subject, items: readonly TranscriptItem[] | null,
     const who = chat.source === 'climayte' ? 'its dispatcher' : 'a person' // a CliMayte worker's messages come from the chat that runs it
     return { ...row, move: 'leave', reason: `${who} wrote in it ${Math.max(1, Math.round((now - person.ts) / 60_000))} min ago` }
   }
+  // The armed orchestrator's own "continue" (act.ts) is a note, never the person's; it waits as long before another.
+  const sent = last(all, 'note')
+  if (sent?.from === ORCHESTRATOR_FROM && now - sent.ts < PERSON_QUIET_MS)
+    return { ...row, move: 'watch', reason: `the orchestrator continued it ${Math.max(1, Math.round((now - sent.ts) / 60_000))} min ago` }
   if (chat.status === 'limited') {
     if (chat.accountAuto) return { ...row, move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
     const at = chat.limitResetsAt ? ` at ${new Date(chat.limitResetsAt).toISOString()}` : ''

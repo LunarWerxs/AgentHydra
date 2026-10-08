@@ -1,17 +1,20 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import type { OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
+import type { OrchestratorAct, OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
 import type { View } from '@/components/shell/logic'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
+import { relativeTime } from '@/components/sidebar/search'
 
-// Orchestrator (shadow): each open chat's next move as the orchestrator sees it, and on request what the CreAitor
-// says the owner would answer. Read-only: nothing here sends, answers or moves anything.
+// Orchestrator: each open chat's next move as the orchestrator sees it, and on request what the CreAitor says the
+// owner would answer. Shadow until the owner arms it here; armed, it continues Desk chats a limit or an error
+// stopped (server/src/orchestrator/act.ts) and lists what it did. Nothing else here sends, answers or moves anything.
 const api = usePaneApi()
 const src = useShellSource()
 const plan = ref<OrchestratorPlan | null>(null)
 const error = ref<string | null>(null)
 const asking = ref(false)
+const arming = ref(false)
 
 const LABEL: Record<OrchestratorMove, string> = {
   'answer-question': 'Answer its question',
@@ -38,6 +41,18 @@ async function load(ask = false): Promise<void> {
 }
 onMounted(() => load())
 
+async function setArmed(armed: boolean): Promise<void> {
+  arming.value = true
+  try {
+    plan.value = await api.diagnostics<OrchestratorPlan>('orchestrator', {}, { armed })
+    error.value = null
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    arming.value = false
+  }
+}
+
 const rows = computed(() => (plan.value?.rows ?? []).filter((r) => !QUIET.includes(r.move)))
 const quiet = computed(() => QUIET.map((m) => `${plan.value?.counts[m] ?? 0} ${m === 'watch' ? 'working or queued' : 'done'}`).join(' · '))
 const knownIds = computed(() => new Set(src.chats.value.map((c) => c.id)))
@@ -47,11 +62,17 @@ const target = (r: OrchestratorRow): View | null =>
 const SOURCE: Record<OrchestratorRow['source'], string> = { desk: '', desktop: 'Claude Desktop', cli: 'CLI', climayte: 'CliMayte', codex: 'Codex', other: 'outside' }
 const where = (r: OrchestratorRow): string => [SOURCE[r.source], r.account].filter(Boolean).join(' ')
 const verdictText = (v: string): string => (v === 'decide' ? 'The owner would say' : v === 'reversible' ? 'Take the reversible option' : 'Only the owner can answer')
+const armed = computed(() => plan.value?.mode === 'armed')
+const actText = (a: OrchestratorAct): string =>
+  `${a.did === 'continued' ? 'Continued' : 'Gave up on'} ${a.move === 'resume-after-limit' ? 'after the limit' : 'after an error'}`
 </script>
 
 <template>
   <div class="text-[13px] leading-4.75" data-testid="orchestrator">
-    <p class="text-text-muted">What the orchestrator would do next in each open chat. Shadow: it only plans, nothing is sent.</p>
+    <p v-if="armed" class="text-text-muted">
+      What the orchestrator does next in each open chat. Armed: it continues Desk chats a limit or an error stopped; the rest it only plans.
+    </p>
+    <p v-else class="text-text-muted">What the orchestrator would do next in each open chat. Shadow: it only plans, nothing is sent.</p>
     <p v-if="error" class="mt-2 text-danger-text">Could not load the plan: {{ error }}</p>
     <p v-else-if="!plan" class="mt-2 text-text-muted">Loading…</p>
     <template v-else>
@@ -65,6 +86,16 @@ const verdictText = (v: string): string => (v === 'decide' ? 'The owner would sa
           @click="load(true)"
         >
           {{ asking ? 'Asking the CreAitor…' : 'Ask the CreAitor' }}
+        </button>
+        <button
+          type="button"
+          class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
+          :class="{ 'ms-auto': !plan.creaitor }"
+          :disabled="arming"
+          :title="armed ? 'Stop acting; it goes back to only planning' : 'Continue Desk chats a limit or an error stopped, until Desk stops'"
+          @click="setArmed(!armed)"
+        >
+          {{ armed ? 'Disarm' : 'Arm' }}
         </button>
       </div>
       <p v-if="!rows.length" class="mt-2 text-text-muted">Nothing waits on the orchestrator.</p>
@@ -94,6 +125,25 @@ const verdictText = (v: string): string => (v === 'decide' ? 'The owner would sa
           </div>
         </li>
       </ul>
+      <template v-if="plan.acts.length">
+        <p class="mt-3 text-text-2">What it did</p>
+        <ul class="mt-1">
+          <li v-for="a in plan.acts" :key="`${a.at}-${a.id}`" class="flex flex-wrap items-baseline gap-x-3 py-1">
+            <span class="tnum text-text-muted">{{ relativeTime(a.at) }}</span>
+            <span class="text-text">{{ actText(a) }}</span>
+            <span v-if="a.error" class="text-danger-text">{{ a.error }}</span>
+            <button
+              v-if="knownIds.has(a.id)"
+              type="button"
+              class="ms-auto cursor-default truncate text-text-2 underline-offset-2 hover:text-text hover:underline"
+              @click="src.select({ kind: 'chat', id: a.id })"
+            >
+              {{ a.title || 'Open chat' }}
+            </button>
+            <span v-else class="ms-auto truncate text-text-muted">{{ a.title }}</span>
+          </li>
+        </ul>
+      </template>
     </template>
   </div>
 </template>

@@ -1,5 +1,6 @@
-// plugins/70-orchestrator.ts through its route: the chats and transcripts come from stand-in engine routes, the
-// CreAitor from a stand-in script run by this test's own runtime. Nothing outside a temp folder is read or written.
+// plugins/70-orchestrator.ts through its route: the chats and transcripts come from stand-in engine routes (the send
+// queue's too, which records what the armed orchestrator queues), the CreAitor from a stand-in script run by this
+// test's own runtime. Nothing outside a temp folder is read or written.
 
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,7 +9,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono } from 'hono'
 import type { ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
-import type { OrchestratorPlan } from '@shared/orchestrator'
+import { ORCHESTRATOR_FROM, type OrchestratorPlan } from '@shared/orchestrator'
 import type { ServerContext } from '../../src/context'
 import { createServer, type DeskServer } from '../../src/index'
 import plugin from '../../src/plugins/70-orchestrator'
@@ -45,6 +46,8 @@ const CHATS: [ChatSummary, TranscriptItem[]][] = [
   [chat('limited', { status: 'limited', limitResetsAt: NOW + 3_600_000 }), [said('Working on it.')]],
   [chat('moved', { status: 'limited', accountAuto: true }), []],
   [chat('error', { status: 'error', lastError: 'network down' }), []],
+  // the armed orchestrator continued it 2 min ago (its note, never the person's): it waits before another
+  [chat('continued', { status: 'error', lastError: 'overloaded' }), [{ id: 'n', ts: NOW - 120_000, kind: 'note', from: ORCHESTRATOR_FROM, text: 'Continue the task.' }]],
   [chat('busy', { status: 'working', activity: 'Bash: bun test' }), []],
   [chat('finished'), [said('Landed 3 of 3; everything is verified.')]],
   [chat('old', { updatedAt: NOW - 10 * 86_400_000 }), [said('🔴 NEED: Old? A) a B) b')]],
@@ -77,20 +80,28 @@ const OUTSIDE: [ExternalSession, TranscriptItem[]][] = [
   [outside('o-archived', { archived: true }), [said('🔴 NEED: Gone? A) a B) b')]]
 ]
 
-/** The plugin over a stand-in engine; `sent` counts every request that would change something. */
-function desk(): { app: Hono; sent: string[] } {
+/** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
+ *  each message handed to the send queue. */
+function desk(): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
   const sent: string[] = []
+  const queued: { chatId: string; text: string }[] = []
   app.use('*', async (c, next) => {
     if (c.req.method !== 'GET') sent.push(`${c.req.method} ${c.req.path}`)
     await next()
   })
+  app.post('/api/queue', async (c) => {
+    const { chatId, text } = (await c.req.json()) as { chatId: string; text: string }
+    queued.push({ chatId, text })
+    return c.json({ id: 'q' })
+  })
+  app.post('/api/queue/chats/:id/resume', (c) => c.json({ items: [] }))
   app.get('/api/chats', (c) => c.json(CHATS.map(([ch]) => ch)))
   app.get('/api/chats/:id/items', (c) => c.json(CHATS.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? []))
   app.get('/api/external/sessions', (c) => c.json(OUTSIDE.map(([s]) => s)))
   app.get('/api/external/sessions/:id/items', (c) => c.json(OUTSIDE.find(([s]) => s.id === c.req.param('id'))?.[1] ?? []))
-  plugin(app, {} as ServerContext)
-  return { app, sent }
+  plugin(app, { onStop: () => {} } as unknown as ServerContext)
+  return { app, sent, queued }
 }
 
 test('each open chat and outside session gets its one next move, most urgent first, and nothing is sent', async () => {
@@ -108,6 +119,7 @@ test('each open chat and outside session gets its one next move, most urgent fir
     ['error', 'retry-error', 'desk'],
     ['limited', 'resume-after-limit', 'desk'],
     ['moved', 'watch', 'desk'],
+    ['continued', 'watch', 'desk'],
     ['busy', 'watch', 'desk'],
     ['o-busy', 'watch', 'desktop'],
     ['person', 'leave', 'desk'],
@@ -124,8 +136,40 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect([by.need.question, by.need.options]).toEqual(['Ship the release now?', ['Ship it', 'Wait a day']])
   expect([by['o-need'].question, by['o-need'].options]).toEqual(['Merge it?', ['Merge', 'Hold']])
   expect(by.asks.question).toBe('Want me to deploy it to the box too?')
-  expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 1, 'resume-after-limit': 1, watch: 3, leave: 4, done: 2 })
+  expect(by.continued.reason).toBe('the orchestrator continued it 2 min ago')
+  expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 1, 'resume-after-limit': 1, watch: 4, leave: 4, done: 2 })
+  expect([plan.mode, plan.acts]).toEqual(['shadow', []])
   expect(sent).toEqual([])
+})
+
+test('armed, it continues each Desk chat a limit or an error stopped, twice at most, and disarmed it sends nothing', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const { app, sent, queued } = desk()
+  const arm = async (armed: boolean): Promise<OrchestratorPlan> =>
+    (await (await app.request('/api/diagnostics/orchestrator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ armed }) })).json()) as OrchestratorPlan
+  const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
+  // Arming looks at once. The stand-in chats never change, so each look finds the same two stopped chats.
+  for (const look of [1, 2]) {
+    const plan = await arm(true)
+    expect(plan.mode).toBe('armed')
+    expect(sent.splice(0)).toEqual(['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue', 'POST /api/queue/chats/error/resume'])
+    const [limited, error] = queued.splice(0)
+    expect([limited.chatId, error.chatId]).toEqual(['limited', 'error'])
+    expect(limited.text).toStartWith(`${lead}Your account's usage limit stopped the last turn`)
+    expect(error.text).toStartWith(`${lead}Your last turn stopped on an error: network down`)
+    expect(plan.acts.slice(0, 2).map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined], ['limited', 'resume-after-limit', 'continued', undefined]])
+    expect(plan.acts).toHaveLength(2 * look)
+  }
+  // The third time it stops trying: nothing is sent, the page says so, and the plan leaves both to a person.
+  const third = await arm(true)
+  expect([sent.splice(0), queued]).toEqual([['POST /api/diagnostics/orchestrator'], []])
+  expect(third.acts.slice(0, 2).map((a) => [a.id, a.did])).toEqual([['error', 'gave-up'], ['limited', 'gave-up']])
+  const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
+  expect([by.error.move, by.limited.move]).toEqual(['leave', 'leave'])
+  expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
+  expect((await arm(true)).acts).toHaveLength(6)
+  const off = await arm(false)
+  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', ['POST /api/diagnostics/orchestrator', 'POST /api/diagnostics/orchestrator'], []])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {

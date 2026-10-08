@@ -22,8 +22,9 @@ export interface PaneApi {
   accounts(): Promise<AccountInfo[]>
   pickAccount(): Promise<AccountRef>
   externalItems(sessionId: string): Promise<TranscriptItem[]>
-  /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this. */
-  diagnostics<T>(name: string, params?: Record<string, string | number | undefined>): Promise<T>
+  /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
+   *  POST of it (the orchestrator's Arm). */
+  diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
   /** AgentHydra's own API through Desk's /ah/api proxy (its settings in this dialog, agenthydra.ts). */
   agentHydra<T>(path: string, init?: RequestInit): Promise<T>
   /** GET /api/free/settings: the Free table's keepalive (Settings > Instances > Free, instances.ts). */
@@ -65,10 +66,11 @@ export const httpPaneApi: PaneApi = {
   accounts: () => json('/accounts'),
   pickAccount: () => json('/accounts/pick'),
   externalItems: (sessionId) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items`),
-  diagnostics: (name, params = {}) => {
+  diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))
-    return json(`/diagnostics/${encodeURIComponent(name)}${q.size ? `?${q}` : ''}`)
+    const init = body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    return json(`/diagnostics/${encodeURIComponent(name)}${q.size ? `?${q}` : ''}`, init)
   },
   agentHydra: (path, init) =>
     json(path, init?.body ? { ...init, headers: { 'Content-Type': 'application/json', ...init.headers } } : init, '/ah/api'),
