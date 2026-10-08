@@ -76,6 +76,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Fixed
 
+- **Running AgentHydra from source, an update can no longer overwrite your Bun.** A source checkout has no
+  launcher of its own, so the release updater used to fall back to the program running it, which is the machine's
+  Bun, and could have put a release download in its place. It now refuses and says a source checkout updates
+  through git. Installed releases update exactly as before.
 - **Moving chats off an account archives the old copies again on Claude Desktop 2.26454.0.** That build moved an
   internal check AgentHydra relies on, so every archive was refused and the moved chats' old copies stayed in
   the source account's sidebar.

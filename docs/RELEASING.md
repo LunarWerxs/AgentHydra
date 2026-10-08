@@ -269,7 +269,7 @@ In 2.0.0, the launcher (AgentHydra.exe / agenthydra) starts the daemon through B
 The in-app update for a 2.0 release install works as follows:
 
 1. The daemon calls `applyUpdate()` with no `exePath` override.
-2. The updater detects that this is a release build (`IS_RELEASE` = true) and defaults `exePath` to `LAUNCHER_PATH`.
+2. The updater detects that this is a release build (`IS_RELEASE` = true) and defaults `exePath` to `LAUNCHER_PATH`. A source checkout (`IS_RELEASE` = false) has no launcher, and its `process.execPath` is the machine's own Bun, so there `applyUpdate()` refuses unless the caller names `exePath`: a source checkout updates through git.
 3. It downloads the 2.0.x zip, extracts it, swaps the launcher aside, and moves the new one in place.
 4. It swaps `app/`, `orchestrator/`, and reconciles `desk2/` and `misc/` the same way.
 5. It never touches `runtime/`: the launcher owns it and will download Bun on next start if needed.
