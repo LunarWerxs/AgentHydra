@@ -54,3 +54,6 @@ def test_a_replayed_402_is_recognised_as_out_of_balance(tmp_path, mock_claude):
     mock_claude("out-of-balance")
     res, _ = asyncio.run(cc.run_cc_task(_task(tmp_path), KEY))
     assert res.status == "error" and cc.out_of_balance(res), res.error
+    # Claude Code says num_turns 1 for a request the key refused: no model call was made, so the next key's run gets
+    # the task's whole max_turns (2026-10-08: dead keys left a 4-turn live task 2 turns, and it stopped at that cap).
+    assert res.turns == 0

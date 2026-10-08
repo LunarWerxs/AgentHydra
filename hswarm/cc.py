@@ -201,7 +201,7 @@ class _SpendWatch:
         try:
             ev = json.loads(line) if line.startswith("{") else None
             msg = ev.get("message") if isinstance(ev, dict) and ev.get("type") == "assistant" else None
-            if not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict):
+            if not isinstance(msg, dict) or not isinstance(msg.get("usage"), dict) or msg.get("model") == SYNTHETIC_MODEL:
                 return False
             # One model call arrives as one event per content block, each repeating the call's usage: count it once.
             mid = str(msg.get("id") or len(self.calls))
@@ -251,6 +251,25 @@ def _tool_uses(ev: dict) -> list[dict]:
     if ev.get("type") != "assistant":
         return []
     return [b for b in (ev.get("message") or {}).get("content") or [] if isinstance(b, dict) and b.get("type") == "tool_use"]
+
+
+# The model Claude Code names on an assistant message it wrote itself, an API error rendered as a reply
+# ("API Error: 402 Insufficient Balance"): no request was served and nothing was billed.
+SYNTHETIC_MODEL = "<synthetic>"
+
+
+def _model_calls(out: str) -> int | None:
+    """The model calls a run's stream shows (one per message id, a subagent's own calls left out), None when it
+    shows no assistant message at all (the one-envelope shape)."""
+    ids, seen = set(), False
+    for n, ev in enumerate(_events(out)):
+        msg = ev.get("message") if ev.get("type") == "assistant" else None
+        if not isinstance(msg, dict):
+            continue
+        seen = True
+        if msg.get("model") != SYNTHETIC_MODEL and not ev.get("parent_tool_use_id"):
+            ids.add(msg.get("id") or n)
+    return len(ids) if seen else None
 
 
 TRACE_INPUT_CHARS = 300
@@ -315,12 +334,18 @@ def _failure_reason(task: Task, res: Result, subtype: str, code: int, err: str) 
     return f"claude exit {code}" + (f" ({subtype})" if subtype and subtype != "success" else "") + (f": {why}" if why else "")
 
 
-def _read_reply(res: Result, task: Task, j: dict, code: int, err: str) -> None:
-    """Fill the Result from Claude Code's final result event: usage at DeepSeek rates, answer, status."""
+def _read_reply(res: Result, task: Task, j: dict, code: int, err: str, calls: int | None = None) -> None:
+    """Fill the Result from Claude Code's final result event: usage at DeepSeek rates, answer, status. `calls` is
+    the model calls the run's own stream showed (_model_calls), None when it showed none to count."""
     res.usage = _usage(j.get("usage") or {})
     # The run's total over all its calls: a tiered model (Haiku 5.5) prices at its first tier.
     res.cost_usd = config.cost_usd(task.model, res.usage["in_hit"], res.usage["in_miss"], res.usage["out"], write=res.usage.get("in_write", 0))
-    res.turns = int(j.get("num_turns") or 0)
+    # num_turns also counts the turn a run was cut off at: a cap stop at --max-turns 2 says 3, and a key that answers
+    # 402 to the first request says 1 with no model call made. The rotation and the route take res.turns off the
+    # task's max_turns for the next key (jobs.remaining), so each spent key cost the task a turn it never ran:
+    # 2026-10-08, as DeepSeek's keys ran dry, the live pong task (max_turns 4) was handed on with 2 and stopped there.
+    turns = int(j.get("num_turns") or 0)
+    res.turns = min(turns, calls) if calls is not None else turns
     res.answer = str(j.get("result") or "").strip()
     res.data = _extract_json(res.answer) if task.schema and res.answer else None
     if res.data is not None and not (res.answer.startswith("{") and res.answer.endswith("}")):
@@ -406,11 +431,12 @@ def edited_note(files: list[str]) -> str:
 
 
 def _finish_result(res: Result, task: Task, j: dict, out: str, code: int, err: str, checkpoint: list[dict],
-                   tool_calls: list, edited: list, prior: list, transcript: dict, stale_stamp: int | None) -> None:
-    """Fill `res` from the run's result event."""
+                   tool_calls: list, edited: list, prior: list, transcript: dict, stale_stamp: int | None,
+                   calls: int | None = None) -> None:
+    """Fill `res` from the run's result event; `calls`, the model calls of the run that event closes."""
     transcript["json"] = {k: v for k, v in j.items() if k != "result"}
     transcript["tool_trace"] = tool_trace(out)
-    _read_reply(res, task, j, code, err)
+    _read_reply(res, task, j, code, err, calls)
     add_spend(res, checkpoint)
     _note_failed_wrap_up(res, task, checkpoint)
     res.tool_calls = tool_calls
@@ -515,9 +541,10 @@ async def run_cc_task(task: Task, api_key: str, after: dict | None = None) -> tu
             code, out, err = await run_hidden(cmd, task.cwd, task.timeout_s, env=env,
                                               stdin_text=RESUME_PROMPT if resumed else _prompt(task) + edited_note(prior),
                                               on_line=watch if task.max_cost_usd else None)
+            own = out  # the stream of the run the result event closes: the wrap-up's when one followed
             if watch.tripped and task.checkpoint_at and saved_session(session):
                 checkpoint, cmd, code, more, err = await _wrap_up(task, watch, session, settings, env, t0, transcript)
-                out += more
+                out, own = out + more, more
         err, out = err.replace(api_key, "sk-***"), out.replace(api_key, "sk-***")
         transcript.update(cmd=cmd, exit=code, stderr=err[-4000:])
         if watch.tripped or (checkpoint and _parse_stream(out)[0] is None):
@@ -531,7 +558,7 @@ async def run_cc_task(task: Task, api_key: str, after: dict | None = None) -> tu
         if j is None:
             res.status, res.error = "error", f"claude exit {code}, no result event: {out[-800:]!r} stderr: {_meaningful_stderr(err)[-800:]!r}"
             return res, transcript
-        _finish_result(res, task, j, out, code, err, checkpoint, tool_calls, edited, prior, transcript, stale_stamp)
+        _finish_result(res, task, j, out, code, err, checkpoint, tool_calls, edited, prior, transcript, stale_stamp, _model_calls(own))
     except asyncio.CancelledError:
         res.status, res.error = "cancelled", "cancelled"
         raise
