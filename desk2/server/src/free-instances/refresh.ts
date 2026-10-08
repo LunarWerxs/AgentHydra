@@ -21,9 +21,10 @@ export function nextRead(instances: readonly FreeInstance[], busy: (id: string) 
   let best: (FreeRead & { overdue: number }) | null = null
   for (const i of instances) {
     if (busy(i.id)) continue
-    // Never checked (a login another PC shared, an account added before checks): check it first. Signed out after a
-    // check: nothing to read until someone signs in again.
-    const login = i.checkedAt == null ? Number.POSITIVE_INFINITY : i.loggedIn ? now - i.checkedAt - LOGIN_EVERY_MS : Number.NEGATIVE_INFINITY
+    // Never checked (a login another PC shared, an account added before checks), or signed in with its address never
+    // read (a record from before checks read it): check it first. Signed out after a check: nothing to read until
+    // someone signs in again.
+    const login = i.checkedAt == null || (i.loggedIn && i.email === undefined) ? Number.POSITIVE_INFINITY : i.loggedIn ? now - i.checkedAt - LOGIN_EVERY_MS : Number.NEGATIVE_INFINITY
     // ChatGPT's free text has no window to move, so only a Claude login's usage is read between checks.
     const usage = i.loggedIn && i.provider === 'claude' ? now - (i.usageReadAt ?? i.checkedAt ?? 0) - USAGE_EVERY_MS : Number.NEGATIVE_INFINITY
     const read: FreeRead & { overdue: number } = login >= usage ? { id: i.id, command: 'auth', overdue: login } : { id: i.id, command: 'usage', overdue: usage }

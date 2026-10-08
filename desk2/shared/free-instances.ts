@@ -51,6 +51,8 @@ export interface FreeResult {
   model?: string
   authenticated?: boolean
   account_label?: string | null
+  /** The signed-in account's address, from a login check. */
+  account_email?: string | null
   chat_id?: string
   chat_name?: string | null
   server_conversation_id?: string
@@ -70,6 +72,9 @@ export interface FreeInstance {
   name: string
   /** True while the name follows the signed-in account: set when the account was added without a name; a rename clears it. */
   autoName: boolean
+  /** The signed-in account's address (owner, 2026-10-08: the Free rows show and copy it as the others do), from the
+   *  last login check; null when the site gave none or the login was logged out, absent until a check has read it. */
+  email?: string | null
   loggedIn: boolean
   checkedAt: number | null
   /** When this account was last seen signed in; null if it never was or you logged it out. Set while signed out,

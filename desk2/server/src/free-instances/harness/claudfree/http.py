@@ -58,6 +58,15 @@ def account_label(name: Any, email: Any) -> str | None:
     return label[:60] or None
 
 
+def account_email(email: Any) -> str | None:
+    """The account's sign-in address, or None when the value is not one."""
+    email = email.strip() if isinstance(email, str) else ""
+    local, at, domain = email.partition("@")
+    if not (at and local and domain) or "@" in domain or len(email) > 254:
+        return None
+    return email if all(ch.isprintable() and not ch.isspace() for ch in email) else None
+
+
 def retired_haiku(model: str) -> bool:
     """Claude Haiku 4.x and older (claude-haiku-4-5, claude-3-5-haiku-...): never picked (owner, 2026-10-07)."""
     if "haiku" not in model:
@@ -278,8 +287,8 @@ class ClaudeHttp:
             self._account_body = self._json("GET", "/api/account")
         return self._account_body
 
-    def account_label_for(self, org: dict[str, Any]) -> str | None:
-        """A short display name for the signed-in account; never raises."""
+    def account_identity_for(self, org: dict[str, Any]) -> dict[str, str | None]:
+        """The signed-in account's short display name and its address (the Free row's hover and copy); never raises."""
         try:
             try:
                 body = self._account()
@@ -296,9 +305,9 @@ class ClaudeHttp:
                 org_name = org.get("name")
                 if isinstance(org_name, str):
                     name = re.sub(r"[’']s Organization$", "", org_name.strip(), flags=re.I)
-            return account_label(name, email)
+            return {"account_label": account_label(name, email), "account_email": account_email(email)}
         except Exception:
-            return None
+            return {"account_label": None, "account_email": None}
 
     def model_for(self, org_id: str, prefer: str, *, own_default: bool = True) -> str | None:
         """The model a new chat gets when none is remembered; never raises.

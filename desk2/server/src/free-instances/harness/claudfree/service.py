@@ -401,7 +401,7 @@ def _account_command(args, api, registry, client, organization, remembered):
             "organization_id": org,
             "transport": "http",
             "browser_launched": False,
-            "account_label": client.account_label_for(organization),
+            **client.account_identity_for(organization),
         }
     return _refresh_chats(registry, client, org)
 

@@ -10,7 +10,7 @@ from uuid import uuid4
 import requests
 
 from ..errors import ClaudeError
-from ..http import account_label, valid_uuid
+from ..http import account_email, account_label, valid_uuid
 from ..results import code_blocks
 from .stream import events
 from .preparation import Preparations, account_key
@@ -125,6 +125,7 @@ class ChatGPTHttp:
         self.preparations = preparations
         self.account_key = None
         self.account_label = None
+        self.account_email = None
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/"}
         )
@@ -260,8 +261,9 @@ class ChatGPTHttp:
         self.session.headers["Authorization"] = "Bearer " + body["accessToken"]
         try:
             self.account_label = account_label(body["user"].get("name"), body["user"].get("email"))
+            self.account_email = account_email(body["user"].get("email"))
         except Exception:
-            self.account_label = None
+            self.account_label = self.account_email = None
         identifier = body["user"].get("id")
         self.account_key = (
             account_key(identifier) if isinstance(identifier, str) and identifier else None

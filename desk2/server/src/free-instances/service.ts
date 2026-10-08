@@ -116,6 +116,8 @@ export class FreeInstances {
     instance.loggedIn = false
     instance.checkedAt = Date.now()
     instance.usage = null
+    // The next sign-in may be another account: its check reads the address again.
+    instance.email = null
     // Logged out on purpose, not lost: the row offers "Sign in", and "Sign in again" stays for an expired login.
     instance.lastSignedInAt = null
     this.store.save()
@@ -322,6 +324,7 @@ export class FreeInstances {
     instance.checkedAt = Date.now()
     if (!signedIn) return
     instance.lastSignedInAt = instance.checkedAt
+    instance.email = result.account_email ?? null
     const label = result.account_label
     if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
     this.onLoginChange?.()

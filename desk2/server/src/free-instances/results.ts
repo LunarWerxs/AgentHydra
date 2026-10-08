@@ -4,6 +4,11 @@ import type { RunOutput } from './runner'
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
 const list = (value: unknown): unknown[] => Array.isArray(value) ? value : []
 const str = (value: unknown, max = 1_000_000): string => typeof value === 'string' ? value.slice(0, max) : ''
+/** One sign-in address (something@somewhere, no spaces or control characters), else null. */
+const address = (value: unknown): string | null => {
+  const email = str(value, 255).trim()
+  return email.length <= 254 && /^[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+$/.test(email) ? email : null
+}
 const percent = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null
 
 export function failure(code: string, message: string, chatId?: string): FreeResult {
@@ -34,7 +39,7 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
     const e = object(r.error)
     return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined)
   }
-  if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null }
+  if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null, account_email: address(r.account_email) }
   if (command === 'nudge') return { ok: true }
   if (command === 'chats') return { ok: true, chats: list(r.chats).map(item => {
     const c = object(item)

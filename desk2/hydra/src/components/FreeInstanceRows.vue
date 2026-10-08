@@ -46,7 +46,7 @@ import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
 import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
-import { type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
+import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 // The table's column list (lib/instance-table.ts): the one the header draws, so the cells follow it.
@@ -140,17 +140,26 @@ function rowModel(i: FreeInstance): InstanceRowModel {
     },
     name: {
       shown,
-      // A Free login carries no address, so its name is plain text (owner, 2026-10-06) and its hover
-      // keeps the provider, the chat kind and the last check.
-      tooltip: () => ({
-        label: i.name,
-        description: `${providerName(i.provider)} · ${chatMode(i.provider)}`,
-        detail:
-          lastCheckLine(i) ??
-          (i.checkedAt
-          ? t('freeInstances.checkedAt', { time: new Date(i.checkedAt).toLocaleString() })
-          : t('freeInstances.unchecked')),
-      }),
+      // The hover leads with the login's address and a click copies it, as on every other row (owner,
+      // 2026-10-08: "so when I click on them, it gives me their email accounts"); the provider and chat
+      // kind follow. A login whose check has not read an address yet keeps the last check there instead.
+      tooltip: (clipped) => {
+        const tip = nameTooltipFor(
+          { full: i.name, shown, email: i.email, copyHint: t('instances.nameCopyHint') },
+          clipped,
+        )
+        return {
+          label: tip.label,
+          description: `${providerName(i.provider)} · ${chatMode(i.provider)}`,
+          detail:
+            tip.detail ??
+            lastCheckLine(i) ??
+            (i.checkedAt
+              ? t('freeInstances.checkedAt', { time: new Date(i.checkedAt).toLocaleString() })
+              : t('freeInstances.unchecked')),
+        }
+      },
+      copy: i.email,
     },
     // The name is the login; the provider is the logo and the chat kind is in the name's hover.
     account: {},
@@ -489,7 +498,7 @@ defineExpose({
   <LogoutInstanceDialog
     v-model:open="logoutOpen"
     :instance-name="logoutTarget?.name ?? null"
-    :account-email="null"
+    :account-email="logoutTarget?.email ?? null"
     :description="$t('freeInstances.logoutDialogDescription')"
     :submitting="loggingOut"
     @confirm="onLogoutConfirm"

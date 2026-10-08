@@ -92,7 +92,11 @@ describe('Free instance boundary', () => {
   test('auth and chat lists never expose raw session/account fields', () => {
     const secret = { token: 'fake-secret', email: 'example@example.test', cookie: 'fixture', organization_id: CHAT }
     const auth = parseResult('auth', output({ ok: true, authenticated: true, ...secret }))
-    expect(auth).toEqual({ ok: true, authenticated: true, account_label: null })
+    expect(auth).toEqual({ ok: true, authenticated: true, account_label: null, account_email: null })
+    // Only the address the harness names as the account's crosses, and only when it is one.
+    expect(parseResult('auth', output({ ok: true, authenticated: true, account_email: ' owner@example.test ' })).account_email).toBe('owner@example.test')
+    for (const bad of ['not-an-address', 'a@b@c', 'a b@example.test', 'x\n@example.test', 42])
+      expect(parseResult('auth', output({ ok: true, authenticated: true, account_email: bad })).account_email).toBeNull()
     const chats = parseResult('chats', output({ ok: true, chats: [
       { chat_id: CHAT, is_temporary: true, name: 'private', ...secret },
       { chat_id: 'regular', is_temporary: false },
@@ -136,7 +140,7 @@ describe('Free instance boundary', () => {
   test('malformed output and login logs are not forwarded, errors retain recovery UUID', () => {
     expect(JSON.stringify(parseResult('chat', { code: 1, stdout: 'cookie=fake-secret\ntraceback' }))).not.toContain('fake-secret')
     expect(parseResult('login', { code: 0, stdout: 'private local path and diagnostics' }).ok).toBe(false)
-    expect(parseResult('login', output({ ok: true, authenticated: true, token: 'fake-secret' }))).toEqual({ ok: true, authenticated: true, account_label: null })
+    expect(parseResult('login', output({ ok: true, authenticated: true, token: 'fake-secret' }))).toEqual({ ok: true, authenticated: true, account_label: null, account_email: null })
     expect(parseResult('resume', output({ ok: false, error: { code: 'timeout', message: 'Read first', chat_id: CHAT, raw: 'private' } }, 1))).toEqual({ ok: false, error: { code: 'timeout', message: 'Read first', chat_id: CHAT } })
   })
 })
@@ -306,17 +310,18 @@ describe('Free jobs and routes', () => {
   })
   test('an instance made without a name takes the account name at sign-in; a renamed one keeps its name', async () => {
     let label = 'Example Owner'
-    const { service, op } = fixture(async (_c, r) => output(r.command === 'auth' ? { ok: true, authenticated: true, account_label: label } : r.command === 'chats' ? { ok: true, chats: [] } : { ok: true, available: false, windows: [] }))
+    const { service, op } = fixture(async (_c, r) => output(r.command === 'auth' ? { ok: true, authenticated: true, account_label: label, account_email: `${label.split(' ')[0]!.toLowerCase()}@example.test` } : r.command === 'chats' ? { ok: true, chats: [] } : { ok: true, available: false, windows: [] }))
     const auto = service.create({ provider: 'claude' })
-    expect([auto.name, auto.autoName]).toEqual(['Claude', true])
+    expect([auto.name, auto.autoName, auto.email]).toEqual(['Claude', true, undefined])
     service.start(op({ instanceId: auto.id })); await tick()
-    expect(auto.name).toBe('Example Owner')
+    expect([auto.name, auto.email]).toEqual(['Example Owner', 'example@example.test'])
     const named = service.create({ provider: 'claude', name: 'Mine' })
     label = 'Someone Else'
     service.start(op({ instanceId: auto.id })); await tick()
     expect(auto.name).toBe('Someone Else')
     service.start(op({ instanceId: named.id })); await tick()
-    expect(named.name).toBe('Mine')
+    // A renamed account keeps its name, but its address always follows the login.
+    expect([named.name, named.email]).toEqual(['Mine', 'someone@example.test'])
     service.rename(auto.id, { name: 'Renamed' })
     label = 'Third Name'
     service.start(op({ instanceId: auto.id })); await tick()
@@ -503,7 +508,7 @@ describe('Free jobs and routes', () => {
   test('the rolling refresh reads the most overdue account: a never-checked login first, then old logins and old Claude usage', () => {
     const NOW = Date.parse('2020-10-06T12:00:00Z')
     const min = 60_000
-    const base: FreeInstance = { id: 'a', num: 1, provider: 'claude', name: 'A', autoName: false, loggedIn: true, checkedAt: NOW - 10 * min, lastSignedInAt: NOW - 10 * min, lastActiveAt: null, usage: null, usageReadAt: NOW - 10 * min }
+    const base: FreeInstance = { id: 'a', num: 1, provider: 'claude', name: 'A', autoName: false, email: 'a@example.test', loggedIn: true, checkedAt: NOW - 10 * min, lastSignedInAt: NOW - 10 * min, lastActiveAt: null, usage: null, usageReadAt: NOW - 10 * min }
     const one = (change: Partial<FreeInstance>, busy = false) => nextRead([{ ...base, ...change }], () => busy, NOW)
     const cases: [string, ReturnType<typeof one>, FreeRead | null][] = [
       ['fresh', one({}), null],
@@ -511,6 +516,8 @@ describe('Free jobs and routes', () => {
       ['older record: usage goes by the last check', one({ usageReadAt: undefined, checkedAt: NOW - 20 * min }), { id: 'a', command: 'usage' }],
       ['login checked 70 minutes ago', one({ checkedAt: NOW - 70 * min, usageReadAt: NOW - min }), { id: 'a', command: 'auth' }],
       ['never checked', one({ checkedAt: null, loggedIn: false }), { id: 'a', command: 'auth' }],
+      ['signed in, address never read', one({ email: undefined }), { id: 'a', command: 'auth' }],
+      ['signed out, address never read', one({ email: undefined, loggedIn: false }), null],
       ['signed out after a check', one({ loggedIn: false, checkedAt: NOW - 600 * min, usageReadAt: null }), null],
       ['ChatGPT usage is not read between checks', one({ provider: 'chatgpt', usageReadAt: NOW - 50 * min }), null],
       ['busy', one({ usageReadAt: NOW - 50 * min }, true), null],
