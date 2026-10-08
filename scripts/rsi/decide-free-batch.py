@@ -1,5 +1,7 @@
-"""Batched-Free against per-item escalation answers for hswarm_decide, graded on gold labels: the gate for
-decisions.free_batch (one Free-account message carrying a shared state once and its open questions numbered).
+"""Batched-Free against per-item escalation answers for hswarm_decide, graded on gold labels: the gate for a batched
+escalation leg (free_batch below: one Free-account message carrying a shared state once and its open questions
+numbered). Run 2026-10-08 on Dredd's 87 gold asks, it failed: not shipped (hswarm/docs/BENCH-2026-10-08-free-batch.md).
+free_batch is the exact code that was measured; re-run this when the Free accounts' models change.
 
 Input (--items): a JSON list of {ask, items: [typed decide items sharing one state], gold: {item id: gold key or list}},
 for example Dredd's gold asks run through its buildQuestions; the gold text stays outside this public repo. Arms, on
@@ -8,8 +10,8 @@ the SAME graded items:
   item-paid  one ask per item on the decision profile's paid route, as the cascade's per-item leg runs with no idle
              account; every graded question, yes/no included
   item-free  one ask per item on an idle Free account, as that leg runs when one is idle; choice and score questions
-  batch4     decisions.free_batch with the ask's choice and score questions (Dredd's cascade group)
-  batch40    decisions.free_batch with every question of the ask, its yes/no ones too (the cap's test)
+  batch4     free_batch with the ask's choice and score questions (Dredd's cascade group)
+  batch40    free_batch with every question of the ask, its yes/no ones too (Dredd's whole ask while Jev is down)
 Rows append to --out as JSONL, so a stopped run resumes where it stopped; --report prints the comparison.
 
     python scripts/rsi/decide-free-batch.py --items items.json --out rows.jsonl
@@ -37,6 +39,46 @@ PAID_AT_ONCE = 8
 TRIES = 3  # a message no account served (or whose reply was unusable) is sent again, up to this many times
 ARMS = ("item-paid", "item-free", "batch4", "batch40")  # plus jev when TypeSafe has credit
 CHOICE = ("choice", "score")
+
+
+# The batched message's own instructions; decisions.SYSTEM and render() stay the per-item benchmark's.
+BATCH_SYSTEM = ("You answer several typed decision questions about the one STATE you are given. Read the state, then each "
+                "numbered question and its options carefully, and answer every question on its own, as if it were the only "
+                "one asked: another question's options are never an answer to it.")
+
+
+def render_batch(items: list[dict]) -> str:
+    """Items that share one state as one message: the state once, then every question numbered q0..qN-1. Each
+    question's text is render()'s own with the state cut off the front, so it reads exactly as the per-item benchmark
+    asks it."""
+    # "STATE:\n<state>\n\n", what every item's render() starts with (rsplit: the state may itself hold "QUESTION: ")
+    head = D.render({**items[0], "instructions": "", "criteria": None, "type": "noul"}).rsplit("\nQUESTION: ", 1)[0] + "\n"
+    n = len(items)
+    parts = [head.rstrip("\n"), f"There are {n} questions about this STATE, q0 to q{n - 1}. Answer every one."]
+    for i, it in enumerate(items):
+        text = D.render(it)
+        if not text.startswith(head):
+            raise ValueError("render_batch takes items that share one state")
+        parts.append(f"## q{i}\n{text[len(head):]}")
+    parts.append(f"Reply with one JSON object that maps each question id (q0 to q{n - 1}) to the key of the option you choose for it.")
+    return "\n\n".join(parts)
+
+
+async def free_batch(items: list[dict]) -> tuple[list[str | None], object]:
+    """Items that share one state, asked in ONE message on an idle Free web account (free_route.consult): each item's
+    option key (None where the reply named no valid key) and the Result, or all None and no Result when no account
+    served the message."""
+    qs = [f"q{i}" for i in range(len(items))]
+    schema = {"type": "object", "properties": {q: {"type": ["string", "integer", "boolean"]} for q in qs}, "required": qs}
+    task = Task(prompt=render_batch(items), id="decide", system=BATCH_SYSTEM, schema=schema, tools="none", profile="decision", timeout_s=120)
+    res, _ = await free_route.consult(f"decide-{uuid.uuid4().hex[:8]}", task)
+    if res is None or not isinstance(res.data, dict):
+        return [None] * len(items), None
+    picks = []
+    for q, it in zip(qs, items):
+        v = res.data.get(q)
+        picks.append(D.parse_final(str(v), [o for o, _ in D.options(it)]) if isinstance(v, (str, int, bool)) else None)
+    return picks, res
 
 
 def passes(pred, gold) -> bool | None:
@@ -133,7 +175,7 @@ class Bench:
             while res is None and tries < TRIES:
                 tries += 1
                 await self.wait_idle()
-                picks, res = await D.free_batch(items)
+                picks, res = await free_batch(items)
         rows = [{"arm": arm, "ask": a["ask"], "id": it["id"], "type": it["type"], "pred": p, "gold": a["gold"].get(it["id"]),
                  "pass": passes(p, a["gold"].get(it["id"])), "model": res.model if res else None, "tries": tries,
                  "served": res is not None, "n": len(items), "secs": res.seconds if res else None}
