@@ -1,7 +1,7 @@
 // Gallery-only data for the shell: rows laid out like the real screenshots
 // (docs/reference/real/sidebar.png) with invented titles and folders, plus one row for each Hydra Desk status cue.
 import { ref } from 'vue'
-import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, HomeStats, HomeStatsRange, SearchHit, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatStatus, ChatSummary, DeskSettings, ExternalSession, HomeStats, HomeStatsRange, ProjectGit, ProjectsResponse, SearchHit, TranscriptItem } from '@shared/protocol'
 import { cliMayteWorkerFixtures, settingsFixtures, transcriptFixtures } from '@/dev/fixtures'
 import type { ShellSource } from './source'
 import { chatViewOf, type View } from './logic'
@@ -267,7 +267,27 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
     homeStats: async (range) => {
       await new Promise((r) => setTimeout(r, 300))
       return demoHomeStats(range)
-    }
+    },
+    projects: async () => demoProjects(),
+    cachedProjects: () => demoProjects()
+  }
+}
+
+function demoProjects(): ProjectsResponse {
+  const git = (over: Partial<ProjectGit>): ProjectGit => ({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0, fetchedAt: null, ...over })
+  const row = (path: string, name: string, group: string | null, sources: ProjectsResponse['projects'][number]['sources'], g: ProjectGit) => ({
+    path,
+    name,
+    group,
+    icon: null,
+    sources,
+    git: g,
+    lastCommitAt: null,
+    lastChatAt: null
+  })
+  return {
+    projects: [row(C, 'connections', 'Work', ['projecthydra', 'chats'], git({ behind: 2 })), row(N, 'nexuscode-2d', null, ['chats'], git({ dirty: 3 })), row(P, 'audio-lab', null, ['recent'], git({ ahead: 1 }))],
+    hydra: { found: true, root: null, placed: 1, problem: null }
   }
 }
 

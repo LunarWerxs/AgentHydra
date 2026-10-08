@@ -789,3 +789,43 @@ export interface HomeStats {
   coverage: { sessions: number; total: number; refreshing: boolean }
   missing: HomeStatsMissing[]
 }
+
+/**
+ * GET /api/projects: the New screen's project grid (owner, 2026-10-08: "I click New Chat, and rather than seeing this
+ * overview and models, I see all my projects"). Project Hydra's projects placed on this PC when it is installed, plus
+ * the folders this app's chats and Recent list use, each with its git state read on this PC (never fetched).
+ */
+export interface ProjectGit {
+  branch: string | null
+  /** The branch it tracks, e.g. 'origin/main'; null when it tracks nothing. */
+  upstream: string | null
+  ahead: number
+  behind: number
+  /** Changed and untracked files. */
+  dirty: number
+  /** When the checkout last fetched (ISO); `behind` is only as fresh as this. */
+  fetchedAt: string | null
+}
+
+export type ProjectSource = 'projecthydra' | 'chats' | 'recent'
+
+export interface ProjectEntry {
+  path: string
+  name: string
+  /** Project Hydra's group, e.g. 'lunarwerx'. */
+  group: string | null
+  /** A URL the page can load (Project Hydra's logo), or null for the folder glyph. */
+  icon: string | null
+  sources: ProjectSource[]
+  /** null when the folder is not a git checkout. */
+  git: ProjectGit | null
+  lastCommitAt: string | null
+  lastChatAt: string | null
+}
+
+export interface ProjectsResponse {
+  /** Newest of lastChatAt and lastCommitAt first. */
+  projects: ProjectEntry[]
+  /** `found` false: Project Hydra is not installed here. `problem`: it is, but could not be read. */
+  hydra: { found: boolean; root: string | null; placed: number; problem: string | null }
+}

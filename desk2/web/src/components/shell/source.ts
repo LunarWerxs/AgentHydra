@@ -10,6 +10,7 @@ import type {
   ExternalSession,
   HomeStats,
   HomeStatsRange,
+  ProjectsResponse,
   QueueAddRequest,
   QueueItem,
   QueuePatch,
@@ -68,6 +69,13 @@ export interface ShellSource {
    */
   homeStats?(range: HomeStatsRange): Promise<HomeStats>
   cachedHomeStats?(range: HomeStatsRange): HomeStats | null
+  /**
+   * The New screen's project grid (GET /api/projects): Project Hydra's projects and the folders of the chats, each
+   * with its git sync state. `cachedProjects` is the last answer kept in this browser. Optional: without them the
+   * screen shows no grid.
+   */
+  projects?(): Promise<ProjectsResponse>
+  cachedProjects?(): ProjectsResponse | null
   /**
    * The managed send queue (SPEC "Send queue"); null until the server reports one. Optional, like every
    * queue member below: the composer shows no queue UI for a source without them (the Gallery, parity).

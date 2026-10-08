@@ -4,6 +4,7 @@ import type {
   TranscriptItem,
   ExternalSession,
   HomeStats,
+  ProjectsResponse,
   HomeStatsRange,
   CliMayteWorker,
   SwarmJob,
@@ -1026,6 +1027,17 @@ export function useDesk() {
     cachedHomeStats(range: HomeStatsRange): HomeStats | null {
       const kept = readCache<HomeStats>(`home-stats.${range}`)
       return kept?.range === range && Array.isArray(kept.heat) && kept.heat.every((c) => typeof c === 'object' && c !== null) && Array.isArray(kept.sources) && Array.isArray(kept.missing) ? kept : null
+    },
+
+    /** The New screen's project grid (GET /api/projects); the answer is kept in this browser. */
+    async projects(): Promise<ProjectsResponse> {
+      const list = await fetchJson<ProjectsResponse>('/projects')
+      writeCache('projects', list)
+      return list
+    },
+    cachedProjects(): ProjectsResponse | null {
+      const kept = readCache<ProjectsResponse>('projects')
+      return Array.isArray(kept?.projects) ? kept : null
     },
 
     async loadItems(chatId: string): Promise<TranscriptItem[]> {

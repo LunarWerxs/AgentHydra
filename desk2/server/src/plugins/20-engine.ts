@@ -40,6 +40,8 @@ import { checkLocalPath, isRemotePath, localFolder, type OpenFile, type OpenFold
 import { MEDIA_ROUTE, mediaCache } from '../media/cache'
 import { nativeFolderPicker, PickError, type PickFolder } from '../folders/pick'
 import { RecentFolders } from '../folders/recent'
+import { findHydra, readHydra, type HydraLocation, type HydraRead } from '../projects/hydra'
+import { ProjectList } from '../projects/projects'
 
 /** How often climayteActive is re-read from the bridge poller's last worker list. */
 const CLIMAYTE_REFRESH_MS = 3000
@@ -396,6 +398,20 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       revealFile(await body(c), MEDIA_ROUTE, { file: openFile, folder: openFolder, sourceOf: (id) => mediaCache(manager.store.home)?.sourceOf(id) ?? null }),
     ),
   )
+  const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
+  const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
+  const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
+  const projects = new ProjectList({
+    findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
+    readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
+    recent,
+    chats: () => manager.list({ archived: true }).map((c) => ({ cwd: c.cwd, updatedAt: c.updatedAt })),
+  })
+  app.get('/api/projects', (c) => answer(c, () => projects.list()))
+  app.get('/api/projects/icon', (c) => {
+    const file = projects.iconFile(c.req.query('key') ?? '')
+    return file ? new Response(Bun.file(file)) : c.notFound()
+  })
   app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, deps)))
   app.get('/api/chats/:id/mcp', (c) => answer(c, () => manager.mcpStatus(c.req.param('id'))))
   app.post('/api/chats/:id/mcp/:name', (c) =>
