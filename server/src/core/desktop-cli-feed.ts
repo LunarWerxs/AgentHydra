@@ -67,7 +67,7 @@ export function cliCredentialFromDesktop(tokenCache: string, now = Date.now()): 
   return best
 }
 
-function readCredentials(path: string): Record<string, unknown> | null {
+export function readCredentials(path: string): Record<string, unknown> | null {
   try {
     const v = JSON.parse(readFileSync(path, 'utf8')) as unknown
     return v && typeof v === 'object' ? (v as Record<string, unknown>) : null

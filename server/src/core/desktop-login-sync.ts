@@ -139,6 +139,22 @@ const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex
 export const tokensHash = (v2: string | null, v1: string | null): string =>
   sha256(`${v2 ?? ''}\n${v1 ?? ''}`)
 
+/** Put a renewed, already encrypted token cache into a closed profile's config. False when the
+ *  config cannot be read or written; the caller has checked the app is not running. */
+export function replaceDesktopTokenCacheV2(dir: string, sealed: string): boolean {
+  const path = join(dir, 'config.json')
+  const cfg = readJson(path)
+  if (!cfg) return false
+  cfg['oauth:tokenCacheV2'] = sealed
+  try {
+    writeAtomic(path, JSON.stringify(cfg, null, 2))
+  } catch {
+    return false
+  }
+  deleteAccountsCacheEntry(dir)
+  return true
+}
+
 /** Every AgentHydra desktop profile here (the instances root only: the machine's own Claude login
  *  is never touched), with its number and the account it is signed in to. */
 export function listDesktopProfiles(): DesktopProfile[] {

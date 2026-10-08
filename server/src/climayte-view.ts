@@ -4,7 +4,15 @@
 // imports it.
 
 import { installStatusView } from './claude-install-guard'
-import { accountsProvider, isActive, JOURNAL_PATH, listeners, load, workers } from './climayte-core'
+import {
+  accountsProvider,
+  acctLabel,
+  isActive,
+  JOURNAL_PATH,
+  listeners,
+  load,
+  workers,
+} from './climayte-core'
 import {
   type EtaBandCalibration,
   type EtaCalibration,
@@ -62,6 +70,8 @@ export function climayteCapacity(now = Date.now()): {
   running: number
   waiting: number
   waitUntil: string | null
+  /** Accounts whose linked Claude Code login has expired: `renewing` while the desktop side refreshes it, `open-once` when its desktop app must be opened once. */
+  expiredLogins: { account: string; state: 'renewing' | 'open-once' }[]
   /** Whether a Claude Code CLI can be started: false holds every task (claude-install-guard.ts). */
   claudeInstall: ReturnType<typeof installStatusView>
 } {
@@ -92,6 +102,9 @@ export function climayteCapacity(now = Date.now()): {
     running,
     waiting,
     waitUntil: until.sort()[0] ?? null,
+    expiredLogins: accounts
+      .filter((a) => a.loginExpired)
+      .map((a) => ({ account: acctLabel(a), state: a.loginExpired as 'renewing' | 'open-once' })),
     claudeInstall: installStatusView(),
   }
 }

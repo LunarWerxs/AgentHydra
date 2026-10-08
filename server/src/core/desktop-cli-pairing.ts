@@ -43,6 +43,7 @@ import {
   listCliInstances,
 } from './cli-instances'
 import { desktopCliCredential, feedCliFromDesktop, feedLinkedCliLogins } from './desktop-cli-feed'
+import { renewClosedCliLogins } from './desktop-cli-renew'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumberFor } from './instance-numbers'
 import { readLoginUuid } from './login-state'
@@ -275,10 +276,12 @@ export async function pairDesktopCliLogins(): Promise<void> {
 
 export const FEED_EVERY_MS = 60_000
 
-/** One timer pass: pair any new signed-in desktop with a CLI instance, then feed
- *  (core/desktop-cli-feed.ts), so a CLI instance made now is signed in in the same pass. */
+/** One timer pass: pair any new signed-in desktop with a CLI instance, renew any closed profile's grant
+ *  that is near its end (core/desktop-cli-renew.ts), then feed (core/desktop-cli-feed.ts), so a CLI
+ *  instance made now is signed in in the same pass. */
 async function feedPass(): Promise<number> {
   await pairDesktopCliLogins()
+  await renewClosedCliLogins()
   return feedLinkedCliLogins()
 }
 

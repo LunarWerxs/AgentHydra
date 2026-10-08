@@ -348,6 +348,9 @@ export interface CliMayteAccount {
   sessionResetsAt?: number | null
   /** When the 7-day window `weekPct` was read from resets (epoch ms); null when unknown. */
   weekResetsAt?: number | null
+  /** The linked Claude Code login has expired: `renewing` while the desktop side can refresh it,
+   *  `open-once` when its desktop app must be opened once (desktop-cli-renew.ts loginExpiryState). */
+  loginExpired?: 'renewing' | 'open-once'
   /** When `sessionPct` was read (epoch ms): the usage check's capture, or a worker's stream. Past
    *  READING_STALE_MS no task starts there until it is read again (readingPending). Absent: not
    *  known. */

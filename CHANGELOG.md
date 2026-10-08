@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+**TL;DR**
+
+- **A linked CLI login stays signed in while its desktop app is closed**
+
+**Everything in Unreleased**
+
+- **A linked CLI login stays signed in while its desktop app is closed.** AgentHydra refreshes a closed
+  profile's Claude Code grant before it runs out, without opening a window. When a login has expired anyway,
+  CliMayte names that account by number in its waiting reason and in the capacity answer.
+
 ## [2.0.1] - 2026-10-08
 
 **TL;DR**

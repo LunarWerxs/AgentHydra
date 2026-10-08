@@ -623,6 +623,23 @@ function noAccountReason(
   return `Every eligible account is at its usage limit, past the ${WIND_DOWN_SESSION_PCT}% stop line, or signed out${soonest ? `; the first frees up at ${new Date(soonest).toLocaleString()}` : ''}.${note}`
 }
 
+/** The accounts whose linked Claude Code login has expired, by number, as a waiting task's row says
+ *  it: " #179, #182: Claude Code login expired; renewing." Empty when none has. */
+export function expiredLoginNote(accounts: CliMayteAccount[]): string {
+  const named = (state: 'renewing' | 'open-once') =>
+    accounts
+      .filter((a) => a.loginExpired === state)
+      .map((a) => acctLabel(a))
+      .join(', ')
+  const renewing = named('renewing')
+  const once = named('open-once')
+  const parts = [
+    renewing && `${renewing}: Claude Code login expired; renewing.`,
+    once && `${once}: Claude Code login expired; open its desktop app once.`,
+  ].filter(Boolean)
+  return parts.length ? ` ${parts.join(' ')}` : ''
+}
+
 /** Busy (every eligible account at its worker cap) stays queued, naming the accounts with room
  *  that a cap holds (`note`, capNote); nothing eligible at all waits. */
 function holdForAccount(
@@ -632,9 +649,10 @@ function holdForAccount(
   note: string,
 ): void {
   const { now, accounts } = s
+  const expired = expiredLoginNote(accounts)
   const idle = new Map<string, number>()
   if (pickAccount(w, accounts, walls, idle, Number.MAX_SAFE_INTEGER, now, idle, s.allowFull)) {
-    const slot = note ? `Waiting for a slot:${note}` : null
+    const slot = note ? `Waiting for a slot:${note}${expired}` : null
     const stale = !slot && !!w.error?.startsWith('Waiting for a slot')
     if (w.status === 'waiting' || (slot && w.error !== slot) || stale) {
       w.status = 'queued'
@@ -644,7 +662,7 @@ function holdForAccount(
     return
   }
   const until = firstFreeAt(allowed, now)
-  const why = noAccountReason(s, w, allowed, until, note)
+  const why = noAccountReason(s, w, allowed, until, note + expired)
   if (w.status !== 'waiting' || w.error !== why || w.waitUntil !== until) {
     if (w.status !== 'waiting' || w.error !== why)
       journal(w, 'waiting', { error: firstLine(why), until: until ?? undefined })

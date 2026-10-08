@@ -59,6 +59,7 @@ import { newestLive } from './climayte-remote'
 import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
+import { loginExpiryState } from './core/desktop-cli-renew'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
@@ -436,7 +437,13 @@ function buildPool(now: number): CliMayteAccount[] {
   // can find out when it works again.
   const accounts = listCliInstances()
     .filter((i) => i.loggedIn || !!i.loginNote)
-    .map((i) => poolAccount(i, b))
+    .map((i) => {
+      const acct = poolAccount(i, b)
+      const expired = i.associatedDesktopDir
+        ? loginExpiryState(i.configDir, i.associatedDesktopDir, now)
+        : null
+      return expired ? { ...acct, loginExpired: expired } : acct
+    })
   // One read at a time (refreshReading): the account a task waits on first, else the first due.
   const next = wantedRead && b.due.includes(wantedRead) ? wantedRead : b.due[0]
   if (next) refreshReading(next, now)
