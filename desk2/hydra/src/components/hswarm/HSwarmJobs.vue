@@ -747,7 +747,7 @@ onBeforeUnmount(() => {
                   <td colspan="7" class="p-0! text-base whitespace-normal">
                     <!-- w-0 min-w-full: the detail spans the table without widening its columns. It grows
                          open from zero height in CSS alone (starting: is @starting-style), with no measuring. -->
-                    <div class="grid w-0 min-w-full grid-rows-[1fr] transition-[grid-template-rows] duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
+                    <div class="grid w-0 min-w-full grid-rows-[1fr] transition-rows duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
                       <div class="min-h-0 overflow-hidden">
                         <div class="flex flex-col gap-2 px-3 py-2">
                           <div class="flex items-start gap-2">

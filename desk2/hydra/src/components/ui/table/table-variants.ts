@@ -64,6 +64,34 @@ export const tableRowVariants = cva('hover:bg-accent data-[state=selected]:bg-mu
   },
 })
 
+// A header cell's width and alignment. `measured` takes the width a table hands its columns as --col-w; a fixed
+// width (a status dot's column, a number column) or `grow` (the name column that takes what is left) replaces it.
+export const tableHeadVariants = cva('text-foreground h-10 px-2 text-start align-middle font-medium whitespace-nowrap has-[[role=checkbox]]:pe-0', {
+  variants: {
+    width: {
+      auto: '',
+      measured: 'w-(--col-w)',
+      grow: 'w-full min-w-36',
+      '10': 'w-10',
+      '12': 'w-12',
+      '16': 'w-16',
+      '20': 'w-20',
+      '24': 'w-24',
+      '32': 'w-32',
+      '48': 'w-48',
+    },
+    align: {
+      start: '',
+      end: 'text-end',
+    },
+  },
+  defaultVariants: {
+    width: "auto",
+    align: "start",
+  },
+})
+
 export type TableVariants = VariantProps<typeof tableVariants>
 export type TableRowVariants = VariantProps<typeof tableRowVariants>
 export type TableCellVariants = VariantProps<typeof tableCellVariants>
+export type TableHeadVariants = VariantProps<typeof tableHeadVariants>

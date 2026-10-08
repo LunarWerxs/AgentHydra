@@ -7,6 +7,8 @@
 
 import type { TokenParts } from '@agenthydra/server/types'
 import type { Component } from 'vue'
+import type { SkeletonVariants } from '@/components/ui/skeleton/skeleton-variants'
+import type { TableHeadVariants } from '@/components/ui/table/table-variants'
 import AccountTokensCell from '@/components/AccountTokensCell.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import type { LogoProvider } from '@/components/ProviderLogo.vue'
@@ -59,11 +61,12 @@ export interface InstanceColumn {
   /** i18n key of the InfoHint beside the header. */
   hint?: string
   sortable?: boolean
-  headClass?: string
+  /** The header's width and alignment (TableHead's variants); the width the table measured when no width is set. */
+  head?: Pick<TableHeadVariants, 'width' | 'align'>
   /** The header's own hover (shown when tooltips are on). */
   title?: string
-  /** Classes of this column's first-load skeleton block. */
-  skeleton: string
+  /** This column's first-load skeleton block: its line and width (Skeleton's variants). */
+  skeleton: Pick<SkeletonVariants, 'line' | 'width'>
   /** Wraps the sort button: opens a hover flyout under the header text (the tokens window choice
    *  plugs in here). Receives `flyoutProps`; the sort button is its default slot. */
   flyout?: Component
@@ -87,9 +90,9 @@ const COLUMNS: ColumnDef[] = [
     key: 'status',
     label: '',
     sortable: true,
-    headClass: 'w-10',
+    head: { width: '10' },
     title: 'instances.sortByStatus',
-    skeleton: 'size-2',
+    skeleton: { line: 'dot' },
   },
   // Name is the one column that gives way: it takes whatever the others leave (w-full, and max-w-0
   // on its cells so a long name cannot force the table wider), never below min-w-36. Every other
@@ -99,8 +102,8 @@ const COLUMNS: ColumnDef[] = [
     label: 'instances.colName',
     hint: 'instances.colNameHint',
     sortable: true,
-    headClass: 'w-full min-w-36',
-    skeleton: 'h-4 w-28',
+    head: { width: 'grow' },
+    skeleton: { line: 'title', width: '28' },
   },
   {
     key: 'configDir',
@@ -108,7 +111,7 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     kinds: ['cli'],
     mode: 'process',
-    skeleton: 'h-3 w-32',
+    skeleton: { line: 'text', width: '32' },
   },
   {
     key: 'pid',
@@ -116,7 +119,7 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     kinds: ['desktop'],
     mode: 'process',
-    skeleton: 'h-3 w-10',
+    skeleton: { line: 'text', width: '10' },
   },
   {
     key: 'uptime',
@@ -124,7 +127,7 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     kinds: ['desktop'],
     mode: 'process',
-    skeleton: 'h-3 w-12',
+    skeleton: { line: 'text', width: '12' },
   },
   {
     key: 'memory',
@@ -132,7 +135,7 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     kinds: ['desktop'],
     mode: 'process',
-    skeleton: 'h-3 w-14',
+    skeleton: { line: 'text', width: '14' },
   },
   // Each quota window is ONE cell: the % chip (the colour and the popover) and the reset bar.
   {
@@ -140,14 +143,14 @@ const COLUMNS: ColumnDef[] = [
     label: 'instances.col5h',
     sortable: true,
     mode: 'quota',
-    skeleton: 'h-5 w-32',
+    skeleton: { line: 'chip', width: '32' },
   },
   {
     key: 'weekly',
     label: 'instances.colWeek',
     sortable: true,
     mode: 'quota',
-    skeleton: 'h-5 w-32',
+    skeleton: { line: 'chip', width: '32' },
   },
   // Process mode keeps the one weekly % chip.
   {
@@ -155,7 +158,7 @@ const COLUMNS: ColumnDef[] = [
     label: 'instances.colUsage',
     sortable: true,
     mode: 'process',
-    skeleton: 'h-5 w-14',
+    skeleton: { line: 'chip', width: '14' },
   },
   // A Free web login has no plan to show: its provider is the logo before its number.
   {
@@ -163,14 +166,14 @@ const COLUMNS: ColumnDef[] = [
     label: 'instances.colPlan',
     sortable: true,
     kinds: ['desktop', 'cli'],
-    skeleton: 'h-5 w-14',
+    skeleton: { line: 'chip', width: '14' },
   },
   {
     key: 'lastActive',
     label: 'instances.colLastActive',
     hint: 'instances.colLastActiveHint',
     sortable: true,
-    skeleton: 'h-3 w-14',
+    skeleton: { line: 'text', width: '14' },
   },
   // What the account has run, from its own transcripts on this PC (a Free login's: estimated from the
   // text Desk sent and got back). ONE column for every kind (owner, 2026-10-07): the window flyout and
@@ -181,9 +184,9 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     flyout: TokenWindowFlyout,
     cell: AccountTokensCell,
-    skeleton: 'h-4 w-12',
+    skeleton: { line: 'title', width: '12' },
   },
-  { key: 'actions', label: 'instances.colActions', headClass: 'text-end', skeleton: 'h-6 w-20' },
+  { key: 'actions', label: 'instances.colActions', head: { align: 'end' }, skeleton: { line: 'button', width: '20' } },
 ]
 
 /** The columns the shown kinds need, once each, in COLUMNS order, for the table's column mode. */

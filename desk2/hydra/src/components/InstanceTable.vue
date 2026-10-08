@@ -56,8 +56,8 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
         <TableHead
           v-for="col in columns"
           :key="col.key"
-          class="w-(--col-w)"
-          :class="col.headClass"
+          :width="col.head?.width ?? 'measured'"
+          :align="col.head?.align"
           :style="{ '--col-w': widths?.[col.key] }"
           :title="col.title && tooltipsEnabled ? $t(col.title) : undefined"
         >
@@ -91,9 +91,9 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
       <TableRow v-for="i in skeletonRows" :key="i">
         <TableCell v-for="col in columns" :key="col.key">
           <div v-if="col.key === 'actions'" class="flex justify-end">
-            <Skeleton :class="col.skeleton" />
+            <Skeleton :line="col.skeleton.line" :width="col.skeleton.width" />
           </div>
-          <Skeleton v-else :class="col.skeleton" />
+          <Skeleton v-else :line="col.skeleton.line" :width="col.skeleton.width" />
         </TableCell>
       </TableRow>
     </TableBody>
