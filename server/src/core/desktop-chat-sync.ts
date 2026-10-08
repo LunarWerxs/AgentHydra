@@ -575,50 +575,44 @@ async function startOver(
   return true
 }
 
-/** Send one local chat's new bytes and record. Returns what is left of the pass's read budget. */
-async function sendChat(
+/** The chat's state when it goes up now, else null: not sendable, still being written in, or its
+ *  first chunk refused as taken less than STOPPED_RETRY_MS ago. */
+function dueState(
   io: ChatIo,
   state: StateFile,
-  rows: Map<string, StoreRow>,
+  row: StoreRow | undefined,
   c: LocalChat,
-  budget: number,
   now: number,
-): Promise<number> {
-  let row = rows.get(c.id)
-  if (row && !c.archived && c.project && writtenElsewhere(state.chats[c.id], row)) {
-    if (!(await startOver(io, state, rows, c))) return budget
-    row = undefined
-  }
+): ChatState | null {
   const st = sendableState(io, state, row, c)
-  if (!st) return budget
-  if (row && stillWriting(st, row, c, now)) return budget
+  if (!st) return null
+  if (row && stillWriting(st, row, c, now)) return null
   // A clock set back since makes this negative: try again rather than wait it out.
   const refused = st.stoppedAt === undefined ? -1 : now - st.stoppedAt
-  if (!row && refused >= 0 && refused < STOPPED_RETRY_MS) return budget
-  const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
-  let at = start
-  let out: SendOutcome = 'done'
-  if (!c.archived && c.project && c.size > start.bytes) {
-    const up = await uploadBytes(io, c, c.project, start.bytes, start.chunks, budget)
-    budget = up.budget
-    out = up.out
-    at = { bytes: up.bytes, chunks: up.chunks }
-  }
-  const wrote = at.bytes > start.bytes
-  if (!row && at.bytes === 0 && out !== 'stopped') return budget // nothing complete to share yet
-  if (wrote) st.up = at
-  if (out === 'stopped' || !c.project) {
-    if (out === 'stopped' && !row) st.stoppedAt = now
-    state.chats[c.id] = st
-    return budget
-  }
-  delete st.stoppedAt
+  if (!row && refused >= 0 && refused < STOPPED_RETRY_MS) return null
+  return st
+}
+
+/** Write a chat's record with its stream at `at` and note what the store agreed; skipped when the
+ *  row already shows it (no chunk written or waiting, the same title and archive state). */
+async function putRecord(
+  io: ChatIo,
+  state: StateFile,
+  row: StoreRow | undefined,
+  c: LocalChat,
+  project: string,
+  st: ChatState,
+  at: { bytes: number; chunks: number },
+  wrote: boolean,
+  budget: number,
+  now: number,
+): Promise<void> {
   const hash = shown(c.record, c.archived)
-  if (row && !wrote && !st.up && hash === st.sent) return budget
+  if (row && !wrote && !st.up && hash === st.sent) return
   const sealed: Sealed = {
     record: c.record,
     sessionId: c.sessionId,
-    project: c.project,
+    project,
     account: c.account,
     org: c.org,
     archived: c.archived,
@@ -631,7 +625,7 @@ async function sendChat(
     meta: { k: 'r', s: c.sessionId, pc: st.origin.pc, b: at.bytes, a: c.archived ? 1 : 0, at: now },
   })
   state.chats[c.id] = st // on a 409 or failure, chunks written stay noted in `up`
-  if (r.status === 409) return budget
+  if (r.status === 409) return
   if (r.status !== 200 || !Number.isInteger(r.json?.version))
     throw chatFailure('Uploading a chat', r)
   Object.assign(st, {
@@ -653,6 +647,43 @@ async function sendChat(
     row.version = st.version
     row.meta = { ...row.meta, b: at.bytes }
   }
+}
+
+/** Send one local chat's new bytes and record. Returns what is left of the pass's read budget. */
+async function sendChat(
+  io: ChatIo,
+  state: StateFile,
+  rows: Map<string, StoreRow>,
+  c: LocalChat,
+  budget: number,
+  now: number,
+): Promise<number> {
+  let row = rows.get(c.id)
+  if (row && !c.archived && c.project && writtenElsewhere(state.chats[c.id], row)) {
+    if (!(await startOver(io, state, rows, c))) return budget
+    row = undefined
+  }
+  const st = dueState(io, state, row, c, now)
+  if (!st) return budget
+  const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
+  let at = start
+  let out: SendOutcome = 'done'
+  if (!c.archived && c.project && c.size > start.bytes) {
+    const up = await uploadBytes(io, c, c.project, start.bytes, start.chunks, budget)
+    budget = up.budget
+    out = up.out
+    at = { bytes: up.bytes, chunks: up.chunks }
+  }
+  const wrote = at.bytes > start.bytes
+  if (!row && at.bytes === 0 && out !== 'stopped') return budget // nothing complete to share yet
+  if (wrote) st.up = at
+  if (out === 'stopped' || !c.project) {
+    if (out === 'stopped' && !row) st.stoppedAt = now
+    state.chats[c.id] = st
+    return budget
+  }
+  delete st.stoppedAt
+  await putRecord(io, state, row, c, c.project, st, at, wrote, budget, now)
   return budget
 }
 

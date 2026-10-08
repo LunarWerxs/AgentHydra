@@ -1221,6 +1221,66 @@ function sizeOf(path: string): number {
   }
 }
 
+/** The logs of `w`'s attempts the storage pass would pack at `now`, onto `pack` (planStorage). */
+function planPackFor(w: CliMayteWorker, now: number, pack: StoragePlan['pack']): void {
+  for (const at of w.attempts) {
+    if (!logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
+    try {
+      const st = statSync(at.log)
+      if (st.mtimeMs < now - PACK_AFTER_MS) pack.push({ path: at.log, bytes: st.size })
+    } catch {
+      // packed already, or archived
+    }
+  }
+}
+
+/** Whether a file last written at `mtimeMs` and named for worker `w` (undefined: no known worker)
+ *  is past keeping at `now` (planStorage). */
+function workerFilesExpired(w: CliMayteWorker | undefined, mtimeMs: number, now: number): boolean {
+  if (!w) return now - mtimeMs > FILES_KEEP_MS
+  if (isActive(w) || w.checkRunner || w.staleChecks?.length) return false
+  if (w.attempts.some((a) => !logSettled(a) || a.runner?.killOnStart)) return false
+  const last = Math.max(0, ...w.attempts.map((a) => a.endedAt ?? 0))
+  return now - Math.max(last, mtimeMs) > FILES_KEEP_MS
+}
+
+/** The files in `dir` the storage pass would remove at `now`, onto `remove` (planStorage). `kept`
+ *  holds, per worker id, whether its files are kept whatever their age, across every dir. */
+function planDirRemovals(
+  dir: string,
+  byId: Map<string, CliMayteWorker>,
+  kept: Map<string, boolean>,
+  now: number,
+  remove: StoragePlan['remove'],
+): void {
+  let names: string[] = []
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const name of names) {
+    const id = /^(w-[0-9a-f]+)/.exec(name)?.[1]
+    if (!id) continue
+    // A known worker that ended inside the keep window keeps its files whatever their age, so
+    // they need no stat: ~7,000 a pass were (2026-10-08), nearly all of a live worker's.
+    let keep = kept.get(id)
+    if (keep === undefined) {
+      const w = byId.get(id)
+      keep = w !== undefined && !workerFilesExpired(w, 0, now)
+      kept.set(id, keep)
+    }
+    if (keep) continue
+    const path = join(dir, name)
+    try {
+      if (workerFilesExpired(byId.get(id), statSync(path).mtimeMs, now))
+        remove.push({ path, bytes: sizeOf(path) })
+    } catch {
+      // gone meanwhile
+    }
+  }
+}
+
 /** What the storage pass would pack and remove for these workers at `now`; touches nothing. A
  *  worker that is active, being stopped, or has an attempt whose log is not settled keeps every
  *  file; a file named for no known worker goes by its own age. */
@@ -1236,52 +1296,11 @@ export function planStorage(
     // The pack list is only reported (a dry run): the real pass packs in packOldLogs, so it skips
     // a stat of every attempt's log here.
     if (!withPack) continue
-    for (const at of w.attempts) {
-      if (!logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
-      try {
-        const st = statSync(at.log)
-        if (st.mtimeMs < now - PACK_AFTER_MS) plan.pack.push({ path: at.log, bytes: st.size })
-      } catch {
-        // packed already, or archived
-      }
-    }
-  }
-  const expired = (id: string, mtimeMs: number): boolean => {
-    const w = byId.get(id)
-    if (!w) return now - mtimeMs > FILES_KEEP_MS
-    if (isActive(w) || w.checkRunner || w.staleChecks?.length) return false
-    if (w.attempts.some((a) => !logSettled(a) || a.runner?.killOnStart)) return false
-    const last = Math.max(0, ...w.attempts.map((a) => a.endedAt ?? 0))
-    return now - Math.max(last, mtimeMs) > FILES_KEEP_MS
+    planPackFor(w, now, plan.pack)
   }
   const kept = new Map<string, boolean>()
-  for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS]) {
-    let names: string[] = []
-    try {
-      names = readdirSync(dir)
-    } catch {
-      continue
-    }
-    for (const name of names) {
-      const id = /^(w-[0-9a-f]+)/.exec(name)?.[1]
-      if (!id) continue
-      // A known worker that ended inside the keep window keeps its files whatever their age, so
-      // they need no stat: ~7,000 a pass were (2026-10-08), nearly all of a live worker's.
-      let keep = kept.get(id)
-      if (keep === undefined) {
-        const w = byId.get(id)
-        keep = w !== undefined && !expired(id, 0)
-        kept.set(id, keep)
-      }
-      if (keep) continue
-      const path = join(dir, name)
-      try {
-        if (expired(id, statSync(path).mtimeMs)) plan.remove.push({ path, bytes: sizeOf(path) })
-      } catch {
-        // gone meanwhile
-      }
-    }
-  }
+  for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS])
+    planDirRemovals(dir, byId, kept, now, plan.remove)
   const archive = join(ROOT, 'archive')
   try {
     for (const name of readdirSync(archive)) {
@@ -1741,8 +1760,9 @@ function resumeInterrupted(w: CliMayteWorker, stderr: string): void {
   }
 }
 
-/** The worker's next state from how its attempt ended, with the account's wall where it earned one. */
-export function settleWorker(
+/** The worker's state from its attempt's outcome alone, with the account's wall where it earned one
+ *  (settleWorker). */
+function settleByOutcome(
   w: CliMayteWorker,
   at: CliMayteWorker['attempts'][number],
   v: ReturnType<typeof classifyAttempt>,
@@ -1787,6 +1807,48 @@ export function settleWorker(
       w.status = 'failed'
       w.error = v.result || stderr.slice(-1_500) || 'The CLI exited without a result.'
   }
+}
+
+/** A manager whose turn ended done on wave `waveId` (settleWorker): held while the wave has live
+ *  tasks and no report, nudged once to report or dispatch, failed after that; a finished wave with
+ *  no report takes the manager's answer as one (reportForManager). */
+function holdManagerForWave(w: CliMayteWorker, waveId: string, now: number): void {
+  try {
+    const found = liveWave(waveId)
+    const wave = found?.wave
+    if (found && wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
+      const running = wave.tasks.filter((t) => t.state === 'running').length
+      const queued = wave.tasks.filter((t) => t.state === 'pending').length
+      if (running || w.status !== 'done') {
+        w.waveNudged = false
+        w.status = 'waiting'
+        w.hold = 'wave'
+        w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
+      } else if (w.waveNudged) {
+        // Nothing runs, so no task's end will wake it: held, the wave would wait forever.
+        w.status = 'failed'
+        w.error = `Wave ${w.wave} has ${queued} pending task(s), none running and no report after "report or dispatch": it needs the orchestrator.`
+      } else {
+        w.waveNudged = true
+        w.pending.push(REPORT_OR_DISPATCH)
+        w.status = 'queued'
+        w.revived = true
+      }
+    } else if (found) reportForManager(w, found, now)
+  } catch {
+    // If we can't read the wave, proceed normally (status is already set by settleWorker).
+  }
+}
+
+/** The worker's next state from how its attempt ended, with the account's wall where it earned one. */
+export function settleWorker(
+  w: CliMayteWorker,
+  at: CliMayteWorker['attempts'][number],
+  v: ReturnType<typeof classifyAttempt>,
+  now: number,
+  stderr: string,
+): void {
+  settleByOutcome(w, at, v, now, stderr)
   // A requeued task that keeps moving, handing off or spending stops here and asks (notConverging).
   if (w.status === 'queued' && (v.outcome === 'handoff' || v.outcome === 'quota')) {
     const stop = notConverging(w)
@@ -1798,33 +1860,8 @@ export function settleWorker(
 
   // Piece 2: The hold. When a manager's turn ends done while its wave has live tasks and no report,
   // hold it in waiting with hold: 'wave'.
-  if (v.outcome === 'done' && w.kind === 'manage' && w.wave && w.status !== 'failed') {
-    try {
-      const found = liveWave(w.wave)
-      const wave = found?.wave
-      if (found && wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
-        const running = wave.tasks.filter((t) => t.state === 'running').length
-        const queued = wave.tasks.filter((t) => t.state === 'pending').length
-        if (running || w.status !== 'done') {
-          w.waveNudged = false
-          w.status = 'waiting'
-          w.hold = 'wave'
-          w.error = `Managing wave ${w.wave}: ${running} running, ${queued} queued`
-        } else if (w.waveNudged) {
-          // Nothing runs, so no task's end will wake it: held, the wave would wait forever.
-          w.status = 'failed'
-          w.error = `Wave ${w.wave} has ${queued} pending task(s), none running and no report after "report or dispatch": it needs the orchestrator.`
-        } else {
-          w.waveNudged = true
-          w.pending.push(REPORT_OR_DISPATCH)
-          w.status = 'queued'
-          w.revived = true
-        }
-      } else if (found) reportForManager(w, found, now)
-    } catch {
-      // If we can't read the wave, proceed normally (status is already set by settleWorker).
-    }
-  }
+  if (v.outcome === 'done' && w.kind === 'manage' && w.wave && w.status !== 'failed')
+    holdManagerForWave(w, w.wave, now)
 }
 
 /** The one message a manager gets when its turn ends with nothing of its wave running and no report. */
@@ -2227,29 +2264,13 @@ function deskProblem(d: unknown, chat: boolean): string | null {
   return null
 }
 
-/** One task's model, effort, kind and priority. A named model or effort is held only when the task
- *  (or its run) gives `ownerWords`, or the task is sealed, or it gives a `modelWhy` AND the named
- *  setting sits on a cheaper rung than the kind's best; otherwise the task is auto: the scorecard's
- *  pick for its kind, and `autoSoFar` counts it.
- *  Owner, 2026-10-02: tasks are to go to "the cheapest/fastest model capable of reliably completing"
- *  them, yet in a day 194 of about 440 arrived pinned to Opus high or above by the chats that sent
- *  them, and a task naming nothing ran on the CLI's default, Opus high.
- *  Owner, 2026-10-05: the point was to offload work to moderate models, yet 'not a single one is
- *  using any other model besides Opus 5.5': senders pinned Opus by naming it with any `modelWhy`
- *  (286 tasks in 72 h here), so a reason no longer holds a setting at or above the pick; only the
- *  owner's own words do. A named setting not held is validated, then left to the scorecard. Throws
- *  on a value that is not one. */
-export function runSetting(
+/** The model and effort a task names, or its run does (runSetting): both null when it asks for
+ *  `auto`. `effort` is the one it runs at, `namedEffort` the one named. Throws on a value that is
+ *  not one. */
+function namedModelEffort(
   t: RunTask,
   defaults: RunDefaults,
-  rows: ReturnType<typeof scoreRows>,
-  autoSoFar: Map<CliMayteKind, number>,
-): RunSetting {
-  const kind = climayteKind(t.kind) ?? defaults.kind
-  const priority = climaytePriority(t.priority) ?? defaults.priority
-  // Validated for every task, a chat's included, though a chat's setting never needs it.
-  const ownWords = ownerWordsOf(t.ownerWords)
-  if (t.chat === true) return chatSetting(t, defaults, kind, priority)
+): { model: string | null; namedEffort: string | null; effort: string | null } {
   const autoAsked = isAutoSetting(t.model) || (isBlank(t.model) && defaults.auto)
   const model = autoAsked ? null : (climayteModel(t.model) ?? defaults.model)
   const namedEffort = autoAsked
@@ -2257,13 +2278,30 @@ export function runSetting(
     : ((isAutoSetting(t.effort) ? null : climayteEffort(t.effort)) ?? defaults.effort)
   // A Haiku named with no effort runs at medium: its first rung, and the API's default.
   const effort = namedEffort ?? (model === HAIKU ? 'medium' : null)
-  const why = (typeof t.modelWhy === 'string' && t.modelWhy.trim()) || defaults.why
+  return { model, namedEffort, effort }
+}
+
+/** The owner's words that may hold a task's named setting (runSetting): its own, else its run's. */
+function ownerWordsFor(t: RunTask, defaults: RunDefaults, ownWords: string | null): string | null {
   // The run's ownerWords asked for the run's setting: a task naming its own needs its own words.
   const namesOwn =
     (!isBlank(t.model) && !isAutoSetting(t.model)) ||
     (!isBlank(t.effort) && !isAutoSetting(t.effort))
-  const words = ownWords ?? (namesOwn ? null : defaults.ownerWords)
-  const k = kind ?? 'code'
+  return ownWords ?? (namesOwn ? null : defaults.ownerWords)
+}
+
+/** The setting a task names when it holds (runSetting): with the owner's `words`, on a sealed task,
+ *  or with a `why` for a rung cheaper than kind `k`'s best. Null when it names none or it does not
+ *  hold. */
+function heldSetting(
+  t: RunTask,
+  s: { model: string | null; effort: string | null; kind: CliMayteKind | null; priority: number },
+  words: string | null,
+  why: string | null,
+  k: CliMayteKind,
+  rows: ReturnType<typeof scoreRows>,
+): RunSetting | null {
+  const { model, effort, kind, priority } = s
   if ((model || effort) && words)
     return {
       model,
@@ -2292,6 +2330,38 @@ export function runSetting(
     if (named !== -1 && named < bestRung(k, rows))
       return { model, effort, kind, auto: false, reason: `named by the sender: ${why}`, priority }
   }
+  return null
+}
+
+/** One task's model, effort, kind and priority. A named model or effort is held only when the task
+ *  (or its run) gives `ownerWords`, or the task is sealed, or it gives a `modelWhy` AND the named
+ *  setting sits on a cheaper rung than the kind's best; otherwise the task is auto: the scorecard's
+ *  pick for its kind, and `autoSoFar` counts it.
+ *  Owner, 2026-10-02: tasks are to go to "the cheapest/fastest model capable of reliably completing"
+ *  them, yet in a day 194 of about 440 arrived pinned to Opus high or above by the chats that sent
+ *  them, and a task naming nothing ran on the CLI's default, Opus high.
+ *  Owner, 2026-10-05: the point was to offload work to moderate models, yet 'not a single one is
+ *  using any other model besides Opus 5.5': senders pinned Opus by naming it with any `modelWhy`
+ *  (286 tasks in 72 h here), so a reason no longer holds a setting at or above the pick; only the
+ *  owner's own words do. A named setting not held is validated, then left to the scorecard. Throws
+ *  on a value that is not one. */
+export function runSetting(
+  t: RunTask,
+  defaults: RunDefaults,
+  rows: ReturnType<typeof scoreRows>,
+  autoSoFar: Map<CliMayteKind, number>,
+): RunSetting {
+  const kind = climayteKind(t.kind) ?? defaults.kind
+  const priority = climaytePriority(t.priority) ?? defaults.priority
+  // Validated for every task, a chat's included, though a chat's setting never needs it.
+  const ownWords = ownerWordsOf(t.ownerWords)
+  if (t.chat === true) return chatSetting(t, defaults, kind, priority)
+  const { model, namedEffort, effort } = namedModelEffort(t, defaults)
+  const why = (typeof t.modelWhy === 'string' && t.modelWhy.trim()) || defaults.why
+  const words = ownerWordsFor(t, defaults, ownWords)
+  const k = kind ?? 'code'
+  const held = heldSetting(t, { model, effort, kind, priority }, words, why, k, rows)
+  if (held) return held
   const n = autoSoFar.get(k) ?? 0
   autoSoFar.set(k, n + 1)
   const pick = pickConfig(k, rows, n)
@@ -2467,6 +2537,70 @@ function assertKnownAccounts(accounts: string[] | undefined): void {
     )
 }
 
+/** A dispatch's top-level `model`, `effort`, `kind`, `priority`, `modelWhy` and `ownerWords` as its
+ *  tasks' defaults (climayteRun). Throws on a value that is not one. */
+function runDefaultsOf(input: Parameters<typeof climayteRun>[0]): RunDefaults {
+  const groupAuto = isAutoSetting(input.model)
+  return {
+    auto: groupAuto,
+    why: (typeof input.modelWhy === 'string' && input.modelWhy.trim()) || null,
+    ownerWords: ownerWordsOf(input.ownerWords),
+    model: groupAuto ? null : climayteModel(input.model),
+    effort: groupAuto || isAutoSetting(input.effort) ? null : climayteEffort(input.effort),
+    kind: climayteKind(input.kind),
+    priority: climaytePriority(input.priority) ?? 0,
+  }
+}
+
+/** Each task's setting (runSetting), in order, once it is checked runnable (assertRunnable); a
+ *  setting that throws is refused naming its task (climayteRun). */
+function taskSettings(tasks: RunTask[], defaults: RunDefaults): RunSetting[] {
+  const rows = scoreRows(workers.values())
+  const autoSoFar = autoPicksSoFar()
+  return tasks.map((t, i) => {
+    assertRunnable(t, i)
+    try {
+      return runSetting(t, defaults, rows, autoSoFar)
+    } catch (err) {
+      throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  })
+}
+
+/** Store a dispatch's new workers, journal each and start them (climayteRun): a wave's carry the
+ *  wave, any other the dispatcher to ping. */
+function enlistWorkers(
+  made: CliMayteWorker[],
+  settings: RunSetting[],
+  fresh: number[],
+  input: { wave?: string; origin?: CliMayteOrigin },
+): void {
+  // A wave's tasks are reported to their manager by the wave's own batch wake, so they carry none.
+  const origin = input.wave ? undefined : originFor(input.origin)
+  for (const [k, w] of made.entries()) {
+    if (input.wave) w.wave = input.wave
+    if (origin) w.origin = origin
+    workers.set(w.id, w)
+    journal(w, 'dispatched', {
+      cwd: w.cwd,
+      accounts: w.accounts?.length,
+      model: w.model,
+      effort: w.effort,
+      kind: w.kind ?? undefined,
+      reason: settings[fresh[k] as number]?.reason,
+      priority: w.priority,
+    })
+  }
+  if (made.length) {
+    // One save for the whole dispatch: a save per task wrote the store 21 times for 21 tasks,
+    // 0.3 s of the daemon's loop (71 dispatches carried 215 tasks, 2026-10-02).
+    save()
+    for (const w of made) notify(w)
+    startCliMayte()
+    schedule(0)
+  }
+}
+
 /** `model` / `effort` / `kind` at the top level are the group's default: a task that names its
  *  own wins. All are validated (climayteModel, climayteEffort, climayteKind) before anything is created.
  *  The scorecard chooses model AND effort for the task's kind (default `code`): of the settings that
@@ -2523,26 +2657,8 @@ export function climayteRun(input: {
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
   input = { ...input, tasks: input.tasks.map(sealedTask) }
-  const groupAuto = isAutoSetting(input.model)
-  const defaults: RunDefaults = {
-    auto: groupAuto,
-    why: (typeof input.modelWhy === 'string' && input.modelWhy.trim()) || null,
-    ownerWords: ownerWordsOf(input.ownerWords),
-    model: groupAuto ? null : climayteModel(input.model),
-    effort: groupAuto || isAutoSetting(input.effort) ? null : climayteEffort(input.effort),
-    kind: climayteKind(input.kind),
-    priority: climaytePriority(input.priority) ?? 0,
-  }
-  const rows = scoreRows(workers.values())
-  const autoSoFar = autoPicksSoFar()
-  const settings = input.tasks.map((t, i) => {
-    assertRunnable(t, i)
-    try {
-      return runSetting(t, defaults, rows, autoSoFar)
-    } catch (err) {
-      throw new Error(`task ${i + 1}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  })
+  const defaults = runDefaultsOf(input)
+  const settings = taskSettings(input.tasks, defaults)
   const cap = input.perAccount ?? 2
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
   assertKnownAccounts(input.accounts)
@@ -2571,30 +2687,7 @@ export function climayteRun(input: {
   const made = fresh.map((i, k) =>
     newWorker(input.tasks[i] as RunTask, settings[i], sized[k], group, input.accounts, now),
   )
-  // A wave's tasks are reported to their manager by the wave's own batch wake, so they carry none.
-  const origin = input.wave ? undefined : originFor(input.origin)
-  for (const [k, w] of made.entries()) {
-    if (input.wave) w.wave = input.wave
-    if (origin) w.origin = origin
-    workers.set(w.id, w)
-    journal(w, 'dispatched', {
-      cwd: w.cwd,
-      accounts: w.accounts?.length,
-      model: w.model,
-      effort: w.effort,
-      kind: w.kind ?? undefined,
-      reason: settings[fresh[k] as number]?.reason,
-      priority: w.priority,
-    })
-  }
-  if (made.length) {
-    // One save for the whole dispatch: a save per task wrote the store 21 times for 21 tasks,
-    // 0.3 s of the daemon's loop (71 dispatches carried 215 tasks, 2026-10-02).
-    save()
-    for (const w of made) notify(w)
-    startCliMayte()
-    schedule(0)
-  }
+  enlistWorkers(made, settings, fresh, input)
   return runReply(group, repeats, fresh, made, now)
 }
 
@@ -2964,6 +3057,88 @@ export const HELD_MESSAGE =
 const URGENT_PREFIX =
   'AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator. Act on it first; then continue the task only if it still applies, checking the state of anything you were in the middle of.'
 
+/** The model, effort and folder a message names, applied from the next launch on. */
+interface SendSetting {
+  model: string | null
+  effort: string | null
+  cwd: string | undefined
+}
+
+/** A message's model, effort and folder, checked; a refusal's text when one is not valid. */
+function sendSetting(
+  w: CliMayteWorker,
+  opts: { model?: string; effort?: string; cwd?: string },
+): SendSetting | string {
+  // A new model or effort applies from the next launch on: the turn that delivers this message
+  // (or one queued before it) and every later one, in the same session (`--resume` takes both).
+  let model: string | null
+  let effort: string | null
+  try {
+    model = climayteModel(opts.model)
+    // A move to Haiku with no effort runs at medium, not at the effort the old model had.
+    effort = climayteEffort(opts.effort) ?? (model === HAIKU && w.model !== HAIKU ? 'medium' : null)
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
+  // Another folder applies from the next launch on (climayte-cwd.ts carries the session there).
+  let cwd: string | undefined
+  if (opts.cwd !== undefined) {
+    try {
+      cwd = validateCwd(opts.cwd)
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    }
+  }
+  return { model, effort, cwd }
+}
+
+/** Put a message's setting on its worker (another folder as pendingCwd, for the next launch). */
+function applySendSetting(w: CliMayteWorker, { model, effort, cwd }: SendSetting): void {
+  if (model) w.model = model
+  if (effort) w.effort = effort
+  if (cwd && cwd !== w.cwd) {
+    w.pendingCwd = cwd
+    journal(w, 'cwd-changed', { cwd, from: w.cwd, pending: 1 })
+  } else if (cwd) delete w.pendingCwd // back to the folder it is in
+}
+
+/** Queue an urgent message first and stop the running turn for it. Null when the worker had
+ *  finished on its own a moment ago: the message then leads its next turn like any other. */
+function sendUrgent(
+  w: CliMayteWorker,
+  text: string,
+  { model, effort }: SendSetting,
+): ReturnType<typeof climayteSend> | null {
+  w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)
+  journal(w, 'follow-up-queued', {
+    pending: w.pending.length,
+    urgent: true,
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+  if (stopToDeliver(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
+    const more = w.pending.length - 1
+    return {
+      ok: true,
+      urgent: true,
+      model: w.model,
+      effort: w.effort,
+      message: `Stopped its running work; the same session continues now with this message first${more ? `, then the ${more} message(s) queued before it` : ''}.`,
+    }
+  }
+  return null
+}
+
+/** Queue a message after the ones held before it, for the worker's next turn. */
+function queueFollowUp(w: CliMayteWorker, text: string, { model, effort }: SendSetting): void {
+  w.pending.push(text)
+  journal(w, 'follow-up-queued', {
+    pending: w.pending.length,
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+}
+
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
  *  follow it, in order. Without it, a running worker gets the message when its task ends. */
@@ -2982,65 +3157,22 @@ export function climayteSend(
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
-  // A new model or effort applies from the next launch on: the turn that delivers this message
-  // (or one queued before it) and every later one, in the same session (`--resume` takes both).
-  let model: string | null
-  let effort: string | null
-  try {
-    model = climayteModel(opts.model)
-    // A move to Haiku with no effort runs at medium, not at the effort the old model had.
-    effort = climayteEffort(opts.effort) ?? (model === HAIKU && w.model !== HAIKU ? 'medium' : null)
-  } catch (err) {
-    return { ok: false, message: err instanceof Error ? err.message : String(err) }
-  }
-  // Another folder applies from the next launch on (climayte-cwd.ts carries the session there).
-  let cwd: string | undefined
-  if (opts.cwd !== undefined) {
-    try {
-      cwd = validateCwd(opts.cwd)
-    } catch (err) {
-      return { ok: false, message: err instanceof Error ? err.message : String(err) }
-    }
-  }
+  const setting = sendSetting(w, opts)
+  if (typeof setting === 'string') return { ok: false, message: setting }
   // A Desk chat's add-ons as they are now replace the kept ones from the next launch on.
   if (opts.desk !== undefined) {
     const why = deskProblem(opts.desk, w.chat === true)
     if (why) return { ok: false, message: why }
     w.desk = opts.desk as CliMayteWorker['desk']
   }
-  if (model) w.model = model
-  if (effort) w.effort = effort
-  if (cwd && cwd !== w.cwd) {
-    w.pendingCwd = cwd
-    journal(w, 'cwd-changed', { cwd, from: w.cwd, pending: 1 })
-  } else if (cwd) delete w.pendingCwd // back to the folder it is in
+  applySendSetting(w, setting)
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
   if (w.status === 'running' && opts.urgent) {
-    w.pending.unshift(`${URGENT_PREFIX}\n\n${text}`)
-    journal(w, 'follow-up-queued', {
-      pending: w.pending.length,
-      urgent: true,
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-    })
-    if (stopToDeliver(w, 'Stopped to deliver an urgent message from the orchestrator.')) {
-      const more = w.pending.length - 1
-      return {
-        ok: true,
-        urgent: true,
-        model: w.model,
-        effort: w.effort,
-        message: `Stopped its running work; the same session continues now with this message first${more ? `, then the ${more} message(s) queued before it` : ''}.`,
-      }
-    }
+    const sent = sendUrgent(w, text, setting)
+    if (sent) return sent
     // It finished on its own a moment ago: the message leads its next turn like any other.
   } else {
-    w.pending.push(text)
-    journal(w, 'follow-up-queued', {
-      pending: w.pending.length,
-      ...(model ? { model } : {}),
-      ...(effort ? { effort } : {}),
-    })
+    queueFollowUp(w, text, setting)
   }
   if (w.status === 'running') {
     changed(w)
@@ -3324,6 +3456,49 @@ export function verdictNoteTooLong(note: unknown): string | null {
     : null
 }
 
+/** A fail's severity when it is one of 0-3, else undefined. */
+function verdictSeverity(sev: unknown): 0 | 1 | 2 | 3 | undefined {
+  return sev === 0 || sev === 1 || sev === 2 || sev === 3 ? sev : undefined
+}
+
+/** Why a verdict is refused on its note or severity, else null: a fail says what was wrong, and
+ *  only a fail has a severity (0-3). */
+function verdictProblem(
+  verdict: 'pass' | 'fail',
+  note: string | null,
+  sev: unknown,
+): string | null {
+  if (verdict === 'fail' && !note)
+    return 'Say what was wrong (note): the worker gets it with the retry.'
+  if (sev != null) {
+    if (verdict === 'pass') return 'A pass has no severity: it is for a fail (0-3).'
+    if (verdictSeverity(sev) === undefined)
+      return "severity must be an integer 0-3 (0 not the model's, 1 slip, 2 rework, 3 failed)."
+  }
+  return null
+}
+
+/** What a recorded verdict does next: a fail goes back to its session one rung up (sendBack) unless
+ *  `retry` is false or the task is sealed. What it was sent back on (null when it was not) and what
+ *  to say. */
+function afterVerdict(
+  id: string,
+  w: CliMayteWorker,
+  verdict: CliMayteVerdict,
+  note: string | null,
+  retry: unknown,
+): { next: { model: string; effort: string | null } | null; message: string } {
+  if (verdict.verdict === 'pass') return { next: null, message: 'Recorded a pass.' }
+  // A sealed task is one visit of a series: a rung up, its next turn would run on a setting it never named.
+  if (w.sealed)
+    return {
+      next: null,
+      message: 'Recorded a fail; not sent back: a sealed task holds the setting it names.',
+    }
+  if (retry === false) return { next: null, message: 'Recorded a fail; not sent back.' }
+  return sendBack(id, verdict, note)
+}
+
 export function climayteVerdict(
   id: string,
   input: {
@@ -3347,18 +3522,9 @@ export function climayteVerdict(
   const tooLong = verdictNoteTooLong(input.note)
   if (tooLong) return { ok: false, message: tooLong }
   const note = typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null
-  if (input.verdict === 'fail' && !note)
-    return { ok: false, message: 'Say what was wrong (note): the worker gets it with the retry.' }
   const sev = input.severity
-  if (sev !== undefined && sev !== null) {
-    if (input.verdict === 'pass')
-      return { ok: false, message: 'A pass has no severity: it is for a fail (0-3).' }
-    if (sev !== 0 && sev !== 1 && sev !== 2 && sev !== 3)
-      return {
-        ok: false,
-        message: "severity must be an integer 0-3 (0 not the model's, 1 slip, 2 rework, 3 failed).",
-      }
-  }
+  const refused = verdictProblem(input.verdict, note, sev)
+  if (refused) return { ok: false, message: refused }
   const badKind = tagKind(w, input.kind)
   if (badKind !== null) return { ok: false, message: badKind }
   const verdict = verdictRecord(
@@ -3367,16 +3533,10 @@ export function climayteVerdict(
     note,
     input.by,
     input.provisional === true,
-    sev === 0 || sev === 1 || sev === 2 || sev === 3 ? sev : undefined,
+    verdictSeverity(sev),
   )
   w.verdicts = [...(w.verdicts ?? []), verdict]
-  let next: { model: string; effort: string | null } | null = null
-  let message = verdict.verdict === 'pass' ? 'Recorded a pass.' : 'Recorded a fail; not sent back.'
-  // A sealed task is one visit of a series: a rung up, its next turn would run on a setting it never named.
-  if (verdict.verdict === 'fail' && w.sealed)
-    message = 'Recorded a fail; not sent back: a sealed task holds the setting it names.'
-  else if (verdict.verdict === 'fail' && input.retry !== false)
-    ({ next, message } = sendBack(id, verdict, note))
+  const { next, message } = afterVerdict(id, w, verdict, note, input.retry)
   journal(w, 'verdict', {
     verdict: verdict.verdict,
     notice: note ? firstLine(note) : undefined,
@@ -3449,6 +3609,56 @@ function reconcilableWave(
   return found
 }
 
+/** A worker of a wave not yet seen settled that has ended: done, failed or cancelled. */
+function endedInWave(w: CliMayteWorker): boolean {
+  if (!w.wave || settledWaves.has(w.wave)) return false
+  return w.status === 'done' || w.status === 'failed' || w.status === 'cancelled'
+}
+
+/** Report a `done` manager's wave (reportForManager), or settle it once it is past `running`. */
+function reconcileManager(m: CliMayteWorker, now: number): void {
+  if (m.kind !== 'manage' || m.status !== 'done') return
+  const found = reconcilableWave(m.wave as string, now)
+  if (!found) return
+  if (found.wave.status !== 'running') settledWaves.add(found.wave.id)
+  else reportForManager(m, found, now)
+}
+
+/** Judge one task of a running wave that its finished worker left `running` (reconcileWaves). */
+function reconcileWaveTask(id: string, task: CliMayteWave['tasks'][number], now: number): void {
+  if (task.state !== 'running' || !task.workerId) return
+  const w = workers.get(task.workerId)
+  if (!w || w.wave !== id) return
+  try {
+    if (w.status === 'done') {
+      // With a check, only its own latest pass settles the task (a fail sends the worker back).
+      const last = w.verdicts?.at(-1)
+      if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
+      judgeInWave(w, w.check ? true : null)
+    } else if (w.status === 'failed' || w.status === 'cancelled') {
+      const found = liveWave(id)
+      const t = found?.wave.tasks.find((x) => x.key === task.key)
+      if (!found || !t) return
+      t.state = 'failed'
+      modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
+      addToWaveBatch(w, now, true)
+    }
+  } catch (err) {
+    console.error(`[climayte] wave ${id}: could not reconcile ${task.key}:`, err)
+  }
+}
+
+/** Judge the tasks of a wave its finished workers name; a wave past `running` is settled. */
+function reconcileWaveTasks(id: string, now: number): void {
+  const wave = reconcilableWave(id, now)?.wave
+  if (!wave) return
+  if (wave.status !== 'running') {
+    settledWaves.add(id)
+    return
+  }
+  for (const task of wave.tasks) reconcileWaveTask(id, task, now)
+}
+
 /** A task of a running wave that is `running` while its worker has finished was missed by the
  *  worker's finish (a wave read from the wrong account, a daemon restarted mid-check): judge it now.
  *  A finished worker is judged on its check and commits (judgeInWave), a failed or cancelled one
@@ -3458,54 +3668,14 @@ function reconcileWaves(now: number): void {
   nextWaveReconcile = now + WAVE_RECONCILE_MS
   // Most workers never belong to a wave: read no wave file unless a finished one does. A wave seen
   // past `running` never runs again, so it is not read again.
-  const ended = [...workers.values()].filter(
-    (w) =>
-      w.wave &&
-      !settledWaves.has(w.wave) &&
-      (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled'),
-  )
+  const ended = [...workers.values()].filter(endedInWave)
   // A manager that ended `done` on its finished wave before settleWorker reported it (an older
   // daemon, a restart between): its wave is reported now (reportForManager).
-  for (const m of ended) {
-    if (m.kind !== 'manage' || m.status !== 'done') continue
-    const found = reconcilableWave(m.wave as string, now)
-    if (!found) continue
-    if (found.wave.status !== 'running') settledWaves.add(found.wave.id)
-    else reportForManager(m, found, now)
-  }
+  for (const m of ended) reconcileManager(m, now)
   const finished = ended.filter((w) => w.kind !== 'manage')
   if (!finished.length) return
   const ids = new Set(finished.map((w) => w.wave as string))
-  for (const id of ids) {
-    const wave = reconcilableWave(id, now)?.wave
-    if (!wave) continue
-    if (wave.status !== 'running') {
-      settledWaves.add(id)
-      continue
-    }
-    for (const task of wave.tasks) {
-      if (task.state !== 'running' || !task.workerId) continue
-      const w = workers.get(task.workerId)
-      if (!w || w.wave !== id) continue
-      try {
-        if (w.status === 'done') {
-          // With a check, only its own latest pass settles the task (a fail sends the worker back).
-          const last = w.verdicts?.at(-1)
-          if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) continue
-          judgeInWave(w, w.check ? true : null)
-        } else if (w.status === 'failed' || w.status === 'cancelled') {
-          const found = liveWave(id)
-          const t = found?.wave.tasks.find((x) => x.key === task.key)
-          if (!found || !t) continue
-          t.state = 'failed'
-          modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
-          addToWaveBatch(w, now, true)
-        }
-      } catch (err) {
-        console.error(`[climayte] wave ${id}: could not reconcile ${task.key}:`, err)
-      }
-    }
-  }
+  for (const id of ids) reconcileWaveTasks(id, now)
 }
 
 /** Every wave on record, newest first, exactly as stored (GET /api/corch/waves). */

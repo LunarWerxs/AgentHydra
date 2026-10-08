@@ -199,6 +199,80 @@ export function stopStallSentinel(): void {
   timers.clear()
 }
 
+/** The main-thread detector's state: each beat and the middleware read and write it. */
+interface BeatState {
+  beat: BigInt64Array
+  begunSinceBeat: string[]
+  window: Late[]
+  lastBeat: number
+  lastSaturatedLog: number
+  lastLongBlockLog: number
+  sampler: Sampler
+  sampling: boolean
+  lastDrain: number
+  buckets: Array<{ at: number; counts: SampleCounts }>
+}
+
+function drainSamples(sampler: Sampler): SampleCounts {
+  return countSamples(sampler.samplingProfilerStackTraces().traces ?? [])
+}
+
+/** One block of LONG_BLOCK_MS, on its own line with the samples taken during it. */
+function logLongBlock(s: BeatState, now: number, lateMs: number, blame: string[]): void {
+  // The samples since the last drain are this block's: drained now, they also stay in the
+  // window for a SATURATED line.
+  s.lastLongBlockLog = now
+  s.lastDrain = now
+  const counts = drainSamples(s.sampler)
+  s.buckets.push({ at: now, counts })
+  const profile = profileText(counts)
+  console.error(
+    `[agenthydra] STALL one block of ${(lateMs / 1000).toFixed(1)}s pid=${process.pid}; it followed: ${blameText([{ lateMs, blame }])}${profile ? ` | profile: ${profile}` : ''}`,
+  )
+}
+
+function bucketSamples(s: BeatState, now: number): void {
+  s.lastDrain = now
+  s.buckets.push({ at: now, counts: drainSamples(s.sampler) })
+  while (s.buckets.length && (s.buckets[0] as { at: number }).at < now - WINDOW_MS)
+    s.buckets.shift()
+}
+
+/** The SATURATED line: the window's late time, what it followed, and the samples kept for it. */
+function logSaturated(s: BeatState, now: number, blocked: number): void {
+  s.lastSaturatedLog = now
+  let profile = ''
+  if (s.sampling) {
+    const all = drainSamples(s.sampler)
+    s.lastDrain = now
+    for (const b of s.buckets) mergeCounts(b.counts, all)
+    s.buckets.length = 0
+    profile = profileText(all)
+  }
+  console.error(
+    `[agenthydra] STALL event loop saturated: blocked ${(blocked / 1000).toFixed(1)}s of the last ${WINDOW_MS / 1000}s pid=${process.pid}; the late time followed: ${blameText(s.window)}${profile ? ` | profile: ${profile}` : ''} | ${WATCHDOG_NOTE}`,
+  )
+}
+
+/** One heartbeat: stamp the shared beat, then judge the lateness it measured. */
+function beatTick(s: BeatState): void {
+  const now = Date.now()
+  Atomics.store(s.beat, 0, BigInt(now))
+  const lateMs = now - s.lastBeat - BEAT_MS
+  s.lastBeat = now
+  const blame = s.begunSinceBeat
+  s.begunSinceBeat = []
+  if (lateMs >= LATE_FLOOR_MS) s.window.push({ at: now, lateMs, blame })
+  while (s.window.length && (s.window[0] as Late).at < now - WINDOW_MS) s.window.shift()
+  const blocked = s.window.reduce((sum, w) => sum + w.lateMs, 0)
+  if (s.sampling && lateMs >= LONG_BLOCK_MS && now - s.lastLongBlockLog >= SATURATED_QUIET_MS) {
+    logLongBlock(s, now, lateMs, blame)
+  }
+  if (s.sampling && now - s.lastDrain >= PROFILE_BUCKET_MS) bucketSamples(s, now)
+  if (blocked < SATURATED_MS || now - s.lastSaturatedLog < SATURATED_QUIET_MS) return
+  logSaturated(s, now, blocked)
+}
+
 /**
  * Start both detectors. Returns the middleware that feeds them what is in flight; register it
  * before every route. `logPath` null (file logging failed to open) still runs the main-thread
@@ -225,71 +299,34 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
     console.warn('[agenthydra] stall sentinel: no worker, freezes will go unrecorded:', err)
   }
 
-  // Requests begun since the last beat: a synchronous handler starts and finishes inside the gap
-  // it causes, so these are what the next late beat is blamed on. A long async request (a
-  // migrate_batch run holds its call open for minutes) began long ago and is never blamed.
-  let begunSinceBeat: string[] = []
-  const window: Late[] = []
-  let lastBeat = Date.now()
-  let lastSaturatedLog = 0
-  let lastLongBlockLog = 0
-  // The sampler: on from boot (BOOT_SAMPLING), drained into counts every PROFILE_BUCKET_MS, the last
-  // WINDOW_MS of them kept for the next SATURATED line.
-  const sampler = jsc as unknown as Sampler
-  let sampling = false
-  let lastDrain = Date.now()
+  const s: BeatState = {
+    beat,
+    // Requests begun since the last beat: a synchronous handler starts and finishes inside the gap
+    // it causes, so these are what the next late beat is blamed on. A long async request (a
+    // migrate_batch run holds its call open for minutes) began long ago and is never blamed.
+    begunSinceBeat: [],
+    window: [],
+    lastBeat: Date.now(),
+    lastSaturatedLog: 0,
+    lastLongBlockLog: 0,
+    // The sampler: on from boot (BOOT_SAMPLING), drained into counts every PROFILE_BUCKET_MS, the
+    // last WINDOW_MS of them kept for the next SATURATED line.
+    sampler: jsc as unknown as Sampler,
+    sampling: false,
+    lastDrain: Date.now(),
+    buckets: [],
+  }
   try {
-    sampler.startSamplingProfiler()
-    sampling = true
+    s.sampler.startSamplingProfiler()
+    s.sampling = true
   } catch {
     // not this runtime: the blame stays per request
   }
-  const buckets: Array<{ at: number; counts: SampleCounts }> = []
-  const drain = () => countSamples(sampler.samplingProfilerStackTraces().traces ?? [])
   // A tick that throws is a tick skipped, never a dead daemon (scripts/checks/
   // timer-callback-can-kill-the-daemon.mjs): the watcher of stalls must not become a crash.
   const timer = setInterval(() => {
     try {
-      const now = Date.now()
-      Atomics.store(beat, 0, BigInt(now))
-      const lateMs = now - lastBeat - BEAT_MS
-      lastBeat = now
-      const blame = begunSinceBeat
-      begunSinceBeat = []
-      if (lateMs >= LATE_FLOOR_MS) window.push({ at: now, lateMs, blame })
-      while (window.length && (window[0] as Late).at < now - WINDOW_MS) window.shift()
-      const blocked = window.reduce((sum, w) => sum + w.lateMs, 0)
-      if (sampling && lateMs >= LONG_BLOCK_MS && now - lastLongBlockLog >= SATURATED_QUIET_MS) {
-        // The samples since the last drain are this block's: drained now, they also stay in the
-        // window for a SATURATED line.
-        lastLongBlockLog = now
-        lastDrain = now
-        const counts = drain()
-        buckets.push({ at: now, counts })
-        const profile = profileText(counts)
-        console.error(
-          `[agenthydra] STALL one block of ${(lateMs / 1000).toFixed(1)}s pid=${process.pid}; it followed: ${blameText([{ lateMs, blame }])}${profile ? ` | profile: ${profile}` : ''}`,
-        )
-      }
-      if (sampling && now - lastDrain >= PROFILE_BUCKET_MS) {
-        lastDrain = now
-        buckets.push({ at: now, counts: drain() })
-        while (buckets.length && (buckets[0] as { at: number }).at < now - WINDOW_MS)
-          buckets.shift()
-      }
-      if (blocked < SATURATED_MS || now - lastSaturatedLog < SATURATED_QUIET_MS) return
-      lastSaturatedLog = now
-      let profile = ''
-      if (sampling) {
-        const all = drain()
-        lastDrain = now
-        for (const b of buckets) mergeCounts(b.counts, all)
-        buckets.length = 0
-        profile = profileText(all)
-      }
-      console.error(
-        `[agenthydra] STALL event loop saturated: blocked ${(blocked / 1000).toFixed(1)}s of the last ${WINDOW_MS / 1000}s pid=${process.pid}; the late time followed: ${blameText(window)}${profile ? ` | profile: ${profile}` : ''} | ${WATCHDOG_NOTE}`,
-      )
+      beatTick(s)
     } catch {
       // skipped: the next beat is BEAT_MS away
     }
@@ -300,7 +337,7 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   let nextId = 0
   return async (c, next) => {
     const what = requestKey(c.req.method, c.req.url)
-    begunSinceBeat.push(what)
+    s.begunSinceBeat.push(what)
     const id = ++nextId
     worker?.postMessage({ t: 'begin', id, what, at: Date.now() })
     try {
