@@ -223,6 +223,21 @@ def _resolve_match(query: str, verb: str, as_json: bool) -> tuple[dict | None, i
     return match, None
 
 
+def _resolve_same_copy(match: dict) -> dict:
+    """Re-read THE COPY the verdict was made on: same instance, same chatId.
+
+    After a move both accounts carry the session id, and resolve_one(session_id) answers with
+    the newest copy - the moved one, live on its new account. Re-checking or verifying the idle
+    source leftover through that read aborted every archive of it as 'moved, now has a live
+    writer' (2026-10-08: four leftovers on one account, each refused over its own successor)."""
+    session_id = match.get("cliSessionId") or ""
+    chat_id = match.get("chatId")
+    same = [m for m in hydralib.dossier(session_id)
+            if m.get("instance") == match.get("instance")
+            and (not chat_id or m.get("chatId") == chat_id)]
+    return hydralib.choose_match(session_id, same)
+
+
 def _handle_already_settled(match: dict, desired: bool, verb: str, title, as_json: bool) -> int | None:
     """Rule 4 does not stop applying just because the flag already matches: under a RUNNING
     app the chat can still be on screen, and calling that 'nothing to do' is how v2's
@@ -354,7 +369,7 @@ def _recheck_before_acting(session_id: str, match: dict, title, verb: str, as_js
     """Rule 5: re-check immediately before acting. Returns (recheck, None) to continue, or
     (None, stop_code) when the resolve failed or the chat moved since the verdict."""
     try:
-        recheck = hydralib.resolve_one(session_id)
+        recheck = _resolve_same_copy(match)
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat) as err:
         # Deterministic at THIS stage too: the same session-id query will answer the same way
         # next run, and an unrecorded refusal here would be retried forever (review finding).
@@ -598,7 +613,7 @@ def _archive_via_disk_flag(session_id: str, desired: bool, verb: str, as_json: b
 
 
 def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as_json: bool,
-                     *, before: dict | None = None, instance: str = "") -> int:
+                     *, match: dict, before: dict | None = None, instance: str = "") -> int:
     """Verify: never claim an act landed without checking, then clear the ledger on success -
     the brake is for futility, not for a real change.
 
@@ -609,7 +624,7 @@ def _verify_archive(session_id: str, desired: bool, verb: str, title, result, as
     on screen even though this process cannot say what; recording nothing there would be the
     exact "false quiet" this repo's rules exist to forbid."""
     try:
-        after = hydralib.resolve_one(session_id)
+        after = _resolve_same_copy(match)
     except (hydralib.ChatNotFound, hydralib.AmbiguousChat, hydralib.DaemonError) as err:
         # UNKNOWN, not failed: the act itself may well have landed, we just could not re-read
         # it to check. Never let this look like a confirmed disagreement (verified=False) -
@@ -701,7 +716,7 @@ def _act_and_verify(session_id: str, match: dict, unarchive: bool, desired: bool
         return _verify_native_archive(session_id, str(title), result["native"], as_json,
                                       before=before, instance=instance)
     return _verify_archive(session_id, desired, verb, title, result, as_json,
-                           before=before, instance=instance)
+                           match=match, before=before, instance=instance)
 
 
 def _run_locked_archive(session_id: str, match: dict, unarchive: bool, desired: bool, verb: str, title,

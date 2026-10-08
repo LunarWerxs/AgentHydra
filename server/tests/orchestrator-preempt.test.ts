@@ -107,6 +107,33 @@ test('mayPreempt needs BOTH a person word and full coverage of what it would str
   expect(mayPreempt(['--chat', 'alpha', '--terminate-live'], ['--to', '8'])).toBe(false)
 })
 
+test('a forced drain of one account never preempts a drain of another (2026-10-08)', () => {
+  // The live case: move_chats {from: 38, terminate_live} cancelled a running move_chats {from: 5}
+  // mid-settle, leaving five of its source rows unarchived and its report lost.
+  const piero = ['--to', '37', '--all-unarchived', '--from', '5']
+  expect(
+    mayPreempt(['--to', '59', '--all-unarchived', '--from', '38', '--terminate-live'], piero),
+  ).toBe(false)
+  // The same account, or every account, still covers it.
+  expect(mayPreempt(['--all-unarchived', '--from', '5', '--terminate-live'], piero)).toBe(true)
+  expect(mayPreempt(['--all-unarchived', '--terminate-live'], piero)).toBe(true)
+  // A sweep of one account does not cover a sweep of every account.
+  expect(
+    mayPreempt(['--all-unarchived', '--from', '5', '--terminate-live'], ['--all-unarchived']),
+  ).toBe(false)
+  // A capped sweep does not cover an uncapped one.
+  expect(
+    mayPreempt(['--all-unarchived', '--from', '5', '--limit', '2', '--terminate-live'], piero),
+  ).toBe(false)
+  // Named chats on a different account are not covered either.
+  expect(
+    mayPreempt(
+      ['--chat', 'alpha', '--from', '38', '--terminate-live'],
+      ['--chat', 'alpha', '--from', '5'],
+    ),
+  ).toBe(false)
+})
+
 test('terminate_live takes the route from a patient move of the SAME chat, and says so', async () => {
   const dir = fakeOrchestratorDir()
   const holder = patientRun(dir, ['--chat', 'alpha', '--to', '8'])

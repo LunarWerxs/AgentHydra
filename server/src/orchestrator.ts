@@ -146,22 +146,31 @@ export function routeLockKey(script: string, args: string[]): string | null {
 }
 
 /** The chats an invocation names: every `--chat <query>`, normalized, plus whether it sweeps a
- *  whole account. Parsing is literal on purpose - resolving a fragment to a chat is the Python
- *  side's job, and a daemon that guessed would be a second, disagreeing resolver. */
-export function chatScopeOf(args: string[]): { chats: Set<string>; sweeps: boolean } {
+ *  whole account, which account (`--from`, null = every account) and any `--limit` cap. Parsing
+ *  is literal on purpose - resolving a fragment to a chat is the Python side's job, and a daemon
+ *  that guessed would be a second, disagreeing resolver. */
+export function chatScopeOf(args: string[]): {
+  chats: Set<string>
+  sweeps: boolean
+  from: string | null
+  limit: string | null
+} {
   const chats = new Set<string>()
   let sweeps = false
+  let from: string | null = null
+  let limit: string | null = null
+  const value = (i: number) =>
+    String(args[i + 1] ?? '')
+      .trim()
+      .toLowerCase()
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--all-unarchived') sweeps = true
-    else if (args[i] === '--chat' && i + 1 < args.length)
-      chats.add(
-        String(args[i + 1] ?? '')
-          .trim()
-          .toLowerCase(),
-      )
+    else if (args[i] === '--chat' && i + 1 < args.length) chats.add(value(i))
+    else if (args[i] === '--from' && i + 1 < args.length) from = value(i) || null
+    else if (args[i] === '--limit' && i + 1 < args.length) limit = value(i) || null
   }
   chats.delete('')
-  return { chats, sweeps }
+  return { chats, sweeps, from, limit }
 }
 
 /**
@@ -181,12 +190,21 @@ export function chatScopeOf(args: string[]): { chats: Set<string>; sweeps: boole
  * migrate_chat re-resolves and re-gates every chat from scratch. A holder that names chats this
  * call does not is never preempted - that is what orchestrator_cancel is for, deliberately, by
  * a person who can see what they are abandoning (and migrate_reconcile.py to find it after).
+ *
+ * ⛔ COVERAGE INCLUDES THE ACCOUNT (2026-10-08). "Only a sweep covers a sweep" used to be the
+ * whole sweep rule, so a forced drain of one account (`--all-unarchived --from 38
+ * --terminate-live`) killed a patient drain of a DIFFERENT account (`--all-unarchived --from 5`)
+ * mid-settle: its ten chats had landed, five source rows were never archived, and its report died
+ * with it. A call scoped to another account strands everything the holder had in flight.
  */
 export function mayPreempt(incoming: string[], holder: string[]): boolean {
   if (!incoming.includes('--terminate-live')) return false
   const want = chatScopeOf(incoming)
   const held = chatScopeOf(holder)
-  if (held.sweeps) return want.sweeps // only a sweep covers a sweep
+  // No --from on the incoming call reaches every account; otherwise it must name the holder's.
+  if (want.from !== null && want.from !== held.from) return false
+  // Only a sweep covers a sweep, and only one with no tighter cap than the holder's.
+  if (held.sweeps) return want.sweeps && (want.limit === null || want.limit === held.limit)
   if (held.chats.size === 0) return false // an unreadable scope is never preempted
   for (const chat of held.chats) if (!want.chats.has(chat)) return false
   return true

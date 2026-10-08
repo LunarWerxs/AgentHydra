@@ -246,6 +246,30 @@ class ArchiveChatTest(unittest.TestCase):
         self.assertEqual(self.archive_chat.main([SID, "--no-preserve"]), 2)
         self.assertFalse(self.acted())
 
+    def test_a_moved_chats_idle_leftover_is_archived_not_aborted_over_its_live_successor(self):
+        # 2026-10-08: after a move both accounts carry the session id. Archiving the idle source
+        # leftover by its own chat id re-checked by SESSION id, got the newer live copy on the
+        # target, and aborted "moved between deciding and acting, now has a live writer".
+        self.wire()
+        stub = self.stub
+
+        def dossier_route(method, path, query, body):
+            q = dossier_query(query)
+            posted = any(p[0].endswith("/desktop-archive") for p in stub.posts)
+            src = {"instance": "src", "chatId": "local_old", "cliSessionId": SID,
+                   "lineageIds": [SID], "title": "T", "archived": posted,
+                   "lastActivityAt": "T1", "live": None}
+            dst = {"instance": "dst", "chatId": "local_new", "cliSessionId": SID,
+                   "lineageIds": [SID], "title": "T", "archived": False,
+                   "lastActivityAt": "T9", "live": {"pid": 7, "name": "T"}}
+            if q == "local_old":
+                return {"matches": [src]}
+            return {"matches": [src, dst] if q == SID else []}
+
+        stub.routes["/api/chats/dossier"] = dossier_route
+        self.assertEqual(self.archive_chat.main(["local_old", "--force", "--no-preserve"]), 0)
+        self.assertTrue(self.acted())
+
     def test_ambiguous_title_is_deterministic_and_recorded(self):
         self.stub.routes["/api/chats/dossier"] = {
             "matches": [
