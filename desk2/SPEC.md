@@ -78,7 +78,8 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
     line naming the file. `server/src/engine/mcp-servers.ts` computes it for both the chat and the MCP list.
     CliMayte worker chats run in AgentHydra, not here: their MCP parity is AgentHydra's job.
   - When the account's CLAUDE.md is AgentHydra's worker-rules copy ('Rules for a CliMayte worker'), Desk sets
-    flag setting `claudeMdExcludes` for it and appends Jacob's real `~/.claude/CLAUDE.md` to the system prompt.
+    flag setting `claudeMdExcludes` for it and appends Jacob's real
+    `~/.claude/CLAUDE.md` (the default config dir, ../docs/CLAUDE-CONFIG-LAYOUT.md) to the system prompt.
   - `disallowedTools: ['Agent', 'Task']` when `delegateToCliMayte` is on.
   - `resume: sessionId` when the chat already has a session (restart, idle-close, import).
   - `canUseTool` (below); `stderr` to the chat's log file `~/.hydra-desk-2/logs/<chatId>.log`.
@@ -754,7 +755,7 @@ config folder before the resume, so it never fails with "No conversation found".
   version of the same transcript; one that went its own way is never overwritten. The original is never touched.
 - A session that has run in Hydra Desk before resumes from the folder it last ran in (`ranIn`, kept on the
   chat), so moving A -> B -> A carries every turn.
-- The default `~/.claude` login is not used to resume (its own CLI token expires): with no account that has
+- The default `~/.claude` login (../docs/CLAUDE-CONFIG-LAYOUT.md) is not used to resume (its own CLI token expires): with no account that has
   room the import is refused (409) rather than landed there, and a named account that is signed out is
   refused the same way ("<label> is signed out").
 - Before the first message the stand-in's quiet line says where it goes: "Continues in place on #N." or

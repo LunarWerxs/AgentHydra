@@ -133,7 +133,7 @@ function scratchDir(name: string): string {
   if (!scratch) {
     const root = mkdtempSync(join(tmpdir(), 'desk-redesign-'))
     scratch = root
-    process.once('exit', () => {
+    process.on('exit', () => {
       try {
         rmSync(root, { recursive: true, force: true })
       } catch {

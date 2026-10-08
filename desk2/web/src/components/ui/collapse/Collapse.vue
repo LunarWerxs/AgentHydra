@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { Transition } from 'vue'
-import { CLOSE_MS } from '@/lib/row-leave'
+import { CLOSE_MS, leavesAtOnce } from '@/lib/row-leave'
 
 // Folds the slot shut when it leaves, so the rows under it close up instead of snapping. With reduced
 // motion asked for, or the window hidden (its animations do not run), it goes at once.
 
 function leave(el: Element, done: () => void) {
   const box = el as HTMLElement
-  if (typeof box.animate !== 'function' || document.visibilityState === 'hidden' || matchMedia('(prefers-reduced-motion: reduce)').matches) return done()
+  if (leavesAtOnce(box)) return done()
   box.style.overflow = 'hidden'
   let ended = false
   const end = () => {

@@ -5,7 +5,7 @@ import { freeCheckVerdict, freeUsageSnapshot } from './free-instances'
 const reading = (windows: FreeUsage['windows']): FreeUsage => ({
   available: true,
   is_snapshot: false,
-  observed_at: '2026-10-06T00:00:00Z',
+  observed_at: '2020-10-06T00:00:00Z',
   note: '',
   windows,
 })
@@ -13,7 +13,7 @@ const win = (id: string, used: number | null, remaining: number | null) => ({
   id,
   used_percent: used,
   remaining_percent: remaining,
-  resets_at: '2026-10-06T05:00:00Z',
+  resets_at: '2020-10-06T05:00:00Z',
   reset_passed: false,
 })
 
@@ -41,8 +41,8 @@ describe('a Free reading in the instance tables', () => {
     )
     expect(snap?.session?.pct).toBe(25)
     expect(snap?.weekAll?.pct).toBe(40)
-    expect(snap?.weekAll?.resetsAt).toBe('2026-10-06T05:00:00Z')
-    expect(snap?.capturedAt).toBe('2026-10-06T00:00:00Z')
+    expect(snap?.weekAll?.resetsAt).toBe('2020-10-06T05:00:00Z')
+    expect(snap?.capturedAt).toBe('2020-10-06T00:00:00Z')
   })
 
   it('offers a check instead of a number when no window has one', () => {

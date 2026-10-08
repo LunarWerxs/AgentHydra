@@ -463,9 +463,19 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
     // A compaction's summary is shown by its compact_boundary line.
     if (msg.isCompactSummary === true || msg.isVisibleInTranscriptOnly === true) return
     const uuid = str(msg.uuid) || `user:${turn}:${now()}`
+    const { userText, images } = readUserBlocks(out, content, uuid, msg.isMeta === true)
+    if (userText.length || images.length) userTurn(out, uuid, userText, images)
+    let finishedMain = false
+    for (const b of content) {
+      if (b.type === 'tool_result' && onToolResult(out, b)) finishedMain = true
+    }
+    if (finishedMain) setActivity(out, mainActivityAfterTool())
+  }
+
+  /** The person's text and images in a user message's blocks. Harness notes and task notices go out as they are read. */
+  function readUserBlocks(out: Emission[], content: Block[], uuid: string, meta: boolean) {
     const userText: string[] = []
     const images: ImageRef[] = []
-    const meta = msg.isMeta === true
     let part = 0
     for (const b of content) {
       if (b.type === 'image' && opts.echoUserText && !meta) {
@@ -479,12 +489,7 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
         else onTaskNotice(out, p.task)
       }
     }
-    if (userText.length || images.length) userTurn(out, uuid, userText, images)
-    let finishedMain = false
-    for (const b of content) {
-      if (b.type === 'tool_result' && onToolResult(out, b)) finishedMain = true
-    }
-    if (finishedMain) setActivity(out, mainActivityAfterTool())
+    return { userText, images }
   }
 
   function onTaskNotice(out: Emission[], notice: TaskNotice) {

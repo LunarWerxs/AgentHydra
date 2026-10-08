@@ -26,6 +26,20 @@ const IDLE_S = Number(process.env.PERF_IDLE_S) || 60
 const ONLY = new Set((process.env.PERF_ONLY || 'bundle,startup,page,idle,localhost,service').split(','))
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const PRELOAD = join(import.meta.dir, 'lib', 'perf-preload.ts')
+
+/** Every Desk home and Edge profile of a run nests in this one temp root, which goes when the run exits, however it ends. */
+const SCRATCH = mkdtempSync(join(tmpdir(), 'desk2-perf-'))
+process.on('exit', () => {
+  try {
+    rmSync(SCRATCH, { recursive: true, force: true })
+  } catch {}
+})
+let scratchMade = 0
+function scratchDir(name: string): string {
+  const dir = join(SCRATCH, `${name}-${++scratchMade}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
+}
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const median = (xs: number[]) => {
   const s = [...xs].sort((a, b) => a - b)
@@ -100,7 +114,7 @@ function killQuietly(pid: number) {
 
 interface Desk { port: number; home: string; pid: number; counts: string; startedMs: number; proc: ReturnType<typeof Bun.spawn> }
 async function startDesk(tag: string, seed?: (home: string) => void): Promise<Desk> {
-  const home = mkdtempSync(join(tmpdir(), `desk2-perf-${tag}-`))
+  const home = scratchDir(tag)
   seed?.(home)
   const counts = join(home, 'perf-counts.jsonl')
   const port = freePort()
@@ -167,7 +181,7 @@ async function cdp(url: string): Promise<Cdp> {
 }
 async function startEdge() {
   const port = freePort()
-  const profile = mkdtempSync(join(tmpdir(), 'desk2-perf-edge-'))
+  const profile = scratchDir('edge')
   const edge = Bun.spawn([EDGE, '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, '--no-first-run',
     // No occlusion or backgrounding switches (the gestures check has them): a page behind another must go hidden here.
     '--no-default-browser-check', '--window-size=1500,950', 'about:blank'], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })

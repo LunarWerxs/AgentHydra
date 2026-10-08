@@ -63,31 +63,17 @@ function createDevServers() {
   let asked = false
   let misses = 0
   async function once(): Promise<void> {
-    let s: DevWebStatus
-    try {
-      s = await devwebStatus()
-      statusMissing.value = false
-    } catch (err) {
-      if (err instanceof RouteMissing) statusMissing.value = true
-      return
-    }
+    const read = await readStatus()
+    if (!read) return
+    let s = read
     const loud = lists > 0
     let loaded = false
     if (loud && !asked) {
       asked = true
       if (s.state === 'stopped') {
-        // The list read is the request that starts the service; 'starting' shows while it is in flight, so the stopped view only appears after a stop.
-        status.value = { state: 'starting', pid: null }
-        let failure: string | null = null
-        try {
-          projects.value = await listProjects()
-          projectsError.value = null
-          loaded = true
-        } catch (err) {
-          failure = err instanceof Error ? err.message : String(err)
-        }
-        s = await devwebStatus().catch(() => s)
-        if (failure && s.state !== 'running') s = { state: 'failed', pid: null, reason: failure }
+        const started = await startWithList(s)
+        s = started.s
+        loaded = started.loaded
       }
     }
     status.value = s
@@ -96,6 +82,40 @@ function createDevServers() {
       return
     }
     if (loaded) return
+    await readProjects()
+    await readFound()
+  }
+
+  /** The service's status, or null when the read failed (a missing route is remembered). */
+  async function readStatus(): Promise<DevWebStatus | null> {
+    try {
+      const s = await devwebStatus()
+      statusMissing.value = false
+      return s
+    } catch (err) {
+      if (err instanceof RouteMissing) statusMissing.value = true
+      return null
+    }
+  }
+
+  /** The list read is the request that starts a stopped service; 'starting' shows while it is in flight, so the stopped view only appears after a stop. */
+  async function startWithList(before: DevWebStatus): Promise<{ s: DevWebStatus; loaded: boolean }> {
+    status.value = { state: 'starting', pid: null }
+    let failure: string | null = null
+    let loaded = false
+    try {
+      projects.value = await listProjects()
+      projectsError.value = null
+      loaded = true
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err)
+    }
+    let s = await devwebStatus().catch(() => before)
+    if (failure && s.state !== 'running') s = { state: 'failed', pid: null, reason: failure }
+    return { s, loaded }
+  }
+
+  async function readProjects(): Promise<void> {
     try {
       // Never the read that starts it: a Stop clicked while this was on its way must stay a stop.
       projects.value = await listProjects({ start: false })
@@ -105,7 +125,10 @@ function createDevServers() {
       // A list already on screen stays through a missed read or two; with none yet, the reason shows at once.
       if (!projects.value || ++misses >= MISSES_SHOWN) projectsError.value = err instanceof Error ? err.message : String(err)
     }
-    // The found list rides the same poll, read at most every 15 s unless a view or an action asked; a failed read keeps the last one.
+  }
+
+  /** The found list rides the same poll, read at most every 15 s unless a view or an action asked; a failed read keeps the last one. */
+  async function readFound(): Promise<void> {
     if (!foundNow && Date.now() - foundAt < FOUND_EVERY_MS) return
     foundNow = false
     found.value = await foundList({ start: false }).catch(() => found.value)
