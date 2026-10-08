@@ -128,3 +128,26 @@ many rows reorder depends on what the other chats are doing at the time.
 
 The shell-drawn rise did not reproduce. In the restyle probe's runs on the same builds (6 a side, run to the same
 point), the shell was drawn in 193 to 693 ms on the base and 195 to 343 ms on the new tree.
+
+## 2026-10-08, the AgentHydra pane again, with its full table
+
+The meter now gives the pane a fresh window's preferences (above), so the pane shows All: the Instances table with
+every account (61 rows on this PC) instead of the empty Free view. Same method: a clean worktree at 93059069 (before
+the health pass) and one at d545d8df, each built in its own folder, `PERF_ONLY=page,idle`, 60 s idle per state, run
+base, new, new, base. Per idle minute:
+
+| metric | before | after | verdict |
+| --- | --- | --- | --- |
+| server fetches to the daemon, pane open | 153 / 160 | 104 / 108 | better |
+| page requests, pane open | 58 / 62 | 31 / 31 | better |
+| page KB downloaded, pane open | 336 / 354 | 219 / 219 | better |
+| server CPU, pane open | 563 / 719 ms | 516 / 453 ms | better (both new runs under both base runs) |
+| server CPU, window visible | 797 / 531 ms | 484 / 422 ms | better |
+| server CPU, window hidden | 516 / 672 ms | 47 / 297 ms | better |
+| server CPU, no window | 297 / 313 ms | 203 / 63 ms | better |
+| server working set, pane open | 116 / 120 MB | 103 / 105 MB | better |
+| page main-thread ms, pane open | 533 / 924 | 639 / 565 | inside the noise |
+| style recalcs, pane open | 169 / 174 | 318 / 342 | worse: the sidebar row glide (above) |
+
+Server CPU with the window visible and with the pane open read inside the noise in the first round; with the full
+table on both sides, every new run came in under every base run, which is this file's rule for "better".
