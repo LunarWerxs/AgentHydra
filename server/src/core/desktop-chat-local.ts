@@ -165,7 +165,39 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
 
   /** Per projects folder and session: the project folder found, or none since `at`. */
   const projectOf = new Map<string, { project: string | null; at: number }>()
-  const folders = new Map<string, { names: string[]; at: number }>()
+  /** Per projects folder: the project folder holding each session's transcript, read in one pass (a
+   *  readdir per project folder) and believed for MISS_MS. Looking for a missing transcript with an
+   *  existsSync in every project folder, per chat, held the daemon for seconds each pass (2026-10-08:
+   *  hundreds of chats x 473 folders). */
+  const sessionsIn = new Map<string, { where: Map<string, string>; at: number }>()
+  function sessionIndex(dir: string): Map<string, string> {
+    const held = sessionsIn.get(dir)
+    if (held && Date.now() - held.at <= MISS_MS) return held.where
+    const where = new Map<string, string>()
+    let list: string[] = []
+    try {
+      list = readdirSync(dir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+    } catch {
+      list = []
+    }
+    for (const folder of list) {
+      let names: string[]
+      try {
+        names = readdirSync(join(dir, folder))
+      } catch {
+        continue
+      }
+      for (const n of names) {
+        if (!n.endsWith('.jsonl')) continue
+        const id = n.slice(0, -6)
+        if (!where.has(id)) where.set(id, folder)
+      }
+    }
+    sessionsIn.set(dir, { where, at: Date.now() })
+    return where
+  }
   /** The projects folder of each Hydra Desk chat's session the last list() found, when not projectsDir. */
   const dirOf = new Map<string, string>()
 
@@ -193,20 +225,9 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
       // The folder is the chat's cwd with every non-alphanumeric turned to `-`: try it first.
       const guess = cwd ? cwd.replace(/[^A-Za-z0-9]/g, '-') : null
       if (guess && existsSync(join(dir, guess, `${sessionId}.jsonl`))) return guess
-      let names = folders.get(dir)
-      if (!names || Date.now() - names.at > MISS_MS) {
-        let list: string[]
-        try {
-          list = readdirSync(dir, { withFileTypes: true })
-            .filter((e) => e.isDirectory())
-            .map((e) => e.name)
-        } catch {
-          list = []
-        }
-        names = { names: list, at: Date.now() }
-        folders.set(dir, names)
-      }
-      return names.names.find((f) => existsSync(join(dir, f, `${sessionId}.jsonl`))) ?? null
+      // One existsSync proves the index's answer: a transcript moved since the index was read is a miss.
+      const hit = sessionIndex(dir).get(sessionId)
+      return hit && existsSync(join(dir, hit, `${sessionId}.jsonl`)) ? hit : null
     })()
     projectOf.set(key, { project: found, at: Date.now() })
     return found
@@ -354,6 +375,7 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
         return retry(`its transcript could not be moved yet (${(err as Error).message})`)
       }
       projectOf.delete(`${projectsDir}\0${sessionId}`)
+      sessionsIn.get(projectsDir)?.where.delete(sessionId)
       try {
         // The folder an earlier version made for it goes with its last transcript.
         rmdirSync(join(projectsDir, project))

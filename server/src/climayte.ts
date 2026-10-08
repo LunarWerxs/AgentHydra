@@ -1144,7 +1144,13 @@ const PACK_AFTER_MS = 10 * 60_000
 const PACK_PASS_BYTES = 128 * 1024 * 1024
 /** The pass runs this often once nothing is left over. */
 const PACK_EVERY_MS = 10 * 60_000
-let nextPackAt = 0
+/** The first pass waits this long after boot: it stats every attempt's log, and a booting daemon
+ *  has requests to answer first. */
+const PACK_FIRST_AFTER_MS = 2 * 60_000
+let nextPackAt = Date.now() + PACK_FIRST_AFTER_MS
+/** Logs packLog packed, or found gone (packed or archived before): a later pass never stats them
+ *  again. Before, every pass stat'ed all ~5,900 attempts' logs, almost all long since packed. */
+const doneLogs = new Set<string>()
 
 /** The attempt's CLI can no longer append to its log. finish() ends an attempt only once its CLI
  *  has exited. A cancel does not wait: the kill is not confirmed, and killAttempts leaves a runner
@@ -1166,8 +1172,11 @@ function packOldLogs(now: number): void {
   let room = PACK_PASS_BYTES
   for (const w of workers.values())
     for (const at of w.attempts) {
-      if (room <= 0 || !logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
-      room -= packLog(at.log, now - PACK_AFTER_MS)
+      if (room <= 0 || doneLogs.has(at.log)) continue
+      if (!logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
+      const packed = packLog(at.log, now - PACK_AFTER_MS)
+      if (packed > 0 || !existsSync(at.log)) doneLogs.add(at.log)
+      room -= packed
     }
   if (room > 0) storagePass(now, false)
   nextPackAt = now + (room <= 0 ? 60_000 : PACK_EVERY_MS)
@@ -1199,11 +1208,18 @@ function sizeOf(path: string): number {
 /** What the storage pass would pack and remove for these workers at `now`; touches nothing. A
  *  worker that is active, being stopped, or has an attempt whose log is not settled keeps every
  *  file; a file named for no known worker goes by its own age. */
-export function planStorage(list: Iterable<CliMayteWorker>, now: number): StoragePlan {
+export function planStorage(
+  list: Iterable<CliMayteWorker>,
+  now: number,
+  { withPack = true }: { withPack?: boolean } = {},
+): StoragePlan {
   const plan: StoragePlan = { pack: [], remove: [] }
   const byId = new Map<string, CliMayteWorker>()
   for (const w of list) {
     byId.set(w.id, w)
+    // The pack list is only reported (a dry run): the real pass packs in packOldLogs, so it skips
+    // a stat of every attempt's log here.
+    if (!withPack) continue
     for (const at of w.attempts) {
       if (!logSettled(at) || now - (at.endedAt as number) < PACK_AFTER_MS) continue
       try {
@@ -1256,7 +1272,7 @@ export function planStorage(list: Iterable<CliMayteWorker>, now: number): Storag
 /** Remove what planStorage lists (packing is packOldLogs's own loop). `dryRun` returns the plan
  *  and deletes nothing. */
 function storagePass(now: number, dryRun: boolean): StoragePlan {
-  const plan = planStorage(workers.values(), now)
+  const plan = planStorage(workers.values(), now, { withPack: dryRun })
   if (!dryRun)
     for (const f of plan.remove)
       try {
@@ -3387,6 +3403,25 @@ const WAVE_RECONCILE_MS = 5_000
 let nextWaveReconcile = 0
 /** Waves seen reported, decided, failed or cancelled: reconcileWaves reads their files no more. */
 const settledWaves = new Set<string>()
+/** How long reconcileWaves waits before looking again for a wave no account folder holds. */
+const WAVE_MISSING_RETRY_MS = 10 * 60_000
+/** Waves reconcileWaves found in no account folder, with when it may look again. A finished worker
+ *  can name a wave whose record is gone (deleted, or under an account since removed); looking for
+ *  each one in every account folder every 5 s blocked the daemon most of the time (2026-10-08: 51
+ *  missing waves x 41 folders, about 2,100 file probes a pass). */
+const missingWaves = new Map<string, number>()
+
+/** liveWave for reconcileWaves: null without touching the disk while a wave is known missing. */
+function reconcilableWave(
+  id: string,
+  now: number,
+): { wave: CliMayteWave; configDir: string } | null {
+  if ((missingWaves.get(id) ?? 0) > now) return null
+  const found = liveWave(id)
+  if (found) missingWaves.delete(id)
+  else missingWaves.set(id, now + WAVE_MISSING_RETRY_MS)
+  return found
+}
 
 /** A task of a running wave that is `running` while its worker has finished was missed by the
  *  worker's finish (a wave read from the wrong account, a daemon restarted mid-check): judge it now.
@@ -3407,7 +3442,7 @@ function reconcileWaves(now: number): void {
   // daemon, a restart between): its wave is reported now (reportForManager).
   for (const m of ended) {
     if (m.kind !== 'manage' || m.status !== 'done') continue
-    const found = liveWave(m.wave as string)
+    const found = reconcilableWave(m.wave as string, now)
     if (!found) continue
     if (found.wave.status !== 'running') settledWaves.add(found.wave.id)
     else reportForManager(m, found, now)
@@ -3416,7 +3451,7 @@ function reconcileWaves(now: number): void {
   if (!finished.length) return
   const ids = new Set(finished.map((w) => w.wave as string))
   for (const id of ids) {
-    const wave = liveWave(id)?.wave
+    const wave = reconcilableWave(id, now)?.wave
     if (!wave) continue
     if (wave.status !== 'running') {
       settledWaves.add(id)

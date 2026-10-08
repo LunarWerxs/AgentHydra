@@ -56,9 +56,10 @@ function waveStoreSpec(configDir: string, waveId: string): JsonStoreSpec<CliMayt
   }
 }
 
-// Read a wave record from disk, or null if missing.
+// Read a wave record from disk, or null if missing. A read creates no folder: a missing folder is a
+// missing wave (ENOENT), and a mkdir per read was most of the daemon's blocked time on 2026-10-08,
+// when the tick looked for 51 deleted waves in 41 account folders every 5 s.
 export function readWave(configDir: string, waveId: string): CliMayteWave | null {
-  mkdirSync(join(configDir, 'corch', 'waves'), { recursive: true })
   const spec = waveStoreSpec(configDir, waveId)
   const result = readJsonStore<CliMayteWave>(spec)
   return result.status === 'ok' ? result.value : null
