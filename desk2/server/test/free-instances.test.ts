@@ -256,6 +256,16 @@ describe('Free jobs and routes', () => {
     expect(valid.status).toBe(202)
     expect((await valid.json()).provider).toBe('claude')
   })
+  // 2026-10-08: the GPT-6 trial names a ChatGPT model. Each provider takes only its own, and the harness gets it.
+  test("a message's model is one of its provider's, only on a message, and reaches the harness as its preference", () => {
+    const { config } = fixture()
+    const chat = { requestId: crypto.randomUUID(), instanceId: INSTANCE, command: 'chat', prompt: 'synthetic prompt' }
+    const six = validateRequest({ ...chat, provider: 'chatgpt', model: 'gpt-6' })
+    expect(commandArgs(config, six).slice(-2)).toEqual(['--prefer', 'gpt-6'])
+    expect(() => validateRequest({ ...chat, provider: 'chatgpt', model: 'haiku' })).toThrow('gpt-6 or luna-thinking')
+    expect(() => validateRequest({ ...chat, provider: 'claude', model: 'gpt-6' })).toThrow('haiku or sonnet')
+    expect(() => validateRequest({ requestId: crypto.randomUUID(), instanceId: INSTANCE, provider: 'chatgpt', command: 'auth', model: 'gpt-6' })).toThrow('Model is')
+  })
   test('verified auth imports only private handles and preserves honest quota', async () => {
     const { service, op, instance } = fixture(async (_c, r) => output(r.command === 'auth' ? { ok: true, authenticated: true } : r.command === 'chats' ? { ok: true, chats: [
       { chat_id: CHAT, is_temporary: true, name: 'Example private chat' }, { chat_id: INSTANCE, is_temporary: false, name: 'Regular chat' },

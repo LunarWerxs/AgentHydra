@@ -12,10 +12,16 @@ the SAME graded items:
   item-free  one ask per item on an idle Free account, as that leg runs when one is idle; choice and score questions
   batch4     free_batch with the ask's choice and score questions (Dredd's cascade group)
   batch40    free_batch with every question of the ask, its yes/no ones too (Dredd's whole ask while Jev is down)
+  item-luna, item-gpt6, item-thinking
+             one ask per choice/score item on a named Free ChatGPT account (--accounts), a new chat asking for
+             GPT-5.6 Luna (its default), GPT-6 or Luna Thinking mini: item-free's prompt, so the arms differ only in
+             the model (added 2026-10-08, when Free accounts began offering GPT-6)
 Rows append to --out as JSONL, so a stopped run resumes where it stopped; --report prints the comparison.
 
     python scripts/rsi/decide-free-batch.py --items items.json --out rows.jsonl
     python scripts/rsi/decide-free-batch.py --out rows.jsonl --report
+    python scripts/rsi/decide-free-batch.py --items items.json --out rows.jsonl \
+        --arms item-paid,item-luna,item-gpt6,item-thinking --accounts item-luna=2,6 item-gpt6=2,6 item-thinking=3,8
 """
 from __future__ import annotations
 
@@ -38,6 +44,9 @@ FREE_AT_ONCE = 3  # of the 6 accounts, so live work keeps the rest
 PAID_AT_ONCE = 8
 TRIES = 3  # a message no account served (or whose reply was unusable) is sent again, up to this many times
 ARMS = ("item-paid", "item-free", "batch4", "batch40")  # plus jev when TypeSafe has credit
+# Per-item arms on a named ChatGPT account, by the model a new chat asks for (None: the account's default, Luna).
+MODEL_ARMS = {"item-luna": None, "item-gpt6": "gpt-6", "item-thinking": "luna-thinking"}
+MODEL_WAIT_S = 900  # a message waits this long for its account (shared with live HSwarm work) and for its answer
 CHOICE = ("choice", "score")
 
 
@@ -99,6 +108,7 @@ class Bench:
                     self.done.add(tuple(r["unit"]))
         self.free = asyncio.Semaphore(FREE_AT_ONCE)
         self.paid = asyncio.Semaphore(PAID_AT_ONCE)
+        self.held: set[int] = set()  # the named accounts a model arm's message is on now, one message each
 
     def write(self, rows: list[dict], unit: tuple) -> None:
         rows.append({"unit": list(unit), "ts": time.time()})
@@ -164,6 +174,64 @@ class Bench:
                      "pass": passes(pred, g), "model": res.model if res else None, "tries": tries,
                      "served": res is not None, "secs": res.seconds if res else None}], unit)
 
+    async def take(self, nums: list[int]) -> int:
+        """One of these accounts that free_status shows idle (signed in, not busy, resting or paced) and no message of
+        this run holds. A named account skips the daemon's pacer, so the pacer is honoured here: a paced account is
+        never taken. Waits for one, up to MODEL_WAIT_S."""
+        for _ in range(MODEL_WAIT_S // 2):
+            try:
+                st = await free_route._call("free_status", {}, free_route.STATUS_TIMEOUT_S)
+            except free_route._ERRORS:
+                st = {}
+            for acc in st.get("accounts") or []:
+                n = acc.get("num")
+                if (n in nums and n not in self.held and acc.get("signedIn") and not acc.get("busy")
+                        and not acc.get("resting") and not acc.get("paced")):
+                    self.held.add(n)
+                    return n
+            await asyncio.sleep(2)
+        raise TimeoutError(f"none of accounts {nums} was idle for {MODEL_WAIT_S} s")
+
+    async def ask_model(self, task: Task, num: int, model: str | None) -> tuple[object, dict]:
+        """One message on account `num`, a new chat asking for `model`, polled to its end as free_route._serve does."""
+        item = {"prompt": free_route.shape(task), "name": f"bench {task.id}", "provider": "chatgpt", "account": num}
+        if model:
+            item["model"] = model
+        started = time.monotonic()
+        sent = await free_route._call("free_chat", {"tasks": [item], "wait_s": free_route.WAIT_S}, free_route.WAIT_S + 5)
+        while True:
+            one = next((t for t in sent.get("tasks") or [] if isinstance(t, dict)), {})
+            if one.get("state") in ("done", "failed") or not sent.get("batch") or time.monotonic() - started > MODEL_WAIT_S:
+                break
+            sent = await free_route._call("free_results", {"batch": sent["batch"], "wait_s": free_route.WAIT_S},
+                                          free_route.WAIT_S + 5)
+        res = free_route._result(task, one, "benchmark", "", "bench") if one.get("state") == "done" else None
+        return res, one
+
+    async def item_model(self, a: dict, raw: dict, arm: str, nums: list[int]) -> None:
+        unit = (arm, a["ask"], raw["id"])
+        if unit in self.done:
+            return
+        it = D.normalize(raw)
+        keys = [o for o, _ in D.options(it)]
+        res, one, tries, num = None, {}, 0, None
+        while res is None and tries < TRIES:
+            tries += 1
+            num = await self.take(nums)
+            try:
+                # item-free's Task, so the model is the only difference
+                task = Task(prompt=D.render(it), id="ask", system=D.SYSTEM, schema=None, tools="none", profile="decision", timeout_s=120)
+                res, one = await self.ask_model(task, num, MODEL_ARMS[arm])
+            except free_route._ERRORS:
+                res, one = None, {}
+            finally:
+                self.held.discard(num)
+        pred = D.parse_final(res.answer or "", keys) if res else None
+        g = a["gold"].get(it["id"])
+        self.write([{"arm": arm, "ask": a["ask"], "id": it["id"], "type": it["type"], "pred": pred, "gold": g,
+                     "pass": passes(pred, g), "model": one.get("model"), "account": num, "tries": tries,
+                     "served": res is not None, "secs": one.get("seconds"), "error": one.get("error")}], unit)
+
     async def batch(self, a: dict, arm: str) -> None:
         unit = (arm, a["ask"])
         if unit in self.done:
@@ -183,7 +251,7 @@ class Bench:
         self.write(rows, unit)
 
 
-async def run(items_path: Path, out: Path, arms: list[str], limit: int | None) -> None:
+async def run(items_path: Path, out: Path, arms: list[str], limit: int | None, accounts: dict[str, list[int]]) -> None:
     asks = json.loads(items_path.read_text(encoding="utf-8"))[:limit]
     b = Bench(out)
     graded = [(a, r) for a in asks for r in a["items"] if a["gold"].get(r["id"]) is not None]
@@ -202,8 +270,10 @@ async def run(items_path: Path, out: Path, arms: list[str], limit: int | None) -
         if "item-free" in arms:
             free += [("item-free", a, r) for a, r in choice]  # yes/no per item would be ~800 more free messages
         free += [(arm, a, None) for arm in ("batch4", "batch40") if arm in arms for a in asks]
+        free += [(arm, a, r) for arm in MODEL_ARMS if arm in arms for a, r in choice]
         random.Random(7).shuffle(free)  # the free arms interleave, so a slow or locked-out hour hits them alike
-        work += [b.item_free(a, r) if arm == "item-free" else b.batch(a, arm) for arm, a, r in free]
+        work += [b.item_free(a, r) if arm == "item-free" else b.item_model(a, r, arm, accounts[arm]) if arm in MODEL_ARMS
+                 else b.batch(a, arm) for arm, a, r in free]
         await asyncio.gather(*work)
     finally:
         await mgr.aclose()
@@ -212,6 +282,9 @@ async def run(items_path: Path, out: Path, arms: list[str], limit: int | None) -
 KINDS = {"choice": lambda r: r["type"] in CHOICE, "yesno": lambda r: r["type"] == "noul"}
 # each new arm against each per-item arm, in report order
 PAIRS = [(new, base) for new in ("batch4", "batch40", "item-free") for base in ("item-paid", "item-free") if new != base]
+# the model arms against the accounts' default model and the paid route
+PAIRS += [("item-gpt6", "item-luna"), ("item-thinking", "item-luna"), ("item-gpt6", "item-paid"),
+          ("item-thinking", "item-paid"), ("item-luna", "item-paid")]
 
 
 def graded(r: dict, of) -> bool:
@@ -290,9 +363,15 @@ def main() -> None:
     p.add_argument("--arms", default=",".join(ARMS))
     p.add_argument("--limit", type=int)
     p.add_argument("--report", action="store_true")
+    p.add_argument("--accounts", nargs="*", default=[], metavar="ARM=N,N",
+                   help="the Free ChatGPT accounts (free_status numbers) each model arm may use, e.g. item-gpt6=2,6")
     a = p.parse_args()
+    accounts = {k: [int(n) for n in v.split(",")] for k, v in (x.split("=", 1) for x in a.accounts)}
+    missing = [arm for arm in a.arms.split(",") if arm in MODEL_ARMS and not accounts.get(arm)]
+    if missing and not a.report:
+        p.error(f"--accounts names no account for {', '.join(missing)}")
     if not a.report:
-        asyncio.run(run(a.items, a.out, a.arms.split(","), a.limit))
+        asyncio.run(run(a.items, a.out, a.arms.split(","), a.limit, accounts))
     print(json.dumps(report(a.out), indent=1))
 
 

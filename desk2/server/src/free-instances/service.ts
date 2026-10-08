@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -40,7 +40,9 @@ function checkOptions(r: FreeRequest, send: boolean): void {
   if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
   const claudeMessage = send && r.provider === 'claude'
   if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !claudeMessage)) throw new FreeError('Web search is an option for Claude messages only.')
-  if (r.model !== undefined && (!['haiku', 'sonnet'].includes(r.model) || !claudeMessage)) throw new FreeError('Model is haiku or sonnet, for Claude messages only.')
+  const models: readonly string[] = r.provider === 'claude' ? FREE_CLAUDE_MODELS : FREE_CHATGPT_MODELS
+  if (r.model !== undefined && (!send || !models.includes(r.model)))
+    throw new FreeError(`Model is ${models.join(' or ')} for a ${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} message.`)
 }
 export function validateRequest(value: unknown): FreeRequest {
   const r = record(value) as unknown as FreeRequest

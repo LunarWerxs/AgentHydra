@@ -8,7 +8,7 @@ from ..api import Client
 from ..errors import ClaudeError
 from ..registry import chat_lock, valid_name
 from ..results import brief_result, export_results
-from .http import connection, visible_messages
+from .http import TEXT_MODEL, connection, visible_messages
 from .registry import ChatGPTRegistry
 from .state import ChatGPTState
 
@@ -169,7 +169,9 @@ class ChatGPTClient(Client):
                 body = http.read(server_id) if server_id else None
                 if command in {"read", "track"}:
                     return self._read_or_track(registry, args, entry, server_id, body)
-                return self._send(http, registry, pool, args.prompt, entry, server_id, body)
+                # A preference picks a NEW chat's model; a continued chat is sent on Luna as before.
+                model = http.model_for(args.prefer) if body is None else TEXT_MODEL
+                return self._send(http, registry, pool, args.prompt, entry, server_id, body, model)
         finally:
             registry.close()
 
@@ -215,7 +217,7 @@ class ChatGPTClient(Client):
             }
         return self._read_result(entry, server_id, messages)
 
-    def _send(self, http, registry, pool, prompt, entry, server_id, body):
+    def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL):
         # Verify the reference and privacy before preparing. Reuse this
         # authenticated connection for preparation, POST and readback.
         measurements = []
@@ -238,6 +240,7 @@ class ChatGPTClient(Client):
                 prompt,
                 existing=body,
                 on_id=partial(registry.link, entry["chat_id"]),
+                model=model,
             )
         except ClaudeError as error:
             registry.status(entry["chat_id"], error.code)
@@ -365,7 +368,7 @@ class ChatGPTClient(Client):
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
                 "No message is retried automatically. On timeout, read the returned chat_id before sending again.",
                 "usage verifies Free access to GPT-5.6 Luna Instant and reports its documented unlimited text policy, with separate tool limits; exact remaining-message counters remain unavailable. It never sends a message.",
-                "GPT-5.6 Luna Instant only (gpt-5-6-mini). regular, model, web_search, organization selection and token streaming are unsupported.",
+                "GPT-5.6 Luna Instant (gpt-5-6-mini) unless --prefer gpt-6 or luna-thinking asks a new chat for that model and the account offers it; the reply's model says which answered. regular, model, web_search, organization selection and token streaming are unsupported.",
                 "Exporting is opt-in and writes the private transcript to disk.",
             ],
         }

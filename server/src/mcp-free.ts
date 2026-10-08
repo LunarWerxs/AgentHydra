@@ -343,8 +343,11 @@ export interface FreeTask {
   account?: number
   provider?: Provider
   web_search?: boolean
-  model?: 'haiku' | 'sonnet'
+  model?: FreeModel
 }
+/** A new chat's model: a Claude family, or a ChatGPT model the account may offer (desk2 shared/free-instances.ts). */
+export type FreeModel = 'haiku' | 'sonnet' | 'gpt-6' | 'luna-thinking'
+const CHATGPT_MODELS: readonly string[] = ['gpt-6', 'luna-thinking']
 interface TaskState {
   task: number
   state: 'queued' | 'running' | 'done' | 'failed'
@@ -506,8 +509,13 @@ function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
     prompt: task.prompt,
     ...(task.chat_id ? { chatId: task.chat_id } : task.name ? { name: task.name } : {}),
     ...(task.web_search && account.provider === 'claude' ? { webSearch: true } : {}),
-    // A continued thread keeps its model; the family only picks a new Claude chat's (owner, 2026-10-07).
-    ...(task.model && !task.chat_id && account.provider === 'claude' ? { model: task.model } : {}),
+    // A continued thread keeps its model; the family only picks a new chat's (owner, 2026-10-07), on the provider
+    // it names: a Claude family goes to Claude only, a ChatGPT model to ChatGPT only (2026-10-08).
+    ...(task.model &&
+    !task.chat_id &&
+    (account.provider === 'chatgpt') === CHATGPT_MODELS.includes(task.model)
+      ? { model: task.model }
+      : {}),
   }
 }
 
@@ -612,9 +620,20 @@ function readTask(raw: unknown, index: number): FreeTask {
   if (!prompt.trim()) throw new Error(`task ${index}: a prompt is required`)
   if (prompt.length > 100_000)
     throw new Error(`task ${index}: a prompt is at most 100,000 characters`)
-  const provider = t.provider == null ? undefined : str(t.provider)
+  const model = t.model == null ? undefined : str(t.model)
+  if (model !== undefined && !['haiku', 'sonnet', ...CHATGPT_MODELS].includes(model))
+    throw new Error(`task ${index}: model is haiku, sonnet, gpt-6 or luna-thinking`)
+  // A ChatGPT model is asked of ChatGPT: the task goes to a ChatGPT account.
+  const provider =
+    t.provider == null
+      ? model && CHATGPT_MODELS.includes(model)
+        ? 'chatgpt'
+        : undefined
+      : str(t.provider)
   if (provider !== undefined && provider !== 'claude' && provider !== 'chatgpt')
     throw new Error(`task ${index}: provider is claude or chatgpt`)
+  if (provider === 'claude' && model && CHATGPT_MODELS.includes(model))
+    throw new Error(`task ${index}: ${model} is a ChatGPT model`)
   return {
     prompt,
     ...(t.chat_id != null ? { chat_id: str(t.chat_id) } : {}),
@@ -622,7 +641,7 @@ function readTask(raw: unknown, index: number): FreeTask {
     ...(t.account != null ? { account: Number(t.account) } : {}),
     ...(provider ? { provider } : {}),
     ...(t.web_search === true ? { web_search: true } : {}),
-    ...(t.model === 'haiku' || t.model === 'sonnet' ? { model: t.model } : {}),
+    ...(model ? { model: model as FreeModel } : {}),
   }
 }
 
@@ -711,7 +730,7 @@ export const FREE_TOOLS: McpEngineTool[] = [
   {
     name: 'free_chat',
     description:
-      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. A task's `model` ('haiku') asks for the lightest Claude model on a new claude.ai thread. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
+      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. A task's `model` asks a new thread for a model: 'haiku' for the lightest Claude, 'gpt-6' or 'luna-thinking' for a ChatGPT one. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
     inputSchema: S(
       {
         tasks: {
@@ -739,9 +758,9 @@ export const FREE_TOOLS: McpEngineTool[] = [
               web_search: { type: 'boolean', description: 'Claude only: let it search the web.' },
               model: {
                 type: 'string',
-                enum: ['haiku', 'sonnet'],
+                enum: ['haiku', 'sonnet', 'gpt-6', 'luna-thinking'],
                 description:
-                  "Preferred Claude family on a Free claude.ai account: 'haiku' takes the newest Haiku the account offers (Haiku 5.5 today), else the account's usual model. Ignored for chatgpt and for a continued thread.",
+                  "A new thread's preferred model, else the account's usual one; the answer's `model` says which answered. Claude: 'haiku' takes the newest Haiku the account offers (Haiku 5.5 today); ignored on a chatgpt account. ChatGPT: 'gpt-6' or 'luna-thinking' (GPT-5.6 Luna Thinking mini), when the account offers it; it sends the task to a chatgpt account. Ignored for a continued thread.",
               },
             },
             ['prompt'],

@@ -19,6 +19,10 @@ BASE = "https://chatgpt.com"
 TEXT_MODEL = "gpt-5-6-mini"
 TEXT_MODEL_NAME = "GPT-5.6 Luna"
 UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include everything in Free
+# What --prefer may ask a NEW chat for, when the account offers it (owner, 2026-10-08: "Run whatever trials you want"):
+# Free accounts list GPT-6 as their Instant default since about 2026-10-08, Go accounts not yet, and every plan lists
+# Luna's Thinking mini. Only Luna's Instant is the verified unlimited text, so it stays the default.
+PREFERRED_MODELS = {"gpt-6": "gpt-6", "luna-thinking": "gpt-5-6-t-mini"}
 # ChatGPT sets conv_key_<uuid> (30 days) and history_off_<uuid> (7 days) on every Temporary Chat. Kept and sent
 # back, ~370 chats made each account's jar ~62 KB and ChatGPT refused every request in 0.1 s (2026-10-07: all
 # three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.
@@ -332,14 +336,26 @@ class ChatGPTHttp:
             "note": _usage_note(unlimited, plan),
         }
 
-    def send(self, prompt, *, existing=None, on_id=None):
+    def model_for(self, prefer):
+        """The model a new chat asked for `prefer` (a PREFERRED_MODELS key) is sent: that model when this account
+        offers it in Temporary Chats, else Luna Instant. The reply's own model says which one answered."""
+        slug = PREFERRED_MODELS.get(prefer)
+        if not slug:
+            return TEXT_MODEL
+        models = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
+        offered = isinstance(models, list) and any(isinstance(m, dict) and m.get("slug") == slug for m in models)
+        return slug if offered else TEXT_MODEL
+
+    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL):
         """One private POST. A prepared credential is consumed before transmission."""
         if not isinstance(prompt, str) or not prompt.strip():
             raise ClaudeError("Supply a nonempty prompt.", code="invalid_arguments")
         if existing is not None and existing.get("is_temporary_chat") is not True:
             raise ClaudeError("Temporary Chat is not verified.", code="privacy_not_verified")
+        if model != TEXT_MODEL and model not in PREFERRED_MODELS.values():
+            raise ClaudeError("That ChatGPT model is not one AgentHydra sends.", code="invalid_model")
         previous = {m["id"] for m in visible_messages(existing)} if existing else set()
-        payload = _send_payload(prompt, existing)
+        payload = _send_payload(prompt, existing, model)
         server_id = payload.get("conversation_id")
         headers = {"Accept": "text/event-stream"}
         if self.preparations is not None:
@@ -398,7 +414,7 @@ def _usage_note(unlimited, plan):
     return "An unlimited Free text allowance could not be verified for this login. No remaining-message counter was returned."
 
 
-def _send_payload(prompt, existing):
+def _send_payload(prompt, existing, model=TEXT_MODEL):
     payload = {
         "action": "next",
         "messages": [
@@ -409,7 +425,7 @@ def _send_payload(prompt, existing):
             }
         ],
         "parent_message_id": valid_uuid(existing["current_node"]) if existing else str(uuid4()),
-        "model": TEXT_MODEL,
+        "model": model,
         "history_and_training_disabled": True,
     }
     if existing:

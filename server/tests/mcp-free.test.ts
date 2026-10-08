@@ -106,7 +106,13 @@ describe('free_chat through a stand-in Desk 2', () => {
     result?: unknown
   }
   const jobs = new Map<string, Job>()
-  const ran: { instance: string; command: string; chatId?: string; prompt: string }[] = []
+  const ran: {
+    instance: string
+    command: string
+    chatId?: string
+    prompt: string
+    model?: string
+  }[] = []
   let overlap = 0
   let server: ReturnType<typeof Bun.serve>
   let port: string | undefined
@@ -139,6 +145,7 @@ describe('free_chat through a stand-in Desk 2', () => {
             chatId?: string
             prompt: string
             name?: string
+            model?: string
           }
           if (
             [...jobs.values()].some((j) => j.instanceId === r.instanceId && j.state === 'running')
@@ -164,6 +171,7 @@ describe('free_chat through a stand-in Desk 2', () => {
             command: r.command,
             chatId: r.chatId,
             prompt: r.prompt,
+            model: r.model,
           })
           setTimeout(() => {
             job.state = 'done'
@@ -228,6 +236,22 @@ describe('free_chat through a stand-in Desk 2', () => {
     expect(overlap).toBe(0)
     const batch = await run('free_results', { batch: out.batch, wait_s: 0 })
     expect(batch.done).toBe('4 of 4')
+  }, 30_000)
+
+  // 2026-10-08: the GPT-6 trial asks a Free ChatGPT account for GPT-6 by name.
+  test('a ChatGPT model goes to a ChatGPT account and reaches Desk; a Claude family is never sent to one', async () => {
+    const out = await run('free_chat', {
+      tasks: [
+        { prompt: 'six', model: 'gpt-6' },
+        { prompt: 'light', model: 'haiku', account: 2 },
+      ],
+    })
+    expect(out.tasks.map((t: { state: string }) => t.state)).toEqual(['done', 'done'])
+    expect(ran.find((r) => r.prompt === 'six')).toMatchObject({ instance: 'b', model: 'gpt-6' })
+    expect(ran.find((r) => r.prompt === 'light')?.model).toBeUndefined()
+    await expect(
+      run('free_chat', { tasks: [{ prompt: 'x', provider: 'claude', model: 'gpt-6' }] }),
+    ).rejects.toThrow('ChatGPT model')
   }, 30_000)
 
   test('a new thread its account refuses is answered by another idle account, and the refusing one rests', async () => {

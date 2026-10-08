@@ -89,7 +89,28 @@ class ChatGPTUsageTests(unittest.TestCase):
             http.usage()
         self.assertEqual(http._json.call_count, 1)
 
-    def test_new_and_resumed_messages_use_only_luna_and_remain_temporary(self):
+    def test_a_preferred_model_is_sent_only_where_the_account_offers_it(self):
+        # 2026-10-08: Free accounts list GPT-6, Go accounts do not; a send naming a model the account lacks would fail.
+        offers_six = {"models": [model(), {"slug": "gpt-6", "title": "GPT-6", "reasoning_type": "auto"}]}
+        cases = [("gpt-6", offers_six, "gpt-6"), ("gpt-6", {"models": [model()]}, TEXT_MODEL), ("sonnet", offers_six, TEXT_MODEL)]
+        for prefer, models, expected in cases:
+            with self.subTest(prefer=prefer, offered=len(models["models"])):
+                http = object.__new__(ChatGPTHttp)
+                http._json = Mock(return_value=models)
+                self.assertEqual(http.model_for(prefer), expected)
+                self.assertEqual(http._json.call_count, 0 if prefer == "sonnet" else 1)
+        http = object.__new__(ChatGPTHttp)
+        http.preparations = None
+        http._request = Mock(side_effect=ClaudeError("Stop before fixture transmission", code="fixture"))
+        with self.assertRaises(ClaudeError):
+            http.send("Synthetic smoke message", model="gpt-6")
+        self.assertEqual(http._request.call_args.kwargs["json"]["model"], "gpt-6")
+        with self.assertRaises(ClaudeError) as refused:
+            http.send("Synthetic smoke message", model="gpt-6-1")
+        self.assertEqual(refused.exception.code, "invalid_model")
+        self.assertEqual(http._request.call_count, 1)
+
+    def test_new_and_resumed_messages_default_to_luna_and_remain_temporary(self):
         chat = "11111111-2222-4333-8444-555555555555"
         parent = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
         existing = {"conversation_id": chat, "current_node": parent, "is_temporary_chat": True,

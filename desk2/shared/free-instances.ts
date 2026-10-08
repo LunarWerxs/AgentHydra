@@ -17,9 +17,13 @@ export interface FreeRequest {
   prompt?: string
   name?: string
   webSearch?: boolean
-  /** Claude family for a new chat (owner, 2026-10-07: Haiku 5.5 through free accounts where possible). */
-  model?: 'haiku' | 'sonnet'
+  /** Model for a new chat: a Claude family (owner, 2026-10-07: Haiku 5.5 through free accounts where possible), or a
+   *  ChatGPT model the account may offer (2026-10-08, for measured trials); else the account's usual model. */
+  model?: FreeModel
 }
+export const FREE_CLAUDE_MODELS = ['haiku', 'sonnet'] as const
+export const FREE_CHATGPT_MODELS = ['gpt-6', 'luna-thinking'] as const
+export type FreeModel = (typeof FREE_CLAUDE_MODELS)[number] | (typeof FREE_CHATGPT_MODELS)[number]
 export interface FreeChat {
   chat_id: string
   name: string | null
