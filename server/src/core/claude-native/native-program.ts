@@ -796,26 +796,28 @@ function nativeOnScreen(lifecycle: any, sessionId: string): boolean {
 
 /**
  * Stops a chat's terminal shells that the app started ahead of time ("prewarm") and nobody has
- * typed into or read, while the app knows the chat is off screen. The app opens one PowerShell
- * (~90 MB + a conhost) for every chat it shows and keeps it until the chat is archived, engine or
- * not; showing the chat again prewarms a new one. A shell anyone used, one the app opened for any
- * other reason, one younger than `minAgeMs`, or one of a chat whose visibility the app has not
- * reported is left alone.
+ * typed into or read, once the app has had the chat off screen for `hiddenForMs`. The app opens
+ * one PowerShell (~85 MB) for every chat it shows and keeps it until the chat is archived, engine
+ * or not; showing the chat again prewarms a new one. A stopped shell's ConPTY conhost (~8 MB) is
+ * never closed by the app, so a chat someone keeps returning to keeps its shell: stopping it each
+ * time left a conhost per return (measured 2026-10-07). A shell anyone used, one the app opened
+ * for any other reason, or one of a chat whose visibility the app has not reported is left alone.
  */
 function nativeStopPrewarmShells(
   shells: any,
   lifecycle: any,
   sessionId: string,
-  minAgeMs: number,
+  hiddenForMs: number,
 ): string[] {
   const entry = lifecycle.sessions.get(sessionId)
   if (!entry?.visibilityKnown || entry.isTabVisible) return []
+  const now = Date.now()
   const stopped: string[] = []
   for (const key of [...shells.shellPtyProcesses.keys()]) {
     if (key !== sessionId && !key.startsWith(`${sessionId}::`)) continue
     const stats = shells.shellPtyStats.get(key)
     if (stats?.spawnReason !== 'prewarm' || stats.hadInput !== false || stats.reads) continue
-    if (Date.now() - (stats.startedAt ?? Date.now()) < minAgeMs) continue
+    if (now - (entry.lastHiddenTime ?? stats.startedAt ?? now) < hiddenForMs) continue
     shells.stopShellPty(key, { noSweep: true })
     stopped.push(key)
   }
@@ -828,8 +830,8 @@ function nativeStopPrewarmShells(
  * already has wins. Unarmed idle chats are armed at once instead of at the app's next 15-minute
  * recheck. The pause itself is the app's (pauseSession), which declines any chat that is running,
  * has a turn, background task, cron, loop wakeup or Remote Control bridge in flight. Then stops
- * never-used prewarmed shells of chats that are off screen, with or without an engine: the shell
- * only serves the terminal pane, which reopens one when the chat is shown again.
+ * never-used prewarmed shells of chats off screen for as long, with or without an engine: the
+ * shell only serves the terminal pane, which opens a new one when the chat is shown again.
  */
 async function nativeIdle(env: any, found: any, request: any, settled: any, state: any) {
   const manager = found.manager
@@ -868,9 +870,8 @@ async function nativeIdle(env: any, found: any, request: any, settled: any, stat
   const shellChats = new Set<string>(
     [...shells.shellPtyProcesses.keys()].map((key: string) => key.split('::')[0]),
   )
-  // Two minutes old at least, so a chat just opened keeps the shell its pane is about to show.
   for (const sessionId of shellChats)
-    shellsStopped.push(...nativeStopPrewarmShells(shells, lifecycle, sessionId, 120_000))
+    shellsStopped.push(...nativeStopPrewarmShells(shells, lifecycle, sessionId, request.idleMs))
   nativeCheckIdentity(env, found, request, settled)
   const sessions = [...manager.sessions.values()]
   return {

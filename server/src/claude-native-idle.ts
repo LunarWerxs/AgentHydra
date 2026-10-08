@@ -59,13 +59,21 @@ async function runNative(
   if (owners.length === 0) return { ok: false, reason: 'the app is not running' }
   if (owners.length > 1) return { ok: false, reason: 'several main processes match this profile' }
   let client: Awaited<ReturnType<typeof connectClaudeInspector>> | undefined
-  try {
-    client = await connectClaudeInspector({
+  // The connect budget spans discovery and the handshake, and this daemon's event loop stalls for
+  // seconds at a time (6.5 s of 10 s logged on 2026-10-07): a 3 s budget timed out on every sweep
+  // of one app. A failed connect ran nothing in the app, so it alone is tried a second time.
+  const connect = () =>
+    connectClaudeInspector({
       pid: owners[0].pid,
       profile,
       port: config.port,
-      connectTimeoutMs: 3000,
+      connectTimeoutMs: 10_000,
       callTimeoutMs,
+    })
+  try {
+    client = await connect().catch(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+      return connect()
     })
     const result = await client.evaluate<Record<string, any>>(build(owners[0].pid, profile))
     if (result?.ok === true) return { ok: true, result }
