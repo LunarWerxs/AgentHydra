@@ -103,6 +103,8 @@ $out | ConvertTo-Json -Depth 6 -Compress
 # Real ids and names, as measured on instance 13 (see the module docstring).
 TITLE = "GlimmerAC collector enablement"
 KEBAB_NAME = "More options for " + TITLE
+KO_SUFFIX = "에 대한 더 많은 옵션"   # Korean 'more options for', after the title
+KO_KEBAB_NAME = TITLE + KO_SUFFIX
 ROW = "42.5771536.4.7.4.663"        # the kebab's raw-view parent: kept its id
 OLD = "42.5771536.4.7.4.664"        # the kebab as found, before its first open
 NEW = "42.5771536.4.7.4.1452"       # the kebab the app rebuilt when the menu opened
@@ -148,6 +150,8 @@ CASES = [
     case("non_ascii_title", SIDEBAR + [kebab(NEW, ROW, "Expanded", "More options for Alcancé mi límite")],
          title="Alcancé mi límite"),
     case("null_records_are_skipped", [None] + SIDEBAR + [kebab(NEW, ROW, "Expanded", KEBAB_NAME)]),
+    # A title-first locale, as read live on a Korean app 2026-10-08: the frame FOLLOWS the title.
+    case("title_first_locale", SIDEBAR + [kebab(NEW, ROW, "Expanded", KO_KEBAB_NAME)]),
     # --- refused: identity ------------------------------------------------------------------------
     case("no_identity_was_readable", SIDEBAR + [kebab(NEW, ROW, "Expanded", KEBAB_NAME)], aim="", row=""),
     case("the_row_is_gone", SIDEBAR),
@@ -167,6 +171,8 @@ CASES = [
     # --- refused: the name assertion --------------------------------------------------------------
     case("the_name_cannot_be_read", SIDEBAR + [kebab(NEW, ROW, "Expanded", "")]),
     case("the_row_now_reads_another_title", SIDEBAR + [kebab(NEW, ROW, "Expanded", "More options for SageThumbs")]),
+    # Title-first, but a LONGER title that merely starts with ours: not our row.
+    case("a_longer_title_first_name", SIDEBAR + [kebab(NEW, ROW, "Expanded", TITLE + "s" + KO_SUFFIX)]),
     # --- refused: the menu ------------------------------------------------------------------------
     case("the_only_open_menu_was_already_open", SIDEBAR + [kebab(NEW, ROW, "Expanded", KEBAB_NAME)],
          before=[MENU]),
@@ -266,6 +272,10 @@ class ReAimByIdentityTest(unittest.TestCase):
     def test_null_records_are_skipped(self):
         self.assertActed("null_records_are_skipped", NEW)
 
+    def test_a_title_first_locale_is_acted_on(self):
+        """Korean puts the title BEFORE its 'more options' frame; EndsWith refused every archive."""
+        self.assertActed("title_first_locale", NEW, aimed=KO_KEBAB_NAME)
+
     # --- refused: identity -----------------------------------------------------------------------
     def test_no_readable_identity_refuses(self):
         self.assertRefused("no_identity_was_readable", "could not be read", retry=False)
@@ -295,6 +305,9 @@ class ReAimByIdentityTest(unittest.TestCase):
     def test_a_row_that_reads_another_title_refuses_and_says_what_it_read(self):
         self.assertRefused("the_row_now_reads_another_title", "sidebar moved", retry=False)
         self.assertEqual(self.verdict("the_row_now_reads_another_title")["Aimed"], "More options for SageThumbs")
+
+    def test_a_longer_title_that_starts_with_ours_refuses(self):
+        self.assertRefused("a_longer_title_first_name", "sidebar moved", retry=False)
 
     # --- refused: the menu -----------------------------------------------------------------------
     def test_a_menu_this_run_did_not_open_refuses(self):

@@ -401,12 +401,25 @@ function InPrimaryPane($el) {
   return $false
 }
 
+# THE TITLE CAN COME FIRST (found live 2026-10-08 on a Korean-locale app: the kebab reads
+# '<title>' + a Hangul 'more options' suffix, so EndsWith found nothing and every archive reported "not
+# rendered" for rows in plain view). Title-first locales join their frame straight onto the
+# title with no space, so a leading title counts only when the next character is neither
+# whitespace nor an ASCII letter/digit: 'Foo 2...' and 'Foos...' are longer titles, not 'Foo'.
+function TitleLeads($n, $title) {
+  if (-not $n -or $n.Length -le $title.Length -or -not $n.StartsWith($title)) { return $false }
+  $next = $n[$title.Length]
+  return -not ([char]::IsWhiteSpace($next) -or ([int]$next -lt 128 -and [char]::IsLetterOrDigit($next)))
+}
+function NameCarriesTitle($n, $title) { return $n -and ($n.EndsWith($title) -or (TitleLeads $n $title)) }
+function NameIsCleanTitle($n, $title) { return $n -eq $title -or $n.EndsWith(' ' + $title) -or (TitleLeads $n $title) }
+
 function KebabFor($scope, $title) {
   $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, $BTN)
   $hits = @()
   foreach ($b in $scope.FindAll($TREE, $c)) {
     $n = $b.Current.Name
-    if ($n -and $n.EndsWith($title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { $hits += $b }
+    if ((NameCarriesTitle $n $title) -and (TryPattern $b ([System.Windows.Automation.ExpandCollapsePattern]::Pattern))) { $hits += $b }
   }
   # THE OPEN CHAT HAS TWO KEBABS (live smoke, 2026-09-01): the chat showing in the primary
   # pane renders a second 'More options for <title>' in its HEADER (Group 'Primary pane',
@@ -423,7 +436,7 @@ function KebabFor($scope, $title) {
   }
   if ($hits.Count -le 1) { return $hits | Select-Object -First 1 }
   if ($Ordinal -ge 1 -and $Action -eq 'Rename') {
-    $exact = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title } |
+    $exact = @($hits | Where-Object { NameIsCleanTitle $_.Current.Name $title } |
               Sort-Object { $_.Current.BoundingRectangle.Y })
     if ($Ordinal -le $exact.Count) { return $exact[$Ordinal - 1] }
     $script:KebabAmbiguity = "AMBIGUOUS: asked for row #$Ordinal of '$title' but only $($exact.Count) rendered"
@@ -431,8 +444,8 @@ function KebabFor($scope, $title) {
   }
   # Prefer the one whose title is preceded by a space (i.e. the whole trailing word matches,
   # not a longer title that merely ends the same way).
-  $clean = @($hits | Where-Object { $_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title })
-  $others = @($hits | Where-Object { -not ($_.Current.Name.EndsWith(' ' + $title) -or $_.Current.Name -eq $title) })
+  $clean = @($hits | Where-Object { NameIsCleanTitle $_.Current.Name $title })
+  $others = @($hits | Where-Object { -not (NameIsCleanTitle $_.Current.Name $title) })
   if ($clean.Count -eq 1 -and $others.Count -eq 0) { return $clean[0] }
   # ONE CHAT DRAWN TWICE IS NOT AN AMBIGUITY (measured 2026-09-15 proving the 0.42.0 build: a
   # chat spawned seconds earlier rendered two kebabs with the IDENTICAL name, and the rename
@@ -579,8 +592,15 @@ function ReAimVerdict {
     return @{ Ok = $false; Retry = $true; Aimed = ''; Kebab = $open[0]
       Why = "this row's kebab was found by identity but its name could not be read" }
   }
-  # The assertion the re-aim always made, now read from the element identity found.
-  if (-not $aimed.EndsWith($Title)) {
+  # The assertion the re-aim always made, now read from the element identity found. Title-last
+  # ('More options for <title>') or title-first ('<title>' + a frame joined with no space - see
+  # TitleLeads; inlined because this verdict must stand alone, test_actuator_reaim_identity).
+  $leads = $false
+  if ($aimed.Length -gt $Title.Length -and $aimed.StartsWith($Title)) {
+    $next = $aimed[$Title.Length]
+    $leads = -not ([char]::IsWhiteSpace($next) -or ([int]$next -lt 128 -and [char]::IsLetterOrDigit($next)))
+  }
+  if (-not ($aimed.EndsWith($Title) -or $leads)) {
     return @{ Ok = $false; Retry = $false; Aimed = $aimed; Kebab = $open[0]
       Why = "the row this menu belongs to no longer reads that title - the sidebar moved while the menu opened" }
   }
