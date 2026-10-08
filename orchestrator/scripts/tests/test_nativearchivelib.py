@@ -115,6 +115,44 @@ class NativeArchiveTransportTest(unittest.TestCase):
         send.assert_called_once()
         health.assert_not_called()
 
+    def test_superseded_flag_is_sent_only_while_a_move_settle_sets_it(self):
+        self.act()
+        self.assertNotIn("sourceSuperseded", self.requests[-1][2])
+        nativearchivelib.set_superseded(True)
+        try:
+            self.act()
+        finally:
+            nativearchivelib.set_superseded(False)
+        self.assertEqual(self.requests[-1][2],
+                         {"instance_ref": f"desktop:{PROFILE}", "sourceSuperseded": True})
+
+    def test_busy_superseded_archive_is_retried_until_it_clears(self):
+        busy = json.dumps({"available": True, "ok": False, "verified": False,
+                           "dispatch": "not-sent",
+                           "reason": "NATIVE_REFUSAL: session has live, pending, or transitioning work"})
+        outcomes = [(nativearchivelib.NATIVE_TERMINAL, busy),
+                    (nativearchivelib.NATIVE_VERIFIED, json.dumps(VERIFIED))]
+        nativearchivelib.set_superseded(True)
+        try:
+            with mock.patch.object(nativearchivelib, "BUSY_POLL_SECS", 0), \
+                    mock.patch.object(nativearchivelib, "_try_archive_once",
+                                      side_effect=outcomes) as once:
+                self.assertEqual(nativearchivelib.try_archive(SID, PROFILE)[0],
+                                 nativearchivelib.NATIVE_VERIFIED)
+        finally:
+            nativearchivelib.set_superseded(False)
+        self.assertEqual(once.call_count, 2)
+
+    def test_busy_refusal_is_not_retried_outside_a_move_settle(self):
+        busy = json.dumps({"available": True, "ok": False, "verified": False,
+                           "dispatch": "not-sent",
+                           "reason": "NATIVE_REFUSAL: session has live, pending, or transitioning work"})
+        with mock.patch.object(nativearchivelib, "_try_archive_once",
+                               return_value=(nativearchivelib.NATIVE_TERMINAL, busy)) as once:
+            self.assertEqual(nativearchivelib.try_archive(SID, PROFILE)[0],
+                             nativearchivelib.NATIVE_TERMINAL)
+        once.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

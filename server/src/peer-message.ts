@@ -63,6 +63,7 @@ function tokenForPid(dir: string, files: string[], pid: number): string | null {
 export function peerTargetFor(
   sessionId: string,
   claudeHome = join(homedir(), '.claude'),
+  hostSessionId?: string,
 ): PeerTarget | null {
   const dir = join(claudeHome, 'sessions')
   let files: string[]
@@ -75,6 +76,8 @@ export function peerTargetFor(
     if (!f.endsWith('.json')) continue
     const reg = readRegistryEntry(dir, f)
     if (!reg || reg.sessionId !== sessionId) continue
+    // A moved chat's old copy can still be live on its source account: only the named host's engine counts.
+    if (hostSessionId !== undefined && reg.hostSessionId !== hostSessionId) continue
     const socketPath = typeof reg.messagingSocketPath === 'string' ? reg.messagingSocketPath : ''
     const pid = typeof reg.pid === 'number' ? reg.pid : 0
     if (!socketPath || !pid) continue
@@ -128,8 +131,9 @@ export async function deliverPeerMessage(
   text: string,
   confirmMs = 45000,
   claudeHome?: string,
+  hostSessionId?: string,
 ): Promise<{ ok: boolean; reason: string }> {
-  const target = peerTargetFor(sessionId, claudeHome)
+  const target = peerTargetFor(sessionId, claudeHome, hostSessionId)
   if (!target) return { ok: false, reason: 'not-live' }
   const sizeOf = () => {
     try {

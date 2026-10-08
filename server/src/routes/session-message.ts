@@ -28,13 +28,26 @@ app.post('/api/sessions/:id/message', async (c) => {
   const text = typeof body.text === 'string' ? body.text.trim() : ''
   if (!text) return c.json({ ok: false, error: 'text required' }, 400)
 
-  const { findDesktopChat } = await import('../instance-sessions')
-  const meta = findDesktopChat(sessionId)
-  const home = await desktopHomeFor(sessionId).catch(() => null)
-  if (!meta || !home) return c.json({ ok: false, error: 'no desktop chat holds this session' }, 404)
+  // `instance` names the instance the landed copy sits in (its name, or a desktop:<dir> ref). A moved
+  // chat keeps its session id on BOTH accounts, so without it the copy, the home and the live engine
+  // are whichever one the index prefers - the source copy's engine woke on a full account.
+  const { findDesktopChat, desktopChatOn } = await import('../instance-sessions')
   const { listInstances } = await import('../core/instances')
-  const inst = (await listInstances()).find((i) => samePathKey(i.dir, home))
+  const namedRef = typeof body.instance === 'string' ? body.instance.trim() : ''
+  const named = namedRef
+    ? (await listInstances()).find(
+        (i) => i.name === namedRef || samePathKey(i.dir, namedRef.replace(/^desktop:/, '')),
+      )
+    : undefined
+  const meta = named ? desktopChatOn(named.dir, sessionId) : findDesktopChat(sessionId)
+  if (namedRef && (!named || !meta))
+    return c.json({ ok: false, error: 'not on the named instance' }, 409)
+  const home = named ? named.dir : await desktopHomeFor(sessionId).catch(() => null)
+  if (!meta || !home) return c.json({ ok: false, error: 'no desktop chat holds this session' }, 404)
+  const inst = named ?? (await listInstances()).find((i) => samePathKey(i.dir, home))
   if (!inst) return c.json({ ok: false, error: `no instance owns ${home}` }, 404)
+  // A live engine belongs to this instance only when its registry hostSessionId is this copy's chat.
+  const hostChatId = named ? (meta.chatId ?? '') : undefined
   if (!inst.isRunning)
     return c.json(
       {
@@ -68,6 +81,8 @@ app.post('/api/sessions/:id/message', async (c) => {
       transcript,
       text,
       Math.min(120, Math.max(10, Number(body.confirm_secs) || 45)) * 1000,
+      undefined,
+      hostChatId,
     )
     if (peer.ok)
       return c.json({
@@ -244,7 +259,7 @@ app.post('/api/sessions/:id/message', async (c) => {
     // app boots a chat's engine that then writes nothing). Stop it the way the daemon's own
     // migrate does, kill-wait included; an engine that keeps respawning belongs to an app
     // that has the chat OPEN, and that stays an honest refusal.
-    const live = liveSessionEntry(sessionId)
+    const live = liveSessionEntry(sessionId, hostChatId)
     if (live) {
       // mtime is NOT a safe quiet signal here: an idle-booted engine touches its transcript
       // periodically without appending (measured 2026-09-01, size static for 100 minutes
@@ -265,9 +280,9 @@ app.post('/api/sessions/:id/message', async (c) => {
         /* already exiting */
       }
       const killDeadline = Date.now() + 8000
-      while (Date.now() < killDeadline && liveSessionEntry(sessionId))
+      while (Date.now() < killDeadline && liveSessionEntry(sessionId, hostChatId))
         await new Promise((r) => setTimeout(r, 250))
-      if (liveSessionEntry(sessionId))
+      if (liveSessionEntry(sessionId, hostChatId))
         return c.json(
           {
             ok: false,

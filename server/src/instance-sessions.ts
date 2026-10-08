@@ -351,6 +351,18 @@ export function findDesktopChat(sessionId: string): SessionMeta | null {
 }
 
 /**
+ * The copy of a session that ONE instance holds, read from that instance's store alone. A moved
+ * chat keeps its session id on both accounts, so the index's single winner cannot answer for a
+ * caller that has named the account it means.
+ */
+export function desktopChatOn(instanceDir: string, sessionId: string): SessionMeta | null {
+  const chat = collectChats([{ dir: instanceDir, label: instanceDir }]).find(
+    (c) => c.chatId === `local_${sessionId}` || c.cliSessionId === sessionId,
+  )
+  return chat ? metaOf(chat).entry : null
+}
+
+/**
  * The index, stale-while-revalidate.
  *
  * ⛔ WHY NOT A BLOCKING RESCAN AT EXPIRY (2026-09-27). This index used to read and parse every

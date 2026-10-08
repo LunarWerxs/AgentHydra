@@ -35,6 +35,13 @@ const realPeerMessage = { ...(await import('../src/peer-message')) }
 // import in the handler's module, and the rest are dynamic imports resolved at request time.
 // Each fake spreads the real namespace first, so a collaborator this test does not care about
 // keeps its real implementation instead of becoming undefined.
+// The per-test answers for the named-instance cases: which instances exist, and which one (if
+// any) holds this session as a desktop chat.
+type FakeInstance = { name: string; dir: string; isRunning: boolean }
+let instances: FakeInstance[] = [{ name: 'temp1', dir: HOME, isRunning: true }]
+let namedChat: { chatId: string; title: string } | null = null
+const OTHER_HOME = 'c:\\i\\temp2'
+
 mock.module('../src/live-registry', () => ({
   ...realLiveRegistry,
   findTranscriptById: () => null,
@@ -42,6 +49,7 @@ mock.module('../src/live-registry', () => ({
 mock.module('../src/instance-sessions', () => ({
   ...realInstanceSessions,
   findDesktopChat: () => ({ title: 'A working chat' }),
+  desktopChatOn: () => namedChat,
 }))
 mock.module('../src/session-launch', () => ({
   ...realSessionLaunch,
@@ -50,15 +58,24 @@ mock.module('../src/session-launch', () => ({
 }))
 mock.module('../src/core/instances', () => ({
   ...realCoreInstances,
-  listInstances: async () => [{ name: 'temp1', dir: HOME, isRunning: true }],
+  listInstances: async () => instances,
 }))
 // 'not-live' is the case under test: a session with NO peer pipe, which is exactly when the
 // route would otherwise downgrade to the composer.
 const peerCalls: string[] = []
+const peerHosts: Array<string | undefined> = []
 mock.module('../src/peer-message', () => ({
   ...realPeerMessage,
-  deliverPeerMessage: async (sessionId: string) => {
+  deliverPeerMessage: async (
+    sessionId: string,
+    _transcript: unknown,
+    _text: unknown,
+    _ms: unknown,
+    _home: unknown,
+    hostSessionId?: string,
+  ) => {
     peerCalls.push(sessionId)
+    peerHosts.push(hostSessionId)
     return { ok: false, reason: 'not-live' }
   },
 }))
@@ -86,6 +103,9 @@ async function post(body: Record<string, unknown>) {
 
 beforeEach(() => {
   peerCalls.length = 0
+  peerHosts.length = 0
+  namedChat = null
+  instances = [{ name: 'temp1', dir: HOME, isRunning: true }]
 })
 
 test('peer_only on a session with no pipe REFUSES instead of typing', async () => {
@@ -112,6 +132,37 @@ test('WITHOUT peer_only the same session still falls through to the composer pat
   const { status, body } = await post({ text: 'carry on' })
   expect(status).toBe(422)
   expect(String(body.error)).toContain('no verify snippet derivable')
+})
+
+test('a named instance that does not hold the session is refused, never guessed at', async () => {
+  instances = [
+    { name: 'temp1', dir: HOME, isRunning: true },
+    { name: 'temp2', dir: OTHER_HOME, isRunning: true },
+  ]
+  namedChat = null
+  const { status, body } = await post({ text: 'carry on', instance: 'temp2' })
+  expect(status).toBe(409)
+  expect(body.error).toBe('not on the named instance')
+  expect(peerCalls).toEqual([])
+})
+
+test('a named instance that is not configured is refused the same way', async () => {
+  namedChat = { chatId: 'local_copy', title: 'A working chat' }
+  const { status, body } = await post({ text: 'carry on', instance: 'nobody' })
+  expect(status).toBe(409)
+  expect(body.error).toBe('not on the named instance')
+})
+
+test('the named instance copy wins, and only its own live engine is asked', async () => {
+  instances = [
+    { name: 'temp1', dir: HOME, isRunning: true },
+    { name: 'temp2', dir: OTHER_HOME, isRunning: true },
+  ]
+  namedChat = { chatId: 'local_copy-on-temp2', title: 'A working chat' }
+  const { body } = await post({ text: 'carry on', instance: 'temp2' })
+  expect(String(body.error ?? '')).not.toContain('not on the named instance')
+  expect(peerCalls).toEqual([SID])
+  expect(peerHosts).toEqual(['local_copy-on-temp2'])
 })
 
 test('peer_only is not honoured as a truthy string - only a real boolean opts in', async () => {

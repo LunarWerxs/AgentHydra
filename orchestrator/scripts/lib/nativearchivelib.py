@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import ntpath
 import posixpath
+import time
 from urllib.parse import quote
 
 from lib import hydralib
@@ -40,6 +41,20 @@ _stopped: dict[str, list] = {}
 def set_at_limit(profile_dirs) -> None:
     global _at_limit
     _at_limit = frozenset(str(p).casefold() for p in (profile_dirs or ()) if p)
+
+
+# Set only by a move's source settle, after its target landing is verified (2026-10-08). The
+# superseded source row is archived over an attached parent and other chats' previews (named in
+# the result), and a busy refusal is retried for BUSY_RETRY_SECS before the row is reported.
+_superseded = False
+BUSY_RETRY_SECS = 15
+BUSY_POLL_SECS = 1
+_BUSY_REASON = "session has live, pending, or transitioning work"
+
+
+def set_superseded(flag: bool) -> None:
+    global _superseded
+    _superseded = bool(flag)
 
 
 def take_stopped(session_id: str) -> list:
@@ -75,8 +90,25 @@ def _profile_dir(instance: str) -> str:
     return str(rows[0]["dir"])
 
 
+def _busy_refusal(detail: str) -> bool:
+    body = json.loads(detail)
+    return body.get("dispatch") == "not-sent" and _BUSY_REASON in str(body.get("reason") or "")
+
+
 def try_archive(session_id: str, instance: str) -> tuple[int, str] | None:
     """Return verified/terminal native result, or None for safe legacy fallback."""
+    outcome = _try_archive_once(session_id, instance)
+    if not _superseded:
+        return outcome
+    deadline = time.monotonic() + BUSY_RETRY_SECS
+    while (outcome is not None and outcome[0] == NATIVE_TERMINAL
+           and _busy_refusal(outcome[1]) and time.monotonic() < deadline):
+        time.sleep(BUSY_POLL_SECS)
+        outcome = _try_archive_once(session_id, instance)
+    return outcome
+
+
+def _try_archive_once(session_id: str, instance: str) -> tuple[int, str] | None:
     if not session_id:
         return _terminal("native archive requires a CLI session ID")
     try:
@@ -91,6 +123,8 @@ def try_archive(session_id: str, instance: str) -> tuple[int, str] | None:
             request["leaving"] = leaving
         if profile.casefold() in _at_limit:
             request["sourceAtLimit"] = True
+        if _superseded:
+            request["sourceSuperseded"] = True
         body = hydralib.api_post_once(path, request, timeout=HTTP_TIMEOUT_SECS)
     except hydralib.DaemonError as err:
         try:

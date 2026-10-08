@@ -400,8 +400,12 @@ async function defaultInstanceRunning(instanceDir: string): Promise<boolean> {
 }
 
 /** The live registry entry (with an alive pid) for this session, or null. Exported for the
- *  migrate flow, which needs the pid to stop a live chat the user asked to move. */
-export function liveSessionEntry(sessionId: string): { pid: number } | null {
+ *  migrate flow, which needs the pid to stop a live chat the user asked to move. `hostSessionId`
+ *  narrows it to the engine hosted by that desktop chat, when a moved chat has two copies. */
+export function liveSessionEntry(
+  sessionId: string,
+  hostSessionId?: string,
+): { pid: number } | null {
   try {
     const dir = join(homedir(), '.claude', 'sessions')
     for (const f of readdirSync(dir)) {
@@ -409,6 +413,7 @@ export function liveSessionEntry(sessionId: string): { pid: number } | null {
       try {
         const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
         if (reg?.sessionId !== sessionId || typeof reg?.pid !== 'number') continue
+        if (hostSessionId !== undefined && reg.hostSessionId !== hostSessionId) continue
         try {
           process.kill(reg.pid, 0)
           return { pid: reg.pid }

@@ -191,6 +191,29 @@ class RowBudgetTest(unittest.TestCase):
         self.assertEqual(courier._budget(time.time() + 1000, 270), 270.0)
         self.assertLessEqual(courier._budget(time.time() + 5, 270), 5.0)
 
+    def test_a_send_cut_at_the_budget_may_have_landed_and_is_never_sent_again(self):
+        """2026-10-08. The budget cuts the CLIENT's wait, not the daemon's work: the route may
+        still type and confirm after the courier gave up. "timed out" read as not-yet, so the row
+        stayed staged and the next cycle typed the same resume a second time."""
+        a = self._stage(SID_A)
+
+        def cut_short(path, body=None, timeout=None):
+            if path.endswith("/message"):
+                raise hydralib.DaemonError(path, None, "timed out - is the daemon running?")
+            return hydralib._request("POST", path, body if body is not None else {},
+                                     timeout=timeout)
+
+        with mock.patch.object(hydralib, "api_post", side_effect=cut_short):
+            res = courier.deliver_one(a, {"instance": "temp1", "title": "chat aaaa",
+                                          "cliSessionId": SID_A, "live": None},
+                                      budget_secs=BUDGET)
+
+        self.assertFalse(res["ok"])
+        self.assertTrue(res.get("mayHaveLanded"), res)
+        self.assertFalse(res.get("deferred"), "a send that may have landed is not a not-yet")
+        self.assertEqual(deliverylib.get(a["id"])["state"], "failed",
+                         "a staged row is typed again by the next cycle")
+
 
 if __name__ == "__main__":
     unittest.main()
