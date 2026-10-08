@@ -214,7 +214,7 @@ async function handlePreview() {
                   {{ ROLE_INFO[roleName] }}
                 </p>
               </div>
-              <div class="w-48 flex-shrink-0">
+              <div class="w-48 shrink-0">
                 <Select
                   :model-value="(selectedModel as string) || 'auto'"
                   @update:model-value="(value) => handleRoleChange(roleName, String(value))"
