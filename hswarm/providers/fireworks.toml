@@ -1,0 +1,68 @@
+# Fireworks AI's serverless models, through its OpenAI-compatible inference endpoint.
+
+base_url = "https://api.fireworks.ai/inference/v1"
+about = "Hosted open-weight language models through Fireworks' OpenAI-compatible API; address a model as fireworks:<model path>."
+website = "https://fireworks.ai"
+key_url = "https://app.fireworks.ai/settings/users/api-keys"
+docs = "https://docs.fireworks.ai/tools-sdks/openai-compatibility"
+transport = "openai"
+capabilities = ["chat"]
+key_billing = "unknown"
+models_path = "/models"
+passthrough = ["fireworks:"]
+anthropic_url = "facade"
+
+# Ranked routes (owner, 2026-10-07). Model paths, context and tool support come from each model's page on
+# app.fireworks.ai/models/<publisher>/<slug>; per-token prices are the Standard column of
+# docs.fireworks.ai/serverless/pricing (cached input is the cache_read price). Fireworks' rate limits are per account
+# and per model in tokens per minute, not per key, so no [limits] table is set (docs.fireworks.ai/serverless/rate-limits).
+# No route for GLM 5.2 (no price on that pricing page) or DeepSeek V4 Pro (no Fireworks price at all); no route for
+# NVIDIA Nemotron 3 Ultra either, because Fireworks serves only its NVFP4 preview, a different artifact from the
+# published 550B point.
+[models."rank:kimi-k3:fireworks"]
+api_id = "accounts/fireworks/models/kimi-k3"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+tools = true
+price_ref = "fireworks/rank:kimi-k3:fireworks"
+cc_effort = false
+
+[models."rank:glm-5-3:fireworks"]
+api_id = "accounts/fireworks/models/glm-5p3"
+benchmark_slug = "glm-5-3"
+ctx = 1048576
+tools = true
+price_ref = "fireworks/rank:glm-5-3:fireworks"
+cc_effort = false
+
+[models."rank:glm-5-3-flash:fireworks"]
+api_id = "accounts/fireworks/models/glm-5p3-flash"
+benchmark_slug = "glm-5-3-flash"
+ctx = 1048576
+tools = true
+price_ref = "fireworks/rank:glm-5-3-flash:fireworks"
+cc_effort = false
+
+[models."rank:deepseek-v4-1-flash:fireworks"]
+api_id = "accounts/fireworks/models/deepseek-v4p1-flash"
+benchmark_slug = "deepseek-v4-1-flash"
+ctx = 1048576
+tools = true
+price_ref = "fireworks/rank:deepseek-v4-1-flash:fireworks"
+cc_effort = false
+
+[models."rank:gpt-oss-120b:fireworks"]
+api_id = "accounts/fireworks/models/gpt-oss-120b"
+benchmark_slug = "gpt-oss-120b"
+ctx = 131072
+tools = true
+price_ref = "fireworks/rank:gpt-oss-120b:fireworks"
+cc_effort = false
+
+[models."rank:minimax-m3:fireworks"]
+api_id = "accounts/fireworks/models/minimax-m3"
+benchmark_slug = "minimax-m3"
+ctx = 512000
+tools = true
+price_ref = "fireworks/rank:minimax-m3:fireworks"
+cc_effort = false
