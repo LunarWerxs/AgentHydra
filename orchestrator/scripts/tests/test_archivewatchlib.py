@@ -109,6 +109,7 @@ class SnapshotTest(unittest.TestCase):
 class _Landing:
     match = {"cliSessionId": "moved", "lineageIds": ["moved"]}
     session_id = "moved"
+    target = {"name": "2", "dir": "C:/Users/me/AppData/Roaming/Claude-2"}
 
 
 class MoveReportsCollateralTest(unittest.TestCase):
@@ -127,7 +128,9 @@ class MoveReportsCollateralTest(unittest.TestCase):
                                   return_value=migrate_chat._MoveOutcome(landing=_Landing(),
                                                                          as_json=True)), \
                 mock.patch.object(migrate_chat, "finish_move", return_value=None), \
-                mock.patch.object(migrate_chat, "landing_payload", return_value=payload):
+                mock.patch.object(migrate_chat, "landing_payload", return_value=payload), \
+                mock.patch.object(migrate_chat, "release_landed",  # pauses chats in a REAL running app
+                                  side_effect=lambda profile_dir, ids: {s: {"id": s, "paused": True} for s in ids}):
             from lib import clilib
             code, out = clilib.capture(migrate_chat.main, ["moved", "--to", "2", "--json"])
         return code, json.loads(out)

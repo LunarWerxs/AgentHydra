@@ -7,9 +7,10 @@
 import { randomBytes } from 'node:crypto'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { query as sdkQuery, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { Options, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountRef } from '@shared/protocol'
 import { hostFilePath, hostsDir, killHostTree, launchHost, listHostFiles, pidAlive, readHostFile } from './launch'
+import { sdkQuery } from './sdk'
 import { HOST_PROTOCOL, type HostEnd, type HostFile, type HostMessage, type HostOptions, type HostRequest, type HostSpec, type JournalEntry, type ServerMessage } from './protocol'
 
 type Hello = Extract<HostMessage, { type: 'hello' }>
@@ -53,53 +54,65 @@ export class HostConnection {
         reject(err)
         return
       }
-      const conn = new HostConnection(file, ws)
-      let settled = false
-      const fail = (err: Error) => {
-        if (settled) return
+      new HostConnection(file, ws).handshake(timeoutMs, resolve, reject)
+    })
+  }
+
+  private handshake(timeoutMs: number, resolve: (conn: HostConnection) => void, reject: (err: unknown) => void): void {
+    const { file, ws } = this
+    let settled = false
+    const fail = (err: Error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      this.closed = true
+      try {
+        ws.close()
+      } catch {
+        // never opened
+      }
+      reject(err)
+    }
+    const timer = setTimeout(() => fail(new Error(`the chat process on port ${file.port} did not answer`)), timeoutMs)
+    ws.onmessage = (ev) => {
+      let msg: HostMessage
+      try {
+        msg = JSON.parse(String(ev.data)) as HostMessage
+      } catch {
+        return
+      }
+      if (settled) {
+        this.dispatch(msg)
+        return
+      }
+      const greeted = this.greet(msg)
+      if (greeted instanceof Error) fail(greeted)
+      else if (greeted) {
         settled = true
         clearTimeout(timer)
-        conn.closed = true
-        try {
-          ws.close()
-        } catch {
-          // never opened
-        }
-        reject(err)
+        resolve(this)
       }
-      const timer = setTimeout(() => fail(new Error(`the chat process on port ${file.port} did not answer`)), timeoutMs)
-      ws.onmessage = (ev) => {
-        let msg: HostMessage
-        try {
-          msg = JSON.parse(String(ev.data)) as HostMessage
-        } catch {
-          return
-        }
-        if (settled) {
-          conn.dispatch(msg)
-          return
-        }
-        if (msg.type === 'hello') {
-          if (msg.chatId !== file.chatId) fail(new Error(`port ${file.port} answers for another chat`))
-          else conn.hello = msg
-        } else if (msg.type === 'replay') conn.journal.push(msg.entry)
-        else if (msg.type === 'ready' && conn.hello) {
-          settled = true
-          clearTimeout(timer)
-          resolve(conn)
-        }
-      }
-      ws.onclose = () => {
-        if (!settled) fail(new Error(`the chat process on port ${file.port} closed the connection`))
-        else if (!conn.closed) {
-          conn.closed = true
-          conn.onClose?.()
-        } else conn.afterClose?.()
-      }
-      ws.onerror = () => {
-        if (!settled) fail(new Error(`no chat process answers on port ${file.port}`))
-      }
-    })
+    }
+    ws.onclose = () => {
+      if (!settled) fail(new Error(`the chat process on port ${file.port} closed the connection`))
+      else if (!this.closed) {
+        this.closed = true
+        this.onClose?.()
+      } else this.afterClose?.()
+    }
+    ws.onerror = () => {
+      if (!settled) fail(new Error(`no chat process answers on port ${file.port}`))
+    }
+  }
+
+  /** A message before ready: true once the host is ready, an Error when it answers for another chat. */
+  private greet(msg: HostMessage): boolean | Error {
+    if (msg.type === 'hello') {
+      if (msg.chatId !== this.file.chatId) return new Error(`port ${this.file.port} answers for another chat`)
+      this.hello = msg
+    } else if (msg.type === 'replay') this.journal.push(msg.entry)
+    else if (msg.type === 'ready' && this.hello) return true
+    return false
   }
 
   get isOpen(): boolean {

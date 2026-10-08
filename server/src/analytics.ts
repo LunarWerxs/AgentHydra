@@ -36,7 +36,7 @@ import { sharedKitStore, storeGeneration, type UsageRow, usageQueryAsync } from 
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf } from './pricing'
-import { anyDiscount, atYourRate, readRoutingSettings } from './routing-cost'
+import { anyDiscount, atYourRate, type Discounts, readRoutingSettings } from './routing-cost'
 import { streamLines } from './session-search'
 import {
   decodeProjectKey,
@@ -1755,6 +1755,167 @@ const HOUR_MS = 60 * 60 * 1000
 /** The longest window that also gets `byHour`. */
 const HOURLY_MAX_MS = 48 * HOUR_MS
 
+/** One kit row's figures, or null for the CLI's own notices, which ride on a pseudo-model with no
+ *  tokens: not a model, not a row. */
+function readSpendRow(row: UsageRow) {
+  const model = (row.model as string | null) ?? 'unknown'
+  const weighted = Number(row.weighted ?? 0)
+  const tokens: TokenBreakdown = {
+    input: Number(row.input ?? 0),
+    cacheRead: Number(row.cache_read ?? 0),
+    cacheWrite: Number(row.cache_write ?? 0),
+    output: Number(row.output ?? 0),
+    total: Number(row.tokens ?? 0),
+  }
+  if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) return null
+  const billed = row.billed_usd as number | null
+  // A group can hold billed and unbilled calls: cost_usd is summed per call (billed, else list), so the
+  // billed part alone is never taken for the whole. Null when no call in the group has a price at all.
+  const cost = billed === null && row.list_usd === null ? null : Number(row.cost_usd ?? 0)
+  const source = (row.source as string | null) ?? 'unknown'
+  return {
+    model,
+    billed,
+    source,
+    account: row.account as string | null,
+    r: { weighted, cost, calls: Number(row.calls ?? 0), tokens },
+  }
+}
+type SpendRow = NonNullable<ReturnType<typeof readSpendRow>>
+type SpendTotals = SpendRow['r']
+type ProviderSpend = { tokens: TokenBreakdown; sessions: Set<string>; costUsd: number | null }
+
+/** The report's breakdowns while its rows are read. */
+interface SpendTally {
+  byModel: BucketSet
+  byProject: BucketSet
+  byDay: BucketSet
+  byAccount: BucketSet
+  bySource: BucketSet
+  byProvider: Map<SessionSource, ProviderSpend>
+  sessions: Set<string>
+  billedModels: Set<string>
+  totals: SpendTotals
+  totalAtRate: number
+  discounts: Discounts
+  /** The session ledger's share of the totals. */
+  attributed: SpendTotals
+  projects: Map<string, string>
+  projectDisplay: Map<string, string>
+}
+
+function sumTokens(into: TokenBreakdown, t: TokenBreakdown): void {
+  into.input += t.input
+  into.cacheRead += t.cacheRead
+  into.cacheWrite += t.cacheWrite
+  into.output += t.output
+  into.total += t.total
+}
+
+function addSpend(into: SpendTotals, r: SpendTotals): void {
+  into.weighted += r.weighted
+  into.calls += r.calls
+  if (r.cost !== null) into.cost = (into.cost ?? 0) + r.cost
+  sumTokens(into.tokens, r.tokens)
+}
+
+function addProviderSpend(byProvider: Map<SessionSource, ProviderSpend>, x: SpendRow): void {
+  const provider = KIT_PROVIDER[x.source] ?? 'claude'
+  const pv = byProvider.get(provider) ?? {
+    tokens: emptyTokens(),
+    sessions: new Set<string>(),
+    costUsd: null,
+  }
+  sumTokens(pv.tokens, x.r.tokens)
+  if (x.r.cost !== null) pv.costUsd = (pv.costUsd ?? 0) + x.r.cost
+  byProvider.set(provider, pv)
+}
+
+/** The figures, whole from the hourly rollup: by day, model, source, account and provider. */
+function foldFigures(rows: UsageRow[], t: SpendTally): void {
+  for (const row of rows) {
+    const x = readSpendRow(row)
+    if (!x) continue
+    if (x.billed !== null) t.billedModels.add(x.model)
+    t.byModel.add(x.model, x.r, null)
+    t.bySource.add(x.source, x.r, null)
+    t.byDay.add(row.day as string, x.r, null)
+    if (x.account) t.byAccount.add(x.account, x.r, null)
+    addProviderSpend(t.byProvider, x)
+    addSpend(t.totals, x.r)
+    if (x.r.cost !== null) t.totalAtRate += atYourRate(x.model, x.r.cost, t.discounts)
+  }
+}
+
+/** The session ledger's view of the same calls: who they belong to. What it does not attribute (usage
+ *  past the raw window, kept only in the hourly rollup) is the difference to the figures. */
+function foldSessions(rows: UsageRow[], t: SpendTally): void {
+  for (const row of rows) {
+    const x = readSpendRow(row)
+    if (!x) continue
+    const session = (row.session as string | null) ?? null
+    t.byModel.touch(x.model, session)
+    t.bySource.touch(x.source, session)
+    if (x.account) t.byAccount.touch(x.account, session)
+    if (session) {
+      t.byProvider.get(KIT_PROVIDER[x.source] ?? 'claude')?.sessions.add(session)
+      t.sessions.add(session)
+    }
+    const path = (session && t.projects.get(session)) || 'unknown'
+    t.byProject.add(projectKeyOf(t.projectDisplay, path), x.r, session)
+    addSpend(t.attributed, x.r)
+  }
+}
+
+/** What the totals hold beyond the session ledger's share. */
+function unattributedSpend(totals: SpendTotals, attributed: SpendTotals): SpendTotals {
+  const t = totals.tokens
+  const u = attributed.tokens
+  return {
+    weighted: totals.weighted - attributed.weighted,
+    cost: totals.cost === null ? null : Math.max(0, totals.cost - (attributed.cost ?? 0)),
+    calls: totals.calls - attributed.calls,
+    tokens: {
+      input: t.input - u.input,
+      cacheRead: t.cacheRead - u.cacheRead,
+      cacheWrite: t.cacheWrite - u.cacheWrite,
+      output: t.output - u.output,
+      total: t.total - u.total,
+    },
+  }
+}
+
+/** Every hour of the window, a quiet one as an empty bar, so the axis is the clock. */
+function hourlyBuckets(rows: UsageRow[], sinceMs: number, now: number): SpendBucket[] {
+  const hours = new BucketSet()
+  for (const row of rows) {
+    const x = readSpendRow(row)
+    if (x) hours.add(row.hour as string, x.r, null)
+  }
+  const got = new Map(hours.list('key').map((b) => [b.key, b]))
+  const byHour: SpendBucket[] = []
+  for (let h = Math.floor(sinceMs / HOUR_MS) * HOUR_MS; h <= now; h += HOUR_MS) {
+    const key = new Date(h).toISOString()
+    byHour.push(
+      got.get(key) ?? {
+        key,
+        weighted: 0,
+        costUsd: null,
+        sessions: 0,
+        turns: 0,
+        tokens: emptyTokens(),
+      },
+    )
+  }
+  return byHour
+}
+
+function spendFilter(sources: readonly string[] | null, pc: SpendReportOptions['pc']) {
+  return sources || pc
+    ? { ...(sources ? { source: [...sources] } : {}), ...(pc ? { pc } : {}) }
+    : undefined
+}
+
 async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> {
   const sources = opts.sources ?? null
   const measures = [
@@ -1772,10 +1933,7 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   // To the minute, so a window cut from the clock (now - 30d) asks the same question for a minute and
   // the kit's result cache answers repeats.
   const window = { from: Math.floor((opts.sinceMs ?? 0) / 60_000) * 60_000 }
-  const filter =
-    sources || opts.pc
-      ? { ...(sources ? { source: [...sources] } : {}), ...(opts.pc ? { pc: opts.pc } : {}) }
-      : undefined
+  const filter = spendFilter(sources, opts.pc)
   const qopts = { store: opts.store, now: opts.now }
   // Two queries, because a session in the grouping makes the kit read every raw row of a window: the
   // figures (by day, model, source, account) come whole from the hourly rollup, and the sessions
@@ -1796,131 +1954,30 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     ? await usageQueryAsync({ window, filter, groupBy: ['hour'], measures: [...measures] }, qopts)
     : null
   const projects = await sessionProjects()
-  const projectDisplay = new Map<string, string>()
-
-  const byModel = new BucketSet()
-  const byProject = new BucketSet()
-  const byDay = new BucketSet()
-  const byAccount = new BucketSet()
-  const bySource = new BucketSet()
-  const byProvider = new Map<
-    SessionSource,
-    { tokens: TokenBreakdown; sessions: Set<string>; costUsd: number | null }
-  >()
-  const sessions = new Set<string>()
-  const billedModels = new Set<string>()
-  const totals = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
-  const discounts = readRoutingSettings().discounts
-  let totalAtRate = 0
-
-  const read = (row: UsageRow) => {
-    const model = (row.model as string | null) ?? 'unknown'
-    const weighted = Number(row.weighted ?? 0)
-    const tokens: TokenBreakdown = {
-      input: Number(row.input ?? 0),
-      cacheRead: Number(row.cache_read ?? 0),
-      cacheWrite: Number(row.cache_write ?? 0),
-      output: Number(row.output ?? 0),
-      total: Number(row.tokens ?? 0),
-    }
-    // The CLI's own notices ride on a pseudo-model with no tokens: not a model, not a row.
-    if (NON_MODELS.has(model) && weighted <= 0 && tokens.total === 0) return null
-    const billed = row.billed_usd as number | null
-    // A group can hold billed and unbilled calls: cost_usd is summed per call (billed, else list), so the
-    // billed part alone is never taken for the whole. Null when no call in the group has a price at all.
-    const cost = billed === null && row.list_usd === null ? null : Number(row.cost_usd ?? 0)
-    const source = (row.source as string | null) ?? 'unknown'
-    return {
-      model,
-      billed,
-      source,
-      account: row.account as string | null,
-      r: { weighted, cost, calls: Number(row.calls ?? 0), tokens },
-    }
+  const t: SpendTally = {
+    byModel: new BucketSet(),
+    byProject: new BucketSet(),
+    byDay: new BucketSet(),
+    byAccount: new BucketSet(),
+    bySource: new BucketSet(),
+    byProvider: new Map(),
+    sessions: new Set(),
+    billedModels: new Set(),
+    totals: { weighted: 0, cost: null, calls: 0, tokens: emptyTokens() },
+    totalAtRate: 0,
+    discounts: readRoutingSettings().discounts,
+    attributed: { weighted: 0, cost: null, calls: 0, tokens: emptyTokens() },
+    projects,
+    projectDisplay: new Map(),
   }
-
-  for (const row of res.rows) {
-    const x = read(row)
-    if (!x) continue
-    const { model, source, r } = x
-    const { tokens, cost, weighted, calls } = r
-    if (x.billed !== null) billedModels.add(model)
-    byModel.add(model, r, null)
-    bySource.add(source, r, null)
-    byDay.add(row.day as string, r, null)
-    if (x.account) byAccount.add(x.account, r, null)
-
-    const provider = KIT_PROVIDER[source] ?? 'claude'
-    const pv = byProvider.get(provider) ?? {
-      tokens: emptyTokens(),
-      sessions: new Set<string>(),
-      costUsd: null,
-    }
-    pv.tokens.input += tokens.input
-    pv.tokens.cacheRead += tokens.cacheRead
-    pv.tokens.cacheWrite += tokens.cacheWrite
-    pv.tokens.output += tokens.output
-    pv.tokens.total += tokens.total
-    if (cost !== null) pv.costUsd = (pv.costUsd ?? 0) + cost
-    byProvider.set(provider, pv)
-
-    totals.weighted += weighted
-    totals.calls += calls
-    if (cost !== null) {
-      totals.cost = (totals.cost ?? 0) + cost
-      totalAtRate += atYourRate(model, cost, discounts)
-    }
-    totals.tokens.input += tokens.input
-    totals.tokens.cacheRead += tokens.cacheRead
-    totals.tokens.cacheWrite += tokens.cacheWrite
-    totals.tokens.output += tokens.output
-    totals.tokens.total += tokens.total
-  }
-
-  // The session ledger's view of the same calls: who they belong to. What it does not attribute (usage
-  // past the raw window, kept only in the hourly rollup) is the difference to the figures above.
-  const attributed = { weighted: 0, cost: null as number | null, calls: 0, tokens: emptyTokens() }
-  for (const row of sess.rows) {
-    const x = read(row)
-    if (!x) continue
-    const { model, source, r } = x
-    const session = (row.session as string | null) ?? null
-    byModel.touch(model, session)
-    bySource.touch(source, session)
-    if (x.account) byAccount.touch(x.account, session)
-    if (session) {
-      byProvider.get(KIT_PROVIDER[source] ?? 'claude')?.sessions.add(session)
-      sessions.add(session)
-    }
-    const path = (session && projects.get(session)) || 'unknown'
-    byProject.add(projectKeyOf(projectDisplay, path), r, session)
-    attributed.weighted += r.weighted
-    attributed.calls += r.calls
-    if (r.cost !== null) attributed.cost = (attributed.cost ?? 0) + r.cost
-    attributed.tokens.input += r.tokens.input
-    attributed.tokens.cacheRead += r.tokens.cacheRead
-    attributed.tokens.cacheWrite += r.tokens.cacheWrite
-    attributed.tokens.output += r.tokens.output
-    attributed.tokens.total += r.tokens.total
-  }
-  const rest = totals.calls - attributed.calls
+  const { byModel, byProject, byDay, byAccount, bySource, byProvider, totals, discounts } = t
+  foldFigures(res.rows, t)
+  foldSessions(sess.rows, t)
+  const rest = totals.calls - t.attributed.calls
   if (rest > 0) {
-    const t = totals.tokens
-    const u = attributed.tokens
     byProject.add(
-      projectKeyOf(projectDisplay, 'unknown'),
-      {
-        weighted: totals.weighted - attributed.weighted,
-        cost: totals.cost === null ? null : Math.max(0, totals.cost - (attributed.cost ?? 0)),
-        calls: rest,
-        tokens: {
-          input: t.input - u.input,
-          cacheRead: t.cacheRead - u.cacheRead,
-          cacheWrite: t.cacheWrite - u.cacheWrite,
-          output: t.output - u.output,
-          total: t.total - u.total,
-        },
-      },
+      projectKeyOf(t.projectDisplay, 'unknown'),
+      unattributedSpend(totals, t.attributed),
       null,
     )
   }
@@ -1930,35 +1987,13 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
   }
 
   const days = byDay.list('key')
-  let byHour: SpendBucket[] | undefined
-  if (hourRes && opts.sinceMs != null) {
-    const hours = new BucketSet()
-    for (const row of hourRes.rows) {
-      const x = read(row)
-      if (x) hours.add(row.hour as string, x.r, null)
-    }
-    const got = new Map(hours.list('key').map((b) => [b.key, b]))
-    // Every hour of the window, a quiet one as an empty bar, so the axis is the clock.
-    byHour = []
-    for (let h = Math.floor(opts.sinceMs / HOUR_MS) * HOUR_MS; h <= now; h += HOUR_MS) {
-      const key = new Date(h).toISOString()
-      byHour.push(
-        got.get(key) ?? {
-          key,
-          weighted: 0,
-          costUsd: null,
-          sessions: 0,
-          turns: 0,
-          tokens: emptyTokens(),
-        },
-      )
-    }
-  }
+  const byHour =
+    hourRes && opts.sinceMs != null ? hourlyBuckets(hourRes.rows, opts.sinceMs, now) : undefined
   return {
     from: days[0]?.key ?? null,
     to: days[days.length - 1]?.key ?? null,
     totalCostUsd: totals.cost,
-    totalCostAtRateUsd: totals.cost === null ? null : totalAtRate,
+    totalCostAtRateUsd: totals.cost === null ? null : t.totalAtRate,
     hasRateDiscount: anyDiscount(discounts),
     totalWeighted: totals.weighted,
     tokens: totals.tokens,
@@ -1970,7 +2005,7 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
         costUsd: p.costUsd,
       }))
       .sort((a, b) => b.tokens.total - a.tokens.total),
-    sessions: sessions.size,
+    sessions: t.sessions.size,
     calls: totals.calls,
     byModel: byModel.list().map((b) => ({
       ...b,
@@ -1980,13 +2015,13 @@ async function buildSpendReport(opts: SpendReportOptions): Promise<SpendReport> 
     byProject: byProject
       .list()
       .slice(0, 25)
-      .map((b) => ({ ...b, key: projectDisplay.get(b.key) ?? b.key })),
+      .map((b) => ({ ...b, key: t.projectDisplay.get(b.key) ?? b.key })),
     byDay: days,
     ...(byHour ? { byHour } : {}),
     byAccount: byAccount.list(),
     bySource: bySource.list(),
     // A model whose provider charged for it IS priced, even without a list price.
-    unpricedModels: res.unpriced.filter((m) => !billedModels.has(m)),
+    unpricedModels: res.unpriced.filter((m) => !t.billedModels.has(m)),
     // Where these dollars came from and how old that source is. A cost figure without its price
     // date is a number nobody can audit, and "downloaded" versus "shipped with the build" is the
     // difference between last week's rate card and this release's.

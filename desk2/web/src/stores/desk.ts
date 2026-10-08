@@ -11,6 +11,7 @@ import type {
   AccountRef,
   DeskSettings,
   ServerEvent,
+  ClientEvent,
   CreateChatRequest,
   SendMessageRequest,
   PermissionDecision,
@@ -53,8 +54,8 @@ import { reportAtPaint, reportTiming } from '@/lib/timing'
 const BASE_URL = '/api'
 
 function getWsUrl() {
-  if (typeof window === 'undefined') return 'ws://localhost/ws'
-  return location.protocol === 'https:' ? 'wss' : 'ws' + '://' + location.host + '/ws'
+  if (typeof location === 'undefined') return 'ws://localhost/ws'
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`
 }
 
 interface DeskStoreState {
@@ -98,7 +99,8 @@ function splitJobs(list: SwarmJob[]): Pick<DeskStoreState, 'swarmJobs' | 'remote
 // Outside sessions and CliMayte workers start from this browser's last copy (lib/list-cache.ts), so a
 // reload shows the sidebar before the server's welcome lands.
 const store = reactive<DeskStoreState>({
-  chats: [],
+  // The last chat list too (2026-10-08): it was the one sidebar list a reload drew empty until hello.
+  chats: readListCache<ChatSummary>('chats') ?? [],
   external: readListCache<ExternalSession>('external') ?? [],
   ...splitWorkers(readListCache<CliMayteWorker>('workers') ?? []),
   ...splitJobs([]),
@@ -252,6 +254,7 @@ function connectWebSocket() {
   ws.onopen = () => {
     store.connected = true
     wsReconnectDelay = 1000
+    sendVisibility()
   }
 
   ws.onmessage = (event) => {
@@ -269,6 +272,21 @@ function connectWebSocket() {
   }
 }
 
+/** Tells the server whether this window is on screen: it polls AgentHydra slower while none is. */
+function sendVisibility() {
+  if (ws?.readyState !== WebSocket.OPEN) return
+  ws.send(JSON.stringify({ type: 'visibility', visible: !document.hidden } satisfies ClientEvent))
+}
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') document.addEventListener('visibilitychange', sendVisibility)
+
+/** Drops a map's oldest entries (its first keys) past max. */
+function capMap<V>(map: Map<string, V>, max: number) {
+  for (const key of map.keys()) {
+    if (map.size <= max) return
+    map.delete(key)
+  }
+}
+
 function scheduleReconnect() {
   if (wsReconnectTimeout) clearTimeout(wsReconnectTimeout)
   wsReconnectTimeout = setTimeout(() => {
@@ -280,6 +298,8 @@ function scheduleReconnect() {
 /** Items streamed for chats whose history is not loaded yet; the load takes them in (keepNewer). */
 const unloadedUpserts = new Map<string, TranscriptItem[]>()
 const UNLOADED_UPSERTS_MAX = 200
+/** Background chats whose streamed items are kept; past it the chat that streamed first is dropped, and its history fetch has them anyway. */
+const UNLOADED_CHATS_MAX = 50
 
 /** Speed tracking: when Send was clicked in a chat whose bubble has not shown yet (performance.now()). */
 const sendClicks = new Map<string, number>()
@@ -298,21 +318,91 @@ function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
   return kept
 }
 
+type EventOf<T extends ServerEvent['type']> = Extract<ServerEvent, { type: T }>
+
+function onHello(event: EventOf<'hello'>) {
+  store.chats = event.chats
+  cacheLater('chats', event.chats)
+  store.settings = event.settings
+  // Full reload: clear items cache
+  itemsByChat.clear()
+  indexes.clear()
+  recentChats.length = 0
+  unloadedUpserts.clear()
+  reloadOpenChat()
+  // Whole, whatever its rev: a restarted server may count afresh. A server without a queue sends none.
+  queueState.value = event.queue ?? null
+  void reloadIfStale()
+  serverHello()
+}
+
+function onChatUpsert(event: EventOf<'chat.upsert'>) {
+  const idx = store.chats.findIndex((c) => c.id === event.chat.id)
+  if (idx >= 0) {
+    store.chats[idx] = event.chat
+  } else {
+    store.chats.push(event.chat)
+  }
+  cacheLater('chats', store.chats)
+}
+
+function onChatRemoved(event: EventOf<'chat.removed'>) {
+  store.chats = store.chats.filter((c) => c.id !== event.chatId)
+  cacheLater('chats', store.chats)
+  itemsByChat.delete(event.chatId)
+  indexes.delete(event.chatId)
+  const gone = recentChats.indexOf(event.chatId)
+  if (gone >= 0) recentChats.splice(gone, 1)
+  unloadedUpserts.delete(event.chatId)
+}
+
+function onItemUpsert(event: EventOf<'item.upsert'>) {
+  // Speed tracking: the sent message's bubble is drawn at the next frame.
+  const clicked = event.item.kind === 'user' ? sendClicks.get(event.chatId) : undefined
+  if (clicked !== undefined) {
+    sendClicks.delete(event.chatId)
+    reportAtPaint('click_to_bubble', clicked, event.chatId)
+  }
+  // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
+  // the whole transcript and opening the chat would never fetch its history.
+  let items = chatItems(event.chatId)
+  if (!items) {
+    items = unloadedUpserts.get(event.chatId) ?? []
+    unloadedUpserts.set(event.chatId, items)
+    capMap(unloadedUpserts, UNLOADED_CHATS_MAX)
+  }
+  const idx = indexOfItem(event.chatId, items, event.item.id)
+  if (idx >= 0) replaceItem(items, idx, event.item)
+  else appendItem(event.chatId, items, event.item)
+  // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
+  if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
+    items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
+    indexes.delete(event.chatId)
+  }
+}
+
+function onItemDelta(event: EventOf<'item.delta'>) {
+  const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
+  const at = items ? indexOfItem(event.chatId, items, event.itemId) : -1
+  const item = items?.[at]
+  if (items && item && (item.kind === 'assistant_text' || item.kind === 'thinking')) {
+    replaceItem(items, at, { ...item, text: item.text + event.text })
+  }
+}
+
+function onItemRemoved(event: EventOf<'item.removed'>) {
+  const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
+  const idx = items ? indexOfItem(event.chatId, items, event.itemId) : -1
+  if (idx >= 0) {
+    items!.splice(idx, 1)
+    indexes.delete(event.chatId)
+  }
+}
+
 function handleServerEvent(event: ServerEvent) {
   switch (event.type) {
     case 'hello':
-      store.chats = event.chats
-      store.settings = event.settings
-      // Full reload: clear items cache
-      itemsByChat.clear()
-      indexes.clear()
-      recentChats.length = 0
-      unloadedUpserts.clear()
-      reloadOpenChat()
-      // Whole, whatever its rev: a restarted server may count afresh. A server without a queue sends none.
-      queueState.value = event.queue ?? null
-      void reloadIfStale()
-      serverHello()
+      onHello(event)
       break
 
     case 'queue.update':
@@ -320,67 +410,24 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'chat.upsert':
-      const idx = store.chats.findIndex((c) => c.id === event.chat.id)
-      if (idx >= 0) {
-        store.chats[idx] = event.chat
-      } else {
-        store.chats.push(event.chat)
-      }
+      onChatUpsert(event)
       break
 
     case 'chat.removed':
-      store.chats = store.chats.filter((c) => c.id !== event.chatId)
-      itemsByChat.delete(event.chatId)
-      indexes.delete(event.chatId)
-      const gone = recentChats.indexOf(event.chatId)
-      if (gone >= 0) recentChats.splice(gone, 1)
-      unloadedUpserts.delete(event.chatId)
+      onChatRemoved(event)
       break
 
-    case 'item.upsert': {
-      // Speed tracking: the sent message's bubble is drawn at the next frame.
-      const clicked = event.item.kind === 'user' ? sendClicks.get(event.chatId) : undefined
-      if (clicked !== undefined) {
-        sendClicks.delete(event.chatId)
-        reportAtPaint('click_to_bubble', clicked, event.chatId)
-      }
-      // A chat whose history is not loaded keeps what streams aside: put in the cache, it would stand for
-      // the whole transcript and opening the chat would never fetch its history.
-      let items = chatItems(event.chatId)
-      if (!items) {
-        items = unloadedUpserts.get(event.chatId) ?? []
-        unloadedUpserts.set(event.chatId, items)
-      }
-      const idx = indexOfItem(event.chatId, items, event.item.id)
-      if (idx >= 0) replaceItem(items, idx, event.item)
-      else appendItem(event.chatId, items, event.item)
-      // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
-      if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
-        items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
-        indexes.delete(event.chatId)
-      }
+    case 'item.upsert':
+      onItemUpsert(event)
       break
-    }
 
-    case 'item.delta': {
-      const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
-      const at = items ? indexOfItem(event.chatId, items, event.itemId) : -1
-      const item = items?.[at]
-      if (items && item && (item.kind === 'assistant_text' || item.kind === 'thinking')) {
-        replaceItem(items, at, { ...item, text: item.text + event.text })
-      }
+    case 'item.delta':
+      onItemDelta(event)
       break
-    }
 
-    case 'item.removed': {
-      const items = chatItems(event.chatId) ?? unloadedUpserts.get(event.chatId)
-      const idx = items ? indexOfItem(event.chatId, items, event.itemId) : -1
-      if (idx >= 0) {
-        items!.splice(idx, 1)
-        indexes.delete(event.chatId)
-      }
+    case 'item.removed':
+      onItemRemoved(event)
       break
-    }
 
     case 'notify':
       dispatchNotification(event)
@@ -515,6 +562,8 @@ const landings = reactive(new Map<string, AccountRef>())
 // hit) is fetched on its own and kept here; the public list shows it after the list's own rows, and a
 // row the list carries wins.
 const extraExternal = reactive(new Map<string, ExternalSession>())
+/** Older sessions kept; past it the first opened goes, and opening it again fetches it again. */
+const EXTRA_EXTERNAL_MAX = 50
 const fetchingExternal = new Set<string>()
 
 function allExternal(): ExternalSession[] {
@@ -625,6 +674,8 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
 // What the window itself writes into a chat's transcript: a first message refused after its chat was
 // made, which only the window knows of. Kept here, so the chat's items loaded from the server keep it.
 const windowNotes = new Map<string, { item: TranscriptItem; reason: string }[]>()
+/** Notes kept per chat, and chats with notes; past it the oldest go. */
+const WINDOW_NOTES_MAX = 20
 
 // The server's own refusal line (a session no folder here has) already says why: not said twice.
 const statesReason = (items: TranscriptItem[], reason: string) => items.some((i) => i.kind === 'system' && i.text === reason)
@@ -637,7 +688,8 @@ function noteNotSent(chatId: string, reason: string, message: SendMessageRequest
   if (images) lines.push(images === 1 ? 'The attached image was dropped: attach it again.' : `The ${images} attached images were dropped: attach them again.`)
   const now = Date.now()
   const note = { item: { kind: 'system', id: `window:not-sent:${now}`, ts: now, level: 'warn', text: lines.join(' ') } satisfies TranscriptItem, reason }
-  windowNotes.set(chatId, [...(windowNotes.get(chatId) ?? []), note])
+  windowNotes.set(chatId, [...(windowNotes.get(chatId) ?? []), note].slice(-WINDOW_NOTES_MAX))
+  capMap(windowNotes, WINDOW_NOTES_MAX)
   const shown = chatItems(chatId)
   if (shown && !statesReason(shown, reason)) appendItem(chatId, shown, note.item)
 }
@@ -915,6 +967,7 @@ export function useDesk() {
       fetchingExternal.add(sessionId)
       try {
         extraExternal.set(sessionId, await fetchJson<ExternalSession>(`/external/sessions/${encodeURIComponent(sessionId)}`))
+        capMap(extraExternal, EXTRA_EXTERNAL_MAX)
       } finally {
         fetchingExternal.delete(sessionId)
       }

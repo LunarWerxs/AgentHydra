@@ -19,6 +19,7 @@ export function reportAtPaint(stage: TimingStage, from: number, chatId?: string)
 }
 
 const WARM_AGAIN_MS = 60_000
+const WARMED_MAX = 200
 const warmed = new Map<string, number>()
 
 /** Asks the server to start a closed chat's process now (the warm start); at most once a minute per chat. */
@@ -26,6 +27,12 @@ export function warmChat(chatId: string): void {
   if (!inWindow()) return
   const now = Date.now()
   if (now - (warmed.get(chatId) ?? 0) < WARM_AGAIN_MS) return
+  warmed.delete(chatId)
   warmed.set(chatId, now)
+  // Only the last minute matters: past WARMED_MAX chats the oldest is let go.
+  for (const id of warmed.keys()) {
+    if (warmed.size <= WARMED_MAX) break
+    warmed.delete(id)
+  }
   void fetch(`/api/chats/${encodeURIComponent(chatId)}/warm`, { method: 'POST' }).catch(() => {})
 }

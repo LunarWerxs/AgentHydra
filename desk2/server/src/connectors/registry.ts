@@ -12,6 +12,8 @@ import type { ConnectorDef, ConnectorFactory, Detected } from './types'
 
 const DEFAULT_DEFS_DIR = join(import.meta.dir, 'defs')
 const DEFAULT_POLL_MS = 15_000
+// The probe pace while no window is on screen (each pass is a health fetch per connector).
+const HIDDEN_POLL_MS = 120_000
 const START_WAIT_MS = 30_000
 const START_CHECK_MS = 1_000
 
@@ -26,6 +28,8 @@ export interface ConnectorRegistry {
   autoStart(): void
   /** Probes every connector now. */
   refresh(): Promise<void>
+  /** Probes first when the last pass is older than the poll interval (no window may have kept the poll going). */
+  fresh(): Promise<void>
   stop(): void
 }
 
@@ -33,6 +37,8 @@ export interface RegistryOptions {
   home: string
   defs: ConnectorDef[]
   pollMs?: number
+  /** Whether a background tick probes now (no window on screen: it waits). Default: always. */
+  shouldPoll?: () => boolean
   /** How long a start may take before it is a failure (tests shorten it). */
   startWaitMs?: number
 }
@@ -119,11 +125,29 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
     if (d.state === 'running') failed.delete(def.info.id)
     detected.set(def.info.id, { ...d, checkedAt: Date.now() })
   }
-  const refresh = async (): Promise<void> => {
-    await Promise.all(defs.map(probe))
+  const pollMs = opts.pollMs ?? DEFAULT_POLL_MS
+  let refreshedAt = 0
+  // One pass at a time: a window coming back and its first GET /api/connectors join the same probes.
+  let inflight: Promise<void> | null = null
+  const refresh = (): Promise<void> =>
+    (inflight ??= Promise.all(defs.map(probe)).then(
+      () => {
+        refreshedAt = Date.now()
+        inflight = null
+      },
+      (err: unknown) => {
+        inflight = null
+        throw err
+      }
+    ))
+  const fresh = async (): Promise<void> => {
+    if (Date.now() - refreshedAt > pollMs) await refresh()
   }
 
-  const timer = setInterval(() => void refresh(), opts.pollMs ?? DEFAULT_POLL_MS)
+  // With no window on screen the probes slow to HIDDEN_POLL_MS: a chat started then still gets a recent reading.
+  const timer = setInterval(() => {
+    if ((opts.shouldPoll?.() ?? true) || Date.now() - refreshedAt >= HIDDEN_POLL_MS) void refresh()
+  }, pollMs)
   timer.unref?.()
   let stopped = false
 
@@ -143,46 +167,53 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
     })()
   }
 
+  const setEnabled = async (def: ConnectorDef, on: boolean): Promise<ActionResult> => {
+    if (on) disabled.delete(def.info.id)
+    else disabled.add(def.info.id)
+    mkdirSync(opts.home, { recursive: true })
+    writeFileSync(join(opts.home, 'connectors.json'), JSON.stringify({ disabled: [...disabled] }, null, 2))
+    // Switching it back on is the person asking for its tools: an installed app that is not running starts now.
+    if (on && def.start && detected.get(def.info.id)?.state === 'installed') return startOne(def)
+    return view(def)
+  }
+  const installOne = (def: ConnectorDef): ActionResult => {
+    const install = def.install
+    if (!install) return 'unsupported'
+    if (busy.has(def.info.id)) return view(def)
+    background(def, 'installing', () =>
+      install.call(def, (line) => {
+        const b = busy.get(def.info.id)
+        if (b) b.reason = line.slice(0, 200)
+      })
+    )
+    return view(def)
+  }
+  const waitRunning = async (def: ConnectorDef): Promise<void> => {
+    const deadline = Date.now() + startWaitMs
+    for (;;) {
+      await probe(def)
+      if (detected.get(def.info.id)?.state === 'running') return
+      if (stopped || Date.now() >= deadline) throw new Error(`${def.info.name} did not answer within ${Math.round(startWaitMs / 1000)} s`)
+      await new Promise((r) => setTimeout(r, Math.min(START_CHECK_MS, startWaitMs)))
+    }
+  }
+  const startOne = (def: ConnectorDef): ActionResult => {
+    const start = def.start
+    if (!start) return 'unsupported'
+    if (busy.has(def.info.id)) return view(def)
+    background(def, 'starting', async () => {
+      await start.call(def)
+      await waitRunning(def)
+    })
+    return view(def)
+  }
+
   const action = async (id: string, act: ConnectorAction): Promise<ActionResult> => {
     const def = byId.get(id as ConnectorId)
     if (!def) return 'unknown'
-    if (act === 'enable' || act === 'disable') {
-      if (act === 'enable') disabled.delete(def.info.id)
-      else disabled.add(def.info.id)
-      mkdirSync(opts.home, { recursive: true })
-      writeFileSync(join(opts.home, 'connectors.json'), JSON.stringify({ disabled: [...disabled] }, null, 2))
-      // Switching it back on is the person asking for its tools: an installed app that is not running starts now.
-      if (act === 'enable' && def.start && detected.get(def.info.id)?.state === 'installed') return action(id, 'start')
-      return view(def)
-    }
-    if (act === 'install') {
-      const install = def.install
-      if (!install) return 'unsupported'
-      if (busy.has(def.info.id)) return view(def)
-      background(def, 'installing', () =>
-        install.call(def, (line) => {
-          const b = busy.get(def.info.id)
-          if (b) b.reason = line.slice(0, 200)
-        })
-      )
-      return view(def)
-    }
-    if (act === 'start') {
-      const start = def.start
-      if (!start) return 'unsupported'
-      if (busy.has(def.info.id)) return view(def)
-      background(def, 'starting', async () => {
-        await start.call(def)
-        const deadline = Date.now() + startWaitMs
-        for (;;) {
-          await probe(def)
-          if (detected.get(def.info.id)?.state === 'running') return
-          if (stopped || Date.now() >= deadline) throw new Error(`${def.info.name} did not answer within ${Math.round(startWaitMs / 1000)} s`)
-          await new Promise((r) => setTimeout(r, Math.min(START_CHECK_MS, startWaitMs)))
-        }
-      })
-      return view(def)
-    }
+    if (act === 'enable' || act === 'disable') return setEnabled(def, act === 'enable')
+    if (act === 'install') return installOne(def)
+    if (act === 'start') return startOne(def)
     return 'unsupported'
   }
 
@@ -199,6 +230,7 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
     action,
     autoStart,
     refresh,
+    fresh,
     stop() {
       stopped = true
       clearInterval(timer)
@@ -233,18 +265,63 @@ export function connectorStatus(id: ConnectorId): ConnectorView | null {
   return active?.registry.list().find((v) => v.id === id) ?? null
 }
 
-/** Starts the registry for this server (the plugin calls it): defs from ctx.deps.connectors, else the defs folder. */
-export async function startConnectors(ctx: ServerContext): Promise<ConnectorRegistry> {
+let ready: Promise<void> = Promise.resolve()
+let pending: Promise<void> | null = null
+
+/** Settles once the registry's first probe pass has landed (at once when no plugin started one); never rejects. */
+export function connectorsReady(): Promise<void> {
+  return ready
+}
+
+/**
+ * The first probe pass while it has not landed, else null: a chat start waits on it only then, so one started later
+ * keeps its status change and hand-off in the same tick (an await, even of a settled promise, would defer them).
+ */
+export function connectorsPending(): Promise<void> | null {
+  return pending
+}
+
+/**
+ * Starts the registry for this server (the plugin calls it, without waiting): defs from ctx.deps.connectors, else the
+ * defs folder. Resolves after the first probe pass; until then connectorStatus is null. The background poll runs only
+ * while a window is on screen, and a window coming back probes at once.
+ */
+export function startConnectors(ctx: ServerContext): Promise<ConnectorRegistry> {
+  const started = boot(ctx)
+  const landed: Promise<void> = started.then(
+    () => {
+      if (pending === landed) pending = null
+    },
+    () => {
+      if (pending === landed) pending = null
+    }
+  )
+  ready = landed
+  pending = landed
+  return started
+}
+
+async function boot(ctx: ServerContext): Promise<ConnectorRegistry> {
   const injected = ctx.deps.connectors as ConnectorDef[] | undefined
   const defs = injected ?? (await loadDefs(existsSync(DEFAULT_DEFS_DIR) ? DEFAULT_DEFS_DIR : '', ctx.home))
   const pollMs = typeof ctx.deps.connectorsPollMs === 'number' ? ctx.deps.connectorsPollMs : undefined
-  const registry = createRegistry({ home: ctx.home, defs, pollMs })
-  await registry.refresh()
-  active = { registry, defs: [...defs].sort((a, b) => CONNECTOR_IDS.indexOf(a.info.id) - CONNECTOR_IDS.indexOf(b.info.id)) }
+  const registry = createRegistry({ home: ctx.home, defs, pollMs, shouldPoll: () => ctx.wsVisibleCount?.() !== 0 })
+  let visible = ctx.wsVisibleCount?.() ?? 1
+  const unsubscribe = ctx.onWsVisibility?.((count) => {
+    if (count > 0 && visible === 0) void registry.refresh()
+    visible = count
+  })
+  // Before the first pass is awaited: a server stopped while it runs still ends the poll and the subscription.
+  let stopped = false
   ctx.onStop(() => {
+    stopped = true
+    unsubscribe?.()
     registry.stop()
     if (active?.registry === registry) active = null
   })
+  await registry.refresh()
+  if (stopped) return registry
+  active = { registry, defs: [...defs].sort((a, b) => CONNECTOR_IDS.indexOf(a.info.id) - CONNECTOR_IDS.indexOf(b.info.id)) }
   registry.autoStart()
   return registry
 }

@@ -238,7 +238,17 @@ describe('ingestClaude', () => {
 
   const ledger = (store: KitStore, table = 'usage_session') =>
     store.db
-      .query(
+      .query<
+        {
+          session: string
+          instance: string
+          calls: number
+          output: number
+          first_ts: number
+          last_ts: number
+        },
+        []
+      >(
         `select session, instance, calls, output, first_ts, last_ts from ${table} order by session, instance`,
       )
       .all()
@@ -273,7 +283,7 @@ describe('ingestClaude', () => {
     ]
     expect(ledger(f.store)).toEqual(want)
     // the settled part holds only what is no longer raw
-    expect(ledger(f.store, 'usage_session_settled').map((r: any) => [r.session, r.calls])).toEqual([
+    expect(ledger(f.store, 'usage_session_settled').map((r) => [r.session, r.calls])).toEqual([
       ['mix', 1],
       ['old', 2],
     ])

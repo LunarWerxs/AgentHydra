@@ -438,12 +438,12 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
 
     <!-- Add Provider Form -->
     <Collapsible v-if="showAddProvider" open @update:open="(v: boolean) => (showAddProvider = v)">
-      <Card size="sm" class="border-primary/50">
+      <Card size="sm" tone="primary">
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.providers.addProviderTitle') }}</CardTitle>
           <CardDescription>{{ t('hswarm.v.providers.addProviderDesc') }}</CardDescription>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <div class="space-y-2">
             <Label for="prov-name">{{ t('hswarm.v.providers.name') }}</Label>
             <Input
@@ -537,7 +537,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
             </div>
           </div>
           <div class="flex items-center gap-2 shrink-0">
-            <Label class="text-sm">{{ t('hswarm.v.providers.enabled') }}</Label>
+            <Label variant="text">{{ t('hswarm.v.providers.enabled') }}</Label>
             <Switch
               :model-value="!!selectedProviderData.enabled"
               :aria-label="t('hswarm.v.providers.useProvider', { name: selectedProviderData.name })"
@@ -556,7 +556,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         </div>
 
         <!-- Keys section -->
-        <InstanceCard class="!m-0">
+        <InstanceCard class="m-0!">
           <InstanceSectionHeader
             :title="t('hswarm.v.providers.keys')"
             :count="selectedProviderKeys.length"
@@ -612,7 +612,7 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         </InstanceCard>
 
         <!-- Models section -->
-        <InstanceCard v-if="modelsForSelectedProvider.length > 0" class="!m-0">
+        <InstanceCard v-if="modelsForSelectedProvider.length > 0" class="m-0!">
           <InstanceSectionHeader
             :title="t('hswarm.v.providers.models')"
             :count="modelsForSelectedProvider.length"
@@ -646,9 +646,9 @@ const emit = defineEmits<{ changed: []; open: [path: string[]] }>()
         </InstanceCard>
 
         <!-- Remove provider section -->
-        <Card size="sm" v-if="!selectedProviderData.builtin" class="border-destructive/50">
+        <Card size="sm" v-if="!selectedProviderData.builtin" tone="destructive">
           <CardHeader>
-            <CardTitle class="text-destructive">{{ t('hswarm.v.providers.removeProvider') }}</CardTitle>
+            <CardTitle tone="destructive">{{ t('hswarm.v.providers.removeProvider') }}</CardTitle>
             <CardDescription>
               {{ t('hswarm.v.providers.removeProviderDesc') }}
             </CardDescription>

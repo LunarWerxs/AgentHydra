@@ -18,8 +18,8 @@ const speaker = computed(() => speakerFor(props.chatId))
       data-testid="chat-audio"
       :aria-label="speaker.label"
       :aria-pressed="speaker.muted"
-      class="absolute top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] hover:bg-fill-hover hover:text-text group-hover/row:right-[23px]"
-      :class="[open ? 'right-[23px]' : 'right-[3px]', speaker.muted ? 'text-text-muted' : 'text-text-2']"
+      class="absolute top-0.75 flex size-5 items-center justify-center rounded-(--radius-5) hover:bg-fill-hover hover:text-text group-hover/row:right-5.75"
+      :class="[open ? 'right-5.75' : 'right-0.75', speaker.muted ? 'text-text-muted' : 'text-text-2']"
       @click.stop="toggleMuted(chatId)"
       @keydown.enter.stop
     >

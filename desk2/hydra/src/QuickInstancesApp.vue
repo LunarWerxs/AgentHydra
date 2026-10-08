@@ -52,6 +52,7 @@ import {
   usageCheckedAgo,
   usagePctFor,
 } from '@/lib/usage'
+import { visibleInterval } from '@/lib/visible-poll'
 import { applyWindowSizeHint } from '@/lib/window-size-hint'
 
 // A second --app launch can be forwarded into an existing Chromium process, which ignores both
@@ -436,7 +437,7 @@ function launchCodexCli(instance: CodexInstance): void {
   void act(`codex:${instance.id}`, 'Launch CLI', () => launchCodexInstance(instance.id))
 }
 
-let pollTimer: number | null = null
+let stopPoll: (() => void) | null = null
 let lifetime: EventSource | null = null
 
 async function connectLifetime(): Promise<void> {
@@ -465,15 +466,14 @@ onMounted(() => {
   document.title = 'Quick Instances · AgentHydra'
   void connectLifetime()
   void refresh()
-  pollTimer = window.setInterval(() => {
-    if (document.hidden) return
+  stopPoll = visibleInterval(() => {
     void refresh(true)
     if (Date.now() - drawnAt.value >= 60_000) drawnAt.value = Date.now()
   }, 10_000)
 })
 
 onBeforeUnmount(() => {
-  if (pollTimer !== null) window.clearInterval(pollTimer)
+  stopPoll?.()
   window.clearTimeout(copiedEmailTimer)
   lifetime?.close()
 })

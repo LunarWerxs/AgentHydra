@@ -1,10 +1,10 @@
 // Hydra Desk server: Hono routes, the /ws hub, plugins, and the built window in production.
 
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
-import { join, resolve, sep } from 'node:path'
+import { basename, join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
-import type { ServerEvent } from '@shared/protocol'
+import type { ClientEvent, ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
 import { type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
 import { REAL_HOME } from './real-home'
@@ -77,8 +77,21 @@ function pluginFiles(dir: string): string[] {
     .map((f) => join(dir, f))
 }
 
+/** A /ws message from the window, or null when it is not one. */
+function parseClientEvent(message: string | Buffer): ClientEvent | null {
+  try {
+    const event = JSON.parse(String(message)) as ClientEvent | null
+    return typeof event?.type === 'string' ? event : null
+  } catch {
+    return null
+  }
+}
+
 async function loadPlugins(app: Hono, ctx: ServerContext, dir: string): Promise<void> {
+  const started = performance.now()
+  const took: { file: string; ms: number }[] = []
   for (const file of pluginFiles(dir)) {
+    const at = performance.now()
     try {
       const mod = (await import(pathToFileURL(file).href)) as { default?: Plugin }
       if (typeof mod.default !== 'function') {
@@ -90,7 +103,13 @@ async function loadPlugins(app: Hono, ctx: ServerContext, dir: string): Promise<
       // One broken plugin must not take the others (or the window) down with it.
       console.error(`[plugins] ${file} failed to load:`, err)
     }
+    took.push({ file, ms: performance.now() - at })
   }
+  const slowest = took
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 3)
+    .map((p) => `${basename(p.file)} ${Math.round(p.ms)} ms`)
+  console.log(`[plugins] loaded in ${Math.round(performance.now() - started)} ms; slowest: ${slowest.join(', ')}`)
 }
 
 function serveStatic(app: Hono, dist: string): void {
@@ -130,6 +149,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
       hello = fn
     },
     wsClientCount: hub.clientCount,
+    wsVisibleCount: hub.visibleCount,
+    onWsVisibility: hub.onVisibility,
     onConnect: (fn) => void connectHooks.push(fn),
     wsRoute: (path, route) => void wsRoutes.set(path, route as WsRoute),
     hostRoute: (route) => void hostRoutes.push(route),
@@ -204,6 +225,10 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
       return app.fetch(req)
     },
     websocket: {
+      // Bun pings each socket and closes one that answers nothing for this long, so a half-open
+      // window (crashed, asleep) leaves the client counts.
+      sendPings: true,
+      idleTimeout: 60,
       async open(ws: WsClient) {
         const own = routeOf(ws)
         if (own) return own.route.open(ws, own.data)
@@ -222,9 +247,11 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
         }
       },
       message(ws: WsClient, message) {
-        // The hub's client only pings (ClientEvent); nothing to answer.
         const own = routeOf(ws)
-        if (own) own.route.message(ws, own.data, message)
+        if (own) return own.route.message(ws, own.data, message)
+        // The hub's client says when it is shown or hidden (ClientEvent); a ping needs no answer.
+        const event = parseClientEvent(message)
+        if (event?.type === 'visibility') hub.setVisible(ws, event.visible === true)
       },
       close(ws: WsClient) {
         const own = routeOf(ws)

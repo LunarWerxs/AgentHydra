@@ -127,20 +127,20 @@ const shotCases = shot === 'composer' ? cases : menuCases.filter((c) => c.id ===
 
 <template>
   <!-- Screenshot mode: the cases alone, over everything, on the pane background. -->
-  <div v-if="shotCases.length" class="fixed inset-0 z-40 flex flex-col justify-end gap-4 overflow-hidden bg-[var(--bg-page)] pb-4">
-    <div v-for="c in shotCases" :key="c.id" class="w-[800px]" :data-case="c.id">
+  <div v-if="shotCases.length" class="fixed inset-0 z-40 flex flex-col justify-end gap-4 overflow-hidden bg-(--bg-page) pb-4">
+    <div v-for="c in shotCases" :key="c.id" class="w-200" :data-case="c.id">
       <Composer :chat="c.chat" :demo="c.demo" />
     </div>
   </div>
 
   <div v-else class="flex flex-col gap-6">
-    <p class="text-[12px] text-[var(--text-muted)]">
+    <p class="text-[12px] text-(--text-muted)">
       Open one menu at a time:
-      <a v-for="c in menuCases" :key="c.id" class="mr-3 text-[var(--accent-text)] hover:underline" :href="`?shot=${c.id}#/gallery`">{{ c.label }}</a>
-      <a class="text-[var(--accent-text)] hover:underline" href="?shot=composer#/gallery">All states alone</a>
+      <a v-for="c in menuCases" :key="c.id" class="me-3 text-(--accent-text) hover:underline" :href="`?shot=${c.id}#/gallery`">{{ c.label }}</a>
+      <a class="text-(--accent-text) hover:underline" href="?shot=composer#/gallery">All states alone</a>
     </p>
-    <div v-for="c in cases" :key="c.id" class="flex w-[800px] flex-col gap-1">
-      <p class="text-xs text-[var(--text-muted)]">{{ c.label }}</p>
+    <div v-for="c in cases" :key="c.id" class="flex w-200 flex-col gap-1">
+      <p class="text-xs text-(--text-muted)">{{ c.label }}</p>
       <Composer :chat="c.chat" :demo="c.demo" />
     </div>
   </div>

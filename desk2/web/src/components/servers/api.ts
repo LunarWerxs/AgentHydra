@@ -88,8 +88,14 @@ export async function processLogs(id: string, o: { start?: boolean } = {}): Prom
 /** The chat folder's project, set up in the dev-servers service when it is not yet (no Add step). */
 export const setUpFolder = (cwd: string): Promise<DevWebFolder> => call(DW_FOLDER, post({ cwd }))
 
-/** The localhost servers no project lists (Desk 2's own /dw/localhost); `all` adds the ports the dev-server filter hides. */
-export const localhostServers = (all = false): Promise<LocalServers> => call(all ? `${DW_LOCALHOST}?all=1` : DW_LOCALHOST)
+/**
+ * The localhost servers no project lists (Desk 2's own /dw/localhost); `all` adds the ports the dev-server filter hides,
+ * and `fresh` scans again rather than take a scan from the last few seconds.
+ */
+export const localhostServers = (all = false, fresh = false): Promise<LocalServers> => {
+  const q = [all && 'all=1', fresh && 'fresh=1'].filter(Boolean).join('&')
+  return call(q ? `${DW_LOCALHOST}?${q}` : DW_LOCALHOST)
+}
 
 // DevWebUI's features beyond start and stop (shared/devwebui.ts DW_ROUTES). `start: false` marks a poll's read, which
 // never starts the service.

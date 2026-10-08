@@ -67,3 +67,33 @@ test('without a running service its ports are ordinary ones, and system services
   expect(probed).not.toContain(135)
   expect(r.servers.find((s) => s.port === 51000)?.kind).toBe('service')
 })
+
+test('a recent scan is reused only while the service owns the same servers; a failed scan and a Refresh scan again', async () => {
+  let scans = 0
+  let failing = false
+  let owned = { ports: [4100, 3000], pids: [] as number[] }
+  const local = new Localhost({
+    scan: async () => {
+      scans++
+      return failing ? { listeners: [], procs: new Map(), error: 'netstat failed' } : { listeners, procs, error: null }
+    },
+    probe: async () => null,
+    owned: async () => owned,
+    deskPid: 700,
+    deskPort: 7798
+  })
+  await local.list()
+  await local.list(true)
+  expect(scans).toBe(1)
+  // The service stopped its server on 3000: a scan from before the stop would list it as someone else's.
+  owned = { ports: [4100], pids: [] }
+  await local.list()
+  expect(scans).toBe(2)
+  await local.list(false, true)
+  expect(scans).toBe(3)
+  failing = true
+  await local.list(false, true)
+  failing = false
+  expect((await local.list()).error).toBeNull()
+  expect(scans).toBe(5)
+})

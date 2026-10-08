@@ -65,6 +65,8 @@ export interface DevServersDeps {
   kill?: (pid: number) => void
   /** True when something accepts a TCP connection on 127.0.0.1 or ::1 at `port` (default: a 300 ms connect). */
   portListening?: (port: number) => Promise<boolean>
+  /** True while a process with this pid runs (default host/launch.ts pidAlive). */
+  alive?: (pid: number) => boolean
   /** Listening sockets and processes (default localhost/ports.ts scanPorts). */
   scan?: () => Promise<Scan>
   /** Walks the disk for projects (default scan.ts scanProjects; the first start's scan covers every drive). */

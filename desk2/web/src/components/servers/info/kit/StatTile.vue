@@ -15,8 +15,8 @@ const emit = defineEmits<{ click: [] }>()
     :title="title"
     :class="[
       CARD,
-      'flex min-w-0 flex-col gap-1 px-3.5 py-3 text-left',
-      props.interactive && 'cursor-default transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
+      'flex min-w-0 flex-col gap-1 px-3.5 py-3 text-start',
+      props.interactive && 'cursor-default transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none'
     ]"
     @click="props.interactive && emit('click')"
   >

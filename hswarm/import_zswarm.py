@@ -165,6 +165,19 @@ def _import_lines(name: str, src_home: Path, dest_home: Path, state: dict, dry: 
     incremental = bool(prev) and prev.get("first") == fh and prev.get("offset", 0) <= ssize and prev.get("dest_size", 0) <= dsize
     start = prev["offset"] if incremental else 0
     known = _hashes(dest, _tail_start(dsize)) if incremental else _hashes(dest)
+    fresh, end = _new_lines(src, start, known, res)
+    res["added"] = len(fresh)
+    if dry or end == start and not fresh:
+        return res
+    if fresh:
+        _write_lines(dest, dsize, incremental, fresh)
+    state[name] = {"offset": end, "first": fh, "dest_size": dest.stat().st_size if dest.exists() else 0}
+    return res
+
+
+def _new_lines(src: Path, start: int, known: set[bytes], res: dict) -> tuple[list[tuple[float, bytes]], int]:
+    """The complete lines of src from `start` that dest does not hold yet, each with its time, and the offset read to.
+    Counts what was read and what was already there into `res`."""
     fresh: list[tuple[float, bytes]] = []
     seen: set[bytes] = set()
     end, last = start, 0.0
@@ -179,28 +192,27 @@ def _import_lines(name: str, src_home: Path, dest_home: Path, state: dict, dry: 
         seen.add(h)
         last = _ts(line, last)
         fresh.append((last, line))
-    res["added"] = len(fresh)
-    if dry or end == start and not fresh:
-        return res
-    if fresh:
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        oldest = min(t for t, _ in fresh)
-        in_place = dsize == 0 or (incremental and oldest >= _tail_max_ts(dest, dsize) - APPEND_SLACK_S)
-        if in_place:
-            chunk = b"".join(line if line.endswith(b"\n") else line + b"\n" for _, line in fresh)
-            with dest.open("ab") as f:  # a torn last line (no newline) must not swallow our first
-                if dsize and _last_byte(dest) != b"\n":
-                    f.write(b"\n")
-                f.write(chunk)
-        else:
-            tmp = dest.with_name(dest.name + ".importing")
-            try:
-                merged = _merge_into(dest, tmp, fresh)
-                _swap(dest, tmp, merged)
-            finally:
-                tmp.unlink(missing_ok=True)
-    state[name] = {"offset": end, "first": fh, "dest_size": dest.stat().st_size if dest.exists() else 0}
-    return res
+    return fresh, end
+
+
+def _write_lines(dest: Path, dsize: int, incremental: bool, fresh: list[tuple[float, bytes]]) -> None:
+    """Append `fresh` when it all comes after dest's tail, else merge it in by time through a swapped copy."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    oldest = min(t for t, _ in fresh)
+    in_place = dsize == 0 or (incremental and oldest >= _tail_max_ts(dest, dsize) - APPEND_SLACK_S)
+    if in_place:
+        chunk = b"".join(line if line.endswith(b"\n") else line + b"\n" for _, line in fresh)
+        with dest.open("ab") as f:  # a torn last line (no newline) must not swallow our first
+            if dsize and _last_byte(dest) != b"\n":
+                f.write(b"\n")
+            f.write(chunk)
+    else:
+        tmp = dest.with_name(dest.name + ".importing")
+        try:
+            merged = _merge_into(dest, tmp, fresh)
+            _swap(dest, tmp, merged)
+        finally:
+            tmp.unlink(missing_ok=True)
 
 
 def _last_byte(path: Path) -> bytes:
@@ -221,13 +233,31 @@ def _import_savings(src_home: Path, dest_home: Path, state: dict, dry: bool) -> 
     prev = state.get(SAVINGS) or {}
     if prev.get("stamp") == stamp and dest.exists() and prev.get("dest_size", 0) <= dest.stat().st_size:
         return res
+    have = _days_in(dest)
+    fresh = _zswarm_days(src, have, res)
+    res["added"] = len(fresh)
+    if dry:
+        return res
+    if fresh:
+        _write_days(dest, have, fresh)
+    state[SAVINGS] = {"stamp": stamp, "dest_size": dest.stat().st_size if dest.exists() else 0}
+    return res
+
+
+def _days_in(path: Path) -> dict[str, bytes]:
+    """day -> its line, for every readable row of a savings file."""
     have: dict[str, bytes] = {}
-    if dest.exists():
-        for line in dest.read_bytes().splitlines():
+    if path.exists():
+        for line in path.read_bytes().splitlines():
             try:
                 have[json.loads(line)["day"]] = line
             except (ValueError, KeyError, TypeError):
                 continue
+    return have
+
+
+def _zswarm_days(src: Path, have: dict[str, bytes], res: dict) -> dict[str, bytes]:
+    """day -> its line with `zswarm_*` counters renamed, for each day of src that `have` lacks; counts into `res`."""
     fresh: dict[str, bytes] = {}
     with src.open("rb") as f:
         for line in f:
@@ -244,35 +274,28 @@ def _import_savings(src_home: Path, dest_home: Path, state: dict, dry: bool) -> 
                 continue
             row = {(("hswarm_" + k[len("zswarm_"):]) if k.startswith("zswarm_") else k): v for k, v in row.items()}
             fresh[day] = json.dumps(row).encode("utf-8")
-    res["added"] = len(fresh)
-    if dry:
-        return res
-    if fresh:
-        for _ in range(SWAP_TRIES):
-            size = dest.stat().st_size if dest.exists() else 0
-            rows = {**have, **fresh}
-            tmp = dest.with_name(dest.name + ".importing")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_bytes(b"".join(rows[d] + b"\n" for d in sorted(rows)))
-            if (dest.stat().st_size if dest.exists() else 0) == size:
-                try:
-                    os.replace(tmp, dest)
-                    break
-                except PermissionError:
-                    time.sleep(0.2)
-            tmp.unlink(missing_ok=True)
-            have = {}
-            if dest.exists():
-                for line in dest.read_bytes().splitlines():
-                    try:
-                        have[json.loads(line)["day"]] = line
-                    except (ValueError, KeyError, TypeError):
-                        continue
-        else:
-            raise OSError(f"{SAVINGS} kept changing while it was merged; run again")
+    return fresh
+
+
+def _write_days(dest: Path, have: dict[str, bytes], fresh: dict[str, bytes]) -> None:
+    """Rewrite dest with `fresh` added, sorted by day; a dest that changed meanwhile is read again and merged again."""
+    for _ in range(SWAP_TRIES):
+        size = dest.stat().st_size if dest.exists() else 0
+        rows = {**have, **fresh}
+        tmp = dest.with_name(dest.name + ".importing")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(b"".join(rows[d] + b"\n" for d in sorted(rows)))
+        if (dest.stat().st_size if dest.exists() else 0) == size:
+            try:
+                os.replace(tmp, dest)
+                break
+            except PermissionError:
+                time.sleep(0.2)
         tmp.unlink(missing_ok=True)
-    state[SAVINGS] = {"stamp": stamp, "dest_size": dest.stat().st_size if dest.exists() else 0}
-    return res
+        have = _days_in(dest)
+    else:
+        raise OSError(f"{SAVINGS} kept changing while it was merged; run again")
+    tmp.unlink(missing_ok=True)
 
 
 # ---- SQLite --------------------------------------------------------------------------------------------------

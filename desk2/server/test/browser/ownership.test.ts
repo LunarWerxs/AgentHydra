@@ -99,8 +99,8 @@ const live = (desk: DeskServer, chat: string, tab: string) =>
   })
 
 const LEDGER = {
-  a1: { chat: 'sess-1', at: '2026-10-07T10:00:00.000Z' },
-  b1: { chat: 'sess-2-old', at: '2026-10-07T10:05:00.000Z' },
+  a1: { chat: 'sess-1', at: '2020-01-07T10:00:00.000Z' },
+  b1: { chat: 'sess-2-old', at: '2020-01-07T10:05:00.000Z' },
 }
 
 describe('two chats on one profile', () => {
@@ -114,7 +114,7 @@ describe('two chats on one profile', () => {
   })
 
   test('a chat with several pages gets the one driven last', async () => {
-    setup(['a1', 'a2', 'b1'], { ...LEDGER, a2: { chat: 'sess-1', at: '2026-10-07T11:00:00.000Z' } })
+    setup(['a1', 'a2', 'b1'], { ...LEDGER, a2: { chat: 'sess-1', at: '2020-01-07T11:00:00.000Z' } })
     const desk = await boot()
     expect((await open(desk, 'c1')).tab?.id).toBe('a2')
   })
@@ -183,7 +183,7 @@ describe('a browser with no ledger', () => {
 
 describe('TabScope', () => {
   test('a page owned by a non-Desk owner is no Desk chat’s', () => {
-    const f = setup(['m1', 'free'], { m1: { chat: 'mcp:other', at: '2026-10-07T10:00:00.000Z' } })
+    const f = setup(['m1', 'free'], { m1: { chat: 'mcp:other', at: '2020-01-07T10:00:00.000Z' } })
     const scope = new TabScope(f.dir, 'c1', ['sess-1'])
     expect(scope.visible(f.tabs).map((t) => t.id)).toEqual(['free'])
     expect(scope.best(f.tabs)?.id).toBe('free')

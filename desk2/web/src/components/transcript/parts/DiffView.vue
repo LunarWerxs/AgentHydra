@@ -12,12 +12,12 @@ const shown = computed(() => (ctx.isOpen(key.value) ? rows.value : rows.value.sl
 </script>
 
 <template>
-  <div class="code-scroll overflow-x-auto font-mono text-[12px] leading-[19px]">
+  <div class="code-scroll overflow-x-auto font-mono text-[12px] leading-4.75">
     <table class="w-full border-collapse">
       <tbody>
         <template v-for="(l, i) in shown" :key="i">
           <tr v-if="l === null" class="text-text-muted">
-            <td class="w-10 select-none px-2 text-right">⋯</td>
+            <td class="w-10 select-none px-2 text-end">⋯</td>
             <td />
             <td />
           </tr>
@@ -27,14 +27,14 @@ const shown = computed(() => (ctx.isOpen(key.value) ? rows.value : rows.value.sl
               l.type === 'add' ? 'bg-git-add/[0.12] text-text' : l.type === 'del' ? 'bg-git-del/[0.12] text-text' : 'text-text-2'
             "
           >
-            <td class="w-10 select-none whitespace-nowrap px-2 text-right align-top text-text-muted">
+            <td class="w-10 select-none whitespace-nowrap px-2 text-end align-top text-text-muted">
               {{ l.type === 'del' ? l.oldNo : l.newNo }}
             </td>
             <td
               class="w-4 select-none align-top"
               :class="l.type === 'add' ? 'text-git-add' : l.type === 'del' ? 'text-git-del' : ''"
             >{{ l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' ' }}</td>
-            <td class="whitespace-pre-wrap break-all pr-3">{{ l.text || ' ' }}</td>
+            <td class="whitespace-pre-wrap break-all pe-3">{{ l.text || ' ' }}</td>
           </tr>
         </template>
       </tbody>

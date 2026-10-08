@@ -771,6 +771,20 @@ export interface AgentRoot {
   archived: boolean
 }
 
+/** Whether each of the real home's candidate roots exists, kept ROOT_EXISTS_MS: the transcript
+ *  index asks for every catalog tool's roots on each pass, an existsSync per candidate (2026-10-08:
+ *  34% of a 5.7 s daemon stall). A tool installed meanwhile is found within the minute. */
+const ROOT_EXISTS_MS = 60_000
+const rootsSeen = new Map<string, { at: number; yes: boolean }>()
+function rootExists(target: string): boolean {
+  const now = Date.now()
+  const seen = rootsSeen.get(target)
+  if (seen && now - seen.at < ROOT_EXISTS_MS) return seen.yes
+  const yes = existsSync(target)
+  rootsSeen.set(target, { at: now, yes })
+  return yes
+}
+
 /**
  * Absolute roots for one tool, existing ones only.
  *
@@ -792,11 +806,12 @@ export function rootsFor(tool: AgentTool, home: string = HOME): AgentRoot[] {
       }))
 
   const out: AgentRoot[] = []
+  const held = home === HOME && !override
   for (const c of candidates) {
     // A `dbName` tool's root is a directory holding that file; the directory existing without the
     // file is an installed tool with no conversations, which is not a store.
     const target = tool.dbName ? join(c.path, tool.dbName) : c.path
-    if (!existsSync(target)) continue
+    if (!(held ? rootExists(target) : existsSync(target))) continue
     out.push({ tool, root: c.path, archived: c.archived })
   }
   return out

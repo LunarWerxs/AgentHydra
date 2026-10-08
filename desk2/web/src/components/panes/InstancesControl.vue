@@ -46,7 +46,7 @@ function saveFloor(e: Event) {
       type="button"
       aria-label="Read the native control settings again"
       title="Read the native control settings again"
-      class="flex size-7 shrink-0 cursor-default items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text disabled:opacity-50"
+      class="flex size-7 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text disabled:opacity-50"
       :disabled="inst.nativeLoading.value || inst.nativeSaving.value"
       @click="inst.loadNative()"
     >
@@ -80,7 +80,7 @@ function saveFloor(e: Event) {
     @update:model-value="(v: boolean) => inst.saveFree({ keepWindows: v })"
   />
 
-  <div v-else-if="id === 'ahFreeFloor' && inst.free.value" class="flex shrink-0 items-center gap-2 text-[13px] leading-[19px] text-text-muted">
+  <div v-else-if="id === 'ahFreeFloor' && inst.free.value" class="flex shrink-0 items-center gap-2 text-[13px] leading-4.75 text-text-muted">
     <input
       :key="inst.free.value.weeklyFloorPct"
       type="number"
@@ -88,7 +88,7 @@ function saveFloor(e: Event) {
       max="100"
       :value="inst.free.value.weeklyFloorPct"
       :aria-label="label"
-      :class="[FIELD, 'tnum w-20 text-right [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none']"
+      :class="[FIELD, 'tnum w-20 text-end [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none']"
       @change="saveFloor"
       @keydown.enter="($event.target as HTMLInputElement).blur()"
     />

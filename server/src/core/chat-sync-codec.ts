@@ -7,9 +7,16 @@ const aadChunk = (chatId: string, seq: number): Buffer =>
 
 const aadRecord = (chatId: string): Buffer => Buffer.from(`desktop-chat-record:${chatId}`, 'utf8')
 
-/** Compress, encrypt, and base64 encode a chunk. */
-export function sealChunk(key: Buffer, chatId: string, seq: number, bytes: Uint8Array): string {
-  const compressed = Bun.zstdCompressSync(bytes, { level: 12 })
+/** Compress, encrypt, and base64 encode a chunk. The compression runs off the daemon's thread: zstd
+ *  level 12 over a 4 MB range is 100-200 ms, and a long chat's send held the event loop for seconds
+ *  (2026-10-08, the stall sampler's sealChunk frames). */
+export async function sealChunk(
+  key: Buffer,
+  chatId: string,
+  seq: number,
+  bytes: Uint8Array,
+): Promise<string> {
+  const compressed = await Bun.zstdCompress(bytes, { level: 12 })
   const iv = randomBytes(12)
   const cipher = createCipheriv('aes-256-gcm', key, iv)
   cipher.setAAD(aadChunk(chatId, seq))
@@ -92,13 +99,13 @@ interface Chunk {
 }
 
 /** Split bytes into ranges, seal each, and return ranges that fit CHUNK_MAX_CHARS. */
-export function cutChunks(
+export async function cutChunks(
   key: Buffer,
   chatId: string,
   firstSeq: number,
   bytes: Uint8Array,
   rawTarget = 4 * 1024 * 1024,
-): Chunk[] {
+): Promise<Chunk[]> {
   if (bytes.length === 0) return []
 
   const result: Chunk[] = []
@@ -124,7 +131,7 @@ export function cutChunks(
       }
 
       const range = bytes.subarray(from, endPos)
-      blob = sealChunk(key, chatId, seq, range)
+      blob = await sealChunk(key, chatId, seq, range)
 
       if (blob.length <= CHUNK_MAX_CHARS) {
         bestLen = endPos - from

@@ -108,33 +108,35 @@ export function parseTaskNotification(body: string): InjectedPart[] {
   if (!ids.length) return summary ? [{ kind: 'system', text: clip(summary) }] : []
   const real = ids.filter((id) => !id.startsWith('__'))
   if (!real.length) return summary ? [{ kind: 'system', text: clip(summary) }] : []
+  // A notice about several tasks (or about tasks a previous session left) describes none of them alone.
+  const shared = real.length > 1 || ENDED_BEFORE.test(summary)
+  return real.map((taskId) => ({ kind: 'task', task: taskNotice(body, summary, taskId, shared) }))
+}
+
+/** The notice for one task of a <task-notification> body; a `shared` one carries no per-task details. */
+function taskNotice(body: string, summary: string, taskId: string, shared: boolean): TaskNotice {
   const rawStatus = field(body, 'status')
   const quoted = /"([^"]+)"/.exec(summary)?.[1]
   const event = field(body, 'event')
-  // A notice about several tasks (or about tasks a previous session left) describes none of them alone.
-  const shared = real.length > 1 || ENDED_BEFORE.test(summary)
+  const task: TaskNotice = {
+    taskId,
+    status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : null,
+    description: shared ? '' : clip(quoted ?? summary, 160),
+    summary: clip(event ? `${summary}: ${event}` : summary),
+    taskKind: shared ? 'other' : taskKindOf(summary),
+  }
+  if (shared) return task
   const toolUseId = field(body, 'tool-use-id')
   const outputFile = field(body, 'output-file')
   const agents = num(body, 'agent_count', 'agents')
   const tokens = num(body, 'subagent_tokens', 'total_tokens', 'tokens')
   const durationMs = num(body, 'duration_ms')
-  return real.map((taskId) => {
-    const task: TaskNotice = {
-      taskId,
-      status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : null,
-      description: shared ? '' : clip(quoted ?? summary, 160),
-      summary: clip(event ? `${summary}: ${event}` : summary),
-      taskKind: shared ? 'other' : taskKindOf(summary),
-    }
-    if (!shared) {
-      if (toolUseId) task.toolUseId = toolUseId
-      if (outputFile) task.outputFile = outputFile
-      if (agents !== undefined) task.agents = agents
-      if (tokens !== undefined) task.tokens = tokens
-      if (durationMs !== undefined) task.durationMs = durationMs
-    }
-    return { kind: 'task', task }
-  })
+  if (toolUseId) task.toolUseId = toolUseId
+  if (outputFile) task.outputFile = outputFile
+  if (agents !== undefined) task.agents = agents
+  if (tokens !== undefined) task.tokens = tokens
+  if (durationMs !== undefined) task.durationMs = durationMs
+  return task
 }
 
 /** '/name args' from a <command-name>/<command-message>/<command-args> echo. */

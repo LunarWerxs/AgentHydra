@@ -6,11 +6,16 @@
 import { watch, type WatchSource } from 'vue'
 
 const FADE_MS = 160
-const CLOSE_MS = 180
+export const CLOSE_MS = 180
+
+/** True when a leave goes at once: no Web Animations, the window hidden, or reduced motion asked for. */
+export function leavesAtOnce(el: HTMLElement): boolean {
+  return typeof el.animate !== 'function' || document.visibilityState === 'hidden' || matchMedia('(prefers-reduced-motion: reduce)').matches
+}
 
 export function rowLeave(el: Element, done: () => void): void {
   const row = el as HTMLElement
-  if (typeof row.animate !== 'function' || document.visibilityState === 'hidden' || matchMedia('(prefers-reduced-motion: reduce)').matches) return done()
+  if (leavesAtOnce(row)) return done()
   // The timer ends it anyway, should the animation never finish (a window hidden halfway).
   let ended = false
   const end = () => {

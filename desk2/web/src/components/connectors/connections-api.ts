@@ -28,6 +28,31 @@ export async function refreshConnectorList(): Promise<void> {
   }
 }
 
+// One loop for every mounted watcher, at the fastest delay any of them asks for; it pauses while the window is hidden.
+type Delay = () => number
+const watchers = new Set<Delay>()
+let timer: ReturnType<typeof setTimeout> | null = null
+
+async function tick(): Promise<void> {
+  timer = null
+  if (!watchers.size) return
+  timer = setTimeout(tick, Math.min(...[...watchers].map((d) => d())))
+  if (!document.hidden) await refreshConnectorList()
+}
+
+/** Start watching the connector list; call the returned function to stop. The loop runs while at least one watcher is left. */
+export function watchConnectors(delay: Delay): () => void {
+  watchers.add(delay)
+  if (!timer) void tick()
+  return () => {
+    watchers.delete(delay)
+    if (!watchers.size && timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+}
+
 async function ask<T>(res: Response): Promise<T> {
   const body = (await res.json().catch(() => null)) as (T & { error?: string }) | null
   if (!res.ok || !body) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)

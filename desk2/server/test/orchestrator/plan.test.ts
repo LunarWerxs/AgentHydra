@@ -1,5 +1,6 @@
-// plugins/70-orchestrator.ts through its route: the chats and transcripts come from stand-in engine routes, the
-// CreAitor from a stand-in script run by this test's own runtime. Nothing outside a temp folder is read or written.
+// plugins/70-orchestrator.ts through its route: the chats and transcripts come from stand-in engine routes (the send
+// queue's too, which records what the armed orchestrator queues), the CreAitor from a stand-in script run by this
+// test's own runtime. Nothing outside a temp folder is read or written.
 
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
@@ -8,7 +9,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono } from 'hono'
 import type { ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
-import type { OrchestratorPlan } from '@shared/orchestrator'
+import { ORCHESTRATOR_FROM, type OrchestratorPlan } from '@shared/orchestrator'
 import type { ServerContext } from '../../src/context'
 import { createServer, type DeskServer } from '../../src/index'
 import plugin from '../../src/plugins/70-orchestrator'
@@ -37,14 +38,18 @@ const said = (text: string, ago = 3_600_000): TranscriptItem => ({ id: `a${ago}`
 const wrote = (ago: number): TranscriptItem => ({ id: `u${ago}`, ts: NOW - ago, kind: 'user', text: 'go' })
 
 const CHATS: [ChatSummary, TranscriptItem[]][] = [
-  [chat('card', { status: 'needs_you' }), [{ id: 'q', ts: NOW - 3_600_000, kind: 'question', state: 'pending', questions: [{ question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'S3' }, { label: 'Disk' }] }] }]],
-  [chat('need'), [said('Done the rest.\n\n🔴 NEED: Ship the release now? A) Ship it ★ B) Wait a day')]],
+  [chat('card', { status: 'needs_you', sessionId: 'sess-card' }), [{ id: 'q', ts: NOW - 3_600_000, kind: 'question', state: 'pending', questions: [{ question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'S3' }, { label: 'Disk' }] }] }]],
+  [chat('need'), [said('Done the rest.\n\n🔴 NEED: Ship the release now? A) Wait a day ★ B) --force')]],
   [chat('asks'), [said('All green. Want me to deploy it to the box too?')]],
   [chat('person'), [said('🔴 NEED: Pick one? A) x B) y', 3_000_000), wrote(120_000)]],
   [chat('permission', { status: 'needs_you' }), [{ id: 'p', ts: NOW - 3_600_000, kind: 'permission', toolName: 'Bash', input: {}, canAlwaysAllow: false, state: 'pending' }]],
   [chat('limited', { status: 'limited', limitResetsAt: NOW + 3_600_000 }), [said('Working on it.')]],
   [chat('moved', { status: 'limited', accountAuto: true }), []],
   [chat('error', { status: 'error', lastError: 'network down' }), []],
+  // the armed orchestrator continued it 2 min ago (its note, never the person's): it waits before another
+  [chat('continued', { status: 'error', lastError: 'overloaded' }), [{ id: 'n', ts: NOW - 120_000, kind: 'note', from: ORCHESTRATOR_FROM, text: 'Continue the task.' }]],
+  // its transcript does not load (the stand-in answers 500): shown, never acted on
+  [chat('unreadable', { status: 'error', lastError: 'disk full' }), []],
   [chat('busy', { status: 'working', activity: 'Bash: bun test' }), []],
   [chat('finished'), [said('Landed 3 of 3; everything is verified.')]],
   [chat('old', { updatedAt: NOW - 10 * 86_400_000 }), [said('🔴 NEED: Old? A) a B) b')]],
@@ -77,21 +82,43 @@ const OUTSIDE: [ExternalSession, TranscriptItem[]][] = [
   [outside('o-archived', { archived: true }), [said('🔴 NEED: Gone? A) a B) b')]]
 ]
 
-/** The plugin over a stand-in engine; `sent` counts every request that would change something. */
-function desk(): { app: Hono; sent: string[] } {
+/** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
+ *  each message handed to the send queue and not yet delivered (a test delivers them by emptying it). `onQueue` runs
+ *  while the queue takes a message. */
+function desk(onQueue?: (app: Hono) => Promise<unknown>): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
   const sent: string[] = []
+  const queued: { chatId: string; text: string }[] = []
   app.use('*', async (c, next) => {
     if (c.req.method !== 'GET') sent.push(`${c.req.method} ${c.req.path}`)
     await next()
   })
+  app.post('/api/queue', async (c) => {
+    const { chatId, text } = (await c.req.json()) as { chatId: string; text: string }
+    queued.push({ chatId, text })
+    await onQueue?.(app)
+    return c.json({ id: 'q' })
+  })
+  app.get('/api/queue', (c) =>
+    c.json({
+      items: queued.map(({ chatId, text }, i) => ({ id: `q${i}`, rev: 1, createdAt: NOW, updatedAt: NOW, state: 'waiting', reason: null, text, kind: 'message', chatId })),
+      paused: false, sendMode: 'immediate', maxNewChats: 1, held: {}, rev: 0
+    })
+  )
+  app.post('/api/queue/chats/:id/resume', (c) => c.json({ items: [] }))
   app.get('/api/chats', (c) => c.json(CHATS.map(([ch]) => ch)))
-  app.get('/api/chats/:id/items', (c) => c.json(CHATS.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? []))
+  app.get('/api/chats/:id/items', (c) =>
+    c.req.param('id') === 'unreadable' ? c.json({ error: 'no transcript' }, 500) : c.json(CHATS.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? [])
+  )
   app.get('/api/external/sessions', (c) => c.json(OUTSIDE.map(([s]) => s)))
   app.get('/api/external/sessions/:id/items', (c) => c.json(OUTSIDE.find(([s]) => s.id === c.req.param('id'))?.[1] ?? []))
-  plugin(app, {} as ServerContext)
-  return { app, sent }
+  plugin(app, { onStop: () => {} } as unknown as ServerContext)
+  return { app, sent, queued }
 }
+
+/** The page's Arm / Disarm. */
+const arm = async (app: Hono, armed: boolean): Promise<OrchestratorPlan> =>
+  (await (await app.request('/api/diagnostics/orchestrator', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ armed }) })).json()) as OrchestratorPlan
 
 test('each open chat and outside session gets its one next move, most urgent first, and nothing is sent', async () => {
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
@@ -106,8 +133,10 @@ test('each open chat and outside session gets its one next move, most urgent fir
     ['asks', 'answer-need', 'desk'],
     ['o-need', 'answer-need', 'cli'],
     ['error', 'retry-error', 'desk'],
+    ['unreadable', 'retry-error', 'desk'],
     ['limited', 'resume-after-limit', 'desk'],
     ['moved', 'watch', 'desk'],
+    ['continued', 'watch', 'desk'],
     ['busy', 'watch', 'desk'],
     ['o-busy', 'watch', 'desktop'],
     ['person', 'leave', 'desk'],
@@ -121,28 +150,80 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect([by.card.question, by.card.options]).toEqual(['Which store?', ['S3', 'Disk']])
   expect([by['o-ask'].question, by['o-ask'].options, by['o-ask'].account]).toEqual(['Which region?', ['East', 'West'], '#2'])
   expect([by['o-cut'].question, by['o-cut'].options]).toEqual(['Keep the "old" cache?', ['Keep', 'Drop']])
-  expect([by.need.question, by.need.options]).toEqual(['Ship the release now?', ['Ship it', 'Wait a day']])
+  expect([by.need.question, by.need.options]).toEqual(['Ship the release now?', ['Wait a day', '--force']])
   expect([by['o-need'].question, by['o-need'].options]).toEqual(['Merge it?', ['Merge', 'Hold']])
   expect(by.asks.question).toBe('Want me to deploy it to the box too?')
-  expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 1, 'resume-after-limit': 1, watch: 3, leave: 4, done: 2 })
+  expect(by.continued.reason).toBe('the orchestrator continued it 2 min ago')
+  expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 2, 'resume-after-limit': 1, watch: 4, leave: 4, done: 2 })
+  expect([plan.mode, plan.acts]).toEqual(['shadow', []])
   expect(sent).toEqual([])
+})
+
+test('armed, it continues each Desk chat a limit or an error stopped, once per stop and twice at most', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const { app, sent, queued } = desk()
+  const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
+  const continued = ['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue', 'POST /api/queue/chats/error/resume']
+  // Arming looks at once: each stopped chat it could read gets one continue, never 'unreadable', whose transcript
+  // did not load (a person may have just written in it).
+  const first = await arm(app, true)
+  expect(first.mode).toBe('armed')
+  expect(sent.splice(0)).toEqual(continued)
+  const [limited, error] = queued
+  expect([limited.chatId, error.chatId]).toEqual(['limited', 'error'])
+  expect(limited.text).toStartWith(`${lead}Your account's usage limit stopped the last turn`)
+  expect(error.text).toStartWith(`${lead}Your last turn stopped on an error: network down`)
+  expect(first.acts.map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined], ['limited', 'resume-after-limit', 'continued', undefined]])
+  // While those wait in the send queue (through the reset, say), another look sends nothing.
+  expect((await arm(app, true)).acts).toHaveLength(2)
+  expect(sent.splice(0)).toEqual(['POST /api/diagnostics/orchestrator'])
+  // Delivered, and both stopped again (the stand-ins never change): one more each.
+  queued.splice(0)
+  expect((await arm(app, true)).acts).toHaveLength(4)
+  expect(sent.splice(0)).toEqual(continued)
+  // The third stop: it gives up, sends nothing, and the plan leaves both to a person, for good.
+  queued.splice(0)
+  const third = await arm(app, true)
+  expect([sent.splice(0), queued]).toEqual([['POST /api/diagnostics/orchestrator'], []])
+  expect(third.acts.slice(0, 2).map((a) => [a.id, a.did])).toEqual([['error', 'gave-up'], ['limited', 'gave-up']])
+  const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
+  expect([by.error.move, by.limited.move, by.unreadable.move]).toEqual(['leave', 'leave', 'retry-error'])
+  expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
+  for (const _ of [5, 6]) expect((await arm(app, true)).acts).toHaveLength(6)
+  const off = await arm(app, false)
+  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', Array(3).fill('POST /api/diagnostics/orchestrator'), []])
+})
+
+test('a disarm part-way through a look stops it before the next send', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  // The owner's Disarm lands while the queue takes the look's first continue.
+  const { app, queued } = desk((self) => arm(self, false))
+  await arm(app, true)
+  expect(queued.map((q) => q.chatId)).toEqual(['limited'])
+  const plan = (await (await app.request('/api/diagnostics/orchestrator')).json()) as OrchestratorPlan
+  expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['limited']])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'desk-creaitor-'))
   temps.push(dir)
   const tool = join(dir, 'creaitor.js')
-  // Answers with the last --option it was given, so the row shows the choices arrived.
-  writeFileSync(tool, `const a = process.argv.slice(2); const o = a.filter((x, i) => a[i - 1] === '--option'); console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: a[1], confidence: 0.9, basis: ['r1'], need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
+  // Reads its command line as strictly as the CreAitor's argparse (a choice that starts with a dash and is not passed
+  // as --option=value is refused) and answers with the last choice, so the row shows the choices arrived intact.
+  const flags = { repo: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
+  const options = Object.fromEntries(Object.entries(flags).map(([k, t]) => [k, { type: t === 'b' ? 'boolean' : 'string', multiple: t === 'm' }]))
+  writeFileSync(tool, `const { values: v, positionals: p } = require('node:util').parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: ${JSON.stringify(options)} }); const o = v.option ?? []; console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: p[1], confidence: 0.9, basis: [v.session, v.via].filter(Boolean), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
   process.env.HYDRA_DESK_CREAITOR = tool
   process.env.HYDRA_DESK_PYTHON = process.execPath
   const { app, sent } = desk()
   const plan = (await (await app.request('/api/diagnostics/orchestrator?ask=1')).json()) as OrchestratorPlan
   const by = Object.fromEntries(plan.rows.map((r) => [r.id, r.creaitor]))
-  expect(by.card).toMatchObject({ verdict: 'decide', option: 'Disk', answer: 'Which store?', basis: ['r1'] })
-  expect(by.need).toMatchObject({ verdict: 'decide', option: 'Wait a day' })
+  // basis echoes --session and --via: an ask carries its chat's session, so the shadow log can be graded against
+  // the owner's own reply there (claude-memory bench.py --shadow)
+  expect(by.card).toMatchObject({ verdict: 'decide', option: 'Disk', answer: 'Which store?', basis: ['sess-card', 'orchestrator'] })
+  expect(by.need).toMatchObject({ verdict: 'decide', option: '--force' })
   expect(by.asks).toMatchObject({ verdict: 'escalate', needLine: '🔴 NEED: x' })
-  expect(by['o-ask']).toMatchObject({ verdict: 'decide', option: 'West', answer: 'Which region?' })
+  expect(by['o-ask']).toMatchObject({ verdict: 'decide', option: 'West', answer: 'Which region?', basis: ['o-ask', 'orchestrator'] })
   expect(by['o-need']).toMatchObject({ verdict: 'decide', option: 'Hold' })
   expect(by.finished).toBeUndefined()
   expect(sent).toEqual([])

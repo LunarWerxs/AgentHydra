@@ -30,7 +30,7 @@ const tooltip = computed(() => [sourceLabel(props.hit.source), props.hit.cwd].fi
       type="button"
       :aria-current="selected ? 'page' : undefined"
       :data-search-cursor="active || undefined"
-      class="flex w-full cursor-default flex-col gap-0.5 rounded-[var(--radius-6)] px-1.5 py-1 text-left transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+      class="flex w-full cursor-default flex-col gap-0.5 rounded-(--radius-6) px-1.5 py-1 text-start transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
       :class="selected ? 'bg-fill-selected' : active ? 'bg-fill-hover' : 'hover:bg-fill-hover'"
       @click="emit('select')"
     >

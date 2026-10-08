@@ -1,6 +1,7 @@
 // The engine's plugin (SPEC "Server wiring"): the ChatManager, every chat route, models, commands, the folder
 // menu's routes (folders/recent, folders/pick), mcp-servers, the `hello` provider, and the chats that kept
-// running in their hosts through a restart (taken over before the server answers), with server/shutdown.
+// running in their hosts through a restart (taken over behind the start; the hello and chat routes wait for it),
+// with server/shutdown.
 // ctx.deps may carry `bridge` (a fake), `queryImpl` (a fake SDK query), `env`, `agentHydraMcp`,
 // `storeDebounceMs`, `climaytePollMs`, `openFolder`, `pickFolder`, `queueSettleMs`, `queueRetryMs` and
 // `shutdown` (tests).
@@ -42,6 +43,8 @@ import { RecentFolders } from '../folders/recent'
 
 /** How often climayteActive is re-read from the bridge poller's last worker list. */
 const CLIMAYTE_REFRESH_MS = 3000
+/** How often while no window is on screen. */
+const CLIMAYTE_HIDDEN_MS = 30_000
 
 /** The items one JSON line each, written out a few hundred at a time instead of built as one string. */
 function jsonlStream(items: readonly unknown[]): ReadableStream<Uint8Array> {
@@ -90,17 +93,16 @@ function answer(c: Context, run: () => Promise<unknown> | unknown): Promise<Resp
     )
 }
 
-export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
+/** The ChatManager, its events to the windows and then to the send queue (`toQueue`, set once the queue exists). */
+function createManager(ctx: ServerContext, toQueue: { fn: (event: ServerEvent) => void }): ChatManager {
   const deps = ctx.deps
-  // The send queue sees every chat event; it is built after the manager it sends through.
-  let toQueue: (event: ServerEvent) => void = () => {}
-  const manager = new ChatManager({
+  return new ChatManager({
     home: ctx.home,
     emit: (event) => {
       ctx.broadcast(event)
       // Nothing the queue throws may reach the chat that emitted: its message has already gone to the CLI.
       try {
-        toQueue(event)
+        toQueue.fn(event)
       } catch (err) {
         console.warn(`[desk] the send queue could not take in ${event.type}: ${err instanceof Error ? err.message : String(err)}`)
       }
@@ -115,6 +117,107 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     storeDebounceMs: typeof deps.storeDebounceMs === 'number' ? deps.storeDebounceMs : undefined,
     newChats: deps.newChats === 'sdk' ? 'sdk' : undefined,
   })
+}
+
+/** The whole record of a chat, JSON items or one per line with ?format=jsonl. */
+async function transcript(c: Context, manager: ChatManager): Promise<Response> {
+  const id = c.req.param('id') ?? ''
+  try {
+    await manager.syncWorkers(id)
+    const items = manager.listItems(id)
+    if (c.req.query('format') === 'jsonl') return c.body(jsonlStream(items), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
+    return c.json(items)
+  } catch (err) {
+    if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
+    throw err
+  }
+}
+
+/** The folder picker, opened at the parent of the folder the window has now. */
+async function pickRoute(c: Context, pickFolder: PickFolder, folders: RecentFolders): Promise<{ path: string | null }> {
+  const current = ((await body(c)) as { current?: unknown } | null)?.current
+  const start = typeof current === 'string' && isAbsolute(current) && !isRemotePath(current) ? dirname(resolve(current)) : null
+  let picked: string | null
+  try {
+    picked = await pickFolder(start)
+  } catch (err) {
+    if (err instanceof PickError) throw new ChatError(502, err.message)
+    throw err
+  }
+  if (picked === null) return { path: null }
+  if (isRemotePath(picked)) throw new ChatError(400, 'choose a folder on this computer: network folders are not supported')
+  const path = localFolder({ path: picked })
+  folders.remember(path)
+  return { path }
+}
+
+function mcpServersRoute(c: Context, deps: ServerContext['deps']): ReturnType<typeof listMcpServers> {
+  const cwd = c.req.query('cwd') ?? ''
+  const configDir = c.req.query('configDir') || null
+  if (!isAbsolute(cwd)) throw new ChatError(400, 'cwd must be an absolute path')
+  if (configDir && !isAbsolute(configDir)) throw new ChatError(400, 'configDir must be an absolute path')
+  checkLocalPath(cwd, 'cwd')
+  if (configDir) checkLocalPath(configDir, 'configDir')
+  const agentHydraMcp = deps.agentHydraMcp === undefined ? readAgentHydraMcp() : (deps.agentHydraMcp as McpServerConfig | null)
+  const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
+  return listMcpServers({ cwd, configDir, agentHydraMcp, mainFile })
+}
+
+/** Chats that kept running through the restart (SPEC "Chat hosts"); never rejects. */
+async function adoptHosts(manager: ChatManager): Promise<void> {
+  try {
+    const adopted = await manager.attachHosts(Number(process.env.HYDRA_DESK_PORT) || 7798)
+    if (adopted) console.log(`[desk] took over ${adopted} chat${adopted === 1 ? '' : 's'} that kept running through the restart`)
+  } catch (err) {
+    console.error('[desk] could not take over the chats still running:', err)
+  }
+}
+
+/**
+ * climayteActive re-read every `pollMs` while a window is on screen, every CLIMAYTE_HIDDEN_MS while none is, and at
+ * once when one comes back. Returns the stop.
+ */
+function pollClimayte(ctx: ServerContext, manager: ChatManager): () => void {
+  const pollMs = typeof ctx.deps.climaytePollMs === 'number' ? ctx.deps.climaytePollMs : CLIMAYTE_REFRESH_MS
+  // A test's own poll interval holds whether or not a window is on screen.
+  const hiddenMs = typeof ctx.deps.climaytePollMs === 'number' ? pollMs : CLIMAYTE_HIDDEN_MS
+  let last = 0
+  const tick = (): void => {
+    const now = Date.now()
+    if (ctx.wsVisibleCount() === 0 && now - last < hiddenMs) return
+    last = now
+    manager.refreshClimayte()
+  }
+  const timer = setInterval(tick, pollMs)
+  ;(timer as { unref?: () => void }).unref?.()
+  let visible = ctx.wsVisibleCount()
+  const unwatch = ctx.onWsVisibility((n) => {
+    const back = visible === 0 && n > 0
+    visible = n
+    if (back) {
+      last = Date.now()
+      manager.refreshClimayte()
+    }
+  })
+  return () => {
+    clearInterval(timer)
+    unwatch()
+  }
+}
+
+export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
+  const deps = ctx.deps
+  // The send queue sees every chat event; it is built after the manager it sends through.
+  const toQueue = { fn: (_event: ServerEvent): void => {} }
+  const manager = createManager(ctx, toQueue)
+  // Taken over behind the server's start, so /api/health does not wait on it; the hello and every route on the
+  // chats wait for it, so no window sees an adopted chat as stopped.
+  const hosts = adoptHosts(manager)
+  const afterHosts = async (_c: Context, next: () => Promise<void>): Promise<void> => {
+    await hosts
+    await next()
+  }
+  for (const path of ['/api/chats', '/api/chats/*', '/api/sessions/*', '/api/queue', '/api/queue/*', '/api/server/shutdown']) app.use(path, afterHosts)
   // The browser plugin (65) reads a chat's session ids here: which browser pages are the chat's own.
   ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
   const queue = new QueueManager({
@@ -124,11 +227,14 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     settleMs: typeof deps.queueSettleMs === 'number' ? deps.queueSettleMs : undefined,
     retryMs: typeof deps.queueRetryMs === 'number' ? deps.queueRetryMs : undefined,
   })
-  toQueue = (event) => queue.observe(event)
+  toQueue.fn = (event) => queue.observe(event)
   // Stop hooks run in order: this one before closeAll (below), so the chats closing do not read as their turns ending.
   ctx.onStop(() => queue.stop())
 
-  ctx.registerHello(() => ({ type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }))
+  ctx.registerHello(async () => {
+    await hosts
+    return { type: 'hello', version: ctx.version, chats: manager.list({ archived: true }), settings: ctx.settings(), queue: queue.state() }
+  })
 
   // The send queue (SPEC "Send queue"); static paths before /api/queue/:id.
   app.get('/api/queue', (c) => c.json(queue.state()))
@@ -183,18 +289,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   // Retry under "Could not get Claude Code": the download starts again.
   app.post('/api/chats/:id/claude-code/retry', (c) => answer(c, () => manager.retryClaudeCode(c.req.param('id'))))
   // The chat's whole record, oldest first, for other programs: JSON items, or one per line with ?format=jsonl.
-  app.get('/api/chats/:id/transcript', async (c) => {
-    const id = c.req.param('id')
-    try {
-      await manager.syncWorkers(id)
-      const items = manager.listItems(id)
-      if (c.req.query('format') === 'jsonl') return c.body(jsonlStream(items), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
-      return c.json(items)
-    } catch (err) {
-      if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
-      throw err
-    }
-  })
+  app.get('/api/chats/:id/transcript', (c) => transcript(c, manager))
   app.post('/api/chats/:id/messages', (c) =>
     answer(c, async () => {
       const { text, images } = parseSend(await body(c))
@@ -291,24 +386,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       return recent()
     }),
   )
-  app.post('/api/folders/pick', (c) =>
-    answer(c, async () => {
-      const current = ((await body(c)) as { current?: unknown } | null)?.current
-      const start = typeof current === 'string' && isAbsolute(current) && !isRemotePath(current) ? dirname(resolve(current)) : null
-      let picked: string | null
-      try {
-        picked = await pickFolder(start)
-      } catch (err) {
-        if (err instanceof PickError) throw new ChatError(502, err.message)
-        throw err
-      }
-      if (picked === null) return { path: null }
-      if (isRemotePath(picked)) throw new ChatError(400, 'choose a folder on this computer: network folders are not supported')
-      const path = localFolder({ path: picked })
-      folders.remember(path)
-      return { path }
-    }),
-  )
+  app.post('/api/folders/pick', (c) => answer(c, () => pickRoute(c, pickFolder, folders)))
   const openFolder = deps.openFolder as OpenFolder | undefined
   app.post('/api/folders/reveal', (c) => answer(c, async () => revealFolder(await body(c), openFolder)))
   const openFile = deps.openFile as OpenFile | undefined
@@ -317,19 +395,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
       revealFile(await body(c), MEDIA_ROUTE, { file: openFile, folder: openFolder, sourceOf: (id) => mediaCache(manager.store.home)?.sourceOf(id) ?? null }),
     ),
   )
-  app.get('/api/mcp-servers', (c) =>
-    answer(c, () => {
-      const cwd = c.req.query('cwd') ?? ''
-      const configDir = c.req.query('configDir') || null
-      if (!isAbsolute(cwd)) throw new ChatError(400, 'cwd must be an absolute path')
-      if (configDir && !isAbsolute(configDir)) throw new ChatError(400, 'configDir must be an absolute path')
-      checkLocalPath(cwd, 'cwd')
-      if (configDir) checkLocalPath(configDir, 'configDir')
-      const agentHydraMcp = deps.agentHydraMcp === undefined ? readAgentHydraMcp() : (deps.agentHydraMcp as McpServerConfig | null)
-      const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
-      return listMcpServers({ cwd, configDir, agentHydraMcp, mainFile })
-    }),
-  )
+  app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, deps)))
   app.get('/api/chats/:id/mcp', (c) => answer(c, () => manager.mcpStatus(c.req.param('id'))))
   app.post('/api/chats/:id/mcp/:name', (c) =>
     answer(c, async () => {
@@ -357,20 +423,11 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     }),
   )
 
-  const pollMs = typeof deps.climaytePollMs === 'number' ? deps.climaytePollMs : CLIMAYTE_REFRESH_MS
-  const timer = setInterval(() => manager.refreshClimayte(), pollMs)
-  ;(timer as { unref?: () => void }).unref?.()
+  const stopClimayte = pollClimayte(ctx, manager)
 
   ctx.onStop(async () => {
-    clearInterval(timer)
+    stopClimayte()
+    await hosts
     await manager.closeAll()
   })
-
-  // Chats that kept running through the restart, before any window asks for them (SPEC "Chat hosts").
-  try {
-    const adopted = await manager.attachHosts(Number(process.env.HYDRA_DESK_PORT) || 7798)
-    if (adopted) console.log(`[desk] took over ${adopted} chat${adopted === 1 ? '' : 's'} that kept running through the restart`)
-  } catch (err) {
-    console.error('[desk] could not take over the chats still running:', err)
-  }
 }

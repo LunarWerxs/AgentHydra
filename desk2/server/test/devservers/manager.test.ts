@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createDevServers } from '../../src/devservers/manager'
 import type { DevServers } from '../../src/devservers/contract'
-import { killHostTree } from '../../src/host/launch'
+import { killHostTree, pidAlive } from '../../src/host/launch'
 import type { Listener, ProcInfo, Scan } from '../../src/localhost/ports'
 
 const dirs: string[] = []
@@ -72,6 +72,8 @@ class World {
       deskPort: 7798,
       now: () => this.t,
       portListening: async (p) => this.open.has(p),
+      // A pid this world made up runs while it still listens; one the manager spawned is asked of the real machine.
+      alive: (pid) => (this.procs.has(pid) ? this.listeners.some((l) => l.pid === pid) : pidAlive(pid)),
       scan: async (): Promise<Scan> => ({ listeners: [...this.listeners], procs: new Map(this.procs), error: null }),
       // The first start's project scan would walk every real drive.
       findProjects: async () => ({ files: [], detected: [], scannedDirs: 0, truncated: false, timedOut: false, ms: 0, roots: [] }),

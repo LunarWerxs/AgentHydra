@@ -12,7 +12,7 @@ defineProps<{ icon: Component; title: string; text?: string; tone?: 'success' | 
       <component :is="icon" class="size-5" aria-hidden="true" />
     </span>
     <p class="text-[13px] font-medium leading-5 text-text">{{ title }}</p>
-    <p v-if="text" class="max-w-[320px] text-[12px] leading-[18px] text-text-muted">{{ text }}</p>
+    <p v-if="text" class="max-w-[320px] text-[12px] leading-4.5 text-text-muted">{{ text }}</p>
     <div v-if="$slots.default" class="mt-1 flex flex-wrap justify-center gap-1.5"><slot /></div>
   </div>
 </template>

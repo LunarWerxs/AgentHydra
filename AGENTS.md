@@ -108,6 +108,6 @@ This repo is PUBLIC (LunarWerxs/AgentHydra), `desk2/` included.
   from `f53bbcda` and tags v1.9.0-v1.9.2 were moved. Never rebase or merge a
   branch made before that onto the new main: it brings the screenshots back.
   With no unpushed commits, `git fetch` then `git reset --soft origin/main`
-  (the newest files are identical); `~/.claude/tools/cycle.py` replays only a
-  session's own commits across such a rewrite. Values scrubbed on 2026-10-05
+  (the newest files are identical); the owner's land tool (`cycle.py`, kept outside
+  this repo) replays only a session's own commits across such a rewrite. Values scrubbed on 2026-10-05
   (emails, names, user folders, chat text) are still in older history.

@@ -1057,6 +1057,15 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 export function nativeProgram(request: NativeProgramRequest): string {
   if (!['inspect', 'archive', 'ultracode', 'idle', 'pause'].includes(request.action))
     throw Error('Unsupported native action')
+  checkIdleAndPause(request)
+  if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
+  if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
+  checkArchiveAndUltracode(request)
+  checkOptionalFields(request)
+  return nativeRuntimeExpression(request)
+}
+
+function checkIdleAndPause(request: NativeProgramRequest): void {
   if (
     request.action === 'idle' &&
     !(
@@ -1080,8 +1089,9 @@ export function nativeProgram(request: NativeProgramRequest): string {
     )
       throw Error('Pause requires waitMs between 0 and 30000')
   }
-  if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
-  if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
+}
+
+function checkArchiveAndUltracode(request: NativeProgramRequest): void {
   if (
     request.action === 'archive' &&
     (!request.accountId || !request.orgId || !request.sessionId || !request.cliSessionId)
@@ -1096,6 +1106,9 @@ export function nativeProgram(request: NativeProgramRequest): string {
     if (request.ultracode !== false && !['xhigh', 'max'].includes(String(request.effort)))
       throw Error('Ultracode on requires an effort of xhigh or max')
   }
+}
+
+function checkOptionalFields(request: NativeProgramRequest): void {
   if (request.sourceAtLimit !== undefined && typeof request.sourceAtLimit !== 'boolean') {
     throw Error('sourceAtLimit must be a boolean')
   }
@@ -1111,5 +1124,4 @@ export function nativeProgram(request: NativeProgramRequest): string {
   ) {
     throw Error('leavingCliSessionIds must be a list of CLI session ids')
   }
-  return nativeRuntimeExpression(request)
 }

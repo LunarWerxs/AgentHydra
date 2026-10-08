@@ -4,7 +4,7 @@ import type { ChatSummary } from '@shared/protocol'
 import { icons, settingsIcons } from '@/lib/icons'
 import { TEXT_BTN } from '@/components/servers/styles'
 import { PANE_ROW, SEARCH_BOX, SEARCH_INPUT } from './styles'
-import { connectorList, refreshConnectorList } from './connections-api'
+import { connectorList, refreshConnectorList, watchConnectors } from './connections-api'
 import { BYPASS_TIP, CONNECTIONS_STUDIO_URL, bypassRow, chipText, connectionsServerInfo, enterPick, isCurrent, signInLine, starState } from './connections-logic'
 import { NO_SESSION, useConnectionsWorkspace } from './connections-workspace'
 
@@ -30,28 +30,28 @@ const reload = () => {
   void load()
   void loadCompanies()
 }
-let timer: ReturnType<typeof setInterval> | null = null
+let stopWatch: (() => void) | null = null
 onMounted(() => {
   reload()
-  timer = setInterval(() => !document.hidden && void refreshConnectorList(), 10_000)
+  stopWatch = watchConnectors(() => 10_000)
 })
-onBeforeUnmount(() => timer && clearInterval(timer))
+onBeforeUnmount(() => stopWatch?.())
 watch(() => props.chat.id, reload)
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--bg)] text-[12px] text-[var(--text-2)]" aria-label="Connections">
+  <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-(--bg) text-[12px] text-(--text-2)" aria-label="Connections">
     <header class="flex h-9 shrink-0 items-center border-b border-border px-3">
-      <span class="flex-1 truncate font-medium text-[var(--text)]">Connections</span>
+      <span class="flex-1 truncate font-medium text-(--text)">Connections</span>
       <button type="button" :class="TEXT_BTN" @click="openStudio">Open Connections Studio</button>
     </header>
 
-    <div class="flex shrink-0 flex-col gap-1 border-b border-border px-3 py-3">
+    <div class="flex shrink-0 flex-col gap-1 border-b border-border p-3">
       <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">Server</h3>
       <template v-if="server">
         <p class="flex items-center gap-1.5">
-          <span class="size-1.5 rounded-full" :class="server.running ? 'bg-[var(--status-working)]' : 'bg-[var(--status-error)]'" />
-          <span class="text-[var(--text)]">{{ server.stateText }}</span>
+          <span class="size-1.5 rounded-full" :class="server.running ? 'bg-(--status-working)' : 'bg-(--status-error)'" />
+          <span class="text-(--text)">{{ server.stateText }}</span>
           <span v-if="server.version" class="tnum text-text-muted">v{{ server.version }}</span>
         </p>
         <p>Connected by {{ server.transport }}<span v-if="server.url" class="tnum"> at {{ server.url }}</span></p>
@@ -59,20 +59,20 @@ watch(() => props.chat.id, reload)
       <p v-else>Connections is not set up on this machine.</p>
     </div>
 
-    <div class="flex shrink-0 flex-col gap-1 border-b border-border px-3 py-3">
+    <div class="flex shrink-0 flex-col gap-1 border-b border-border p-3">
       <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">Account</h3>
-      <p class="text-[var(--text)]">{{ signInLine(ws) }}</p>
+      <p class="text-(--text)">{{ signInLine(ws) }}</p>
       <div v-if="ws && !ws.signedIn" class="pt-1">
         <button type="button" :class="TEXT_BTN" @click="signIn">Sign in to Connections</button>
       </div>
     </div>
 
     <!-- The list scrolls inside; the search, "No workspace" and the Bypass row stay in view whatever the list's length. -->
-    <div v-if="!ws || ws.signedIn" class="flex min-h-0 flex-1 flex-col gap-1 px-3 py-3">
+    <div v-if="!ws || ws.signedIn" class="flex min-h-0 flex-1 flex-col gap-1 p-3">
       <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">This chat's workspace</h3>
       <p class="pb-1">
-        <span :class="current.muted ? 'text-text-muted' : 'text-[var(--text)]'">{{ current.text }}</span>
-        <span v-if="current.pinned" class="ml-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] text-text-muted">this chat</span>
+        <span :class="current.muted ? 'text-text-muted' : 'text-(--text)'">{{ current.text }}</span>
+        <span v-if="current.pinned" class="ms-1 rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] text-text-muted">this chat</span>
       </p>
       <label :class="SEARCH_BOX">
         <component :is="settingsIcons.search" class="size-4 shrink-0 text-text-muted" />
@@ -81,7 +81,7 @@ watch(() => props.chat.id, reload)
       <ul class="min-h-0 flex-1 overflow-y-auto" role="list">
         <li v-for="c in matches" :key="c.companyId" class="group">
           <div :class="[PANE_ROW, busy ? 'opacity-60' : '']" :data-current="isCurrent(ws, c)" :title="chatOk ? undefined : NO_SESSION">
-            <button type="button" class="flex h-full min-w-0 flex-1 cursor-default items-center text-left" :disabled="busy" @click="pick(c.companyId)">
+            <button type="button" class="flex h-full min-w-0 flex-1 cursor-default items-center text-start" :disabled="busy" @click="pick(c.companyId)">
               <span class="flex-1 truncate">{{ c.name }}</span>
             </button>
             <button
@@ -91,7 +91,7 @@ watch(() => props.chat.id, reload)
               :title="starState(ws, c).title"
               :aria-label="starState(ws, c).title"
               :aria-pressed="starState(ws, c).on"
-              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover"
+              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
               :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100'"
               @click="toggleDefault(c)"
             >

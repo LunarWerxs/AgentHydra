@@ -7,12 +7,13 @@ import { tableVariants } from "./table-variants"
 const props = defineProps<{
   class?: HTMLAttributes["class"]
   density?: TableVariants["density"]
+  rows?: TableVariants["rows"]
 }>()
 </script>
 
 <template>
   <div data-slot="table-container" class="relative w-full overflow-x-auto">
-    <table data-slot="table" :data-density="density" :class="cn(tableVariants({ density }), props.class)">
+    <table data-slot="table" :data-density="density" :class="cn(tableVariants({ density, rows }), props.class)">
       <slot />
     </table>
   </div>

@@ -186,36 +186,9 @@ def emit(args, result: dict):
     if args.command == "auth":
         print(f"Authenticated via HTTP. Organization: {result['organization_id']}")
     elif args.command == "usage":
-        if result["is_snapshot"]:
-            print(
-                f"Last chat-stream reading: {result['observed_at']} (age: {result['age_seconds']} seconds)"
-            )
-        elif result["available"]:
-            print(f"Usage endpoint reading: {result['observed_at']}")
-        for item in result["windows"]:
-            used, remaining = item["used_percent"], item["remaining_percent"]
-            amount = (
-                f"{used:g}% used; {remaining:g}% remaining"
-                if used is not None
-                else "percentage unavailable"
-            )
-            expired = (
-                " [reset has passed; this reading is historical]" if item["reset_passed"] else ""
-            )
-            print(f"{item['id']}: {amount}; resets {item['resets_at'] or 'unknown'}{expired}")
-        print(result["note"])
+        _print_usage(result)
     elif args.command == "chats":
-        for entry in result["chats"]:
-            mode = (
-                private_label
-                if entry["is_temporary"]
-                else "regular"
-                if entry["is_temporary"] is False
-                else "unknown"
-            )
-            print(f"{entry['name'] or '(unnamed)'}  {entry['chat_id']}  {mode}  {entry['status']}")
-        if not result["chats"]:
-            print("No chats tracked locally. Use 'chat --name NAME' or 'track UUID --name NAME'.")
+        _print_chats(result, private_label)
     elif args.command == "track":
         print(
             f"Tracked {result['chat_name'] or result['chat_id']}: {result['chat_id']} ({private_label}: {result['is_temporary']})"
@@ -226,13 +199,7 @@ def emit(args, result: dict):
                 f"{message['role'].capitalize()}:\n{cited_text(message['text'], message['citations'])}\n"
             )
     else:
-        if args.stream:
-            # Text callbacks already printed the answer; append only its source links.
-            print(flush=True)
-            if result["citations"]:
-                print(cited_text("", result["citations"]).lstrip(), flush=True)
-        else:
-            print(cited_text(result["response"], result["citations"]), flush=True)
+        _print_answer(args, result)
         print(
             f"Chat: {result['chat_id']}  name={result.get('chat_name') or '(unnamed)'}  {private_label}={result['is_temporary']}",
             file=sys.stderr,
@@ -242,3 +209,48 @@ def emit(args, result: dict):
     for warning in result.get("warnings", []):
         # Keep saved answer text on stdout independent of local bookkeeping problems.
         print(f"Warning: {warning['message']}", file=sys.stderr)
+
+
+def _print_answer(args, result):
+    if args.stream:
+        # Text callbacks already printed the answer; append only its source links.
+        print(flush=True)
+        if result["citations"]:
+            print(cited_text("", result["citations"]).lstrip(), flush=True)
+    else:
+        print(cited_text(result["response"], result["citations"]), flush=True)
+
+
+def _print_usage(result):
+    if result["is_snapshot"]:
+        print(
+            f"Last chat-stream reading: {result['observed_at']} (age: {result['age_seconds']} seconds)"
+        )
+    elif result["available"]:
+        print(f"Usage endpoint reading: {result['observed_at']}")
+    for item in result["windows"]:
+        used, remaining = item["used_percent"], item["remaining_percent"]
+        amount = (
+            f"{used:g}% used; {remaining:g}% remaining"
+            if used is not None
+            else "percentage unavailable"
+        )
+        expired = (
+            " [reset has passed; this reading is historical]" if item["reset_passed"] else ""
+        )
+        print(f"{item['id']}: {amount}; resets {item['resets_at'] or 'unknown'}{expired}")
+    print(result["note"])
+
+
+def _print_chats(result, private_label):
+    for entry in result["chats"]:
+        mode = (
+            private_label
+            if entry["is_temporary"]
+            else "regular"
+            if entry["is_temporary"] is False
+            else "unknown"
+        )
+        print(f"{entry['name'] or '(unnamed)'}  {entry['chat_id']}  {mode}  {entry['status']}")
+    if not result["chats"]:
+        print("No chats tracked locally. Use 'chat --name NAME' or 'track UUID --name NAME'.")

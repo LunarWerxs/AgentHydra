@@ -177,8 +177,10 @@ const remove = () =>
     emit('deleted')
   })
 
+const browsing = ref(false)
 async function browse(): Promise<void> {
   const base = project.value ? projectDir(project.value) : null
+  browsing.value = true
   try {
     const picked = await pickFolder(base && cwd.value ? `${base}/${cwd.value}` : base)
     if (!picked) return
@@ -190,6 +192,8 @@ async function browse(): Promise<void> {
     else cwd.value = p
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    browsing.value = false
   }
 }
 
@@ -203,20 +207,20 @@ const chipClass = (on: boolean): string[] => [
 
 <template>
   <form class="flex min-h-full flex-col text-[13px]" @submit.prevent="save">
-    <div class="mx-auto flex w-full max-w-[640px] flex-col gap-6 p-4 pb-6">
-      <div v-if="loading" :class="[CARD, 'flex h-[340px] items-center justify-center']" aria-busy="true">
+    <div class="mx-auto flex w-full max-w-160 flex-col gap-6 p-4 pb-6">
+      <div v-if="loading" :class="[CARD, 'flex h-85 items-center justify-center']" aria-busy="true">
         <p class="text-[13px] text-text-muted">Reading its entry…</p>
       </div>
       <template v-else>
         <FormSection title="Basics" description="What it is and how it starts.">
           <Field label="Name">
             <template #default="{ id: fid, describedBy, invalid }">
-              <input :id="fid" v-model="name" :class="[INPUT, 'max-w-[360px]']" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="Web" />
+              <input :id="fid" v-model="name" :class="[INPUT, 'max-w-90']" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="Web" />
             </template>
           </Field>
           <Field label="Id" help="Its name in the .devwebui file and in links. Changing it renames the server.">
             <template #default="{ id: fid, describedBy, invalid }">
-              <input :id="fid" v-model="id" :class="[INPUT_MONO, 'max-w-[360px]']" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="web" @input="idTyped = true" />
+              <input :id="fid" v-model="id" :class="[INPUT_MONO, 'max-w-90']" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="web" @input="idTyped = true" />
             </template>
           </Field>
           <Field label="Command" help="Run in its folder to start it.">
@@ -228,7 +232,7 @@ const chipClass = (on: boolean): string[] => [
             <template #default="{ id: fid, describedBy, invalid }">
               <div class="flex min-w-0 items-center gap-2">
                 <input :id="fid" v-model="cwd" :class="INPUT_MONO" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="The project folder" />
-                <button type="button" :class="BTN" aria-label="Browse for its folder" @click="browse"><FolderOpen class="size-3.5" />Browse</button>
+                <button type="button" :class="BTN" aria-label="Browse for its folder" :disabled="browsing" :aria-busy="browsing" @click="browse"><FolderOpen class="size-3.5" />Browse</button>
               </div>
             </template>
           </Field>
@@ -237,7 +241,7 @@ const chipClass = (on: boolean): string[] => [
         <FormSection title="Network" description="Where it answers.">
           <Field label="Port" help="The port it listens on: AgentHydra checks it is free before starting and shows the server as up when it answers.">
             <template #default="{ id: fid, describedBy, invalid }">
-              <input :id="fid" v-model="port" :class="[INPUT, 'tnum max-w-[160px]']" inputmode="numeric" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="None" />
+              <input :id="fid" v-model="port" :class="[INPUT, 'tnum max-w-40']" inputmode="numeric" :aria-describedby="describedBy" :aria-invalid="invalid" placeholder="None" />
             </template>
           </Field>
           <Field label="Address" help="A path like /app, or a full URL. Open in browser goes here.">
@@ -254,12 +258,12 @@ const chipClass = (on: boolean): string[] => [
           </div>
           <Field v-if="waitMode === 'port'" label="Port to wait for">
             <template #default="{ id: fid }">
-              <input :id="fid" v-model="waitPort" :class="[INPUT, 'tnum max-w-[160px]']" inputmode="numeric" placeholder="5432" />
+              <input :id="fid" v-model="waitPort" :class="[INPUT, 'tnum max-w-40']" inputmode="numeric" placeholder="5432" />
             </template>
           </Field>
           <Field v-if="waitMode === 'sibling'" label="Server to wait for">
             <template #default="{ id: fid }">
-              <select :id="fid" v-model="waitSibling" :class="[SELECT, 'max-w-[360px]']">
+              <select :id="fid" v-model="waitSibling" :class="[SELECT, 'max-w-90']">
                 <option v-for="o in others" :key="o.id" :value="o.localId">{{ o.name }}</option>
               </select>
             </template>
@@ -294,7 +298,7 @@ const chipClass = (on: boolean): string[] => [
           <p v-if="!env.length" class="text-[13px] text-text-muted">No variables.</p>
           <div v-else class="flex flex-col gap-2">
             <div v-for="(r, i) in env" :key="i" class="flex min-w-0 items-center gap-2">
-              <input v-model="r.k" :class="[INPUT_MONO, 'max-w-[200px]']" aria-label="Variable name" placeholder="NAME" />
+              <input v-model="r.k" :class="[INPUT_MONO, 'max-w-50']" aria-label="Variable name" placeholder="NAME" />
               <span class="text-text-muted" aria-hidden="true">=</span>
               <input v-model="r.v" :class="INPUT_MONO" aria-label="Value" placeholder="value" />
               <Tip label="Remove">
@@ -308,10 +312,10 @@ const chipClass = (on: boolean): string[] => [
         <FormSection title="Automatic answers" description="When it prints the text on the left, AgentHydra types the reply.">
           <div v-if="answers.length" class="flex flex-col gap-2">
             <div v-for="(a, i) in answers" :key="i" class="flex min-w-0 flex-wrap items-center gap-2">
-              <input v-model="a.expect" :class="[INPUT, 'min-w-[160px] flex-1']" aria-label="When it prints" placeholder="Continue? (y/n)" />
-              <input v-model="a.send" :class="[INPUT, 'max-w-[140px]']" aria-label="Reply" placeholder="y" />
+              <input v-model="a.expect" :class="[INPUT, 'min-w-40 flex-1']" aria-label="When it prints" placeholder="Continue? (y/n)" />
+              <input v-model="a.send" :class="[INPUT, 'max-w-35']" aria-label="Reply" placeholder="y" />
               <Tip label="Only answer the first time">
-                <label :class="[chipClass(a.once), 'focus-within:shadow-[var(--focus-ring)]']">
+                <label :class="[chipClass(a.once), 'focus-within:shadow-(--focus-ring)']">
                   <input v-model="a.once" type="checkbox" class="sr-only" aria-label="Only once" />
                   <Check v-if="a.once" class="size-3.5" />Only once
                 </label>
@@ -343,8 +347,8 @@ const chipClass = (on: boolean): string[] => [
     </div>
 
     <div class="sticky bottom-0 mt-auto border-t border-border bg-bg-page/95 px-4 py-3 backdrop-blur">
-      <div class="mx-auto flex w-full max-w-[640px] flex-wrap items-center gap-2">
-        <p v-if="error" role="alert" class="min-w-0 flex-1 break-words text-[12px] leading-4 text-danger-text">{{ error }}</p>
+      <div class="mx-auto flex w-full max-w-160 flex-wrap items-center gap-2">
+        <p v-if="error" role="alert" class="min-w-0 flex-1 wrap-break-word text-[12px] leading-4 text-danger-text">{{ error }}</p>
         <span v-else class="flex-1" />
         <button type="button" :class="BTN_GHOST" :disabled="busy" @click="emit('cancel')">Cancel</button>
         <button type="submit" :class="BTN_PRIMARY" :disabled="busy || loading">

@@ -52,7 +52,11 @@ import { repointClaudeStartShortcut } from './claude-start-shortcut'
 import { listCliInstances } from './core/cli-instances'
 import { listInstances } from './core/instances'
 import { type CapturedRun, scanClaudeProcesses, spawnCaptured } from './core/process'
-import { nativeProcessInfo, nativeProcessTable } from './core/win-process-table'
+import {
+  INFO_EXECUTABLE_PATH,
+  nativeProcessInfo,
+  nativeProcessTable,
+} from './core/win-process-table'
 import {
   isFinishedBuild,
   newestFinishedBuild,
@@ -765,7 +769,9 @@ async function windowsCliInUse(npmRoot: string): Promise<boolean> {
   if (table) {
     const prefix = pkgDir.toLowerCase()
     return table.some((p) =>
-      nativeProcessInfo(p.pid)?.executablePath?.toLowerCase().startsWith(prefix),
+      nativeProcessInfo(p.pid, INFO_EXECUTABLE_PATH)
+        ?.executablePath?.toLowerCase()
+        .startsWith(prefix),
     )
   }
   const run = await spawnCaptured(

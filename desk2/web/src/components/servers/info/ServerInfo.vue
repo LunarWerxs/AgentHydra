@@ -215,7 +215,7 @@ const MENU_ITEM = 'text-[13px]'
     <header class="flex flex-col gap-3.5">
       <div class="flex min-w-0 items-start gap-3">
         <span
-          class="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-10)] shadow-[inset_0_0_0_1px_var(--border)]"
+          class="flex size-10 shrink-0 items-center justify-center rounded-(--radius-10) shadow-[inset_0_0_0_1px_var(--border)]"
           :class="p.color ? '' : TONE_BG[tone]"
           :style="p.color ? { background: `color-mix(in srgb, ${p.color} 22%, transparent)`, color: p.color } : undefined"
           aria-hidden="true"
@@ -225,7 +225,7 @@ const MENU_ITEM = 'text-[13px]'
         <div class="flex min-w-0 flex-1 flex-col gap-1">
           <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <h2 class="min-w-0 truncate text-[17px] font-semibold leading-6 text-text">{{ p.name }}</h2>
-            <span class="inline-flex h-[22px] shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-4" :class="TONE_BG[tone]" role="status">
+            <span class="inline-flex h-5.5 shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-4" :class="TONE_BG[tone]" role="status">
               <span class="size-1.5 rounded-full bg-current" :class="tone === 'warning' && 'animate-pulse motion-reduce:animate-none'" aria-hidden="true" />
               {{ statusText }}
             </span>
@@ -249,7 +249,7 @@ const MENU_ITEM = 'text-[13px]'
 
       <div class="flex flex-wrap items-center gap-1.5">
         <Tip v-if="!up && block" :label="block">
-          <span tabindex="0" class="inline-flex rounded-[var(--radius-6)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none">
+          <span tabindex="0" class="inline-flex rounded-(--radius-6) focus-visible:shadow-(--focus-ring) focus-visible:outline-none">
             <button type="button" :class="BTN_PRIMARY" disabled :aria-label="`Start ${p.name}`"><Play class="size-3.5" />Start</button>
           </span>
         </Tip>
@@ -394,10 +394,10 @@ const MENU_ITEM = 'text-[13px]'
         <div class="flex flex-col gap-4">
           <div class="flex min-w-0 flex-col gap-1.5">
             <span :class="EYEBROW">Command</span>
-            <div class="flex min-w-0 items-start gap-2 rounded-[var(--radius-8)] bg-bg-deepest px-3 py-2 shadow-[inset_0_0_0_1px_var(--border)]">
+            <div class="flex min-w-0 items-start gap-2 rounded-(--radius-8) bg-bg-deepest px-3 py-2 shadow-[inset_0_0_0_1px_var(--border)]">
               <code :class="[MONO, 'min-w-0 flex-1 break-all leading-5 text-text']">{{ p.command }}</code>
               <Tip :label="copied === 'command' ? 'Copied' : 'Copy the command'">
-                <button type="button" :class="[ICON_BTN_SM, '-my-0.5 -mr-1']" aria-label="Copy the command" @click="copy('command', p.command)">
+                <button type="button" :class="[ICON_BTN_SM, '-my-0.5 -me-1']" aria-label="Copy the command" @click="copy('command', p.command)">
                   <component :is="copied === 'command' ? Check : Copy" class="size-3.5" />
                 </button>
               </Tip>

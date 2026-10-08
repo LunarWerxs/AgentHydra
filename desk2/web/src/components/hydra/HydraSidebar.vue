@@ -109,7 +109,6 @@ function onSearchInput() {
 }
 const rows = computed(() => props.model.sections.flatMap((s) => s.rows))
 function onSearchKey(e: KeyboardEvent) {
-  if (e.isComposing) return
   if (e.key === 'Enter') {
     const hit = rows.value.find((r) => r.hit && !r.branch) ?? rows.value.find((r) => r.hit) ?? rows.value[0]
     if (hit) send.select(hit.key)
@@ -164,7 +163,7 @@ const brokenAvatars = ref(new Set<string>())
 const empty = computed(() => !rows.value.length)
 
 const ROW =
-  'group/row flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] pr-1 text-left text-[13px] leading-[19.5px] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none focus-visible:ring-1 focus-visible:ring-accent'
+  'group/row flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] pe-1 text-start text-[13px] leading-[19.5px] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none focus-visible:ring-1 focus-visible:ring-accent'
 const HEAD_BTN =
   'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors hover:bg-fill-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent'
 const FOOT_BTN =
@@ -173,7 +172,7 @@ const FOOT_BTN =
 
 <template>
   <div class="flex flex-col" :class="stale ? 'opacity-60' : ''" :inert="stale" :aria-busy="stale || undefined" role="region" :aria-label="model.title" data-testid="hydra-sidebar">
-    <header class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
+    <header class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
       <component :is="icon(model.icon)" v-if="model.icon" class="size-3.5 shrink-0" />
       <span class="min-w-0 truncate font-medium text-text-2">{{ model.title }}</span>
       <span v-if="model.count != null" class="shrink-0 tnum">{{ model.count }}</span>
@@ -199,7 +198,7 @@ const FOOT_BTN =
       </Tip>
     </header>
 
-    <p v-if="model.banner" role="status" class="mx-1 mb-1 flex items-start gap-1.5 rounded-[var(--radius-6)] bg-fill-5 px-2 py-1.5 text-[12px] leading-4" :class="tone(model.banner.tone)">
+    <p v-if="model.banner" role="status" class="mx-1 mb-1 flex items-start gap-1.5 rounded-(--radius-6) bg-fill-5 px-2 py-1.5 text-[12px] leading-4" :class="tone(model.banner.tone)">
       <component :is="icon(model.banner.icon)" v-if="model.banner.icon" class="mt-px size-3.5 shrink-0" />
       <span class="min-w-0">{{ model.banner.text }}</span>
     </p>
@@ -210,16 +209,16 @@ const FOOT_BTN =
       type="button"
       role="switch"
       :aria-checked="s.on"
-      class="flex h-[26px] w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 text-left text-[12px] leading-4 text-text-muted hover:bg-fill-hover hover:text-text-2"
+      class="flex h-6.5 w-full items-center gap-2 rounded-(--radius-6) px-1.5 text-start text-[12px] leading-4 text-text-muted hover:bg-fill-hover hover:text-text-2"
       @click="send.switch(s.id, !s.on)"
     >
       <span class="min-w-0 flex-1 truncate">{{ s.label }}<span v-if="s.note" class="tnum"> · {{ s.note }}</span></span>
-      <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="s.on ? 'bg-accent' : 'bg-[var(--fill-secondary)]'">
+      <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="s.on ? 'bg-accent' : 'bg-(--fill-secondary)'">
         <span class="absolute top-0.5 size-2.5 rounded-full bg-white transition-[left]" :class="s.on ? 'left-3' : 'left-0.5'" />
       </span>
     </button>
 
-    <div v-if="model.search" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
+    <div v-if="model.search" class="mb-1 flex h-6.5 items-center gap-1 rounded-(--radius-6) bg-fill-5 px-0.5">
       <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><Search class="size-3.5" /></span>
       <input
         v-model="query"
@@ -234,7 +233,7 @@ const FOOT_BTN =
         v-if="query"
         type="button"
         aria-label="Clear search"
-        class="flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-muted hover:bg-fill-hover hover:text-text"
+        class="flex size-5 items-center justify-center rounded-(--radius-5) text-text-muted hover:bg-fill-hover hover:text-text"
         @click="(query = ''), send.search('')"
       >
         <component :is="icons.dismiss" class="size-3.5" />
@@ -243,12 +242,12 @@ const FOOT_BTN =
 
     <div v-if="model.legend?.length" class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1.5 pb-1 text-[11px] leading-4 text-text-muted">
       <span v-for="l in model.legend" :key="l.label" class="flex items-center gap-1"><span class="size-1.5 rounded-full" :class="DOT[l.dot]" />{{ l.label }}</span>
-      <span v-if="model.legendNote" class="ml-auto font-mono">{{ model.legendNote }}</span>
+      <span v-if="model.legendNote" class="ms-auto font-mono">{{ model.legendNote }}</span>
     </div>
 
     <div ref="list" role="tree" :aria-label="model.title" class="flex flex-col">
       <section v-for="sec in model.sections" :key="sec.key" :aria-label="sec.label || undefined">
-        <header v-if="sec.label" class="flex h-[30px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-2.5 text-[12px] leading-4 text-text-muted" :title="sec.hint">
+        <header v-if="sec.label" class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-[12px] leading-4 text-text-muted" :title="sec.hint">
           <span class="truncate">{{ sec.label }}</span>
           <span class="flex-1" />
           <span class="tnum">{{ sec.rows.length }}</span>
@@ -270,12 +269,12 @@ const FOOT_BTN =
               r.dim ? 'opacity-60' : '',
               r.italic ? 'italic text-text-muted' : ''
             ]"
-            :style="{ paddingLeft: `${2 + (r.depth ?? 0) * 14}px` }"
+            :style="{ paddingInlineStart: `${2 + (r.depth ?? 0) * 14}px` }"
             @click="send.select(r.key)"
             @keydown="onRowKey($event, r)"
           >
             <span v-if="r.branch" class="flex size-4 shrink-0 items-center justify-center text-text-muted" aria-hidden="true" @click.stop="send.toggle(r.key)">
-              <ChevronRight class="size-3 transition-transform duration-[var(--dur-fast)]" :class="r.branch === 'open' ? 'rotate-90' : ''" />
+              <ChevronRight class="size-3 transition-transform duration-(--dur-fast)" :class="r.branch === 'open' ? 'rotate-90' : ''" />
             </span>
             <span v-else-if="branching.has(sec.key)" class="size-4 shrink-0" aria-hidden="true" />
             <span v-if="r.status" class="flex size-5 shrink-0 items-center justify-center" :class="tone(r.status.tone)" :title="r.status.label">
@@ -296,9 +295,9 @@ const FOOT_BTN =
               <span v-else class="flex size-4 shrink-0 items-center justify-center rounded-[3px] bg-fill-5 text-[9px] font-semibold text-text-muted" aria-hidden="true">{{ r.avatar.text }}</span>
             </template>
             <component :is="icon(r.icon)" v-else-if="r.icon" class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
-            <span class="min-w-0 flex-1 truncate"><template v-for="[before, match, after] in [parts(r)]" :key="r.key">{{ before }}<mark v-if="match" class="rounded-[2px] bg-[rgb(250_204_21/0.3)] text-inherit">{{ match }}</mark>{{ after }}</template></span>
+            <span class="min-w-0 flex-1 truncate"><template v-for="[before, match, after] in [parts(r)]" :key="r.key">{{ before }}<mark v-if="match" class="rounded-xs bg-[rgb(250_204_21/0.3)] text-inherit">{{ match }}</mark>{{ after }}</template></span>
             <component :is="icon(r.badge.icon)" v-if="r.badge" class="size-3.5 shrink-0 text-text-muted" :aria-label="r.badge.label" />
-            <span v-if="r.chip" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-warning-text" :title="r.chip.hint">{{ r.chip.text }}</span>
+            <span v-if="r.chip" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-warning-text" :title="r.chip.hint">{{ r.chip.text }}</span>
             <span v-if="r.count != null" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">({{ r.count }})</span>
             <span v-if="r.tag" class="max-w-[45%] shrink-0 truncate text-[11px] leading-4" :class="r.tag.tone === 'warning' ? 'text-warning-text' : 'text-text-muted'">{{ r.tag.text }}</span>
             <span v-if="r.mark" class="inline-flex shrink-0" :class="tone(r.mark.tone)" :title="r.mark.hint ?? r.mark.label">
@@ -310,7 +309,7 @@ const FOOT_BTN =
             <button
               v-if="r.star"
               type="button"
-              class="shrink-0 rounded-[4px] px-0.5 text-[11px] leading-4 hover:bg-fill-hover"
+              class="shrink-0 rounded-sm px-0.5 text-[11px] leading-4 hover:bg-fill-hover"
               :class="[r.star.on ? 'text-accent-text' : 'text-text-muted', r.star.busy ? 'opacity-50' : '']"
               :aria-label="r.star.label"
               :title="r.star.label"
@@ -324,7 +323,7 @@ const FOOT_BTN =
     </div>
 
     <div v-if="empty && model.loading" class="flex flex-col gap-1.5 px-1.5 pt-2" aria-busy="true">
-      <span v-for="i in 3" :key="i" class="h-[22px] animate-pulse rounded-[var(--radius-6)] bg-fill-5" />
+      <span v-for="i in 3" :key="i" class="h-5.5 animate-pulse rounded-(--radius-6) bg-fill-5" />
     </div>
     <p v-else-if="empty && model.empty" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">{{ model.empty }}</p>
 

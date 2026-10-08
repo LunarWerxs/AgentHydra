@@ -20,7 +20,7 @@ watch(() => props.chatId, () => (open.value = false))
       <button
         ref="button"
         type="button"
-        class="tnum flex h-6 items-center self-start rounded-[var(--radius-6)] bg-[var(--fill-5)] px-[7px] text-[13px] leading-[19px] text-[var(--text-2)] shadow-[inset_0_0_0_1px_var(--border)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+        class="tnum flex h-6 items-center self-start rounded-(--radius-6) bg-(--fill-5) px-1.75 text-[13px] leading-4.75 text-(--text-2) shadow-[inset_0_0_0_1px_var(--border)] transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
         aria-haspopup="dialog"
       >
         {{ count }} queued

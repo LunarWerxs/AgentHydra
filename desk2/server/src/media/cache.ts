@@ -192,32 +192,38 @@ export function createMediaCache(dir: string): MediaCache {
       return null
     }
     const name = basename(path)
-    const ext = extname(name).slice(1).toLowerCase()
-    if (VIDEO.test(name)) {
-      if (size && size <= MAX_VIDEO_BYTES) {
-        try {
-          const ref = putVideo(path, size, mtimeMs, name)
-          if (ref) return ref
-        } catch {
-          // unreadable: a card like any other file
-        }
-      }
-    } else if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) {
-      const hit = seen.get(path)
-      if (hit && hit.size === size && hit.mtimeMs === mtimeMs && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
-      try {
-        const ref = put(new Uint8Array(readFileSync(path)), name)
-        if (ref) {
-          // Delete first so the newest path goes to the end; past the cap the oldest one is dropped.
-          seen.delete(path)
-          seen.set(path, { size, mtimeMs, ref })
-          if (seen.size > KNOWN_MAX) seen.delete(seen.keys().next().value!)
-          return { ...ref }
-        }
-      } catch {
-        // unreadable: a card like any other file
-      }
+    let ref: ImageRef | null = null
+    if (VIDEO.test(name)) ref = size && size <= MAX_VIDEO_BYTES ? videoRef(path, size, mtimeMs, name) : null
+    else if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) ref = imageRef(path, size, mtimeMs, name)
+    return ref ?? cardRef(name, size)
+  }
+
+  function videoRef(path: string, size: number, mtimeMs: number, name: string): ImageRef | null {
+    try {
+      return putVideo(path, size, mtimeMs, name) || null
+    } catch {
+      return null // unreadable: a card like any other file
     }
+  }
+
+  function imageRef(path: string, size: number, mtimeMs: number, name: string): ImageRef | null {
+    const hit = seen.get(path)
+    if (hit && hit.size === size && hit.mtimeMs === mtimeMs && existsSync(join(dir, hit.ref.url!.slice(MEDIA_ROUTE.length)))) return { ...hit.ref }
+    try {
+      const ref = put(new Uint8Array(readFileSync(path)), name)
+      if (!ref) return null
+      // Delete first so the newest path goes to the end; past the cap the oldest one is dropped.
+      seen.delete(path)
+      seen.set(path, { size, mtimeMs, ref })
+      if (seen.size > KNOWN_MAX) seen.delete(seen.keys().next().value!)
+      return { ...ref }
+    } catch {
+      return null // unreadable: a card like any other file
+    }
+  }
+
+  function cardRef(name: string, size: number): ImageRef {
+    const ext = extname(name).slice(1).toLowerCase()
     return { mediaType: CARD_TYPE[ext] ?? (RENDERABLE.test(name) ? `image/${ext === 'jpg' ? 'jpeg' : ext}` : 'application/octet-stream'), name, bytes: size }
   }
 }

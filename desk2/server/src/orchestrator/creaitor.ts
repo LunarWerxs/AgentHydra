@@ -18,32 +18,41 @@ export function creaitorTool(): string | null {
   return existsSync(p) ? p : null
 }
 
-/** One question, its choices, the chat's folder (its name is the repo the CreAitor weighs). Never throws. */
-export function askCreaitor(tool: string, question: string, options: readonly string[], cwd: string): Promise<CreaitorAnswer | { error: string }> {
-  const args = [tool, 'ask', question, '--repo', basename(cwd.replace(/[\\/]+$/, '')), '--timeout', String(ASK_TIMEOUT_S), '--json']
-  for (const o of options) args.push('--option', o)
+/** One question, its choices, the chat's folder (its name is the repo the CreAitor weighs) and its Claude session,
+ *  which the CreAitor logs so its answer is later graded against the owner's own reply there. Never throws. */
+export function askCreaitor(tool: string, question: string, options: readonly string[], cwd: string, session: string | null): Promise<CreaitorAnswer | { error: string }> {
+  // Each value as --flag=value and the question after --: a question or choice that starts with a dash ("--force")
+  // otherwise reads as a flag, and the CreAitor refuses the whole ask.
+  const args = [tool, 'ask', `--repo=${basename(cwd.replace(/[\\/]+$/, ''))}`, `--timeout=${ASK_TIMEOUT_S}`, '--json']
+  if (session) args.push(`--session=${session}`, '--via=orchestrator')
+  for (const o of options) args.push(`--option=${o}`)
+  args.push('--', question)
   return new Promise((resolve) => {
     execFile(
       process.env.HYDRA_DESK_PYTHON || 'python',
       args,
       { windowsHide: true, timeout: (ASK_TIMEOUT_S + 15) * 1000, maxBuffer: 1 << 20, encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } },
-      (err, stdout) => {
-        try {
-          const r = JSON.parse(stdout) as Record<string, unknown>
-          const verdict = r.verdict === 'decide' || r.verdict === 'reversible' ? r.verdict : 'escalate'
-          resolve({
-            verdict,
-            answer: typeof r.answer === 'string' ? r.answer : '',
-            option: typeof r.option === 'string' ? r.option : '',
-            confidence: typeof r.confidence === 'number' ? r.confidence : 0,
-            basis: Array.isArray(r.basis) ? r.basis.filter((b): b is string => typeof b === 'string') : [],
-            needLine: typeof r.need_line === 'string' ? r.need_line : null,
-            mode: typeof r.mode === 'string' ? r.mode : 'shadow'
-          })
-        } catch {
-          resolve({ error: err ? (err.killed ? 'the CreAitor ran out of time' : err.message.split('\n')[0].slice(0, 200)) : 'the CreAitor gave no answer' })
-        }
-      }
+      (err, stdout) => resolve(readAnswer(err, stdout))
     )
   })
+}
+
+/** The tool's JSON answer, or why there is none. */
+function readAnswer(err: (Error & { killed?: boolean }) | null, stdout: string): CreaitorAnswer | { error: string } {
+  try {
+    const r = JSON.parse(stdout) as Record<string, unknown>
+    const verdict = r.verdict === 'decide' || r.verdict === 'reversible' ? r.verdict : 'escalate'
+    return {
+      verdict,
+      answer: typeof r.answer === 'string' ? r.answer : '',
+      option: typeof r.option === 'string' ? r.option : '',
+      confidence: typeof r.confidence === 'number' ? r.confidence : 0,
+      basis: Array.isArray(r.basis) ? r.basis.filter((b): b is string => typeof b === 'string') : [],
+      needLine: typeof r.need_line === 'string' ? r.need_line : null,
+      mode: typeof r.mode === 'string' ? r.mode : 'shadow'
+    }
+  } catch {
+    if (!err) return { error: 'the CreAitor gave no answer' }
+    return { error: err.killed ? 'the CreAitor ran out of time' : err.message.split('\n')[0].slice(0, 200) }
+  }
 }

@@ -1,10 +1,10 @@
-// The orchestrator's planner (phase A, shadow): each open chat's one next move, read from its summary and its
-// transcript. A chat is a Desk chat or an outside session (a Claude Desktop, CLI, CliMayte or Codex session
-// AgentHydra knows): both become a Subject first. Pure: the plugin (plugins/70-orchestrator.ts) fetches, this
-// decides, nothing is sent.
+// The orchestrator's planner: each open chat's one next move, read from its summary and its transcript. A chat is a
+// Desk chat or an outside session (a Claude Desktop, CLI, CliMayte or Codex session AgentHydra knows): both become a
+// Subject first. Pure: the plugin (plugins/70-orchestrator.ts) fetches, this decides, and only the armed
+// orchestrator (act.ts) sends anything.
 
 import type { ChatStatus, ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
-import { ORCHESTRATOR_MOVES, type OrchestratorRow } from '@shared/orchestrator'
+import { ORCHESTRATOR_FROM, ORCHESTRATOR_MOVES, type OrchestratorRow } from '@shared/orchestrator'
 
 /** A person wrote in the chat this recently: it is theirs, and the orchestrator leaves it alone. */
 export const PERSON_QUIET_MS = 10 * 60_000
@@ -16,6 +16,8 @@ const ASKS_BACK = /\b(want me to|shall I|should I|do you want me to|would you li
 /** What the planner reads of a chat, whichever app runs it. */
 export interface Subject {
   id: string
+  /** Its Claude session id, when known: a CreAitor ask carries it so the answer can be graded against the owner's reply there. */
+  session: string | null
   title: string
   cwd: string
   account: string
@@ -31,7 +33,7 @@ export interface Subject {
 
 export function fromChat(c: ChatSummary): Subject {
   return {
-    id: c.id, title: c.title, cwd: c.cwd, account: c.account.label, source: 'desk', status: c.status, updatedAt: c.updatedAt,
+    id: c.id, session: c.sessionId, title: c.title, cwd: c.cwd, account: c.account.label, source: 'desk', status: c.status, updatedAt: c.updatedAt,
     activity: c.activity, queuedCount: c.queuedCount, accountAuto: c.accountAuto, limitResetsAt: c.limitResetsAt, lastError: c.lastError
   }
 }
@@ -39,7 +41,7 @@ export function fromChat(c: ChatSummary): Subject {
 /** An outside session reports only working, needs you, idle or stale; stale reads as closed. */
 export function fromExternal(s: ExternalSession): Subject {
   return {
-    id: s.id, title: s.title, cwd: s.cwd ?? '', account: s.instance ?? '', source: s.source, status: s.status === 'stale' ? 'closed' : s.status,
+    id: s.id, session: s.id, title: s.title, cwd: s.cwd ?? '', account: s.instance ?? '', source: s.source, status: s.status === 'stale' ? 'closed' : s.status,
     updatedAt: s.lastActivityAt ?? 0, activity: s.activity, queuedCount: 0, accountAuto: false, limitResetsAt: null, lastError: null
   }
 }
@@ -113,10 +115,15 @@ export function classify(chat: Subject, items: readonly TranscriptItem[] | null,
     const who = chat.source === 'climayte' ? 'its dispatcher' : 'a person' // a CliMayte worker's messages come from the chat that runs it
     return { ...row, move: 'leave', reason: `${who} wrote in it ${Math.max(1, Math.round((now - person.ts) / 60_000))} min ago` }
   }
+  // The armed orchestrator's own "continue" (act.ts) is a note, never the person's; it waits as long before another.
+  const sent = last(all, 'note')
+  if (sent?.from === ORCHESTRATOR_FROM && now - sent.ts < PERSON_QUIET_MS)
+    return { ...row, move: 'watch', reason: `the orchestrator continued it ${Math.max(1, Math.round((now - sent.ts) / 60_000))} min ago` }
   if (chat.status === 'limited') {
     if (chat.accountAuto) return { ...row, move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
-    const at = chat.limitResetsAt ? ` at ${new Date(chat.limitResetsAt).toISOString()}` : ''
-    return { ...row, move: 'resume-after-limit', reason: `its account hit the usage limit; resume when it resets${at}` }
+    const left = chat.limitResetsAt === null ? null : Math.ceil((chat.limitResetsAt - now) / 60_000)
+    const when = left === null ? 'resume when it resets' : left > 0 ? `it resets in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}` : 'it has reset since'
+    return { ...row, move: 'resume-after-limit', reason: `its account hit the usage limit; ${when}` }
   }
   if (chat.status === 'error') return { ...row, move: 'retry-error', reason: short(chat.lastError || 'the last turn failed', 200) }
   const asking = waitingQuestion(all)

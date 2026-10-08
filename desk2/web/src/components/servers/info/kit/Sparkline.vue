@@ -92,7 +92,7 @@ const lastPoint = computed(() => {
     </svg>
     <span
       v-if="lastPoint"
-      class="pointer-events-none absolute size-[7px] -translate-x-1/2 -translate-y-1/2 rounded-full shadow-[0_0_0_2px_var(--bg-panel)]"
+      class="pointer-events-none absolute size-1.75 -translate-x-1/2 -translate-y-1/2 rounded-full shadow-[0_0_0_2px_var(--bg-panel)]"
       :style="{ ...lastPoint, background: color }"
       aria-hidden="true"
     />

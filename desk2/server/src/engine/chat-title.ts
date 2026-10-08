@@ -1,3 +1,4 @@
+import type { Options, Query } from '@anthropic-ai/claude-agent-sdk'
 import type { QueryImpl } from './chat-runtime'
 import { pinHaikuModel } from './haiku-pin'
 
@@ -49,41 +50,14 @@ export function sdkTitleGenerator(
     const abort = new AbortController()
     const timer = setTimeout(() => abort.abort(), timeoutMs)
     try {
-      const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
-      if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
-      else delete childEnv.CLAUDE_CONFIG_DIR
-      pinHaikuModel(childEnv)
-      const binary = binaryPath()
       const q = queryImpl({
         prompt:
           'Title this chat in 3-6 words, sentence case, no quotes, no trailing period. Answer with the title only.\n\nFirst message:\n' +
           req.prompt.slice(0, TITLE_PROMPT_CHARS),
-        options: {
-          cwd: req.cwd,
-          env: childEnv,
-          model: TITLE_MODEL,
-          effort: 'low',
-          tools: [],
-          maxTurns: 1,
-          settingSources: [],
-          persistSession: false,
-          abortController: abort,
-          ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
-        },
+        options: titleOptions(req, env, abort, binaryPath()),
       })
-      let text = ''
-      let error = 'the query ended without a result'
-      const run = (async () => {
-        for await (const m of q) {
-          if (m.type === 'result') {
-            // A signed-out account answers 'success' with is_error and the error as the result; that is
-            // no title (two chats were named 'Failed to authenticate: OAuth session ex...').
-            if (m.subtype === 'success' && !m.is_error) text = m.result
-            else error = m.subtype === 'success' ? String(m.result ?? '').slice(0, 200) || 'the model answered with an error' : m.subtype
-            break
-          }
-        }
-      })()
+      const answer = { text: '', error: 'the query ended without a result' }
+      const run = readAnswer(q, answer)
       const timedOut = new Promise<void>((r) => abort.signal.addEventListener('abort', () => r()))
       await Promise.race([run, timedOut])
       if (abort.signal.aborted) {
@@ -91,8 +65,8 @@ export function sdkTitleGenerator(
         failed?.(`no answer within ${Math.round(timeoutMs / 1000)}s`)
         return null
       }
-      const title = cleanTitle(text)
-      if (!title) failed?.(text.trim() ? 'the answer had no usable title' : error)
+      const title = cleanTitle(answer.text)
+      if (!title) failed?.(answer.text.trim() ? 'the answer had no usable title' : answer.error)
       return title
     } catch (err) {
       failed?.(err instanceof Error ? err.message : String(err))
@@ -100,5 +74,36 @@ export function sdkTitleGenerator(
     } finally {
       clearTimeout(timer)
     }
+  }
+}
+
+function titleOptions(req: TitleRequest, env: Record<string, string | undefined> | undefined, abort: AbortController, binary: string | null): Options {
+  const childEnv: Record<string, string | undefined> = { ...(env ?? process.env) }
+  if (req.configDir) childEnv.CLAUDE_CONFIG_DIR = req.configDir
+  else delete childEnv.CLAUDE_CONFIG_DIR
+  pinHaikuModel(childEnv)
+  return {
+    cwd: req.cwd,
+    env: childEnv,
+    model: TITLE_MODEL,
+    effort: 'low',
+    tools: [],
+    maxTurns: 1,
+    settingSources: [],
+    persistSession: false,
+    abortController: abort,
+    ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
+  }
+}
+
+/** Reads the query up to its result: the title text, or why there is none. */
+async function readAnswer(q: Query, answer: { text: string; error: string }): Promise<void> {
+  for await (const m of q) {
+    if (m.type !== 'result') continue
+    // A signed-out account answers 'success' with is_error and the error as the result; that is
+    // no title (two chats were named 'Failed to authenticate: OAuth session ex...').
+    if (m.subtype === 'success' && !m.is_error) answer.text = m.result
+    else answer.error = m.subtype === 'success' ? String(m.result ?? '').slice(0, 200) || 'the model answered with an error' : m.subtype
+    return
   }
 }

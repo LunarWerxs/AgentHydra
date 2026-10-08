@@ -46,14 +46,14 @@ const Chevron = icons.morePrOptions
 <template>
   <nav
     aria-label="Repository and pull request controls"
-    class="flex h-10 items-center gap-[5px] rounded-[var(--radius-10)] bg-[var(--fill-5)] p-2 text-[13px] leading-[19px]"
+    class="flex h-10 items-center gap-1.25 rounded-(--radius-10) bg-(--fill-5) p-2 text-[13px] leading-4.75"
   >
-    <div class="flex min-w-0 flex-1 items-center gap-[5px]">
+    <div class="flex min-w-0 flex-1 items-center gap-1.25">
       <slot>
         <!-- One mono run, "project branch" with a single space, like the real strip. -->
         <Tip v-if="project || branch" :label="projectPath ?? project ?? ''" side="top">
           <span
-            class="flex h-6 min-w-0 items-center gap-[1ch] truncate rounded-[var(--radius-6)] px-[5px] font-mono text-[var(--text-muted)]"
+            class="flex h-6 min-w-0 items-center gap-[1ch] truncate rounded-(--radius-6) px-1.25 font-mono text-(--text-muted)"
           >
             <span v-if="project" class="truncate">{{ project }}</span>
             <span v-if="branch" class="truncate">{{ branch }}</span>
@@ -66,12 +66,12 @@ const Chevron = icons.morePrOptions
       <button
         type="button"
         :class="STRIP_BUTTON"
-        class="gap-0.5 bg-[var(--fill-secondary)] font-medium hover:bg-[var(--fill-secondary-hover)]"
+        class="gap-0.5 bg-(--fill-secondary) font-medium hover:bg-(--fill-secondary-hover)"
         :aria-label="`${formatCount(added)} additions, ${formatCount(removed)} deletions`"
         @click="emit('open-diff')"
       >
-        <span class="tnum text-[var(--git-add)]">+{{ formatCount(added) }}</span>
-        <span class="tnum text-[var(--git-del)]">−{{ formatCount(removed) }}</span>
+        <span class="tnum text-(--git-add)">+{{ formatCount(added) }}</span>
+        <span class="tnum text-(--git-del)">−{{ formatCount(removed) }}</span>
       </button>
     </Tip>
 
@@ -85,22 +85,22 @@ const Chevron = icons.morePrOptions
       @changed="emit('changed')"
     />
 
-    <div v-else-if="canCreatePr" role="group" aria-label="Create PR" class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)]">
+    <div v-else-if="canCreatePr" role="group" aria-label="Create PR" class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-(--radius-6) bg-(--fill-secondary)">
       <Tip label="Ask Claude to commit and open a pull request" side="top">
         <button
           type="button"
-          class="px-2 text-[13px] font-medium text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
+          class="px-2 text-[13px] font-medium text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
           @click="emit('create-pr', false)"
         >
           Create PR
         </button>
       </Tip>
-      <span class="my-1 w-px bg-[var(--border)]" />
+      <span class="my-1 w-px bg-(--border)" />
       <DropdownMenu>
         <DropdownMenuTrigger as-child>
           <button
             type="button"
-            class="flex w-6 items-center justify-center text-[var(--text-muted)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+            class="flex w-6 items-center justify-center text-(--text-muted) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
             aria-label="More PR options"
           >
             <Chevron class="size-3.5" />
@@ -121,7 +121,7 @@ const Chevron = icons.morePrOptions
     <Tip label="Hide this bar until the folder changes" side="top">
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-muted)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+        class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
         aria-label="Dismiss"
         @click="emit('dismiss')"
       >

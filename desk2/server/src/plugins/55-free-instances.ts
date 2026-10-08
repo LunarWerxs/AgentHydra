@@ -12,11 +12,17 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   ctx.onStop(() => service.stop())
   // The logins go to the other PCs through AgentHydra's Login sync store, from the real home only (real-home.ts): a
   // test's, an e2e script's or a probe's Desk never reaches the owner's store.
-  const sync = isRealHome(ctx.home) ? new FreeSync(ctx.home, service.syncHost(), () => daemonCreds(bridge().url)) : undefined
+  const sync = isRealHome(ctx.home) ? new FreeSync(ctx.home, service.syncHost(), () => daemonCreds(bridge().url), () => ctx.wsVisibleCount() > 0) : undefined
   if (sync) {
     service.onLoginChange = () => sync.nudge()
     sync.start()
-    ctx.onStop(() => sync.stop())
+    const unsubscribe = ctx.onWsVisibility((visible) => {
+      if (visible > 0) sync.wake()
+    })
+    ctx.onStop(() => {
+      unsubscribe()
+      sync.stop()
+    })
   }
   const router = new Hono()
   router.onError((error, c) => c.json({ error: error instanceof FreeError ? error.message : 'Free instances could not complete the request.' }, error instanceof FreeError ? error.status : 503))

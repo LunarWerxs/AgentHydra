@@ -23,6 +23,7 @@ import { installBroken, settleWorker } from '../src/climayte'
 import { workers } from '../src/climayte-core'
 import {
   type CliMayteAccount,
+  type CliMayteAttempt,
   type CliMayteWorker,
   classifyAttempt,
   isInstantEmptyDeath,
@@ -383,11 +384,16 @@ describe('scheduler', () => {
 
 describe('instant empty deaths', () => {
   const dead = { livedMs: 900, events: [] as unknown[], stderr: '', hadRunnerPid: false }
-  const attempt = (): any => ({
+  const attempt = (): CliMayteAttempt => ({
     account: accounts[0],
+    pid: null,
+    log: '',
+    errLog: '',
     startedAt: t0,
     endedAt: t0 + 900,
     outcome: 'running',
+    notice: null,
+    resumed: false,
   })
 
   test('the old verdict for such a death was interrupted (the bug)', () => {

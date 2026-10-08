@@ -73,12 +73,12 @@ function keepFocus(e: Event): void {
             role="menuitemcheckbox"
             :aria-checked="activeOnly"
             :title="ACTIVE_TIP"
-            :class="`${MENU_ITEM} pr-2`"
+            :class="`${MENU_ITEM} pe-2`"
             @select.prevent="toggleActive"
           >
             <Activity />
             <span class="flex-1">Active only</span>
-            <component :is="icons.check" v-if="activeOnly" class="ml-3" />
+            <component :is="icons.check" v-if="activeOnly" class="ms-3" />
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

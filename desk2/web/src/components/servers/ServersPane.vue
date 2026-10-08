@@ -27,7 +27,7 @@ import { DOT, ICON_BTN } from './styles'
 // opens the running copy and says so in a small notice. After them the New tab lists "Other localhost servers": what
 // listens on this machine that no project lists (GET /dw/localhost), open-only, scanned at most every 8 s.
 /** aiBrowser: the browser this chat's AI last used, which a chat with no tabs yet starts on. */
-const props = defineProps<{ chatId: string; cwd: string; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null }>()
+const props = defineProps<{ chatId: string; cwd: string; focus?: ServerFocus | null; aiBrowser: BrowserOpenRequest | null; /** A page (AgentHydra, Dev servers) covers the chat side. */ paused?: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 
 const servers = useDevServers()
@@ -141,7 +141,7 @@ async function loadLocal(force = false) {
   localAt = Date.now()
   const all = allPorts.value
   try {
-    const r = await localhostServers(all)
+    const r = await localhostServers(all, force)
     if (all !== allPorts.value) return
     localList.value = r
     localError.value = r.error
@@ -306,12 +306,24 @@ async function look() {
     })
   )
 }
+// The look runs every 2 s only while the pane is on screen and the window shown; coming back looks at once.
 let lookTimer: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
+function pace() {
+  if (lookTimer) clearInterval(lookTimer)
+  lookTimer = null
+  if (props.paused || document.hidden) return
   void look()
   lookTimer = setInterval(() => void look(), 2000)
+}
+watch(() => props.paused, pace)
+onMounted(() => {
+  document.addEventListener('visibilitychange', pace)
+  pace()
 })
-onBeforeUnmount(() => lookTimer && clearInterval(lookTimer))
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', pace)
+  if (lookTimer) clearInterval(lookTimer)
+})
 
 // The strip scrolls when the tabs outgrow the pane: the shown one is kept in view.
 const strip = ref<HTMLElement | null>(null)
@@ -409,9 +421,9 @@ watch(
 </script>
 
 <template>
-  <section class="relative flex h-full w-full min-w-0 flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]" aria-label="Servers">
+  <section class="relative flex size-full min-w-0 flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)" aria-label="Servers">
     <!-- The tab strip, like a browser's: tabs, a + after the last, and the pane's own buttons at the right end. -->
-    <div class="flex h-[41px] shrink-0 items-end gap-1 border-b border-border bg-[var(--bg-sidebar)] pl-2 pr-1.5 pt-[9px]">
+    <div class="flex h-10.25 shrink-0 items-end gap-1 border-b border-border bg-(--bg-sidebar) ps-2 pe-1.5 pt-2.25">
       <div ref="strip" role="tablist" aria-label="Tabs" class="-mb-px flex min-w-0 items-end gap-px overflow-x-auto pb-px [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div
           v-for="t in state.tabs"
@@ -420,8 +432,8 @@ watch(
           tabindex="0"
           :aria-selected="t.id === activeTab.id"
           :title="titleOf(t)"
-          class="group relative flex h-8 w-[170px] max-w-[190px] flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-[8px] pl-2.5 pr-1 transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-          :class="[t.kind === 'saved' && t.page ? 'min-w-[132px]' : 'min-w-[44px]', t.id === activeTab.id ? 'z-10 -mb-px h-[33px] bg-[var(--bg-page)] text-[var(--text)]' : 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]']"
+          class="group relative flex h-8 w-42.5 max-w-47.5 flex-[0_1_170px] cursor-default items-center gap-1.5 rounded-t-lg ps-2.5 pe-1 transition-colors duration-60 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+          :class="[t.kind === 'saved' && t.page ? 'min-w-33' : 'min-w-11', t.id === activeTab.id ? 'z-10 -mb-px h-8.25 bg-(--bg-page) text-(--text)' : 'text-(--text-2) hover:bg-(--fill-hover) hover:text-(--text)']"
           @click="pick(t.id)"
           @keydown.enter.prevent="pick(t.id)"
           @mousedown.middle.prevent
@@ -434,13 +446,13 @@ watch(
           <span class="min-w-0 flex-1 truncate text-[12px]">{{ titleOf(t) }}</span>
           <span
             v-if="t.kind === 'saved' && t.page"
-            class="max-w-[58px] shrink-0 truncate rounded-[var(--radius-6)] bg-[var(--fill-selected)] px-1 text-[10px] leading-4 text-[var(--text-2)]"
+            class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-[10px] leading-4 text-(--text-2)"
             data-testid="profile-badge"
             :title="`Chrome profile: ${t.target}`"
           >{{ labelOf(t.target) ?? t.target }}</span>
           <button
             type="button"
-            class="size-5 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] hover:bg-[var(--fill-selected)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none group-hover:flex"
+            class="size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) hover:bg-(--fill-selected) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none group-hover:flex"
             :class="t.id === activeTab.id ? 'flex' : 'hidden'"
             :aria-label="`Close ${titleOf(t)}`"
             @click.stop="close(t.id)"
@@ -502,7 +514,7 @@ watch(
         @toggle="toggle"
       />
     </template>
-    <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-[30] max-w-[90%] -translate-x-1/2 rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text)] shadow-(--shadow-menu-ringed)">{{ notice }}</div>
+    <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-30 max-w-[90%] -translate-x-1/2 rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-[12px] text-(--text) shadow-(--shadow-menu-ringed)">{{ notice }}</div>
     <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}|${activeTab.page ?? ''}`" :cwd="cwd" :chat-id="chatId" :profile="activeTab.target" :url="activeTab.url" :page-id="activeTab.page" />
   </section>
 </template>

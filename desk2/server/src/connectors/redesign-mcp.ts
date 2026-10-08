@@ -22,6 +22,7 @@
 // No dependency on @modelcontextprotocol/sdk: newline-delimited JSON-RPC 2.0 over stdio, written by hand.
 
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, extname, join } from 'node:path'
@@ -82,6 +83,67 @@ interface Manifest {
   status: string
   jobs?: Job[]
   error?: string | null
+}
+
+type Progress = (done: number, total: number, msg: string) => void
+
+interface Plan {
+  models: ModelInfo[]
+  pools: KeyPool[]
+  health: Health
+  ranked: Ranked[]
+}
+
+interface RunState {
+  id: string
+  expected: number
+  /** The style direction this run carries; it names its option. */
+  instance: number
+  handled: Set<string>
+  /** Jobs given up on as unanswered; they no longer count as on their way. */
+  stalled: Set<string>
+  startedAt: number
+  ended: boolean
+}
+
+interface DesignOption {
+  option: number
+  name: string
+  model: string
+  description: string
+  image: string | null
+  markdown: string | null
+  page: string
+  run: string
+  job: string
+}
+
+interface RunOutcome {
+  options: DesignOption[]
+  failedJobs: Job[]
+  why: string[]
+  primary: string
+  started: number
+}
+
+let scratch: string | null = null
+
+/** A fresh folder for one capture, inside this process's one temp root, which goes when the process exits. */
+function scratchDir(name: string): string {
+  if (!scratch) {
+    const root = mkdtempSync(join(tmpdir(), 'desk-redesign-'))
+    scratch = root
+    process.on('exit', () => {
+      try {
+        rmSync(root, { recursive: true, force: true })
+      } catch {
+        // floor-ok: a file Windows still holds leaves the folder in tmp, which is harmless
+      }
+    })
+  }
+  const dir = join(scratch, `${name}-${randomUUID()}`)
+  mkdirSync(dir, { recursive: true })
+  return dir
 }
 
 /** A pool whose every key's last word was an error (no success since its last use). Unknown (no entries): not failing. */
@@ -162,7 +224,7 @@ export async function removeQuietly(dir: string, rm: (dir: string) => void = (d)
 async function captureWithBrowser(url: string, png: string): Promise<void> {
   const exe = findBrowser()
   if (!exe) throw new Error('no Edge or Chrome found to capture the url: pass a screenshot file instead')
-  const profile = mkdtempSync(join(tmpdir(), 'desk-shot-'))
+  const profile = scratchDir('shot')
   try {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(exe, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, '--window-size=1440,900', '--virtual-time-budget=8000', `--screenshot=${png}`, url], {
@@ -288,72 +350,81 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     return kind === 'cutoff' ? 'the provider cut the connection off' : kind === 'stalled' ? 'no answer in time' : kind === 'recitation' ? 'an empty or blocked reply' : kind === 'cooling' ? 'its keys were cooling down' : kind === 'quota' ? 'rate limited' : error.slice(0, 80)
   }
 
-  async function designOptions(args: Record<string, unknown>, progress: (done: number, total: number, msg: string) => void): Promise<ToolResult> {
+  /** The models to run on, with thin pools first topped up from HSwarm (each key checked live there); null when none works. */
+  async function planRun(count: number, notes: string[]): Promise<Plan | null> {
+    let { models, pools } = await planInputs()
+    const health: Health = loadHealth(healthFile)
+    let ranked = rankModels(models, pools, health)
+    if (!ranked.length) return null
+    // Enough working keys behind the models we are about to use.
+    const lists = listsToRefill(ranked, planJobs(ranked, count), pools)
+    if (!lists.length) return { models, pools, health, ranked }
+    try {
+      notes.push(await topUp(lists))
+      ;({ models, pools } = await planInputs())
+      ranked = rankModels(models, pools, health)
+    } catch {
+      notes.push('the HSwarm key top-up failed')
+    }
+    return ranked.length ? { models, pools, health, ranked } : null
+  }
+
+  async function screenshotInput(file: string): Promise<string | ToolResult> {
+    const ext = extname(file).toLowerCase()
+    if (!MIME[ext]) return fail(`screenshot must be a png, jpg, webp, gif or bmp file, got ${ext || 'no extension'}.`)
+    if (!existsSync(file)) return fail(`No file at ${file}.`)
+    return uploadInput(basename(file), MIME[ext] as string, readFileSync(file))
+  }
+
+  async function urlInput(url: string): Promise<string | ToolResult> {
+    if (!/^https?:\/\//i.test(url)) return fail('url must start with http:// or https://')
+    const dir = scratchDir('design')
+    try {
+      const png = join(dir, 'page.png')
+      await (o.captureUrl ?? captureWithBrowser)(url, png)
+      return await uploadInput('page.png', 'image/png', readFileSync(png))
+    } catch (err) {
+      return fail(`Could not capture ${url}: ${err instanceof Error ? err.message : String(err)}. Pass a screenshot file instead.`)
+    } finally {
+      await removeQuietly(dir)
+    }
+  }
+
+  /** The input image's id in ReDesign: the screenshot, the captured url, or a placeholder for a brief alone. */
+  async function resolveInput(args: Record<string, unknown>): Promise<string | ToolResult> {
+    if (typeof args.screenshot === 'string' && args.screenshot) return screenshotInput(args.screenshot)
+    if (typeof args.url === 'string' && args.url) return urlInput(args.url)
+    return uploadInput('brief-only.png', 'image/png', PLACEHOLDER_PNG)
+  }
+
+  async function designOptions(args: Record<string, unknown>, progress: Progress): Promise<ToolResult> {
     const brief = typeof args.brief === 'string' ? args.brief.trim() : ''
     if (!brief) return fail('design_options needs a brief: what is being designed and the feel wanted.')
     const mock = args.mock === true
     const askOwner = args.ask_owner === true
     const count = Math.max(3, Math.min(6, Math.round(Number(args.count) || 4)))
-    let { models, pools } = await planInputs()
-    const health: Health = loadHealth(healthFile)
-    let ranked = rankModels(models, pools, health)
-    if (!ranked.length) return fail(KEY_HINT)
     const notes: string[] = []
-    // Enough working keys behind the models we are about to use: top thin pools up from HSwarm (each key checked live there).
-    const lists = listsToRefill(ranked, planJobs(ranked, count), pools)
-    if (lists.length) {
-      try {
-        notes.push(await topUp(lists))
-        ;({ models, pools } = await planInputs())
-        ranked = rankModels(models, pools, health)
-      } catch {
-        notes.push('the HSwarm key top-up failed')
-      }
-      if (!ranked.length) return fail(KEY_HINT)
-    }
+    const plan = await planRun(count, notes)
+    if (!plan) return fail(KEY_HINT)
+    const inputId = await resolveInput(args)
+    if (typeof inputId !== 'string') return inputId
+    const done = await runJobs({ brief, mock, count, inputId, plan, progress })
+    if (!done.options.length) return fail(await noOptionsMessage(done.primary, { status: 'failed', jobs: done.failedJobs }))
+    return answer(done, notes, mock, askOwner, count)
+  }
 
-    // The input image.
-    let inputId: string
-    if (typeof args.screenshot === 'string' && args.screenshot) {
-      const ext = extname(args.screenshot).toLowerCase()
-      if (!MIME[ext]) return fail(`screenshot must be a png, jpg, webp, gif or bmp file, got ${ext || 'no extension'}.`)
-      if (!existsSync(args.screenshot)) return fail(`No file at ${args.screenshot}.`)
-      inputId = await uploadInput(basename(args.screenshot), MIME[ext] as string, readFileSync(args.screenshot))
-    } else if (typeof args.url === 'string' && args.url) {
-      if (!/^https?:\/\//i.test(args.url)) return fail('url must start with http:// or https://')
-      const dir = mkdtempSync(join(tmpdir(), 'desk-design-'))
-      try {
-        const png = join(dir, 'page.png')
-        await (o.captureUrl ?? captureWithBrowser)(args.url, png)
-        inputId = await uploadInput('page.png', 'image/png', readFileSync(png))
-      } catch (err) {
-        return fail(`Could not capture ${args.url}: ${err instanceof Error ? err.message : String(err)}. Pass a screenshot file instead.`)
-      } finally {
-        await removeQuietly(dir)
-      }
-    } else {
-      inputId = await uploadInput('brief-only.png', 'image/png', PLACEHOLDER_PNG)
-    }
-
+  /** Runs `count` jobs, replacing failed ones on other working models, and lands each finished one as an option. */
+  async function runJobs(p: { brief: string; mock: boolean; count: number; inputId: string; plan: Plan; progress: Progress }): Promise<RunOutcome> {
+    const { brief, mock, count, inputId, progress } = p
+    const { models, pools, health, ranked } = p.plan
     const label = (id: string) => models.find((m) => m.id === id)?.label ?? id
-    interface RunState {
-      id: string
-      expected: number
-      /** The style direction this run carries; it names its option. */
-      instance: number
-      handled: Set<string>
-      /** Jobs given up on as unanswered; they no longer count as on their way. */
-      stalled: Set<string>
-      startedAt: number
-      ended: boolean
-    }
     const runs: RunState[] = []
     const taken = new Map<string, number>() // jobs started per model
     const blocked = new Set<string>()
     const strikes = new Map<string, number>()
     const failedJobs: Job[] = []
     const why: string[] = []
-    const options: { option: number; name: string; model: string; description: string; image: string | null; markdown: string | null; page: string; run: string; job: string }[] = []
+    const options: DesignOption[] = []
     let primary = ''
     let dir = ''
 
@@ -426,12 +497,23 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       progress(n, count, ['Option ' + n + ' of ' + count + ' is ready', ...options.map((x) => x.name)].join(' · '))
     }
 
-    const started = Date.now()
-    const budget = o.budgetMs ?? BUDGET_MS
-    const inflight = () => runs.reduce((n, r) => n + (r.ended ? 0 : r.expected - r.handled.size - r.stalled.size), 0)
-    await startJobs(planJobs(ranked, count))
-    let replacements = 0
-    for (;;) {
+    /** One job of a run as the poll sees it: landed, failed, or given up on as stalled. */
+    const seeJob = async (r: RunState, job: Job): Promise<void> => {
+      if (r.handled.has(job.id)) return
+      if (job.status === 'ok' && job.file) {
+        r.handled.add(job.id)
+        r.stalled.delete(job.id)
+        if (options.length < count) await land(r, job)
+      } else if (job.status === 'error' || job.status === 'skipped' || job.status === 'cancelled') {
+        r.handled.add(job.id)
+        r.stalled.delete(job.id)
+        onFailure(job, String(job.error ?? job.status))
+      } else if (!r.stalled.has(job.id) && Date.now() - r.startedAt > (o.stallMs ?? STALL_MS)) {
+        r.stalled.add(job.id)
+        onFailure(job, `no answer within ${Math.round((Date.now() - r.startedAt) / 1000)} s`)
+      }
+    }
+    const pollRuns = async (): Promise<void> => {
       for (const r of runs) {
         if (r.ended) continue
         let m: Manifest
@@ -440,44 +522,49 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
         } catch {
           continue // one missed poll is not a failure
         }
-        for (const job of m.jobs ?? []) {
-          if (r.handled.has(job.id)) continue
-          if (job.status === 'ok' && job.file) {
-            r.handled.add(job.id)
-            r.stalled.delete(job.id)
-            if (options.length < count) await land(r, job)
-          } else if (job.status === 'error' || job.status === 'skipped' || job.status === 'cancelled') {
-            r.handled.add(job.id)
-            r.stalled.delete(job.id)
-            onFailure(job, String(job.error ?? job.status))
-          } else if (!r.stalled.has(job.id) && Date.now() - r.startedAt > (o.stallMs ?? STALL_MS)) {
-            r.stalled.add(job.id)
-            onFailure(job, `no answer within ${Math.round((Date.now() - r.startedAt) / 1000)} s`)
-          }
-        }
+        for (const job of m.jobs ?? []) await seeJob(r, job)
         if (m.status !== 'queued' && m.status !== 'running') r.ended = true
       }
-      if (options.length >= count) break
-      const elapsed = Date.now() - started
+    }
+
+    const started = Date.now()
+    const budget = o.budgetMs ?? BUDGET_MS
+    const inflight = () => runs.reduce((n, r) => n + (r.ended ? 0 : r.expected - r.handled.size - r.stalled.size), 0)
+    let replacements = 0
+    /** A job failed: start replacements on other models that still work, until `count` options exist or the budget is spent. False: nothing more can come. */
+    const replace = async (elapsed: number): Promise<boolean> => {
       const need = count - options.length - inflight()
       if (need > 0 && replacements < count * 3 && budget - elapsed >= (o.minStartMs ?? MIN_START_MS)) {
-        // A job failed: start replacements on other models that still work, until `count` options exist or the budget is spent.
         const next = planJobs(rankModels(models, pools, health, blocked), need, taken, 1)
         if (next.length) {
           replacements += next.length
           await startJobs(next)
           progress(options.length, count, `Started ${next.length} replacement job(s) after a failure`)
-        } else if (!inflight()) break
-      } else if (!inflight()) break
+          return true
+        }
+      }
+      return inflight() > 0
+    }
+
+    await startJobs(planJobs(ranked, count))
+    for (;;) {
+      await pollRuns()
+      if (options.length >= count) break
+      const elapsed = Date.now() - started
+      if (!(await replace(elapsed))) break
       if (elapsed >= budget + (o.graceMs ?? GRACE_MS)) break
       progress(options.length, count, `ReDesign is making options (${options.length}/${count})`)
       await sleep(o.pollMs ?? 1500)
     }
     for (const r of runs) if (!r.ended) await post(`/api/runs/${encodeURIComponent(r.id)}/cancel`, {}).catch(() => {})
     saveHealth(healthFile, health)
+    return { options, failedJobs, why, primary, started }
+  }
 
-    if (!options.length) return fail(await noOptionsMessage(primary, { status: 'failed', jobs: failedJobs }))
-    const seconds = Math.round((Date.now() - started) / 1000)
+  /** The tool's answer once at least one option landed. */
+  function answer(done: RunOutcome, notes: string[], mock: boolean, askOwner: boolean, count: number): ToolResult {
+    const { options, why, primary } = done
+    const seconds = Math.round((Date.now() - done.started) / 1000)
     if (options.length < count) notes.push(`Only ${options.length} of ${count} options came back after ${seconds} s${why.length ? ` (${[...new Set(why)].join('; ')})` : ''}. Say so to the person; call design_options again later for more.`)
     const shown = options.map(({ run: _run, job: _job, ...rest }) => rest)
     const missing = shown.some((x) => !x.image)

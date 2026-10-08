@@ -101,18 +101,31 @@ export async function runCliResetSweep(): Promise<void> {
 const FIRST_PASS_MS = 10 * 60_000
 const PASS_EVERY_MS = 3_600_000
 
+let firstPass: ReturnType<typeof setTimeout> | null = null
+let everyPass: ReturnType<typeof setInterval> | null = null
+
 /** Start the daily check (called once at daemon boot). Off under tests, like the usage refresh. */
 export function startCliResetSweep(): void {
-  if (process.env.NODE_ENV === 'test') return
+  if (process.env.NODE_ENV === 'test' || firstPass) return
   const pass = () => void runCliResetSweep()
-  setTimeout(() => {
+  firstPass = setTimeout(() => {
     pass()
-    setInterval(() => {
+    everyPass = setInterval(() => {
       try {
         pass()
       } catch (err) {
         console.error('[cli-reset-sweep] tick failed:', err instanceof Error ? err.message : err)
       }
-    }, PASS_EVERY_MS).unref?.()
-  }, FIRST_PASS_MS).unref?.()
+    }, PASS_EVERY_MS)
+    everyPass.unref?.()
+  }, FIRST_PASS_MS)
+  firstPass.unref?.()
+}
+
+/** Stop the daily check (daemon shutdown). */
+export function stopCliResetSweep(): void {
+  if (firstPass) clearTimeout(firstPass)
+  if (everyPass) clearInterval(everyPass)
+  firstPass = null
+  everyPass = null
 }

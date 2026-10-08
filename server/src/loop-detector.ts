@@ -46,50 +46,56 @@ function resultText(content: unknown): string {
     .trim()
 }
 
+type ToolCall = { name: string; input: string }
+type ToolResult = ToolCall & { id: string; failed: boolean; error: string }
+
+/** One transcript line as an event, or null for a blank or cut-off line. */
+function parseLine(raw: string): any {
+  if (!raw.trim()) return null
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null // the first line of a tail read is usually cut off mid-line
+  }
+}
+
+function noteCalls(content: any[], calls: Map<string, ToolCall>): void {
+  for (const b of content) {
+    if (b?.type === 'tool_use' && typeof b.id === 'string') {
+      calls.set(b.id, {
+        name: String(b.name ?? 'tool'),
+        input: JSON.stringify(b.input ?? null),
+      })
+    }
+  }
+}
+
+function noteResults(content: any[], calls: Map<string, ToolCall>, results: ToolResult[]): void {
+  for (const b of content) {
+    if (b?.type !== 'tool_result') continue
+    const call = calls.get(b.tool_use_id)
+    if (!call) continue
+    results.push({
+      id: b.tool_use_id,
+      ...call,
+      failed: b.is_error === true,
+      error: resultText(b.content),
+    })
+  }
+}
+
 /** The run of identical failing calls the transcript currently ENDS with, if it is long enough. Pure. */
 export function findToolLoop(jsonl: string): ToolLoop | null {
-  const calls = new Map<string, { name: string; input: string }>()
-  const results: Array<{
-    id: string
-    name: string
-    input: string
-    failed: boolean
-    error: string
-  }> = []
+  const calls = new Map<string, ToolCall>()
+  const results: ToolResult[] = []
   for (const raw of jsonl.split('\n')) {
-    if (!raw.trim()) continue
-    let ev: any
-    try {
-      ev = JSON.parse(raw)
-    } catch {
-      continue // the first line of a tail read is usually cut off mid-line
-    }
+    const ev = parseLine(raw)
     // A subagent's calls are its own conversation; mixing them in would break up or fake a run.
     if (ev?.isSidechain === true) continue
     const content = ev?.message?.content
     if (!Array.isArray(content)) continue
-    if (ev.type === 'assistant') {
-      for (const b of content) {
-        if (b?.type === 'tool_use' && typeof b.id === 'string') {
-          calls.set(b.id, {
-            name: String(b.name ?? 'tool'),
-            input: JSON.stringify(b.input ?? null),
-          })
-        }
-      }
-    } else if (ev.type === 'user') {
-      for (const b of content) {
-        if (b?.type !== 'tool_result') continue
-        const call = calls.get(b.tool_use_id)
-        if (!call) continue
-        results.push({
-          id: b.tool_use_id,
-          ...call,
-          failed: b.is_error === true,
-          error: resultText(b.content),
-        })
-      }
-    }
+    if (ev.type === 'assistant') noteCalls(content, calls)
+    else if (ev.type === 'user') noteResults(content, calls, results)
   }
 
   const last = results[results.length - 1]

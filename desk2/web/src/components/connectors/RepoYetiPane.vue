@@ -54,9 +54,9 @@ const openOutside = () => view.value.kind === 'frame' && window.open(view.value.
 </script>
 
 <template>
-  <section class="flex min-w-0 flex-1 flex-col bg-[var(--bg)]" aria-label="RepoYeti">
+  <section class="flex min-w-0 flex-1 flex-col bg-(--bg)" aria-label="RepoYeti">
     <header class="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
-      <span class="flex-1 truncate text-[12px] font-medium text-[var(--text)]">RepoYeti</span>
+      <span class="flex-1 truncate text-[12px] font-medium text-(--text)">RepoYeti</span>
       <template v-if="view.kind === 'frame'">
         <Tip label="Reload">
           <button type="button" :class="ICON_BTN" aria-label="Reload RepoYeti" @click="reload"><RotateCw class="size-3.5" /></button>
@@ -72,7 +72,7 @@ const openOutside = () => view.value.kind === 'frame' && window.open(view.value.
 
     <iframe v-if="view.kind === 'frame'" ref="frame" :src="view.url" title="RepoYeti" class="min-h-0 w-full flex-1 border-0 bg-white" />
 
-    <div v-else class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-[var(--text-2)]">
+    <div v-else class="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-[12px] text-(--text-2)">
       <template v-if="view.kind === 'loading'"><p>Looking for RepoYeti</p></template>
       <template v-else-if="view.kind === 'start'">
         <p>RepoYeti is installed and not running.</p>
@@ -84,10 +84,10 @@ const openOutside = () => view.value.kind === 'frame' && window.open(view.value.
       </template>
       <template v-else-if="view.kind === 'busy'"><p role="status">{{ view.line }}</p></template>
       <template v-else>
-        <p class="text-[var(--danger-text)]">{{ view.reason }}</p>
+        <p class="text-(--danger-text)">{{ view.reason }}</p>
         <button type="button" :class="TEXT_BTN" :disabled="pending" @click="act('start')">Try again</button>
       </template>
-      <p v-if="error" role="alert" class="text-[var(--danger-text)]">{{ error }}</p>
+      <p v-if="error" role="alert" class="text-(--danger-text)">{{ error }}</p>
     </div>
   </section>
 </template>

@@ -147,11 +147,8 @@ async function runScan(opts: ScanOptions): Promise<DevWebScanResult> {
     return full
   }
 
-  async function scanDir(dir: string, depth: number): Promise<{ dir: string; depth: number }[]> {
-    if (stopped()) return []
-    scannedDirs++
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => null)
-    if (!entries || stopped()) return []
+  /** One folder's entries: the subfolders to walk, the .devwebui files to read, and whether it has a package.json. */
+  function sortEntries(dir: string, entries: Dirent[], depth: number) {
     const subdirs: { dir: string; depth: number }[] = []
     const fileJobs: Promise<DevWebFoundFile>[] = []
     let packageJson = false
@@ -167,7 +164,11 @@ async function runScan(opts: ScanOptions): Promise<DevWebScanResult> {
         else if (lower === 'package.json') packageJson = true
       }
     }
-    for (const f of await Promise.all(fileJobs)) {
+    return { subdirs, fileJobs, packageJson }
+  }
+
+  function addFiles(found: DevWebFoundFile[]): void {
+    for (const f of found) {
       if (stopped()) break
       if (collected() >= limit) {
         truncated = true
@@ -175,14 +176,25 @@ async function runScan(opts: ScanOptions): Promise<DevWebScanResult> {
       }
       files.push(f)
     }
-    // A package root with no .devwebui of its own: nothing to add, but its scripts could make one.
-    if (packageJson && fileJobs.length === 0 && !stopped() && collected() < limit) {
-      const found = describeDetected(dir)
-      if (found && !settled && !timedOut) {
-        if (collected() < limit) detected.push(found)
-        else truncated = true
-      }
-    }
+  }
+
+  /** A package root with no .devwebui of its own: nothing to add, but its scripts could make one. */
+  function addDetected(dir: string): void {
+    if (stopped() || collected() >= limit) return
+    const found = describeDetected(dir)
+    if (!found || settled || timedOut) return
+    if (collected() < limit) detected.push(found)
+    else truncated = true
+  }
+
+  async function scanDir(dir: string, depth: number): Promise<{ dir: string; depth: number }[]> {
+    if (stopped()) return []
+    scannedDirs++
+    const entries = await readdir(dir, { withFileTypes: true }).catch(() => null)
+    if (!entries || stopped()) return []
+    const { subdirs, fileJobs, packageJson } = sortEntries(dir, entries, depth)
+    addFiles(await Promise.all(fileJobs))
+    if (packageJson && fileJobs.length === 0) addDetected(dir)
     return subdirs
   }
 

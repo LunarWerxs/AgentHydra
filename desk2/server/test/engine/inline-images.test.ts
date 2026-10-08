@@ -25,7 +25,7 @@ const gif = (mb: number) => Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(m
 const rec = (type: 'user' | 'assistant', text: string) => ({
   type,
   uuid: `u-${Math.random().toString(36).slice(2)}`,
-  timestamp: '2026-10-03T10:00:00.000Z',
+  timestamp: '2020-10-03T10:00:00.000Z',
   message: { id: `m-${Math.random().toString(36).slice(2)}`, role: type, content: [{ type: 'text', text }] },
 })
 

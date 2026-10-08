@@ -71,55 +71,83 @@ function taskPlace(it: TaskItem, lastTurn: boolean): 'card' | 'hidden' | 'settle
  * message). The last assistant text before the next user message (or the end) is marked endOfTurn: it
  * carries the message actions toolbar, unless it is still streaming.
  */
-export function groupRows(items: TranscriptItem[]): DisplayRow[] {
-  const out: DisplayRow[] = []
+function settledAt(it: TranscriptItem): number | undefined {
+  return it.kind === 'task' && it.status !== 'running' && it.durationMs !== undefined ? it.ts + it.durationMs : undefined
+}
+
+function turnPromptOf(it: Extract<TranscriptItem, { kind: 'user' }>): TurnPrompt {
+  let p = prompts.get(it)
+  if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { id: it.id, text: it.text, images: it.images }))
+  return p
+}
+
+/** The index of the last message (a program's note starts a turn as a message does) and when the last turn started. */
+function turnBounds(items: TranscriptItem[]): { lastUser: number; turnStart: number } {
   let lastUser = -1
   let turnStart = -Infinity
-  const settledAt = (it: TranscriptItem) =>
-    it.kind === 'task' && it.status !== 'running' && it.durationMs !== undefined ? it.ts + it.durationMs : undefined
-  items.forEach((it, i) => {
-    // A program's note starts a turn as a message does.
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
     if (it.kind === 'user' || it.kind === 'note') {
       lastUser = i
       turnStart = Math.max(turnStart, it.ts)
     }
     const s = settledAt(it)
     if (s !== undefined) turnStart = Math.max(turnStart, s)
-  })
+  }
+  return { lastUser, turnStart }
+}
+
+function placeBrowser(out: DisplayRow[], it: ToolItem): void {
+  // One card per browser per turn: a run of the same profile's calls joins across other rows, and the card moves down to its newest call.
+  const run = openBrowserRun(out, parseBrowserCall(it.name, it.input).profile)
+  if (!run) {
+    out.push({ id: `browser:${it.id}`, kind: 'browser', items: [it] })
+    return
+  }
+  out.splice(out.indexOf(run), 1)
+  run.items.push(it)
+  out.push(run)
+}
+
+function placeTask(out: DisplayRow[], it: TaskItem, i: number, bounds: { lastUser: number; turnStart: number }): void {
+  const last = out[out.length - 1]
+  const s = settledAt(it)
+  const place = taskPlace(it, s !== undefined ? s >= bounds.turnStart : i > bounds.lastUser)
+  if (place === 'hidden') return
+  if (place === 'card') out.push({ id: it.id, kind: 'item', item: it, endOfTurn: false })
+  else if (last?.kind === 'tools') (last.tasks ??= []).push(it)
+  else if (last?.kind === 'tasks') last.items.push(it)
+  else out.push({ id: `tasks:${it.id}`, kind: 'tasks', items: [it] })
+}
+
+// A handoff's continuation right after CliMayte's move line says nothing that line has not (owner,
+// 2026-10-05: only the move line). The move line's id is `moved:<ts>` (server chat-manager systemLine).
+function isHandoffContinuation(it: TranscriptItem, last: DisplayRow | undefined): boolean {
+  return it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')
+}
+
+function placeRow(out: DisplayRow[], it: TranscriptItem, i: number, bounds: { lastUser: number; turnStart: number }, prompt: TurnPrompt | null): void {
+  const last = out[out.length - 1]
+  if (it.kind === 'tool_use' && toolFamily(it.name, it.input) === 'browser') placeBrowser(out, it)
+  else if (folds(it)) {
+    if (last?.kind === 'tools') last.items.push(it)
+    else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
+  } else if (it.kind === 'task') placeTask(out, it, i, bounds)
+  else out.push(it.kind === 'assistant_text' ? { id: it.id, kind: 'item', item: it, endOfTurn: false, prompt } : { id: it.id, kind: 'item', item: it, endOfTurn: false })
+}
+
+export function groupRows(items: TranscriptItem[]): DisplayRow[] {
+  const out: DisplayRow[] = []
+  const bounds = turnBounds(items)
   let prompt: TurnPrompt | null = null
-  items.forEach((it, i) => {
-    const last = out[out.length - 1]
-    if (it.kind === 'user' && !it.parentToolUseId && !it.queued) {
-      let p = prompts.get(it)
-      if (!p || p.text !== it.text || p.images !== it.images) prompts.set(it, (p = { id: it.id, text: it.text, images: it.images }))
-      prompt = p
-    }
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i]
+    if (it.kind === 'user' && !it.parentToolUseId && !it.queued) prompt = turnPromptOf(it)
     // A reply to a note has no prompt of the person's to send again.
     if (it.kind === 'note') prompt = null
-    // A handoff's continuation right after CliMayte's move line says nothing that line has not (owner,
-    // 2026-10-05: only the move line). The move line's id is `moved:<ts>` (server chat-manager systemLine).
-    if (it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')) return
-    if (it.kind === 'tool_use' && toolFamily(it.name, it.input) === 'browser') {
-      // One card per browser per turn: a run of the same profile's calls joins across other rows, and the card moves down to its newest call.
-      const run = openBrowserRun(out, parseBrowserCall(it.name, it.input).profile)
-      if (run) {
-        out.splice(out.indexOf(run), 1)
-        run.items.push(it)
-        out.push(run)
-      } else out.push({ id: `browser:${it.id}`, kind: 'browser', items: [it] })
-    } else if (folds(it)) {
-      if (last?.kind === 'tools') last.items.push(it)
-      else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
-    } else if (it.kind === 'task') {
-      const s = settledAt(it)
-      const place = taskPlace(it, s !== undefined ? s >= turnStart : i > lastUser)
-      if (place === 'hidden') return
-      if (place === 'card') out.push({ id: it.id, kind: 'item', item: it, endOfTurn: false })
-      else if (last?.kind === 'tools') (last.tasks ??= []).push(it)
-      else if (last?.kind === 'tasks') last.items.push(it)
-      else out.push({ id: `tasks:${it.id}`, kind: 'tasks', items: [it] })
-    } else out.push(it.kind === 'assistant_text' ? { id: it.id, kind: 'item', item: it, endOfTurn: false, prompt } : { id: it.id, kind: 'item', item: it, endOfTurn: false })
-  })
+    if (isHandoffContinuation(it, out[out.length - 1])) continue
+    placeRow(out, it, i, bounds, prompt)
+  }
   let seenText = false
   for (let i = out.length - 1; i >= 0; i--) {
     const r = out[i]
@@ -186,70 +214,80 @@ function host(url: string): string {
   }
 }
 
-/** The status row's sentence for a run of tool calls, in first-seen order; present tense while a call runs. */
-export function toolSummary(items: ToolItem[], cwd?: string | null, tasks: TaskItem[] = []): ToolSummary {
-  const order: Cat[] = []
+type Verb = (past: string, now: string) => string
+
+function groupByCategory(items: ToolItem[]): Map<Cat, ToolItem[]> {
   const byCat = new Map<Cat, ToolItem[]>()
   for (const it of items) {
     const c = category(it)
-    if (!byCat.has(c)) {
-      order.push(c)
-      byCat.set(c, [])
-    }
+    if (!byCat.has(c)) byCat.set(c, [])
     byCat.get(c)!.push(it)
   }
+  return byCat
+}
+
+function verbFor(list: ToolItem[]): Verb {
+  const live = list.some((i) => i.status === 'running')
+  return (past, now) => (live ? now : past)
+}
+
+// An image read is a primary-text target (screen-half.png in whole-window.png); a code file is
+// muted like the rest of the row (index.ts in user/window.webp).
+function filePhrase(c: 'read' | 'edit' | 'write', v: Verb, list: ToolItem[], cwd?: string | null): Phrase {
+  const verb = c === 'read' ? v('read', 'reading') : c === 'edit' ? v('edited', 'editing') : v('wrote', 'writing')
+  const files = [...new Set(list.map((i) => shortPath(str(i.input.file_path || i.input.notebook_path), cwd)))]
+  if (files.length === 1 && IMAGE.test(files[0])) return { text: verb, target: base(files[0]) }
+  if (files.length === 1) return { text: `${verb} ${base(files[0])}` }
+  return { text: `${verb} ${files.length} files` }
+}
+
+function otherPhrase(v: Verb, list: ToolItem[], items: ToolItem[]): Phrase {
+  const mcp = items.length === 1 ? parseMcpName(list[0].name) : null
+  if (mcp) return { text: `${v('used', 'using')} ${mcp.server}: ${mcp.tool.replace(/_/g, ' ')}` }
+  if (items.length === 1) return { text: `${v('used', 'using')} ${list[0].name}` }
+  return { text: `${v('used', 'using')} ${n(list.length, 'a tool', 'tools')}` }
+}
+
+function phraseFor(c: Cat, list: ToolItem[], items: ToolItem[], cwd?: string | null): Phrase {
+  const v = verbFor(list)
+  const k = list.length
+  switch (c) {
+    case 'bash':
+      return { text: `${v('ran', 'running')} ${n(k, 'a command', 'commands')}` }
+    case 'read':
+    case 'edit':
+    case 'write':
+      return filePhrase(c, v, list, cwd)
+    case 'search':
+      return { text: `${v('searched', 'searching')} code` }
+    case 'fetch':
+      if (k === 1) return { text: v('fetched', 'fetching'), target: host(str(list[0].input.url)) }
+      return { text: `${v('fetched', 'fetching')} ${k} pages` }
+    case 'websearch':
+      return { text: `${v('searched', 'searching')} the web${k > 1 ? ` ${k} times` : ''}` }
+    case 'todo':
+      return { text: `${v('updated', 'updating')} the to-do list` }
+    default:
+      return otherPhrase(v, list, items)
+  }
+}
+
+function finishedTasksPhrase(tasks: TaskItem[]): Phrase {
+  const bad = tasks.filter((t) => t.status === 'failed').length
+  const p: Phrase = { text: `finished ${n(tasks.length, 'a background task', 'background tasks')}` }
+  if (bad) p.after = `(${bad} failed)`
+  return p
+}
+
+/** The status row's sentence for a run of tool calls, in first-seen order; present tense while a call runs. */
+export function toolSummary(items: ToolItem[], cwd?: string | null, tasks: TaskItem[] = []): ToolSummary {
   const phrases: Phrase[] = []
-  for (const c of order) {
-    const list = byCat.get(c)!
-    const live = list.some((i) => i.status === 'running')
-    const v = (past: string, now: string) => (live ? now : past)
-    const files = [...new Set(list.map((i) => shortPath(str(i.input.file_path || i.input.notebook_path), cwd)))]
-    const k = list.length
+  for (const [c, list] of groupByCategory(items)) {
+    const p = phraseFor(c, list, items, cwd)
     const bad = list.filter((i) => i.status === 'error').length
-    const at = phrases.length
-    switch (c) {
-      case 'bash':
-        phrases.push({ text: `${v('ran', 'running')} ${n(k, 'a command', 'commands')}` })
-        break
-      case 'read':
-      case 'edit':
-      case 'write': {
-        const verb = c === 'read' ? v('read', 'reading') : c === 'edit' ? v('edited', 'editing') : v('wrote', 'writing')
-        // An image read is a primary-text target (screen-half.png in whole-window.png); a code file is
-        // muted like the rest of the row (index.ts in user/window.webp).
-        if (files.length === 1 && IMAGE.test(files[0])) phrases.push({ text: verb, target: base(files[0]) })
-        else if (files.length === 1) phrases.push({ text: `${verb} ${base(files[0])}` })
-        else phrases.push({ text: `${verb} ${files.length} files` })
-        break
-      }
-      case 'search':
-        phrases.push({ text: `${v('searched', 'searching')} code` })
-        break
-      case 'fetch':
-        if (k === 1) phrases.push({ text: v('fetched', 'fetching'), target: host(str(list[0].input.url)) })
-        else phrases.push({ text: `${v('fetched', 'fetching')} ${k} pages` })
-        break
-      case 'websearch':
-        phrases.push({ text: `${v('searched', 'searching')} the web${k > 1 ? ` ${k} times` : ''}` })
-        break
-      case 'todo':
-        phrases.push({ text: `${v('updated', 'updating')} the to-do list` })
-        break
-      default: {
-        const mcp = items.length === 1 ? parseMcpName(list[0].name) : null
-        if (mcp) phrases.push({ text: `${v('used', 'using')} ${mcp.server}: ${mcp.tool.replace(/_/g, ' ')}` })
-        else if (items.length === 1) phrases.push({ text: `${v('used', 'using')} ${list[0].name}` })
-        else phrases.push({ text: `${v('used', 'using')} ${n(k, 'a tool', 'tools')}` })
-      }
-    }
-    if (bad && phrases[at]) phrases[at] = { ...phrases[at], after: `(${bad} failed)` }
+    phrases.push(bad ? { ...p, after: `(${bad} failed)` } : p)
   }
-  if (tasks.length) {
-    const bad = tasks.filter((t) => t.status === 'failed').length
-    const p: Phrase = { text: `finished ${n(tasks.length, 'a background task', 'background tasks')}` }
-    if (bad) p.after = `(${bad} failed)`
-    phrases.push(p)
-  }
+  if (tasks.length) phrases.push(finishedTasksPhrase(tasks))
   if (phrases.length) phrases[0] = { ...phrases[0], text: phrases[0].text[0].toUpperCase() + phrases[0].text.slice(1) }
 
   let added = 0

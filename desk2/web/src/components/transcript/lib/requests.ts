@@ -14,7 +14,6 @@ export interface KeyLike {
   ctrlKey?: boolean
   metaKey?: boolean
   altKey?: boolean
-  isComposing?: boolean
   defaultPrevented?: boolean
   target: EventTarget | null
 }
@@ -68,7 +67,7 @@ export function keyIsForCard(m: KeyMoment): boolean {
 }
 
 export function permissionKeyAction(e: KeyLike, item: Pick<PermissionItem, 'canAlwaysAllow' | 'defaultToNo'>): PermissionKey | null {
-  if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.defaultPrevented || keysTaken(e.target)) return null
+  if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented || keysTaken(e.target)) return null
   const tag = (e.target as ElementLike | null)?.tagName
   switch (e.key) {
     case 'Enter':

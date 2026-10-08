@@ -72,16 +72,16 @@ const hot = ref<string | null>(null)
 </script>
 
 <template>
-  <TransitionGroup tag="div" class="ml-[11px] flex flex-col gap-px border-l border-border py-px" role="group" aria-label="CliMayte tasks and HSwarm jobs" :css="false" @leave="rowLeave">
+  <TransitionGroup tag="div" class="ms-2.75 flex flex-col gap-px border-s border-border py-px" role="group" aria-label="CliMayte tasks and HSwarm jobs" :css="false" @leave="rowLeave">
     <button
       v-for="{ n, key, status, own, base } in lines"
       :key="key"
       type="button"
       :title="hot === key ? tip(n.worker, status, now) : base"
       :aria-current="own && selectedId === own ? 'page' : undefined"
-      class="flex h-[22px] w-full min-w-0 cursor-default items-center gap-1 rounded-r-[var(--radius-6)] pr-1 text-left text-[12px] leading-4 transition-colors duration-[var(--dur-fast)]"
+      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) pe-1 text-start text-[12px] leading-4 transition-colors duration-(--dur-fast)"
       :class="own && selectedId === own ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover'"
-      :style="{ paddingLeft: `${4 + (n.depth - 1) * 14}px` }"
+      :style="{ paddingInlineStart: `${4 + (n.depth - 1) * 14}px` }"
       @click="emit('open', n.worker)"
       @pointerenter="hot = key"
       @pointerleave="hot = null"
@@ -110,7 +110,7 @@ const hot = ref<string | null>(null)
       :key="`swarm:${j.id}`"
       type="button"
       :title="jobTip(j)"
-      class="flex h-[22px] w-full min-w-0 cursor-default items-center gap-1 rounded-r-[var(--radius-6)] pl-1 pr-1 text-left text-[12px] leading-4 text-text-2 transition-colors duration-[var(--dur-fast)] hover:bg-fill-hover"
+      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) ps-1 pe-1 text-start text-[12px] leading-4 text-text-2 transition-colors duration-(--dur-fast) hover:bg-fill-hover"
       @click="emit('open-job', j)"
     >
       <!-- A running job's network mark is the sidebar's one blue, pulsing slowly (owner, 2026-10-05: "a slow blue pulsing icon"). -->

@@ -17,6 +17,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { readdir as readdirAsync, readFile as readFileAsync } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
@@ -60,6 +61,7 @@ import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
+import { mapPool } from './core/map-pool'
 import { POINTER_DIR } from './instance'
 import type { KitStore } from './kit/store'
 import { liveSessionIds } from './live-registry'
@@ -479,9 +481,48 @@ export function setCliMayteMemoryReader(fn: (() => MachineMemory | null) | null)
   memoryReader = fn
 }
 
+/** done/'s workers as preloadDone read them, for the first load() to take instead of reading every
+ *  file on the daemon's only thread (3,767 files, 44 MB: seconds of a blocked loop at each start,
+ *  the boot stall the tray watchdog killed daemons for, 2026-10-08). Only save() writes done/, and
+ *  it writes nothing before load(), so the preloaded copy is what the files hold. */
+let preloadedDone: CliMayteWorker[] | null = null
+
+/** A done/ file's worker, or a throw when it names another worker than its file or is no worker. */
+function doneWorker(name: string, text: string): CliMayteWorker {
+  const w = JSON.parse(text) as CliMayteWorker
+  if (name !== `${w?.id}.json` || !Array.isArray(w.attempts)) throw new Error('not a worker')
+  return w
+}
+
+/** Read done/ off the daemon's thread (the reads run on the I/O pool, 32 at a time; the parses yield
+ *  to requests between files), for the first load() (readDone) to take. A no-op once loaded. */
+export async function preloadDone(): Promise<void> {
+  if (loaded || preloadedDone) return
+  let names: string[]
+  try {
+    names = (await readdirAsync(DONE)).filter((n) => n.endsWith('.json'))
+  } catch {
+    return
+  }
+  const read = await mapPool(names, 32, async (name) => {
+    try {
+      return doneWorker(name, await readFileAsync(join(DONE, name), 'utf8'))
+    } catch (err) {
+      console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
+      return null
+    }
+  })
+  if (!loaded) preloadedDone = read.filter((w): w is CliMayteWorker => w !== null)
+}
+
 /** Every readable worker file under done/. One that cannot be read, or that names another worker
  *  than its file, is left as found and said: an unreadable record is not an absent one. */
 function readDone(): CliMayteWorker[] {
+  if (preloadedDone) {
+    const found = preloadedDone
+    preloadedDone = null
+    return found
+  }
   let names: string[] = []
   try {
     names = readdirSync(DONE)
@@ -492,9 +533,7 @@ function readDone(): CliMayteWorker[] {
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     try {
-      const w = JSON.parse(readFileSync(join(DONE, name), 'utf8')) as CliMayteWorker
-      if (name !== `${w?.id}.json` || !Array.isArray(w.attempts)) throw new Error('not a worker')
-      found.push(w)
+      found.push(doneWorker(name, readFileSync(join(DONE, name), 'utf8')))
     } catch (err) {
       console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
     }

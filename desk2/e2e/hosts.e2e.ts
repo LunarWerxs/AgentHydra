@@ -11,9 +11,10 @@ import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, r
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { AccountInfo, ChatSummary, ServerEvent, TranscriptItem } from '../shared/protocol'
+import { portFrom } from './lib/free-port'
 
 const MODEL = process.env.E2E_MODEL || 'sonnet'
-const PORT = Number(process.env.E2E_PORT) || 7897
+const PORT = portFrom(process.env.E2E_PORT)
 const TURN_MS = 180_000
 const DESK = resolve(import.meta.dir, '..')
 
@@ -30,6 +31,9 @@ const info = (s: string) => console.log(`     ${s}`)
 // API key, so the account's own login is used.
 const STRIP = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']
 const root = mkdtempSync(join(tmpdir(), 'hydra-desk-hosts-e2e-'))
+process.on('exit', () => {
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }) } catch {}
+})
 const home = join(root, 'home')
 const work = join(root, 'work')
 mkdirSync(home, { recursive: true })
@@ -244,12 +248,9 @@ try {
     } catch {}
   }
   for (const pid of pids) if (alive(pid)) spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+  if (results.some((r) => !r.ok) && existsSync(serverLog)) console.log(readFileSync(serverLog, 'utf8').slice(-4000))
 }
 
 const failed = results.filter((r) => !r.ok)
 console.log(`\n${results.length - failed.length} PASS, ${failed.length} FAIL`)
-if (failed.length) {
-  console.log(`kept for a look: ${root} (server.log, home/hosts/*.host.log)`)
-  process.exit(1)
-}
-rmSync(root, { recursive: true, force: true })
+if (failed.length) process.exit(1)

@@ -139,13 +139,13 @@ const summary = computed(() => {
   </div>
 
   <div v-else class="tx-ask px-3 py-2.5" role="group" aria-label="Claude has a question" @keydown.enter.self.prevent="next()">
-    <div v-if="many" class="mb-2 flex items-center gap-2 pl-6 text-[12px] text-text-muted">
+    <div v-if="many" class="mb-2 flex items-center gap-2 ps-6 text-[12px] text-text-muted">
       <span class="font-medium text-text">Question {{ step + 1 }} of {{ item.questions.length }}</span>
       <span class="flex items-center gap-1" aria-hidden="true">
         <span
           v-for="(c, i) in item.questions"
           :key="c.question"
-          class="h-1.5 rounded-full transition-all"
+          class="h-1.5 rounded-full transition-colors"
           :class="i === step ? 'w-4 bg-brand' : answered(c.question) ? 'w-1.5 bg-brand/50' : 'w-1.5 bg-border'"
         />
       </span>
@@ -154,17 +154,17 @@ const summary = computed(() => {
       <div class="flex items-start gap-2 text-[14px]">
         <MessageCircleQuestion class="mt-0.5 size-4 shrink-0 text-warning-text" />
         <div class="min-w-0">
-          <span v-if="q.header" class="mr-2 rounded bg-fill-hover px-1.5 py-0.5 text-[11px] text-text-muted">{{ q.header }}</span>
+          <span v-if="q.header" class="me-2 rounded bg-fill-hover px-1.5 py-0.5 text-[11px] text-text-muted">{{ q.header }}</span>
           <span class="text-text">{{ q.question }}</span>
-          <span v-if="q.multiSelect" class="ml-1 text-[12px] text-text-muted">(pick any)</span>
+          <span v-if="q.multiSelect" class="ms-1 text-[12px] text-text-muted">(pick any)</span>
         </div>
       </div>
-      <div class="mt-2 grid gap-1 pl-6">
+      <div class="mt-2 grid gap-1 ps-6">
         <button
           v-for="o in q.options"
           :key="o.label"
           type="button"
-          class="flex items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-left text-[13px] transition-colors"
+          class="flex items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-start text-[13px] transition-colors"
           :class="
             picked[q.question]?.includes(o.label)
               ? 'border-brand/60 bg-brand/10 text-text'
@@ -179,7 +179,7 @@ const summary = computed(() => {
         <template v-if="!ctx.readOnly.value">
           <button
             type="button"
-            class="rounded-md border px-2.5 py-1.5 text-left text-[13px]"
+            class="rounded-md border px-2.5 py-1.5 text-start text-[13px]"
             :class="otherOn[q.question] ? 'border-brand/60 bg-brand/10 text-text' : 'border-border text-text-muted hover:bg-fill-hover'"
             :disabled="busy"
             @click="toggleOther(q.question, q.multiSelect)"
@@ -206,7 +206,7 @@ const summary = computed(() => {
                 <img :src="im.url" :alt="im.name" class="size-full object-cover" />
                 <button
                   type="button"
-                  class="absolute right-0 top-0 flex size-4 items-center justify-center rounded-bl bg-black/70 text-white"
+                  class="absolute right-0 top-0 flex size-4 items-center justify-center rounded-es bg-black/70 text-white"
                   :aria-label="`Remove ${im.name}`"
                   @click="removePicture(q.question, im.id)"
                 >
@@ -219,7 +219,7 @@ const summary = computed(() => {
         </template>
       </div>
     </div>
-    <div v-if="!ctx.readOnly.value" class="mt-2.5 flex items-center gap-2 pl-6">
+    <div v-if="!ctx.readOnly.value" class="mt-2.5 flex items-center gap-2 ps-6">
       <button v-if="step > 0" type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="step--">Back</button>
       <button v-if="!last" type="button" class="tx-btn tx-btn-primary" :disabled="busy || !stepDone" @click="next()">Next</button>
       <button v-else type="button" class="tx-btn tx-btn-primary" :disabled="busy || !complete" @click="submit()">Answer</button>

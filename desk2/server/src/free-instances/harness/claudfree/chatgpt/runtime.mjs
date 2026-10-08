@@ -17,8 +17,7 @@ const requests = new Map();
 let nextId = 0;
 let finished = false;
 let window;
-let resolveConfig;
-const configuration = new Promise(resolve => { resolveConfig = resolve; });
+const { promise: configuration, resolve: resolveConfig } = Promise.withResolvers();
 const input = createInterface({ input: process.stdin });
 const write = value => process.stdout.write(JSON.stringify(value) + '\n');
 input.on('line', line => {

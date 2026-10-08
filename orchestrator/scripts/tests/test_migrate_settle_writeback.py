@@ -120,6 +120,18 @@ class PhaseSettleProvisionalTest(unittest.TestCase):
         self.assertFalse(land.source_app_running)
         self.assertNotIn("PROVISIONAL", land.settle_note)
 
+    def test_a_superseded_settle_that_stopped_a_bystander_off_a_source_NOT_at_its_limit(self):
+        """2026-10-07: a move off #59 (not at its limit) stopped another chat's HTML preview and
+        the note quoted `full.get(...)` with `full` None - AttributeError, and a row the settle
+        HAD archived came back reported as 'unknown'."""
+        self._patch(migrate_chat.nativearchivelib, "take_stopped",
+                    lambda sid: [{"kind": "html-preview", "id": "preview-1"}])
+        land = _Landing(running=True)
+        migrate_chat.phase_settle(land)
+        self.assertEqual(land.source_row, "settled")
+        self.assertIn("html-preview preview-1", land.settle_note)
+        self.assertNotIn("usage limit", land.settle_note)
+
     def test_the_journal_stays_OWED_when_the_source_app_was_running(self):
         """⛔ THE RAIL THAT CLOSED THE ROW FOREVER. `stamped` is migrate_reconcile's DONE_PHASE:
         writing it is what stopped anything re-reading the resurrected rows."""

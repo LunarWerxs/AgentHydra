@@ -7,7 +7,7 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Hono } from 'hono'
 import { REPOYETI_REGISTER, type RepoYetiRegisterRequest, type RepoYetiRegisterResult } from '@shared/connectors'
 import type { ServerContext } from '../context'
-import { connectorStatus } from '../connectors/registry'
+import { connectorStatus, connectorsReady } from '../connectors/registry'
 import { notOwnPage } from '../own-page'
 
 const WHAT = "RepoYeti's registration API"
@@ -36,6 +36,8 @@ export default async function plugin(app: Hono, _ctx: ServerContext): Promise<vo
     const body = (await c.req.json().catch(() => null)) as Partial<RepoYetiRegisterRequest> | null
     const cwd = typeof body?.cwd === 'string' ? body.cwd.trim() : ''
     if (!cwd || !isAbsolute(cwd)) return c.json({ error: 'cwd must be an absolute folder' }, 400)
+    // Before the first probe pass lands (about 1.5 s after start) every status reads null.
+    await connectorsReady()
     const status = connectorStatus('repoyeti')
     if (!status || status.state !== 'running' || !status.url) return c.json({ error: 'RepoYeti is not running' }, 409)
     const root = await workTreeRoot(cwd)

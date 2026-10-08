@@ -173,6 +173,8 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
 4. **Commit** the version bump and changelog update.
 5. **Push `main`, then wait for CI to go green.** Not the same step as tagging, deliberately: this
    push is the release (see above), so it is the last point at which a red run is still cheap.
+   A run on `main` finishes even when someone pushes again meanwhile (only the newest push waits
+   behind it), so the run you watch always ends in a verdict.
    ```sh
    git push origin main
    gh run watch          # or: gh run list --limit 2

@@ -120,6 +120,21 @@ export function installedApp(dest: string): { file: string; version: string } | 
   }
 }
 
+const whichCache = new Map<string, string>()
+
+/**
+ * Bun.which, its found path kept while that file exists: the probes run it every few seconds and PATH rarely changes.
+ * A name not found is asked again, so an app installed or removed while Desk runs is seen at the next probe.
+ */
+export function whichOnce(name: string): string | null {
+  const kept = whichCache.get(name)
+  if (kept && existsSync(kept)) return kept
+  const found = Bun.which(name)
+  if (found) whichCache.set(name, found)
+  else whichCache.delete(name)
+  return found
+}
+
 /** Starts `cmd` detached with no console window, its output appended to `log`; the pid, or null when it could not start. */
 export function startHidden(cmd: string[], o: { cwd?: string; log: string; env?: Record<string, string | undefined> }): number | null {
   try {

@@ -76,9 +76,9 @@ export class InputQueue implements AsyncIterable<SDKUserMessage> {
         const head = this.items.shift()
         if (head) return Promise.resolve({ value: head, done: false })
         if (this.closed) return Promise.resolve({ value: undefined, done: true })
-        return new Promise((resolve) => {
-          this.waiter = resolve
-        })
+        const { promise, resolve } = Promise.withResolvers<IteratorResult<SDKUserMessage>>()
+        this.waiter = resolve
+        return promise
       },
       return: () => {
         this.close()

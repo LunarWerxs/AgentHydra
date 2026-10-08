@@ -14,7 +14,7 @@ defineProps<{ item: Extract<TranscriptItem, { kind: 'task' }> }>()
     <div class="min-w-0 flex-1">
       <div class="flex items-center gap-2">
         <span class="truncate text-text">{{ item.description }}</span>
-        <span class="ml-auto shrink-0 text-[13px] text-text-muted">Background task · {{ item.status }}</span>
+        <span class="ms-auto shrink-0 text-[13px] text-text-muted">Background task · {{ item.status }}</span>
       </div>
       <p v-if="item.summary" class="mt-0.5 line-clamp-3 whitespace-pre-wrap text-[13px] text-text-muted">{{ item.summary }}</p>
     </div>

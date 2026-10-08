@@ -201,11 +201,11 @@ function open() {
 </script>
 
 <template>
-  <div ref="root" class="group/card relative w-[360px] max-w-full">
+  <div ref="root" class="group/card relative w-90 max-w-full">
     <div class="tx-card overflow-hidden shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]">
       <button
         type="button"
-        class="group/open relative block aspect-[16/10] w-full overflow-hidden rounded-[inherit] text-left outline-none focus-visible:ring-2 focus-visible:ring-brand"
+        class="group/open relative block aspect-16/10 w-full overflow-hidden rounded-[inherit] text-start outline-none focus-visible:ring-2 focus-visible:ring-brand"
         :title="tip"
         @click="open"
       >
@@ -217,7 +217,7 @@ function open() {
         <span v-if="closed" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Closed</span>
         <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Page closed</span>
         <span
-          class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-[120ms] hover:opacity-100 group-focus-visible/open:opacity-100"
+          class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-120 hover:opacity-100 group-focus-visible/open:opacity-100"
           :title="`${info.verb}${info.url ? ' ' + info.url : ''}`"
         >
           <span v-if="live" class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" title="Live" />
@@ -234,11 +234,11 @@ function open() {
       </button>
       <!-- Over the caption's right end, not inside its button: the count and status, with Copy the calls on hover. -->
       <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-[12px] text-white">
-        <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-[120ms] focus-within:opacity-100 hover:opacity-100">
+        <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-120 focus-within:opacity-100 hover:opacity-100">
           <button
             type="button"
-            class="grid h-5 place-items-center rounded-6 bg-black/55 px-1 text-white opacity-0 outline-none transition-opacity duration-[120ms] hover:bg-black/75 focus-visible:opacity-100 group-hover/calls:opacity-100"
-            :class="copied ? '!opacity-100' : ''"
+            class="grid h-5 place-items-center rounded-6 bg-black/55 px-1 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/calls:opacity-100"
+            :class="copied ? 'opacity-100!' : ''"
             :aria-label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
             :title="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
             @click="copyCalls"
@@ -254,13 +254,13 @@ function open() {
     <button
       v-if="picture"
       type="button"
-      class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-6 bg-black/55 text-white opacity-0 outline-none transition-opacity duration-[120ms] hover:bg-black/75 focus-visible:opacity-100 group-hover/card:opacity-100"
+      class="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-6 bg-black/55 text-white opacity-0 outline-none transition-opacity duration-120 hover:bg-black/75 focus-visible:opacity-100 group-hover/card:opacity-100"
       aria-label="Open full screen"
       title="Open full screen"
       @click="openLightbox(picture!, 'Browser')"
     >
       <Maximize2 class="size-3.5" aria-hidden="true" />
     </button>
-    <p v-if="error" class="mt-1 whitespace-pre-wrap break-words px-1 text-[12px] text-danger-text">{{ error }}</p>
+    <p v-if="error" class="mt-1 whitespace-pre-wrap wrap-break-word px-1 text-[12px] text-danger-text">{{ error }}</p>
   </div>
 </template>

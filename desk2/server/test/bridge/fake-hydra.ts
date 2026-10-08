@@ -188,98 +188,128 @@ export interface FakeHydra {
   start(): Promise<void>
 }
 
+const json = (data: unknown, status = 200) => Response.json(data, { status })
+const stat = (answer: any) => (typeof answer === 'string' ? json({ error: answer }, 500) : json(answer))
+
+function handlePost(state: FakeState, p: string, body: any): Response {
+  if (p === '/api/corch/cancel') {
+    const w = state.workers.find((x) => x.id === body?.id && ACTIVE.has(x.status))
+    if (w) w.status = 'cancelled'
+    return json({ cancelled: w ? [w.id] : [], keptMessages: {} })
+  }
+  const send = /^\/api\/corch\/workers\/([^/]+)\/send$/.exec(p)
+  if (send) {
+    const w = state.workers.find((x) => x.id === decodeURIComponent(send[1]))
+    if (!w) return json({ ok: false, message: `no such worker ${send[1]}` })
+    if (!ACTIVE.has(w.status)) return json({ ok: false, message: `worker ${w.id} is ${w.status}` })
+    if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
+    return json({ ok: true, message: 'queued' })
+  }
+  const branch = /^\/api\/sessions\/([^/]+)\/branch$/.exec(p)
+  if (branch) {
+    // AgentHydra's session-branch: a reply line that is not in the chat is a 404
+    if (body?.uuid === 'not-in-this-chat') return json({ error: 'that reply is not in this chat' }, 404)
+    return json({ session_id: `branch-of-${decodeURIComponent(branch[1])}`, source: 'claude' })
+  }
+  const now = /^\/api\/corch\/workers\/([^/]+)\/deliver-now$/.exec(p)
+  if (now) {
+    if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
+    const w = state.workers.find((x) => x.id === decodeURIComponent(now[1]))
+    if (!w) return json({ ok: false, message: 'No such worker.' })
+    return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
+  }
+  return json({ error: 'not found' }, 404)
+}
+
+function getWorkers(state: FakeState, q: URLSearchParams): Response {
+  const ids = q.get('ids')
+  if (ids !== null) return json(state.workers.filter((w) => ids.split(',').includes(w.id)))
+  const group = q.get('group')
+  if (group !== null) return json(state.workers.filter((w) => w.group === group))
+  const limit = q.get('limit')
+  if (limit === null) return json(state.workers)
+  const n = Number(limit)
+  const active = state.workers.filter((w) => ACTIVE.has(w.status))
+  const done = state.workers.filter((w) => !ACTIVE.has(w.status)).slice(0, n)
+  return json([...active, ...done])
+}
+
+/** The GET routes answered straight from the state, by exact path. */
+function plainGet(state: FakeState, p: string): Response | null {
+  switch (p) {
+    case '/api/health':
+      return json({ ok: true, version: state.version ?? '9.9.9' })
+    case '/api/agent-status':
+      return json(state.agentStatus)
+    case '/api/sessions/live':
+      return json(state.live)
+    case '/api/chats':
+      return json(state.chats)
+    case '/api/sessions':
+      return json(state.sessions)
+    case '/api/cli-instances':
+      return json(state.instances)
+    case '/api/analytics/spend':
+      return stat(state.stats.spend)
+    case '/api/analytics/activity':
+      return stat(state.stats.activity)
+    case '/api/corch/totals':
+      return stat(state.stats.totals)
+    case '/api/hswarm/api/stats':
+      return stat(state.stats.hswarm)
+  }
+  return null
+}
+
+function handleGet(state: FakeState, u: URL): Response {
+  const p = u.pathname
+  const plain = plainGet(state, p)
+  if (plain) return plain
+  if (p === '/api/sessions/search') {
+    if (typeof state.search === 'string') return json({ error: state.search }, 500)
+    const limit = Number(u.searchParams.get('limit') ?? 50)
+    // An answer of another shape (no results array) goes out as it is.
+    return json({ ...state.search, results: state.search.results?.slice(0, limit) })
+  }
+  const row = /^\/api\/sessions\/([^/]+)$/.exec(p)
+  if (row) {
+    const s = state.sessions.find((x) => x.session_id === decodeURIComponent(row[1]))
+    return s ? json(s) : json({ error: 'session not found' }, 404)
+  }
+  if (p === '/api/corch/remote') {
+    if (state.remote === null) return json({ error: 'not found' }, 404)
+    if (typeof state.remote === 'string') return json({ error: state.remote }, 500)
+    return json(state.remote)
+  }
+  if (p === '/api/corch/workers') return getWorkers(state, u.searchParams)
+  const detail = /^\/api\/corch\/workers\/([^/]+)$/.exec(p)
+  if (detail) {
+    const id = decodeURIComponent(detail[1])
+    if (state.detail?.id === id) return json(state.detail)
+    return json({ error: `no worker ${id}` }, 404)
+  }
+  const tail = /^\/api\/sessions\/([^/]+)\/tail$/.exec(p)
+  if (tail) {
+    const id = decodeURIComponent(tail[1])
+    if (state.tail?.session_id === id) return json(state.tail)
+    return json({ session_id: id, source: '', title: '', cwd: '', events: [], error: 'transcript not found' })
+  }
+  return json({ error: 'not found' }, 404)
+}
+
 export async function startFakeHydra(state: FakeState = freshState()): Promise<FakeHydra> {
   const posts: { path: string; body: any }[] = []
   const gets: string[] = []
-  const json = (data: unknown, status = 200) => Response.json(data, { status })
 
   async function handle(req: Request): Promise<Response> {
     const u = new URL(req.url)
-    const p = u.pathname
     if (req.method === 'POST') {
       const body: any = await req.json().catch(() => null)
-      posts.push({ path: p, body })
-      if (p === '/api/corch/cancel') {
-        const w = state.workers.find((x) => x.id === body?.id && ACTIVE.has(x.status))
-        if (w) w.status = 'cancelled'
-        return json({ cancelled: w ? [w.id] : [], keptMessages: {} })
-      }
-      const send = /^\/api\/corch\/workers\/([^/]+)\/send$/.exec(p)
-      if (send) {
-        const w = state.workers.find((x) => x.id === decodeURIComponent(send[1]))
-        if (!w) return json({ ok: false, message: `no such worker ${send[1]}` })
-        if (!ACTIVE.has(w.status)) return json({ ok: false, message: `worker ${w.id} is ${w.status}` })
-        if (body?.urgent === true && w.status === 'running') return json({ ok: true, urgent: true, message: 'Stopped its running work; the same session continues now with this message first.' })
-        return json({ ok: true, message: 'queued' })
-      }
-      const branch = /^\/api\/sessions\/([^/]+)\/branch$/.exec(p)
-      if (branch) {
-        // AgentHydra's session-branch: a reply line that is not in the chat is a 404
-        if (body?.uuid === 'not-in-this-chat') return json({ error: 'that reply is not in this chat' }, 404)
-        return json({ session_id: `branch-of-${decodeURIComponent(branch[1])}`, source: 'claude' })
-      }
-      const now = /^\/api\/corch\/workers\/([^/]+)\/deliver-now$/.exec(p)
-      if (now) {
-        if (state.deliverNow === false) return new Response('404 Not Found', { status: 404 })
-        const w = state.workers.find((x) => x.id === decodeURIComponent(now[1]))
-        if (!w) return json({ ok: false, message: 'No such worker.' })
-        return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
-      }
-      return json({ error: 'not found' }, 404)
+      posts.push({ path: u.pathname, body })
+      return handlePost(state, u.pathname, body)
     }
-    gets.push(p + u.search)
-    if (p === '/api/health') return json({ ok: true, version: state.version ?? '9.9.9' })
-    if (p === '/api/agent-status') return json(state.agentStatus)
-    if (p === '/api/sessions/live') return json(state.live)
-    if (p === '/api/chats') return json(state.chats)
-    if (p === '/api/sessions') return json(state.sessions)
-    if (p === '/api/sessions/search') {
-      if (typeof state.search === 'string') return json({ error: state.search }, 500)
-      const limit = Number(u.searchParams.get('limit') ?? 50)
-      // An answer of another shape (no results array) goes out as it is.
-      return json({ ...state.search, results: state.search.results?.slice(0, limit) })
-    }
-    const row = /^\/api\/sessions\/([^/]+)$/.exec(p)
-    if (row) {
-      const s = state.sessions.find((x) => x.session_id === decodeURIComponent(row[1]))
-      return s ? json(s) : json({ error: 'session not found' }, 404)
-    }
-    if (p === '/api/cli-instances') return json(state.instances)
-    if (p === '/api/corch/remote') {
-      if (state.remote === null) return json({ error: 'not found' }, 404)
-      if (typeof state.remote === 'string') return json({ error: state.remote }, 500)
-      return json(state.remote)
-    }
-    if (p === '/api/corch/workers') {
-      const ids = u.searchParams.get('ids')
-      if (ids !== null) return json(state.workers.filter((w) => ids.split(',').includes(w.id)))
-      const group = u.searchParams.get('group')
-      if (group !== null) return json(state.workers.filter((w) => w.group === group))
-      const limit = u.searchParams.get('limit')
-      if (limit === null) return json(state.workers)
-      const n = Number(limit)
-      const active = state.workers.filter((w) => ACTIVE.has(w.status))
-      const done = state.workers.filter((w) => !ACTIVE.has(w.status)).slice(0, n)
-      return json([...active, ...done])
-    }
-    const detail = /^\/api\/corch\/workers\/([^/]+)$/.exec(p)
-    if (detail) {
-      const id = decodeURIComponent(detail[1])
-      if (state.detail?.id === id) return json(state.detail)
-      return json({ error: `no worker ${id}` }, 404)
-    }
-    const tail = /^\/api\/sessions\/([^/]+)\/tail$/.exec(p)
-    if (tail) {
-      const id = decodeURIComponent(tail[1])
-      if (state.tail?.session_id === id) return json(state.tail)
-      return json({ session_id: id, source: '', title: '', cwd: '', events: [], error: 'transcript not found' })
-    }
-    const stat = (answer: any) => (typeof answer === 'string' ? json({ error: answer }, 500) : json(answer))
-    if (p === '/api/analytics/spend') return stat(state.stats.spend)
-    if (p === '/api/analytics/activity') return stat(state.stats.activity)
-    if (p === '/api/corch/totals') return stat(state.stats.totals)
-    if (p === '/api/hswarm/api/stats') return stat(state.stats.hswarm)
-    return json({ error: 'not found' }, 404)
+    gets.push(u.pathname + u.search)
+    return handleGet(state, u)
   }
 
   let server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: handle })

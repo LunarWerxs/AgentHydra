@@ -17,7 +17,11 @@ import { createServer } from 'node:net'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ClaudeNativeProfileConfig } from './claude-native-settings'
 import { DATA_DIR } from './config'
-import { nativeProcessInfo, nativeProcessTable } from './core/win-process-table'
+import {
+  INFO_EXECUTABLE_PATH,
+  nativeProcessInfo,
+  nativeProcessTable,
+} from './core/win-process-table'
 import { desktopInstallSettled, isFinishedBuild, newestFinishedBuild } from './desktop-install-lock'
 
 const FUSE_MARKER = Buffer.from('dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX')
@@ -501,7 +505,7 @@ async function listRunningExecutablePaths(): Promise<string[] | null> {
   const table = nativeProcessTable()
   if (table)
     return table.flatMap((p) => {
-      const exe = nativeProcessInfo(p.pid)?.executablePath
+      const exe = nativeProcessInfo(p.pid, INFO_EXECUTABLE_PATH)?.executablePath
       return exe ? [exe] : []
     })
   const script =

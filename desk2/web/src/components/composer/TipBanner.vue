@@ -9,26 +9,26 @@ const emit = defineEmits<{ try: [tip: Tip]; dismiss: [tip: Tip] }>()
 </script>
 
 <template>
-  <div role="note" aria-label="Tip" class="flex h-10 min-w-0 items-center rounded-[var(--radius-10)] bg-fill-5 pl-2 pr-2 text-[13px] leading-[19px]">
-    <span class="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-[var(--fill-secondary)] text-text-2" aria-hidden="true">
+  <div role="note" aria-label="Tip" class="flex h-10 min-w-0 items-center rounded-(--radius-10) bg-fill-5 ps-2 pe-2 text-[13px] leading-4.75">
+    <span class="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-(--fill-secondary) text-text-2" aria-hidden="true">
       <newSessionGlyphs.tip class="size-4" />
     </span>
-    <p class="relative -top-[1.5px] ml-[5px] min-w-0 flex-1 truncate font-medium text-text">
+    <p class="relative top-[-1.5px] ms-1.25 min-w-0 flex-1 truncate font-medium text-text">
       {{ tip.text }}<template v-if="tip.link">
-        <span class="text-[var(--accent-text)]"> {{ tip.link }}</span>
+        <span class="text-(--accent-text)"> {{ tip.link }}</span>
       </template>
     </p>
     <button
       v-if="tip.action"
       type="button"
-      class="ml-3 flex h-6 shrink-0 items-center rounded-[var(--radius-6)] px-1.5 font-medium text-text transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
+      class="ms-3 flex h-6 shrink-0 items-center rounded-(--radius-6) px-1.5 font-medium text-text transition-colors duration-60 hover:bg-(--fill-hover)"
       @click="emit('try', tip)"
     >
-      <span class="relative -top-[1.5px]">Try it</span>
+      <span class="relative top-[-1.5px]">Try it</span>
     </button>
     <button
       type="button"
-      class="ml-3 flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-muted transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-text"
+      class="ms-3 flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-muted transition-colors duration-60 hover:bg-(--fill-hover) hover:text-text"
       aria-label="Dismiss"
       title="Dismiss this tip"
       @click="emit('dismiss', tip)"

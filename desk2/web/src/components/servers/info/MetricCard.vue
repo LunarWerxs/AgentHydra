@@ -44,7 +44,7 @@ const minutes = computed(() => Math.round((props.to - props.from) / 60_000))
         </span>
       </div>
       <span class="flex-1" />
-      <dl v-if="state !== 'off' && avg !== null" class="flex shrink-0 gap-4 pt-0.5 text-right">
+      <dl v-if="state !== 'off' && avg !== null" class="flex shrink-0 gap-4 pt-0.5 text-end">
         <div class="flex flex-col gap-0.5">
           <dt :class="EYEBROW">Avg</dt>
           <dd class="text-[13px] leading-5 text-text-2 tnum">{{ format(avg) }}</dd>
@@ -56,12 +56,12 @@ const minutes = computed(() => Math.round((props.to - props.from) / 60_000))
       </dl>
     </div>
 
-    <div v-if="state === 'off'" class="flex h-[96px] flex-col items-start justify-center gap-2 rounded-[var(--radius-8)] bg-fill-5 px-3">
+    <div v-if="state === 'off'" class="flex h-24 flex-col items-start justify-center gap-2 rounded-(--radius-8) bg-fill-5 px-3">
       <p class="text-[12px] leading-4 text-text-muted">Resource monitoring is off, so nothing is measured.</p>
       <button type="button" :class="BTN" :disabled="busy" @click="emit('monitor')">Turn monitoring on</button>
     </div>
     <!-- Nothing measured in the window: a quiet box saying why, never an empty chart. -->
-    <div v-else-if="!vals.length" class="flex h-[96px] items-center justify-center rounded-[var(--radius-8)] bg-fill-5 px-3 text-center text-[12px] leading-4 text-text-muted">
+    <div v-else-if="!vals.length" class="flex h-24 items-center justify-center rounded-(--radius-8) bg-fill-5 px-3 text-center text-[12px] leading-4 text-text-muted">
       {{ state === 'down' ? `Start it to see its ${label === 'CPU' ? 'CPU' : label.toLowerCase()} over time.` : 'Waiting for the first sample…' }}
     </div>
     <template v-else>

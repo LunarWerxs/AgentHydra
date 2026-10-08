@@ -8,7 +8,7 @@ import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
 import { OPEN_BROWSER_EVENT, type BrowserOpenRequest } from '@shared/browser'
 import { lastBrowserRequest } from '@/components/transcript/lib/tools'
-import CliMaytePanel from '@/components/climayte/CliMaytePanel.vue'
+const CliMaytePanel = lazyPanel(() => import('@/components/climayte/CliMaytePanel.vue'))
 const ChangesPane = lazyPanel(() => import('@/components/panes/ChangesPane.vue'))
 const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue'))
 const loadInfoPane = () => import('@/components/servers/info/InfoPane.vue')
@@ -19,8 +19,9 @@ import type { DevSelection } from '@/components/servers/info/selection'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
 const SettingsView = lazyPanel(loadSettingsView)
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import ExternalSessionView from '@/components/external/ExternalSessionView.vue'
-import HydraPane from '@/components/hydra/HydraPane.vue'
+// Loaded on first use, so their chunks stay out of the files the window loads before its first paint.
+const ExternalSessionView = lazyPanel(() => import('@/components/external/ExternalSessionView.vue'))
+const HydraPane = lazyPanel(() => import('@/components/hydra/HydraPane.vue'))
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { useDevServers } from '@/components/servers/store'
@@ -40,7 +41,8 @@ import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
 import { restartServer, updateOffer } from '@/lib/server-update'
-import { lazyPanel } from '@/lib/lazy-panel'
+import { lazyPanel, prefetchPanels } from '@/lib/lazy-panel'
+import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 import { requestedSection } from '@/components/panes/settings-request'
 import type { SettingsSection } from '@/components/panes/settings'
 import { actionError } from '@/lib/action-error'
@@ -92,7 +94,7 @@ const focusSettingsNav = async (e: Event) => {
   for (let i = 0; i < 120; i++) {
     const nav = box?.querySelector<HTMLElement>('[data-section][aria-current="page"]')
     if (nav) return nav.focus()
-    await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    await waitForNextPaint()
   }
 }
 // A browser tab that kept playing in the background of another chat closes when that chat is archived or deleted.
@@ -317,6 +319,24 @@ if (kept.hydra) {
   keepHydra()
 }
 const onOpenHydra = () => toggleHydra(true)
+// The AgentHydra frame preloads once the sidebar has its first outside sessions (or 10 s passed), so its burst of
+// requests does not compete with the sidebar's first reads; pointing at or focusing its button starts it at once.
+// The lazy panels' chunks load then too, each while the window is idle (prefetchPanels).
+const sidebarReady = ref(false)
+const hydraIntent = ref(false)
+const readyTimer = setTimeout(() => {
+  sidebarReady.value = true
+  prefetchPanels()
+}, 10_000)
+const stopReadyWatch = watch(
+  () => src.external.value,
+  () => {
+    sidebarReady.value = true
+    prefetchPanels()
+    clearTimeout(readyTimer)
+    stopReadyWatch()
+  }
+)
 // Picking anything slides the chat back, from AgentHydra or the Dev servers page; an outside session came from the
 // cloud list, which stays. Settings is a pop-up over whatever is on screen, so opening and closing it leaves the page
 // where it is: a table's gear opens its Instances page over the table, and closing Settings goes back to it.
@@ -667,6 +687,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('focus', markOpenRead)
   document.removeEventListener('visibilitychange', onVisibility)
   if (slideTimer) clearTimeout(slideTimer)
+  clearTimeout(readyTimer)
   clearTimeout(slotTimer)
   clearTimeout(devTimer)
   peek.dispose()
@@ -679,7 +700,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 
 <template>
   <!-- DOM order is the tab order: chrome bar, sidebar, then the pane (title bar first); the grid places them. -->
-  <div class="relative grid h-full w-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text">
+  <div class="relative grid size-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text">
     <ChromeBar
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
@@ -692,6 +713,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       :update="demo ? null : updateOffer"
       @restart="restartServer"
       @hydra="toggleHydra()"
+      @hydra-intent="hydraIntent = true"
       @cloud="toggleCloud"
       @tasks="toggleTasks"
       @dev="toggleDev"
@@ -704,7 +726,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 
     <div
       class="col-start-1 row-span-2 row-start-1 h-full overflow-hidden"
-      :class="sliding ? 'transition-[width] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
+      :class="sliding ? 'transition-[width] duration-(--dur-slow) ease-(--ease-snap)' : ''"
       :style="{ width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
       :inert="!sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
@@ -716,7 +738,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           flyout && [
             'absolute left-0 top-0 z-20 shadow-(--shadow-popover)',
             !peekOpen && 'invisible -translate-x-full',
-            peekLive && 'transition-[translate,visibility] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none'
+            peekLive && 'transition-[translate,visibility] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none'
           ]
         "
         :data-peek-zone="flyout ? 'open' : undefined"
@@ -728,14 +750,14 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
         <Sidebar ref="sidebar" :width="sidebarWidth" :accounts-open="props.accountsOpen" @resize="resizeSidebar" />
       </div>
     </div>
-    <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute left-0 top-0 z-[19] h-full w-1.5" />
+    <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute left-0 top-0 z-19 h-full w-1.5" />
 
     <!-- Hydra Desk 2: the chat side and the page side (AgentHydra or the Dev servers page) on one track; their buttons
          slide it (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
     <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
     <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
       <div
-        class="flex h-full w-[200%] transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
+        class="flex h-full w-[200%] transition-transform duration-420 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
         :style="{ transform: pageOpen ? 'translateX(-50%)' : 'translateX(0)' }"
       >
         <div
@@ -747,8 +769,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
         >
           <div
             class="col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
-            :class="sliding ? 'transition-[padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)]' : ''"
-            :style="{ paddingLeft: `${titlePad}px` }"
+            :class="sliding ? 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)' : ''"
+            :style="{ paddingInlineStart: `${titlePad}px` }"
           >
             <ShellHeader
               class="min-w-0 flex-1"
@@ -779,13 +801,13 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
                 <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
-                <ExternalSessionView :key="view.id" :session-id="view.id" />
+                <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
               </div>
 
-              <div v-if="notice" role="status" data-testid="archived-notice" class="shrink-0 bg-[var(--bg-page)] px-4 pb-1.5 pt-1">
-                <p class="mx-auto w-full max-w-[768px] text-center text-[13px] leading-[19px] text-text-muted">
+              <div v-if="notice" role="status" data-testid="archived-notice" class="shrink-0 bg-(--bg-page) px-4 pb-1.5 pt-1">
+                <p class="mx-auto w-full max-w-3xl text-center text-[13px] leading-4.75 text-text-muted">
                   This chat was archived.
-                  <button type="button" class="rounded-[var(--radius-6)] text-text-2 underline-offset-2 transition-colors duration-[60ms] hover:text-[var(--accent-text)] hover:underline focus-visible:underline" @click="unarchive">Click here to unarchive.</button>
+                  <button type="button" class="rounded-(--radius-6) text-text-2 underline-offset-2 transition-colors duration-60 hover:text-(--accent-text) hover:underline focus-visible:underline" @click="unarchive">Click here to unarchive.</button>
                 </p>
               </div>
 
@@ -802,8 +824,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
                buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. -->
           <aside
             v-if="asideOpen"
-            class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-l border-border"
-            :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-[380px]'"
+            class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-s border-border"
+            :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-95'"
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <div
@@ -814,12 +836,12 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
               tabindex="0"
               :aria-valuenow="chatAt"
               :aria-valuemin="CHAT_MIN"
-              class="absolute -left-1.5 top-0 z-[22] h-full w-3 cursor-col-resize touch-none focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+              class="absolute -left-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               @pointerdown.prevent="onSplitDown"
               @keydown="onSplitKey"
             />
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
-            <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" @close="pane = null" />
+            <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" :paused="pageOpen" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
@@ -828,8 +850,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
                sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
           <aside
             v-if="tasks"
-            class="flex min-w-0 pb-2 pr-2"
-            :class="tasks.expanded ? 'col-start-1 row-start-2 pl-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-[440px] pt-2'"
+            class="flex min-w-0 pb-2 pe-2"
+            :class="tasks.expanded ? 'col-start-1 row-start-2 ps-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-110 pt-2'"
           >
             <BackgroundTasksPanel
               :session-id="tasksSessionId"
@@ -851,6 +873,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             <HydraPane
               :open="hydraOpen"
               :pad-left="titlePad"
+              :preload="sidebarReady"
+              :intent="hydraIntent"
               @close="toggleHydra(false)"
               @open-session="(id: string) => src.select({ kind: 'external', id })"
               @show-sessions="showSessions"
@@ -869,7 +893,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
         flush
         :aria-describedby="undefined"
         @open-auto-focus="focusSettingsNav"
-        class="flex h-[min(680px,calc(100vh_-_48px))] max-h-none w-[min(920px,calc(100vw_-_48px))] max-w-none flex-col overflow-hidden rounded-[var(--radius-12)] shadow-(--shadow-popover) ring-0 sm:max-w-none"
+        class="flex h-[min(680px,calc(100vh-48px))] max-h-none w-[min(920px,calc(100vw-48px))] max-w-none flex-col overflow-hidden rounded-(--radius-12) shadow-(--shadow-popover) ring-0 sm:max-w-none"
       >
         <DialogTitle class="sr-only">Settings</DialogTitle>
         <SettingsView />

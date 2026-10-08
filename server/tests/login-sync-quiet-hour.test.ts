@@ -90,7 +90,8 @@ function pcChats(name: string) {
   const viewed = (project: string, sessionId: string) =>
     join(dir, 'view', project, `${sessionId}.jsonl`)
   const local: ChatLocal = {
-    list: () => chats.map((c) => ({ ...c, size: c.project ? size(c.project, c.sessionId) : 0 })),
+    list: async () =>
+      chats.map((c) => ({ ...c, size: c.project ? size(c.project, c.sessionId) : 0 })),
     read: (project, sessionId, from, to) =>
       new Uint8Array(readFileSync(file(project, sessionId)).subarray(from, to)),
     viewSize: (project, sessionId) => {

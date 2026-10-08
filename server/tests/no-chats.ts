@@ -6,7 +6,7 @@ import { setChatLocalForTests } from '../src/core/cli-login-sync'
 import type { ChatLocal } from '../src/core/desktop-chat-types'
 
 export const noChats: ChatLocal = {
-  list: () => [],
+  list: async () => [],
   read: () => new Uint8Array(),
   viewSize: () => 0,
   viewWrite: () => false,

@@ -15,7 +15,7 @@ import { useHswarmApi } from '@/lib/hswarm-api'
 import { refreshRouting } from '@/lib/routing-cost'
 import { acquirePoll, fetchKitUsage, kitQueryString } from '@/lib/kit'
 import { loadStats, statsKey } from '@/lib/swarm-stats'
-import { registerWarm, startWarm } from '@/lib/warm-data'
+import { registerWarm, startWarm, viewOnScreen } from '@/lib/warm-data'
 
 const settled = (jobs: Promise<unknown>[]) => Promise.allSettled(jobs)
 
@@ -32,10 +32,11 @@ registerWarm('cli', () =>
   ]),
 )
 
-// Desktop instances (identities resolved from the cache), their usage and per-account tokens.
+// Desktop instances, their usage and per-account tokens. Identities are resolved in full (the profile
+// calls) only while the Instances tab is on screen; any other moment reads them from the cache.
 registerWarm('desktop', () =>
   settled([
-    useInstances().refreshInstances({ silent: true, resolve: 'full' }),
+    useInstances().refreshInstances({ silent: true, resolve: viewOnScreen() === 'instances' ? 'full' : 'cache' }),
     useUsage().hydrate(true),
     refreshDesktopAccountTokens(),
   ]),

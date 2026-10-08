@@ -98,7 +98,8 @@ describe('media cache', () => {
       c.fileRef(p)
     }
     expect(c.fileRef(first)!.url).not.toBe(url!)
-  })
+    // 2000 real files written and read: past bun's 5 s default on a busy Windows disk, HEAD's code included.
+  }, 30_000)
 
   test('a sent image keeps its url, never its base64', () => {
     const c = createMediaCache(join(temp('sent'), 'media'))
@@ -226,7 +227,7 @@ describe('normalizer pictures', () => {
   const rec = (type: string, content: unknown, extra: Record<string, unknown> = {}) => ({
     type,
     uuid: `u-${Math.random().toString(36).slice(2)}`,
-    timestamp: '2026-10-03T10:00:00.000Z',
+    timestamp: '2020-10-03T10:00:00.000Z',
     message: { id: `m-${Math.random().toString(36).slice(2)}`, role: type, content },
     ...extra,
   })

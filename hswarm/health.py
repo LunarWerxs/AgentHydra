@@ -22,13 +22,7 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     out: dict = {"home": str(config.HOME), "key": config.key_status(), "rate_now": "peak" if config.is_peak() else "off-peak", "procs": procgate.status(),
                  "providers": config.providers_status(), "roles": dict(config.ROLES),
                  "config": f"{config.PROVIDERS_DIR} ({len(list(config.PROVIDERS_DIR.glob('*.toml')))} provider file(s) of your own; docs/PROVIDERS.md)"}
-    for name, st in out["providers"].items():
-        if name != config.DEFAULT_PROVIDER and st["keys"] and config.PROVIDERS[name].get("models_path"):
-            try:
-                c = m.client_for(st["models"][0]) if st["models"] else None
-                st["reachable"] = (await c.models())[:20] if c else f"no model registered; add one under [models.<name>] in {config.user_file(name)}"
-            except Exception as e:  # noqa: BLE001 - one provider down must not hide the rest
-                st["reachable"] = f"ERROR {type(e).__name__}: {e}"[:200]
+    await _reachable(m, out["providers"])
     try:
         out["claude_bin"] = claude_bin()
     except RuntimeError as e:
@@ -82,21 +76,37 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     except ValueError as e:
         out["faults_armed"] = f"UNREADABLE: {e}"
     if out["key"]["present"]:
-        try:
-            out["models"] = await m.client.models()
-            out["balance"] = await m.client.balance()
-            rows = await m.client.balances()  # one row per key in the pool: fingerprint + balance, never the key
-            if verbose:
-                out["keys"] = rows
-                out["key_pool"] = m.client.pool.status()
-            off = [r["fingerprint"] for r in rows if r.get("usable") is False]
-            out["keys_out_of_balance"] = off  # both consoles colour the key check by whether this is empty
-            out["keys_note"] = (f"{len(off)} of {len(rows)} keys are out of credit and DISABLED - never retried with a real "
-                                "request until a probe sees a top-up or `hswarm keys enable` says so"
-                                if off else f"every one of the {len(rows)} keys has balance")
-        except Exception as e:  # noqa: BLE001 - the report must come back even when the API is down
-            out["api_error"] = f"{type(e).__name__}: {e}"
+        await _default_pool(m, out, verbose)
     return out
+
+
+async def _reachable(m: JobManager, providers: dict) -> None:
+    """Each keyed provider other than the default answers its model list into its row of `providers`."""
+    for name, st in providers.items():
+        if name != config.DEFAULT_PROVIDER and st["keys"] and config.PROVIDERS[name].get("models_path"):
+            try:
+                c = m.client_for(st["models"][0]) if st["models"] else None
+                st["reachable"] = (await c.models())[:20] if c else f"no model registered; add one under [models.<name>] in {config.user_file(name)}"
+            except Exception as e:  # noqa: BLE001 - one provider down must not hide the rest
+                st["reachable"] = f"ERROR {type(e).__name__}: {e}"[:200]
+
+
+async def _default_pool(m: JobManager, out: dict, verbose: bool) -> None:
+    """The default provider's models, balance and per-key balances, added to `out`."""
+    try:
+        out["models"] = await m.client.models()
+        out["balance"] = await m.client.balance()
+        rows = await m.client.balances()  # one row per key in the pool: fingerprint + balance, never the key
+        if verbose:
+            out["keys"] = rows
+            out["key_pool"] = m.client.pool.status()
+        off = [r["fingerprint"] for r in rows if r.get("usable") is False]
+        out["keys_out_of_balance"] = off  # both consoles colour the key check by whether this is empty
+        out["keys_note"] = (f"{len(off)} of {len(rows)} keys are out of credit and DISABLED - never retried with a real "
+                            "request until a probe sees a top-up or `hswarm keys enable` says so"
+                            if off else f"every one of the {len(rows)} keys has balance")
+    except Exception as e:  # noqa: BLE001 - the report must come back even when the API is down
+        out["api_error"] = f"{type(e).__name__}: {e}"
 
 
 async def cost(m: JobManager, days: float = 1.0, balance: bool = True) -> dict:

@@ -41,14 +41,15 @@ import {
 } from 'node:fs'
 import { connect, createServer, type Socket } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { findRepoRoot } from '../tests/repo-root'
 import { findCsc } from './build-launcher'
 
 const ROOT = (process.env.AH_UPGRADE_E2E_ROOT ?? join(tmpdir(), 'ah-upgrade-e2e')).replaceAll(
   '\\',
   '/',
 )
-const REPO = resolve(import.meta.dir, '..').replaceAll('\\', '/')
+const REPO = findRepoRoot(import.meta.dir).replaceAll('\\', '/')
 const LOG = join(ROOT, 'upgrade-e2e.log')
 const OLD_TAG = 'v1.13.0'
 const OLD_NAME = 'AgentHydra-1.13.0-windows-x64'
@@ -68,7 +69,7 @@ const OPENSSL = existsSync(GIT_OPENSSL) ? GIT_OPENSSL : 'openssl'
 const CSC = findCsc() ?? 'csc.exe'
 const argv = process.argv.slice(2)
 const flag = (n: string) => argv.includes(n)
-const opt = (n: string) => (argv.indexOf(n) >= 0 ? argv[argv.indexOf(n) + 1] : undefined)
+const opt = (n: string) => (argv.includes(n) ? argv[argv.indexOf(n) + 1] : undefined)
 const norm = (p: string) => p.replaceAll('\\', '/').toLowerCase()
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
@@ -532,6 +533,192 @@ interface Ports {
   proxy: number
 }
 
+type Health = Awaited<ReturnType<typeof health>>
+
+async function awaitHealth(port: number): Promise<Health> {
+  for (let i = 0; i < 100; i++) {
+    const h = await health(port)
+    if (h) return h
+    await sleep(300)
+  }
+  return null
+}
+
+async function applyUpdate(base: string): Promise<{ t0: number; tApply: number }> {
+  const t0 = Date.now()
+  const applyRes = await fetch(`${base}/api/update/apply`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(300_000),
+  })
+  const apply = (await applyRes.json()) as {
+    ok?: boolean
+    message?: string
+    restartRequired?: boolean
+    output?: string[]
+  }
+  const tApply = (Date.now() - t0) / 1000
+  log(`apply answered after ${tApply.toFixed(1)}s: ${JSON.stringify(apply).slice(0, 400)}`)
+  check(
+    apply.ok === true && apply.restartRequired === true,
+    '(a) apply call succeeds',
+    apply.message ?? '',
+  )
+  if (!apply.ok) throw new Error('apply failed')
+  return { t0, tApply }
+}
+
+async function awaitRelease(port: number, t0: number, delayMs: number) {
+  const limit = Date.now() + (delayMs > 0 ? 420_000 : 240_000)
+  let t2: number | null = null
+  let seen113Until = 0
+  let last: Health = null
+  while (Date.now() < limit) {
+    last = await health(port)
+    if (last?.version === '2.0.0') {
+      t2 = (Date.now() - t0) / 1000
+      break
+    }
+    if (last) seen113Until = (Date.now() - t0) / 1000
+    await sleep(500)
+  }
+  return { t2, seen113Until, last }
+}
+
+function checkInstalled(): void {
+  const exeV = spawnSync(join(INSTALL, 'AgentHydra.exe'), ['--version'], {
+    encoding: 'utf8',
+    windowsHide: true,
+    env: { ...process.env, AGENTHYDRA_HEADLESS: '1' } as never,
+  })
+  const pin = existsSync(join(INSTALL, 'app', 'bun-version'))
+    ? readFileSync(join(INSTALL, 'app', 'bun-version'), 'utf8').trim()
+    : ''
+  const stamp = existsSync(join(INSTALL, 'runtime', 'bun.version'))
+    ? readFileSync(join(INSTALL, 'runtime', 'bun.version'), 'utf8').trim()
+    : ''
+  const files = [
+    'app/server.js',
+    'app/release.json',
+    'runtime/bun.exe',
+    'runtime/bun.version',
+    'desk2/server/src/index.ts',
+    'orchestrator/orch.py',
+    'misc/AgentHydra-Tray.json',
+  ]
+  const missing = files.filter((f) => !existsSync(join(INSTALL, f)))
+  check(
+    exeV.stdout.trim() === '2.0.0' && missing.length === 0 && stamp === pin && pin === BUN_PIN,
+    '(c) install holds the 2.0.0 launcher, app/, runtime/bun.exe + bun.version, desk2/',
+    `--version=${exeV.stdout.trim()} missing=[${missing}] bun.version=${stamp} pin=${pin}`,
+  )
+}
+
+function logFiles(dir: string): string[] {
+  return !existsSync(dir)
+    ? []
+    : readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory()
+          ? logFiles(join(dir, e.name))
+          : /\.log$/.test(e.name)
+            ? [join(dir, e.name)]
+            : [],
+      )
+}
+
+function checkHandoff(label: string, run0: string, oldLog: string, delayMs: number): void {
+  const oldText = existsSync(oldLog) ? readFileSync(oldLog, 'utf8') : ''
+  const allText = [...logFiles(run0), ...logFiles(INSTALL)]
+    .map((f) => `--- ${f}\n${readFileSync(f, 'utf8')}`)
+    .join('\n')
+  const ack = /update applied, relaunching the daemon: successor pid \d+ reported in/.test(oldText)
+  const noAck = /no successor reported in within/.test(oldText)
+  const takeover = /predecessor pid \d+ still holds port.*ending it/.test(allText)
+  log(
+    `HANDOFF scenario ${label}: ${ack ? 'ACK inside the 60 s (1.13 exited itself)' : noAck || takeover ? '2.0 TAKEOVER (1.13 ack deadline passed; 2.0 ended the predecessor)' : 'unknown (see logs)'} [ack=${ack} noAck=${noAck} takeover=${takeover}]`,
+  )
+  if (delayMs > 0)
+    check(
+      noAck && takeover,
+      'scenario 2: 1.13 ack expired and the 2.0 daemon took over',
+      `noAck=${noAck} takeover=${takeover}`,
+    )
+  else
+    check(
+      ack,
+      'scenario 1: handoff by ack inside 60 s',
+      `ack=${ack} noAck=${noAck} takeover=${takeover}`,
+    )
+}
+
+async function desk2Attempt(
+  attempt: number,
+  deskLog: string,
+  env: Record<string, string>,
+  base: string,
+  port: number,
+): Promise<boolean> {
+  if (attempt > 1) await sleep(4000)
+  const dfd = require('node:fs').openSync(deskLog, 'a')
+  const started = Date.now()
+  const desk = spawn(join(INSTALL, 'runtime', 'bun.exe'), ['server/src/index.ts'], {
+    cwd: join(INSTALL, 'desk2'),
+    env: { ...env, HYDRA_URL: base },
+    stdio: ['ignore', dfd, dfd],
+    windowsHide: true,
+  })
+  let deskExit = ''
+  desk.on('exit', (c, sig) => {
+    deskExit = `exited ${c ?? sig} after ${((Date.now() - started) / 1000).toFixed(1)}s`
+  })
+  log(`Desk 2 attempt ${attempt} on runtime/bun.exe, pid ${desk.pid}, port ${port}`)
+  let dh = false
+  for (let i = 0; i < 100 && !dh && !deskExit; i++) {
+    dh = (await health(port)) !== null
+    if (!dh) await sleep(400)
+  }
+  if (!dh)
+    log(
+      `Desk 2 attempt ${attempt} failed (${deskExit || 'still running, no health'}); log tail: ${readFileSync(deskLog, 'utf8').slice(-400)}`,
+    )
+  return dh
+}
+
+function desk2Probe(env: Record<string, string>, base: string, port: number): void {
+  const probe = spawnSync(join(INSTALL, 'runtime', 'bun.exe'), ['server/src/index.ts'], {
+    cwd: join(INSTALL, 'desk2'),
+    env: { ...env, HYDRA_URL: base } as never,
+    encoding: 'utf8',
+    timeout: 5000,
+    windowsHide: true,
+  })
+  log(
+    `Desk 2 probe: status ${probe.status} signal ${probe.signal} err ${probe.error?.message ?? ''} stdout[${(probe.stdout ?? '').slice(-300)}] stderr[${(probe.stderr ?? '').slice(-600)}]`,
+  )
+  log(
+    `Desk 2 port ${port} listeners: ${spawnSync('powershell', ['-NoProfile', '-Command', `Get-NetTCPConnection -LocalPort ${port} -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess.ToString() + ' ' + $_.State }`], { encoding: 'utf8' }).stdout.trim() || 'none'}`,
+  )
+  log(
+    `procs under ROOT: ${procsUnderRoot()
+      .map((p) => `${p.pid}:${p.path.slice(ROOT.length)}`)
+      .join(', ')}`,
+  )
+}
+
+async function checkDesk2(
+  run0: string,
+  env: Record<string, string>,
+  base: string,
+  port: number,
+): Promise<boolean> {
+  const deskLog = join(run0, 'desk2.log')
+  let dh = false
+  for (let attempt = 1; attempt <= 5 && !dh; attempt++) {
+    dh = await desk2Attempt(attempt, deskLog, env, base, port)
+    if (!dh && attempt === 2) desk2Probe(env, base, port)
+  }
+  return dh
+}
+
 async function scenario(label: string, ports: Ports, delayMs: number): Promise<void> {
   log(`==== scenario ${label}: bun mirror delay ${delayMs / 1000}s ====`)
   bunDelayMs = delayMs
@@ -593,12 +780,7 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
   log(`1.13 daemon started, pid ${oldPid}, port ${ports.daemon}`)
 
   try {
-    let h = null as Awaited<ReturnType<typeof health>>
-    for (let i = 0; i < 100; i++) {
-      h = await health(ports.daemon)
-      if (h) break
-      await sleep(300)
-    }
+    const h = await awaitHealth(ports.daemon)
     check(
       h?.version === '1.13.0' && h?.distribution === 'compiled',
       'before: 1.13.0 compiled daemon healthy',
@@ -623,40 +805,10 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
     if (!chk.canApply) throw new Error('1.13 cannot apply')
 
     // ---- apply ----
-    const t0 = Date.now()
-    const applyRes = await fetch(`${base}/api/update/apply`, {
-      method: 'POST',
-      signal: AbortSignal.timeout(300_000),
-    })
-    const apply = (await applyRes.json()) as {
-      ok?: boolean
-      message?: string
-      restartRequired?: boolean
-      output?: string[]
-    }
-    const tApply = (Date.now() - t0) / 1000
-    log(`apply answered after ${tApply.toFixed(1)}s: ${JSON.stringify(apply).slice(0, 400)}`)
-    check(
-      apply.ok === true && apply.restartRequired === true,
-      '(a) apply call succeeds',
-      apply.message ?? '',
-    )
-    if (!apply.ok) throw new Error('apply failed')
+    const { t0, tApply } = await applyUpdate(base)
 
     // ---- wait for 2.0.0 on the same port ----
-    const limit = Date.now() + (delayMs > 0 ? 420_000 : 240_000)
-    let t2: number | null = null
-    let seen113Until = 0
-    let last: Awaited<ReturnType<typeof health>> = null
-    while (Date.now() < limit) {
-      last = await health(ports.daemon)
-      if (last?.version === '2.0.0') {
-        t2 = (Date.now() - t0) / 1000
-        break
-      }
-      if (last) seen113Until = (Date.now() - t0) / 1000
-      await sleep(500)
-    }
+    const { t2, seen113Until, last } = await awaitRelease(ports.daemon, t0, delayMs)
     const dark = t2 !== null ? t2 - seen113Until : 0
     log(
       `1.13 was last seen at ${seen113Until.toFixed(1)}s; 2.0.0 first healthy at ${t2?.toFixed(1) ?? 'never'}s after the apply started (apply returned at ${tApply.toFixed(1)}s)`,
@@ -672,32 +824,7 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
       )
 
     // ---- the install on disk ----
-    const exeV = spawnSync(join(INSTALL, 'AgentHydra.exe'), ['--version'], {
-      encoding: 'utf8',
-      windowsHide: true,
-      env: { ...process.env, AGENTHYDRA_HEADLESS: '1' } as never,
-    })
-    const pin = existsSync(join(INSTALL, 'app', 'bun-version'))
-      ? readFileSync(join(INSTALL, 'app', 'bun-version'), 'utf8').trim()
-      : ''
-    const stamp = existsSync(join(INSTALL, 'runtime', 'bun.version'))
-      ? readFileSync(join(INSTALL, 'runtime', 'bun.version'), 'utf8').trim()
-      : ''
-    const files = [
-      'app/server.js',
-      'app/release.json',
-      'runtime/bun.exe',
-      'runtime/bun.version',
-      'desk2/server/src/index.ts',
-      'orchestrator/orch.py',
-      'misc/AgentHydra-Tray.json',
-    ]
-    const missing = files.filter((f) => !existsSync(join(INSTALL, f)))
-    check(
-      exeV.stdout.trim() === '2.0.0' && missing.length === 0 && stamp === pin && pin === BUN_PIN,
-      '(c) install holds the 2.0.0 launcher, app/, runtime/bun.exe + bun.version, desk2/',
-      `--version=${exeV.stdout.trim()} missing=[${missing}] bun.version=${stamp} pin=${pin}`,
-    )
+    checkInstalled()
 
     // ---- no 1.13 process left ----
     await sleep(2500)
@@ -709,88 +836,10 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
     )
 
     // ---- which handoff happened ----
-    const oldText = existsSync(oldLog) ? readFileSync(oldLog, 'utf8') : ''
-    const logs = (dir: string): string[] =>
-      !existsSync(dir)
-        ? []
-        : readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
-            e.isDirectory()
-              ? logs(join(dir, e.name))
-              : /\.log$/.test(e.name)
-                ? [join(dir, e.name)]
-                : [],
-          )
-    const allText = [...logs(run0), ...logs(INSTALL)]
-      .map((f) => `--- ${f}\n${readFileSync(f, 'utf8')}`)
-      .join('\n')
-    const ack = /update applied, relaunching the daemon: successor pid \d+ reported in/.test(
-      oldText,
-    )
-    const noAck = /no successor reported in within/.test(oldText)
-    const takeover = /predecessor pid \d+ still holds port.*ending it/.test(allText)
-    log(
-      `HANDOFF scenario ${label}: ${ack ? 'ACK inside the 60 s (1.13 exited itself)' : noAck || takeover ? '2.0 TAKEOVER (1.13 ack deadline passed; 2.0 ended the predecessor)' : 'unknown (see logs)'} [ack=${ack} noAck=${noAck} takeover=${takeover}]`,
-    )
-    if (delayMs > 0)
-      check(
-        noAck && takeover,
-        'scenario 2: 1.13 ack expired and the 2.0 daemon took over',
-        `noAck=${noAck} takeover=${takeover}`,
-      )
-    else
-      check(
-        ack,
-        'scenario 1: handoff by ack inside 60 s',
-        `ack=${ack} noAck=${noAck} takeover=${takeover}`,
-      )
+    checkHandoff(label, run0, oldLog, delayMs)
 
     // ---- Desk 2 on the runtime bun the launcher installed ----
-    const deskLog = join(run0, 'desk2.log')
-    let dh = false
-    for (let attempt = 1; attempt <= 5 && !dh; attempt++) {
-      if (attempt > 1) await sleep(4000)
-      const dfd = require('node:fs').openSync(deskLog, 'a')
-      const started = Date.now()
-      const desk = spawn(join(INSTALL, 'runtime', 'bun.exe'), ['server/src/index.ts'], {
-        cwd: join(INSTALL, 'desk2'),
-        env: { ...env, HYDRA_URL: base },
-        stdio: ['ignore', dfd, dfd],
-        windowsHide: true,
-      })
-      let deskExit = ''
-      desk.on('exit', (c, sig) => {
-        deskExit = `exited ${c ?? sig} after ${((Date.now() - started) / 1000).toFixed(1)}s`
-      })
-      log(`Desk 2 attempt ${attempt} on runtime/bun.exe, pid ${desk.pid}, port ${ports.desk}`)
-      for (let i = 0; i < 100 && !dh && !deskExit; i++) {
-        dh = (await health(ports.desk)) !== null
-        if (!dh) await sleep(400)
-      }
-      if (!dh)
-        log(
-          `Desk 2 attempt ${attempt} failed (${deskExit || 'still running, no health'}); log tail: ${readFileSync(deskLog, 'utf8').slice(-400)}`,
-        )
-      if (!dh && attempt === 2) {
-        const probe = spawnSync(join(INSTALL, 'runtime', 'bun.exe'), ['server/src/index.ts'], {
-          cwd: join(INSTALL, 'desk2'),
-          env: { ...env, HYDRA_URL: base } as never,
-          encoding: 'utf8',
-          timeout: 5000,
-          windowsHide: true,
-        })
-        log(
-          `Desk 2 probe: status ${probe.status} signal ${probe.signal} err ${probe.error?.message ?? ''} stdout[${(probe.stdout ?? '').slice(-300)}] stderr[${(probe.stderr ?? '').slice(-600)}]`,
-        )
-        log(
-          `Desk 2 port ${ports.desk} listeners: ${spawnSync('powershell', ['-NoProfile', '-Command', `Get-NetTCPConnection -LocalPort ${ports.desk} -ErrorAction SilentlyContinue | ForEach-Object { $_.OwningProcess.ToString() + ' ' + $_.State }`], { encoding: 'utf8' }).stdout.trim() || 'none'}`,
-        )
-        log(
-          `procs under ROOT: ${procsUnderRoot()
-            .map((p) => `${p.pid}:${p.path.slice(ROOT.length)}`)
-            .join(', ')}`,
-        )
-      }
-    }
+    const dh = await checkDesk2(run0, env, base, ports.desk)
     check(dh, '(e) Desk 2 /api/health answers on its port', `port ${ports.desk}`)
   } catch (e) {
     check(false, `scenario ${label} ran to the end`, e instanceof Error ? e.message : String(e))

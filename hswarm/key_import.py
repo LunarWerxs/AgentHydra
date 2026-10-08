@@ -129,12 +129,25 @@ def _revoked(entry: dict) -> bool:
         and ("revoked" in why or "rejected this key" in why)
 
 
-def _plan(incoming: dict[str, list[str]]) -> tuple[dict, dict[str, list[str]], list[tuple[Path, str]]]:
-    local = vault.scan()
-    desired = {n: list(v) for n, v in local.items()}
+def _toml_held_keys(path: Path, doc) -> tuple[str, list[str]]:
+    """The vault list name and the validated keys a provider TOML file still holds."""
+    raw = doc["keys"]
+    raw = [raw] if isinstance(raw, str) else raw
+    if not isinstance(raw, (list, tomlkit.items.Array)) or any(not isinstance(k, str) for k in raw):
+        raise KeyImportError(f"invalid keys field in {path.name}")
+    name = f"{path.stem}_api_keys"
+    if not vault.LIST_RX.fullmatch(name):
+        raise KeyImportError(f"provider name cannot form a vault list: {path.name}")
+    held = [k.strip() for k in raw if k.strip()]
+    if any(len(k) < vault.KEY_MIN_LEN or any(c.isspace() for c in k) for k in held):
+        raise KeyImportError(f"invalid key entry in {path.name}")
+    return name, held
+
+
+def _retire_toml_keys(desired: dict[str, list[str]]) -> tuple[int, list[tuple[Path, str]]]:
+    """Retire persistent TOML key copies into `desired`, preserving all settings and comments."""
     toml_edits = []
     migrated = 0
-    # Retire persistent TOML key copies, preserving all settings and comments.
     for path in sorted(config.PROVIDERS_DIR.glob("*.toml")):
         if path.is_symlink():
             raise KeyImportError(f"refusing a linked provider file: {path.name}")
@@ -144,54 +157,62 @@ def _plan(incoming: dict[str, list[str]]) -> tuple[dict, dict[str, list[str]], l
             raise KeyImportError(f"could not parse provider file {path.name} ({type(e).__name__})") from e
         if "keys" not in doc:
             continue
-        raw = doc["keys"]
-        raw = [raw] if isinstance(raw, str) else raw
-        if not isinstance(raw, (list, tomlkit.items.Array)) or any(not isinstance(k, str) for k in raw):
-            raise KeyImportError(f"invalid keys field in {path.name}")
-        name = f"{path.stem}_api_keys"
-        if not vault.LIST_RX.fullmatch(name):
-            raise KeyImportError(f"provider name cannot form a vault list: {path.name}")
-        held = [k.strip() for k in raw if k.strip()]
-        if any(len(k) < vault.KEY_MIN_LEN or any(c.isspace() for c in k) for k in held):
-            raise KeyImportError(f"invalid key entry in {path.name}")
+        name, held = _toml_held_keys(path, doc)
         migrated += len(set(held) - set(desired.get(name, ())))
         desired[name] = list(dict.fromkeys([*desired.get(name, []), *held]))
         del doc["keys"]
         toml_edits.append((path, tomlkit.dumps(doc)))
-    for name, values in incoming.items():
-        desired[name] = list(dict.fromkeys([*desired.get(name, []), *values]))
+    return migrated, toml_edits
 
+
+def _revoked_fps(desired: dict[str, list[str]]) -> set[str]:
+    """Fingerprints with explicit revoked evidence that name exactly one active key."""
     by_fp: dict[str, set[str]] = {}
     for name, values in desired.items():
         if not name.endswith((".dead", ".unfunded")):
             for key in values:
                 by_fp.setdefault(config.fingerprint(key), set()).add(key)
-    revoked = {fp for fp, e in _state_snapshot().items() if len(by_fp.get(fp, ())) == 1 and _revoked(e)}
+    return {fp for fp, e in _state_snapshot().items() if len(by_fp.get(fp, ())) == 1 and _revoked(e)}
+
+
+def _reconcile(provider: str, desired: dict, incoming: dict, local: dict, revoked: set[str]) -> dict | None:
+    """Apply one provider's alive and dead classifications to `desired`; its report row, or None when nothing moved."""
+    name = provider + "_api_keys"
+    alive = set(incoming.get(name, ()))
+    # Persist explicit revoked evidence as a synced classification, so another machine's
+    # older active copy cannot return the key to the usable pool.
+    revoked_keys = [k for k in desired.get(name, ()) if config.fingerprint(k) in revoked and k not in alive]
+    if revoked_keys:
+        desired[name + ".dead"] = list(dict.fromkeys([*desired.get(name + ".dead", []), *revoked_keys]))
+    dead = set(desired.get(name + ".dead", ())) - alive
+    active = desired.get(name, [])
+    removed = len(set(active) & dead)
+    desired[name] = [k for k in active if k not in dead]
+    restored = 0
+    for suffix in (".dead", ".unfunded"):
+        archive = name + suffix
+        if archive in desired:
+            restored += len(set(desired[archive]) & alive)
+            desired[archive] = [k for k in desired[archive] if k not in alive]
+    added = len(set(desired[name]) - set(local.get(name, ())))
+    if not (alive or removed or restored or added):
+        return None
+    return {"provider": provider, "incoming_alive": len(alive), "added": added,
+            "removed_dead": removed, "restored_classifications": restored,
+            "active_after": len(desired[name])}
+
+
+def _plan(incoming: dict[str, list[str]]) -> tuple[dict, dict[str, list[str]], list[tuple[Path, str]]]:
+    local = vault.scan()
+    desired = {n: list(v) for n, v in local.items()}
+    migrated, toml_edits = _retire_toml_keys(desired)
+    for name, values in incoming.items():
+        desired[name] = list(dict.fromkeys([*desired.get(name, []), *values]))
+
+    revoked = _revoked_fps(desired)
     providers = sorted({n.removesuffix(".dead").removesuffix(".unfunded").removesuffix("_api_keys") for n in desired})
-    rows = []
-    for provider in providers:
-        name = provider + "_api_keys"
-        alive = set(incoming.get(name, ()))
-        # Persist explicit revoked evidence as a synced classification, so another machine's
-        # older active copy cannot return the key to the usable pool.
-        revoked_keys = [k for k in desired.get(name, ()) if config.fingerprint(k) in revoked and k not in alive]
-        if revoked_keys:
-            desired[name + ".dead"] = list(dict.fromkeys([*desired.get(name + ".dead", []), *revoked_keys]))
-        dead = set(desired.get(name + ".dead", ())) - alive
-        active = desired.get(name, [])
-        removed = len(set(active) & dead)
-        desired[name] = [k for k in active if k not in dead]
-        restored = 0
-        for suffix in (".dead", ".unfunded"):
-            archive = name + suffix
-            if archive in desired:
-                restored += len(set(desired[archive]) & alive)
-                desired[archive] = [k for k in desired[archive] if k not in alive]
-        added = len(set(desired[name]) - set(local.get(name, ())))
-        if alive or removed or restored or added:
-            rows.append({"provider": provider, "incoming_alive": len(alive), "added": added,
-                         "removed_dead": removed, "restored_classifications": restored,
-                         "active_after": len(desired[name])})
+    rows = [row for provider in providers
+            if (row := _reconcile(provider, desired, incoming, local, revoked)) is not None]
     changed = {n: v for n, v in desired.items() if set(v) != set(local.get(n, ())) }
     report = {"incoming_files": len(incoming), "incoming_alive": sum(len(v) for n, v in incoming.items()
               if not n.endswith((".dead", ".unfunded"))), "added": sum(r["added"] for r in rows),

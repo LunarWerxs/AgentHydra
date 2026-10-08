@@ -46,7 +46,7 @@ export type RetireOutcome =
 export interface ChatLocal {
   /** Every chat record in this PC's desktop profiles that renders for the account the profile is
    *  signed into, archived ones included. Records only: no transcript is read. */
-  list(): LocalChat[]
+  list(): Promise<LocalChat[]>
   /** Bytes [from, to) of one of this PC's transcripts. */
   read(project: string, sessionId: string, from: number, to: number): Uint8Array
   /** The size of the viewer's copy of another PC's chat; 0 when there is none. */

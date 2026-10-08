@@ -26,11 +26,11 @@ const stateVariant = computed(() => {
 <template>
   <TableRow class="group/row">
     <template v-for="col in columns" :key="col.key">
-      <TableCell v-if="col.key === 'keyMasked'" class="font-mono text-xs max-w-0">
+      <TableCell v-if="col.key === 'keyMasked'" mono size="xs" class="max-w-0">
         {{ row.masked }}
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'keyFingerprint'" class="font-mono text-xs">
+      <TableCell v-else-if="col.key === 'keyFingerprint'" mono size="xs">
         {{ row.fingerprint }}
       </TableCell>
 
@@ -39,7 +39,9 @@ const stateVariant = computed(() => {
           v-if="multipleKeys"
           type="number"
           :value="row.priority ?? ''"
-          class="h-6 w-16 px-1.5 py-0 text-xs md:text-xs"
+          variant="numeric"
+          text-size="xs"
+          class="h-6 w-16"
           :placeholder="$t('hswarm.v.providers.noPriority')"
           @change="
             (e: Event) => {
@@ -52,12 +54,12 @@ const stateVariant = computed(() => {
       </TableCell>
 
       <TableCell v-else-if="col.key === 'keyState'">
-        <Badge :variant="stateVariant" class="text-xs">
+        <Badge :variant="stateVariant" size="md">
           {{ row.state.label }}
         </Badge>
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'actions'" class="text-right">
+      <TableCell v-else-if="col.key === 'actions'" align="end">
         <div class="flex justify-end gap-1">
           <Button
             size="icon-sm"

@@ -3,11 +3,13 @@
 // the pages only read the store. This module decides when it is asked again:
 //   - once in the background after the window is up (startWarm, staggered so the daemon is not hit by
 //     every kind in the same moment),
-//   - about every 2 minutes while Desk is open, never while the document is hidden, and catching up
-//     as soon as it is visible again,
+//   - about every 2 minutes for the kinds the view on screen shows, never while the document is
+//     hidden, and catching up as soon as it is visible again,
 //   - right when a page is opened or the Desk pane is shown (refreshForView).
 // A kind never has two requests in flight (an overlapping ask shares the running one) and is never
 // asked twice within MIN_GAP_MS, so a page and its children opening together cost one request.
+
+import type { AppView } from './app-view'
 
 export type WarmKind = 'cli' | 'desktop' | 'free' | 'analytics' | 'hswarm' | 'climayte' | 'routing'
 
@@ -56,23 +58,35 @@ export function refreshWarm(kind: WarmKind, opts: { viewed?: boolean } = {}): Pr
   return run
 }
 
-/** The kinds a view shows. */
+/** The kinds a view shows; every AppView has its entry (a view left out would never be refreshed in the background). */
 const VIEW_KINDS: Record<string, readonly WarmKind[]> = {
   instances: ['desktop', 'cli', 'free'],
   analytics: ['analytics'],
   // CliMayte's page lists the Free logins' private chats beside its tasks.
   hswarm: ['hswarm', 'climayte', 'routing', 'free'],
+} satisfies Record<AppView, readonly WarmKind[]>
+
+let currentView = ''
+
+/** The view on screen, as last given to refreshForView. */
+export function viewOnScreen(): string {
+  return currentView
 }
 
 /** A page was opened (or the pane was shown on it): refresh what it shows, right then. */
 export function refreshForView(view: string): void {
+  currentView = view
   for (const k of VIEW_KINDS[view] ?? []) void refreshWarm(k, { viewed: true })
 }
 
+// Only the kinds the view on screen shows: a kind no one is looking at waits until its view opens.
 function refreshDue(): void {
   if (document.visibilityState === 'hidden') return
   const now = Date.now()
-  for (const [kind, e] of entries) if (!e.inflight && now - e.at >= WARM_MS) void refreshWarm(kind)
+  for (const kind of VIEW_KINDS[currentView] ?? []) {
+    const e = entries.get(kind)
+    if (e && !e.inflight && now - e.at >= WARM_MS) void refreshWarm(kind)
+  }
 }
 
 /** Loads every kind once, a few seconds apart, then keeps them fresh. Safe to call twice. */

@@ -22,8 +22,11 @@ export interface ServerFocus {
 }
 
 const ON_KEY = 'hydra-desk.devservers.on'
+/** 2 s while a server is starting or stopping, else 5 s; the found list at most every 15 s. */
 const POLL_MS = 2000
+const IDLE_POLL_MS = 5000
 const STARTING_POLL_MS = 1000
+const FOUND_EVERY_MS = 15_000
 /**
  * Missed list reads in a row before a shown list gives way to "did not answer": on a PC at full CPU one read in 60 still
  * passed the 2 s limit (2026-10-07), and the next one answered.
@@ -60,31 +63,17 @@ function createDevServers() {
   let asked = false
   let misses = 0
   async function once(): Promise<void> {
-    let s: DevWebStatus
-    try {
-      s = await devwebStatus()
-      statusMissing.value = false
-    } catch (err) {
-      if (err instanceof RouteMissing) statusMissing.value = true
-      return
-    }
+    const read = await readStatus()
+    if (!read) return
+    let s = read
     const loud = lists > 0
     let loaded = false
     if (loud && !asked) {
       asked = true
       if (s.state === 'stopped') {
-        // The list read is the request that starts the service; 'starting' shows while it is in flight, so the stopped view only appears after a stop.
-        status.value = { state: 'starting', pid: null }
-        let failure: string | null = null
-        try {
-          projects.value = await listProjects()
-          projectsError.value = null
-          loaded = true
-        } catch (err) {
-          failure = err instanceof Error ? err.message : String(err)
-        }
-        s = await devwebStatus().catch(() => s)
-        if (failure && s.state !== 'running') s = { state: 'failed', pid: null, reason: failure }
+        const started = await startWithList(s)
+        s = started.s
+        loaded = started.loaded
       }
     }
     status.value = s
@@ -93,6 +82,40 @@ function createDevServers() {
       return
     }
     if (loaded) return
+    await readProjects()
+    await readFound()
+  }
+
+  /** The service's status, or null when the read failed (a missing route is remembered). */
+  async function readStatus(): Promise<DevWebStatus | null> {
+    try {
+      const s = await devwebStatus()
+      statusMissing.value = false
+      return s
+    } catch (err) {
+      if (err instanceof RouteMissing) statusMissing.value = true
+      return null
+    }
+  }
+
+  /** The list read is the request that starts a stopped service; 'starting' shows while it is in flight, so the stopped view only appears after a stop. */
+  async function startWithList(before: DevWebStatus): Promise<{ s: DevWebStatus; loaded: boolean }> {
+    status.value = { state: 'starting', pid: null }
+    let failure: string | null = null
+    let loaded = false
+    try {
+      projects.value = await listProjects()
+      projectsError.value = null
+      loaded = true
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err)
+    }
+    let s = await devwebStatus().catch(() => before)
+    if (failure && s.state !== 'running') s = { state: 'failed', pid: null, reason: failure }
+    return { s, loaded }
+  }
+
+  async function readProjects(): Promise<void> {
     try {
       // Never the read that starts it: a Stop clicked while this was on its way must stay a stop.
       projects.value = await listProjects({ start: false })
@@ -102,8 +125,14 @@ function createDevServers() {
       // A list already on screen stays through a missed read or two; with none yet, the reason shows at once.
       if (!projects.value || ++misses >= MISSES_SHOWN) projectsError.value = err instanceof Error ? err.message : String(err)
     }
-    // The found list rides the same poll; a failed read keeps the last one.
+  }
+
+  /** The found list rides the same poll, read at most every 15 s unless a view or an action asked; a failed read keeps the last one. */
+  async function readFound(): Promise<void> {
+    if (!foundNow && Date.now() - foundAt < FOUND_EVERY_MS) return
+    foundNow = false
     found.value = await foundList({ start: false }).catch(() => found.value)
+    foundAt = Date.now()
   }
 
   // A refresh asked for while one runs runs once more after it, so an action's refresh never reads what was already in flight.
@@ -119,11 +148,17 @@ function createDevServers() {
       answered.value++
     } while (queued)
   }
-  function refresh(): Promise<void> {
+  let foundNow = true
+  let foundAt = 0
+  function request(foundToo: boolean): Promise<void> {
+    if (foundToo) foundNow = true
     if (running) queued = true
     else running = drain().finally(() => (running = null))
     return running
   }
+  const refresh = (): Promise<void> => request(true)
+  const moving = (): boolean => (projects.value ?? []).some((p) => p.processes.some((x) => x.status === 'starting' || x.status === 'stopping'))
+  const pollMs = (): number => (status.value?.state === 'starting' ? STARTING_POLL_MS : moving() ? POLL_MS : IDLE_POLL_MS)
 
   // ---- polling: only while a view is on screen, and the window is ----
   let viewers = 0
@@ -136,9 +171,9 @@ function createDevServers() {
   function schedule(g = gen) {
     if (!viewers || document.hidden || g !== gen) return
     timer = setTimeout(async () => {
-      await refresh()
+      await request(false)
       schedule(g)
-    }, status.value?.state === 'starting' ? STARTING_POLL_MS : POLL_MS)
+    }, pollMs())
   }
   function stopTimer() {
     gen++

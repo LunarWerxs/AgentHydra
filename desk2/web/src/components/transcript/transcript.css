@@ -87,7 +87,7 @@
   list-style: decimal;
 }
 .md li {
-  padding-left: 7px;
+  padding-inline-start: 7px;
   margin-top: 3.5px;
 }
 .md li:first-child {
@@ -102,7 +102,7 @@
 .md li > ul,
 .md li > ol {
   margin-top: 3.5px;
-  padding-right: 0;
+  padding-inline-end: 0;
 }
 .md a {
   color: var(--accent-text);
@@ -117,8 +117,8 @@
   font-weight: 600;
 }
 .md blockquote {
-  margin-left: 4px;
-  border-left: 2px solid var(--border-strong);
+  margin-inline-start: 4px;
+  border-inline-start: 2px solid var(--border-strong);
   padding: 0 56px 0 12px;
   color: var(--text-2);
 }
@@ -144,7 +144,7 @@
 /* Tables: a bordered grid in its own sideways-scrolling box (the measured thin scrollbar on a white-5%
    track), the header row on white 5%, cells 6/12, 13/19 text. Not measured live (no table was on screen). */
 .md .md-table {
-  margin-left: 4px;
+  margin-inline-start: 4px;
   max-width: calc(100% - 4px);
   overflow-x: auto;
   border-radius: 8px;
@@ -161,14 +161,14 @@
 .md th,
 .md td {
   border-bottom: 1px solid var(--border);
-  border-left: 1px solid var(--border);
+  border-inline-start: 1px solid var(--border);
   padding: 6px 12px;
-  text-align: left;
+  text-align: start;
   vertical-align: top;
 }
 .md th:first-child,
 .md td:first-child {
-  border-left: 0;
+  border-inline-start: 0;
 }
 .md th {
   font-weight: 600;
@@ -184,7 +184,7 @@
    never wraps; past CODE_CAP_LINES it is capped with a fade and "Show more". The real block was not on
    screen to measure; the surfaces, ring, radius, code size and scrollbar are the measured tokens. */
 .md-code {
-  margin-left: 4px !important;
+  margin-inline-start: 4px !important;
   border-radius: 8px;
   background: var(--bg-panel);
   box-shadow: inset 0 0 0 1px var(--border);
@@ -320,7 +320,7 @@
   max-height: 360px;
   border-radius: 5px;
   border: 1px solid var(--border);
-  background: #000;
+  background: var(--bg-pure-black);
 }
 .tx-inline-video {
   align-self: flex-start;
@@ -382,7 +382,7 @@
   border-radius: 8px;
   background: var(--bg-popover);
   box-shadow: inset 0 0 0 1px var(--border-strong);
-  text-align: left;
+  text-align: start;
 }
 button.tx-file-card {
   cursor: zoom-in;
@@ -414,7 +414,7 @@ button.tx-file-card:hover {
   padding: 9px 11px 11px;
   border-radius: 8px;
   box-shadow: inset 0 0 0 1px var(--border);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 60ms;
 }
@@ -425,10 +425,10 @@ button.tx-file-card:hover {
   width: 6px;
   height: 6px;
   border-radius: 1px;
-  background: #444444;
+  background: var(--workflow-dot-idle);
 }
 .tx-workflow-dot[data-state='done'] {
-  background: #255da2;
+  background: var(--workflow-dot-done);
 }
 .tx-workflow-dot[data-state='running'] {
   background: var(--accent);
@@ -436,7 +436,7 @@ button.tx-file-card:hover {
 }
 .tx-workflow-dot[data-state='pending'] {
   background: transparent;
-  box-shadow: inset 0 0 0 1px #303030;
+  box-shadow: inset 0 0 0 1px var(--workflow-dot-ring);
 }
 .tx-workflow-dot[data-state='failed'] {
   background: var(--danger);
@@ -456,7 +456,7 @@ button.tx-file-card:hover {
   border-radius: 6px;
   font-size: 13px;
   line-height: 19px;
-  text-align: left;
+  text-align: start;
   cursor: pointer;
 }
 .tx-task-line:hover {
@@ -476,7 +476,7 @@ button.tx-file-card:hover {
   display: inline-block;
   width: 0.5em;
   height: 1.05em;
-  margin-left: 2px;
+  margin-inline-start: 2px;
   vertical-align: text-bottom;
   background: var(--text-muted);
   border-radius: 1px;
@@ -548,7 +548,7 @@ button.tx-file-card:hover {
   font-size: 14px;
   line-height: 20px;
   color: var(--text-muted);
-  text-align: left;
+  text-align: start;
   cursor: pointer;
   transition: background-color 60ms;
 }
@@ -559,7 +559,7 @@ button.tx-file-card:hover {
 .tx-status-chevron {
   width: 14px;
   height: 14px;
-  margin-left: -5px;
+  margin-inline-start: -5px;
   flex-shrink: 0;
   color: var(--text-muted);
   transition: transform var(--dur-fast) cubic-bezier(0.32, 0.72, 0, 1);
@@ -657,7 +657,7 @@ button.tx-file-card:hover {
   overflow: hidden;
   border-radius: 10px;
   background: var(--bg-popover);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent), 0 4px 20px #00000009;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warning) 45%, transparent), var(--shadow-soft);
   animation: epitaxy-approval-inline-enter 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -671,7 +671,7 @@ button.tx-file-card:hover {
   border-radius: 9999px;
   background: var(--bg-popover);
   color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--border), 0 8px 24px #00000052, 0 2px 6px #0003;
+  box-shadow: inset 0 0 0 1px var(--border), var(--shadow-menu);
   cursor: pointer;
   transition: background-color 60ms;
 }
@@ -705,7 +705,7 @@ button.tx-file-card:hover {
 .tx-btn-primary {
   background: var(--accent);
   box-shadow: none;
-  color: #ffffff;
+  color: var(--on-accent);
 }
 .tx-btn-primary:hover:not(:disabled) {
   background: var(--accent-hover);
@@ -718,7 +718,7 @@ button.tx-file-card:hover {
 .tx-btn-danger {
   background: var(--danger);
   box-shadow: none;
-  color: #ffffff;
+  color: var(--on-accent);
 }
 .tx-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger), white 10%);
@@ -730,7 +730,7 @@ button.tx-file-card:hover {
 }
 .tx-btn-primary .tx-kbd,
 .tx-btn-danger .tx-kbd {
-  color: #ffffffb3;
+  color: var(--on-accent-muted);
 }
 .tx-input {
   height: 28px;
@@ -740,8 +740,13 @@ button.tx-file-card:hover {
   background: var(--bg-page);
   box-shadow: inset 0 0 0 1px var(--border);
   color: var(--text);
-  font-size: 13px;
+  font-size: 16px;
   outline: none;
+}
+@media (pointer: fine) {
+  .tx-input {
+    font-size: 13px;
+  }
 }
 .tx-input::placeholder {
   color: var(--text-muted);
@@ -752,10 +757,10 @@ button.tx-file-card:hover {
 
 /* Hydra Desk 2's session header Find (TranscriptView paints these with the CSS Custom Highlight API). */
 ::highlight(desk-find) {
-  background-color: rgb(250 204 21 / 0.3);
+  background-color: var(--find-match);
   color: inherit;
 }
 ::highlight(desk-find-active) {
-  background-color: rgb(249 115 22 / 0.8);
-  color: #fff;
+  background-color: var(--find-active);
+  color: var(--on-accent);
 }

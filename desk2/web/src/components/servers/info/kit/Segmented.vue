@@ -18,7 +18,7 @@ function key(e: KeyboardEvent, i: number) {
 </script>
 
 <template>
-  <div role="radiogroup" :aria-label="label" class="inline-flex h-8 max-w-full shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-[3px] shadow-[inset_0_0_0_1px_var(--border)]" :class="disabled && 'pointer-events-none opacity-50'">
+  <div role="radiogroup" :aria-label="label" class="inline-flex h-8 max-w-full shrink-0 items-center gap-px rounded-(--radius-7) bg-fill-5 p-0.75 shadow-[inset_0_0_0_1px_var(--border)]" :class="disabled && 'pointer-events-none opacity-50'">
     <button
       v-for="(o, i) in options"
       :key="o.value"
@@ -26,7 +26,7 @@ function key(e: KeyboardEvent, i: number) {
       role="radio"
       :aria-checked="modelValue === o.value"
       :tabindex="modelValue === o.value ? 0 : -1"
-      class="inline-flex h-[26px] min-w-0 cursor-default items-center gap-1.5 rounded-[var(--radius-5)] px-2.5 text-[13px] leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text"
+      class="inline-flex h-6.5 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-5) px-2.5 text-[13px] leading-4.75 text-text-2 transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none aria-checked:bg-(--fill-secondary) aria-checked:text-text"
       @click="emit('update:modelValue', o.value)"
       @keydown="key($event, i)"
     >

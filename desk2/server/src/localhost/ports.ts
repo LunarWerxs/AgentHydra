@@ -191,8 +191,9 @@ export async function scanPorts(): Promise<Scan> {
   let listeners: Listener[] = []
   let error: string | null = null
   if (process.platform === 'win32') {
-    const [tcp, tcp6] = await Promise.all([run('netstat', ['-ano', '-p', 'TCP']), run('netstat', ['-ano', '-p', 'TCPv6'])])
-    if (tcp !== null || tcp6 !== null) listeners = parseNetstat(`${tcp ?? ''}\n${tcp6 ?? ''}`)
+    // Without -p netstat lists TCP over v4 and v6 (and UDP, whose rows the parser skips) in one spawn.
+    const text = await run('netstat', ['-ano'])
+    if (text !== null) listeners = parseNetstat(text)
     else {
       const json = await powershell(PS_NETTCP)
       if (json === null) error = 'could not read the listening ports (netstat and Get-NetTCPConnection both failed)'

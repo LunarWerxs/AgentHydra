@@ -23,16 +23,16 @@ const SOON = 'Not available in Hydra Desk yet'
     <span v-if="branch" :class="ENV_PILL" class="min-w-0 shrink" :title="`On branch ${branch}`">
       <newSessionGlyphs.branch class="size-4 shrink-0" />
       <span class="truncate" :class="PILL_TEXT">{{ branch }}</span>
-      <span class="ml-2 flex shrink-0 items-center" :title="`Worktree: ${SOON}`">
-        <span class="h-2.5 w-px bg-[var(--fill-secondary)]" aria-hidden="true" />
+      <span class="ms-2 flex shrink-0 items-center" :title="`Worktree: ${SOON}`">
+        <span class="h-2.5 w-px bg-(--fill-secondary)" aria-hidden="true" />
         <span
           role="checkbox"
           aria-checked="false"
           aria-disabled="true"
           aria-label="worktree"
-          class="ml-[5px] size-3 rounded-[3px] border border-[#ffffff33]"
+          class="ms-1.25 size-3 rounded-[3px] border border-[#ffffff33]"
         />
-        <span class="ml-[3px]" :class="PILL_TEXT" aria-hidden="true">worktree</span>
+        <span class="ms-0.75" :class="PILL_TEXT" aria-hidden="true">worktree</span>
       </span>
     </span>
 

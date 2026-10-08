@@ -16,7 +16,7 @@ import {
   type RepoYetiGitState
 } from '@shared/connectors'
 import type { ServerContext } from '../context'
-import { connectorStatus } from '../connectors/registry'
+import { connectorStatus, connectorsReady } from '../connectors/registry'
 import { notOwnPage } from '../own-page'
 import { ensureUpstream, gitOut, RepoYetiClient, RepoYetiError, workTreeRoot } from '../repoyeti/api'
 import { compareUrl, parseGithubRemote, prBranchName } from '../repoyeti/remote'
@@ -41,6 +41,8 @@ async function target(c: Context, cwd: unknown): Promise<Target> {
   if (why) throw new RepoYetiError(why, 403)
   const dir = typeof cwd === 'string' ? cwd.trim() : ''
   if (!dir || !isAbsolute(dir)) throw new RepoYetiError('cwd must be an absolute folder', 400)
+  // Before the first probe pass lands (about 1.5 s after start) every status reads null.
+  await connectorsReady()
   const status = connectorStatus('repoyeti')
   if (!status || status.state !== 'running' || !status.url) throw new RepoYetiError('RepoYeti is not running', 409)
   const root = await workTreeRoot(dir)
@@ -98,59 +100,83 @@ async function dirty(t: Target): Promise<boolean> {
 
 const text = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
 
-async function run(action: RepoYetiGitAction, t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
+async function commit(t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
+  const message = text(req.message)
+  if (!message) throw new RepoYetiError('write a commit message first', 400)
+  await t.client.call('POST', `/api/repos/${t.id}/commit`, { message, ...(req.amend ? { amend: true } : {}) })
+  return { ok: true, message: req.amend ? 'Amended the last commit' : 'Committed' }
+}
+
+async function push(t: Target): Promise<RepoYetiGitResult> {
+  await ensureUpstream(t.root, (await readBranches(t)).current ?? '')
+  await t.client.net(`/api/repos/${t.id}/push`)
+  return { ok: true, message: 'Pushed' }
+}
+
+async function pull(t: Target): Promise<RepoYetiGitResult> {
+  await t.client.net(`/api/repos/${t.id}/pull`)
+  return { ok: true, message: 'Pulled (fast-forward)' }
+}
+
+async function checkout(t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
+  const branch = text(req.branch)
+  if (!branch) throw new RepoYetiError('pick a branch', 400)
+  await t.client.call('POST', `/api/repos/${t.id}/checkout`, { branch })
+  return { ok: true, message: `Switched to ${branch}` }
+}
+
+async function newBranch(t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
+  const name = text(req.branch)
+  if (!name) throw new RepoYetiError('name the new branch', 400)
+  await t.client.call('POST', `/api/repos/${t.id}/branch`, { name, switch: true })
+  return { ok: true, message: `Created and switched to ${name}` }
+}
+
+async function undoRedo(action: 'undo' | 'redo', t: Target): Promise<RepoYetiGitResult> {
   const at = `/api/repos/${t.id}`
+  const preview = await t.client.call<{ undo?: Step; redo?: Step }>('GET', `${at}/undo`)
+  const side = action === 'undo' ? preview.undo : preview.redo
+  if (!side?.ok || !side.step?.to) throw new RepoYetiError(side?.message ?? `nothing to ${action}`, 422)
+  await t.client.call('POST', `${at}/${action}`, { expect: { to: side.step.to, subject: side.step.subject ?? '' } })
+  return { ok: true, message: action === 'undo' ? 'Undid the last git action' : 'Redid the git action' }
+}
+
+async function createPr(t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
+  const at = `/api/repos/${t.id}`
+  const s = await state(t)
+  if (!s.remote) throw new RepoYetiError('origin is not on GitHub, so there is no pull request page to open', 422)
+  if (!s.branch) throw new RepoYetiError('switch to a branch first (HEAD is detached)', 422)
+  let branch = s.branch
+  if (branch === s.defaultBranch) {
+    branch = prBranchName(new Date(), s.branches)
+    await t.client.call('POST', `${at}/branch`, { name: branch, switch: true })
+  }
+  if (await dirty(t)) {
+    const message = text(req.message) || (await draft(t)) || 'Update'
+    await t.client.call('POST', `${at}/commit`, { message })
+  }
+  await ensureUpstream(t.root, branch)
+  await t.client.net(`${at}/push`)
+  return { ok: true, message: `Pushed ${branch}`, compareUrl: compareUrl(s.remote, branch) }
+}
+
+async function run(action: RepoYetiGitAction, t: Target, req: RepoYetiGitRequest): Promise<RepoYetiGitResult> {
   switch (action) {
-    case 'commit': {
-      const message = text(req.message)
-      if (!message) throw new RepoYetiError('write a commit message first', 400)
-      await t.client.call('POST', `${at}/commit`, { message, ...(req.amend ? { amend: true } : {}) })
-      return { ok: true, message: req.amend ? 'Amended the last commit' : 'Committed' }
-    }
+    case 'commit':
+      return commit(t, req)
     case 'push':
-      await ensureUpstream(t.root, (await readBranches(t)).current ?? '')
-      await t.client.net(`${at}/push`)
-      return { ok: true, message: 'Pushed' }
+      return push(t)
     case 'pull':
-      await t.client.net(`${at}/pull`)
-      return { ok: true, message: 'Pulled (fast-forward)' }
-    case 'checkout': {
-      const branch = text(req.branch)
-      if (!branch) throw new RepoYetiError('pick a branch', 400)
-      await t.client.call('POST', `${at}/checkout`, { branch })
-      return { ok: true, message: `Switched to ${branch}` }
-    }
-    case 'branch': {
-      const name = text(req.branch)
-      if (!name) throw new RepoYetiError('name the new branch', 400)
-      await t.client.call('POST', `${at}/branch`, { name, switch: true })
-      return { ok: true, message: `Created and switched to ${name}` }
-    }
+      return pull(t)
+    case 'checkout':
+      return checkout(t, req)
+    case 'branch':
+      return newBranch(t, req)
     case 'undo':
-    case 'redo': {
-      const preview = await t.client.call<{ undo?: Step; redo?: Step }>('GET', `${at}/undo`)
-      const side = action === 'undo' ? preview.undo : preview.redo
-      if (!side?.ok || !side.step?.to) throw new RepoYetiError(side?.message ?? `nothing to ${action}`, 422)
-      await t.client.call('POST', `${at}/${action}`, { expect: { to: side.step.to, subject: side.step.subject ?? '' } })
-      return { ok: true, message: action === 'undo' ? 'Undid the last git action' : 'Redid the git action' }
-    }
-    case 'create-pr': {
-      const s = await state(t)
-      if (!s.remote) throw new RepoYetiError('origin is not on GitHub, so there is no pull request page to open', 422)
-      if (!s.branch) throw new RepoYetiError('switch to a branch first (HEAD is detached)', 422)
-      let branch = s.branch
-      if (branch === s.defaultBranch) {
-        branch = prBranchName(new Date(), s.branches)
-        await t.client.call('POST', `${at}/branch`, { name: branch, switch: true })
-      }
-      if (await dirty(t)) {
-        const message = text(req.message) || (await draft(t)) || 'Update'
-        await t.client.call('POST', `${at}/commit`, { message })
-      }
-      await ensureUpstream(t.root, branch)
-      await t.client.net(`${at}/push`)
-      return { ok: true, message: `Pushed ${branch}`, compareUrl: compareUrl(s.remote, branch) }
-    }
+    case 'redo':
+      return undoRedo(action, t)
+    case 'create-pr':
+      return createPr(t, req)
   }
 }
 

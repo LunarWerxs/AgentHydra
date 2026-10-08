@@ -211,19 +211,19 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
       ref="group"
       role="group"
       aria-label="Git actions"
-      class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)]"
+      class="flex h-6 shrink-0 items-stretch overflow-hidden rounded-(--radius-6) bg-(--fill-secondary)"
     >
       <Tip :label="busy ?? item(primary.key).hint ?? 'Run it in RepoYeti'" side="top">
         <button type="button" :class="BTN" class="px-2" :aria-disabled="!primaryEnabled" :disabled="!primaryEnabled" @click="run(primary.key)">
           {{ busy ?? primary.label }}
         </button>
       </Tip>
-      <span class="my-1 w-px bg-[var(--border)]" />
+      <span class="my-1 w-px bg-(--border)" />
       <DropdownMenu v-model:open="menuOpen">
         <DropdownMenuTrigger as-child>
           <button
             type="button"
-            class="flex w-6 items-center justify-center text-[var(--text-muted)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+            class="flex w-6 items-center justify-center text-(--text-muted) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
             aria-label="Git actions in RepoYeti"
           >
             <Chevron class="size-3.5" />
@@ -241,7 +241,7 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
               </DropdownMenuSub>
               <DropdownMenuItem :class="ITEM" :disabled="!item(k).enabled || !!busy" @select="run(k)">
                 {{ item(k).label }}
-                <span v-if="item(k).hint" class="ml-auto pl-3 text-[var(--text-muted)]">{{ item(k).hint }}</span>
+                <span v-if="item(k).hint" class="ms-auto ps-3 text-(--text-muted)">{{ item(k).hint }}</span>
               </DropdownMenuItem>
             </template>
           </template>
@@ -250,7 +250,7 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
     </div>
 
     <!-- The menu hands focus back to its trigger as it closes; that is not a click outside the panel it just opened. -->
-    <PopoverContent side="top" align="end" :side-offset="6" flush @focus-outside.prevent class="w-[340px] rounded-[var(--radius-10)] border-0 bg-[var(--bg-popover)] p-2.5 shadow-(--shadow-menu-ringed) ring-0">
+    <PopoverContent side="top" align="end" :side-offset="6" flush @focus-outside.prevent class="w-85 rounded-(--radius-10) border-0 bg-(--bg-popover) p-2.5 shadow-(--shadow-menu-ringed) ring-0">
       <form v-if="panel === 'commit'" class="flex flex-col gap-2" aria-label="Commit" @submit.prevent="commit">
         <textarea
           ref="messageBox"
@@ -263,52 +263,52 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
           @keydown.ctrl.enter.prevent="commit"
         />
         <div class="flex items-center gap-2">
-          <label class="flex items-center gap-1.5 text-[13px] text-[var(--text-muted)]">
+          <label class="flex items-center gap-1.5 text-[13px] text-(--text-muted)">
             <input v-model="amend" type="checkbox" class="size-3.5" />
             Amend the last commit
           </label>
-          <span class="tnum ml-auto text-[13px] text-[var(--text-muted)]">{{ props.git.changed }} {{ props.git.changed === 1 ? 'file' : 'files' }}</span>
-          <button type="submit" :class="ACT" class="bg-[var(--fill-secondary)] hover:bg-[var(--fill-secondary-hover)] disabled:opacity-50" :disabled="!message.trim()">Commit</button>
+          <span class="tnum ms-auto text-[13px] text-(--text-muted)">{{ props.git.changed }} {{ props.git.changed === 1 ? 'file' : 'files' }}</span>
+          <button type="submit" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover) disabled:opacity-50" :disabled="!message.trim()">Commit</button>
         </div>
       </form>
 
       <form v-else-if="panel === 'branch'" class="flex flex-col gap-2" aria-label="New branch" @submit.prevent="createBranch">
         <input ref="branchBox" v-model="branchName" :class="FIELD" placeholder="New branch name" aria-label="New branch name" />
-        <p class="text-[13px] text-[var(--text-muted)]">Created from {{ props.git.branch }} and switched to.</p>
-        <button type="submit" :class="ACT" class="self-end bg-[var(--fill-secondary)] hover:bg-[var(--fill-secondary-hover)] disabled:opacity-50" :disabled="!branchName.trim()">Create</button>
+        <p class="text-[13px] text-(--text-muted)">Created from {{ props.git.branch }} and switched to.</p>
+        <button type="submit" :class="ACT" class="self-end bg-(--fill-secondary) hover:bg-(--fill-secondary-hover) disabled:opacity-50" :disabled="!branchName.trim()">Create</button>
       </form>
 
       <div v-else-if="panel === 'step'" class="flex flex-col gap-2" role="alertdialog" aria-label="Confirm">
-        <p class="text-[13px] leading-[19px]">{{ stepText }}</p>
+        <p class="text-[13px] leading-4.75">{{ stepText }}</p>
         <div class="flex justify-end gap-1.5">
-          <button type="button" :class="ACT" class="text-[var(--text-muted)] hover:bg-[var(--fill-hover)]" @click="panel = null">Cancel</button>
-          <button type="button" :class="ACT" class="bg-[var(--fill-secondary)] hover:bg-[var(--fill-secondary-hover)]" @click="runStep">
+          <button type="button" :class="ACT" class="text-(--text-muted) hover:bg-(--fill-hover)" @click="panel = null">Cancel</button>
+          <button type="button" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover)" @click="runStep">
             {{ stepAction === 'undo' ? 'Undo' : 'Redo' }}
           </button>
         </div>
       </div>
 
       <div v-else-if="panel === 'chat'" class="flex flex-col gap-2" role="alertdialog" aria-label="Undo this chat's changes">
-        <p class="text-[13px] font-medium leading-[19px]">Put these files back to how they were before this chat</p>
-        <p v-if="planError" class="text-[13px] text-[var(--text-muted)]">{{ planError }}</p>
-        <p v-else-if="!plan" class="text-[13px] text-[var(--text-muted)]">Reading the chat…</p>
-        <p v-else-if="!plan.files.length" class="text-[13px] text-[var(--text-muted)]">This chat changed no files that are still different.</p>
+        <p class="text-[13px] font-medium leading-4.75">Put these files back to how they were before this chat</p>
+        <p v-if="planError" class="text-[13px] text-(--text-muted)">{{ planError }}</p>
+        <p v-else-if="!plan" class="text-[13px] text-(--text-muted)">Reading the chat…</p>
+        <p v-else-if="!plan.files.length" class="text-[13px] text-(--text-muted)">This chat changed no files that are still different.</p>
         <ul v-else class="flex max-h-56 flex-col gap-0.5 overflow-y-auto">
-          <li v-for="f in plan.files" :key="f.path" class="flex items-start gap-1.5 text-[13px] leading-[19px]">
-            <input type="checkbox" class="mt-[3px] size-3.5 shrink-0" :checked="picked.has(f.path)" :disabled="f.state !== 'ready'" :aria-label="undoLine(f)" @change="toggle(f.path)" />
+          <li v-for="f in plan.files" :key="f.path" class="flex items-start gap-1.5 text-[13px] leading-4.75">
+            <input type="checkbox" class="mt-0.75 size-3.5 shrink-0" :checked="picked.has(f.path)" :disabled="f.state !== 'ready'" :aria-label="undoLine(f)" @change="toggle(f.path)" />
             <span class="min-w-0 flex-1">
               <span class="block truncate font-mono" :title="f.path">{{ f.path }}</span>
               <span v-if="f.state === 'ready'" class="tnum text-[12px]">
-                <span class="text-[var(--git-add)]">+{{ f.added }}</span> <span class="text-[var(--git-del)]">−{{ f.removed }}</span>
-                <span v-if="f.kind === 'delete'" class="text-[var(--text-muted)]"> · created by the chat, deleted</span>
+                <span class="text-(--git-add)">+{{ f.added }}</span> <span class="text-(--git-del)">−{{ f.removed }}</span>
+                <span v-if="f.kind === 'delete'" class="text-(--text-muted)"> · created by the chat, deleted</span>
               </span>
-              <span v-else class="block text-[12px] text-[var(--text-muted)]">Left alone: {{ f.reason }}</span>
+              <span v-else class="block text-[12px] text-(--text-muted)">Left alone: {{ f.reason }}</span>
             </span>
           </li>
         </ul>
         <div class="flex justify-end gap-1.5">
-          <button type="button" :class="ACT" class="text-[var(--text-muted)] hover:bg-[var(--fill-hover)]" @click="panel = null">Cancel</button>
-          <button type="button" :class="ACT" class="bg-[var(--fill-secondary)] hover:bg-[var(--fill-secondary-hover)] disabled:opacity-50" :disabled="!picked.size" @click="runChatUndo">
+          <button type="button" :class="ACT" class="text-(--text-muted) hover:bg-(--fill-hover)" @click="panel = null">Cancel</button>
+          <button type="button" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover) disabled:opacity-50" :disabled="!picked.size" @click="runChatUndo">
             Undo {{ picked.size }} {{ picked.size === 1 ? 'file' : 'files' }}
           </button>
         </div>

@@ -792,7 +792,7 @@ async function handleRefresh() {
       <nav
         v-if="!EMBEDDED"
         :aria-label="t('hswarm.nav.label')"
-        class="flex min-h-0 shrink-0 flex-col border-e border-border bg-sidebar max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:start-0 max-[899px]:z-30 max-[899px]:w-[min(86vw,340px)] max-[899px]:transition-transform min-[900px]:w-(--tree-w)"
+        class="flex min-h-0 shrink-0 flex-col border-e border-border bg-sidebar max-[899px]:fixed max-[899px]:inset-y-0 max-[899px]:inset-s-0 max-[899px]:z-30 max-[899px]:w-[min(86vw,340px)] max-[899px]:transition-transform min-[900px]:w-(--tree-w)"
         :class="navOpen ? '' : 'max-[899px]:-translate-x-full max-[899px]:invisible'"
         :style="{ '--tree-w': `${treeWidth}px` }"
         @keydown.esc="navOpen = false"
@@ -870,14 +870,14 @@ async function handleRefresh() {
             :aria-level="r.depth + 1"
             :aria-expanded="r.hasKids ? r.open : undefined"
             :aria-selected="r.id === sel"
-            class="flex h-[26px] cursor-pointer items-center gap-1.5 border-s-2 pe-3 transition-colors"
+            class="flex h-6.5 cursor-pointer items-center gap-1.5 border-s-2 pe-3 ps-(--tree-pad) transition-colors"
             :class="[
               r.id === sel ? 'border-primary bg-accent font-medium' : 'border-transparent hover:bg-accent/50',
               r.id === cur && r.id !== sel ? 'bg-accent/30' : '',
               r.n.dim ? 'opacity-60' : '',
               r.n.more ? 'italic text-muted-foreground' : '',
             ]"
-            :style="{ paddingInlineStart: `calc(4px + ${r.depth} * 14px)` }"
+            :style="{ '--tree-pad': `calc(4px + ${r.depth} * 14px)` }"
             :title="r.n.dotTitle"
             @click="pick(r.sel)"
           >
@@ -905,7 +905,7 @@ async function handleRefresh() {
               >
               <span
                 v-else
-                class="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-[10px] font-semibold text-muted-foreground"
+                class="flex size-5 shrink-0 items-center justify-center rounded bg-muted text-3xs font-semibold text-muted-foreground"
                 aria-hidden="true"
               >{{ initials(r.n.av) }}</span>
             </template>
@@ -975,7 +975,7 @@ async function handleRefresh() {
         <template v-if="page.component !== CliMayteView">
           <!-- Error state -->
           <Alert v-if="error || !status?.running" variant="destructive" class="m-2 w-auto">
-            <AlertCircle class="h-4 w-4" />
+            <AlertCircle class="size-4" />
             <AlertTitle>{{ t('hswarm.notRunning') }}</AlertTitle>
             <AlertDescription>
               {{ error ? t('hswarm.errorLoading') : (status?.lastError ? t('hswarm.statusError', { error: status.lastError }) : t('hswarm.notRunning')) }}

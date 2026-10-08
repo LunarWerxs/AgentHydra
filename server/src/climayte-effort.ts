@@ -9,7 +9,8 @@
 // from here too.
 //
 // Read-only and cheap: a finished worker's file never changes, so each is parsed once and re-read
-// only when its mtime or size moves; the whole map is rebuilt at most every TTL_MS.
+// only when its mtime or size moves, and done/ is looked through again only when its own mtime
+// moves; the whole map is rebuilt at most every TTL_MS.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { POINTER_DIR } from './instance'
@@ -25,6 +26,8 @@ interface FileRecord {
 }
 
 const files = new Map<string, FileRecord>()
+/** done/'s mtime when its names were last listed and its files last checked, and those paths. */
+const done: { at: number; paths: string[] } = { at: Number.NaN, paths: [] }
 let built: { at: number; map: Map<string, string>; dispatched: Map<string, number> } | null = null
 
 /** (session id, effort) for every attempt of these workers that was launched with an effort. A null
@@ -97,33 +100,51 @@ function build(): NonNullable<typeof built> {
   const now = Date.now()
   if (built && now - built.at < TTL_MS) return built
   const root = join(POINTER_DIR, 'corch')
-  const paths = [join(root, 'workers.json')]
+  const live = join(root, 'workers.json')
+  const doneDir = join(root, 'done')
+  let doneAt = Number.NaN
   try {
-    for (const name of readdirSync(join(root, 'done')))
-      if (name.endsWith('.json')) paths.push(join(root, 'done', name))
+    doneAt = statSync(doneDir).mtimeMs
   } catch {
     // no finished work yet
   }
+  // A finished worker's file is written by renaming a temporary file over it, and filed or removed
+  // the same way, so the folder's own mtime moves with every change in it. While it stands still,
+  // the names and parses from the last build stand too: 3,800 files were a statSync each, every
+  // build (2026-10-08, 13% of a 5.7 s daemon stall).
+  const recheck = doneAt !== done.at
+  if (recheck) {
+    done.paths = []
+    try {
+      for (const name of readdirSync(doneDir))
+        if (name.endsWith('.json')) done.paths.push(join(doneDir, name))
+    } catch {
+      // gone meanwhile
+    }
+  }
+  const paths = [live, ...done.paths]
   const map = new Map<string, string>()
   // By worker: a task finishing moves from workers.json to done/, and one read can catch it in both.
   const senders = new Map<string, string>()
   const seen = new Set<string>()
   for (const path of paths) {
     seen.add(path)
-    const rec = readRecord(path)
+    const rec = path === live || recheck ? readRecord(path) : (files.get(path) ?? readRecord(path))
     if (!rec) continue
     for (const [sid, effort] of rec.efforts) map.set(sid, effort)
     for (const [workerId, sid] of rec.origins) senders.set(workerId, sid)
   }
   for (const path of files.keys()) if (!seen.has(path)) files.delete(path)
+  done.at = doneAt
   const dispatched = new Map<string, number>()
   for (const sid of senders.values()) dispatched.set(sid, (dispatched.get(sid) ?? 0) + 1)
   built = { at: now, map, dispatched }
   return built
 }
 
-/** Drop the cached map (not the per-file parses, which re-validate on stat). For tests that write a
- *  worker record and then ask about it. */
+/** Drop the cached map and the done/ folder's stamp (not the per-file parses, which re-validate on
+ *  stat). For tests that write a worker record and then ask about it. */
 export function invalidateClimayteEffortCache(): void {
   built = null
+  done.at = Number.NaN
 }

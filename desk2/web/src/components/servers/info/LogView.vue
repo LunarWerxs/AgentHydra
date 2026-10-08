@@ -102,9 +102,11 @@ onBeforeUnmount(() => {
   if (copiedTimer) clearTimeout(copiedTimer)
 })
 
+const loadingOlder = ref(false)
 async function older() {
   const first = lines.value.find((l) => l.seq !== undefined)
   if (!first) return
+  loadingOlder.value = true
   try {
     const page = await logPage(props.processId, { before: first.seq, limit: 300, start: false })
     const el = box.value
@@ -115,6 +117,8 @@ async function older() {
     if (el) el.scrollTop += el.scrollHeight - h
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    loadingOlder.value = false
   }
 }
 function clear() {
@@ -163,9 +167,9 @@ watch(
 <template>
   <div class="flex flex-col gap-2">
     <div class="flex flex-wrap items-center gap-2">
-      <div class="relative min-w-[160px] max-w-[320px] flex-1">
+      <div class="relative min-w-40 max-w-[320px] flex-1">
         <Search class="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-text-muted" aria-hidden="true" />
-        <input v-model="filter" type="search" :class="[INPUT, 'pl-8']" placeholder="Filter lines" aria-label="Filter log lines" />
+        <input v-model="filter" type="search" :class="[INPUT, 'ps-8']" placeholder="Filter lines" aria-label="Filter log lines" />
       </div>
       <Segmented
         v-model="only"
@@ -194,13 +198,13 @@ watch(
     <p v-if="error" role="alert" class="text-[12px] text-danger-text">{{ error }}</p>
     <div
       ref="box"
-      class="relative h-[min(560px,calc(100vh-290px))] min-h-[240px] overflow-auto rounded-[var(--radius-10)] bg-bg-deepest p-3 font-mono text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--border)]"
+      class="relative h-[min(560px,calc(100vh-290px))] min-h-60 overflow-auto rounded-(--radius-10) bg-bg-deepest p-3 font-mono text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--border)]"
       role="log"
       aria-label="Server log"
       @scroll="onScroll"
     >
       <div v-if="more" class="mb-2 flex justify-center">
-        <button type="button" :class="BTN_GHOST" @click="older">Load older</button>
+        <button type="button" :class="BTN_GHOST" :disabled="loadingOlder" :aria-busy="loadingOlder" @click="older">Load older</button>
       </div>
       <p v-if="!text.length" class="flex h-full items-center justify-center font-sans text-[13px] text-text-muted">
         {{ lines.length ? 'No line matches.' : loaded ? 'Nothing logged yet.' : 'Reading the log…' }}
@@ -208,16 +212,16 @@ watch(
       <div
         v-for="(l, i) in text"
         :key="l.seq ?? `t${l.ts}-${i}`"
-        class="-ml-[10px] border-l-2 pl-2 whitespace-pre-wrap break-all"
+        class="-ms-2.5 border-s-2 ps-2 whitespace-pre-wrap break-all"
         :class="l.stream === 'stderr' ? 'border-danger/60 text-danger-text' : 'border-transparent text-text-2'"
       >{{ l.line }}</div>
     </div>
-    <div class="flex flex-wrap items-center gap-x-2 text-[12px] leading-[18px] text-text-muted tnum">
+    <div class="flex flex-wrap items-center gap-x-2 text-[12px] leading-4.5 text-text-muted tnum">
       <span>{{ text.length }} {{ text.length === 1 ? 'line' : 'lines' }} · {{ stderrCount }} from stderr</span>
       <template v-if="!stick">
         <span aria-hidden="true">·</span>
         <span>Scrolled up: new lines are not followed</span>
-        <button type="button" class="cursor-default rounded-[var(--radius-6)] px-1 text-text-2 hover:bg-fill-hover hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" @click="follow(true)">Jump to latest</button>
+        <button type="button" class="cursor-default rounded-(--radius-6) px-1 text-text-2 hover:bg-fill-hover hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none" @click="follow(true)">Jump to latest</button>
       </template>
     </div>
   </div>

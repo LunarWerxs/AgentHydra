@@ -220,7 +220,9 @@ function onRootOpenChange(v: boolean): void {
     <template #closed>
       <Badge
         :variant="variant"
-        class="relative min-w-11 cursor-pointer tabular-nums"
+        tabular
+        interactive
+        class="relative min-w-11"
         :dimmed="stale"
         :title="noData ? reasonMessage : undefined"
         :aria-busy="checking || undefined"
@@ -239,7 +241,9 @@ function onRootOpenChange(v: boolean): void {
            does not grow it either: in a 5h or Week cell the bar beside the chip stays put. -->
       <Badge
         :variant="variant"
-        class="relative min-w-11 cursor-pointer tabular-nums"
+        tabular
+        interactive
+        class="relative min-w-11"
         :dimmed="stale"
         :title="noData ? reasonMessage : undefined"
         :aria-busy="checking || undefined"

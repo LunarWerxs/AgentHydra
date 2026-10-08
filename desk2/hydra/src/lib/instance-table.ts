@@ -283,5 +283,5 @@ export interface InstanceRowModel {
   /** The Tokens hover's second and third lines, for figures that are not a transcript's (a Free login's estimate). */
   tokensNote?: { breakdown: string; source: string }
   /** The ⋯ menu: its header's icon actions and its width. Its items come in the `menu` slot. */
-  menu?: { name: string; actions: MenuIconAction[]; class?: string }
+  menu?: { name: string; actions: MenuIconAction[]; width?: 'sm' | 'md' | 'lg' }
 }

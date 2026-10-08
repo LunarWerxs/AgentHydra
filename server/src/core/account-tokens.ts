@@ -556,29 +556,26 @@ async function giveBack(): Promise<void> {
   heldSince = performance.now()
 }
 
-async function sweep(): Promise<void> {
-  sweepNo++
-  heldSince = performance.now()
-  if (!cacheLoaded) {
-    cacheLoaded = true
-    await loadCache()
-  }
-  const seenCli = new Set<string>()
-  const seenDesktop = new Set<string>()
-  const olds = new Map<string, number[]>()
-  const recents = new Map<string, number[]>()
-  const creditOld = (uuid: string, sum: number[]) => {
-    const into = olds.get(uuid) ?? [0, 0, 0, 0]
+/** One sweep's tokens by account: the old sums and the recent rows, before they become ledgers. */
+class Credits {
+  readonly olds = new Map<string, number[]>()
+  readonly recents = new Map<string, number[]>()
+
+  old(uuid: string, sum: number[]): void {
+    const into = this.olds.get(uuid) ?? [0, 0, 0, 0]
     for (let k = 0; k < 4; k++) into[k] = (into[k] as number) + (sum[k] as number)
-    olds.set(uuid, into)
-  }
-  const creditRecent = (uuid: string, rows: number[], from: number) => {
-    const into = recents.get(uuid) ?? []
-    for (let k = 0; k < STRIDE; k++) into.push(rows[from + k] as number)
-    recents.set(uuid, into)
+    this.olds.set(uuid, into)
   }
 
-  // CLI instances: the message's own time picks the holder.
+  recent(uuid: string, rows: number[], from: number): void {
+    const into = this.recents.get(uuid) ?? []
+    for (let k = 0; k < STRIDE; k++) into.push(rows[from + k] as number)
+    this.recents.set(uuid, into)
+  }
+}
+
+/** CLI instances: the message's own time picks the holder. Adds every transcript read to `seen`. */
+async function sweepCli(credits: Credits, seen: Set<string>): Promise<void> {
   const holders = readHolders()
   let holdersChanged = false
   const now = Date.now()
@@ -590,23 +587,30 @@ async function sweep(): Promise<void> {
     const paths = await transcriptsUnder(join(inst.configDir, 'projects'))
     const { stats, quiet } = await statAll(cliFiles, paths)
     for (const path of paths) {
-      seenCli.add(path)
+      seen.add(path)
       const entry = quiet.has(path)
         ? cliFiles.get(path)
         : await entryOf(cliFiles, path, stats.get(path) ?? null, (ts) => holderAt(history, ts))
       if (!entry) continue
       await giveBack()
-      for (const [who, sum] of Object.entries(entry.old)) creditOld(who, sum)
-      for (const rows of [entry.recent, entry.tail ?? []])
-        for (let i = 0; i < rows.length; i += STRIDE) {
-          const who = holderAt(history, rows[i] as number)
-          if (who) creditRecent(who, rows, i)
-        }
+      creditCliEntry(credits, entry, history)
     }
   }
   if (holdersChanged) writeHolders(holders)
+}
 
-  // Desktop chats: the transcript's session id names the chat record, whose folder names the account.
+function creditCliEntry(credits: Credits, entry: FileEntry, history: Holder[]): void {
+  for (const [who, sum] of Object.entries(entry.old)) credits.old(who, sum)
+  for (const rows of [entry.recent, entry.tail ?? []])
+    for (let i = 0; i < rows.length; i += STRIDE) {
+      const who = holderAt(history, rows[i] as number)
+      if (who) credits.recent(who, rows, i)
+    }
+}
+
+/** The account of each Desktop session id: the newest chat record naming it, a live one before an
+ *  archived one. */
+async function desktopAccounts(): Promise<Map<string, string>> {
   const accountOf = new Map<string, string>()
   const newest = new Map<string, string>()
   for (const c of await collectChatsAsync()) {
@@ -619,35 +623,58 @@ async function sweep(): Promise<void> {
       }
     }
   }
-  if (accountOf.size) {
-    const chatFiles = await desktopTranscripts(CLAUDE_PROJECTS_ROOT, (sid) => accountOf.has(sid))
-    const { stats, quiet } = await statAll(desktopFiles, chatFiles.keys())
-    for (const [path, sid] of chatFiles) {
-      seenDesktop.add(path)
-      const entry = quiet.has(path)
-        ? desktopFiles.get(path)
-        : await entryOf(desktopFiles, path, stats.get(path) ?? null, () => OWNER)
-      if (!entry) continue
-      await giveBack()
-      const owner = accountOf.get(sid) as string
-      for (const sum of Object.values(entry.old)) creditOld(owner, sum)
-      for (const rows of [entry.recent, entry.tail ?? []])
-        for (let i = 0; i < rows.length; i += STRIDE) creditRecent(owner, rows, i)
-    }
-  }
+  return accountOf
+}
 
+/** Desktop chats: the transcript's session id names the chat record, whose folder names the account.
+ *  Adds every transcript read to `seen`. */
+async function sweepDesktop(credits: Credits, seen: Set<string>): Promise<void> {
+  const accountOf = await desktopAccounts()
+  if (!accountOf.size) return
+  const chatFiles = await desktopTranscripts(CLAUDE_PROJECTS_ROOT, (sid) => accountOf.has(sid))
+  const { stats, quiet } = await statAll(desktopFiles, chatFiles.keys())
+  for (const [path, sid] of chatFiles) {
+    seen.add(path)
+    const entry = quiet.has(path)
+      ? desktopFiles.get(path)
+      : await entryOf(desktopFiles, path, stats.get(path) ?? null, () => OWNER)
+    if (!entry) continue
+    await giveBack()
+    const owner = accountOf.get(sid) as string
+    for (const sum of Object.values(entry.old)) credits.old(owner, sum)
+    for (const rows of [entry.recent, entry.tail ?? []])
+      for (let i = 0; i < rows.length; i += STRIDE) credits.recent(owner, rows, i)
+  }
+}
+
+/** Drops the cached files this sweep no longer found. */
+function forgetUnseen(files: Map<string, FileEntry>, seen: Set<string>): void {
+  for (const path of files.keys())
+    if (!seen.has(path)) {
+      files.delete(path)
+      cacheDirty = true
+    }
+}
+
+async function sweep(): Promise<void> {
+  sweepNo++
+  heldSince = performance.now()
+  if (!cacheLoaded) {
+    cacheLoaded = true
+    await loadCache()
+  }
+  const seenCli = new Set<string>()
+  const seenDesktop = new Set<string>()
+  const credits = new Credits()
+  await sweepCli(credits, seenCli)
+  await sweepDesktop(credits, seenDesktop)
+
+  const { olds, recents } = credits
   ledgers.clear()
   for (const uuid of new Set([...olds.keys(), ...recents.keys()]))
     ledgers.set(uuid, ledgerOf(olds.get(uuid) ?? [0, 0, 0, 0], recents.get(uuid) ?? []))
-  for (const [files, seen] of [
-    [cliFiles, seenCli],
-    [desktopFiles, seenDesktop],
-  ] as const)
-    for (const path of files.keys())
-      if (!seen.has(path)) {
-        files.delete(path)
-        cacheDirty = true
-      }
+  forgetUnseen(cliFiles, seenCli)
+  forgetUnseen(desktopFiles, seenDesktop)
   if (cacheDirty && Date.now() - savedAt > SAVE_EVERY_MS) await saveCache()
   sweptAt = Date.now()
 }

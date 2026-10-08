@@ -48,7 +48,7 @@ const ui =
             @select="emit('run', sub)"
           >
             <span class="min-w-0 flex-1 truncate">{{ sub.label }}</span>
-            <component :is="icons.check" v-if="sub.checked" class="ml-3" />
+            <component :is="icons.check" v-if="sub.checked" class="ms-3" />
           </component>
         </template>
       </component>

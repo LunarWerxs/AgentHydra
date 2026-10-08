@@ -355,10 +355,10 @@ describe('Free jobs and routes', () => {
     expect(service.settings().weeklyFloorPct).toBe(70)
   })
   test('nudgeDue follows the CLI keepalive rules', () => {
-    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const NOW = Date.parse('2020-10-06T12:00:00Z')
     const window = (id: string, used: number, resets: string | null) => ({ id, used_percent: used, remaining_percent: 100 - used, resets_at: resets, reset_passed: false })
-    const future = '2026-10-06T15:00:00Z'
-    const past = '2026-10-06T09:00:00Z'
+    const future = '2020-10-06T15:00:00Z'
+    const past = '2020-10-06T09:00:00Z'
     const usage = (windows: ReturnType<typeof window>[]): FreeUsage => ({ available: true, is_snapshot: false, observed_at: null, note: '', windows })
     const base: FreeInstance = { id: INSTANCE, num: 1, provider: 'claude', name: 'Example', autoName: false, loggedIn: true, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: usage([window('five_hour', 0, null), window('seven_day', 10, future)]) }
     const on = { keepWindows: true, weeklyFloorPct: 85 }
@@ -478,7 +478,7 @@ describe('Free jobs and routes', () => {
     expect(again.status().tokens).toEqual({})
   })
   test('token windows cut where the account\'s own windows do: at a reset ahead or just passed, else rolling', () => {
-    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const NOW = Date.parse('2020-10-06T12:00:00Z')
     const hour = 3_600_000
     // Distinct powers of two, so a sum names exactly which messages a window holds.
     const ledger = { entries: [[1, 1], [4, 2], [6, 4], [72, 8]].map(([ago, n]) => ({ at: NOW - ago! * hour, input: n!, output: 0 })), total: { input: 99, output: 1 } }
@@ -501,7 +501,7 @@ describe('Free jobs and routes', () => {
     expect([later.entries.map(e => e.input), later.total.input]).toEqual([[1, 2, 4, 16], 115])
   })
   test('the rolling refresh reads the most overdue account: a never-checked login first, then old logins and old Claude usage', () => {
-    const NOW = Date.parse('2026-10-06T12:00:00Z')
+    const NOW = Date.parse('2020-10-06T12:00:00Z')
     const min = 60_000
     const base: FreeInstance = { id: 'a', num: 1, provider: 'claude', name: 'A', autoName: false, loggedIn: true, checkedAt: NOW - 10 * min, lastSignedInAt: NOW - 10 * min, lastActiveAt: null, usage: null, usageReadAt: NOW - 10 * min }
     const one = (change: Partial<FreeInstance>, busy = false) => nextRead([{ ...base, ...change }], () => busy, NOW)

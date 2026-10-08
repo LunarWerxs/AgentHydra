@@ -6,7 +6,7 @@
 // 150 ms, down/up: the ordinary mouse path, and the moment a 120 ms tooltip opens), right-click, key (focus, Enter), hover, focus.
 // hover-leave judges the way out: rest until it opens, then move away; it must have opened and be gone. `paused` holds the page as
 // a window without focus (lib/pause-motion.ts), where every tooltip and breakdown the pointer left stayed on screen.
-// Starts the built Desk 2 (web/dist, hydra/dist: run `bun run build` first) as a hidden process on E2E_PORT (default 7819) with a
+// Starts the built Desk 2 (web/dist, hydra/dist: run `bun run build` first) as a hidden process on E2E_PORT (default a free port) with a
 // throwaway HYDRA_DESK_HOME; /ah/api goes on to the live AgentHydra daemon, read only: no case here acts on an account (the Open
 // and Focus row icons are only hovered or focused), it only opens menus and popovers, hides the sidebar, selects a row, flips a
 // view toggle or copies an address to the clipboard. DevWebUI's /dw status and projects are answered here with an invented
@@ -17,10 +17,12 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { portFrom } from './lib/free-port'
 
 const DESK = resolve(import.meta.dir, '..')
-const PORT = Number(process.env.E2E_PORT) || 7819
-const CDP = Number(process.env.E2E_CDP_PORT) || 9439
+// A free port each unless E2E_PORT / E2E_CDP_PORT name one: two sessions running this at once used to collide on 7819.
+const PORT = portFrom(process.env.E2E_PORT)
+const CDP = portFrom(process.env.E2E_CDP_PORT)
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -122,6 +124,7 @@ const server = Bun.spawn([process.execPath, 'server/src/index.ts'], {
   stdout: 'ignore', stderr: 'ignore', windowsHide: true,
 })
 let edge: ReturnType<typeof Bun.spawn> | null = null
+const sockets: WebSocket[] = []
 const lines: { ok: boolean; line: string }[] = []
 
 try {
@@ -142,6 +145,7 @@ try {
   const page = list.find((t) => t.type === 'page')
   if (!page) throw new Error(`no Edge page on CDP port ${CDP}`)
   const ws = new WebSocket(page.webSocketDebuggerUrl)
+  sockets.push(ws)
   await new Promise((r) => (ws.onopen = r))
   let id = 0
   const pending = new Map<number, (v: any) => void>()
@@ -260,6 +264,7 @@ try {
     if (process.env.GESTURE_TRACE) console.log(`     trace ${JSON.stringify(await ev(`window.__log`))}`)
   }
 } finally {
+  for (const s of sockets) s.close()
   edge?.kill()
   server.kill()
   await Promise.all([edge?.exited, server.exited])

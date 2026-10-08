@@ -442,7 +442,7 @@ watch(
       @contextmenu.capture="onContextCapture"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
-      <div class="mx-auto w-full max-w-[840px] px-9 pb-[86px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <div class="mx-auto w-full max-w-210 px-9 pb-21.5 @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">{{ emptyText }}</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
@@ -472,7 +472,7 @@ watch(
     <div
       v-if="revealNote"
       role="status"
-      class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-[var(--radius-10)] bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
+      class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
     >{{ revealNote }}</div>
     <Transition
       enter-from-class="opacity-0 translate-y-1"

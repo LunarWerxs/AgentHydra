@@ -14,6 +14,10 @@ export const isHomeStatsRange = (r: string): r is HomeStatsRange => (HOME_STATS_
 
 /** How long one range's answer is reused: the spend report reads every store (about 1 s for all). */
 const HOME_STATS_FRESH_MS = 60_000
+/** How old an answer may be and still be shown while a newer one is read: the four reads took 3 s on a
+ *  cold call (2026-10-08), so the card shows the last figures at once and has the new ones next time.
+ *  Past this a reopened card waits for its read, so an AgentHydra that went down shows as down. */
+const HOME_STATS_STALE_MS = 15 * 60_000
 /** The activity grid: 27 weeks of 7 days, oldest first, ending today. */
 const HEAT_DAYS = 189
 
@@ -148,12 +152,15 @@ const WHO: Record<HomeStatsMissing['part'], string> = {
 }
 
 /**
- * `homeStats(range)`: the card's answer, reused for HOME_STATS_FRESH_MS (a failure is not kept). AgentHydra
- * down throws its unreachable BridgeError; a spend report that fails or runs out of time while the rest
- * answered throws an http one (slow or broken, not down).
+ * `homeStats(range)`: the card's answer, reused for HOME_STATS_FRESH_MS (a failure is not kept); after that
+ * the last answer is shown while the next is read, for up to HOME_STATS_STALE_MS. AgentHydra down throws its
+ * unreachable BridgeError; a spend report that fails or runs out of time while the rest answered throws an
+ * http one (slow or broken, not down).
  */
 export function createHomeStats(client: HydraClient, now: () => number = Date.now) {
   const kept = new Map<HomeStatsRange, { at: number; answer: Promise<HomeStats> }>()
+  /** Each range's last answer that came back, and when its read began. */
+  const last = new Map<HomeStatsRange, { at: number; answer: HomeStats }>()
 
   async function read(range: HomeStatsRange): Promise<HomeStats> {
     const since = range === 'all' ? undefined : now() - RANGE_DAYS[range] * DAY
@@ -196,9 +203,13 @@ export function createHomeStats(client: HydraClient, now: () => number = Date.no
     if (hit && now() - hit.at < HOME_STATS_FRESH_MS) return hit.answer
     const entry = { at: now(), answer: read(range) }
     kept.set(range, entry)
-    entry.answer.catch(() => {
-      if (kept.get(range) === entry) kept.delete(range)
-    })
-    return entry.answer
+    entry.answer.then(
+      (answer) => last.set(range, { at: entry.at, answer }),
+      () => {
+        if (kept.get(range) === entry) kept.delete(range)
+      },
+    )
+    const shown = last.get(range)
+    return shown && entry.at - shown.at < HOME_STATS_STALE_MS ? Promise.resolve(shown.answer) : entry.answer
   }
 }

@@ -31,7 +31,7 @@ const { tiles } = useSwarmTiles(stats)
       >
         {{ t('swarmStats.title') }}
       </button>
-      <Badge v-if="fromHistory" variant="secondary" class="text-[10px] text-muted-foreground">
+      <Badge v-if="fromHistory" variant="muted">
         {{ t('swarmStats.fromZswarm') }}
       </Badge>
     </div>
@@ -49,7 +49,7 @@ const { tiles } = useSwarmTiles(stats)
     <div v-else-if="stats" class="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-xs">
       <span v-for="tile in tiles" :key="tile.key" class="whitespace-nowrap" :title="tile.hint">
         <span class="text-muted-foreground">{{ tile.label }}</span>
-        <span class="ml-1 font-semibold tabular-nums">{{ tile.value }}</span>
+        <span class="ms-1 font-semibold tabular-nums">{{ tile.value }}</span>
       </span>
     </div>
   </div>

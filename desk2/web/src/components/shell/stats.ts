@@ -14,7 +14,8 @@ export interface StatsTile {
 }
 
 const UNKNOWN = '–'
-const count = (n: number) => n.toLocaleString('en-US')
+// Figures and dates follow the reader's own locale.
+const count = (n: number) => n.toLocaleString(undefined)
 const plural = (n: number, one: string, many: string) => `${count(n)} ${n === 1 ? one : many}`
 
 export function statsTiles(s: DeskStats): StatsTile[] {
@@ -39,7 +40,7 @@ export function statsFooter(s: DeskStats): string {
 /** A grid square's hover: 'Sat, Oct 4: 1,234 messages', or 'Sat, Oct 4: no messages' (its day read as a local date). */
 export function heatTitle(cell: HeatCell, one: string, many: string): string {
   const [y, m, d] = cell.day.split('-').map(Number)
-  const date = new Date(y!, m! - 1, d!).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+  const date = new Date(y!, m! - 1, d!).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
   return `${date}: ${cell.count === 0 ? `no ${many}` : plural(cell.count, one, many)}`
 }
 
@@ -62,7 +63,7 @@ export function compact(n: number): string {
 
 /** $257,672 for a big figure, $12.40 for a small one. */
 export function usd(n: number): string {
-  return n >= 100 ? `$${Math.round(n).toLocaleString('en-US')}` : `$${n.toFixed(2)}`
+  return n >= 100 ? `$${count(Math.round(n))}` : `$${n.toFixed(2)}`
 }
 
 function agentTime(minutes: number): string {

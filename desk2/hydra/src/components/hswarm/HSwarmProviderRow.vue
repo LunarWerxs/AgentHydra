@@ -21,7 +21,7 @@ const dimmed = computed(() => !props.row.enabled)
   <TableRow :variant="dimmed ? 'faded' : 'default'" class="group/row">
     <template v-for="col in columns" :key="col.key">
       <TableCell v-if="col.key === 'providerState'">
-        <Badge :variant="row.state.variant" class="text-xs">{{ row.state.label }}</Badge>
+        <Badge :variant="row.state.variant" size="md">{{ row.state.label }}</Badge>
       </TableCell>
 
       <TableCell v-else-if="col.key === 'providerName'" class="max-w-0">
@@ -58,7 +58,7 @@ const dimmed = computed(() => !props.row.enabled)
         />
       </TableCell>
 
-      <TableCell v-else-if="col.key === 'actions'" class="text-right" />
+      <TableCell v-else-if="col.key === 'actions'" align="end" />
     </template>
   </TableRow>
 </template>

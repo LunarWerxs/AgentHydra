@@ -16,7 +16,7 @@ const current = computed(() => DIAGNOSTICS_SECTIONS.find((s) => s.id === open.va
         type="button"
         role="tab"
         :aria-selected="open === s.id"
-        class="flex h-7 cursor-default items-center rounded-[var(--radius-6)] px-2.5 text-[13px] leading-[19px] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+        class="flex h-7 cursor-default items-center rounded-(--radius-6) px-2.5 text-[13px] leading-4.75 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         :class="open === s.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover hover:text-text'"
         @click="open = s.id"
       >

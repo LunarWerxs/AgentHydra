@@ -14,7 +14,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { uptime } from 'node:os'
 import { join } from 'node:path'
-import { Hono } from 'hono'
+import { type Context, Hono } from 'hono'
 import { type DevWebAlertRuleInput, type DevWebProcessSpec, type DevWebScanPreset, type DevWebSettings, projectForCwd } from '@shared/devwebui'
 import { Localhost, type LocalhostDeps } from '../localhost/servers'
 import { pidAlive } from '../host/launch'
@@ -29,13 +29,23 @@ export const serviceLockPath = (home: string): string => join(devServersDir(home
 const LOCK_WAIT_MS = 15_000
 export const serviceLogPath = (home: string): string => join(home, 'logs', 'devservers.log')
 
+/** The last read of each service.json, kept until the file's mtime or size moves (Desk reads it on every request). */
+const serviceFileCache = new Map<string, { mtimeMs: number; size: number; value: ServiceFile | null }>()
+
 /** service.json as it is on disk, or null when it is missing or not one. */
 export function readServiceFile(home: string): ServiceFile | null {
+  const path = serviceFilePath(home)
   try {
-    const f = JSON.parse(readFileSync(serviceFilePath(home), 'utf8')) as Partial<ServiceFile>
+    const st = statSync(path)
+    const hit = serviceFileCache.get(path)
+    if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value
+    const f = JSON.parse(readFileSync(path, 'utf8')) as Partial<ServiceFile>
     const good = typeof f.pid === 'number' && typeof f.port === 'number' && typeof f.token === 'string' && typeof f.stamp === 'string'
-    return good ? (f as ServiceFile) : null
+    const value = good ? (f as ServiceFile) : null
+    serviceFileCache.set(path, { mtimeMs: st.mtimeMs, size: st.size, value })
+    return value
   } catch {
+    serviceFileCache.delete(path)
     return null
   }
 }
@@ -148,11 +158,7 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
   })
 
   const app = new Hono()
-  app.onError((err, c) => {
-    if (err instanceof DevServerError) return c.json({ error: err.message }, err.status)
-    console.error('[devservers]', err)
-    return c.json({ error: err instanceof Error ? err.message || String(err) : String(err) }, 500)
-  })
+  app.onError(answerError)
   app.use('*', async (c, next) => {
     const given = /^Bearer (.+)$/i.exec(c.req.header('authorization') ?? '')?.[1] ?? ''
     if (!sameToken(given, token)) return c.json({ error: 'unauthorized' }, 401)
@@ -166,181 +172,22 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
     await next()
   })
 
-  const body = async (c: { req: { json(): Promise<unknown> } }): Promise<Record<string, unknown>> => {
-    const parsed = await c.req.json().catch(() => null)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
-  }
-  const text = (v: unknown, what: string): string => {
-    if (typeof v !== 'string' || v.trim() === '') throw new DevServerError(`${what} is required`, 400)
-    return v
-  }
-  /** A query number: absent is undefined; anything but a whole number from 0 up is refused. */
-  const whole = (v: string | undefined, what: string): number | undefined => {
-    if (v === undefined || v === '') return undefined
-    const n = Number(v)
-    if (!Number.isInteger(n) || n < 0) throw new DevServerError(`${what} must be a whole number`, 400)
-    return n
-  }
-
   app.get('/health', (c) => c.json({ ok: !closing, pid: process.pid, stamp, running: dev.runningIds().length }))
+  processRoutes(app, dev)
+  projectRoutes(app, dev)
+  foundRoutes(app, dev)
+  errorAndAlertRoutes(app, dev)
+  chatRoutes(app, dev, localhost)
 
-  app.get('/api/projects', async (c) => c.json(await dev.listProjects()))
-  app.get('/api/processes/:id', async (c) => {
-    const proc = await dev.process(c.req.param('id'))
-    if (!proc) throw new DevServerError(`no server ${c.req.param('id')}`, 404)
-    return c.json(proc)
-  })
-  app.post('/api/processes/:id/start', async (c) => c.json(await dev.start(c.req.param('id'))))
-  app.post('/api/processes/:id/stop', async (c) => c.json(await dev.stop(c.req.param('id'))))
-  app.post('/api/processes/:id/restart', async (c) => c.json(await dev.restart(c.req.param('id'))))
-  app.get('/api/processes/:id/logs', async (c) => {
-    const id = c.req.param('id')
-    const before = c.req.query('before')
-    const limit = c.req.query('limit')
-    if (before === undefined && limit === undefined) return c.json({ id, lines: await dev.logs(id) })
-    return c.json({ id, ...(await dev.logPage(id, { before: whole(before, 'before'), limit: whole(limit, 'limit') })) })
-  })
-  app.post('/api/projects/:id/start', async (c) => c.json(await dev.startProject(c.req.param('id'))))
-  app.post('/api/projects/:id/stop', async (c) => c.json(await dev.stopProject(c.req.param('id'))))
-  app.post('/api/projects/load', async (c) => c.json(await dev.load(text((await body(c)).path, 'path'))))
-  app.post('/api/projects/scaffold', async (c) => {
-    const b = await body(c)
-    if (!b.project || typeof b.project !== 'object') throw new DevServerError('project is required', 400)
-    return c.json(await dev.scaffold(text(b.dir, 'dir'), text(b.fileName, 'fileName'), b.project as Parameters<DevServers['scaffold']>[2]))
-  })
-  const flagOn = (b: Record<string, unknown>): boolean => {
-    if (typeof b.on !== 'boolean') throw new DevServerError('on must be true or false', 400)
-    return b.on
-  }
-  const specOf = (b: Record<string, unknown>): DevWebProcessSpec => {
-    if (!b.spec || typeof b.spec !== 'object' || Array.isArray(b.spec)) throw new DevServerError('spec is required', 400)
-    return b.spec as DevWebProcessSpec
-  }
-  const queryPath = (c: { req: { query(k: string): string | undefined } }): string => text(c.req.query('path'), 'path')
-
-  app.get('/api/found', async (c) => c.json(await dev.found()))
-  app.post('/api/scan', async (c) => {
-    const b = await body(c)
-    const presets = ['startup', 'quick', 'deep', 'scoped']
-    if (typeof b.preset !== 'string' || !presets.includes(b.preset)) throw new DevServerError('preset must be startup, quick, deep or scoped', 400)
-    if (b.roots !== undefined && (!Array.isArray(b.roots) || b.roots.some((r) => typeof r !== 'string' || r.trim() === ''))) throw new DevServerError('roots must be a list of folders', 400)
-    return c.json(await dev.scan({ preset: b.preset as DevWebScanPreset, roots: b.roots as string[] | undefined }))
-  })
-  app.post('/api/found/forget', async (c) => c.json(await dev.forgetFound()))
-  app.get('/api/preview', async (c) => c.json(await dev.preview(queryPath(c))))
-  app.get('/api/ignored', async (c) => c.json(await dev.ignored()))
-  app.post('/api/ignored', async (c) => c.json(await dev.ignore(text((await body(c)).path, 'path'))))
-  app.delete('/api/ignored', async (c) => c.json(await dev.unignore(queryPath(c))))
-  app.get('/api/projects/clone-dest', async (c) => c.json(await dev.cloneDest(text(c.req.query('url'), 'url'))))
-  app.post('/api/projects/clone', async (c) => {
-    const b = await body(c)
-    return c.json(await dev.clone(text(b.url, 'url'), text(b.dest, 'dest')))
-  })
-  app.patch('/api/projects/:id', async (c) => {
-    const b = await body(c)
-    if (b.name !== undefined) text(b.name, 'name')
-    if (b.color !== undefined && b.color !== null && typeof b.color !== 'string') throw new DevServerError('color must be text', 400)
-    return c.json(await dev.updateProject(c.req.param('id'), { name: b.name as string | undefined, color: b.color as string | null | undefined }))
-  })
-  app.delete('/api/projects/:id', async (c) => c.json(await dev.removeProject(c.req.param('id'))))
-  app.post('/api/projects/:id/enabled', async (c) => c.json(await dev.setProjectEnabled(c.req.param('id'), flagOn(await body(c)))))
-  app.post('/api/projects/:id/processes', async (c) => c.json(await dev.addProcess(c.req.param('id'), specOf(await body(c)))))
-  app.get('/api/projects/:id/takeover', async (c) => c.json(await dev.takeover(c.req.param('id'))))
-  app.post('/api/projects/:id/takeover', async (c) => c.json(await dev.takeOver(c.req.param('id'))))
-  app.post('/api/projects/:id/takeover/restore', async (c) => c.json(await dev.restoreTakeover(c.req.param('id'))))
-  app.put('/api/processes/:id', async (c) => c.json(await dev.updateProcess(c.req.param('id'), specOf(await body(c)))))
-  app.delete('/api/processes/:id', async (c) => c.json(await dev.removeProcess(c.req.param('id'))))
-  app.get('/api/processes/:id/config', async (c) => c.json(await dev.processConfig(c.req.param('id'))))
-  app.get('/api/processes/:id/metrics', async (c) => c.json(await dev.metricsHistory(c.req.param('id'))))
-  app.post('/api/processes/:id/starred', async (c) => c.json(await dev.setStarred(c.req.param('id'), flagOn(await body(c)))))
-  app.post('/api/processes/:id/enabled', async (c) => c.json(await dev.setProcessEnabled(c.req.param('id'), flagOn(await body(c)))))
-  app.post('/api/start-all', async (c) => c.json(await dev.startAllServers()))
-  app.post('/api/stop-all', async (c) => c.json(await dev.stopAllServers()))
-  app.post('/api/processes/:id/free-port', async (c) => {
-    const b = await body(c)
-    // The pids the person saw and confirmed; no list asks who holds the port first.
-    if (b.pids !== undefined && (!Array.isArray(b.pids) || b.pids.some((p) => !Number.isInteger(p) || (p as number) <= 0))) throw new DevServerError('pids must be a list of positive whole numbers', 400)
-    return c.json(await dev.freePort(c.req.param('id'), b.pids as number[] | undefined))
-  })
-  app.get('/api/errors', async (c) => c.json(await dev.errors(c.req.query('process') || undefined)))
-  app.post('/api/errors/dismiss', async (c) => c.json(await dev.dismissError(text((await body(c)).fingerprint, 'fingerprint'))))
-  app.post('/api/errors/clear', async (c) => {
-    const b = await body(c)
-    if (b.process !== undefined && typeof b.process !== 'string') throw new DevServerError('process must be a server id', 400)
-    return c.json(await dev.clearErrors((b.process as string | undefined) || undefined))
-  })
-  app.post('/api/open-in-editor', async (c) => {
-    const b = await body(c)
-    const at = (v: unknown, what: string): number | undefined => {
-      if (v === undefined) return undefined
-      if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw new DevServerError(`${what} must be a whole number from 1`, 400)
-      return v
-    }
-    if (b.processId !== undefined && typeof b.processId !== 'string') throw new DevServerError('processId must be a server id', 400)
-    return c.json(await dev.openInEditor({ file: text(b.file, 'file'), line: at(b.line, 'line'), column: at(b.column, 'column'), processId: b.processId as string | undefined }))
-  })
-  const alertInput = (b: Record<string, unknown>, partial: boolean): Partial<DevWebAlertRuleInput> => {
-    const out: Partial<DevWebAlertRuleInput> = {}
-    if (b.processId !== undefined || !partial) out.processId = text(b.processId, 'processId')
-    if (b.metric !== undefined || !partial) {
-      if (b.metric !== 'cpu' && b.metric !== 'memory') throw new DevServerError('metric must be cpu or memory', 400)
-      out.metric = b.metric
-    }
-    if (b.threshold !== undefined || !partial) {
-      if (typeof b.threshold !== 'number' || !Number.isFinite(b.threshold) || b.threshold <= 0) throw new DevServerError('threshold must be a number above 0', 400)
-      out.threshold = b.threshold
-    }
-    if (b.forMs !== undefined || !partial) {
-      if (typeof b.forMs !== 'number' || !Number.isFinite(b.forMs) || b.forMs < 0) throw new DevServerError('forMs must be a number from 0', 400)
-      out.forMs = b.forMs
-    }
-    if (b.enabled !== undefined) out.enabled = flagOn({ on: b.enabled })
-    return out
-  }
-  app.get('/api/alerts', async (c) => c.json(await dev.alerts()))
-  app.post('/api/alerts', async (c) => c.json(await dev.addAlert(alertInput(await body(c), false) as DevWebAlertRuleInput)))
-  app.patch('/api/alerts/:id', async (c) => c.json(await dev.updateAlert(c.req.param('id'), alertInput(await body(c), true))))
-  app.delete('/api/alerts/:id', async (c) => c.json(await dev.removeAlert(c.req.param('id'))))
-  app.post('/api/alerts/events/clear', async (c) => c.json(await dev.clearAlertEvents()))
-  app.get('/api/settings', async (c) => c.json(await dev.settings()))
-  app.patch('/api/settings', async (c) => c.json(await dev.saveSettings(await body(c) as Partial<DevWebSettings>)))
-  app.post('/api/settings/restart-running', async (c) => c.json(await dev.restartRunning()))
-  app.post('/api/folder', async (c) => c.json(await dev.folder(text((await body(c)).cwd, 'cwd'))))
-  app.post('/api/ensure', async (c) => {
-    const b = await body(c)
-    const server = typeof b.server === 'string' && b.server.trim() !== '' ? b.server : undefined
-    return c.json(await dev.ensure(text(b.cwd, 'cwd'), server, typeof b.wait === 'boolean' ? b.wait : undefined))
-  })
-  app.get('/api/servers', async (c) => {
-    const cwd = c.req.query('cwd')
-    const all = c.req.query('all') === '1'
-    const [projects, others] = await Promise.all([dev.listProjects(), localhost.list(false)])
-    const project = cwd ? projectForCwd(projects, cwd) : null
-    return c.json({ project, projects: all ? projects : project ? [project] : [], others: others.servers })
-  })
-  app.get('/api/owned', async (c) => c.json(await dev.owned()))
-
+  const { promise: done, resolve: settle } = Promise.withResolvers<void>()
   let finishing: Promise<void> | null = null
-  let settle: () => void = () => {}
-  const done = new Promise<void>((r) => {
-    settle = r
-  })
   const shutdown = (restart = false): Promise<void> => {
     closing = true
-    finishing ??= (async () => {
-      try {
-        // A restart records what ran so the next service starts it again; a plain stop must not bring it back.
-        if (restart) writeJsonAtomic(resumeFilePath(home), { ids: dev.runningIds() })
-        else rmSync(resumeFilePath(home), { force: true })
-        await dev.stopAll()
-      } catch (err) {
-        console.error('[devservers] stopping the servers failed:', err)
-      }
-      if (readServiceFile(home)?.pid === process.pid) rmSync(serviceFilePath(home), { force: true })
+    finishing ??= finish(home, dev, restart).then(() => {
       server.stop(true)
       exit(0)
       settle()
-    })()
+    })
     return finishing
   }
   app.post('/api/shutdown', async (c) => {
@@ -359,13 +206,228 @@ export async function startService(o: ServiceOptions): Promise<RunningService> {
   return { file, done, shutdown }
 }
 
-/** Appends everything the process prints to `file`, one timestamped line each. */
+/** Stops every server (a restart first notes what ran) and removes service.json when it is this process's. */
+async function finish(home: string, dev: DevServers, restart: boolean): Promise<void> {
+  try {
+    // A restart records what ran so the next service starts it again; a plain stop must not bring it back.
+    if (restart) writeJsonAtomic(resumeFilePath(home), { ids: dev.runningIds() })
+    else rmSync(resumeFilePath(home), { force: true })
+    await dev.stopAll()
+  } catch (err) {
+    console.error('[devservers] stopping the servers failed:', err)
+  }
+  if (readServiceFile(home)?.pid === process.pid) rmSync(serviceFilePath(home), { force: true })
+}
+
+function answerError(err: Error, c: Context): Response {
+  if (err instanceof DevServerError) return c.json({ error: err.message }, err.status)
+  console.error('[devservers]', err)
+  return c.json({ error: err instanceof Error ? err.message || String(err) : String(err) }, 500)
+}
+
+async function body(c: { req: { json(): Promise<unknown> } }): Promise<Record<string, unknown>> {
+  const parsed = await c.req.json().catch(() => null)
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {}
+}
+
+function text(v: unknown, what: string): string {
+  if (typeof v !== 'string' || v.trim() === '') throw new DevServerError(`${what} is required`, 400)
+  return v
+}
+
+/** A query number: absent is undefined; anything but a whole number from 0 up is refused. */
+function whole(v: string | undefined, what: string): number | undefined {
+  if (v === undefined || v === '') return undefined
+  const n = Number(v)
+  if (!Number.isInteger(n) || n < 0) throw new DevServerError(`${what} must be a whole number`, 400)
+  return n
+}
+
+function flagOn(b: Record<string, unknown>): boolean {
+  if (typeof b.on !== 'boolean') throw new DevServerError('on must be true or false', 400)
+  return b.on
+}
+
+function specOf(b: Record<string, unknown>): DevWebProcessSpec {
+  if (!b.spec || typeof b.spec !== 'object' || Array.isArray(b.spec)) throw new DevServerError('spec is required', 400)
+  return b.spec as DevWebProcessSpec
+}
+
+const queryPath = (c: { req: { query(k: string): string | undefined } }): string => text(c.req.query('path'), 'path')
+
+/** A line or column number: absent is undefined; anything but a whole number from 1 is refused. */
+function from1(v: unknown, what: string): number | undefined {
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || !Number.isInteger(v) || v < 1) throw new DevServerError(`${what} must be a whole number from 1`, 400)
+  return v
+}
+
+function positiveNumber(v: unknown, what: string, floor: 'above 0' | 'from 0'): number {
+  const ok = typeof v === 'number' && Number.isFinite(v) && (floor === 'above 0' ? v > 0 : v >= 0)
+  if (!ok) throw new DevServerError(`${what} must be a number ${floor}`, 400)
+  return v as number
+}
+
+function alertInput(b: Record<string, unknown>, partial: boolean): Partial<DevWebAlertRuleInput> {
+  const out: Partial<DevWebAlertRuleInput> = {}
+  if (b.processId !== undefined || !partial) out.processId = text(b.processId, 'processId')
+  if (b.metric !== undefined || !partial) {
+    if (b.metric !== 'cpu' && b.metric !== 'memory') throw new DevServerError('metric must be cpu or memory', 400)
+    out.metric = b.metric
+  }
+  if (b.threshold !== undefined || !partial) out.threshold = positiveNumber(b.threshold, 'threshold', 'above 0')
+  if (b.forMs !== undefined || !partial) out.forMs = positiveNumber(b.forMs, 'forMs', 'from 0')
+  if (b.enabled !== undefined) out.enabled = flagOn({ on: b.enabled })
+  return out
+}
+
+async function logsRoute(c: Context, dev: DevServers): Promise<Response> {
+  const id = c.req.param('id') ?? ''
+  const before = c.req.query('before')
+  const limit = c.req.query('limit')
+  if (before === undefined && limit === undefined) return c.json({ id, lines: await dev.logs(id) })
+  return c.json({ id, ...(await dev.logPage(id, { before: whole(before, 'before'), limit: whole(limit, 'limit') })) })
+}
+
+function processRoutes(app: Hono, dev: DevServers): void {
+  app.get('/api/processes/:id', async (c) => {
+    const proc = await dev.process(c.req.param('id'))
+    if (!proc) throw new DevServerError(`no server ${c.req.param('id')}`, 404)
+    return c.json(proc)
+  })
+  app.post('/api/processes/:id/start', async (c) => c.json(await dev.start(c.req.param('id'))))
+  app.post('/api/processes/:id/stop', async (c) => c.json(await dev.stop(c.req.param('id'))))
+  app.post('/api/processes/:id/restart', async (c) => c.json(await dev.restart(c.req.param('id'))))
+  app.get('/api/processes/:id/logs', (c) => logsRoute(c, dev))
+  app.put('/api/processes/:id', async (c) => c.json(await dev.updateProcess(c.req.param('id'), specOf(await body(c)))))
+  app.delete('/api/processes/:id', async (c) => c.json(await dev.removeProcess(c.req.param('id'))))
+  app.get('/api/processes/:id/config', async (c) => c.json(await dev.processConfig(c.req.param('id'))))
+  app.get('/api/processes/:id/metrics', async (c) => c.json(await dev.metricsHistory(c.req.param('id'))))
+  app.post('/api/processes/:id/starred', async (c) => c.json(await dev.setStarred(c.req.param('id'), flagOn(await body(c)))))
+  app.post('/api/processes/:id/enabled', async (c) => c.json(await dev.setProcessEnabled(c.req.param('id'), flagOn(await body(c)))))
+  app.post('/api/processes/:id/free-port', async (c) => {
+    const b = await body(c)
+    // The pids the person saw and confirmed; no list asks who holds the port first.
+    if (b.pids !== undefined && (!Array.isArray(b.pids) || b.pids.some((p) => !Number.isInteger(p) || (p as number) <= 0))) throw new DevServerError('pids must be a list of positive whole numbers', 400)
+    return c.json(await dev.freePort(c.req.param('id'), b.pids as number[] | undefined))
+  })
+  app.post('/api/start-all', async (c) => c.json(await dev.startAllServers()))
+  app.post('/api/stop-all', async (c) => c.json(await dev.stopAllServers()))
+}
+
+function projectRoutes(app: Hono, dev: DevServers): void {
+  app.get('/api/projects', async (c) => c.json(await dev.listProjects()))
+  app.post('/api/projects/:id/start', async (c) => c.json(await dev.startProject(c.req.param('id'))))
+  app.post('/api/projects/:id/stop', async (c) => c.json(await dev.stopProject(c.req.param('id'))))
+  app.post('/api/projects/load', async (c) => c.json(await dev.load(text((await body(c)).path, 'path'))))
+  app.post('/api/projects/scaffold', async (c) => {
+    const b = await body(c)
+    if (!b.project || typeof b.project !== 'object') throw new DevServerError('project is required', 400)
+    return c.json(await dev.scaffold(text(b.dir, 'dir'), text(b.fileName, 'fileName'), b.project as Parameters<DevServers['scaffold']>[2]))
+  })
+  app.get('/api/projects/clone-dest', async (c) => c.json(await dev.cloneDest(text(c.req.query('url'), 'url'))))
+  app.post('/api/projects/clone', async (c) => {
+    const b = await body(c)
+    return c.json(await dev.clone(text(b.url, 'url'), text(b.dest, 'dest')))
+  })
+  app.patch('/api/projects/:id', async (c) => {
+    const b = await body(c)
+    if (b.name !== undefined) text(b.name, 'name')
+    if (b.color !== undefined && b.color !== null && typeof b.color !== 'string') throw new DevServerError('color must be text', 400)
+    return c.json(await dev.updateProject(c.req.param('id'), { name: b.name as string | undefined, color: b.color as string | null | undefined }))
+  })
+  app.delete('/api/projects/:id', async (c) => c.json(await dev.removeProject(c.req.param('id'))))
+  app.post('/api/projects/:id/enabled', async (c) => c.json(await dev.setProjectEnabled(c.req.param('id'), flagOn(await body(c)))))
+  app.post('/api/projects/:id/processes', async (c) => c.json(await dev.addProcess(c.req.param('id'), specOf(await body(c)))))
+  app.get('/api/projects/:id/takeover', async (c) => c.json(await dev.takeover(c.req.param('id'))))
+  app.post('/api/projects/:id/takeover', async (c) => c.json(await dev.takeOver(c.req.param('id'))))
+  app.post('/api/projects/:id/takeover/restore', async (c) => c.json(await dev.restoreTakeover(c.req.param('id'))))
+}
+
+function foundRoutes(app: Hono, dev: DevServers): void {
+  app.get('/api/found', async (c) => c.json(await dev.found()))
+  app.post('/api/scan', async (c) => {
+    const b = await body(c)
+    const presets = ['startup', 'quick', 'deep', 'scoped']
+    if (typeof b.preset !== 'string' || !presets.includes(b.preset)) throw new DevServerError('preset must be startup, quick, deep or scoped', 400)
+    if (b.roots !== undefined && (!Array.isArray(b.roots) || b.roots.some((r) => typeof r !== 'string' || r.trim() === ''))) throw new DevServerError('roots must be a list of folders', 400)
+    return c.json(await dev.scan({ preset: b.preset as DevWebScanPreset, roots: b.roots as string[] | undefined }))
+  })
+  app.post('/api/found/forget', async (c) => c.json(await dev.forgetFound()))
+  app.get('/api/preview', async (c) => c.json(await dev.preview(queryPath(c))))
+  app.get('/api/ignored', async (c) => c.json(await dev.ignored()))
+  app.post('/api/ignored', async (c) => c.json(await dev.ignore(text((await body(c)).path, 'path'))))
+  app.delete('/api/ignored', async (c) => c.json(await dev.unignore(queryPath(c))))
+  app.get('/api/settings', async (c) => c.json(await dev.settings()))
+  app.patch('/api/settings', async (c) => c.json(await dev.saveSettings(await body(c) as Partial<DevWebSettings>)))
+  app.post('/api/settings/restart-running', async (c) => c.json(await dev.restartRunning()))
+}
+
+function errorAndAlertRoutes(app: Hono, dev: DevServers): void {
+  app.get('/api/errors', async (c) => c.json(await dev.errors(c.req.query('process') || undefined)))
+  app.post('/api/errors/dismiss', async (c) => c.json(await dev.dismissError(text((await body(c)).fingerprint, 'fingerprint'))))
+  app.post('/api/errors/clear', async (c) => {
+    const b = await body(c)
+    if (b.process !== undefined && typeof b.process !== 'string') throw new DevServerError('process must be a server id', 400)
+    return c.json(await dev.clearErrors((b.process as string | undefined) || undefined))
+  })
+  app.post('/api/open-in-editor', async (c) => {
+    const b = await body(c)
+    if (b.processId !== undefined && typeof b.processId !== 'string') throw new DevServerError('processId must be a server id', 400)
+    return c.json(await dev.openInEditor({ file: text(b.file, 'file'), line: from1(b.line, 'line'), column: from1(b.column, 'column'), processId: b.processId as string | undefined }))
+  })
+  app.get('/api/alerts', async (c) => c.json(await dev.alerts()))
+  app.post('/api/alerts', async (c) => c.json(await dev.addAlert(alertInput(await body(c), false) as DevWebAlertRuleInput)))
+  app.patch('/api/alerts/:id', async (c) => c.json(await dev.updateAlert(c.req.param('id'), alertInput(await body(c), true))))
+  app.delete('/api/alerts/:id', async (c) => c.json(await dev.removeAlert(c.req.param('id'))))
+  app.post('/api/alerts/events/clear', async (c) => c.json(await dev.clearAlertEvents()))
+}
+
+/** What a chat's tools and the localhost list read. */
+function chatRoutes(app: Hono, dev: DevServers, localhost: Localhost): void {
+  app.post('/api/folder', async (c) => c.json(await dev.folder(text((await body(c)).cwd, 'cwd'))))
+  app.post('/api/ensure', async (c) => {
+    const b = await body(c)
+    const server = typeof b.server === 'string' && b.server.trim() !== '' ? b.server : undefined
+    return c.json(await dev.ensure(text(b.cwd, 'cwd'), server, typeof b.wait === 'boolean' ? b.wait : undefined))
+  })
+  app.get('/api/servers', async (c) => {
+    const cwd = c.req.query('cwd')
+    const all = c.req.query('all') === '1'
+    const [projects, others] = await Promise.all([dev.listProjects(), localhost.list(false)])
+    const project = cwd ? projectForCwd(projects, cwd) : null
+    return c.json({ project, projects: all ? projects : project ? [project] : [], others: others.servers })
+  })
+  app.get('/api/owned', async (c) => c.json(await dev.owned()))
+}
+
+/** The log is moved to `<file>.1` (replacing the one before) once it grows past this. */
+const LOG_MAX_BYTES = 5 * 1024 * 1024
+
+/** Appends everything the process prints to `file`, one timestamped line each; one previous file is kept. */
 export function logConsoleTo(file: string): void {
   mkdirSync(join(file, '..'), { recursive: true })
+  let size = 0
+  try {
+    size = statSync(file).size
+  } catch {
+    // floor-ok: no log yet
+  }
   const write = (level: string, args: unknown[]) => {
     const line = args.map((a) => (typeof a === 'string' ? a : a instanceof Error ? (a.stack ?? a.message) : JSON.stringify(a))).join(' ')
+    const entry = `${new Date().toISOString()} ${level} ${line}\n`
+    if (size > LOG_MAX_BYTES) {
+      // A rename that fails (the file held open elsewhere) is tried again after another LOG_MAX_BYTES.
+      size = 0
+      try {
+        renameSync(file, `${file}.1`)
+      } catch {
+        // floor-ok: the lines go on into the same file
+      }
+    }
     try {
-      appendFileSync(file, `${new Date().toISOString()} ${level} ${line}\n`)
+      appendFileSync(file, entry)
+      size += Buffer.byteLength(entry)
     } catch {
       // floor-ok: a log that cannot be written must not stop the service
     }

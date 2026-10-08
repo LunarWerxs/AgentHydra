@@ -66,6 +66,7 @@ import ContextRing from './ContextRing.vue'
 import NewSessionBar from './NewSessionBar.vue'
 import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
+import Collapse from '@/components/ui/collapse/Collapse.vue'
 import RepoStrip from './RepoStrip.vue'
 import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors/repoyeti-state'
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
@@ -664,7 +665,6 @@ function listKeys(e: KeyboardEvent, count: number, index: { value: number }, pic
 }
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.isComposing) return
   if (slashOpen.value && listKeys(e, slashMatches.value.length, slashIndex, () => pickCommand(slashMatches.value[slashIndex.value]), () => (slashDismissed.value = true))) return
   if (mentionOpen.value && listKeys(e, mentionMatches.value.length, mentionIndex, () => pickMention(mentionMatches.value[mentionIndex.value]), () => (mentionDismissed.value = true))) return
   switch (composerKeyAction(e, { empty: !text.value, busy: busy.value, suggestion: !!shown.value, stop: showStop.value })) {
@@ -869,6 +869,48 @@ function stop(click = false) {
   desk.interrupt(props.chat.id).catch((e) => showNotice(`Stop failed: ${errText(e)}`))
 }
 
+async function sendToChat(id: string, body: string, refs: ImageRef[], enqueue: boolean) {
+  const message = { text: body, ...(refs.length ? { images: refs } : {}) }
+  if (enqueue) await shell.queueAdd?.({ kind: 'message', chatId: id, ...message })
+  else await desk.send(id, message)
+  lastSent.set(id, body)
+  saveDraft(storage, id, '')
+  saveDraftImages(id, [])
+}
+
+async function createNewChat(body: string, refs: ImageRef[], enqueue: boolean, sentSlot: string | null) {
+  if (!newCwd.value) throw new Error('Choose a folder first.')
+  const req: CreateChatRequest = {
+    cwd: newCwd.value,
+    prompt: body,
+    ...(refs.length ? { images: refs } : {}),
+    accountId: newAccount.value,
+    model: newModel.value,
+    effort: newEffort.value,
+    permissionMode: newMode.value
+  }
+  if (enqueue) {
+    // The server starts it when an account has room; the screen stays for the next one.
+    await shell.queueAdd?.({ kind: 'chat', ...req })
+    showNotice('Queued: starts when an account has room', true)
+  } else {
+    // The store lists the new chat and opens it.
+    await desk.createChat(req)
+  }
+  lastSent.set('new', body)
+  saveDraft(storage, sentSlot, '')
+  saveDraftImages(sentSlot, [])
+}
+
+async function deliver(body: string, refs: ImageRef[], enqueue: boolean, sentSlot: string | null) {
+  if (props.chat && props.into) {
+    await props.into.send(body)
+    lastSent.set(props.chat.id, body)
+    saveDraft(storage, props.chat.id, '')
+  } else if (props.chat) await sendToChat(props.chat.id, body, refs, enqueue)
+  else await createNewChat(body, refs, enqueue, sentSlot)
+}
+
 /** Sends the box, or queues it (see sendDecision); `ctrl` is Ctrl+Enter or a Ctrl-click, which asks to queue. */
 async function submit(ctrl = false) {
   if (sending.value) return
@@ -887,41 +929,7 @@ async function submit(ctrl = false) {
   // Enter brings the chat to its bottom at once, even scrolled up, and the reply is followed from there.
   if (props.chat) window.dispatchEvent(new CustomEvent<ChatSentDetail>(CHAT_SENT_EVENT, { detail: { chatId: props.chat.id, sessionId: props.chat.sessionId ?? null } }))
   try {
-    if (props.chat && props.into) {
-      await props.into.send(body)
-      lastSent.set(props.chat.id, body)
-      saveDraft(storage, props.chat.id, '')
-    } else if (props.chat) {
-      const id = props.chat.id
-      const message = { text: body, ...(refs.length ? { images: refs } : {}) }
-      if (enqueue) await shell.queueAdd?.({ kind: 'message', chatId: id, ...message })
-      else await desk.send(id, message)
-      lastSent.set(id, body)
-      saveDraft(storage, id, '')
-      saveDraftImages(id, [])
-    } else {
-      if (!newCwd.value) throw new Error('Choose a folder first.')
-      const req: CreateChatRequest = {
-        cwd: newCwd.value,
-        prompt: body,
-        ...(refs.length ? { images: refs } : {}),
-        accountId: newAccount.value,
-        model: newModel.value,
-        effort: newEffort.value,
-        permissionMode: newMode.value
-      }
-      if (enqueue) {
-        // The server starts it when an account has room; the screen stays for the next one.
-        await shell.queueAdd?.({ kind: 'chat', ...req })
-        showNotice('Queued: starts when an account has room', true)
-      } else {
-        // The store lists the new chat and opens it.
-        await desk.createChat(req)
-      }
-      lastSent.set('new', body)
-      saveDraft(storage, sentSlot, '')
-      saveDraftImages(sentSlot, [])
-    }
+    await deliver(body, refs, enqueue, sentSlot)
   } catch (e) {
     if (slot.value === sentSlot) {
       text.value = keptText
@@ -1011,8 +1019,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="bg-[var(--bg-page)] px-4 pb-[9px]">
-    <div class="mx-auto flex w-full max-w-[768px] flex-col gap-1.5">
+  <div class="bg-(--bg-page) px-4 pb-2.25">
+    <div class="mx-auto flex w-full max-w-3xl flex-col gap-1.5">
       <!-- Hydra Desk status row (ours): pending, queued -->
       <WorkerDock
         :pending="Math.max(0, (chat?.pendingCount ?? 0) - (request ? 1 : 0))"
@@ -1050,7 +1058,9 @@ onBeforeUnmount(() => {
           :account="newAccount"
           :accounts="desk.accounts.value"
         />
-        <TipBanner v-if="tip" :tip="tip" @try="tryTip" @dismiss="closeTip" />
+        <Collapse>
+          <TipBanner v-if="tip" :tip="tip" @try="tryTip" @dismiss="closeTip" />
+        </Collapse>
       </template>
 
       <RepoStrip
@@ -1077,11 +1087,11 @@ onBeforeUnmount(() => {
       <!-- The box -->
       <div
         v-show="!request"
-        class="group/box relative z-[1] rounded-[var(--radius-12)] bg-[var(--bg-popover)] p-2 transition-[box-shadow,background-color] duration-200 ease-[var(--ease-composer)]"
+        class="group/box relative z-1 rounded-(--radius-12) bg-(--bg-popover) p-2 transition-[box-shadow,background-color] duration-200 ease-(--ease-composer)"
         :class="
           dragging
             ? 'shadow-[inset_0_0_0_2px_var(--accent)]'
-            : 'shadow-[var(--shadow-composer)] focus-within:shadow-[var(--shadow-composer-focus)]'
+            : 'shadow-(--shadow-composer) focus-within:shadow-(--shadow-composer-focus)'
         "
         @dragover.prevent="dragging = true"
         @dragleave="dragging = false"
@@ -1099,7 +1109,7 @@ onBeforeUnmount(() => {
             type="button"
             aria-label="More"
             title="More"
-            class="absolute -right-2.5 -top-2.5 z-10 flex size-6 items-center justify-center rounded-full bg-[var(--bg-popover)] text-[var(--text-2)] shadow-[var(--shadow-menu-ringed)] transition-opacity duration-150 hover:text-[var(--text)] focus-visible:opacity-100 group-focus-within/box:opacity-100 group-hover/box:opacity-100"
+            class="absolute -right-2.5 -top-2.5 z-10 flex size-6 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-focus-within/box:opacity-100 group-hover/box:opacity-100"
             :class="moveOpen ? 'opacity-100' : 'opacity-0'"
           >
             <component :is="shellGlyphs.rowMore" class="size-4" />
@@ -1108,13 +1118,13 @@ onBeforeUnmount(() => {
         <!-- Slash command menu -->
         <div
           v-if="slashOpen"
-          class="absolute bottom-full left-0 z-30 mb-1.5 flex w-[420px] max-w-full flex-col overflow-y-auto"
+          class="absolute bottom-full left-0 z-30 mb-1.5 flex w-105 max-w-full flex-col overflow-y-auto"
           :class="MENU"
           style="max-height: 320px"
           role="listbox"
           aria-label="Slash commands"
         >
-          <p v-if="!slashMatches.length" class="flex h-6 items-center px-2 text-[var(--text-muted)]">
+          <p v-if="!slashMatches.length" class="flex h-6 items-center px-2 text-(--text-muted)">
             {{ commands.length ? 'No matching command' : 'Loading commands…' }}
           </p>
           <button
@@ -1123,40 +1133,40 @@ onBeforeUnmount(() => {
             type="button"
             role="option"
             :aria-selected="i === slashIndex"
-            class="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left"
-            :class="i === slashIndex ? 'bg-[var(--fill-hover)]' : ''"
+            class="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-(--radius-6) px-2 text-start"
+            :class="i === slashIndex ? 'bg-(--fill-hover)' : ''"
             @mouseenter="slashIndex = i"
             @mousedown.prevent="pickCommand(cmd)"
           >
-            <span class="shrink-0 text-[var(--text)]">/{{ cmd.name }}</span>
-            <span v-if="cmd.argumentHint" class="shrink-0 text-[var(--text-muted)]">{{ cmd.argumentHint }}</span>
-            <span class="ml-auto truncate pl-3 text-[var(--text-muted)]">{{ cmd.description }}</span>
+            <span class="shrink-0 text-(--text)">/{{ cmd.name }}</span>
+            <span v-if="cmd.argumentHint" class="shrink-0 text-(--text-muted)">{{ cmd.argumentHint }}</span>
+            <span class="ms-auto truncate ps-3 text-(--text-muted)">{{ cmd.description }}</span>
           </button>
         </div>
 
         <!-- @-mention menu -->
         <div
           v-if="mentionOpen"
-          class="absolute bottom-full left-0 z-30 mb-1.5 flex w-[420px] max-w-full flex-col overflow-y-auto"
+          class="absolute bottom-full left-0 z-30 mb-1.5 flex w-105 max-w-full flex-col overflow-y-auto"
           :class="MENU"
           style="max-height: 320px"
           role="listbox"
           aria-label="Files and folders"
         >
-          <p v-if="!mentionMatches.length" class="flex h-6 items-center px-2 text-[var(--text-muted)]">No matching file or folder</p>
+          <p v-if="!mentionMatches.length" class="flex h-6 items-center px-2 text-(--text-muted)">No matching file or folder</p>
           <button
             v-for="(p, i) in mentionMatches"
             :key="p"
             type="button"
             role="option"
             :aria-selected="i === mentionIndex"
-            class="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left"
-            :class="i === mentionIndex ? 'bg-[var(--fill-hover)]' : ''"
+            class="flex h-6 w-full shrink-0 items-center gap-1.5 rounded-(--radius-6) px-2 text-start"
+            :class="i === mentionIndex ? 'bg-(--fill-hover)' : ''"
             @mouseenter="mentionIndex = i"
             @mousedown.prevent="pickMention(p)"
           >
-            <component :is="p.endsWith('/') ? FolderIcon : icons.addFiles" class="size-4 shrink-0 text-[var(--text-muted)]" />
-            <span class="truncate text-[var(--text)]">{{ p }}</span>
+            <component :is="p.endsWith('/') ? FolderIcon : icons.addFiles" class="size-4 shrink-0 text-(--text-muted)" />
+            <span class="truncate text-(--text)">{{ p }}</span>
           </button>
         </div>
 
@@ -1170,13 +1180,13 @@ onBeforeUnmount(() => {
                 <img
                   :src="img.url"
                   :alt="img.name"
-                  class="size-[120px] rounded-[var(--radius-8)] bg-[var(--bg-picture)] object-contain shadow-(--shadow-picture-light)"
+                  class="size-30 rounded-(--radius-8) bg-(--bg-picture) object-contain shadow-(--shadow-picture-light)"
                 />
               </button>
             </Tip>
             <button
               type="button"
-              class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-[var(--bg-popover)] text-[var(--text-2)] opacity-0 shadow-[var(--shadow-menu-ringed)] transition-opacity duration-150 hover:text-[var(--text)] focus-visible:opacity-100 group-hover:opacity-100"
+              class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) opacity-0 shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-hover:opacity-100"
               :aria-label="`Remove ${img.name}`"
               @click="removeImage(img.id)"
             >
@@ -1193,13 +1203,13 @@ onBeforeUnmount(() => {
             :placeholder="shown || 'Describe a task or ask a question'"
             spellcheck="true"
             aria-label="Message"
-            class="block max-h-96 min-h-6 flex-1 resize-none overflow-hidden bg-transparent px-1 py-0.5 text-[14px] leading-5 text-[var(--text)] caret-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
+            class="block max-h-96 min-h-6 flex-1 resize-none overflow-hidden bg-transparent px-1 py-0.5 text-[14px] leading-5 text-(--text) caret-(--text) outline-none placeholder:text-(--text-muted)"
             @keydown="onKeydown"
             @keyup="syncCaret"
             @click="syncCaret"
             @paste="onPaste"
           />
-          <span v-if="(busy || enterQueues) && hasContent" class="mb-[3px] shrink-0 text-[12px] text-[var(--text-muted)]">Queue</span>
+          <span v-if="(busy || enterQueues) && hasContent" class="mb-0.75 shrink-0 text-[12px] text-(--text-muted)">Queue</span>
           <SendSplit
             v-model:open="queueOpen"
             :show-stop="showStop"
@@ -1221,12 +1231,12 @@ onBeforeUnmount(() => {
       <p
         v-if="notice"
         class="-mt-0.5 px-2 text-[12px]"
-        :class="noticeInfo ? 'text-[var(--text-muted)]' : 'text-[var(--warning-text)]'"
+        :class="noticeInfo ? 'text-(--text-muted)' : 'text-(--warning-text)'"
         :role="noticeInfo ? 'status' : 'alert'"
       >{{ notice }}</p>
 
       <!-- Toolbar row below the box: h20, 12px #c3c2b7, padding 0 10 0 7 -->
-      <div class="flex h-5 items-center pl-[7px] pr-2.5">
+      <div class="flex h-5 items-center ps-1.75 pe-2.5">
         <DropdownMenu v-bind="menuModel('plus')" :modal="!nonModal">
           <DropdownMenuTrigger as-child>
             <button type="button" :class="TOOL_ICON" aria-label="Add">
@@ -1255,19 +1265,19 @@ onBeforeUnmount(() => {
         <Tip :label="into ? into.why : SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
           <button
             type="button"
-            :class="[TOOL_ICON, recording ? 'bg-[var(--danger-bg)] text-[var(--danger-text)]' : '']"
+            :class="[TOOL_ICON, recording ? 'bg-(--danger-bg) text-(--danger-text)' : '']"
             :aria-label="recording ? 'Recording, release to stop' : 'Press and hold to record'"
             :disabled="!SpeechRecognition || !!into"
             @pointerdown.prevent="startDictation"
             @pointerup="stopDictation"
             @pointerleave="stopDictation"
           >
-            <Mic class="size-3.5" :class="recording ? 'animate-[var(--animate-dot-blink)]' : ''" />
+            <Mic class="size-3.5" :class="recording ? 'animate-(--animate-dot-blink)' : ''" />
           </button>
         </Tip>
         <DropdownMenu v-bind="menuModel('dictation')" :modal="!nonModal">
           <DropdownMenuTrigger as-child>
-            <button type="button" :class="TOOL_ICON" class="w-[19px]" aria-label="Dictation settings">
+            <button type="button" :class="TOOL_ICON" class="w-4.75" aria-label="Dictation settings">
               <DictationChevron class="size-3" />
             </button>
           </DropdownMenuTrigger>
@@ -1275,7 +1285,7 @@ onBeforeUnmount(() => {
             <div :class="HEADER">Dictation language</div>
             <DropdownMenuItem v-for="l in dictationLangs" :key="l" :class="ITEM" @select="setDictationLang(l)">
               <span class="flex-1">{{ l }}{{ l === browserLang ? ' (browser)' : '' }}</span>
-              <Check v-if="dictationLang === l" class="ml-auto size-3.5 text-[var(--accent)]" :stroke-width="3" />
+              <Check v-if="dictationLang === l" class="ms-auto size-3.5 text-(--accent)" :stroke-width="3" />
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1304,7 +1314,7 @@ onBeforeUnmount(() => {
                 @select="pickModel(m.value)"
               >
                 <span class="flex-1 whitespace-nowrap">{{ m.label }}</span>
-                <Check v-if="model === m.value" class="-mr-1 ml-3 size-3.5 text-[var(--accent)]" :stroke-width="3" />
+                <Check v-if="model === m.value" class="-me-1 ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
                 <span v-else :class="SHORTCUT">{{ i + 1 }}</span>
               </DropdownMenuItem>
               <div role="separator" :class="SEPARATOR" />
@@ -1313,7 +1323,7 @@ onBeforeUnmount(() => {
                 <DropdownMenuSubContent :class="MENU">
                   <DropdownMenuItem role="menuitemradio" :aria-checked="!model" :class="ITEM" @select="pickModel(null)">
                     <span class="flex-1 whitespace-nowrap">Account default</span>
-                    <Check v-if="!model" class="ml-3 size-3.5 text-[var(--accent)]" :stroke-width="3" />
+                    <Check v-if="!model" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     v-for="m in modelSplit.more"
@@ -1324,7 +1334,7 @@ onBeforeUnmount(() => {
                     @select="pickModel(m.value)"
                   >
                     <span class="flex-1 whitespace-nowrap">{{ m.label }}</span>
-                    <Check v-if="model === m.value" class="ml-3 size-3.5 text-[var(--accent)]" :stroke-width="3" />
+                    <Check v-if="model === m.value" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>

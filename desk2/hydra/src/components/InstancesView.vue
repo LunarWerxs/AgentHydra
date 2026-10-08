@@ -117,6 +117,7 @@ import { FREE_PROVIDERS } from '@desk/shared/free-instances'
 import { billsPastLimit, usageReasonMessageKey } from '@/lib/usage'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
 import { planSize } from '@/lib/usage-pool'
+import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const {
@@ -1396,7 +1397,7 @@ async function refreshDesktopInstall(fresh = false) {
 // While the warning banner is up, re-verify the verdict every 60s (fresh, bypassing the server's
 // 5-minute cache): the banner's own instruction is "install the classic build", and following it
 // used to leave the stale banner pinned until a manual Refresh. No banner → no polling cost.
-let desktopInstallTimer: number | null = null
+let stopDesktopInstallPoll: (() => void) | null = null
 
 onMounted(() => {
   // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop, cli and free kinds).
@@ -1405,8 +1406,8 @@ onMounted(() => {
   // The Claude rows here read the CLI list too (the linked-CLI badge and the ⋯ menu's CLI items).
   startCliPolling()
   refreshDesktopInstall()
-  desktopInstallTimer = window.setInterval(() => {
-    if (desktopWarning.value && !document.hidden) void refreshDesktopInstall(true)
+  stopDesktopInstallPoll = visibleInterval(() => {
+    if (desktopWarning.value) void refreshDesktopInstall(true)
   }, 60_000)
   // A probe or a resolve that never answers must not hold the order (or the warning) for good.
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
@@ -1416,7 +1417,7 @@ onUnmounted(() => {
   // exist to fill in THIS table, and a tab you have navigated away from has no business holding a
   // slow queue of network requests open behind you.
   catchupSignal.aborted = true
-  if (desktopInstallTimer !== null) window.clearInterval(desktopInstallTimer)
+  stopDesktopInstallPoll?.()
   window.clearTimeout(firstDrawTimer)
   window.clearTimeout(loadHoldTimer)
 })
@@ -1454,15 +1455,9 @@ onUnmounted(() => {
             <Button
               v-for="view in KIND_VIEWS"
               :key="view"
-              size="sm"
-              variant="ghost"
+              size="segment"
+              variant="segment"
               role="radio"
-              class="h-7 gap-1.5 rounded-[5px] px-2.5"
-              :class="
-                kindView === view
-                  ? 'bg-primary/15 text-foreground ring-1 ring-primary/40 hover:bg-primary/20'
-                  : 'text-muted-foreground hover:text-foreground'
-              "
               :aria-checked="kindView === view"
               :tabindex="kindView === view ? 0 : -1"
               :data-kind="view"
@@ -1802,7 +1797,7 @@ onUnmounted(() => {
                 <DropdownMenuSubTrigger :disabled="moveAllBusy">
                   <ArrowRightLeft /> {{ $t('instances.moveChats') }}
                 </DropdownMenuSubTrigger>
-                <DropdownMenuSubContent class="max-w-64">
+                <DropdownMenuSubContent width="lg">
                   <!-- The list is DESTINATIONS, and until this heading it never said so.
                        A switch reading "Show not running" sitting directly under "Move
                        chats to account" reads as a filter on the chats (owner, 2026-09-09,

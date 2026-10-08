@@ -1,9 +1,16 @@
 import type { Dirent } from 'node:fs'
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
-import { readdir as readdirAsync, stat as statAsync } from 'node:fs/promises'
+import {
+  readdir as readdirAsync,
+  readFile as readFileAsync,
+  rename as renameAsync,
+  rm as rmAsync,
+  stat as statAsync,
+  writeFile as writeFileAsync,
+} from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
-import { CLAUDE_PROJECTS_ROOT, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
+import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
 import { timeSlice } from './core/loop-yield'
@@ -181,7 +188,7 @@ export function instanceScopeMatches(tf: TranscriptFile, scope: string): boolean
   return want.toLowerCase() === inst.name.toLowerCase()
 }
 
-let cache: { at: number; files: TranscriptFile[] } | null = null
+let cache: { at: number; files: TranscriptFile[]; seeded?: true } | null = null
 /**
  * How long a snapshot is trusted before a background sweep is started.
  *
@@ -448,7 +455,7 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
     // what the setTimeout here used to do — held the event loop for the entire sweep, so the
     // "background" refresh was really a full stop for every request in flight. Measured: an
     // /api/health that reads nothing answered in 6.6 s while one of these ran.
-    if (now - cache.at >= TTL_MS) void startIndexBuild()
+    if (cache.seeded || now - cache.at >= TTL_MS) void startIndexBuild()
     return cache.files
   }
   return coldIndexFallback()
@@ -460,6 +467,7 @@ let syncIndexBuildAllowed = true
  *  while the async build starts. Scripts and tests keep the default: the one-shot sync build. */
 export function forbidSyncIndexBuild(): void {
   syncIndexBuildAllowed = false
+  void seedIndexFromSnapshot()
 }
 
 function coldIndexFallback(): TranscriptFile[] {
@@ -1206,7 +1214,65 @@ function finishIndex(
   // that checks freshness immediately asks for another sweep — the rebuild-forever loop this
   // module used to sit in. The age of a snapshot is how long ago it became TRUE, which is now.
   cache = { at: performance.now(), files: result }
+  persistIndexSnapshot(result)
   return result
+}
+
+/**
+ * The daemon's last index on disk, read back at boot. Every update relaunches the daemon, and a
+ * relaunched one had no snapshot, so its first `/api/sessions` waited out a full store sweep (9-17 s
+ * on this PC's store, 2026-10-08) before the window could list a single session. Seeded from this
+ * file, the first caller gets the last known rows at once and the real sweep starts behind it.
+ * Scripts and tests (which may build synchronously) neither read nor write it.
+ */
+const INDEX_SNAPSHOT_PATH = join(DATA_DIR, 'transcript-index.json')
+const INDEX_SNAPSHOT_VERSION = 1
+/** A sweep's result is written at most this often, and only when the store changed. */
+const INDEX_SNAPSHOT_EVERY_MS = 2 * 60_000
+let snapshotAt = 0
+let snapshotStamp = ''
+let snapshotWriting = false
+
+function persistIndexSnapshot(files: TranscriptFile[]): void {
+  if (syncIndexBuildAllowed || snapshotWriting) return
+  const now = Date.now()
+  if (now - snapshotAt < INDEX_SNAPSHOT_EVERY_MS) return
+  let newest = 0
+  let bytes = 0
+  for (const f of files) {
+    if (f.mtime_ms > newest) newest = f.mtime_ms
+    bytes += f.size_bytes
+  }
+  const stamp = `${files.length}:${newest}:${bytes}`
+  if (stamp === snapshotStamp) return
+  snapshotWriting = true
+  snapshotAt = now
+  const tmp = `${INDEX_SNAPSHOT_PATH}.${process.pid}.tmp`
+  void writeFileAsync(tmp, JSON.stringify({ v: INDEX_SNAPSHOT_VERSION, files }))
+    .then(() => renameAsync(tmp, INDEX_SNAPSHOT_PATH))
+    .then(() => {
+      snapshotStamp = stamp
+    })
+    .catch(() => rmAsync(tmp, { force: true }).catch(noop))
+    .finally(() => {
+      snapshotWriting = false
+    })
+}
+
+async function seedIndexFromSnapshot(): Promise<void> {
+  try {
+    const saved = JSON.parse(await readFileAsync(INDEX_SNAPSHOT_PATH, 'utf8')) as {
+      v?: unknown
+      files?: unknown
+    }
+    if (cache || saved?.v !== INDEX_SNAPSHOT_VERSION || !Array.isArray(saved.files)) return
+    // Stale on arrival: whoever asks first gets these rows and starts the real sweep. Marked
+    // `seeded` rather than back-dated, so the stamp stays the moment it was stored (rule B of
+    // scripts/checks/transcript-index-born-stale.mjs); the sweep's own snapshot clears it.
+    cache = { at: performance.now(), files: saved.files as TranscriptFile[], seeded: true }
+  } catch {
+    // none yet, or unreadable: the first sweep builds the index as before
+  }
 }
 
 function buildTranscriptIndex(): TranscriptFile[] {
@@ -1480,7 +1546,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
  */
 export async function ensureTranscriptIndex(force = false): Promise<TranscriptFile[]> {
   const now = performance.now()
-  if (!force && cache && now - cache.at < TTL_MS) return cache.files
+  if (!force && cache && !cache.seeded && now - cache.at < TTL_MS) return cache.files
   const build = startIndexBuild()
   if (!force && cache) return cache.files
   return build

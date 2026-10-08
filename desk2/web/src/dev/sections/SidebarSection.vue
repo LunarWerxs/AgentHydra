@@ -13,14 +13,14 @@ provide(SHELL_SOURCE, demoSource())
 <template>
   <div class="flex flex-wrap items-start gap-6">
     <div>
-      <h3 class="mb-2 text-sm text-[var(--text-muted)]">Sidebar (account popup closed)</h3>
-      <div class="flex h-[720px] w-[288px] overflow-hidden rounded-[var(--radius-8)] border border-[var(--border)]">
+      <h3 class="mb-2 text-sm text-(--text-muted)">Sidebar (account popup closed)</h3>
+      <div class="flex h-180 w-[288px] overflow-hidden rounded-(--radius-8) border border-(--border)">
         <Sidebar :width="288" />
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-sm text-[var(--text-muted)]">Account popup open (choosing a row saves the default account for new chats)</h3>
-      <div class="flex h-[720px] w-[288px] overflow-hidden rounded-[var(--radius-8)] border border-[var(--border)]">
+      <h3 class="mb-2 text-sm text-(--text-muted)">Account popup open (choosing a row saves the default account for new chats)</h3>
+      <div class="flex h-180 w-[288px] overflow-hidden rounded-(--radius-8) border border-(--border)">
         <Sidebar :width="288" accounts-open />
       </div>
     </div>

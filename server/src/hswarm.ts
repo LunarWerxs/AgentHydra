@@ -225,22 +225,8 @@ function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
 export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
   if (stopRequested) return
 
-  const enabled = deps.enabled ?? appEnv('HSWARM_ENABLED')?.trim() !== '0'
-  if (!enabled) {
-    state.lastError = 'hswarm is disabled'
-    return
-  }
-
-  const dir = deps.dir ?? hswarmDir(deps.env)
-  if (!dir) {
-    const override = (deps.env ?? process.env).AGENTHYDRA_HSWARM_DIR?.trim()
-    state.lastError = override
-      ? `AGENTHYDRA_HSWARM_DIR=${override} has no hswarm/__init__.py`
-      : 'hswarm package not found (no hswarm/__init__.py beside the app)'
-    console.log(`[hswarm] ${state.lastError}; sidecar not started`)
-    return
-  }
-  console.log(`[hswarm] using package folder ${dir}`)
+  const dir = enabledDir(deps)
+  if (!dir) return
   const port = deps.port ?? hswarmPort(deps.env)
   const python = deps.python ?? pythonBinary(deps.env)
 
@@ -262,31 +248,78 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     PYTHONUNBUFFERED: '1',
   }
 
-  // Probe for an existing live hswarm before starting a competitor
+  if (await settleLive(deps, { port, dir, python, env })) return
+  spawnServer(deps, { port, dir, python, env })
+}
+
+/** The package folder to run, or null (state.lastError says why) when hswarm is off or has none. */
+function enabledDir(deps: HSwarmDeps): string | null {
+  const enabled = deps.enabled ?? appEnv('HSWARM_ENABLED')?.trim() !== '0'
+  if (!enabled) {
+    state.lastError = 'hswarm is disabled'
+    return null
+  }
+
+  const dir = deps.dir ?? hswarmDir(deps.env)
+  if (!dir) {
+    const override = (deps.env ?? process.env).AGENTHYDRA_HSWARM_DIR?.trim()
+    state.lastError = override
+      ? `AGENTHYDRA_HSWARM_DIR=${override} has no hswarm/__init__.py`
+      : 'hswarm package not found (no hswarm/__init__.py beside the app)'
+    console.log(`[hswarm] ${state.lastError}; sidecar not started`)
+    return null
+  }
+  console.log(`[hswarm] using package folder ${dir}`)
+  return dir
+}
+
+/** What one start runs: the port, package folder, interpreter and the sidecar's env. */
+interface StartPlan {
+  port: number
+  dir: string
+  python: string
+  env: NodeJS.ProcessEnv
+}
+
+/** Probe for an existing live hswarm before starting a competitor: one of another folder is replaced,
+ *  any other is adopted. True when that ends this start (adopted, or a replacement that did not end). */
+async function settleLive(deps: HSwarmDeps, plan: StartPlan): Promise<boolean> {
+  const { port, dir, python, env } = plan
   const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
   const sideRun = isSideRun(deps)
   if (liveHSwarm?.hswarm === true && !sideRun && !runsFrom(liveHSwarm, dir)) {
     // Adopting it would leave this folder's code unserved: end it and start our own.
-    if (!(await replaceForeign(deps, port, dir, liveHSwarm))) {
-      state.lastError = `the server on port ${port} runs from another folder and did not end`
-      console.log(`[hswarm] ${state.lastError}`)
-      scheduleRestart(deps)
-      return
-    }
-  } else if (liveHSwarm?.hswarm === true && (sideRun || typeof liveHSwarm.pid === 'number')) {
-    // A side-run adopts whatever server answers, read-only: spawning beside it would fight for the port.
-    state.running = true
-    state.pid = typeof liveHSwarm.pid === 'number' ? liveHSwarm.pid : null
-    state.port = port
-    state.lastError = null
-    backoffMs = MIN_BACKOFF_MS
-    console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
-    // The old sidecar usually survives a daemon restart; the hourly import must not stop with it.
-    startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
-    watchAdopted(deps, port, dir)
-    return
+    if (await replaceForeign(deps, port, dir, liveHSwarm)) return false
+    state.lastError = `the server on port ${port} runs from another folder and did not end`
+    console.log(`[hswarm] ${state.lastError}`)
+    scheduleRestart(deps)
+    return true
   }
+  if (liveHSwarm?.hswarm !== true || !(sideRun || typeof liveHSwarm.pid === 'number')) return false
+  // A side-run adopts whatever server answers, read-only: spawning beside it would fight for the port.
+  state.running = true
+  state.pid = typeof liveHSwarm.pid === 'number' ? liveHSwarm.pid : null
+  state.port = port
+  state.lastError = null
+  backoffMs = MIN_BACKOFF_MS
+  console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
+  // The old sidecar usually survives a daemon restart; the hourly import must not stop with it.
+  startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
+  watchAdopted(deps, port, dir)
+  return true
+}
 
+function restartOnExit(deps: HSwarmDeps): void {
+  if (!stopRequested && state.running) {
+    state.running = false
+    state.pid = null
+    state.lastError = 'process exited'
+    scheduleRestart(deps)
+  }
+}
+
+function spawnServer(deps: HSwarmDeps, plan: StartPlan): void {
+  const { port, dir, python, env } = plan
   let fd = -1
   try {
     fd = openHSwarmLog(deps.logDir ?? join(DATA_DIR, 'logs'))
@@ -315,14 +348,7 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
     // Watch for crash and restart with backoff
     proc.exited
       .finally(() => closeLog(fd))
-      .then(() => {
-        if (!stopRequested && state.running) {
-          state.running = false
-          state.pid = null
-          state.lastError = 'process exited'
-          scheduleRestart(deps)
-        }
-      })
+      .then(() => restartOnExit(deps))
       .catch((e) => {
         // A failure in the restart path would otherwise leave hswarm down with no reason shown.
         state.lastError = `restart failed: ${e instanceof Error ? e.message : String(e)}`

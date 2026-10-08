@@ -49,9 +49,18 @@ const CMDLINE_BUF_BYTES = 16 + 65_536
 // FILETIME counts 100 ns ticks from 1601-01-01; the Unix epoch is this many ms later.
 const FILETIME_UNIX_EPOCH_MS = 11_644_473_600_000
 
+/** Which facts to ask a process's handle for. Each is its own call, and the executable path is the
+ *  slow one (2026-10-08: QueryFullProcessImageNameW was 30% of a 7.7 s daemon stall while CliMayte's
+ *  tick only wanted command lines and working sets), so a caller asks for what it reads. */
+export const INFO_COMMAND_LINE = 1
+export const INFO_EXECUTABLE_PATH = 2
+export const INFO_WORKING_SET = 4
+export const INFO_CREATION_DATE = 8
+const INFO_ALL = INFO_COMMAND_LINE | INFO_EXECUTABLE_PATH | INFO_WORKING_SET | INFO_CREATION_DATE
+
 interface Native {
   table(): NativeProcess[] | null
-  info(pid: number): NativeProcessInfo | null
+  info(pid: number, want: number): NativeProcessInfo | null
 }
 
 let native: Native | null | undefined
@@ -128,22 +137,26 @@ function load(): Native | null {
           k.CloseHandle(snap)
         }
       },
-      info(pid) {
+      info(pid, want) {
         // VM_READ is asked for only so the memory query works on older builds; the limited right
         // alone answers everything else, and is all a protected or elevated process grants.
         const h =
-          k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid) ||
+          ((want & INFO_WORKING_SET) !== 0 &&
+            k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, pid)) ||
           k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
         if (!h) return null
         try {
           let commandLine: string | null = null
-          const status = nt.NtQueryInformationProcess(
-            h,
-            ProcessCommandLineInformation,
-            ptr(cmd),
-            cmd.byteLength,
-            ptr(cmdLen),
-          )
+          const status =
+            want & INFO_COMMAND_LINE
+              ? nt.NtQueryInformationProcess(
+                  h,
+                  ProcessCommandLineInformation,
+                  ptr(cmd),
+                  cmd.byteLength,
+                  ptr(cmdLen),
+                )
+              : -1
           if (status >= 0) {
             // A UNICODE_STRING (Length, MaximumLength, Buffer) whose Buffer points into `cmd`.
             const bytes = cmdView.getUint16(0, true)
@@ -154,18 +167,24 @@ function load(): Native | null {
 
           let executablePath: string | null = null
           imageLen[0] = image.length
-          if (k.QueryFullProcessImageNameW(h, 0, ptr(image), ptr(imageLen)))
+          if (
+            want & INFO_EXECUTABLE_PATH &&
+            k.QueryFullProcessImageNameW(h, 0, ptr(image), ptr(imageLen))
+          )
             executablePath = text(image, imageLen[0]!)
 
           let creationDate: string | null = null
-          if (k.GetProcessTimes(h, ptr(times), ptr(times, 8), ptr(times, 16), ptr(times, 24))) {
+          if (
+            want & INFO_CREATION_DATE &&
+            k.GetProcessTimes(h, ptr(times), ptr(times, 8), ptr(times, 16), ptr(times, 24))
+          ) {
             const ms = Number(times[0]! / 10_000n) - FILETIME_UNIX_EPOCH_MS
             if (ms > 0) creationDate = new Date(ms).toISOString()
           }
 
           let workingSetSize: number | null = null
           memView.setUint32(0, mem.byteLength, true)
-          if (k.K32GetProcessMemoryInfo(h, ptr(mem), mem.byteLength))
+          if (want & INFO_WORKING_SET && k.K32GetProcessMemoryInfo(h, ptr(mem), mem.byteLength))
             workingSetSize = Number(memView.getBigUint64(16, true))
 
           return { commandLine, executablePath, workingSetSize, creationDate }
@@ -194,12 +213,13 @@ export function nativeProcessTable(): NativeProcess[] | null {
   }
 }
 
-/** One process's command line, executable, working set and start time. Null when the pid does not
- *  open or this cannot be asked here. An exited process whose handle someone still holds (the
- *  daemon holds its own children's) opens with a null command line; the table never lists it. */
-export function nativeProcessInfo(pid: number): NativeProcessInfo | null {
+/** One process's command line, executable, working set and start time, or only the `want` ones
+ *  (INFO_* bits; the rest come back null). Null when the pid does not open or this cannot be asked
+ *  here. An exited process whose handle someone still holds (the daemon holds its own children's)
+ *  opens with a null command line; the table never lists it. */
+export function nativeProcessInfo(pid: number, want = INFO_ALL): NativeProcessInfo | null {
   try {
-    return lib()?.info(pid) ?? null
+    return lib()?.info(pid, want) ?? null
   } catch {
     return null
   }
@@ -213,7 +233,7 @@ export function nativeCommandLines(pids: readonly number[]): Map<number, string>
   const out = new Map<number, string>()
   for (const pid of pids) {
     try {
-      const command = n.info(pid)?.commandLine
+      const command = n.info(pid, INFO_COMMAND_LINE)?.commandLine
       if (command) out.set(pid, command)
     } catch {
       // that one process only

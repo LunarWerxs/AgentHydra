@@ -184,11 +184,11 @@ const ROW = LIST_ROW
             <component :is="shellIcons.climayte" v-if="isTaskRow(r.id)" role="img" aria-label="CliMayte task" title="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
-            <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
+            <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
-            <RowAge v-if="!cleanSidebar" class="pr-1" :at="r.lastActivityAt" />
+            <RowAge v-if="!cleanSidebar" class="pe-1" :at="r.lastActivityAt" />
     </DefineRowBody>
-    <header v-if="shownGroups.length === 0" class="flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
+    <header v-if="shownGroups.length === 0" class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
       <span class="flex-1" />
       <slot name="tools" />
@@ -196,32 +196,32 @@ const ROW = LIST_ROW
 
     <p v-if="cloud.error.value" role="alert" class="px-1.5 pt-2 text-[12px] leading-4 text-danger-text">
       {{ cloud.error.value }}
-      <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.refresh()">Retry</button>
+      <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="cloud.refresh()">Retry</button>
     </p>
     <p v-else-if="cloud.loaded.value && shownGroups.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
       Every group here is hidden.
-      <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
+      <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
     </p>
     <p v-else-if="cloud.loaded.value && shownGroups.length === 0" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
       No sessions match.
-      <button type="button" class="ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
+      <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
     </p>
 
     <TransitionGroup :css="false" @leave="rowLeave">
     <section v-for="(g, gi) in shownGroups" :key="g.key" :aria-label="g.label">
       <ContextMenu>
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
-      <header class="group/head flex h-[34px] items-center gap-1 pb-1 pl-1.5 pr-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
+      <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
         <Tip :label="g.cwd ?? ''" align="start">
-          <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-[4px] hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
+          <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
             <span class="truncate">{{ g.label }}</span>
-            <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ml-0.5 size-3 shrink-0" />
+            <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
             <component
               :is="shellGlyphs.groupChevron"
-              class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
+              class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
               :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
             />
-            <RunningBadge v-if="foldedRunning.get(g.key)" class="ml-1" :tasks="foldedRunning.get(g.key)!.tasks" :jobs="foldedRunning.get(g.key)!.jobs" :chats="foldedRunning.get(g.key)!.chats" />
+            <RunningBadge v-if="foldedRunning.get(g.key)" class="ms-1" :tasks="foldedRunning.get(g.key)!.tasks" :jobs="foldedRunning.get(g.key)!.jobs" :chats="foldedRunning.get(g.key)!.chats" />
           </button>
         </Tip>
         <span class="flex-1" />
@@ -293,12 +293,12 @@ const ROW = LIST_ROW
     </section>
     </TransitionGroup>
 
-    <div v-if="cloud.selectMode.value" class="sticky bottom-0 mt-2 flex items-center gap-1 rounded-[var(--radius-6)] bg-bg-popover px-1.5 py-1 text-[12px] text-text-2 shadow-(--shadow-popover)">
+    <div v-if="cloud.selectMode.value" class="sticky bottom-0 mt-2 flex items-center gap-1 rounded-(--radius-6) bg-bg-popover px-1.5 py-1 text-[12px] text-text-2 shadow-(--shadow-popover)">
       <span class="flex-1">{{ cloud.selected.value.size }} selected</span>
-      <button type="button" class="rounded-[4px] px-1.5 py-0.5 hover:bg-fill-hover disabled:opacity-50" :disabled="cloud.selected.value.size === 0" @click="copyIds">
+      <button type="button" class="rounded-sm px-1.5 py-0.5 hover:bg-fill-hover disabled:opacity-50" :disabled="cloud.selected.value.size === 0" @click="copyIds">
         {{ copied ? 'Copied' : `Copy ${cloud.selected.value.size} id${cloud.selected.value.size === 1 ? '' : 's'}` }}
       </button>
-      <button type="button" class="rounded-[4px] px-1.5 py-0.5 hover:bg-fill-hover" @click="cloud.setSelectMode(false)">Done</button>
+      <button type="button" class="rounded-sm px-1.5 py-0.5 hover:bg-fill-hover" @click="cloud.setSelectMode(false)">Done</button>
     </div>
   </div>
 </template>

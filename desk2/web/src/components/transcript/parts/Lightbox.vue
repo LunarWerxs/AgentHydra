@@ -4,7 +4,7 @@
 // at the ends; the wheel (or + and -) zooms at the pointer with a snap to fit and to true 100%; drag pans a zoomed
 // picture; 0 or 1 or a double click toggles fit and 100%; W fits the width; F goes full screen. Keys: lib/viewer.ts.
 // The pen (or A) annotates the picture (Annotator.vue); Save copy puts the annotated copy in the box beside the original.
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Pencil, X } from '@lucide/vue'
 import { canAnnotate } from '../lib/annotate'
 import { ANNOTATED_EVENT, closeLightbox, lightbox, stepLightbox, type Annotated } from '../lib/media'
@@ -114,9 +114,9 @@ function onPointerUp() {
   dragging.value = false
 }
 // A click on the empty backdrop closes; the end of a drag does not.
-function onStageClick(e: MouseEvent) {
+function onBackdropClick(e: MouseEvent) {
   if (swallowClick) return void (swallowClick = false)
-  if (e.target === e.currentTarget) closeLightbox()
+  if (e.target === stage.value) closeLightbox()
 }
 function onDblClick() {
   view.value = toggleZoom(view.value, true100Zoom(fitScale(geometry.value)))
@@ -172,32 +172,39 @@ function swallowSpaceRelease() {
 
 let opener: HTMLElement | null = null
 let observer: ResizeObserver | null = null
+async function opened() {
+  opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+  view.value = FIT_VIEW
+  window.addEventListener('keydown', onKey, true)
+  await nextTick()
+  stage.value?.focus()
+  measure()
+  if (stage.value && typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver(measure)
+    observer.observe(stage.value)
+  }
+}
+function closed() {
+  annotating.value = false
+  window.removeEventListener('keydown', onKey, true)
+  observer?.disconnect()
+  observer = null
+  if (document.fullscreenElement) void document.exitFullscreen?.()
+  const back = opener
+  opener = null
+  void nextTick(() => back?.isConnected && back.focus())
+}
 watch(
   () => !!lightbox.value,
-  async (open) => {
-    if (open) {
-      opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      view.value = FIT_VIEW
-      window.addEventListener('keydown', onKey, true)
-      await nextTick()
-      stage.value?.focus()
-      measure()
-      if (stage.value && typeof ResizeObserver !== 'undefined') {
-        observer = new ResizeObserver(measure)
-        observer.observe(stage.value)
-      }
-    } else {
-      annotating.value = false
-      window.removeEventListener('keydown', onKey, true)
-      observer?.disconnect()
-      observer = null
-      if (document.fullscreenElement) void document.exitFullscreen?.()
-      const back = opener
-      opener = null
-      void nextTick(() => back?.isConnected && back.focus())
-    }
+  (open) => {
+    if (open) void opened()
+    else closed()
   },
 )
+// App.vue loads this on first use: a picture opened before the chunk arrived is already open when it mounts.
+onMounted(() => {
+  if (lightbox.value) void opened()
+})
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKey, true)
   observer?.disconnect()
@@ -208,7 +215,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-150">
-      <div v-if="lightbox && current" class="tx-viewer fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'">
+      <div v-if="lightbox && current" class="tx-viewer fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
         <Annotator v-if="annotating" ref="annotator" :src="current.src" :name="current.alt" @cancel="annotating = false" @save="onAnnotated" />
         <template v-else>
           <div
@@ -217,7 +224,6 @@ onBeforeUnmount(() => {
             class="absolute inset-0 flex items-center justify-center overflow-hidden outline-none"
             :class="dragging ? 'cursor-grabbing' : view.zoom > 1 ? 'cursor-grab' : 'cursor-zoom-out'"
             data-testid="viewer-stage"
-            @click="onStageClick"
             @wheel.prevent="onWheel"
             @pointerdown="onPointerDown"
             @pointermove="onPointerMove"
@@ -269,29 +275,3 @@ onBeforeUnmount(() => {
     </Transition>
   </Teleport>
 </template>
-
-<style scoped>
-.tx-viewer-img {
-  /* The checkerboard SageThumbs draws behind a transparent picture. */
-  background-color: #2b2b29;
-  background-image: conic-gradient(#3a3a38 25%, transparent 0 50%, #3a3a38 0 75%, transparent 0);
-  background-size: 16px 16px;
-}
-.tx-viewer-pen {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  color: var(--text-2);
-  background: var(--fill-5);
-  box-shadow: inset 0 0 0 1px var(--border);
-  cursor: pointer;
-  transition: background-color 60ms, color 60ms;
-}
-.tx-viewer-pen:hover {
-  background: var(--fill-hover);
-  color: var(--text);
-}
-</style>

@@ -11,7 +11,7 @@ const row = (id: string) => sessions.find((s) => s.session_id === id) ?? null
 
 describe('search hits', () => {
   const results = searchAnswer().results
-  const hits = mapSearch(results, results.map((r: any) => row(r.session_id)), 'websocket test')
+  const hits = mapSearch(results, results.map((r: { session_id: string }) => row(r.session_id)), 'websocket test')
 
   test('a hit takes its title and activity time from the session row, in AgentHydra order', () => {
     expect(hits.map((h) => h.sessionId)).toEqual([sid(2), sid(1), '00000000-0000-4000-8000-0000000000ff'])

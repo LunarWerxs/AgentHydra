@@ -4,7 +4,7 @@
 // state.json overrides and the pane's remembered ids carry over), and the atomic writes every file here goes through.
 
 import { createHash } from 'node:crypto'
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { AnswerRule } from './answers'
 import { readRules } from './answers'
@@ -117,6 +117,17 @@ function parseProcess(raw: unknown, at: string): ProcessSpec {
   const id = str(raw.id, `${label}: id`)!
   if (!ID_RE.test(id)) throw new ProjectFileError(`${label}: id may only contain letters, numbers, . _ -`)
   const out: ProcessSpec = { ...(raw as object), id, name: str(raw.name, `${label}: name`)!, command: str(raw.command, `${label}: command`)! } as ProcessSpec
+  checkPlainFields(raw, label)
+  checkOrdering(raw, label)
+  if (raw.compose !== undefined) {
+    const compose = parseCompose(raw.compose, label)
+    if (compose) out.compose = compose
+  }
+  if (raw.answers !== undefined && !Array.isArray(raw.answers)) throw new ProjectFileError(`${label}: answers must be a list`)
+  return out
+}
+
+function checkPlainFields(raw: Record<string, unknown>, label: string): void {
   if (raw.cwd !== undefined && typeof raw.cwd !== 'string') throw new ProjectFileError(`${label}: cwd must be text`)
   if (raw.color !== undefined && typeof raw.color !== 'string') throw new ProjectFileError(`${label}: color must be text`)
   if (raw.env !== undefined) {
@@ -131,6 +142,9 @@ function parseProcess(raw: unknown, at: string): ProcessSpec {
     if (typeof raw.url !== 'string' || !(/^https?:\/\//i.test(raw.url) || !/^[a-z][a-z0-9+.-]*:/i.test(raw.url))) throw new ProjectFileError(`${label}: url must be an http(s):// address or a path`)
   }
   if (raw.runtime !== undefined && raw.runtime !== 'node' && raw.runtime !== 'bun') throw new ProjectFileError(`${label}: runtime must be "node" or "bun"`)
+}
+
+function checkOrdering(raw: Record<string, unknown>, label: string): void {
   if (raw.waitForPort !== undefined) {
     const w = raw.waitForPort
     const ok = (typeof w === 'number' && Number.isInteger(w) && w > 0) || (typeof w === 'string' && w !== '')
@@ -139,21 +153,20 @@ function parseProcess(raw: unknown, at: string): ProcessSpec {
   if (raw.links !== undefined) {
     if (!Array.isArray(raw.links) || raw.links.some((l) => typeof l !== 'string' || !ID_RE.test(l))) throw new ProjectFileError(`${label}: links must be a list of server ids`)
   }
-  if (raw.compose !== undefined) {
-    const c = raw.compose
-    if (!isObject(c)) throw new ProjectFileError(`${label}: compose must be an object`)
-    // Omitted, compose finds compose.yaml in the server's folder.
-    str(c.file, `${label}: compose.file`, { optional: true })
-    if (c.mode !== undefined && c.mode !== 'none' && c.mode !== 'start-only' && c.mode !== 'start-and-stop') throw new ProjectFileError(`${label}: compose.mode must be "none", "start-only" or "start-and-stop"`)
-    bool(c.skipIfRunning, `${label}: compose.skipIfRunning`)
-    bool(c.injectEnv, `${label}: compose.injectEnv`)
-    // A longer wait would hold a start for hours on a typo; `up` itself gives up after 10 minutes.
-    const wait = port(c.readinessTimeoutMs, `${label}: compose.readinessTimeoutMs`)
-    if (wait && wait > MAX_READINESS_MS) out.compose = { ...c, readinessTimeoutMs: MAX_READINESS_MS }
-    if (c.services !== undefined && (!Array.isArray(c.services) || c.services.some((s) => typeof s !== 'string' || s === ''))) throw new ProjectFileError(`${label}: compose.services must be a list of service names`)
-  }
-  if (raw.answers !== undefined && !Array.isArray(raw.answers)) throw new ProjectFileError(`${label}: answers must be a list`)
-  return out
+}
+
+/** Validates `compose`; answers a replacement only when its readiness wait had to be capped. */
+function parseCompose(c: unknown, label: string): Record<string, unknown> | undefined {
+  if (!isObject(c)) throw new ProjectFileError(`${label}: compose must be an object`)
+  // Omitted, compose finds compose.yaml in the server's folder.
+  str(c.file, `${label}: compose.file`, { optional: true })
+  if (c.mode !== undefined && c.mode !== 'none' && c.mode !== 'start-only' && c.mode !== 'start-and-stop') throw new ProjectFileError(`${label}: compose.mode must be "none", "start-only" or "start-and-stop"`)
+  bool(c.skipIfRunning, `${label}: compose.skipIfRunning`)
+  bool(c.injectEnv, `${label}: compose.injectEnv`)
+  // A longer wait would hold a start for hours on a typo; `up` itself gives up after 10 minutes.
+  const wait = port(c.readinessTimeoutMs, `${label}: compose.readinessTimeoutMs`)
+  if (c.services !== undefined && (!Array.isArray(c.services) || c.services.some((s) => typeof s !== 'string' || s === ''))) throw new ProjectFileError(`${label}: compose.services must be a list of service names`)
+  return wait && wait > MAX_READINESS_MS ? { ...c, readinessTimeoutMs: MAX_READINESS_MS } : undefined
 }
 
 /** Validates a parsed .devwebui body (also the scaffold body). Throws ProjectFileError with a readable message. */
@@ -228,7 +241,8 @@ export function readProjectFile(filePath: string): LoadedProject {
  */
 export function writeFileAtomic(filePath: string, contents: string): void {
   const target = path.resolve(filePath)
-  const tmp = `${target}.${process.pid}.${Date.now()}.tmp`
+  if (sameContents(target, contents)) return
+  const tmp =`${target}.${process.pid}.${Date.now()}.tmp`
   try {
     writeFileSync(tmp, contents)
     renameSync(tmp, target)
@@ -239,6 +253,15 @@ export function writeFileAtomic(filePath: string, contents: string): void {
       // the error below is the one worth reporting
     }
     throw e
+  }
+}
+
+/** The file already holds exactly this text, so a write would change nothing (and wake every watcher for nothing). */
+function sameContents(file: string, contents: string): boolean {
+  try {
+    return statSync(file).size === Buffer.byteLength(contents) && readFileSync(file, 'utf8') === contents
+  } catch {
+    return false
   }
 }
 

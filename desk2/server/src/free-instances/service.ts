@@ -22,20 +22,31 @@ function name(value: unknown): string {
   if (typeof value !== 'string' || !value.trim() || value.length > 100 || /[\x00-\x1f]/.test(value)) throw new FreeError('A name must contain 1–100 printable characters.')
   return value.trim()
 }
-export function validateRequest(value: unknown): FreeRequest {
-  const r = record(value) as unknown as FreeRequest
+const isUuid = (v: unknown): boolean => typeof v === 'string' && UUID.test(v)
+function checkIdentity(r: FreeRequest): void {
   const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch', 'model']
   if (Object.keys(r).some(k => !keys.includes(k))) throw new FreeError('Unknown operation option.')
-  if (typeof r.requestId !== 'string' || !UUID.test(r.requestId) || typeof r.instanceId !== 'string' || !UUID.test(r.instanceId) || !FREE_PROVIDERS.includes(r.provider) || !FREE_COMMANDS.includes(r.command)) throw new FreeError('Request and instance UUIDs, a supported provider and command are required.')
-  const send = r.command === 'chat' || r.command === 'resume'
+  if (!isUuid(r.requestId) || !isUuid(r.instanceId) || !FREE_PROVIDERS.includes(r.provider) || !FREE_COMMANDS.includes(r.command)) throw new FreeError('Request and instance UUIDs, a supported provider and command are required.')
+}
+function checkChatAndPrompt(r: FreeRequest, send: boolean): void {
   const reference = ['read', 'resume', 'track'].includes(r.command)
-  if (reference ? typeof r.chatId !== 'string' || !UUID.test(r.chatId) : r.chatId !== undefined) throw new FreeError('Use an explicit chat UUID for read, resume or track.')
+  if (reference ? !isUuid(r.chatId) : r.chatId !== undefined) throw new FreeError('Use an explicit chat UUID for read, resume or track.')
   if (send ? typeof r.prompt !== 'string' || !r.prompt.trim() || r.prompt.length > 100_000 : r.prompt !== undefined) throw new FreeError('Messages must contain 1–100,000 characters, only for chat or resume.')
+}
+function checkOptions(r: FreeRequest, send: boolean): void {
   if (r.name !== undefined) { if (!['chat', 'track'].includes(r.command)) throw new FreeError('Name is an option for chat or track.'); name(r.name) }
   if (r.command === 'nudge' && r.provider !== 'claude') throw new FreeError('A keepalive nudge is for Claude only.')
   if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
-  if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !send || r.provider !== 'claude')) throw new FreeError('Web search is an option for Claude messages only.')
-  if (r.model !== undefined && (!['haiku', 'sonnet'].includes(r.model) || !send || r.provider !== 'claude')) throw new FreeError('Model is haiku or sonnet, for Claude messages only.')
+  const claudeMessage = send && r.provider === 'claude'
+  if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !claudeMessage)) throw new FreeError('Web search is an option for Claude messages only.')
+  if (r.model !== undefined && (!['haiku', 'sonnet'].includes(r.model) || !claudeMessage)) throw new FreeError('Model is haiku or sonnet, for Claude messages only.')
+}
+export function validateRequest(value: unknown): FreeRequest {
+  const r = record(value) as unknown as FreeRequest
+  checkIdentity(r)
+  const send = r.command === 'chat' || r.command === 'resume'
+  checkChatAndPrompt(r, send)
+  checkOptions(r, send)
   return { ...r }
 }
 
@@ -48,7 +59,6 @@ export class FreeInstances {
   /** Accounts whose log out is running: no operation may start on them meanwhile. */
   private forgetting = new Set<string>()
   private stopping = false
-  private cleanup = setInterval(() => this.prune(), 60_000).unref()
   /** Keep windows running: a first pass a minute after start, then every NUDGE_EVERY_MS. */
   private keeper: ReturnType<typeof setTimeout> = setTimeout(() => { this.keepWindows(); this.keeper = setInterval(() => this.keepWindows(), NUDGE_EVERY_MS).unref() }, 60_000).unref()
   /** The rolling refresh (refresh.ts): a first read a minute and a half after start, then one each REFRESH_TICK_MS. */
@@ -131,6 +141,7 @@ export class FreeInstances {
       } catch { /* deleted regardless */ }
       for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
       this.store.remove(id, opts.tombstone ?? true)
+      this.refreshed.delete(id)
     } finally { this.forgetting.delete(id) }
     this.onLoginChange?.()
     return { ok: true }
@@ -291,29 +302,8 @@ export class FreeInstances {
       const config = this.runtime.config(r.instanceId)
       job.result = parseResult(r.command, await this.runner(config, r, controller.signal))
       const instance = this.instance(r.instanceId)
-      if (r.command === 'auth' || r.command === 'login') {
-        // Only an answer moves the login: the site took it, or said it needs one (login_required). A check that failed
-        // on its own (offline after sleep, a crashed harness) leaves it as it was: Desk checks in the background now
-        // (refresh.ts), and a working login read as signed out would never be checked again.
-        const signedIn = job.result.ok && job.result.authenticated === true
-        if (job.result.ok || r.command === 'login' || job.result.error?.code === 'login_required') instance.loggedIn = signedIn
-        instance.checkedAt = Date.now()
-        if (signedIn) {
-          instance.lastSignedInAt = instance.checkedAt
-          const label = job.result.account_label
-          if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
-          this.onLoginChange?.()
-        }
-        // Read-only followups bring imported chats and available quota into the shared view.
-        if (signedIn) for (const command of ['chats', 'usage'] as const) {
-          try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, controller.signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
-        }
-      }
-      if (r.command === 'nudge') {
-        instance.nudge = { at: Date.now(), ok: job.result.ok }
-        // Read the quota again so the window the nudge started shows.
-        if (job.result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, controller.signal))) } catch { /* the nudge worked; the next refresh reads it */ }
-      }
+      if (r.command === 'auth' || r.command === 'login') await this.afterAuth(r, job.result, instance, config, controller.signal)
+      if (r.command === 'nudge') await this.afterNudge(r, job.result, instance, config, controller.signal)
       this.apply(r, job.result)
     } catch {
       job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
@@ -322,6 +312,28 @@ export class FreeInstances {
       job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
       this.store.save()
     }
+  }
+  private async afterAuth(r: FreeRequest, result: FreeResult, instance: FreeInstance, config: ReturnType<FreeRuntime['config']>, signal: AbortSignal): Promise<void> {
+    // Only an answer moves the login: the site took it, or said it needs one (login_required). A check that failed
+    // on its own (offline after sleep, a crashed harness) leaves it as it was: Desk checks in the background now
+    // (refresh.ts), and a working login read as signed out would never be checked again.
+    const signedIn = result.ok && result.authenticated === true
+    if (result.ok || r.command === 'login' || result.error?.code === 'login_required') instance.loggedIn = signedIn
+    instance.checkedAt = Date.now()
+    if (!signedIn) return
+    instance.lastSignedInAt = instance.checkedAt
+    const label = result.account_label
+    if (instance.autoName && label && label.length <= 100 && !/[\x00-\x1f]/.test(label)) instance.name = label
+    this.onLoginChange?.()
+    // Read-only followups bring imported chats and available quota into the shared view.
+    for (const command of ['chats', 'usage'] as const) {
+      try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
+    }
+  }
+  private async afterNudge(r: FreeRequest, result: FreeResult, instance: FreeInstance, config: ReturnType<FreeRuntime['config']>, signal: AbortSignal): Promise<void> {
+    instance.nudge = { at: Date.now(), ok: result.ok }
+    // Read the quota again so the window the nudge started shows.
+    if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal))) } catch { /* the nudge worked; the next refresh reads it */ }
   }
   private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): void {
     const instance = this.instance(r.instanceId)
@@ -358,5 +370,5 @@ export class FreeInstances {
     ledgers[r.instanceId] = addTokens(ledgers[r.instanceId], { at: Date.now(), input: estimateTokens(context + sent), output: estimateTokens(reply) })
     if (thread) thread.contextChars = context + sent + reply
   }
-  stop(): void { this.stopping = true; clearInterval(this.cleanup); clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher); for (const controller of this.controllers.values()) controller.abort() }
+  stop(): void { this.stopping = true; clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher); for (const controller of this.controllers.values()) controller.abort() }
 }

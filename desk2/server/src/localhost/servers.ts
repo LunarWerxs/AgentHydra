@@ -6,6 +6,9 @@ import type { DevWebCompany, LocalServer, LocalServers } from '@shared/devwebui'
 import { commandDir, companyOf } from '../devservers/company'
 import { classify, type ClassifyContext, isDescendant, type Listener, probeHttp, type ProcInfo, type Scan, scanPorts } from './ports'
 
+/** A scan takes seconds on Windows and the Dev list asks several times a minute. */
+const SCAN_TTL_MS = 10_000
+
 /** What the dev-servers service accounts for right now: the port and pid of every server it lists as up (and its own). */
 export interface DevWebOwned {
   ports: number[]
@@ -32,6 +35,7 @@ export class Localhost {
   private readonly dirOf: (command: string | null) => string | null
   private readonly companyOf: (dir: string) => DevWebCompany
   private inflight: Promise<Scan> | null = null
+  private last: { scan: Scan; at: number; owned: string } | null = null
 
   constructor(deps: LocalhostDeps = {}) {
     this.scan = deps.scan ?? scanPorts
@@ -42,16 +46,28 @@ export class Localhost {
     this.cls = { deskPid: deps.deskPid ?? process.pid, deskPort: deps.deskPort ?? (Number(process.env.HYDRA_DESK_PORT) || 7798) }
   }
 
-  /** One scan at a time: panes that refresh together share it. */
-  private scanOnce(): Promise<Scan> {
-    this.inflight ??= this.scan().finally(() => {
-      this.inflight = null
-    })
+  /**
+   * One scan at a time: panes that refresh together share it. An answer younger than SCAN_TTL_MS is reused while the
+   * service owns the same servers (one it just stopped must not stay listed as someone else's); a failed one never is.
+   */
+  private scanOnce(owned: string, fresh: boolean): Promise<Scan> {
+    const last = this.last
+    if (!fresh && last && last.owned === owned && Date.now() - last.at < SCAN_TTL_MS) return Promise.resolve(last.scan)
+    this.inflight ??= this.scan()
+      .then((scan) => {
+        this.last = scan.error ? null : { scan, at: Date.now(), owned }
+        return scan
+      })
+      .finally(() => {
+        this.inflight = null
+      })
     return this.inflight
   }
 
-  async list(all = false): Promise<LocalServers> {
-    const [scan, owned] = await Promise.all([this.scanOnce(), this.owned()])
+  /** `fresh` (a person's Refresh) scans again whatever the last scan's age. */
+  async list(all = false, fresh = false): Promise<LocalServers> {
+    const owned = await this.owned()
+    const scan = await this.scanOnce(JSON.stringify(owned), fresh)
     const ports = new Set(owned?.ports ?? [])
     // A listed server's pid is whoever holds its port; what it runs hangs below that process or the listed ones.
     const roots = new Set(owned?.pids ?? [])

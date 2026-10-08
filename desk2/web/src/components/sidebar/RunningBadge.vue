@@ -10,7 +10,7 @@ defineProps<{ tasks: number; jobs: number; chats: number }>()
 <template>
   <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-text-2 tnum">
     <span v-if="tasks" class="flex items-center gap-1" :title="`${tasks} CliMayte ${tasks === 1 ? 'task runs' : 'tasks run'} in this folded group`">
-      <span class="size-1.5 rounded-full bg-[var(--status-working)]" aria-hidden="true" />
+      <span class="size-1.5 rounded-full bg-(--status-working)" aria-hidden="true" />
       <span class="sr-only">CliMayte tasks running:</span>
       {{ tasks }}
     </span>
@@ -20,7 +20,7 @@ defineProps<{ tasks: number; jobs: number; chats: number }>()
       {{ jobs }}
     </span>
     <span v-if="chats" class="flex items-center gap-1" :title="`${chats} ${chats === 1 ? 'chat runs' : 'chats run'} in this folded group`">
-      <span class="size-1.5 rounded-full bg-[var(--success-text)]" aria-hidden="true" />
+      <span class="size-1.5 rounded-full bg-(--success-text)" aria-hidden="true" />
       <span class="sr-only">Chats running:</span>
       {{ chats }}
     </span>

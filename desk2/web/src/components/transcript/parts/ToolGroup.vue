@@ -21,15 +21,15 @@ const sum = computed(() => toolSummary(props.items, ctx.cwd.value, props.tasks))
   <div>
     <StatusRow :open="open" :running="sum.running" @toggle="ctx.toggle(id)">
       <!-- one line: template whitespace would show as stray spaces -->
-      <span class="min-w-0 truncate" :class="sum.running && 'tx-shimmer'"><template v-for="(p, i) in sum.phrases" :key="i">{{ i ? ', ' : '' }}{{ p.text }}{{ p.target ? ' ' : '' }}<span v-if="p.target" class="tx-target ml-[3px]">{{ p.target }}</span>{{ p.after ? ' ' + p.after : '' }}</template></span>
+      <span class="min-w-0 truncate" :class="sum.running && 'tx-shimmer'"><template v-for="(p, i) in sum.phrases" :key="i">{{ i ? ', ' : '' }}{{ p.text }}{{ p.target ? ' ' : '' }}<span v-if="p.target" class="tx-target ms-0.75">{{ p.target }}</span>{{ p.after ? ' ' + p.after : '' }}</template></span>
       <template #after>
         <span v-if="sum.added || sum.removed" class="shrink-0 font-mono text-[12px] tabular-nums">
           <span class="text-git-add">+{{ sum.added }}</span>
-          <span v-if="sum.removed" class="ml-1 text-git-del">-{{ sum.removed }}</span>
+          <span v-if="sum.removed" class="ms-1 text-git-del">-{{ sum.removed }}</span>
         </span>
       </template>
     </StatusRow>
-    <div v-if="open" class="mb-1 mt-1.5 flex flex-col gap-0.5 border-l border-border pl-3 ml-1">
+    <div v-if="open" class="mb-1 mt-1.5 flex flex-col gap-0.5 border-s border-border ps-3 ms-1">
       <template v-for="t in items" :key="t.id">
         <CliMayteCard v-if="toolFamily(t.name) === 'climayte'" :item="t" />
         <ToolRow v-else :item="t" />

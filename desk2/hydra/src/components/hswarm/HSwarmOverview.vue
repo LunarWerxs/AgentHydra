@@ -448,15 +448,15 @@ function formatPercent(value: number): string {
     <div v-if="!checklist.allDone" class="space-y-2">
       <Card size="sm">
         <CardHeader>
-          <CardTitle class="text-base">{{ t('hswarm.v.overview.gettingStarted') }}</CardTitle>
+          <CardTitle size="lg">{{ t('hswarm.v.overview.gettingStarted') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <div v-for="(step, idx) in steps" :key="idx" class="flex items-start gap-2 border-b pb-1.5 last:border-b-0 last:pb-0">
             <div class="mt-0.5 shrink-0">
-              <div v-if="step.done" class="flex size-5 items-center justify-center rounded-full bg-green-100 text-green-600">
+              <div v-if="step.done" class="flex size-5 items-center justify-center rounded-full bg-success/10 text-success">
                 <CheckCircle2 class="size-3.5" />
               </div>
-              <div v-else-if="idx === checklist.nextIncomplete" class="flex size-5 items-center justify-center rounded-full bg-amber-100 text-amber-600">
+              <div v-else-if="idx === checklist.nextIncomplete" class="flex size-5 items-center justify-center rounded-full bg-warning/10 text-warning">
                 <AlertCircle class="size-3.5" />
               </div>
               <div v-else class="flex size-5 items-center justify-center rounded-full bg-muted text-sm font-semibold text-muted-foreground">
@@ -486,7 +486,7 @@ function formatPercent(value: number): string {
       <!-- Spend chart -->
       <Card size="sm">
         <CardHeader>
-          <CardTitle class="text-base">{{ t('hswarm.v.overview.spendChart') }}</CardTitle>
+          <CardTitle size="lg">{{ t('hswarm.v.overview.spendChart') }}</CardTitle>
           <p class="text-sm text-muted-foreground mt-2">
             <strong>{{ formatTokens(totalTokens) }}</strong> {{ t('hswarm.v.overview.tokensIn14Days') }}
             <span v-if="totalCachedTokens > 0">{{ t('hswarm.v.overview.separator') }} {{ formatTokens(totalCachedTokens) }} {{ t('hswarm.v.overview.cachedInput') }}</span>
@@ -515,20 +515,20 @@ function formatPercent(value: number): string {
             <table class="w-full text-sm">
               <thead class="bg-muted">
                 <tr>
-                  <th class="px-2 py-1 text-left font-medium">{{ t('hswarm.v.overview.day') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tokens') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.cost') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.tasks') }}</th>
-                  <th class="px-2 py-1 text-right font-medium">{{ t('hswarm.v.overview.errors') }}</th>
+                  <th class="px-2 py-1 text-start font-medium">{{ t('hswarm.v.overview.day') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.tokens') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.cost') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.tasks') }}</th>
+                  <th class="px-2 py-1 text-end font-medium">{{ t('hswarm.v.overview.errors') }}</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="d in reversedDays" :key="d.date" class="border-t hover:bg-muted/50">
                   <td class="px-2 py-1">{{ d.date }}</td>
-                  <td class="px-2 py-1 text-right">{{ formatTokens(d.tokens) }}</td>
-                  <td class="px-2 py-1 text-right">{{ fineUsd(d.cost) }}</td>
-                  <td class="px-2 py-1 text-right">{{ d.tasks }}</td>
-                  <td class="px-2 py-1 text-right">{{ d.error }}</td>
+                  <td class="px-2 py-1 text-end">{{ formatTokens(d.tokens) }}</td>
+                  <td class="px-2 py-1 text-end">{{ fineUsd(d.cost) }}</td>
+                  <td class="px-2 py-1 text-end">{{ d.tasks }}</td>
+                  <td class="px-2 py-1 text-end">{{ d.error }}</td>
                 </tr>
               </tbody>
             </table>
@@ -540,7 +540,7 @@ function formatPercent(value: number): string {
       <!-- Outcomes chart -->
       <Card size="sm">
         <CardHeader>
-          <CardTitle class="text-base">{{ t('hswarm.v.overview.outcomeChart') }}</CardTitle>
+          <CardTitle size="lg">{{ t('hswarm.v.overview.outcomeChart') }}</CardTitle>
           <p class="text-sm text-muted-foreground mt-2">
             {{ t('hswarm.v.overview.taskFailureRate') }}
           </p>
@@ -565,7 +565,7 @@ function formatPercent(value: number): string {
       <!-- Provider health chart -->
       <Card size="sm" v-if="healthData.length > 0">
         <CardHeader>
-          <CardTitle class="text-base">{{ t('hswarm.v.overview.keyHealth') }}</CardTitle>
+          <CardTitle size="lg">{{ t('hswarm.v.overview.keyHealth') }}</CardTitle>
         </CardHeader>
         <CardContent>
           <BarRows
@@ -578,7 +578,7 @@ function formatPercent(value: number): string {
       <!-- Money by provider chart -->
       <Card size="sm" v-if="moneyData.length > 0">
         <CardHeader>
-          <CardTitle class="text-base">{{ t('hswarm.v.overview.moneyChart') }}</CardTitle>
+          <CardTitle size="lg">{{ t('hswarm.v.overview.moneyChart') }}</CardTitle>
         </CardHeader>
         <CardContent>
           <BarRows
@@ -601,15 +601,15 @@ function formatPercent(value: number): string {
     <!-- Health section -->
     <Card size="sm">
       <CardHeader>
-        <CardTitle class="text-base">{{ t('hswarm.v.overview.health') }}</CardTitle>
+        <CardTitle size="lg">{{ t('hswarm.v.overview.health') }}</CardTitle>
       </CardHeader>
-      <CardContent class="space-y-2">
+      <CardContent stack="sm">
         <!-- Doctor -->
         <div class="space-y-2">
           <div class="flex items-start justify-between gap-2">
             <div>
               <div class="font-medium text-sm flex items-center gap-2">
-                <Stethoscope class="h-4 w-4" />
+                <Stethoscope class="size-4" />
                 {{ t('hswarm.v.overview.doctor') }}
               </div>
               <p class="text-xs text-muted-foreground mt-1">
@@ -639,7 +639,7 @@ function formatPercent(value: number): string {
         <div class="flex items-start justify-between gap-2">
           <div>
             <div class="font-medium text-sm flex items-center gap-2">
-              <Clock class="h-4 w-4" />
+              <Clock class="size-4" />
               {{ t('hswarm.v.overview.balances') }}
             </div>
             <p class="text-xs text-muted-foreground mt-1">
@@ -660,9 +660,9 @@ function formatPercent(value: number): string {
     <!-- Quick ask section -->
     <Card size="sm">
       <CardHeader>
-        <CardTitle class="text-base">{{ t('hswarm.v.overview.quickAsk') }}</CardTitle>
+        <CardTitle size="lg">{{ t('hswarm.v.overview.quickAsk') }}</CardTitle>
       </CardHeader>
-      <CardContent class="space-y-2">
+      <CardContent stack="sm">
         <textarea
           v-model="askPrompt"
           :placeholder="t('hswarm.v.overview.askPlaceholder')"
@@ -688,7 +688,7 @@ function formatPercent(value: number): string {
             :disabled="!askPrompt || askRunning || readyKeys === 0"
             @click="submitAsk"
           >
-            <Play class="h-4 w-4 me-1" />
+            <Play class="size-4 me-1" />
             {{ t('hswarm.v.overview.ask') }}
           </Button>
         </div>

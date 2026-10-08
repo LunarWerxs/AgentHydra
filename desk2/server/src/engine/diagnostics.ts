@@ -8,6 +8,9 @@ import type { Context, Hono } from 'hono'
 
 export const DIAGNOSTICS_API = '/api/diagnostics'
 
+/** How many files' parsed rows a JsonlLog keeps; the current file is read last, so it is never the one dropped. */
+const PARSED_FILES_MAX = 6
+
 /** Real addresses never reach a log: they read '<email>'. */
 export function maskEmails(text: string): string {
   return text.replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '<email>')
@@ -40,7 +43,7 @@ export class JsonlLog {
   /** The current file's size and last-write month as this process knows them; null until the first append looks. */
   private known: { size: number; month: string } | null = null
   /** Per file: its rows as parsed when it stood at this size and mtime. */
-  private readonly parsed = new Map<string, { size: number; mtimeMs: number; offset: number; rows: unknown[]; tail: unknown[] }>()
+  private readonly parsed = new Map<string, ParsedFile>()
 
   constructor(
     readonly home: string,
@@ -104,30 +107,49 @@ export class JsonlLog {
         this.parsed.delete(f)
         continue
       }
-      let hit = this.parsed.get(f)
-      if (!hit || hit.size !== st.size || hit.mtimeMs !== st.mtimeMs) {
-        // An append only grows the file: read from where the last read stopped. Anything else reads it whole.
-        const from = hit && st.size > hit.size ? hit.offset : 0
-        let chunk: Buffer
-        try {
-          chunk = readFrom(f, from, st.size)
-        } catch {
-          continue
-        }
-        const end = chunk.lastIndexOf(0x0a) + 1
-        const rows = from > 0 && hit ? hit.rows : []
-        parseLines(rows, chunk.toString('utf8', 0, end))
-        // A last line with no newline yet may be a write in progress: shown if it parses, read again from its start next time.
-        const tail: unknown[] = []
-        parseLines(tail, chunk.toString('utf8', end))
-        hit = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, rows, tail }
-        this.parsed.set(f, hit)
-      }
+      const hit = parseFile(f, st, this.parsed.get(f))
+      if (!hit) continue
+      this.parsed.set(f, hit)
       for (const row of hit.rows) out.push(row)
       for (const row of hit.tail) out.push(row)
     }
+    // Only the newest files stay parsed: past the cap the oldest rolled ones are parsed afresh on each read that
+    // asks for them, so what a read returns is the same. Dropping by age, not by last read, keeps a read that walks
+    // every file oldest first from evicting each one just before the next read needs it.
+    if (rolled) {
+      const keep = new Set(files.slice(-PARSED_FILES_MAX))
+      for (const f of [...this.parsed.keys()]) if (!keep.has(f)) this.parsed.delete(f)
+    }
     return out
   }
+}
+
+interface ParsedFile {
+  size: number
+  mtimeMs: number
+  offset: number
+  rows: unknown[]
+  tail: unknown[]
+}
+
+/** `f`'s rows at its size and mtime `st`: `hit` itself when unchanged, null when the file cannot be read. */
+function parseFile(f: string, st: { size: number; mtimeMs: number }, hit: ParsedFile | undefined): ParsedFile | null {
+  if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit
+  // An append only grows the file: read from where the last read stopped. Anything else reads it whole.
+  const from = hit && st.size > hit.size ? hit.offset : 0
+  let chunk: Buffer
+  try {
+    chunk = readFrom(f, from, st.size)
+  } catch {
+    return null
+  }
+  const end = chunk.lastIndexOf(0x0a) + 1
+  const rows = from > 0 && hit ? hit.rows : []
+  parseLines(rows, chunk.toString('utf8', 0, end))
+  // A last line with no newline yet may be a write in progress: shown if it parses, read again from its start next time.
+  const tail: unknown[] = []
+  parseLines(tail, chunk.toString('utf8', end))
+  return { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, rows, tail }
 }
 
 /** The file's bytes from `from` to `to`. */

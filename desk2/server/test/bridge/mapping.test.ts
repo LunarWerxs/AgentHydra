@@ -36,7 +36,7 @@ describe('accounts', () => {
   })
 
   test('a running worker makes its account in use even before the live registry counts it', () => {
-    const inst = fixture('cli-instances').map((i: any) => ({ ...i, liveSessions: 0 }))
+    const inst = fixture<Parameters<typeof mapAccounts>[0]>('cli-instances').map((i) => ({ ...i, liveSessions: 0 }))
     const busy = mapAccounts(inst, [{ ...fixture('corch-workers')[0], status: 'running', accountId: 'cli-2' }])
     expect(busy.find((a) => a.id === 'cli-2')!.inUse).toBe(true)
     expect(busy.find((a) => a.id === 'cli-3')!.inUse).toBe(false)
@@ -232,7 +232,7 @@ describe('transcripts', () => {
     const tools = items.filter((i) => i.kind === 'tool_use') as Extract<(typeof items)[number], { kind: 'tool_use' }>[]
     expect(tools[0].input).toEqual({ command: 'bun test', description: 'Run tests' })
     expect(tools[0].result).toEqual({ text: '3 pass 1 fail', isError: false })
-    expect(tools[0].endedAt).toBe(Date.parse('2026-10-03T23:10:09.000Z'))
+    expect(tools[0].endedAt).toBe(Date.parse('2020-10-03T23:10:09.000Z'))
     expect(tools[2].result?.isError).toBe(true)
     // its result was empty (the tail drops those): closed as done without one
     expect(tools[3].result).toBeUndefined()

@@ -283,7 +283,7 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
     // listed to be READ and offers no menu.
     menu: instance.isExternal
       ? undefined
-      : { name: instance.name, actions: menuActionsFor(instance), class: 'max-w-52' },
+      : { name: instance.name, actions: menuActionsFor(instance), width: 'sm' },
   }
 }
 

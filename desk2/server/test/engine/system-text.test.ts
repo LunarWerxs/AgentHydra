@@ -201,7 +201,7 @@ describe('classifyUserText', () => {
 const rec = (type: string, content: unknown, extra: Record<string, unknown> = {}) => ({
   type,
   uuid: `u${Math.random().toString(36).slice(2)}`,
-  timestamp: '2026-10-03T10:00:00.000Z',
+  timestamp: '2020-10-03T10:00:00.000Z',
   message: { role: type, content },
   ...extra,
 })
@@ -223,7 +223,7 @@ describe('every path uses the classifier', () => {
   test('history: a notification upserts the running task, never a user bubble', () => {
     const items = historyToItems([
       rec('user', 'start the parity run'),
-      { type: 'system', subtype: 'informational', level: 'warning', content: 'heads up', uuid: 'i1', timestamp: '2026-10-03T10:00:01.000Z' },
+      { type: 'system', subtype: 'informational', level: 'warning', content: 'heads up', uuid: 'i1', timestamp: '2020-10-03T10:00:01.000Z' },
       rec('user', WORKFLOW_DONE, { origin: { kind: 'task-notification' } }),
       rec('user', COMMAND),
       rec('user', '<local-command-stdout>Set model to `claude-sonnet-5-5`</local-command-stdout>'),
@@ -245,9 +245,9 @@ describe('every path uses the classifier', () => {
       title: 't',
       cwd: 'C:/x',
       events: [
-        { role: 'user', kind: 'text', text: 'go', tool_name: null, timestamp: '2026-10-03T10:00:00Z' },
-        { role: 'user', kind: 'text', text: flat(MONITOR), tool_name: null, timestamp: '2026-10-03T10:00:01Z' },
-        { role: 'user', kind: 'text', text: flat(MONITOR.replace('<summary>', '<status>completed</status><summary>')), tool_name: null, timestamp: '2026-10-03T10:00:02Z' },
+        { role: 'user', kind: 'text', text: 'go', tool_name: null, timestamp: '2020-10-03T10:00:00Z' },
+        { role: 'user', kind: 'text', text: flat(MONITOR), tool_name: null, timestamp: '2020-10-03T10:00:01Z' },
+        { role: 'user', kind: 'text', text: flat(MONITOR.replace('<summary>', '<status>completed</status><summary>')), tool_name: null, timestamp: '2020-10-03T10:00:02Z' },
       ],
     })
     expect(items.map((i) => i.kind)).toEqual(['user', 'task'])
@@ -263,11 +263,11 @@ describe("a background task the file shows launched and never settled", () => {
 
   test("is a running workflow task named from its script, until its notification settles it", () => {
     const script = "export const meta = { name: 'round-three', description: 'd' }"
-    const open = historyToItems(launch("wneam8v5j", "Workflow", script, "2026-10-04T08:00:00.000Z"), { now: () => Date.parse("2026-10-04T09:00:00.000Z") })
+    const open = historyToItems(launch("wneam8v5j", "Workflow", script, "2020-10-04T08:00:00.000Z"), { now: () => Date.parse("2020-10-04T09:00:00.000Z") })
     expect(open.find((i) => i.kind === "task")).toMatchObject({ id: "task:wneam8v5j", status: "running", taskKind: "workflow", description: "round-three", toolUseId: "tu-wneam8v5j" })
     const done = historyToItems(
-      [...launch("w5ahe9hto", "Workflow", script, "2026-10-04T08:00:00.000Z"), rec("user", WORKFLOW_DONE, { origin: { kind: "task-notification" } })],
-      { now: () => Date.parse("2026-10-04T09:00:00.000Z") },
+      [...launch("w5ahe9hto", "Workflow", script, "2020-10-04T08:00:00.000Z"), rec("user", WORKFLOW_DONE, { origin: { kind: "task-notification" } })],
+      { now: () => Date.parse("2020-10-04T09:00:00.000Z") },
     )
     expect(done.filter((i) => i.kind === "task")).toHaveLength(1)
     expect(done.find((i) => i.kind === "task")).toMatchObject({ status: "completed", agents: 3 })
@@ -277,17 +277,17 @@ describe("a background task the file shows launched and never settled", () => {
     const bash = [
       rec("assistant", [{ type: "tool_use", id: "tu-b1", name: "Bash", input: { command: "bun test", description: "Run the tests", run_in_background: true } }]),
       rec("user", [{ type: "tool_result", tool_use_id: "tu-b1", content: "Command running in background with ID: bk1. Output is being written to: C:\\x\\bk1.output" }]),
-      { type: "attachment", uuid: "a1", timestamp: "2026-10-03T10:05:00.000Z", attachment: { type: "queued_command", prompt: BASH_DONE.replace("bovmv81je", "bk1") } },
+      { type: "attachment", uuid: "a1", timestamp: "2020-10-03T10:05:00.000Z", attachment: { type: "queued_command", prompt: BASH_DONE.replace("bovmv81je", "bk1") } },
       rec("assistant", [{ type: "tool_use", id: "tu-b2", name: "Bash", input: { command: "sed -n 1,5p x.ts" } }]),
       rec("user", [{ type: "tool_result", tool_use_id: "tu-b2", content: "// \"... launched in background. Task ID: x\" or \"Command running in background with ID: y\"" }]),
     ]
-    const tasks = historyToItems(bash, { now: () => Date.parse("2026-10-03T10:06:00.000Z") }).filter((i) => i.kind === "task")
+    const tasks = historyToItems(bash, { now: () => Date.parse("2020-10-03T10:06:00.000Z") }).filter((i) => i.kind === "task")
     expect(tasks).toHaveLength(1)
     expect(tasks[0]).toMatchObject({ id: "task:bk1", status: "completed", taskKind: "bash", description: "bun test ./server/test" })
   })
 
   test("is taken as stopped once a day has passed with no notification", () => {
-    const items = historyToItems(launch("wold", "Workflow", "", "2026-10-01T08:00:00.000Z"), { now: () => Date.parse("2026-10-04T09:00:00.000Z") })
+    const items = historyToItems(launch("wold", "Workflow", "", "2020-10-01T08:00:00.000Z"), { now: () => Date.parse("2020-10-04T09:00:00.000Z") })
     expect(items.find((i) => i.kind === "task")).toMatchObject({ status: "stopped" })
   })
 })
@@ -374,8 +374,8 @@ describe('notes and picture lines', () => {
       title: 't',
       cwd: 'C:/x',
       events: [
-        { role: 'user', kind: 'text', text: 'go', tool_name: null, timestamp: '2026-10-03T10:00:00Z' },
-        { role: 'user', kind: 'text', text: PING, tool_name: null, timestamp: '2026-10-03T10:00:01Z' },
+        { role: 'user', kind: 'text', text: 'go', tool_name: null, timestamp: '2020-10-03T10:00:00Z' },
+        { role: 'user', kind: 'text', text: PING, tool_name: null, timestamp: '2020-10-03T10:00:01Z' },
       ],
     })
     expect(tail.map((i) => i.kind)).toEqual(['user', 'note'])

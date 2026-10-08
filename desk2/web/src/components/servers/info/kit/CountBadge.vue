@@ -14,6 +14,6 @@ const text = () => (props.count > 99 ? '99+' : String(props.count))
 <template>
   <span
     class="inline-flex h-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold leading-none tnum"
-    :class="[TONE[tone], text().length === 1 ? 'w-4' : 'min-w-4 px-[5px]']"
+    :class="[TONE[tone], text().length === 1 ? 'w-4' : 'min-w-4 px-1.25']"
   >{{ text() }}</span>
 </template>

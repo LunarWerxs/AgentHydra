@@ -97,7 +97,7 @@ onBeforeUnmount(() => {
       v-if="open"
       ref="tip"
       role="tooltip"
-      class="pointer-events-none fixed z-[100] max-w-80 whitespace-pre-line rounded-[var(--radius-6)] bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
+      class="pointer-events-none fixed z-100 max-w-80 whitespace-pre-line rounded-(--radius-6) bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
       :style="{ left: `${pos.x}px`, top: `${pos.y}px` }"
     >
       {{ text }}

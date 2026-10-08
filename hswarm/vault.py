@@ -590,26 +590,7 @@ def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run:
     ops, stats = _local_ops(local, base, me, FIRST_SYNC_TIME if base is None else _now_ms())
     if base is not None and not allow_removals:
         _guard(stats)
-    merged = remote = None
-    pushed = False
-    for _ in range(CAS_TRIES):
-        blob, etag = be.get()
-        remote = unseal(key, blob) if blob else empty_state()
-        if base is not None and remote["rev"] < base.get("rev", 0):
-            raise VaultError(f"the server holds an older vault (rev {remote['rev']}, this machine last saw {base['rev']}): it was rolled back "
-                             "or replaced; nothing was changed. `hswarm vault sync --rebase` accepts it.")
-        merged = merge(remote, {"lists": ops})
-        if present(merged) == present(remote) or dry_run:
-            break
-        merged["rev"] = remote["rev"] + 1
-        try:
-            be.put(seal(key, merged), etag)
-            pushed = True
-            break
-        except Conflict:
-            continue
-    else:
-        raise VaultError("the vault kept changing under this sync (another machine writing); try again in a minute")
+    merged, remote, pushed = _push(be, key, base, ops, dry_run)
     after, before = present(merged), present(remote)  # once each: this runs over every key, and 60,000 of them is seconds, not hours
     into_vault = sum(1 for k, v in after.items() if v and not before.get(k))
     out_of_vault = sum(1 for k, v in after.items() if not v and before.get(k))
@@ -622,6 +603,27 @@ def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run:
     _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
     return {"backend": be.label, "dry_run": False, "pushed": pushed, "rev": merged["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
             "added_here": applied["added"], "removed_here": applied["removed"], "keys": live_count(merged), "lists": len(applied["lists"])}
+
+
+def _push(be, key: bytes, base: dict | None, ops, dry_run: bool) -> tuple[dict, dict, bool]:
+    """Merge `ops` into the vault and write it back by compare-and-swap, again while another machine writes first.
+    Returns the merged state, the remote it was merged into, and whether it was pushed."""
+    for _ in range(CAS_TRIES):
+        blob, etag = be.get()
+        remote = unseal(key, blob) if blob else empty_state()
+        if base is not None and remote["rev"] < base.get("rev", 0):
+            raise VaultError(f"the server holds an older vault (rev {remote['rev']}, this machine last saw {base['rev']}): it was rolled back "
+                             "or replaced; nothing was changed. `hswarm vault sync --rebase` accepts it.")
+        merged = merge(remote, {"lists": ops})
+        if present(merged) == present(remote) or dry_run:
+            return merged, remote, False
+        merged["rev"] = remote["rev"] + 1
+        try:
+            be.put(seal(key, merged), etag)
+            return merged, remote, True
+        except Conflict:
+            continue
+    raise VaultError("the vault kept changing under this sync (another machine writing); try again in a minute")
 
 
 def init(backend: str) -> dict:

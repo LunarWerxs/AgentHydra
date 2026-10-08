@@ -568,6 +568,110 @@ def _read_secret_text(prompt: str) -> str:
     return sys.stdin.read()
 
 
+_VAULT_KEYS_USAGE = "hswarm vault add <list>  |  hswarm vault remove <list> <fingerprint>"
+
+
+async def _vault_init(a, vault) -> dict:
+    if not a.target:
+        raise vault.VaultError("hswarm vault init <backend>, e.g. ssh://user@host/hswarm-vault or dir:D:/shared/hswarm-vault")
+    return await asyncio.to_thread(vault.init, a.target)
+
+
+async def _vault_join(a, vault) -> dict:
+    return await asyncio.to_thread(vault.join, _read_secret_text("vault pairing code (hidden): "), a.backend, a.force)
+
+
+async def _vault_adopt(a, vault) -> dict:
+    return await asyncio.to_thread(vault.adopt)
+
+
+async def _vault_accept(a, vault) -> dict:
+    return await asyncio.to_thread(vault.accept, a.force)
+
+
+async def _vault_sync(a, vault) -> dict:
+    return await asyncio.to_thread(vault.sync, rebase=a.rebase, allow_removals=a.allow_removals, dry_run=a.dry_run)
+
+
+async def _vault_leave(a, vault) -> dict:
+    if not a.force:
+        if not sys.stdin.isatty():
+            raise vault.VaultError("leaving removes this machine's vault key and setup (the keys in secrets/ and the backend stay): "
+                                   "run it in a terminal to confirm, or pass --force")
+        if input("stop using the vault on this machine? type yes: ").strip().lower() != "yes":
+            raise vault.VaultError("not confirmed; the vault is still set up here")
+    return await asyncio.to_thread(vault.leave)
+
+
+async def _vault_list(a, vault) -> dict:
+    return {"rows": await asyncio.to_thread(vault.rows, a.target)}
+
+
+async def _vault_add(a, vault) -> dict:
+    if not a.target:
+        raise vault.VaultError(_VAULT_KEYS_USAGE)
+    from . import settings
+
+    return await asyncio.to_thread(vault.add_keys, a.target, settings.split_keys(_read_secret_text(f"{a.target} API key(s), space-separated (hidden): ")))
+
+
+async def _vault_remove(a, vault) -> dict:
+    if not a.target or not a.fingerprint:
+        raise vault.VaultError(_VAULT_KEYS_USAGE)
+    return await asyncio.to_thread(vault.remove_key, a.target, a.fingerprint)
+
+
+async def _vault_status(a, vault) -> dict:
+    return await asyncio.to_thread(vault.status)
+
+
+async def _vault_pair(a, vault) -> int:
+    if not sys.stdout.isatty():
+        raise vault.VaultError("the pairing code opens every stored key, so it prints only to a terminal: run `hswarm vault pair` "
+                               "in your own terminal and hand the code over directly (text or DM), never in a chat or a ticket")
+    print(await asyncio.to_thread(vault.pair_code))
+    return 0
+
+
+async def _vault_request(a, vault) -> int:
+    if not a.target:
+        raise vault.VaultError("hswarm vault request <backend>: the vault's backend as this machine reaches it, e.g. ssh://user@host/hswarm-vault")
+    r = await asyncio.to_thread(vault.request, a.target, a.force)
+    if a.json:
+        _print(r)
+    else:
+        print(f"request {r['machine']}  fingerprint {r['fingerprint']}  on {r['backend']}")
+        print(f"next: on the vault machine run `hswarm vault grant {r['machine']}` and check it shows {r['fingerprint']}; "
+              "then here: `hswarm vault accept`")
+    return 0
+
+
+def _ask_grant(row):
+    return input(f"grant {row['machine']}? type the full fingerprint the new machine printed (16 characters): ")
+
+
+async def _vault_grant(a, vault) -> int:
+    rows = await asyncio.to_thread(vault.requests_waiting)
+    if not a.json:
+        for r in rows:
+            print(f"{r['machine']:24} {r.get('at') or '-':21} {r.get('fingerprint') or r.get('error')}"
+                  f"{'  (granted, not accepted yet)' if r['granted'] else ''}")
+    ask = _ask_grant if a.yes is None and sys.stdin.isatty() else None
+    r = await asyncio.to_thread(vault.grant, a.target, a.yes, ask)
+    if a.json:
+        _print(r)
+    else:
+        print(f"granted {r['granted']} ({r['fingerprint']})")
+    return 0
+
+
+_VAULT_VERBS = {
+    "init": _vault_init, "join": _vault_join, "adopt": _vault_adopt, "accept": _vault_accept, "sync": _vault_sync,
+    "leave": _vault_leave, "list": _vault_list, "add": _vault_add, "remove": _vault_remove,
+}
+_VAULT_SELF_PRINTING = {"pair": _vault_pair, "request": _vault_request, "grant": _vault_grant}
+
+
 async def cmd_vault(a) -> int:
     """The shared key vault (vault.py). Every verb prints counts and fingerprints; a key and the pairing code never reach
     a pipe: `pair` refuses unless stdout is a terminal, so a script or an agent running it learns nothing."""
@@ -575,76 +679,12 @@ async def cmd_vault(a) -> int:
 
     action = a.action
     try:
-        if action == "pair":
-            if not sys.stdout.isatty():
-                raise vault.VaultError("the pairing code opens every stored key, so it prints only to a terminal: run `hswarm vault pair` "
-                                       "in your own terminal and hand the code over directly (text or DM), never in a chat or a ticket")
-            print(await asyncio.to_thread(vault.pair_code))
-            return 0
-        if action == "init":
-            if not a.target:
-                raise vault.VaultError("hswarm vault init <backend>, e.g. ssh://user@host/hswarm-vault or dir:D:/shared/hswarm-vault")
-            out = await asyncio.to_thread(vault.init, a.target)
-        elif action == "join":
-            out = await asyncio.to_thread(vault.join, _read_secret_text("vault pairing code (hidden): "), a.backend, a.force)
-        elif action == "adopt":
-            out = await asyncio.to_thread(vault.adopt)
-        elif action == "request":
-            if not a.target:
-                raise vault.VaultError("hswarm vault request <backend>: the vault's backend as this machine reaches it, e.g. ssh://user@host/hswarm-vault")
-            r = await asyncio.to_thread(vault.request, a.target, a.force)
-            if a.json:
-                _print(r)
-            else:
-                print(f"request {r['machine']}  fingerprint {r['fingerprint']}  on {r['backend']}")
-                print(f"next: on the vault machine run `hswarm vault grant {r['machine']}` and check it shows {r['fingerprint']}; "
-                      "then here: `hswarm vault accept`")
-            return 0
-        elif action == "grant":
-            rows = await asyncio.to_thread(vault.requests_waiting)
-            if not a.json:
-                for r in rows:
-                    print(f"{r['machine']:24} {r.get('at') or '-':21} {r.get('fingerprint') or r.get('error')}"
-                          f"{'  (granted, not accepted yet)' if r['granted'] else ''}")
-            ask = None
-            if a.yes is None and sys.stdin.isatty():
-                def ask(row):
-                    return input(f"grant {row['machine']}? type the full fingerprint the new machine printed (16 characters): ")
-            r = await asyncio.to_thread(vault.grant, a.target, a.yes, ask)
-            if a.json:
-                _print(r)
-            else:
-                print(f"granted {r['granted']} ({r['fingerprint']})")
-            return 0
-        elif action == "accept":
-            try:
-                out = await asyncio.to_thread(vault.accept, a.force)
-            except vault.NotGranted as e:
-                print(f"hswarm vault accept: {e}", file=sys.stderr)
-                return 3
-        elif action == "sync":
-            out = await asyncio.to_thread(lambda: vault.sync(rebase=a.rebase, allow_removals=a.allow_removals, dry_run=a.dry_run))
-        elif action == "leave":
-            if not a.force:
-                if not sys.stdin.isatty():
-                    raise vault.VaultError("leaving removes this machine's vault key and setup (the keys in secrets/ and the backend stay): "
-                                           "run it in a terminal to confirm, or pass --force")
-                if input("stop using the vault on this machine? type yes: ").strip().lower() != "yes":
-                    raise vault.VaultError("not confirmed; the vault is still set up here")
-            out = await asyncio.to_thread(vault.leave)
-        elif action == "list":
-            out = {"rows": await asyncio.to_thread(vault.rows, a.target)}
-        elif action in ("add", "remove"):
-            if not a.target or (action == "remove" and not a.fingerprint):
-                raise vault.VaultError("hswarm vault add <list>  |  hswarm vault remove <list> <fingerprint>")
-            if action == "add":
-                from . import settings
-
-                out = await asyncio.to_thread(vault.add_keys, a.target, settings.split_keys(_read_secret_text(f"{a.target} API key(s), space-separated (hidden): ")))
-            else:
-                out = await asyncio.to_thread(vault.remove_key, a.target, a.fingerprint)
-        else:
-            out = await asyncio.to_thread(vault.status)
+        if action in _VAULT_SELF_PRINTING:
+            return await _VAULT_SELF_PRINTING[action](a, vault)
+        out = await _VAULT_VERBS.get(action, _vault_status)(a, vault)
+    except vault.NotGranted as e:
+        print(f"hswarm vault {action}: {e}", file=sys.stderr)
+        return 3
     except vault.VaultError as e:
         print(f"hswarm vault {action}: {e}", file=sys.stderr)
         return 2

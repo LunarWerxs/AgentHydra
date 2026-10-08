@@ -301,8 +301,10 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
   const chatsForExternal = sharedRead(SESSIONS_FRESH_MS, () => client.chats())
 
-  /** AgentHydra's reads behind the outside sessions, or null when every one failed to reach it (it is down). */
-  async function externalInputs(): Promise<ExternalInputs | null> {
+  /** AgentHydra's reads behind the outside sessions, or null when every one failed to reach it (it is down).
+   *  With `strict`, the two reads that are never cached failing to reach it throws their unreachable BridgeError:
+   *  the poller reads that as down in place of a ping. */
+  async function externalInputs(strict = false): Promise<ExternalInputs | null> {
     const settle = <T>(p: Promise<T>, empty: T) => p.catch((err) => (unreachable(err) ? Promise.reject(err) : empty))
     const parts = await Promise.allSettled([
       settle(client.agentStatus(), []),
@@ -311,6 +313,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       settle(sessionsIndex(), []),
       settle(rawWorkers(), []),
     ])
+    if (strict && parts[0].status === 'rejected' && parts[1].status === 'rejected') throw parts[0].reason
     if (parts.every((p) => p.status === 'rejected')) return null
     const val = <T>(p: PromiseSettledResult<T>, empty: T): T => (p.status === 'fulfilled' ? p.value : empty)
     return {
@@ -322,8 +325,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
-  async function externalSessions(): Promise<ExternalSession[]> {
-    const inp = await externalInputs()
+  async function externalSessions(o: { strict?: boolean } = {}): Promise<ExternalSession[]> {
+    const inp = await externalInputs(o.strict)
     if (!inp) return []
     const exclude = new Set(await excludeSessionIds())
     const who = await resumeData()

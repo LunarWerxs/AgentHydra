@@ -38,6 +38,10 @@ export interface ServerContext {
   /** Replaces the provider of the `hello` event each window gets on connect (the engine registers one). */
   registerHello(fn: HelloProvider): void
   wsClientCount(): number
+  /** Windows connected to /ws and on screen; one that never said counts as on screen. */
+  wsVisibleCount(): number
+  /** Runs fn whenever wsVisibleCount changes; returns its unsubscribe. */
+  onWsVisibility(fn: (visible: number) => void): () => void
   /** Runs fn for each window that connects, after its `hello`; `send` reaches that window alone. */
   onConnect(fn: (send: (event: ServerEvent) => void) => void): void
   /** Serves a websocket at `path` (exact match) with its own handlers instead of the /ws hub's. */

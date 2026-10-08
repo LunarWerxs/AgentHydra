@@ -29,34 +29,42 @@ const TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
 /** The chat's successful file-changing tool calls per absolute path, in the order they ran. */
 export function opsByFile(jsonl: string): Map<string, Op[]> {
-  const calls = new Map<string, { tool: string; input: Record<string, unknown> }>()
+  const calls: Calls = new Map()
   const out = new Map<string, Op[]>()
   for (const line of jsonl.split('\n')) {
     if (!line.includes('"tool_use"') && !line.includes('"tool_result"')) continue
-    let rec: unknown
-    try {
-      rec = JSON.parse(line)
-    } catch {
-      continue
-    }
+    const rec = parseLine(line)
     if (!isRecord(rec) || !isRecord(rec.message) || !Array.isArray(rec.message.content)) continue
-    for (const block of rec.message.content) {
-      if (!isRecord(block)) continue
-      if (rec.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string' && TOOLS.has(block.name) && isRecord(block.input)) {
-        calls.set(block.id, { tool: block.name, input: block.input })
-      } else if (rec.type === 'user' && block.type === 'tool_result' && typeof block.tool_use_id === 'string') {
-        const call = calls.get(block.tool_use_id)
-        if (!call || block.is_error === true) continue
-        const file = call.input.file_path ?? call.input.notebook_path
-        if (typeof file !== 'string' || !isAbsolute(file)) continue
-        const key = resolve(file)
-        const list = out.get(key) ?? []
-        list.push({ tool: call.tool, input: call.input, result: isRecord(rec.toolUseResult) ? rec.toolUseResult : {} })
-        out.set(key, list)
-      }
-    }
+    for (const block of rec.message.content) if (isRecord(block)) takeBlock(rec, block, calls, out)
   }
   return out
+}
+
+type Calls = Map<string, { tool: string; input: Record<string, unknown> }>
+
+function parseLine(line: string): unknown {
+  try {
+    return JSON.parse(line)
+  } catch {
+    return undefined
+  }
+}
+
+/** Remembers a file-changing tool_use, or files the op its successful tool_result finishes under its absolute path. */
+function takeBlock(rec: Record<string, unknown>, block: Record<string, unknown>, calls: Calls, out: Map<string, Op[]>): void {
+  if (rec.type === 'assistant' && block.type === 'tool_use' && typeof block.id === 'string' && typeof block.name === 'string' && TOOLS.has(block.name) && isRecord(block.input)) {
+    calls.set(block.id, { tool: block.name, input: block.input })
+    return
+  }
+  if (rec.type !== 'user' || block.type !== 'tool_result' || typeof block.tool_use_id !== 'string') return
+  const call = calls.get(block.tool_use_id)
+  if (!call || block.is_error === true) return
+  const file = call.input.file_path ?? call.input.notebook_path
+  if (typeof file !== 'string' || !isAbsolute(file)) return
+  const key = resolve(file)
+  const list = out.get(key) ?? []
+  list.push({ tool: call.tool, input: call.input, result: isRecord(rec.toolUseResult) ? rec.toolUseResult : {} })
+  out.set(key, list)
 }
 
 const eol = (s: string): string => s.replace(/\r\n/g, '\n')
@@ -130,58 +138,57 @@ interface Entry {
   before: string | null
 }
 
+/** The file before the chat's first call: null when that call created it, undefined when the transcript did not keep it. */
+function originOf(first: Op): string | null | undefined {
+  if (first.tool === 'Write' && first.result.type === 'create') return null
+  return typeof first.result.originalFile === 'string' ? first.result.originalFile : undefined
+}
+
+/** The content the chat last left, or null when a call does not replay. */
+function replayAll(origin: string | null, ops: Op[]): string | null {
+  let cur: string | null = origin
+  for (const op of ops) {
+    cur = replay(cur, op)
+    if (cur === null) return null
+  }
+  return cur
+}
+
+/** One file's entry, or null when there is nothing to undo in it. */
+function entryOf(root: string, abs: string, ops: Op[]): Entry | null {
+  const rel = relative(root, abs)
+  const path = rel.split(sep).join('/')
+  const make = (state: ChatUndoFile['state'], reason: string | undefined, over: Partial<ChatUndoFile> = {}, before: string | null = null): Entry => ({
+    abs,
+    before,
+    file: { path, added: 0, removed: 0, kind: 'restore', state, ...(reason ? { reason } : {}), ...over }
+  })
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return make('unknown', "outside this chat's folder", { path: abs.split(sep).join('/') })
+  if (ops.some((o) => o.tool === 'NotebookEdit')) return make('unknown', 'a notebook edit cannot be replayed')
+  const origin = originOf(ops[0]!)
+  if (origin === undefined) return make('unknown', "the transcript did not keep the file's old content")
+  const cur = replayAll(origin, ops)
+  const disk = readDisk(abs)
+  if (disk === undefined) return make('unknown', 'it cannot be read as text')
+  const kind = origin === null ? 'delete' : 'restore'
+  if (disk === null || cur === null || eol(disk) !== eol(cur)) {
+    // Gone already and created by the chat: nothing to undo. Otherwise someone else changed it since the chat last wrote it.
+    if (kind === 'delete' && disk === null) return null
+    return make('changed', disk === null ? 'it was deleted after the chat wrote it' : 'it was changed after the chat last wrote it', { kind }, origin)
+  }
+  if (origin !== null && eol(origin) === eol(disk)) return null
+  // Put back with the file's own line endings.
+  const back = origin !== null && disk.includes('\r\n') && !/(^|[^\r])\n/.test(disk) ? eol(origin).replace(/\n/g, '\r\n') : origin
+  const { added, removed } = lineChange(origin ?? '', disk)
+  return make('ready', undefined, { kind, added, removed }, back)
+}
+
 function entries(jsonl: string, cwd: string): Entry[] {
   const root = resolve(cwd)
   const list: Entry[] = []
   for (const [abs, ops] of opsByFile(jsonl)) {
-    const rel = relative(root, abs)
-    const path = rel.split(sep).join('/')
-    const make = (state: ChatUndoFile['state'], reason: string | undefined, over: Partial<ChatUndoFile> = {}, before: string | null = null): Entry => ({
-      abs,
-      before,
-      file: { path, added: 0, removed: 0, kind: 'restore', state, ...(reason ? { reason } : {}), ...over }
-    })
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
-      list.push(make('unknown', "outside this chat's folder", { path: abs.split(sep).join('/') }))
-      continue
-    }
-    if (ops.some((o) => o.tool === 'NotebookEdit')) {
-      list.push(make('unknown', 'a notebook edit cannot be replayed'))
-      continue
-    }
-    const first = ops[0]!
-    const origin = first.tool === 'Write' && first.result.type === 'create' ? null : typeof first.result.originalFile === 'string' ? first.result.originalFile : undefined
-    if (origin === undefined) {
-      list.push(make('unknown', "the transcript did not keep the file's old content"))
-      continue
-    }
-    let cur: string | null = origin
-    let broken = false
-    for (const op of ops) {
-      const next = replay(cur, op)
-      if (next === null) {
-        broken = true
-        break
-      }
-      cur = next
-    }
-    const disk = readDisk(abs)
-    if (disk === undefined) {
-      list.push(make('unknown', 'it cannot be read as text'))
-      continue
-    }
-    const kind = origin === null ? 'delete' : 'restore'
-    if (broken || disk === null || cur === null || eol(disk) !== eol(cur)) {
-      // Gone already and created by the chat: nothing to undo. Otherwise someone else changed it since the chat last wrote it.
-      if (kind === 'delete' && disk === null) continue
-      list.push(make('changed', disk === null ? 'it was deleted after the chat wrote it' : 'it was changed after the chat last wrote it', { kind }, origin))
-      continue
-    }
-    if (origin !== null && eol(origin) === eol(disk)) continue
-    // Put back with the file's own line endings.
-    const back = origin !== null && disk.includes('\r\n') && !/(^|[^\r])\n/.test(disk) ? eol(origin).replace(/\n/g, '\r\n') : origin
-    const { added, removed } = lineChange(origin ?? '', disk)
-    list.push(make('ready', undefined, { kind, added, removed }, back))
+    const entry = entryOf(root, abs, ops)
+    if (entry) list.push(entry)
   }
   return list.sort((a, b) => a.file.path.localeCompare(b.file.path))
 }

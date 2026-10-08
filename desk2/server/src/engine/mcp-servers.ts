@@ -43,7 +43,11 @@ function localServersOf(json: unknown, cwd: string): Record<string, unknown> {
   if (!isObject(projects)) return {}
   const want = folderKey(cwd)
   // .claude.json can hold the folder under several spellings (c:/ and C:/): all of them count.
-  return Object.assign({}, ...Object.keys(projects).filter((k) => folderKey(k) === want).map((k) => serversOf(projects[k])))
+  return Object.fromEntries(
+    Object.keys(projects)
+      .filter((k) => folderKey(k) === want)
+      .flatMap((k) => Object.entries(serversOf(projects[k]))),
+  )
 }
 
 /**

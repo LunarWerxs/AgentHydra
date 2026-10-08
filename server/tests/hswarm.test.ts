@@ -15,6 +15,8 @@ import {
   stopHSwarm,
 } from '../src/hswarm'
 
+type SpawnOpts = NonNullable<Parameters<typeof Bun.spawn>[1]>
+
 const tmp = mkdtempSync(join(tmpdir(), 'hswarm-test-'))
 
 function withPackage(name: string): string {
@@ -264,8 +266,8 @@ test('a server running our own package folder is adopted and left alone', async 
 
 test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and the stats DB is left to HSwarm', async () => {
   mkdirSync(join(tmp, '.zswarm'), { recursive: true })
-  let sidecarEnv: NodeJS.ProcessEnv | null = null
-  const spawn = ((cmd: string[], opts: any) => {
+  let sidecarEnv: SpawnOpts['env'] | null = null
+  const spawn = ((cmd: string[], opts: SpawnOpts) => {
     sidecarEnv = opts.env
     let exit = () => {}
     const exited = new Promise<number>((resolve) => {
@@ -274,8 +276,8 @@ test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and t
     return { pid: undefined, exited, kill: () => exit() }
   }) as unknown as typeof Bun.spawn
 
-  const importCalls: { cmd: string[]; opts: any }[] = []
-  const importSpawn = ((cmd: string[], opts: any) => {
+  const importCalls: { cmd: string[]; opts: SpawnOpts }[] = []
+  const importSpawn = ((cmd: string[], opts: SpawnOpts) => {
     importCalls.push({ cmd, opts })
     const counts = { sqlite: { utilizations: { read: 3, added: 2, already_there: 1 } } }
     return {
@@ -330,8 +332,8 @@ test('a ZSwarm home is imported into HSwarm by a hidden import-zswarm run, and t
 })
 
 test('HSWARM_STATS_DB is not set when zswarm.sqlite does not exist', async () => {
-  let capturedEnv: NodeJS.ProcessEnv | null = null
-  const spawn = ((cmd: string[], opts: any) => {
+  let capturedEnv: SpawnOpts['env'] | null = null
+  const spawn = ((cmd: string[], opts: SpawnOpts) => {
     capturedEnv = opts.env
     let exit = () => {}
     const exited = new Promise<number>((resolve) => {
@@ -396,10 +398,10 @@ test('a signed-out account is named from known accounts and login history, never
   const stranger = '00000000-0000-0000-0000-0000000000a4'
   const history: Record<string, Array<{ accountUuid: string; lastSeenAt: string | null }>> = {
     'dir-2': [
-      { accountUuid: moved, lastSeenAt: '2026-01-01T00:00:00Z' },
-      { accountUuid: current, lastSeenAt: '2026-01-02T00:00:00Z' },
+      { accountUuid: moved, lastSeenAt: '2021-01-01T00:00:00Z' },
+      { accountUuid: current, lastSeenAt: '2021-01-02T00:00:00Z' },
     ],
-    'dir-5': [{ accountUuid: moved, lastSeenAt: '2026-03-01T00:00:00Z' }],
+    'dir-5': [{ accountUuid: moved, lastSeenAt: '2021-03-01T00:00:00Z' }],
   }
   const map = hswarmAccountMap({
     desktop: [

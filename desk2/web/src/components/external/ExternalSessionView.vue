@@ -22,7 +22,7 @@ import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, wh
 // it slides away and back on a transform, and the transcript keeps its first row clear of it with a top
 // inset rather than shrinking, so folding it lays nothing out again. Its Display choices pick what the
 // transcript shows.
-const props = defineProps<{ sessionId: string }>()
+const props = defineProps<{ sessionId: string; /** A page (AgentHydra, Dev servers) covers the view. */ paused?: boolean }>()
 
 const src = useShellSource()
 const desk = useDesk()
@@ -159,8 +159,8 @@ watch(
     const ms = working ? 3000 : running ? 10000 : 0
     if (ms !== pollMs) {
       stopPolling()
-      // A hidden window rests; it reads once on return (below).
-      if (ms) pollInterval = setInterval(() => !document.hidden && loadItems(true), ms)
+      // A hidden window, or a view a page covers, rests; it reads once on return (below).
+      if (ms) pollInterval = setInterval(() => !document.hidden && !props.paused && loadItems(true), ms)
       pollMs = ms
     }
     if (!working && before?.[0]) void loadItems(true)
@@ -168,9 +168,10 @@ watch(
   { immediate: true }
 )
 function onVisible() {
-  if (!document.hidden && pollMs) void loadItems(true)
+  if (!document.hidden && !props.paused && pollMs) void loadItems(true)
 }
 document.addEventListener('visibilitychange', onVisible)
+watch(() => props.paused, onVisible)
 onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisible)
   stopPolling()
@@ -179,7 +180,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]">
+  <div class="flex h-full flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)">
     <!-- The header is clipped here: folded, it slides up out of this box, never over the title bar. -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <SessionHeader
@@ -190,14 +191,14 @@ onUnmounted(() => {
         @update:find="(f) => (find = f)"
         @update:inset="(h: number) => (inset = h)"
       />
-      <div v-if="loading" class="flex h-full items-center justify-center text-[var(--text-muted)]" :style="{ paddingTop: `${inset}px` }">Loading transcript…</div>
+      <div v-if="loading" class="flex h-full items-center justify-center text-(--text-muted)" :style="{ paddingTop: `${inset}px` }">Loading transcript…</div>
       <div
         v-else-if="error && !items.length"
         class="flex h-full flex-col items-center justify-center gap-1 px-6 text-center"
         :style="{ paddingTop: `${inset}px` }"
       >
         <div class="font-medium">Could not load this session</div>
-        <div class="text-[var(--text-muted)]">{{ error }}</div>
+        <div class="text-(--text-muted)">{{ error }}</div>
       </div>
       <TranscriptView
         v-else
@@ -213,14 +214,14 @@ onUnmounted(() => {
 
     <template v-if="standIn">
       <div v-if="continueNote" class="shrink-0 px-8 pb-2">
-        <p class="mx-auto w-full max-w-[768px] truncate px-2 text-[12px] leading-4 text-[var(--text-muted)]" role="status">{{ continueNote }}</p>
+        <p class="mx-auto w-full max-w-3xl truncate px-2 text-[12px] leading-4 text-(--text-muted)" role="status">{{ continueNote }}</p>
       </div>
       <Composer :key="standIn.id" :chat="standIn" />
     </template>
 
     <template v-else-if="desktopChat && session">
       <div class="shrink-0 px-8 pt-1.5">
-        <p class="mx-auto flex h-6 w-full max-w-[768px] items-center gap-[5px] px-2 pb-1 text-[12px] leading-4 text-[var(--text-muted)]" role="status">
+        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 pb-1 text-[12px] leading-4 text-(--text-muted)" role="status">
           <span class="flex size-6 shrink-0 items-center justify-center">
             <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
@@ -228,7 +229,7 @@ onUnmounted(() => {
             {{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}<span v-if="session.activity"> · {{ session.activity }}</span>
           </span>
         </p>
-        <ul v-if="queued.length" class="mx-auto flex w-full max-w-[768px] flex-col gap-0.5 px-2 pb-2 pl-8 text-[12px] leading-4 text-[var(--text-muted)]" aria-label="Queued messages">
+        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pb-2 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
         </ul>
       </div>
@@ -236,7 +237,7 @@ onUnmounted(() => {
     </template>
 
     <div v-else-if="session && usable" class="shrink-0 px-8 pb-3 pt-1.5">
-      <p class="mx-auto flex h-10 w-full max-w-[768px] items-center gap-[5px] px-2 text-[var(--text-muted)]" role="status">
+      <p class="mx-auto flex h-10 w-full max-w-3xl items-center gap-1.25 px-2 text-(--text-muted)" role="status">
         <span class="flex size-6 shrink-0 items-center justify-center">
           <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
@@ -246,17 +247,17 @@ onUnmounted(() => {
 
     <div v-else-if="session" class="shrink-0 px-8 pb-3 pt-1.5">
       <div
-        class="mx-auto flex h-10 w-full max-w-[768px] items-center gap-[5px] rounded-[var(--radius-10)] bg-[var(--fill-5)] p-2"
+        class="mx-auto flex h-10 w-full max-w-3xl items-center gap-1.25 rounded-(--radius-10) bg-(--fill-5) p-2"
         role="status"
       >
         <span class="flex size-6 shrink-0 items-center justify-center">
           <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
-        <span class="min-w-0 flex-1 truncate text-[var(--text-2)]">
+        <span class="min-w-0 flex-1 truncate text-(--text-2)">
           <span>{{ isWorking ? 'Running in' : 'Read-only from' }} {{ where }}</span>
-          <span v-if="session.activity" class="text-[var(--text-muted)]"> · {{ session.activity }}</span>
+          <span v-if="session.activity" class="text-(--text-muted)"> · {{ session.activity }}</span>
         </span>
-        <span v-if="error" class="max-w-[40%] shrink truncate text-[var(--danger-text)]" :title="error">{{ error }}</span>
+        <span v-if="error" class="max-w-[40%] shrink truncate text-(--danger-text)" :title="error">{{ error }}</span>
       </div>
     </div>
   </div>

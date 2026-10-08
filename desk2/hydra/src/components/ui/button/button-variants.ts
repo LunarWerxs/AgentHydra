@@ -13,6 +13,14 @@ export const buttonVariants = cva(
         "overlay-destructive": 'border-border bg-background/90 dark:bg-input/30 text-destructive shadow-sm backdrop-blur hover:bg-destructive hover:text-destructive-foreground aria-expanded:bg-muted aria-expanded:text-foreground',
         secondary: 'bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground',
         ghost: 'hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground',
+        // A ghost button that shows its on state: aria-pressed for a toggle.
+        "ghost-toggle": 'hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground aria-pressed:not-hover:text-primary',
+        // A tab in a row of tabs; the caller sets data-active on the open one.
+        tab: 'hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground data-[active=true]:border-b-2 data-[active=true]:not-focus-visible:border-primary',
+        // One option of a role=radio segmented control; aria-checked marks the chosen one.
+        segment: 'hover:bg-muted dark:hover:bg-muted/50 aria-checked:bg-primary/15 aria-checked:text-foreground aria-checked:not-focus-visible:ring-1 aria-checked:not-focus-visible:ring-primary/40 aria-checked:hover:bg-primary/20 not-aria-checked:text-muted-foreground not-aria-checked:hover:text-foreground',
+        // A ghost action hidden until its group/row is hovered or the button has focus.
+        "row-reveal": 'hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground bg-card opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100',
         "ghost-destructive": 'text-destructive hover:bg-destructive/10 hover:text-destructive dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground',
         "ghost-destructive-muted": 'text-muted-foreground hover:bg-muted hover:text-destructive dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground',
         destructive: 'bg-destructive/10 hover:bg-destructive/20 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/20 text-destructive focus-visible:border-destructive/40 dark:hover:bg-destructive/30',
@@ -23,6 +31,8 @@ export const buttonVariants = cva(
         "default": 'h-7 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*=size-])]:size-3.5',
         "xs": 'h-5 gap-1 rounded-sm px-2 text-[0.625rem] has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*=size-])]:size-2.5',
         "sm": 'h-6 gap-1 px-2 text-xs/relaxed has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*=size-])]:size-3',
+        "chip": 'h-6 gap-1 px-2 text-xs font-semibold has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 [&_svg:not([class*=size-])]:size-3',
+        "segment": 'h-7 gap-1.5 rounded-[5px] px-2.5 text-xs/relaxed [&_svg:not([class*=size-])]:size-3',
         "lg": 'h-8 gap-1 px-2.5 text-xs/relaxed has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2 [&_svg:not([class*=size-])]:size-4',
         "inline": 'h-auto gap-1 p-0 align-baseline [&_svg:not([class*=size-])]:size-3',
         "compact": 'h-auto gap-1 px-1 py-0.5 [&_svg:not([class*=size-])]:size-3',

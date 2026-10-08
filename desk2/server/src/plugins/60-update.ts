@@ -60,10 +60,21 @@ export function startedByLauncher(home: string, pid: number): boolean {
   }
 }
 
+const STAMP_TTL_MS = 30_000
+
+/** codeStamp, walked at most once per STAMP_TTL_MS: the window asks every minute and on each hello. */
+function cachedStamp(): () => CodeStamp {
+  let last: { at: number; stamp: CodeStamp } | null = null
+  return () => {
+    if (!last || Date.now() - last.at > STAMP_TTL_MS) last = { at: Date.now(), stamp: codeStamp() }
+    return last.stamp
+  }
+}
+
 function realDeps(): UpdateDeps {
   return {
     bootedAt: performance.timeOrigin,
-    stamp: () => codeStamp(),
+    stamp: cachedStamp(),
     platform: process.platform,
     pid: process.pid,
     start(argv) {
@@ -75,15 +86,20 @@ function realDeps(): UpdateDeps {
   }
 }
 
-export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
+export default function plugin(app: Hono, ctx: ServerContext): void {
   const deps = (ctx.deps.update as UpdateDeps | undefined) ?? realDeps()
-  const atBoot = deps.stamp()
+  // The boot stamp is taken once the server has bound, off the startup path; a read before then takes it first.
+  let atBoot: CodeStamp | null = null
+  setTimeout(() => {
+    atBoot ??= deps.stamp()
+  }, 0)
   const restartable = () => deps.platform === 'win32' && startedByLauncher(ctx.home, deps.pid)
 
   app.get('/api/server/update', (c) => {
+    const boot = (atBoot ??= deps.stamp())
     const now = deps.stamp()
     // A file saved after the start may or may not be what the server loaded: it counts as new.
-    const stale = now.newest > deps.bootedAt || now.count !== atBoot.count
+    const stale = now.newest > deps.bootedAt || now.count !== boot.count
     return c.json({ stale, restartable: restartable() } satisfies ServerUpdate)
   })
 

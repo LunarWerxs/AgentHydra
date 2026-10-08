@@ -117,66 +117,93 @@ def kit_claude_days(since: dt.date, end: dt.date) -> dict[str, dict] | None:
     base = os.environ.get("AGENTHYDRA_URL", DEFAULT_AGENTHYDRA_URL).rstrip("/")
     if not base:
         return None
-    ms = lambda d: int(dt.datetime.combine(d, dt.time.min).astimezone().timestamp() * 1000)  # noqa: E731
     kinds = "input,output,cache_read,cache_write_5m,cache_write_1h"
-    window = {"source": KIT_SOURCES, "pc": "self", "from": ms(since), "to": ms(end + dt.timedelta(1)) - 1}
+    window = {"source": KIT_SOURCES, "pc": "self", "from": _ms(since), "to": _ms(end + dt.timedelta(1)) - 1}
     try:
         data = _kit_get(base, window, measures=f"tokens,list_usd,calls,{kinds}", groupBy="day,model")
-        seen = [v for k, v in data["coverage"]["sources"].items() if k in KIT_SOURCES.split(",") and v.get("events")]
-        if not seen or min(v["firstTs"] for v in seen) > ms(since):
-            return None
-        # Caught up to the window's end too: a daemon stopped overnight (or mid first sweep) has the old events but
-        # not the recent ones, and a low day stored now would never be re-measured. The newest event (or transcript
-        # mtime the sweep has read) must reach the window end, less a few sweep intervals, capped at now.
-        target = min(ms(end + dt.timedelta(1)) - 1, int(time.time() * 1000)) - KIT_CURRENT_SLACK_MS
-        newest = max([v["lastTs"] for v in seen] + [data["coverage"].get("cursors", {}).get("newestMtime") or 0])
-        if newest < target:
+        if not _kit_covers(data, since, end):
             return None
         unpriced = set(data.get("unpriced") or [])
         days: dict[str, dict] = {}
-        for r in data["rows"]:
-            d = days.setdefault(r["day"], claude_usage.empty_day())
-            model = r.get("model") or ""
-            m = d["by_model"].setdefault(model, claude_usage.empty_model())
-            t, usd, calls = _kit_tokens(r), r.get("list_usd") or 0.0, int(r.get("calls") or 0)
-            d["claude_usd"] += usd
-            d["requests"] += calls
-            d["unpriced_requests"] += calls if model in unpriced else 0
-            m["requests"] += calls
-            m["usd"] += usd
-            _add_tokens(d["tokens"], t)
-            _add_tokens(m["tokens"], t)
+        _kit_day_models(days, data["rows"], unpriced)
         # The sub-agent share of the same calls; the main share is what remains.
-        for r in _kit_get(base, window, measures="list_usd", groupBy="day,model", agent="subagent")["rows"]:
-            d = days.setdefault(r["day"], claude_usage.empty_day())
-            usd = r.get("list_usd") or 0.0
-            d["sub_usd"] += usd
-            d["by_model"].setdefault(r.get("model") or "", claude_usage.empty_model())["sub_usd"] += usd
-        for d in days.values():
-            d["main_usd"] = d["claude_usd"] - d["sub_usd"]
-            for m in d["by_model"].values():
-                m["main_usd"] = m["usd"] - m["sub_usd"]
-        for r in _kit_get(base, window, measures=f"calls,list_usd,{kinds}", groupBy="day,session")["rows"]:
-            if r.get("session"):
-                s = days.setdefault(r["day"], claude_usage.empty_day())["by_session"].setdefault(r["session"], claude_usage.empty_session())
-                s["usd"] += r.get("list_usd") or 0.0
-                s["requests"] += int(r.get("calls") or 0)
-                _add_tokens(s["tokens"], _kit_tokens(r))
+        _kit_sub_usd(days, _kit_get(base, window, measures="list_usd", groupBy="day,model", agent="subagent")["rows"])
+        _kit_sessions(days, _kit_get(base, window, measures=f"calls,list_usd,{kinds}", groupBy="day,session")["rows"])
         sub = _kit_get(base, window, measures=f"calls,list_usd,{kinds}", groupBy="hour,agent_id,model,session", agent="subagent")
         if any("agent_id" in str(n) for n in sub.get("notes") or []):
             return None  # the window reaches past the raw calls the sub-agent ids live on: a partial list would pass for the whole
         _kit_agents(days, sub["rows"], unpriced)
-        for d in days.values():
-            for k in ("claude_usd", "main_usd", "sub_usd"):
-                d[k] = round(d[k], 4)
-            for m in d["by_model"].values():
-                for k in ("usd", "main_usd", "sub_usd"):
-                    m[k] = round(m[k], 4)
-            for s in d["by_session"].values():
-                s["usd"] = round(s["usd"], 4)
+        _round_days(days)
         return days
     except (OSError, ValueError, KeyError, TypeError):  # URLError is an OSError; a bad body or shape is not the kit's answer
         return None
+
+
+def _ms(d: dt.date) -> int:
+    """Local midnight starting day d, in epoch milliseconds."""
+    return int(dt.datetime.combine(d, dt.time.min).astimezone().timestamp() * 1000)
+
+
+def _kit_covers(data: dict, since: dt.date, end: dt.date) -> bool:
+    """Whether the kit's Claude events reach back to the window's start and forward to its end."""
+    seen = [v for k, v in data["coverage"]["sources"].items() if k in KIT_SOURCES.split(",") and v.get("events")]
+    if not seen or min(v["firstTs"] for v in seen) > _ms(since):
+        return False
+    # Caught up to the window's end too: a daemon stopped overnight (or mid first sweep) has the old events but
+    # not the recent ones, and a low day stored now would never be re-measured. The newest event (or transcript
+    # mtime the sweep has read) must reach the window end, less a few sweep intervals, capped at now.
+    target = min(_ms(end + dt.timedelta(1)) - 1, int(time.time() * 1000)) - KIT_CURRENT_SLACK_MS
+    newest = max([v["lastTs"] for v in seen] + [data["coverage"].get("cursors", {}).get("newestMtime") or 0])
+    return newest >= target
+
+
+def _kit_day_models(days: dict[str, dict], rows: list[dict], unpriced: set[str]) -> None:
+    """Fold the kit's per day and model rows (all calls) into `days`."""
+    for r in rows:
+        d = days.setdefault(r["day"], claude_usage.empty_day())
+        model = r.get("model") or ""
+        m = d["by_model"].setdefault(model, claude_usage.empty_model())
+        t, usd, calls = _kit_tokens(r), r.get("list_usd") or 0.0, int(r.get("calls") or 0)
+        d["claude_usd"] += usd
+        d["requests"] += calls
+        d["unpriced_requests"] += calls if model in unpriced else 0
+        m["requests"] += calls
+        m["usd"] += usd
+        _add_tokens(d["tokens"], t)
+        _add_tokens(m["tokens"], t)
+
+
+def _kit_sub_usd(days: dict[str, dict], rows: list[dict]) -> None:
+    """Fold the sub-agent spend per day and model into `days`, then set each main share."""
+    for r in rows:
+        d = days.setdefault(r["day"], claude_usage.empty_day())
+        usd = r.get("list_usd") or 0.0
+        d["sub_usd"] += usd
+        d["by_model"].setdefault(r.get("model") or "", claude_usage.empty_model())["sub_usd"] += usd
+    for d in days.values():
+        d["main_usd"] = d["claude_usd"] - d["sub_usd"]
+        for m in d["by_model"].values():
+            m["main_usd"] = m["usd"] - m["sub_usd"]
+
+
+def _kit_sessions(days: dict[str, dict], rows: list[dict]) -> None:
+    for r in rows:
+        if r.get("session"):
+            s = days.setdefault(r["day"], claude_usage.empty_day())["by_session"].setdefault(r["session"], claude_usage.empty_session())
+            s["usd"] += r.get("list_usd") or 0.0
+            s["requests"] += int(r.get("calls") or 0)
+            _add_tokens(s["tokens"], _kit_tokens(r))
+
+
+def _round_days(days: dict[str, dict]) -> None:
+    for d in days.values():
+        for k in ("claude_usd", "main_usd", "sub_usd"):
+            d[k] = round(d[k], 4)
+        for m in d["by_model"].values():
+            for k in ("usd", "main_usd", "sub_usd"):
+                m[k] = round(m[k], 4)
+        for s in d["by_session"].values():
+            s["usd"] = round(s["usd"], 4)
 
 
 def hswarm_by_day(since: dt.date, today: dt.date) -> dict[str, dict]:

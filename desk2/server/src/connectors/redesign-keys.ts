@@ -129,6 +129,66 @@ function parked(home: string): Set<string> {
   return out
 }
 
+/** ReDesign's pools with their working-key counts, or why they could not be read. */
+async function readPools(base: string, doFetch: typeof fetch): Promise<Map<string, number> | string> {
+  try {
+    const res = await doFetch(`${base}/api/keys`)
+    if (!res.ok) return `ReDesign answered ${res.status} for its key pools`
+    const body = (await res.json()) as { pools?: { pool: string; total: number; entries?: PoolEntry[] }[] }
+    return new Map((body.pools ?? []).map((p) => [p.pool, workingKeys(p)]))
+  } catch {
+    return 'ReDesign is not answering'
+  }
+}
+
+/** Adds one checked key to every pool still short of `want`; false when ReDesign stopped answering. */
+async function saveKey(base: string, doFetch: typeof fetch, key: string, open: PoolResult[], want: number): Promise<boolean> {
+  for (const row of open) {
+    let res: Response
+    try {
+      res = await doFetch(`${base}/api/keys/save`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pool: row.pool, key })
+      })
+    } catch {
+      return false
+    }
+    if (res.status === 409) continue // already in the pool
+    if (!res.ok) {
+      row.before = want // this pool refuses keys; do not hammer it
+      continue
+    }
+    row.added++
+    row.fingerprints.push(fingerprint(key))
+  }
+  return true
+}
+
+interface PlanRun {
+  base: string
+  doFetch: typeof fetch
+  check: (list: string, key: string) => Promise<boolean>
+  result: CopyResult
+}
+
+/** Tops up one plan's pools from its checked keys; false when ReDesign stopped answering. */
+async function fillPlan(run: PlanRun, plan: (typeof KEY_PLAN)[number], ok: string[], rows: PoolResult[]): Promise<boolean> {
+  let checks = 0
+  for (const key of ok) {
+    const open = rows.filter((row) => row.before + row.added < plan.want)
+    if (!open.length || checks >= CHECK_LIMIT) break
+    checks++
+    if (!(await run.check(plan.list, key))) {
+      run.result.failed = [...(run.result.failed ?? []), fingerprint(key)]
+      continue
+    }
+    if (!(await saveKey(run.base, run.doFetch, key, open, plan.want))) return false
+  }
+  run.result.checked = { ...run.result.checked, [plan.list]: checks }
+  return true
+}
+
 export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
   const doFetch = opts.fetchImpl ?? fetch
   const base = opts.redesignUrl.replace(/\/+$/, '')
@@ -136,15 +196,8 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
   const result: CopyResult = { ok: true, pools: [], okInHswarm: {} }
   const fail = (error: string): CopyResult => ({ ...result, ok: false, error })
 
-  let poolTotals: Map<string, number>
-  try {
-    const res = await doFetch(`${base}/api/keys`)
-    if (!res.ok) return fail(`ReDesign answered ${res.status} for its key pools`)
-    const body = (await res.json()) as { pools?: { pool: string; total: number; entries?: PoolEntry[] }[] }
-    poolTotals = new Map((body.pools ?? []).map((p) => [p.pool, workingKeys(p)]))
-  } catch {
-    return fail('ReDesign is not answering')
-  }
+  const poolTotals = await readPools(base, doFetch)
+  if (typeof poolTotals === 'string') return fail(poolTotals)
 
   let skip: Set<string>
   try {
@@ -153,43 +206,14 @@ export async function copyHswarmKeys(opts: CopyOptions): Promise<CopyResult> {
     return fail("HSwarm's key state could not be read")
   }
 
-  const check = opts.checkKey ?? ((list: string, key: string) => liveCheck(list, key, doFetch))
+  const run: PlanRun = { base, doFetch, check: opts.checkKey ?? ((list: string, key: string) => liveCheck(list, key, doFetch)), result }
   for (const plan of KEY_PLAN) {
     if (opts.lists && !opts.lists.includes(plan.list)) continue
     const ok = readList(join(home, 'secrets', `${plan.list}_api_keys`)).filter((k) => !skip.has(fingerprint(k)) && !opts.skip?.has(fingerprint(k)))
     result.okInHswarm[plan.list] = ok.length
     const rows: PoolResult[] = plan.pools.filter((pool) => poolTotals.has(pool)).map((pool) => ({ pool, before: poolTotals.get(pool) ?? 0, added: 0, fingerprints: [] }))
     result.pools.push(...rows)
-    let checks = 0
-    for (const key of ok) {
-      const open = rows.filter((row) => row.before + row.added < plan.want)
-      if (!open.length || checks >= CHECK_LIMIT) break
-      checks++
-      if (!(await check(plan.list, key))) {
-        result.failed = [...(result.failed ?? []), fingerprint(key)]
-        continue
-      }
-      for (const row of open) {
-        let res: Response
-        try {
-          res = await doFetch(`${base}/api/keys/save`, {
-            method: 'POST',
-            headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ pool: row.pool, key })
-          })
-        } catch {
-          return fail('ReDesign stopped answering while keys were added')
-        }
-        if (res.status === 409) continue // already in the pool
-        if (!res.ok) {
-          row.before = plan.want // this pool refuses keys; do not hammer it
-          continue
-        }
-        row.added++
-        row.fingerprints.push(fingerprint(key))
-      }
-    }
-    result.checked = { ...result.checked, [plan.list]: checks }
+    if (!(await fillPlan(run, plan, ok, rows))) return fail('ReDesign stopped answering while keys were added')
   }
   return result
 }

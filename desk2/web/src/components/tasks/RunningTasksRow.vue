@@ -50,7 +50,7 @@ const label = computed(() =>
   <button
     v-if="label"
     type="button"
-    class="mt-10 flex h-6 items-center rounded-[6px] px-1 text-[14px] text-[var(--text-muted)] outline-none transition-colors duration-[60ms] hover:text-[var(--text-2)] focus-visible:shadow-[var(--focus-ring)]"
+    class="mt-10 flex h-6 items-center rounded-md px-1 text-[14px] text-(--text-muted) outline-none transition-colors duration-60 hover:text-(--text-2) focus-visible:shadow-(--focus-ring)"
     data-running-tasks
     @click="openBackgroundTasks()"
   >

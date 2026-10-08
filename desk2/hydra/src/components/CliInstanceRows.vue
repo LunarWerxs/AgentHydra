@@ -256,7 +256,7 @@ function rowModel(inst: CliInstance): InstanceRowModel {
     },
     plan: plan ? { label: plan } : null,
     tokens: tokenPartsFor(inst.tokens, tokenWindow.value),
-    menu: { name: inst.name, actions: menuActionsFor(inst), class: 'max-w-56' },
+    menu: { name: inst.name, actions: menuActionsFor(inst), width: 'md' },
   }
 }
 

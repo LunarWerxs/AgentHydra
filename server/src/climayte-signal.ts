@@ -137,8 +137,8 @@ async function fromSubagent(req: { text: () => Promise<string> }): Promise<boole
 
 /** A loopback server that answers every request with the signal file's JSON, or `{}` when there is
  *  none (or it is half written: the daemon writes it in one call, but a read can still land inside
- *  it). Read afresh each time, so the signal shows on every call from the moment it is written
- *  until the file is removed, as the `cat` it replaces did. A tool call inside one of the worker's
+ *  it). Read afresh each time, so every call sees the signal from the moment it is written to the
+ *  moment the file is removed, as the PostToolUse `cat` does. A tool call inside one of the worker's
  *  sub-agents always gets `{}`: the handoff is the worker's to write, and a sub-agent told to write
  *  it quits mid-task and overwrites the worker's own (2026-10-04). Null when no port could be
  *  bound. */

@@ -13,6 +13,7 @@ import {
   climayteCancel,
   climayteGet,
   climaytePing,
+  climayteReady,
   climayteRun,
   climayteSend,
   setCliMayteAccountsProvider,
@@ -29,7 +30,7 @@ const HOME = 'C:/ask-test-home'
 const TRANSCRIPT = `${HOME}/projects/p/${SID}.jsonl`
 const delivered: Array<{ sessionId: string; text: string }> = []
 
-beforeAll(() => {
+beforeAll(async () => {
   setCliMayteAccountsProvider(() => [])
   setCliMaytePingDeps({
     deliverPeer: async (sessionId, _transcript, text) => {
@@ -41,6 +42,7 @@ beforeAll(() => {
     journal: () => undefined,
   })
   startCliMayte()
+  await climayteReady()
 })
 
 afterAll(() => {

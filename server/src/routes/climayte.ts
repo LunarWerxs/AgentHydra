@@ -20,6 +20,7 @@ import {
   climayteLeanWorker,
   climayteList,
   climaytePingState,
+  climayteReady,
   climayteRemove,
   climayteReports,
   climayteRun,
@@ -54,6 +55,13 @@ import { ownBuild } from '../core/own-build'
 import { app } from '../http-app'
 import { CLIMAYTE_MAX_WAIT_S } from '../mcp-client'
 import { jsonBody } from '../route-helpers'
+
+// A request at boot waits for CliMayte's first load (startCliMayte reads done/ off the daemon's thread
+// first) instead of doing that blocking read itself.
+app.use('/api/corch/*', async (_c, next) => {
+  await climayteReady()
+  await next()
+})
 
 const optStr = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
 

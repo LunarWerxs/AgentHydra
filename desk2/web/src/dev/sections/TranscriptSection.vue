@@ -5,6 +5,7 @@ import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import { transcriptFixtures, chatFixtures } from '../fixtures'
 import { makeStressItems, transcriptChat, transcriptStates } from '@/components/transcript/fixtures'
 import { markdownGalleryItems } from '@/dev/parity/markdown'
+import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 
 // Finished work in one box (no Working row), the open cards and the running turn in another.
 const split = transcriptStates.findIndex((i) => i.id === 'u2')
@@ -104,8 +105,6 @@ const stressItems = ref<ReturnType<typeof makeStressItems>>([])
 const stressBox = ref<HTMLElement | null>(null)
 const stats = ref<string>('measuring…')
 
-const frame = () => new Promise<void>((r) => requestAnimationFrame(() => r()))
-
 onMounted(async () => {
   const tBuild = performance.now()
   const items = makeStressItems(STRESS_N)
@@ -117,8 +116,8 @@ onMounted(async () => {
   const el = box.querySelector<HTMLElement>('[data-transcript-scroller]')!
   void el.scrollHeight // force layout
   const mountMs = performance.now() - t0
-  await frame()
-  await frame()
+  await waitForNextPaint()
+  await waitForNextPaint()
   const domRows = box.querySelectorAll('[data-id]').length
 
   // Sweep bottom -> top in 150 steps; each step: scroll, Vue update, layout.
@@ -134,7 +133,7 @@ onMounted(async () => {
     void el.scrollHeight
     steps.push(performance.now() - s)
     maxRows = Math.max(maxRows, box.querySelectorAll('[data-id]').length)
-    await frame()
+    await waitForNextPaint()
   }
   steps.sort((a, b) => a - b)
   const avg = steps.reduce((a, b) => a + b, 0) / steps.length
@@ -144,7 +143,6 @@ onMounted(async () => {
     `${STRESS_N} items · fixture ${buildMs.toFixed(1)}ms · mount+layout ${mountMs.toFixed(1)}ms · ` +
     `rows in DOM ${domRows} (max ${maxRows} while scrolling) · scroll step avg ${avg.toFixed(2)}ms, ` +
     `p95 ${p95.toFixed(2)}ms, max ${max.toFixed(2)}ms over ${steps.length} steps · content ${Math.round(total)}px`
-  console.log('[transcript-stress]', stats.value)
 })
 </script>
 
@@ -152,35 +150,35 @@ onMounted(async () => {
   <div class="space-y-6">
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">A ReDesign card asking the owner to pick (4 options)</h3>
-      <div class="h-[900px] overflow-hidden rounded-lg border border-border" data-gallery-redesign>
+      <div class="h-225 overflow-hidden rounded-lg border border-border" data-gallery-redesign>
         <TranscriptView chat-id="gallery-redesign" :items="redesignItems" :chat="null" />
       </div>
     </div>
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">The same card while it runs, and after More options was sent</h3>
-      <div class="h-[560px] overflow-hidden rounded-lg border border-border" data-gallery-redesign-running>
+      <div class="h-140 overflow-hidden rounded-lg border border-border" data-gallery-redesign-running>
         <TranscriptView chat-id="gallery-redesign-running" :items="redesignRunning" :chat="null" />
       </div>
-      <div class="mt-2 h-[900px] overflow-hidden rounded-lg border border-border" data-gallery-redesign-more>
+      <div class="mt-2 h-225 overflow-hidden rounded-lg border border-border" data-gallery-redesign-more>
         <TranscriptView chat-id="gallery-redesign-more" :items="redesignMore" :chat="null" />
       </div>
     </div>
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">A program's note (an AgentHydra ping), closed</h3>
-      <div class="h-[260px] overflow-hidden rounded-lg border border-border" data-gallery-note>
+      <div class="h-65 overflow-hidden rounded-lg border border-border" data-gallery-note>
         <TranscriptView chat-id="gallery-note" :items="pingItems" :chat="null" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
         <h3 class="mb-2 text-[13px] text-text-muted">A saved browser's calls in one turn: one Browser card</h3>
-        <div class="h-[460px] overflow-hidden rounded-lg border border-border" data-gallery-browser>
+        <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-browser>
           <TranscriptView chat-id="gallery-browser" :items="browserItems" :chat="browserChat" />
         </div>
       </div>
       <div>
         <h3 class="mb-2 text-[13px] text-text-muted">A Browser card with no picture</h3>
-        <div class="h-[460px] overflow-hidden rounded-lg border border-border" data-gallery-browser-noshot>
+        <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-browser-noshot>
           <TranscriptView chat-id="gallery-browser-2" :items="browserNoShot" :chat="browserChat2" />
         </div>
       </div>
@@ -193,20 +191,20 @@ onMounted(async () => {
     </div>
     <div>
       <h3 class="mb-2 text-[13px] text-text-muted">Pending cards, streaming, Working row</h3>
-      <div class="h-[1150px] overflow-hidden rounded-lg border border-border">
+      <div class="h-287.5 overflow-hidden rounded-lg border border-border">
         <TranscriptView chat-id="gallery-transcript" :items="live" :chat="transcriptChat" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
         <h3 class="mb-2 text-[13px] text-text-muted">Shell fixtures, read-only (buttons hidden)</h3>
-        <div class="h-[520px] overflow-hidden rounded-lg border border-border">
+        <div class="h-130 overflow-hidden rounded-lg border border-border">
           <TranscriptView chat-id="gallery-readonly" :items="transcriptFixtures" :chat="chatFixtures[1]" read-only />
         </div>
       </div>
       <div>
         <h3 class="mb-2 text-[13px] text-text-muted">Windowed: {{ STRESS_N }} items</h3>
-        <div ref="stressBox" class="h-[520px] overflow-hidden rounded-lg border border-border">
+        <div ref="stressBox" class="h-130 overflow-hidden rounded-lg border border-border">
           <TranscriptView chat-id="gallery-stress" :items="stressItems" :chat="null" />
         </div>
         <p class="mt-2 font-mono text-[11px] text-text-muted" data-stress-stats>{{ stats }}</p>

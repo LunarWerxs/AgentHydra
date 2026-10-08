@@ -310,11 +310,53 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
 
   /** The tools after the first four, by name. */
   async function extra(name: string, a: Record<string, unknown>): Promise<ToolResult | null> {
+    return (await serverExtra(name, a)) ?? (await listExtra(name, a)) ?? errorExtra(name, a)
+  }
+
+  /** The `before` and `limit` of a log history call, when they are numbers. */
+  function historyQuery(a: Record<string, unknown>): URLSearchParams {
+    const q = new URLSearchParams()
+    if (Number.isFinite(Number(a.before)) && a.before !== undefined) q.set('before', String(Math.round(Number(a.before))))
+    if (Number.isFinite(Number(a.limit)) && a.limit !== undefined) q.set('limit', String(Math.round(Number(a.limit))))
+    return q
+  }
+
+  /** The tools that act on one server (args.server). */
+  async function serverExtra(name: string, a: Record<string, unknown>): Promise<ToolResult | null> {
     const sid = () => serverId(a, name)
-    const optionalSid = async () => (typeof a.server === 'string' && a.server.trim() !== '' ? sid() : undefined)
     switch (name) {
       case 'dev_server_restart':
         return route(`processes/${encodeURIComponent(await sid())}/restart`, 'POST', {})
+      case 'dev_server_config':
+        return route(DW_ROUTES.processConfig(await sid()))
+      case 'dev_server_update':
+        return route(DW_ROUTES.process(await sid()), 'PUT', { spec: a.spec })
+      case 'dev_server_remove':
+        return route(DW_ROUTES.process(await sid()), 'DELETE')
+      case 'dev_server_star':
+        return route(DW_ROUTES.processStarred(await sid()), 'POST', { on: a.on === true })
+      case 'dev_server_autostart':
+        return route(DW_ROUTES.processEnabled(await sid()), 'POST', { on: a.on === true })
+      case 'dev_server_log_history':
+        return route(`${DW_ROUTES.processLogs(await sid())}?${historyQuery(a)}`)
+      case 'dev_server_free_port':
+        return route(DW_ROUTES.freePort(await sid()), 'POST', Array.isArray(a.pids) ? { pids: a.pids } : {})
+      case 'dev_server_alert_add':
+        return route(DW_ROUTES.alerts, 'POST', {
+          processId: await sid(),
+          metric: a.metric,
+          threshold: a.threshold,
+          forMs: a.forMs,
+          ...(typeof a.enabled === 'boolean' ? { enabled: a.enabled } : {})
+        })
+      default:
+        return null
+    }
+  }
+
+  /** The tools on the project list, the found list and every server at once. */
+  async function listExtra(name: string, a: Record<string, unknown>): Promise<ToolResult | null> {
+    switch (name) {
       case 'dev_servers_scan':
         return route(DW_ROUTES.scan, 'POST', { preset: a.preset === 'deep' ? 'deep' : 'quick', ...(Array.isArray(a.roots) ? { roots: a.roots } : {}) })
       case 'dev_servers_found': {
@@ -327,28 +369,21 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
         return projectAdd(a)
       case 'dev_project_remove':
         return route(DW_ROUTES.project(await projectId(a, name)), 'DELETE')
-      case 'dev_server_config':
-        return route(DW_ROUTES.processConfig(await sid()))
       case 'dev_server_add':
         return route(DW_ROUTES.projectProcesses(await projectId(a, name)), 'POST', { spec: a.spec })
-      case 'dev_server_update':
-        return route(DW_ROUTES.process(await sid()), 'PUT', { spec: a.spec })
-      case 'dev_server_remove':
-        return route(DW_ROUTES.process(await sid()), 'DELETE')
-      case 'dev_server_star':
-        return route(DW_ROUTES.processStarred(await sid()), 'POST', { on: a.on === true })
-      case 'dev_server_autostart':
-        return route(DW_ROUTES.processEnabled(await sid()), 'POST', { on: a.on === true })
       case 'dev_servers_start_all':
         return route(DW_ROUTES.startAll, 'POST', {})
       case 'dev_servers_stop_all':
         return route(DW_ROUTES.stopAll, 'POST', {})
-      case 'dev_server_log_history': {
-        const q = new URLSearchParams()
-        if (Number.isFinite(Number(a.before)) && a.before !== undefined) q.set('before', String(Math.round(Number(a.before))))
-        if (Number.isFinite(Number(a.limit)) && a.limit !== undefined) q.set('limit', String(Math.round(Number(a.limit))))
-        return route(`${DW_ROUTES.processLogs(await sid())}?${q}`)
-      }
+      default:
+        return null
+    }
+  }
+
+  /** The errors panel and the alert rules. */
+  async function errorExtra(name: string, a: Record<string, unknown>): Promise<ToolResult | null> {
+    const optionalSid = async () => (typeof a.server === 'string' && a.server.trim() !== '' ? serverId(a, name) : undefined)
+    switch (name) {
       case 'dev_server_errors': {
         const id = await optionalSid()
         return route(`${DW_ROUTES.errors}${id ? `?process=${encodeURIComponent(id)}` : ''}`)
@@ -360,18 +395,8 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
       case 'dev_server_error_dismiss':
         if (typeof a.fingerprint !== 'string' || !a.fingerprint) return fail('dev_server_error_dismiss needs fingerprint.')
         return route(DW_ROUTES.dismissError, 'POST', { fingerprint: a.fingerprint })
-      case 'dev_server_free_port':
-        return route(DW_ROUTES.freePort(await sid()), 'POST', Array.isArray(a.pids) ? { pids: a.pids } : {})
       case 'dev_server_alerts':
         return route(DW_ROUTES.alerts)
-      case 'dev_server_alert_add':
-        return route(DW_ROUTES.alerts, 'POST', {
-          processId: await sid(),
-          metric: a.metric,
-          threshold: a.threshold,
-          forMs: a.forMs,
-          ...(typeof a.enabled === 'boolean' ? { enabled: a.enabled } : {})
-        })
       case 'dev_server_alert_remove':
         if (typeof a.id !== 'string' || !a.id) return fail('dev_server_alert_remove needs id.')
         return route(DW_ROUTES.alert(a.id), 'DELETE')
@@ -400,15 +425,9 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
         return reply({ tools: TOOLS })
       case 'tools/call': {
         const name = msg.params?.name
-        const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
         try {
-          if (name === 'dev_servers') return reply(await devServers(args))
-          if (name === 'dev_server_start') return reply(await devServerStart(args))
-          if (name === 'dev_server_stop') return reply(await devServerStop(args))
-          if (name === 'dev_server_logs') return reply(await devServerLogs(args))
-          const more = await extra(String(name), args)
-          if (more) return reply(more)
-          return error(-32602, `unknown tool ${String(name)}`)
+          const result = await callTool(String(name), (msg.params?.arguments ?? {}) as Record<string, unknown>)
+          return result ? reply(result) : error(-32602, `unknown tool ${String(name)}`)
         } catch (err) {
           return reply(fail(err instanceof Error ? err.message : String(err)))
         }
@@ -416,6 +435,15 @@ export function createDevServersMcp(o: DevServersMcpOptions) {
       default:
         return error(-32601, `method not found: ${String(msg.method)}`)
     }
+  }
+
+  /** A tool's answer, or null for a tool by no such name. */
+  async function callTool(name: string, args: Record<string, unknown>): Promise<ToolResult | null> {
+    if (name === 'dev_servers') return devServers(args)
+    if (name === 'dev_server_start') return devServerStart(args)
+    if (name === 'dev_server_stop') return devServerStop(args)
+    if (name === 'dev_server_logs') return devServerLogs(args)
+    return extra(name, args)
   }
 
   return { handle }

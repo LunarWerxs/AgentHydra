@@ -115,13 +115,13 @@ function startDeny() {
         <span class="min-w-0 truncate font-mono text-[12px] text-text-muted">{{ arg }}</span>
       </template>
     </div>
-    <p v-if="item.description" class="px-3 pt-1 pl-9 text-[12px] text-text-muted">{{ item.description }}</p>
-    <p v-if="item.reason" class="px-3 pt-1 pl-9 text-[12px] text-warning-text">{{ item.reason }}</p>
-    <p v-if="item.blockedPath" class="px-3 pt-1 pl-9 text-[12px] text-text-muted">
+    <p v-if="item.description" class="px-3 pt-1 ps-9 text-[12px] text-text-muted">{{ item.description }}</p>
+    <p v-if="item.reason" class="px-3 pt-1 ps-9 text-[12px] text-warning-text">{{ item.reason }}</p>
+    <p v-if="item.blockedPath" class="px-3 pt-1 ps-9 text-[12px] text-text-muted">
       Outside the allowed folders: <span class="font-mono">{{ item.blockedPath }}</span>
     </p>
     <div class="mx-3 mt-2 overflow-hidden rounded-md border border-border bg-bg-page">
-      <pre v-if="command" class="whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
+      <pre v-if="command" class="whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-[12px] text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
       <DiffView v-else-if="diff" :id="`${item.id}:diff`" :diff="diff" :max-lines="24" />
       <OutputBlock v-else :id="`${item.id}:in`" :text="inputJson" :max-lines="12" />
     </div>

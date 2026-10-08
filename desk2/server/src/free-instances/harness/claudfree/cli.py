@@ -21,15 +21,24 @@ def run_http(args):
     emit(args, Client()._run(args, on_text=on_text))
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, message):
+        # argparse normally exits and prints; API/MCP callers need an exception.
+        raise UserError(message, code="invalid_arguments")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Validate all interfaces consistently; only CLI help may exit or print here."""
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    _check_preparation(parser, args)
+    _check_references(parser, args)
+    _check_options(parser, args)
+    return args
 
-    class Parser(argparse.ArgumentParser):
-        def error(self, message):
-            # argparse normally exits and prints; API/MCP callers need an exception.
-            raise UserError(message, code="invalid_arguments")
 
-    parser = Parser(
+def _build_parser():
+    parser = _Parser(
         description=__doc__,
         epilog="For agents: schema describes commands and output. Use --stdin --json --brief for reliable pipes.",
     )
@@ -135,7 +144,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=900,
         help="Seconds to allow for manual login",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def _check_preparation(parser, args):
     if args.command in {"prepare", "prepared"} and args.provider != "chatgpt":
         parser.error("prepare/prepared require --provider chatgpt")
     if args.count is not None and (args.command != "prepare" or not 1 <= args.count <= 8):
@@ -145,6 +157,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         or args.command not in {"chat", "resume", "mcp"}
     ):
         parser.error("--no-auto-prepare is only for ChatGPT chat/resume/mcp")
+
+
+def _check_references(parser, args):
     # Validate the command/option combinations before opening any state or sockets.
     if args.timeout < 1:
         parser.error("--timeout must be positive")
@@ -168,6 +183,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--name is only valid for a new chat or for track")
     if args.command == "track" and not args.name:
         parser.error("track requires --name")
+
+
+def _check_options(parser, args):
     if args.check_chats and args.command != "chats":
         parser.error("--check is only valid with chats")
     if args.brief and (
@@ -206,7 +224,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--export is only valid with chat/resume/read")
     if args.request_timeout < 1:
         parser.error("--request-timeout must be positive")
-    return args
 
 
 def main(argv: list[str] | None = None) -> int:

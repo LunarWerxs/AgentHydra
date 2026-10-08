@@ -85,22 +85,22 @@ const selectSession = (session: ExternalSession) => {
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-[var(--bg-page)]">
+  <div class="flex flex-col h-full bg-(--bg-page)">
     <!-- Header -->
-    <div class="px-4 py-3 border-b border-[var(--border)]">
+    <div class="px-4 py-3 border-b border-(--border)">
       <div class="flex items-center gap-2 mb-2">
         <h2 class="text-[13px] font-medium">Elsewhere</h2>
-        <span v-if="workingCount > 0" class="rounded-[var(--radius-4)] bg-[var(--fill-secondary)] px-1 text-[11px] leading-4 text-[var(--text-2)]">
+        <span v-if="workingCount > 0" class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-[11px] leading-4 text-(--text-2)">
           {{ workingCount }} working
         </span>
       </div>
       <div class="relative">
-        <Search class="absolute left-2.5 top-2.5 w-4 h-4 text-[var(--text-muted)]" />
+        <Search class="absolute left-2.5 top-2.5 size-4 text-(--text-muted)" />
         <input
           v-model="searchQuery"
           type="text"
           placeholder="Search sessions..."
-          class="w-full pl-8 pr-3 py-1.5 bg-[var(--fill-5)] rounded-[var(--radius-6)] text-[13px] text-[var(--text)] shadow-[inset_0_0_0_1px_var(--border)] placeholder:text-[var(--text-muted)] focus:outline-none focus:shadow-[var(--shadow-composer-focus)]"
+          class="w-full ps-8 pe-3 py-1.5 bg-(--fill-5) rounded-(--radius-6) text-[13px] text-(--text) shadow-[inset_0_0_0_1px_var(--border)] placeholder:text-(--text-muted) focus:outline-none focus:shadow-(--shadow-composer-focus)"
         />
       </div>
     </div>
@@ -111,7 +111,7 @@ const selectSession = (session: ExternalSession) => {
         <div
           v-for="{ session, time } in filteredSessions"
           :key="session.id"
-          class="px-4 py-3 border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--fill-hover)] cursor-pointer"
+          class="px-4 py-3 border-b border-(--border) last:border-b-0 hover:bg-(--fill-hover) cursor-pointer"
           @click="selectSession(session)"
         >
           <!-- Title with status -->
@@ -123,14 +123,14 @@ const selectSession = (session: ExternalSession) => {
           </div>
 
           <!-- Metadata row -->
-          <div class="flex items-center gap-2 text-[12px] text-[var(--text-muted)]">
+          <div class="flex items-center gap-2 text-[12px] text-(--text-muted)">
             <span v-if="session.source" class="shrink-0">{{ sourceIcon(session.source) }}</span>
             <span v-if="session.instance" class="shrink-0">{{ session.instance }}</span>
-            <span v-if="session.cwd" class="truncate text-[var(--text-muted)]">{{ session.cwd }}</span>
+            <span v-if="session.cwd" class="truncate text-(--text-muted)">{{ session.cwd }}</span>
           </div>
 
           <!-- Activity and time -->
-          <div class="flex items-center gap-2 text-[12px] text-[var(--text-muted)] mt-1">
+          <div class="flex items-center gap-2 text-[12px] text-(--text-muted) mt-1">
             <span v-if="session.activity" class="truncate">{{ session.activity }}</span>
             <span v-if="session.lastActivityAt" class="shrink-0">{{ time }}</span>
           </div>
@@ -138,7 +138,7 @@ const selectSession = (session: ExternalSession) => {
       </div>
 
       <!-- Empty state -->
-      <div v-else class="flex items-center justify-center h-full text-[var(--text-muted)]">
+      <div v-else class="flex items-center justify-center h-full text-(--text-muted)">
         <div class="text-center">
           <p class="text-[13px] font-medium">{{ searchQuery ? 'No sessions found' : 'No sessions' }}</p>
           <p class="text-[12px]">{{ searchQuery ? 'Try a different search' : 'No Claude Desktop, CLI, or other sessions running elsewhere' }}</p>

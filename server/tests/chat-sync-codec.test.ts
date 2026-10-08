@@ -17,9 +17,9 @@ describe('chat-sync-codec', () => {
   const wrongChatId = 'wrong-chat'
 
   describe('chunk round trip', () => {
-    it('seals and opens a chunk', () => {
+    it('seals and opens a chunk', async () => {
       const data = new Uint8Array(Buffer.from('Hello, World!\n{"key": "value"}\n'))
-      const blob = sealChunk(key, chatId, 1, data)
+      const blob = await sealChunk(key, chatId, 1, data)
       expect(typeof blob).toBe('string')
       expect(blob.length).toBeGreaterThan(0)
 
@@ -27,23 +27,23 @@ describe('chat-sync-codec', () => {
       expect(opened).toEqual(data)
     })
 
-    it('returns null with wrong key', () => {
+    it('returns null with wrong key', async () => {
       const data = new Uint8Array(Buffer.from('test data'))
-      const blob = sealChunk(key, chatId, 1, data)
+      const blob = await sealChunk(key, chatId, 1, data)
       const opened = openChunk(wrongKey, chatId, 1, blob)
       expect(opened).toBeNull()
     })
 
-    it('returns null with different chatId', () => {
+    it('returns null with different chatId', async () => {
       const data = new Uint8Array(Buffer.from('test data'))
-      const blob = sealChunk(key, chatId, 1, data)
+      const blob = await sealChunk(key, chatId, 1, data)
       const opened = openChunk(key, wrongChatId, 1, blob)
       expect(opened).toBeNull()
     })
 
-    it('returns null with different seq', () => {
+    it('returns null with different seq', async () => {
       const data = new Uint8Array(Buffer.from('test data'))
-      const blob = sealChunk(key, chatId, 1, data)
+      const blob = await sealChunk(key, chatId, 1, data)
       const opened = openChunk(key, chatId, 2, blob)
       expect(opened).toBeNull()
     })
@@ -130,14 +130,14 @@ describe('chat-sync-codec', () => {
   })
 
   describe('cutChunks', () => {
-    it('returns empty for empty input', () => {
-      const result = cutChunks(key, chatId, 1, new Uint8Array([]))
+    it('returns empty for empty input', async () => {
+      const result = await cutChunks(key, chatId, 1, new Uint8Array([]))
       expect(result).toEqual([])
     })
 
-    it('handles single small chunk', () => {
+    it('handles single small chunk', async () => {
       const data = new Uint8Array(Buffer.from('single line\n'))
-      const result = cutChunks(key, chatId, 10, data)
+      const result = await cutChunks(key, chatId, 10, data)
 
       expect(result.length).toBe(1)
       expect(result[0].seq).toBe(10)
@@ -148,10 +148,10 @@ describe('chat-sync-codec', () => {
       expect(opened).toEqual(data)
     })
 
-    it('splits large incompressible data across multiple chunks', () => {
+    it('splits large incompressible data across multiple chunks', async () => {
       // 3 MB of random bytes (incompressible)
       const incompressible = randomBytes(3 * 1024 * 1024)
-      const result = cutChunks(key, chatId, 1, new Uint8Array(incompressible), 1024 * 1024)
+      const result = await cutChunks(key, chatId, 1, new Uint8Array(incompressible), 1024 * 1024)
 
       // Verify structure
       expect(result.length).toBeGreaterThan(1)
@@ -179,7 +179,7 @@ describe('chat-sync-codec', () => {
       expect(reopened).toEqual(incompressible)
     })
 
-    it('handles mixed incompressible and repetitive data', () => {
+    it('handles mixed incompressible and repetitive data', async () => {
       // 3 MB incompressible + 6 MB repetitive JSONL text
       const incompressible = randomBytes(3 * 1024 * 1024)
       const repetitive = Buffer.alloc(6 * 1024 * 1024)
@@ -189,7 +189,7 @@ describe('chat-sync-codec', () => {
       }
 
       const combined = Buffer.concat([incompressible, repetitive])
-      const result = cutChunks(key, chatId, 100, new Uint8Array(combined), 2 * 1024 * 1024)
+      const result = await cutChunks(key, chatId, 100, new Uint8Array(combined), 2 * 1024 * 1024)
 
       // Verify consecutive seqs
       for (let i = 1; i < result.length; i++) {
@@ -221,14 +221,14 @@ describe('chat-sync-codec', () => {
       expect(reopened).toEqual(combined)
     })
 
-    it('prefers to end at newlines in the second half', () => {
+    it('prefers to end at newlines in the second half', async () => {
       const data = Buffer.alloc(10000)
       const line = 'line content\n'
       for (let i = 0; i < data.length; i += line.length) {
         data.write(line, i)
       }
 
-      const result = cutChunks(key, chatId, 1, new Uint8Array(data), 5000)
+      const result = await cutChunks(key, chatId, 1, new Uint8Array(data), 5000)
 
       // Each chunk except possibly the last should end at a newline
       for (let i = 0; i < result.length - 1; i++) {

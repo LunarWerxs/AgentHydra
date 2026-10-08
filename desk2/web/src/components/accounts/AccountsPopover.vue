@@ -26,7 +26,7 @@ const list = ref<InstanceType<typeof AccountsList> | null>(null)
       :align="align"
       :side-offset="6"
       flush
-      class="w-auto rounded-[var(--radius-10)] border-0 bg-[var(--bg-popover)] shadow-(--shadow-menu-ringed) ring-0"
+      class="w-auto rounded-(--radius-10) border-0 bg-(--bg-popover) shadow-(--shadow-menu-ringed) ring-0"
     >
       <AccountsList
         ref="list"

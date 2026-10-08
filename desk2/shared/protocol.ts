@@ -670,7 +670,8 @@ export type ServerEvent =
   | { type: 'accounts.update'; accounts: AccountInfo[] }
   | { type: 'settings.update'; settings: DeskSettings }
 
-export type ClientEvent = { type: 'ping' }
+/** What a window sends on /ws: `visibility` right after it connects and whenever it is shown or hidden. */
+export type ClientEvent = { type: 'ping' } | { type: 'visibility'; visible: boolean }
 
 // Failure ledger (SPEC "Failure ledger"): <home>/failures.jsonl, GET /api/failures
 

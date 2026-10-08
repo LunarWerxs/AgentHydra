@@ -343,47 +343,62 @@ export async function syncKit(store: KitStore, opts: SyncOpts = {}): Promise<Syn
     const shard = await buildShard(store, pc)
     rep.exported = shard.rows
     await writeIfChanged(mine, shard.bytes)
-
-    const dir = join(tree, SHARD_DIR)
-    for (const name of (await readdir(dir)).sort()) {
-      if (!name.endsWith(SHARD_EXT) || name === `${pc}${SHARD_EXT}`) continue
-      try {
-        const bytes = new Uint8Array(await Bun.file(join(dir, name)).arrayBuffer())
-        const r = await importShard(store, bytes, name.slice(0, -SHARD_EXT.length), pc)
-        if (!r.skipped) rep.imported[r.pc] = r.rows
-      } catch (err) {
-        rep.notes.push(`import ${name}: ${err instanceof Error ? err.message : String(err)}`)
-      }
-    }
-
-    const rel = `${SHARD_DIR}/${pc}${SHARD_EXT}`
-    await git(tree, ['add', '--', rel])
-    if ((await git(tree, ['diff', '--cached', '--quiet', '--', rel])).code !== 0) {
-      const r = await git(tree, [
-        'commit',
-        '--quiet',
-        '-m',
-        `kit: ${pc}, ${shard.rows} usage hours`,
-        '--',
-        rel,
-      ])
-      rep.committed = r.code === 0
-      if (r.code) rep.notes.push(`commit: ${(r.err || r.out).slice(0, 200)}`)
-    }
+    await importOthers(store, tree, pc, rep)
+    await commitShard(tree, pc, shard.rows, rep)
     if (push && (rep.committed || (await git(tree, ['status', '-sb'])).out.includes('ahead'))) {
-      let r = await git(tree, ['push', '--quiet', '-u', 'origin', SYNC_BRANCH])
-      if (r.code) {
-        // Another PC pushed first: take its commit under ours and try once more. Never forced.
-        await git(tree, ['pull', '--rebase', '--quiet'])
-        r = await git(tree, ['push', '--quiet', '-u', 'origin', SYNC_BRANCH])
-      }
-      rep.pushed = r.code === 0
-      if (r.code) rep.notes.push(`push: ${(r.err || r.out).slice(0, 200)}`)
+      await pushShard(tree, rep)
     }
   } catch (err) {
     rep.notes.push(err instanceof Error ? err.message : String(err))
   }
   return rep
+}
+
+/** Every other PC's shard into the store; a shard that fails is noted and the rest go on. */
+async function importOthers(
+  store: KitStore,
+  tree: string,
+  pc: string,
+  rep: SyncReport,
+): Promise<void> {
+  const dir = join(tree, SHARD_DIR)
+  for (const name of (await readdir(dir)).sort()) {
+    if (!name.endsWith(SHARD_EXT) || name === `${pc}${SHARD_EXT}`) continue
+    try {
+      const bytes = new Uint8Array(await Bun.file(join(dir, name)).arrayBuffer())
+      const r = await importShard(store, bytes, name.slice(0, -SHARD_EXT.length), pc)
+      if (!r.skipped) rep.imported[r.pc] = r.rows
+    } catch (err) {
+      rep.notes.push(`import ${name}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+}
+
+async function commitShard(tree: string, pc: string, rows: number, rep: SyncReport): Promise<void> {
+  const rel = `${SHARD_DIR}/${pc}${SHARD_EXT}`
+  await git(tree, ['add', '--', rel])
+  if ((await git(tree, ['diff', '--cached', '--quiet', '--', rel])).code === 0) return
+  const r = await git(tree, [
+    'commit',
+    '--quiet',
+    '-m',
+    `kit: ${pc}, ${rows} usage hours`,
+    '--',
+    rel,
+  ])
+  rep.committed = r.code === 0
+  if (r.code) rep.notes.push(`commit: ${(r.err || r.out).slice(0, 200)}`)
+}
+
+async function pushShard(tree: string, rep: SyncReport): Promise<void> {
+  let r = await git(tree, ['push', '--quiet', '-u', 'origin', SYNC_BRANCH])
+  if (r.code) {
+    // Another PC pushed first: take its commit under ours and try once more. Never forced.
+    await git(tree, ['pull', '--rebase', '--quiet'])
+    r = await git(tree, ['push', '--quiet', '-u', 'origin', SYNC_BRANCH])
+  }
+  rep.pushed = r.code === 0
+  if (r.code) rep.notes.push(`push: ${(r.err || r.out).slice(0, 200)}`)
 }
 
 let lastAt = 0

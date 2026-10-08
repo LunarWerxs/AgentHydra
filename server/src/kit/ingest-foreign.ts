@@ -340,6 +340,74 @@ const totalKey = (session: string, ref: string) => `codex_total:${session}:${ref
 const prunedKey = (session: string, ref: string) => `codex_pruned:${session}:${ref}`
 const pathKey = (ref: string) => `codex_path:${ref}`
 
+/** Where a rollout's read picks up: the saved offset and state, or the top with none when either is
+ *  missing, from an older version, or past the end of the file. */
+function codexResume(
+  store: KitStore,
+  path: string,
+  cur: ReturnType<KitStore['getCursor']>,
+  size: number,
+): { offset: number; state: CodexFileState | null } {
+  const raw = store.getMeta(stateKey(path))
+  const offset = cur && cur.version === FOREIGN_INGEST_VERSION && raw ? cur.offset : 0
+  const state = raw && offset > 0 ? (JSON.parse(raw) as CodexFileState) : null
+  if (offset > size) return { offset: 0, state: null }
+  return { offset, state }
+}
+
+/** One rollout's read so far: what CodexFileState saves, plus the events still to write. */
+interface CodexRun {
+  session: string
+  total: number
+  n: number
+  pending: CodexPending[]
+  lastTs: number
+  events: UsageEventInput[]
+}
+
+/** One parsed line: the turn it closes becomes an event, and turns that waited for a model get theirs. */
+function codexLine(
+  run: CodexRun,
+  reader: CodexUsageReader,
+  ev: unknown,
+  ref: string,
+  instance: string | null,
+  pc: string | null,
+): void {
+  const turn = reader.push(ev)
+  const model = reader.state().model
+  const shell: CodexFileState = {
+    session: run.session,
+    ref,
+    n: run.n,
+    reader: reader.state(),
+    pending: run.pending,
+  }
+  if (turn) {
+    run.total += turn.input + turn.cacheRead + turn.cacheWrite + turn.output
+    const t: CodexPending = {
+      n: run.n++,
+      ts: turn.ts ?? run.lastTs,
+      input: turn.input,
+      cacheRead: turn.cacheRead,
+      cacheWrite: turn.cacheWrite,
+      output: turn.output,
+    }
+    run.lastTs = t.ts
+    shell.n = run.n
+    if (model) run.events.push(codexEvent(shell, t, model, instance, pc))
+    else {
+      run.pending.push(t)
+      // `codex` is not a model any price table knows: the turn counts, unpriced, until named.
+      run.events.push(codexEvent(shell, t, 'codex', instance, pc))
+    }
+  }
+  if (model && run.pending.length) {
+    for (const t of run.pending) run.events.push(codexEvent(shell, t, model, instance, pc))
+    run.pending = []
+  }
+}
+
 /** Returns events written, or null when the file was unchanged. */
 async function ingestCodexFile(
   store: KitStore,
@@ -353,28 +421,24 @@ async function ingestCodexFile(
   const cur = store.getCursor(path)
   if (cursorUnchanged(cur, st0.size, st0.mtime)) return null
 
-  const raw = store.getMeta(stateKey(path))
-  let offset = cur && cur.version === FOREIGN_INGEST_VERSION && raw ? cur.offset : 0
-  let state: CodexFileState | null = raw && offset > 0 ? (JSON.parse(raw) as CodexFileState) : null
-  if (offset > st0.size) {
-    offset = 0
-    state = null
-  }
+  const { offset, state } = codexResume(store, path, cur, st0.size)
   if (state?.skip) {
     store.setCursor({ path, ...st0, offset: st0.size, version: FOREIGN_INGEST_VERSION })
     return 0
   }
 
   const pc = opts.pc ?? null
-  const events: UsageEventInput[] = []
   const reader = new CodexUsageReader(state?.reader)
   const ref = rolloutKey(path)
-  let session = state?.session ?? ''
-  let total = state?.total ?? 0
-  let n = state?.n ?? 0
-  let pending: CodexPending[] = state?.pending ?? []
+  const run: CodexRun = {
+    session: state?.session ?? '',
+    total: state?.total ?? 0,
+    n: state?.n ?? 0,
+    pending: state?.pending ?? [],
+    lastTs: st0.mtime,
+    events: [],
+  }
   let end = offset
-  let lastTs = st0.mtime
   let first = offset === 0
 
   for await (const line of linesFrom(path, offset)) {
@@ -389,17 +453,13 @@ async function ingestCodexFile(
     }
     if (first) {
       first = false
-      const fallback = basename(path).replace(/\.jsonl$/, '')
-      const ident = codexRolloutIdentity(
-        ev,
-        fallback.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i)?.[1] ??
-          fallback,
-      )
-      session = ident.sessionId
+      // The rollout key is the file name's uuid, else the name: what the identity falls back on.
+      const ident = codexRolloutIdentity(ev, ref)
+      run.session = ident.sessionId
       if (ident.isSubagent) {
         const skipState: CodexFileState = {
           skip: true,
-          session,
+          session: run.session,
           n: 0,
           reader: reader.state(),
           pending: [],
@@ -409,34 +469,10 @@ async function ingestCodexFile(
         return 0
       }
     }
-    const turn = reader.push(ev)
-    const model = reader.state().model
-    const shell: CodexFileState = { session, ref, n, reader: reader.state(), pending }
-    if (turn) {
-      total += turn.input + turn.cacheRead + turn.cacheWrite + turn.output
-      const t: CodexPending = {
-        n: n++,
-        ts: turn.ts ?? lastTs,
-        input: turn.input,
-        cacheRead: turn.cacheRead,
-        cacheWrite: turn.cacheWrite,
-        output: turn.output,
-      }
-      lastTs = t.ts
-      shell.n = n
-      if (model) events.push(codexEvent(shell, t, model, instance, pc))
-      else {
-        pending.push(t)
-        // `codex` is not a model any price table knows: the turn counts, unpriced, until named.
-        events.push(codexEvent(shell, t, 'codex', instance, pc))
-      }
-    }
-    if (model && pending.length) {
-      for (const t of pending) events.push(codexEvent(shell, t, model, instance, pc))
-      pending = []
-    }
+    codexLine(run, reader, ev, ref, instance, pc)
   }
 
+  const { session, total, n, pending, events } = run
   if (!session) {
     // Empty or header-less file: nothing to attribute yet, look again when it grows.
     store.setCursor({ path, ...st0, offset: 0, version: FOREIGN_INGEST_VERSION })

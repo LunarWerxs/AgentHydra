@@ -14,6 +14,8 @@ export function cleanTemps(): void {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
 }
 
+process.on('exit', cleanTemps)
+
 /** Runs git synchronously in cwd for test setup; throws with stderr on failure. */
 export function git(cwd: string, ...args: string[]): string {
   const r = Bun.spawnSync(['git', '-c', 'core.autocrlf=false', ...args], {

@@ -34,6 +34,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { stat as statAsync } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { claudeInstallState, INSTALL_BROKEN_HEAD, installStatusView } from './claude-install-guard'
@@ -67,6 +68,7 @@ import {
   perAccount,
   perAccountStrict,
   placementState,
+  preloadDone,
   ROOT,
   readInto,
   runnerSpecPath,
@@ -197,6 +199,7 @@ import {
 import { resolveClaudeExe } from './config'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
+import { mapPool } from './core/map-pool'
 import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
 import { nativeCommandLines } from './core/win-process-table'
 import { desk2Url } from './desk2'
@@ -1144,13 +1147,26 @@ const PACK_AFTER_MS = 10 * 60_000
 const PACK_PASS_BYTES = 128 * 1024 * 1024
 /** The pass runs this often once nothing is left over. */
 const PACK_EVERY_MS = 10 * 60_000
-/** The first pass waits this long after boot: it stats every attempt's log, and a booting daemon
- *  has requests to answer first. */
-const PACK_FIRST_AFTER_MS = 2 * 60_000
-let nextPackAt = Date.now() + PACK_FIRST_AFTER_MS
+let nextPackAt = 0
 /** Logs packLog packed, or found gone (packed or archived before): a later pass never stats them
  *  again. Before, every pass stat'ed all ~5,900 attempts' logs, almost all long since packed. */
 const doneLogs = new Set<string>()
+/** Whether startCliMayte has filled doneLogs with the logs already gone at boot. Until then no pass
+ *  runs: the first one would stat every attempt's log on the daemon's thread. */
+let packReady = false
+
+/** Every attempt log that is no longer there (packed or archived), into doneLogs: the stats run on
+ *  the thread pool, so the first pass only meets the logs it has to pack. */
+async function findPackedLogs(): Promise<void> {
+  const logs = [...workers.values()].flatMap((w) => w.attempts.map((a) => a.log))
+  await mapPool(logs, 32, async (log) => {
+    try {
+      await statAsync(log)
+    } catch {
+      doneLogs.add(log)
+    }
+  })
+}
 
 /** The attempt's CLI can no longer append to its log. finish() ends an attempt only once its CLI
  *  has exited. A cancel does not wait: the kill is not confirmed, and killAttempts leaves a runner
@@ -1168,7 +1184,7 @@ function logSettled(at: CliMayteWorker['attempts'][number]): boolean {
 /** Pack the logs of settled attempts (packLog) once they are PACK_AFTER_MS old, then clear what
  *  finished workers left behind (retention), every PACK_EVERY_MS. */
 function packOldLogs(now: number): void {
-  if (now < nextPackAt) return
+  if (!packReady || now < nextPackAt) return
   let room = PACK_PASS_BYTES
   for (const w of workers.values())
     for (const at of w.attempts) {
@@ -1238,6 +1254,7 @@ export function planStorage(
     const last = Math.max(0, ...w.attempts.map((a) => a.endedAt ?? 0))
     return now - Math.max(last, mtimeMs) > FILES_KEEP_MS
   }
+  const kept = new Map<string, boolean>()
   for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS]) {
     let names: string[] = []
     try {
@@ -1248,6 +1265,15 @@ export function planStorage(
     for (const name of names) {
       const id = /^(w-[0-9a-f]+)/.exec(name)?.[1]
       if (!id) continue
+      // A known worker that ended inside the keep window keeps its files whatever their age, so
+      // they need no stat: ~7,000 a pass were (2026-10-08), nearly all of a live worker's.
+      let keep = kept.get(id)
+      if (keep === undefined) {
+        const w = byId.get(id)
+        keep = w !== undefined && !expired(id, 0)
+        kept.set(id, keep)
+      }
+      if (keep) continue
       const path = join(dir, name)
       try {
         if (expired(id, statSync(path).mtimeMs)) plan.remove.push({ path, bytes: sizeOf(path) })
@@ -4046,13 +4072,31 @@ export function sweepWorkerFiles(): number {
 }
 
 /** Idempotent: load the store and start watching. Called at daemon boot. */
+/** Settles once startCliMayte's first load has run. The /api/corch routes wait on it, so a request
+ *  that lands at boot never does the blocking read of done/ that preloadDone exists to avoid. */
+let ready: Promise<void> = Promise.resolve()
+export function climayteReady(): Promise<void> {
+  return ready
+}
+
 export function startCliMayte(): void {
-  load()
   if (started) return
   started = true
-  sweepWorkerFiles()
-  startPing()
-  schedule(0)
+  ready = preloadDone()
+    .catch((err) => console.error('[climayte] preloading finished workers failed:', err))
+    .then(() => {
+      load()
+      sweepWorkerFiles()
+      startPing()
+      schedule(0)
+    })
+  void ready
+    .then(findPackedLogs)
+    .catch((err) => console.error('[climayte] looking for packed logs failed:', err))
+    .finally(() => {
+      packReady = true
+      schedule(0)
+    })
 }
 
 // --- pings to the dispatching chat (climayte-ping.ts; docs/CLIMAYTE.md) ----------------------------

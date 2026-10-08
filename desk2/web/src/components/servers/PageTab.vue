@@ -116,19 +116,28 @@ if (view) {
   let resized: ResizeObserver | null = null
   let opened: MutationObserver | null = null
   let slow = 0
+  // The slow look (a forced layout each tick) rests while the window is hidden and looks at once when it is shown.
+  const pace = () => {
+    window.clearInterval(slow)
+    slow = 0
+    if (document.hidden) return
+    slow = window.setInterval(sync, 250)
+    sync()
+  }
   onMounted(() => {
     resized = new ResizeObserver(soon)
     if (slot.value) resized.observe(slot.value)
     opened = new MutationObserver(soon)
     opened.observe(document.body, { childList: true })
     window.addEventListener('resize', soon)
-    slow = window.setInterval(sync, 250)
-    sync()
+    document.addEventListener('visibilitychange', pace)
+    pace()
   })
   onBeforeUnmount(() => {
     resized?.disconnect()
     opened?.disconnect()
     window.removeEventListener('resize', soon)
+    document.removeEventListener('visibilitychange', pace)
     window.clearInterval(slow)
     if (frame) cancelAnimationFrame(frame)
     // A view that plays sound stays, hidden, while its chat is off screen (background-views.ts); else it closes with the tab.
@@ -155,14 +164,14 @@ if (view) {
       <div v-if="view" ref="slot" class="size-full" data-testid="page-host-slot" />
       <!-- A server's page loads once it runs: a frame opened while it starts would sit on a refused-connection page. -->
       <iframe v-else-if="wanted && frameSrc" :key="`${frameSrc}#${reloads}`" :src="frameSrc" :title="proc ? `${proc.name} preview` : 'Preview'" class="size-full border-0" referrerpolicy="no-referrer" />
-      <div v-if="proc && proc.status !== 'running'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center" role="status">
-        <div class="text-[var(--text-muted)]">{{ proc.name }} is {{ statusWord(proc) }}{{ isUp(proc.status) ? ', opens when it answers' : '' }}.</div>
+      <div v-if="proc && proc.status !== 'running'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--bg-page) px-6 text-center" role="status">
+        <div class="text-(--text-muted)">{{ proc.name }} is {{ statusWord(proc) }}{{ isUp(proc.status) ? ', opens when it answers' : '' }}.</div>
         <button v-if="!isUp(proc.status)" type="button" :class="TEXT_BTN" :disabled="busy" @click="emit('toggle', proc)"><Play class="size-3" />Start</button>
       </div>
       <button
         v-else-if="!view && frameSrc && proc"
         type="button"
-        class="absolute bottom-2 right-2 flex h-6 items-center rounded-[var(--radius-6)] bg-[var(--bg-popover)] px-2 text-[12px] text-[var(--text)] opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-[60ms] hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+        class="absolute bottom-2 right-2 flex h-6 items-center rounded-(--radius-6) bg-(--bg-popover) px-2 text-[12px] text-(--text) opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-60 hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         :aria-pressed="viaManager"
         @click="viaManager = !viaManager"
       >{{ viaManager ? 'Show directly' : 'Blank? Show through the server manager' }}</button>

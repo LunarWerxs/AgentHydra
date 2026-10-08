@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { cliResetChecksDue } from '../src/core/cli-reset-sweep'
 import type { CliLimitResetResult, UsageSnapshot } from '../src/types'
 
-const NOW = Date.parse('2026-10-03T12:00:00Z')
+const NOW = Date.parse('2020-10-03T12:00:00Z')
 const MIN = 60_000
 const HOUR = 60 * MIN
 

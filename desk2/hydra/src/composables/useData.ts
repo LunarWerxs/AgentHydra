@@ -10,6 +10,7 @@ import type {
   SessionSummary,
 } from '@/lib/api'
 import * as api from '@/lib/api'
+import { HEADLESS_QUEUEING_ENABLED } from '@/lib/headless'
 import { reconcileList, sameData } from '@/lib/reconcile'
 import {
   ARCHIVED_VALUES,
@@ -24,6 +25,7 @@ import {
   sessionScopeQuery,
   WIDE_SCOPES,
 } from '@/lib/session-scopes'
+import { visibleInterval } from '@/lib/visible-poll'
 import { usePanels } from './usePanels'
 import { registerSharedPref } from './useSharedPrefs'
 import { storedSelection } from './useStoredSelection'
@@ -271,53 +273,53 @@ async function refreshScheduler() {
   if (r && !sameData(scheduler.value, r)) scheduler.value = r
 }
 
-let fastTimer: number | null = null
-let slowTimer: number | null = null
+const SLOW_MS = 12000
+let lastSchedulerFetch = 0
+let stopFast: (() => void) | null = null
+let stopSlow: (() => void) | null = null
+
+// The scheduler is read every 2 s only while the drawer is open or something is queued or running;
+// otherwise at the slow pace, which is what an idle pane needs to notice new work. The queue answer
+// carries every item with its whole prompt, so it is fetched only when the scheduler's counts moved,
+// at 2 s while live, and otherwise every 15 s as a safety net for edits made elsewhere.
+async function fastTick() {
+  const s = scheduler.value
+  // A queued item cannot start while headless queueing is off (lib/headless.ts), so it is not work in flight:
+  // one stuck in the queue pinned this poll, and the queue's whole prompts, at 2 s for the pane's life.
+  const queued = HEADLESS_QUEUEING_ENABLED ? (s?.queued_count ?? 0) : 0
+  const busy = queueOpen.value || (s?.running_count ?? 0) > 0 || queued > 0
+  if (!busy && Date.now() - lastSchedulerFetch < SLOW_MS) return
+  lastSchedulerFetch = Date.now()
+  const before = schedulerCounts()
+  await refreshScheduler()
+  const live = queueOpen.value || (scheduler.value?.running_count ?? 0) > 0
+  if (live || schedulerCounts() !== before || Date.now() - lastQueueFetch >= 15000) refreshQueue()
+}
 
 // Desk 2's copy has no Sessions tab and nothing on screen reads `sessions` or `agentStatuses`
 // (Desk draws its own cloud list), so neither is polled: a view that wants one calls
 // refreshSessions() / refreshAgentStatuses() itself. The sessions poll made the daemon re-scan
 // transcripts every 12 s for a list nobody saw.
 function startPolling() {
-  if (fastTimer !== null) return
+  if (stopFast !== null) return
   refreshQueue()
   refreshIncidents()
   refreshAccounts()
+  lastSchedulerFetch = Date.now()
   refreshScheduler()
-  // The scheduler answer is tiny, so it stays at 2 s. The queue answer carries every item with its
-  // whole prompt, so it is fetched only when the scheduler's counts moved, at 2 s while the drawer
-  // is open or something runs, and otherwise every 15 s as a safety net for edits made elsewhere.
-  fastTimer = window.setInterval(async () => {
-    if (document.hidden) return
-    const before = schedulerCounts()
-    await refreshScheduler()
-    const live = queueOpen.value || (scheduler.value?.running_count ?? 0) > 0
-    if (live || schedulerCounts() !== before || Date.now() - lastQueueFetch >= 15000) refreshQueue()
-  }, 2000)
+  // Both rest while the page is hidden and catch up once when it is shown again (lib/visible-poll.ts);
+  // the scheduler's catch-up still waits out its slow pace, so a quick slide in and out costs nothing.
+  stopFast = visibleInterval(() => void fastTick(), 2000)
   // Incidents change only on a new failure or an ack/resolve click (both already re-fetch on their
   // own), so the slow cadence is plenty.
-  slowTimer = window.setInterval(() => {
-    if (document.hidden) return
-    refreshIncidents()
-  }, 12000)
-  // A window left open in the background or minimised to the tray kept every poll running. Nobody
-  // is looking, so the ticks above skip; coming back catches up at once instead of on the next tick.
-  document.addEventListener('visibilitychange', catchUpWhenShown)
-}
-
-function catchUpWhenShown() {
-  if (document.hidden) return
-  refreshQueue()
-  refreshIncidents()
-  refreshScheduler()
+  stopSlow = visibleInterval(() => void refreshIncidents(), SLOW_MS)
 }
 
 function stopPolling() {
-  if (fastTimer !== null) window.clearInterval(fastTimer)
-  if (slowTimer !== null) window.clearInterval(slowTimer)
-  fastTimer = null
-  slowTimer = null
-  document.removeEventListener('visibilitychange', catchUpWhenShown)
+  stopFast?.()
+  stopSlow?.()
+  stopFast = null
+  stopSlow = null
 }
 
 export function useData() {

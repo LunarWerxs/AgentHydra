@@ -347,9 +347,15 @@ async function load(opts: { silent?: boolean; side?: boolean } = {}) {
 
 // The page stays built while another tab is shown (App.vue's KeepAlive): it reads again only while it is
 // the one on screen, when it comes back, and when the window or the Desk pane is shown again.
+// Every click into the frame is a window focus, so a catch-up reads at most once per 30 s.
 let active = false
+let lastCatchUp = 0
+const CATCH_UP_GAP_MS = 30_000
 function onVisible() {
-  if (active && document.visibilityState === 'visible') void load({ silent: true, side: true })
+  if (!active || document.visibilityState !== 'visible') return
+  if (Date.now() - lastCatchUp < CATCH_UP_GAP_MS) return
+  lastCatchUp = Date.now()
+  void load({ silent: true, side: true })
 }
 
 /** This PC's task by id. One older than the finished tasks read so far reads the whole list first. */
@@ -681,12 +687,11 @@ onUnmounted(() => {
         </div>
         <Button
           v-if="hasPictureInPictureAPI"
-          variant="ghost"
+          variant="ghost-toggle"
           size="icon-sm"
           :aria-label="$t('climayte.floatButton')"
           :title="$t('climayte.floatButton')"
           :aria-pressed="floatIsOpen"
-          :class="floatIsOpen ? 'text-primary' : ''"
           @click="toggleFloat()"
         >
           <PictureInPicture2 />
@@ -821,23 +826,25 @@ onUnmounted(() => {
 
     <!-- The list, under the scorecard (folded until opened). -->
     <div v-else ref="listEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-      <Collapsible v-model:open="scoreOpen" class="mb-2 flex flex-col gap-1.5">
-        <CollapsibleTrigger as-child>
-          <button
-            type="button"
-            class="group flex items-center gap-1.5 self-start rounded-md px-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <ChevronRight
-              class="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
-              aria-hidden="true"
-            />
-            <BarChart3 class="size-3.5" aria-hidden="true" />
-            {{ $t('climayte.scorecard') }}
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent>
-          <OffloadStatsCard :totals="totals" :scorecard="scorecard" @open="emit('open', ['savings'])" />
-        </CollapsibleContent>
+      <Collapsible v-model:open="scoreOpen" class="mb-2">
+        <div class="flex flex-col gap-1.5">
+          <CollapsibleTrigger as-child>
+            <button
+              type="button"
+              class="group flex items-center gap-1.5 self-start rounded-md px-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <ChevronRight
+                class="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
+                aria-hidden="true"
+              />
+              <BarChart3 class="size-3.5" aria-hidden="true" />
+              {{ $t('climayte.scorecard') }}
+            </button>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <OffloadStatsCard :totals="totals" :scorecard="scorecard" @open="emit('open', ['savings'])" />
+          </CollapsibleContent>
+        </div>
       </Collapsible>
 
       <!-- One line per task, as the Jobs page lists jobs: the status as an icon (a failed one tells its
@@ -895,9 +902,9 @@ onUnmounted(() => {
           <!-- A Free chat is private: Desk's list is all that remembers it, so one row can be dropped from it. -->
           <IconTooltip v-if="w.free" :label="$t('freeInstances.forgetThread')" :description="$t('freeInstances.forgetThreadHint')">
             <Button
-              variant="ghost"
+              variant="row-reveal"
               size="icon-xs"
-              class="absolute end-1.5 top-1/2 -translate-y-1/2 bg-card opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100"
+              class="absolute end-1.5 top-1/2 -translate-y-1/2"
               :aria-label="$t('freeInstances.forgetThread')"
               :disabled="w.free.status === 'running'"
               @click="forgetFree(w.free)"

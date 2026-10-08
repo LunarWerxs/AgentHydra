@@ -42,7 +42,7 @@ import {
   linkCliInstanceToDesktop,
   listCliInstances,
 } from './cli-instances'
-import { desktopCliCredential, feedCliFromDesktop } from './desktop-cli-feed'
+import { desktopCliCredential, feedCliFromDesktop, feedLinkedCliLogins } from './desktop-cli-feed'
 import { readInstanceMetaMap } from './instance-meta'
 import { instanceNumberFor } from './instance-numbers'
 import { readLoginUuid } from './login-state'
@@ -179,6 +179,51 @@ export function runPairing(opts: { all: boolean }): Promise<PairingResult> {
   return next
 }
 
+/** A new "<label> (CLI)" instance for a desktop. */
+function createPairedCli(desktopLabel: string): CliInstance {
+  // A CLI instance's name is at most 60 characters (cli-instances.ts NAME_MAX).
+  const r = createCliInstance(`${desktopLabel.trim().slice(0, 54).trim()} (CLI)`)
+  const id = (r.data as { id?: string } | undefined)?.id
+  if (!r.ok || !id) throw new Error(r.message || 'could not create the CLI instance')
+  const cli = getCliInstance(id)
+  if (!cli) throw new Error('the new CLI instance is missing')
+  return cli
+}
+
+/** Link (making it first when the plan says so) and sign in one desktop's CLI instance. Throws
+ *  with the reason it failed; a CLI instance it made is deleted again first. */
+async function pairOne(c: PairingCandidate): Promise<{ p: Pairing; made: boolean }> {
+  const found = c.action === 'link' && c.cliId ? getCliInstance(c.cliId) : null
+  const made = !found
+  const cli = found ?? createPairedCli(c.desktopLabel)
+  const link = linkCliInstanceToDesktop(cli.id, c.desktopDir, c.desktopLabel)
+  if (!link.ok) {
+    if (made) deleteCliInstance(cli.id, cli.name)
+    throw new Error(link.message || 'could not link the CLI instance')
+  }
+  const feed = await feedCliFromDesktop({
+    configDir: cli.configDir,
+    associatedDesktopDir: c.desktopDir,
+  }).catch(() => null)
+  if (made && feed !== 'fed') {
+    deleteCliInstance(cli.id, cli.name)
+    throw new Error(
+      feed === 'no-desktop-login'
+        ? 'its Desktop app has no Claude Code sign-in right now'
+        : 'the new CLI instance could not be signed in',
+    )
+  }
+  const p: Pairing = {
+    desktopNum: c.desktopNum,
+    desktopLabel: c.desktopLabel,
+    cliId: cli.id,
+    cliNum: cli.num,
+    // 'own-login': a linked CLI instance with a sign-in of its own is signed in already.
+    signedIn: feed === 'fed' || feed === 'current' || feed === 'own-login',
+  }
+  return { p, made }
+}
+
 async function doPairing({ all }: { all: boolean }): Promise<PairingResult> {
   const result: PairingResult = { created: [], linked: [], failed: [] }
   if (all) saveHandled([])
@@ -197,45 +242,7 @@ async function doPairing({ all }: { all: boolean }): Promise<PairingResult> {
 
   for (const c of plan) {
     try {
-      let cli: CliInstance | null = null
-      let made = false
-      if (c.action === 'link' && c.cliId) {
-        cli = getCliInstance(c.cliId)
-      }
-      if (!cli) {
-        // A CLI instance's name is at most 60 characters (cli-instances.ts NAME_MAX).
-        const r = createCliInstance(`${c.desktopLabel.trim().slice(0, 54).trim()} (CLI)`)
-        const id = (r.data as { id?: string } | undefined)?.id
-        if (!r.ok || !id) throw new Error(r.message || 'could not create the CLI instance')
-        cli = getCliInstance(id)
-        made = true
-        if (!cli) throw new Error('the new CLI instance is missing')
-      }
-      const link = linkCliInstanceToDesktop(cli.id, c.desktopDir, c.desktopLabel)
-      if (!link.ok) {
-        if (made) deleteCliInstance(cli.id, cli.name)
-        throw new Error(link.message || 'could not link the CLI instance')
-      }
-      const feed = await feedCliFromDesktop({
-        configDir: cli.configDir,
-        associatedDesktopDir: c.desktopDir,
-      }).catch(() => null)
-      if (made && feed !== 'fed') {
-        deleteCliInstance(cli.id, cli.name)
-        throw new Error(
-          feed === 'no-desktop-login'
-            ? 'its Desktop app has no Claude Code sign-in right now'
-            : 'the new CLI instance could not be signed in',
-        )
-      }
-      const p: Pairing = {
-        desktopNum: c.desktopNum,
-        desktopLabel: c.desktopLabel,
-        cliId: cli.id,
-        cliNum: cli.num,
-        // 'own-login': a linked CLI instance with a sign-in of its own is signed in already.
-        signedIn: feed === 'fed' || feed === 'current' || feed === 'own-login',
-      }
+      const { p, made } = await pairOne(c)
       ;(made ? result.created : result.linked).push(p)
       saveHandled([...handledList(), c.desktopDir])
       failedAt.delete(key(c.desktopDir))
@@ -264,4 +271,36 @@ export async function pairDesktopCliLogins(): Promise<void> {
       err instanceof Error ? err.message : 'unknown error',
     )
   }
+}
+
+export const FEED_EVERY_MS = 60_000
+
+/** One timer pass: pair any new signed-in desktop with a CLI instance, then feed
+ *  (core/desktop-cli-feed.ts), so a CLI instance made now is signed in in the same pass. */
+async function feedPass(): Promise<number> {
+  await pairDesktopCliLogins()
+  return feedLinkedCliLogins()
+}
+
+let timer: ReturnType<typeof setInterval> | null = null
+/** Start the feed (daemon boot): now-ish, then every FEED_EVERY_MS. */
+export function startDesktopCliFeed(): void {
+  if (timer || process.platform !== 'win32') return
+  // A pass that throws is logged, never left to reject: an unhandled rejection from a timer can
+  // take the daemon down (scripts/checks/timer-callback-can-kill-the-daemon.mjs).
+  timer = setInterval(
+    () => void feedPass().catch((err) => console.error('[desktop-cli-feed] pass failed:', err)),
+    FEED_EVERY_MS,
+  )
+  timer.unref?.()
+  setTimeout(
+    () => void feedPass().catch((err) => console.error('[desktop-cli-feed] pass failed:', err)),
+    20_000,
+  ).unref?.()
+}
+
+/** Stop the feed (daemon shutdown). */
+export function stopDesktopCliFeed(): void {
+  if (timer) clearInterval(timer)
+  timer = null
 }

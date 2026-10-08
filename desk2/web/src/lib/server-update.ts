@@ -65,13 +65,23 @@ export function serverHello(): void {
 
 let watching = false
 
-/** Asks every minute while the window is in sight (once per window). */
-export function watchServerUpdate(): void {
-  if (watching || typeof window === 'undefined' || typeof document === 'undefined') return
+const onVisibility = () => {
+  if (!document.hidden) void checkServerUpdate()
+}
+
+/** Asks every minute while the window is in sight, and at once when it comes back into view (once per window). Returns what stops it. */
+export function watchServerUpdate(): () => void {
+  if (watching || typeof window === 'undefined' || typeof document === 'undefined') return () => {}
   watching = true
-  setInterval(() => {
+  document.addEventListener?.('visibilitychange', onVisibility)
+  const every = setInterval(() => {
     if (!document.hidden) void checkServerUpdate()
   }, LOOK_EVERY_MS)
+  return () => {
+    document.removeEventListener?.('visibilitychange', onVisibility)
+    clearInterval(every)
+    watching = false
+  }
 }
 
 /** Restarts the server onto the code on disk (launcher/restart.ps1); the chats run on and the window reconnects. */

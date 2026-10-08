@@ -42,12 +42,12 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('list', () => {
-  test('returns a visible chat with its project and size, and skips a stale-login record', () => {
+  test('returns a visible chat with its project and size, and skips a stale-login record', async () => {
     record(profile, ACCT, SESSION)
     record(profile, OTHER, STALE)
     mkdirSync(join(projects, 'proj'))
     writeFileSync(join(projects, 'proj', `${SESSION}.jsonl`), 'hello\n')
-    const chats = createChatLocal({
+    const chats = await createChatLocal({
       profileRoots: () => [profile],
       projectsDir: projects,
       deskHomes: [],
@@ -65,7 +65,7 @@ describe('list', () => {
     expect(chats[0].record.title).toBe('A chat')
   })
 
-  test("lists Hydra Desk's chats with the transcript in their account's folder, each session once, and holds back one idle over a week", () => {
+  test("lists Hydra Desk's chats with the transcript in their account's folder, each session once, and holds back one idle over a week", async () => {
     record(profile, ACCT, SESSION)
     mkdirSync(join(projects, 'proj'))
     writeFileSync(join(projects, 'proj', `${SESSION}.jsonl`), 'hello\n')
@@ -107,7 +107,7 @@ describe('list', () => {
       projectsDir: projects,
       deskHomes: [desk],
     })
-    const chats = local.list()
+    const chats = await local.list()
     expect(chats.map((c) => [c.id, c.project, c.size, c.holdBack === true])).toEqual([
       [SESSION, 'proj', 6, false],
       [DESK_ID, 'X--work', 10, false],

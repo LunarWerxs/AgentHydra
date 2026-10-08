@@ -32,10 +32,10 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
 <template>
   <div>
     <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id, openByDefault)" />
-    <div v-if="open" class="mb-1.5 ml-[26px] mt-0.5 overflow-hidden rounded-8 border border-border bg-bg-panel">
+    <div v-if="open" class="mb-1.5 ms-6.5 mt-0.5 overflow-hidden rounded-8 border border-border bg-bg-panel">
       <!-- Bash: the command, its output, the exit state -->
       <template v-if="family === 'bash'">
-        <pre class="whitespace-pre-wrap break-words border-b border-border px-3 py-2 font-mono text-[12px] leading-[19px] text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
+        <pre class="whitespace-pre-wrap wrap-break-word border-b border-border px-3 py-2 font-mono text-[12px] leading-4.75 text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
         <OutputBlock
           v-if="item.result || item.progress"
           :id="item.id"

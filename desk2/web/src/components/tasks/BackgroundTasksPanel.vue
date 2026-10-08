@@ -160,9 +160,9 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
 </script>
 
 <template>
-  <section class="flex h-full min-h-0 w-full flex-col overflow-hidden rounded-[8px] border border-[var(--border)] bg-[var(--bg-panel)] text-[13px] leading-5" aria-label="Background tasks">
-    <header class="flex h-[34px] shrink-0 items-center pl-2 pr-1">
-      <h2 class="min-w-0 flex-1 truncate font-normal text-[var(--text-2)]">Background tasks</h2>
+  <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-[13px] leading-5" aria-label="Background tasks">
+    <header class="flex h-8.5 shrink-0 items-center ps-2 pe-1">
+      <h2 class="min-w-0 flex-1 truncate font-normal text-(--text-2)">Background tasks</h2>
       <Tip :label="expanded ? 'Restore' : 'Expand'" side="bottom">
         <button type="button" :class="ICON_BTN" :aria-label="expanded ? 'Restore' : 'Expand'" @click="emit('toggle-expand')">
           <component :is="expanded ? Minimize2 : Maximize2" class="size-3.5" :stroke-width="1.5" />
@@ -176,40 +176,40 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
     </header>
 
     <div ref="body" class="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-1.5">
-      <div v-if="lists.running.length" class="mb-[5px] flex h-5 items-center text-[var(--text-muted)]">
+      <div v-if="lists.running.length" class="mb-1.25 flex h-5 items-center text-(--text-muted)">
         <span class="flex-1">Running</span>
         <button v-if="stoppableNow.length" type="button" :class="ROW_BTN" @click="stopping = 'all'">Stop all</button>
-        <button v-if="sessionId" type="button" :class="[ROW_BTN, all ? 'text-[var(--text)]' : '']" :aria-pressed="all" @click="toggleAll">All</button>
+        <button v-if="sessionId" type="button" :class="[ROW_BTN, all ? 'text-(--text)' : '']" :aria-pressed="all" @click="toggleAll">All</button>
       </div>
 
-      <p v-if="stopError" class="mb-2 text-[var(--danger-text)]" role="alert">{{ stopError }}</p>
+      <p v-if="stopError" class="mb-2 text-(--danger-text)" role="alert">{{ stopError }}</p>
 
       <div class="flex flex-col gap-2">
         <article
           v-for="u in lists.running"
           :key="u.id"
           :data-unit="u.id"
-          class="rounded-[8px] bg-[var(--fill-5)] px-2 pb-2 pt-2"
+          class="rounded-lg bg-(--fill-5) p-2"
           :class="focusId && (u.id === focusId || u.keys.includes(focusId)) ? 'shadow-[inset_0_0_0_1px_var(--border-strong)]' : ''"
         >
           <div class="flex items-start gap-2">
             <div class="min-w-0 flex-1">
-              <h3 class="truncate font-normal text-[var(--text-2)]">{{ u.name }}</h3>
+              <h3 class="truncate font-normal text-(--text-2)">{{ u.name }}</h3>
               <p class="mt-0.5 flex gap-2.5">
-                <span class="font-semibold text-[var(--text-2)]">{{ u.label }}</span>
-                <span class="tnum text-[var(--text-muted)]">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>
-                <span v-if="u.etaEndsAt !== null" class="tnum text-[var(--text-muted)]">{{ etaLeft(u.etaEndsAt, now) }}</span>
-                <span v-if="u.account" class="text-[var(--text-muted)]">{{ u.account }}</span>
+                <span class="font-semibold text-(--text-2)">{{ u.label }}</span>
+                <span class="tnum text-(--text-muted)">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>
+                <span v-if="u.etaEndsAt !== null" class="tnum text-(--text-muted)">{{ etaLeft(u.etaEndsAt, now) }}</span>
+                <span v-if="u.account" class="text-(--text-muted)">{{ u.account }}</span>
               </p>
-              <p v-if="u.agents || u.tokens !== null" class="tnum flex gap-1.5 text-[var(--text-muted)]">
-                <span v-if="u.agents"><b class="font-semibold text-[var(--text-2)]">{{ u.agents }}</b> {{ u.agents === 1 ? 'agent' : 'agents' }}</span>
-                <span><b class="font-semibold text-[var(--text-2)]">{{ formatTokens(u.tokens) }}</b> tokens</span>
+              <p v-if="u.agents || u.tokens !== null" class="tnum flex gap-1.5 text-(--text-muted)">
+                <span v-if="u.agents"><b class="font-semibold text-(--text-2)">{{ u.agents }}</b> {{ u.agents === 1 ? 'agent' : 'agents' }}</span>
+                <span><b class="font-semibold text-(--text-2)">{{ formatTokens(u.tokens) }}</b> tokens</span>
               </p>
             </div>
             <Tip v-if="canStop(u)" :label="`Stop ${u.name}`" side="left">
               <button
                 type="button"
-                class="flex size-5 shrink-0 items-center justify-center rounded-[4px] bg-white/10 text-[var(--text)] outline-none transition-colors duration-[60ms] hover:bg-white/20 focus-visible:shadow-[var(--focus-ring)]"
+                class="flex size-5 shrink-0 items-center justify-center rounded-sm bg-white/10 text-(--text) outline-none transition-colors duration-60 hover:bg-white/20 focus-visible:shadow-(--focus-ring)"
                 :aria-label="`Stop ${u.name}`"
                 @click="stopping = u"
               >
@@ -218,52 +218,52 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
             </Tip>
           </div>
 
-          <p v-if="u.description" class="mt-2.5 leading-[19px] text-[var(--text-muted)]">{{ u.description }}</p>
+          <p v-if="u.description" class="mt-2.5 leading-4.75 text-(--text-muted)">{{ u.description }}</p>
 
           <template v-if="u.phases.length">
-            <h4 class="mt-[21px] font-semibold text-[var(--text)]">Phases</h4>
+            <h4 class="mt-5.25 font-semibold text-(--text)">Phases</h4>
             <div v-for="p in u.phases" :key="p.name" class="mt-1">
               <button
                 v-if="shownPhase(u) === p.name"
                 type="button"
-                class="flex w-full flex-col rounded-[6px] bg-[var(--fill-5)] px-2 pb-2 pt-1 text-left"
+                class="flex w-full flex-col rounded-md bg-(--fill-5) px-2 pb-2 pt-1 text-start"
                 :aria-expanded="true"
                 @click="togglePhase(u, p.name)"
               >
                 <span class="flex h-5 w-full items-center gap-2">
-                  <span class="min-w-0 flex-1 truncate text-[var(--text)]">{{ p.name }}</span>
-                  <span class="tnum text-[var(--text-muted)]">{{ p.done }}/{{ p.total }}</span>
-                  <ChevronDown class="size-4 text-[var(--text-muted)]" :stroke-width="1.5" />
+                  <span class="min-w-0 flex-1 truncate text-(--text)">{{ p.name }}</span>
+                  <span class="tnum text-(--text-muted)">{{ p.done }}/{{ p.total }}</span>
+                  <ChevronDown class="size-4 text-(--text-muted)" :stroke-width="1.5" />
                 </span>
                 <span class="mt-1.5 flex gap-0.5" aria-hidden="true">
                   <span
                     v-for="(s, i) in squares.get(p)"
                     :key="i"
                     class="size-1.5 rounded-[1.5px]"
-                    :class="[SQUARE[s], s === 'running' ? 'animate-[var(--animate-dot-blink)]' : '']"
+                    :class="[SQUARE[s], s === 'running' ? 'animate-(--animate-dot-blink)' : '']"
                   />
                 </span>
               </button>
               <button
                 v-else
                 type="button"
-                class="flex h-10 w-full items-center gap-2 rounded-[6px] px-2 text-left transition-colors duration-[60ms] hover:bg-[var(--fill-5)]"
+                class="flex h-10 w-full items-center gap-2 rounded-md px-2 text-start transition-colors duration-60 hover:bg-(--fill-5)"
                 :aria-expanded="false"
                 @click="togglePhase(u, p.name)"
               >
-                <span class="min-w-0 flex-1 truncate text-[var(--text-2)]">{{ p.name }}</span>
-                <span class="tnum text-[var(--text-muted)]">{{ p.done }}/{{ p.total }}</span>
-                <ChevronRight class="size-4 text-[var(--text-muted)]" :stroke-width="1.5" />
+                <span class="min-w-0 flex-1 truncate text-(--text-2)">{{ p.name }}</span>
+                <span class="tnum text-(--text-muted)">{{ p.done }}/{{ p.total }}</span>
+                <ChevronRight class="size-4 text-(--text-muted)" :stroke-width="1.5" />
               </button>
 
               <table v-if="shownPhase(u) === p.name" class="tnum mb-1 mt-1.5 w-full table-fixed border-collapse">
                 <thead>
-                  <tr class="h-5 text-[var(--text-muted)]">
+                  <tr class="h-5 text-(--text-muted)">
                     <th class="w-7 p-0" />
-                    <th class="p-0 text-left font-normal">Agent</th>
-                    <th class="w-[64px] p-0 text-left font-normal">Model</th>
-                    <th class="w-12 p-0 text-right font-normal">Tokens</th>
-                    <th class="w-24 p-0 pr-2 text-right font-normal">Time</th>
+                    <th class="p-0 text-start font-normal">Agent</th>
+                    <th class="w-16 p-0 text-start font-normal">Model</th>
+                    <th class="w-12 p-0 text-end font-normal">Tokens</th>
+                    <th class="w-24 p-0 pe-2 text-end font-normal">Time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -271,21 +271,21 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
                     v-for="a in p.agents"
                     :key="a.id"
                     class="h-5"
-                    :class="a.state === 'running' || a.state === 'waiting' ? 'font-semibold text-[var(--text-2)]' : 'text-[var(--text-muted)]'"
+                    :class="a.state === 'running' || a.state === 'waiting' ? 'font-semibold text-(--text-2)' : 'text-(--text-muted)'"
                     :data-agent="a.id"
                   >
-                    <td class="p-0 pl-2">
+                    <td class="p-0 ps-2">
                       <Check v-if="a.state === 'done'" class="size-3" :stroke-width="1.5" aria-label="done" />
-                      <X v-else-if="a.state === 'failed'" class="size-3 text-[var(--danger-text)]" :stroke-width="1.5" aria-label="failed" />
+                      <X v-else-if="a.state === 'failed'" class="size-3 text-(--danger-text)" :stroke-width="1.5" aria-label="failed" />
                     </td>
                     <td class="truncate p-0">
-                      <button v-if="a.sessionId" type="button" class="max-w-full truncate text-left hover:underline" @click="openAgent(a)">{{ a.name }}</button>
+                      <button v-if="a.sessionId" type="button" class="max-w-full truncate text-start hover:underline" @click="openAgent(a)">{{ a.name }}</button>
                       <span v-else>{{ a.name }}</span>
                     </td>
                     <td class="truncate p-0">{{ a.model || '–' }}</td>
-                    <td class="p-0 text-right">{{ formatTokens(a.tokens) }}</td>
-                    <td class="truncate p-0 pr-2 text-right">
-                      {{ elapsedOf(a.startedAt, a.endedAt, now) }}<span v-if="a.etaMin !== null" class="font-normal text-[var(--text-muted)]"> / {{ etaShort(a.etaMin) }}</span>
+                    <td class="p-0 text-end">{{ formatTokens(a.tokens) }}</td>
+                    <td class="truncate p-0 pe-2 text-end">
+                      {{ elapsedOf(a.startedAt, a.endedAt, now) }}<span v-if="a.etaMin !== null" class="font-normal text-(--text-muted)"> / {{ etaShort(a.etaMin) }}</span>
                     </td>
                   </tr>
                 </tbody>
@@ -298,7 +298,7 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
       <div class="flex h-5 items-center" :class="lists.running.length ? 'mt-4' : ''">
         <button
           type="button"
-          class="flex items-center gap-1 text-[var(--text-muted)] transition-colors duration-[60ms] hover:text-[var(--text)]"
+          class="flex items-center gap-1 text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
           :aria-expanded="finishedOpen"
           @click="finishedOpen = !finishedOpen"
         >
@@ -306,11 +306,11 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
           <ChevronRight class="size-3 transition-transform duration-150" :class="finishedOpen ? 'rotate-90' : ''" :stroke-width="1.5" />
         </button>
         <span class="flex-1" />
-        <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-[var(--text)]' : 'text-[var(--text-muted)]']" :aria-pressed="all" @click="toggleAll">All</button>
+        <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-(--text)' : 'text-(--text-muted)']" :aria-pressed="all" @click="toggleAll">All</button>
         <Tip v-if="lists.finished.length" label="Clear finished" side="left">
           <button
             type="button"
-            class="flex size-6 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
+            class="flex size-6 items-center justify-center rounded-(--radius-6) text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
             aria-label="Clear finished"
             @click="clearFinished(lists.finished.flatMap((u) => u.keys))"
           >
@@ -324,25 +324,25 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
           v-for="u in lists.finished"
           :key="u.id"
           :data-unit="u.id"
-          class="flex h-8 items-center gap-2 rounded-[6px] px-2 text-[var(--text-muted)] hover:bg-[var(--fill-5)]"
+          class="flex h-8 items-center gap-2 rounded-md px-2 text-(--text-muted) hover:bg-(--fill-5)"
         >
           <Check v-if="!u.failed && u.phases.every((p) => p.agents.every((a) => a.state === 'done'))" class="size-3 shrink-0" :stroke-width="1.5" />
-          <X v-else class="size-3 shrink-0 text-[var(--danger-text)]" :stroke-width="1.5" />
-          <span class="min-w-0 flex-1 truncate text-[var(--text-2)]">{{ u.name }}</span>
+          <X v-else class="size-3 shrink-0 text-(--danger-text)" :stroke-width="1.5" />
+          <span class="min-w-0 flex-1 truncate text-(--text-2)">{{ u.name }}</span>
           <span v-if="u.agents > 1" class="tnum shrink-0">{{ u.agents }} agents</span>
           <span class="tnum shrink-0">{{ formatTokens(u.tokens) }}</span>
-          <span class="tnum w-[60px] shrink-0 text-right">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>
+          <span class="tnum w-15 shrink-0 text-end">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>
         </li>
       </ul>
     </div>
 
     <Dialog :open="stopping !== null" @update:open="(o: boolean) => !o && (stopping = null)">
-      <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
+      <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">{{ stopTitle }}</DialogTitle>
-        <DialogDescription class="text-[13px] leading-[19px] text-text-2">{{ stopText }}</DialogDescription>
+        <DialogDescription class="text-[13px] leading-4.75 text-text-2">{{ stopText }}</DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="stopping = null">Cancel</button>
-          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmStop">Stop</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="stopping = null">Cancel</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmStop">Stop</button>
         </div>
       </DialogContent>
     </Dialog>

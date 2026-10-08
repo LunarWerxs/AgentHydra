@@ -154,9 +154,9 @@ describe('groupBy', () => {
   test('hour buckets and a two-key group', () => {
     const r = q({ window: { last: '24h' }, groupBy: ['hour', 'account'], measures: ['tokens'] })
     expect(r.rows).toEqual([
-      { hour: '2026-06-14T23:00:00.000Z', account: 'acct-b', tokens: 7 },
-      { hour: '2026-06-15T10:00:00.000Z', account: 'acct-a', tokens: 15 },
-      { hour: '2026-06-15T11:00:00.000Z', account: 'acct-a', tokens: 150 },
+      { hour: new Date(NOW - 13 * H).toISOString(), account: 'acct-b', tokens: 7 },
+      { hour: new Date(NOW - 2 * H).toISOString(), account: 'acct-a', tokens: 15 },
+      { hour: new Date(NOW - 1 * H).toISOString(), account: 'acct-a', tokens: 150 },
     ])
   })
 })

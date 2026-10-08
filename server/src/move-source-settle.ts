@@ -226,24 +226,40 @@ async function settleOne(
     await (deps.wait ?? pause)(BUSY_POLL_MS)
     native = await deps.native(profile, sessionId, nativeOpts)
   }
-  if (native.kind === 'result') {
-    const done = native.ok && native.verified
-    return {
-      profile,
-      via: 'native',
-      changed: done && native.changed,
-      ...(atLimit ? { atLimit } : {}),
-      ...(native.stoppedBystanders?.length ? { stoppedBystanders: native.stoppedBystanders } : {}),
-      ...(native.attachedParent ? { attachedParent: native.attachedParent } : {}),
-      // A record the store already called archived is an older move's leftover. An unconfirmed
-      // native answer about it says nothing about THIS move, and calling it "still shown" would
-      // flag every chat that ever lived on a now-unreachable account.
-      stillShown: !done && !alreadyArchived,
-      ...(alreadyArchived ? { alreadyArchived } : {}),
-      ...(done ? {} : { reason: nativeReason(native.reason) }),
-    }
-  }
+  if (native.kind === 'result') return nativeSettle(profile, native, atLimit, alreadyArchived)
+  return uiSettle(sessionId, profile, deps, native.reason, alreadyArchived)
+}
 
+function nativeSettle(
+  profile: string,
+  native: Extract<NativeArchiveOutcome, { kind: 'result' }>,
+  atLimit: boolean,
+  alreadyArchived: boolean,
+): SourceSettle {
+  const done = native.ok && native.verified
+  return {
+    profile,
+    via: 'native',
+    changed: done && native.changed,
+    ...(atLimit ? { atLimit } : {}),
+    ...(native.stoppedBystanders?.length ? { stoppedBystanders: native.stoppedBystanders } : {}),
+    ...(native.attachedParent ? { attachedParent: native.attachedParent } : {}),
+    // A record the store already called archived is an older move's leftover. An unconfirmed
+    // native answer about it says nothing about THIS move, and calling it "still shown" would
+    // flag every chat that ever lived on a now-unreachable account.
+    stillShown: !done && !alreadyArchived,
+    ...(alreadyArchived ? { alreadyArchived } : {}),
+    ...(done ? {} : { reason: nativeReason(native.reason) }),
+  }
+}
+
+async function uiSettle(
+  sessionId: string,
+  profile: string,
+  deps: SettleDeps,
+  nativeWhy: string | undefined,
+  alreadyArchived: boolean,
+): Promise<SourceSettle> {
   // Native is unavailable for this profile: the app's own Archive control FIRST, the flag only if
   // that does not settle it. The order is the point (review, 2026-09-26): uiArchiveChat confirms a
   // click by reading the record's flag, so a flag written beforehand confirmed ITSELF - a row the
@@ -258,7 +274,7 @@ async function settleOne(
       stillShown: false,
       ...(alreadyArchived ? { alreadyArchived } : {}),
     }
-  const why = ui.reason ?? native.reason ?? 'the app did not archive it'
+  const why = ui.reason ?? nativeWhy ?? 'the app did not archive it'
   // An older leftover the store already calls archived needs nothing queued.
   if (alreadyArchived)
     return { profile, via: 'ui', changed: false, stillShown: false, alreadyArchived, reason: why }

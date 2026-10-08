@@ -5,15 +5,14 @@
 let last: number | null = null
 let prev: number | null = null
 
+function onKeydown() {
+  prev = last
+  last = performance.now()
+}
+
 if (typeof window !== 'undefined') {
-  window.addEventListener(
-    'keydown',
-    () => {
-      prev = last
-      last = performance.now()
-    },
-    { capture: true }
-  )
+  window.addEventListener('keydown', onKeydown, { capture: true })
+  import.meta.hot?.dispose(() => window.removeEventListener('keydown', onKeydown, { capture: true }))
 }
 
 /** Inside a keydown listener: when the keydown before this one came (performance.now() time); null when none did. */

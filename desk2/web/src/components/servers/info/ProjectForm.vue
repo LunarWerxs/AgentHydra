@@ -56,11 +56,11 @@ async function remove() {
 
 <template>
   <form class="flex min-h-full flex-col" @submit.prevent="save">
-    <div class="mx-auto flex w-full max-w-[640px] flex-col gap-6 p-4 pb-6">
+    <div class="mx-auto flex w-full max-w-160 flex-col gap-6 p-4 pb-6">
       <FormSection title="Project" description="How it reads in the list.">
         <Field label="Name">
           <template #default="{ id, describedBy, invalid }">
-            <input :id="id" v-model="name" :class="[INPUT, 'max-w-[360px]']" :aria-describedby="describedBy" :aria-invalid="invalid" />
+            <input :id="id" v-model="name" :class="[INPUT, 'max-w-90']" :aria-describedby="describedBy" :aria-invalid="invalid" />
           </template>
         </Field>
         <div class="flex flex-col gap-1.5">

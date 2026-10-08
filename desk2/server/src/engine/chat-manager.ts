@@ -48,6 +48,7 @@ import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '..
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
 import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
+import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
 import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
@@ -231,6 +232,16 @@ function standInFor(sent: UserItem[], real: UserItem): number {
   const text = squash(real.text)
   const same = sent.findIndex((s) => text.includes(squash(s.text)))
   return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000)
+}
+
+/** An imported session's title. One nobody named (no title, or only its first words) is named from its first message, as a new chat is. */
+function importTitle(req: ImportSessionRequest, items: TranscriptItem[], kept: string | null | undefined, listed: string | undefined): { title: string; generate: boolean; firstAsk: string | undefined } {
+  const firstAsk = items.find((i): i is UserItem => i.kind === 'user' && !!i.text.trim())?.text
+  const named = !!req.title?.trim() || !!kept?.trim()
+  const words = firstAsk ? titleFrom(firstAsk) : null
+  const generate = !req.fork && !named && !!firstAsk && (!listed?.trim() || listed.trim() === words)
+  const title = req.title?.trim() || listed?.trim() || words || IMPORT_TITLE
+  return { title, generate, firstAsk }
 }
 
 /** How many accounts one message is tried on (the first and the ones it moves to). */
@@ -690,32 +701,9 @@ export class ChatManager {
     ;(e.sent ??= []).push(standIn)
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: standIn })
     const sentAt = this.now()
-    // Sent as AgentHydra's urgent message, and whether that stopped the running turn for it.
-    let urgent = false
-    let stoppedFor = false
+    let sent: { urgent: boolean; stoppedFor: boolean }
     try {
-      if (chat.workerId) {
-        // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
-        const at = e.workerCwd ?? this.bridge.lastWorkers().find((w) => w.id === chat.workerId)?.cwd ?? null
-        const moved = at !== null && at !== chat.cwd
-        // An AgentHydra without deliver-now (v1.10.0) takes it as an urgent message: the turn stops and the session
-        // continues with it first, in this one call. Only for a message it does not hold yet: it would go twice.
-        urgent = queued && opts.now === true && !(await this.bridge.canDeliverNow())
-        stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte))
-        e.workerCwd = chat.cwd
-      } else {
-        let started!: () => void
-        e.starting = new Promise<void>((r) => (started = r))
-        try {
-          const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte) })
-          e.workerCwd = chat.cwd
-          chat.workerId = w.id
-          chat.sessionId = w.sessionId
-        } finally {
-          e.starting = undefined
-          started()
-        }
-      }
+      sent = await this.dispatchToWorker(e, text, queued, opts)
     } catch (err) {
       this.dropStandIn(e, standIn)
       // Never a 404: the chat exists, and the send queue reads a 404 as a deleted chat.
@@ -724,23 +712,9 @@ export class ChatManager {
     if (this.chats.get(chat.id) !== e) return { queued }
     this.timings.workerSent(chat, this.now() - sentAt)
     e.workerLive = true
-    // A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
-    // on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
-    // stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again.
-    if (urgent) {
-      if (stoppedFor) {
-        this.unqueue(e, standIn)
-        queued = false
-      }
-    } else if (queued && opts.now && chat.workerId) {
-      try {
-        if ((await this.deliverHeldNow(e, standIn, text)).stopped) queued = false
-      } catch (err) {
-        const why = err instanceof Error ? err.message : String(err)
-        this.systemLine(chat.id, 'send-now', 'warn', `Your message waits for the current task to end: CliMayte could not send it now (${why}). Its Send now tries again.`)
-      }
-      if (this.chats.get(chat.id) !== e) return { queued }
-    }
+    const held = await this.settleHeld(e, standIn, text, queued, sent, opts)
+    queued = held.queued
+    if (held.gone) return { queued }
     if (!queued) {
       chat.status = 'starting'
       chat.activity = 'Queued'
@@ -751,6 +725,77 @@ export class ChatManager {
     this.changed(chat)
     void this.syncWorkers(chat.id)
     return { queued }
+  }
+
+  /**
+   * The message to the chat's worker, or the worker started with it. `urgent`: sent as AgentHydra's urgent message;
+   * `stoppedFor`: that stopped the running turn for it.
+   */
+  private async dispatchToWorker(e: Entry, text: string, queued: boolean, opts: SendOptions): Promise<{ urgent: boolean; stoppedFor: boolean }> {
+    const chat = e.chat
+    if (!chat.workerId) {
+      await this.startWorkerFor(e, text)
+      return { urgent: false, stoppedFor: false }
+    }
+    // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
+    const at = e.workerCwd ?? this.bridge.lastWorkers().find((w) => w.id === chat.workerId)?.cwd ?? null
+    const moved = at !== null && at !== chat.cwd
+    // An AgentHydra without deliver-now (v1.10.0) takes it as an urgent message: the turn stops and the session
+    // continues with it first, in this one call. Only for a message it does not hold yet: it would go twice.
+    const urgent = queued && opts.now === true && !(await this.bridge.canDeliverNow())
+    // A worker started before the connectors' first probe pass lands would run without their MCP servers.
+    const connectors = connectorsPending()
+    if (connectors) await connectors
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte))
+    e.workerCwd = chat.cwd
+    return { urgent, stoppedFor }
+  }
+
+  private async startWorkerFor(e: Entry, text: string): Promise<void> {
+    const chat = e.chat
+    let started!: () => void
+    e.starting = new Promise<void>((r) => (started = r))
+    try {
+      const connectors = connectorsPending()
+      if (connectors) await connectors
+      const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte) })
+      e.workerCwd = chat.cwd
+      chat.workerId = w.id
+      chat.sessionId = w.sessionId
+    } finally {
+      e.starting = undefined
+      started()
+    }
+  }
+
+  /**
+   * A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
+   * on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
+   * stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again. `gone`: the chat
+   * was deleted meanwhile.
+   */
+  private async settleHeld(
+    e: Entry,
+    standIn: UserItem,
+    text: string,
+    queued: boolean,
+    sent: { urgent: boolean; stoppedFor: boolean },
+    opts: SendOptions,
+  ): Promise<{ queued: boolean; gone: boolean }> {
+    const chat = e.chat
+    if (sent.urgent) {
+      if (!sent.stoppedFor) return { queued, gone: false }
+      this.unqueue(e, standIn)
+      return { queued: false, gone: false }
+    }
+    if (!(queued && opts.now && chat.workerId)) return { queued, gone: false }
+    try {
+      if ((await this.deliverHeldNow(e, standIn, text)).stopped) queued = false
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err)
+      this.systemLine(chat.id, 'send-now', 'warn', `Your message waits for the current task to end: CliMayte could not send it now (${why}). Its Send now tries again.`)
+    }
+    return { queued, gone: this.chats.get(chat.id) !== e }
   }
 
   /**
@@ -1143,58 +1188,24 @@ export class ChatManager {
     const existing = adopted()
     if (existing) return { ...existing.chat }
 
-    // The list holds the last 24 hours; an older session (a search hit) is read on its own.
-    const outside =
-      (await this.bridge.externalSessions().catch(() => [])).find((s) => s.id === req.sessionId) ??
-      (await this.bridge.externalSession(req.sessionId).catch(() => undefined))
-    // Only a Claude Code session resumes; the rest are read-only. One AgentHydra does not know is let
-    // through: its send refuses it when no folder here has it.
-    if (outside && outside.source !== 'desktop' && outside.source !== 'cli') {
-      throw new ChatError(400, `This ${READ_ONLY_SOURCES[outside.source]} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
-    }
+    const outside = await this.outsideSession(req.sessionId)
     const rawCwd = req.cwd ?? outside?.cwd
     if (!rawCwd) throw new ChatError(400, `cwd is required: AgentHydra does not know the folder of session ${req.sessionId}`)
     const cwd = checkCwd(rawCwd)
-    const { account, auto, note } =
-      req.configDir === undefined
-        ? await this.resolveAccount(this.settingsOf().defaultAccountId)
-        : { account: await this.accountForConfigDir(req.configDir), auto: false, note: null }
-    // Never landed on unasked: the default ~/.claude login's own CLI token expires, so its resume would fail.
-    if (req.configDir === undefined && account.id === DEFAULT_ACCOUNT.id) {
-      throw new ChatError(409, 'Choose the account to continue this session on: Hydra Desk does not choose one.')
-    }
-
-    let items: TranscriptItem[] = []
-    let loadError: string | null = null
-    try {
-      items = await this.bridge.externalItems(req.sessionId)
-    } catch (err) {
-      loadError = err instanceof Error ? err.message : String(err)
-    }
+    const { account, auto, note } = await this.importAccount(req.configDir)
+    const loaded = await this.externalItemsOf(req.sessionId)
+    const loadError = loaded.error
     // Another import of the same session (a second window) may have landed during the awaits above: two
     // chats on one session would have two CLIs appending to one transcript.
     const raced = adopted()
     if (raced) return { ...raced.chat }
-    let cut: Cut | null = null
-    if (req.fork && req.at) {
-      const index = items.findIndex((i) => i.id === req.at)
-      const msg = items[index]
-      if (msg?.kind !== 'user') throw new ChatError(400, loadError ?? `session ${req.sessionId} has no message ${JSON.stringify(req.at)} of yours to fork at`)
-      cut = this.findCut([req.sessionId], cwd, msg, items.slice(index + 1), [account])
-      if (!cut) throw new ChatError(409, CUT_NOT_FOUND)
-      items = items.slice(0, index)
-    }
+    const { cut, items } = this.importCut(req, loaded.items, loadError, cwd, account)
 
     const settings = this.settingsOf()
     const now = this.now()
     // The marks Hydra Desk kept on the outside session carry over to the chat it becomes.
     const meta = this.sessionMeta.get(req.sessionId)
-    // A session nobody named (no title, or only its first words) is named from its first message, as a new chat is.
-    const firstAsk = items.find((i): i is UserItem => i.kind === 'user' && !!i.text.trim())?.text
-    const named = !!req.title?.trim() || !!meta?.title?.trim()
-    const words = firstAsk ? titleFrom(firstAsk) : null
-    const generate = !req.fork && !named && !!firstAsk && (!outside?.title?.trim() || outside.title.trim() === words)
-    const title = req.title?.trim() || outside?.title?.trim() || words || IMPORT_TITLE
+    const { title, generate, firstAsk } = importTitle(req, items, meta?.title, outside?.title)
     const chat: ChatSummary = {
       id: randomUUID(),
       sessionId: req.fork ? null : req.sessionId,
@@ -1240,6 +1251,50 @@ export class ChatManager {
     return { ...chat }
   }
 
+  /** The outside session as AgentHydra lists it; undefined when it does not know it. Refused when it cannot resume. */
+  private async outsideSession(sessionId: string): Promise<Awaited<ReturnType<Bridge['externalSession']>> | undefined> {
+    // The list holds the last 24 hours; an older session (a search hit) is read on its own.
+    const outside =
+      (await this.bridge.externalSessions().catch(() => [])).find((s) => s.id === sessionId) ??
+      (await this.bridge.externalSession(sessionId).catch(() => undefined))
+    // Only a Claude Code session resumes; the rest are read-only. One AgentHydra does not know is let
+    // through: its send refuses it when no folder here has it.
+    if (outside && outside.source !== 'desktop' && outside.source !== 'cli') {
+      throw new ChatError(400, `This ${READ_ONLY_SOURCES[outside.source]} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
+    }
+    return outside
+  }
+
+  /** The account an imported session continues on: the one asked for, else the default one, never the bare ~/.claude login. */
+  private async importAccount(configDir: string | null | undefined): Promise<{ account: AccountRef; auto: boolean; note: string | null }> {
+    const { account, auto, note } =
+      configDir === undefined ? await this.resolveAccount(this.settingsOf().defaultAccountId) : { account: await this.accountForConfigDir(configDir), auto: false, note: null }
+    // Never landed on unasked: the default ~/.claude login's own CLI token expires, so its resume would fail.
+    if (configDir === undefined && account.id === DEFAULT_ACCOUNT.id) {
+      throw new ChatError(409, 'Choose the account to continue this session on: Hydra Desk does not choose one.')
+    }
+    return { account, auto, note }
+  }
+
+  private async externalItemsOf(sessionId: string): Promise<{ items: TranscriptItem[]; error: string | null }> {
+    try {
+      return { items: await this.bridge.externalItems(sessionId), error: null }
+    } catch (err) {
+      return { items: [], error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
+  /** A fork at one of the owner's messages: the cut, and the items before that message. */
+  private importCut(req: ImportSessionRequest, items: TranscriptItem[], loadError: string | null, cwd: string, account: AccountRef): { cut: Cut | null; items: TranscriptItem[] } {
+    if (!(req.fork && req.at)) return { cut: null, items }
+    const index = items.findIndex((i) => i.id === req.at)
+    const msg = items[index]
+    if (msg?.kind !== 'user') throw new ChatError(400, loadError ?? `session ${req.sessionId} has no message ${JSON.stringify(req.at)} of yours to fork at`)
+    const cut = this.findCut([req.sessionId], cwd, msg, items.slice(index + 1), [account])
+    if (!cut) throw new ChatError(409, CUT_NOT_FOUND)
+    return { cut, items: items.slice(0, index) }
+  }
+
   /**
    * Reads the CliMayte chats' workers again (every live one, or only `only`): status, account and
    * transcript. One read at a time; a read that fails (AgentHydra down) leaves the chats as they were.
@@ -1278,13 +1333,50 @@ export class ChatManager {
     const moved = !!w.accountId && w.accountId !== chat.account.id && chat.account.id !== CLIMAYTE_ACCOUNT.id
     const freshSession = !!before.sessionId && !!w.sessionId && w.sessionId !== before.sessionId
     if (moved || freshSession) this.endTasks(e)
-    if (w.accountId && w.accountId !== chat.account.id) {
-      const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
-      chat.account = workerAccount(w)
-      if (from) this.timings.workerMoved(chat, `${accountName(from)}>${accountName(chat.account)}`)
-      if (from && e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
-      if (from) this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
+    if (w.accountId && w.accountId !== chat.account.id) this.applyWorkerAccount(e, w)
+    const next = this.applyWorkerStatus(e, w, was)
+
+    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
+    // Desk file is read once, for what it already holds (emitted), not on every poll.
+    if (!e.emitted) this.deskItems(e)
+    const rescan = e.readAccount !== w.accountId
+    const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
+    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
+    // Deleted meanwhile, or Undo let this worker go.
+    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
+    e.readAccount = w.accountId
+    const newReply = this.syncWorkerItems(e, items)
+    this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
+    // A finished worker's process is gone, and every background task it started with it.
+    if (!e.workerLive) this.endTasks(e)
+    // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
+    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
+      this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
     }
+    // A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again).
+    if (!e.workerLive) {
+      e.emitted = undefined
+      e.workerSeen = undefined
+      e.cwdFile = undefined
+    }
+    if (!chatDiffers(before, chat)) return
+    chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
+    this.changed(chat)
+  }
+
+  /** The worker runs on another account than the chat says: the chat follows, and a move is said in the transcript. */
+  private applyWorkerAccount(e: Entry, w: AhWorker): void {
+    const chat = e.chat
+    const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
+    chat.account = workerAccount(w)
+    if (!from) return
+    this.timings.workerMoved(chat, `${accountName(from)}>${accountName(chat.account)}`)
+    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
+    this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
+  }
+
+  private applyWorkerStatus(e: Entry, w: AhWorker, was: ChatSummary['status']): ReturnType<typeof workerChatStatus> {
+    const chat = e.chat
     const next = workerChatStatus(w)
     chat.status = next.status
     chat.activity = next.activity
@@ -1298,16 +1390,12 @@ export class ChatManager {
     chat.model = w.reportedModel ?? w.model ?? chat.model
     if (w.sessionId) chat.sessionId = w.sessionId
     e.workerLive = isActiveWorkerStatus(w.status)
+    return next
+  }
 
-    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
-    // Desk file is read once, for what it already holds (emitted), not on every poll.
-    if (!e.emitted) this.deskItems(e)
-    const rescan = e.readAccount !== w.accountId
-    const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
-    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
-    // Deleted meanwhile, or Undo let this worker go.
-    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
-    e.readAccount = w.accountId
+  /** The worker's items that are new or changed go to the Desk file and the windows; true when one is a new reply. */
+  private syncWorkerItems(e: Entry, items: TranscriptItem[]): boolean {
+    const chat = e.chat
     const emitted = e.emitted!
     let newReply = false
     // The same array as last time: nothing in the worker's files changed, so nothing in it is new.
@@ -1328,22 +1416,7 @@ export class ChatManager {
       this.emitEvent({ type: 'item.upsert', chatId: chat.id, item })
       this.noteTask(e, item)
     }
-    this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive, newReply, ok: next.status !== 'error' })
-    // A finished worker's process is gone, and every background task it started with it.
-    if (!e.workerLive) this.endTasks(e)
-    // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
-    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
-      this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
-    }
-    // A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again).
-    if (!e.workerLive) {
-      e.emitted = undefined
-      e.workerSeen = undefined
-      e.cwdFile = undefined
-    }
-    if (!chatDiffers(before, chat)) return
-    chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
-    this.changed(chat)
+    return newReply
   }
 
   /** The worker's session file: the one found last time while the session and account are the same and it is still there, else searched for. */

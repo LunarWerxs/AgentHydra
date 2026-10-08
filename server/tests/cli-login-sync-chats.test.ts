@@ -37,7 +37,7 @@ function fakeLocal(): { local: ChatLocal; chat: LocalChat } {
     size: transcript.length,
   }
   const local: ChatLocal = {
-    list: () => [chat],
+    list: async () => [chat],
     read: (_p, _s, from, to) => transcript.subarray(from, to),
     viewSize: () => 0,
     viewWrite: () => true,

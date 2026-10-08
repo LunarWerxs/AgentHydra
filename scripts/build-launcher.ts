@@ -20,8 +20,9 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import pkg from '../package.json'
+import { findRepoRoot } from '../tests/repo-root'
 
-const ROOT = resolve(import.meta.dir, '..')
+const ROOT = findRepoRoot(import.meta.dir)
 const SOURCE_DIR = join(ROOT, 'launcher', 'windows')
 const ICON = join(ROOT, 'misc', 'AgentHydra.ico')
 

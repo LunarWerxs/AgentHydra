@@ -13,6 +13,9 @@ import puppeteer from 'puppeteer'
 import { LiveSession } from '../server/src/browser/cdp'
 import { clipboardAction, keyMessage } from '../web/src/components/servers/logic'
 import type { BrowserLiveIn, BrowserLiveOut } from '../shared/browser'
+import { portFrom } from './lib/free-port'
+
+const CDP = portFrom(process.env.E2E_CDP_PORT)
 
 const RUNS = Number(process.env.E2E_RUNS) || 10
 const LEGACY = process.env.E2E_LEGACY === '1'
@@ -39,7 +42,7 @@ Third line to finish.</textarea>
 <p id=para style="width:400px">Plain page text that is not in any box, just a paragraph.</p>`
 const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response(html, { headers: { 'content-type': 'text/html' } }) })
 
-const chrome = spawn(CHROME, [`--user-data-dir=${join(dir, 'profile')}`, '--remote-debugging-port=9461', '--no-first-run', '--no-default-browser-check',
+const chrome = spawn(CHROME, [`--user-data-dir=${join(dir, 'profile')}`, `--remote-debugging-port=${CDP}`, '--no-first-run', '--no-default-browser-check',
   '--window-position=-2000,-2000', '--disable-features=CalculateNativeWinOcclusion', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling', '--window-size=900,700', 'about:blank'], { stdio: 'ignore', windowsHide: true })
 const results: { ok: boolean; line: string }[] = []
 let session: LiveSession | null = null
@@ -47,7 +50,7 @@ let browser: Awaited<ReturnType<typeof puppeteer.connect>> | null = null
 
 try {
   for (let t = 0; t < 60; t++) {
-    if (await fetch('http://127.0.0.1:9461/json/version').then((r) => r.ok, () => false)) break
+    if (await fetch(`http://127.0.0.1:${CDP}/json/version`).then((r) => r.ok, () => false)) break
     await sleep(250)
   }
   let clipboardOut: string | null = null
@@ -57,14 +60,14 @@ try {
       if (m.text) setClip(m.text)
     }
   }
-  const tab = await LiveSession.pick(9461, null)
+  const tab = await LiveSession.pick(CDP, null)
   if (!tab) throw new Error('no page in the test Chrome')
-  session = new LiveSession(9461, out, () => {})
+  session = new LiveSession(CDP, out, () => {})
   await session.start(tab)
   const send = (m: BrowserLiveIn) => session!.input(m)
   await send({ type: 'viewport', width: 800, height: 600 })
   await send({ type: 'navigate', url: `http://127.0.0.1:${server.port}/` })
-  browser = await puppeteer.connect({ browserURL: 'http://127.0.0.1:9461', defaultViewport: null })
+  browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${CDP}`, defaultViewport: null })
   const page = (await browser.pages()).find((p) => p.url().startsWith(`http://127.0.0.1:${server.port}`))!
   for (let t = 0; t < 40 && !(await page.$('#msg')); t++) await sleep(100)
 

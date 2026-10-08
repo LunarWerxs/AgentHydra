@@ -13,7 +13,7 @@ const showAll = computed(() => ctx.isOpen(key.value))
 <template>
   <div>
     <pre
-      class="code-scroll max-h-[60vh] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[19px]"
+      class="code-scroll max-h-[60vh] overflow-auto whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-[12px] leading-4.75"
       :class="error ? 'text-danger-text' : 'text-text-2'"
     >{{ showAll ? text : cut.shown }}<span v-if="!text" class="italic text-text-muted">(no output)</span></pre>
     <div

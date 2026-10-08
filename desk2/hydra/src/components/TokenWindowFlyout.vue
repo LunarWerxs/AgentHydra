@@ -91,7 +91,8 @@ function onAutoFocus(e: Event): void {
     <PopoverContent
       data-token-flyout
       align="start"
-      class="w-auto min-w-44 gap-0.5 p-1"
+      flush
+      class="w-auto min-w-44"
       role="radiogroup"
       :aria-label="$t('cliInstances.tokensWindowLabel')"
       :trap-focus="false"
@@ -100,22 +101,24 @@ function onAutoFocus(e: Event): void {
       @mouseleave="onLeave"
       @focusout="onFocusOut"
     >
-      <button
-        v-for="w in TOKEN_WINDOWS"
-        :key="w"
-        type="button"
-        role="radio"
-        :aria-checked="model === w"
-        :title="$t(`cliInstances.${hintKey[w]}`)"
-        class="flex items-start gap-2 rounded-md px-2 py-1.5 text-start hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        @click="pick(w)"
-      >
-        <Check class="mt-0.5 size-3 shrink-0" :class="model === w ? '' : 'opacity-0'" />
-        <span class="flex flex-col">
-          <span class="font-medium">{{ $t(`cliInstances.${labelKey[w]}`) }}</span>
-          <span class="text-muted-foreground">{{ $t(`cliInstances.${hintKey[w]}`) }}</span>
-        </span>
-      </button>
+      <div class="flex flex-col gap-0.5 p-1">
+        <button
+          v-for="w in TOKEN_WINDOWS"
+          :key="w"
+          type="button"
+          role="radio"
+          :aria-checked="model === w"
+          :title="$t(`cliInstances.${hintKey[w]}`)"
+          class="flex items-start gap-2 rounded-md px-2 py-1.5 text-start hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          @click="pick(w)"
+        >
+          <Check class="mt-0.5 size-3 shrink-0" :class="model === w ? '' : 'opacity-0'" />
+          <span class="flex flex-col">
+            <span class="font-medium">{{ $t(`cliInstances.${labelKey[w]}`) }}</span>
+            <span class="text-muted-foreground">{{ $t(`cliInstances.${hintKey[w]}`) }}</span>
+          </span>
+        </button>
+      </div>
     </PopoverContent>
   </Popover>
 </template>

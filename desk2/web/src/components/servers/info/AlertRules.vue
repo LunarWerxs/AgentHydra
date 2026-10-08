@@ -136,11 +136,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-w-0 flex-col gap-4">
-    <p v-if="error" role="alert" class="text-[13px] leading-[19px] text-danger-text">{{ error }}</p>
+    <p v-if="error" role="alert" class="text-[13px] leading-4.75 text-danger-text">{{ error }}</p>
     <div v-if="!alerts" role="status" class="flex flex-col gap-3" aria-busy="true">
       <span class="sr-only">Reading the alert rules…</span>
-      <div class="h-8 w-40 animate-pulse rounded-[var(--radius-6)] bg-fill-5 motion-reduce:animate-none" />
-      <div class="h-[104px] animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-8 w-40 animate-pulse rounded-(--radius-6) bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-26 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
     </div>
     <template v-else>
       <div class="flex min-h-8 items-center gap-2">
@@ -166,7 +166,7 @@ onBeforeUnmount(() => {
             <div v-if="editing === rule.id" class="p-2">
               <RuleForm :rule="rule" :process-id="processId" :servers="servers" @saved="saved" @cancel="editing = null" />
             </div>
-            <div v-else class="flex min-h-[52px] items-center gap-3 px-4 py-3">
+            <div v-else class="flex min-h-13 items-center gap-3 px-4 py-3">
               <PaneSwitch :model-value="rule.enabled" label="Turn alert rule on/off" @update:model-value="toggleRule(rule)" />
               <div class="min-w-0 flex-1" :class="!rule.enabled && 'opacity-60'">
                 <p class="text-[13px] leading-5 text-text-2">
@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
                   <span class="font-medium text-text tnum">{{ limit(rule) }}</span> for
                   <span class="font-medium text-text tnum">{{ duration(rule.forMs) }}</span>
                 </p>
-                <p class="flex flex-wrap items-center gap-x-2 text-[12px] leading-[18px] text-text-muted">
+                <p class="flex flex-wrap items-center gap-x-2 text-[12px] leading-4.5 text-text-muted">
                   <span v-if="!processId" class="truncate">
                     {{ liveProcess(rule.processId)?.name ?? serverOf(rule.processId)?.name ?? rule.processId }}<template v-if="serverOf(rule.processId)"> · {{ serverOf(rule.processId)?.projectName }}</template>
                   </span>
@@ -210,17 +210,17 @@ onBeforeUnmount(() => {
           </template>
           <button v-else type="button" :class="BTN_GHOST" @click="confirmClear = true">Clear history</button>
         </template>
-        <ol class="relative ml-1 flex flex-col gap-3 border-l border-border pl-4">
+        <ol class="relative ms-1 flex flex-col gap-3 border-s border-border ps-4">
           <li v-for="ev in shownEvents" :key="ev.id" class="relative flex flex-wrap items-center gap-x-2 gap-y-0.5">
             <span
-              class="absolute top-[7px] -left-[21px] size-2 rounded-full ring-2 ring-bg-panel"
+              class="absolute top-1.75 -left-5.25 size-2 rounded-full ring-2 ring-bg-panel"
               :class="stillFiring(ev) ? 'bg-warning' : 'bg-text-muted'"
               aria-hidden="true"
             />
             <p class="min-w-0 flex-1 text-[13px] leading-5 text-text-2">
               {{ ev.metric === 'cpu' ? 'CPU' : 'Memory' }} reached <span class="font-medium text-text tnum">{{ amount(ev.metric, ev.value) }}</span>
               (over {{ amount(ev.metric, ev.threshold) }})
-              <span class="block text-[12px] leading-[18px] text-text-muted">
+              <span class="block text-[12px] leading-4.5 text-text-muted">
                 <template v-if="!processId">{{ serverName(ev) }} · </template><span :title="clockTime(ev.firedAt)">{{ ago(ev.firedAt) }}</span>
               </span>
             </p>

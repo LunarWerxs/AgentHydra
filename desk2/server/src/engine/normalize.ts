@@ -23,7 +23,7 @@ import {
 } from '@shared/protocol'
 import { cut, describeToolActivity } from './describe'
 import { resetsAtMs, type NotifyReason } from './status'
-import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurns } from './system-text'
+import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurns, type TaskNotice } from './system-text'
 import { MEDIA_ROUTE, mediaCache, RENDERABLE, type MediaCache } from '../media/cache'
 
 export type Emission =
@@ -393,49 +393,54 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
     for (const block of content as Block[]) {
       const index = blockCount.get(msgId) ?? 0
       blockCount.set(msgId, index + 1)
-      if (block.type === 'text' || block.type === 'thinking') {
-        const id = `${msgId}:${index}`
-        const s = streamed.get(id)
-        streamed.delete(id)
-        const kind = block.type === 'text' ? 'assistant_text' : 'thinking'
-        // Thinking shown as "updates" finalizes with an empty block: keep what streamed.
-        const said = str(block.type === 'text' ? block.text : block.thinking) || s?.text || ''
-        const text = kind === 'assistant_text' ? rewriteLocalImages(said, named, media, opts.cwd) : said
-        const files = kind === 'assistant_text' ? namedMedia(said, media, opts.cwd, text) : []
-        if (text || s?.upserted) {
-          const item = withParent({ kind, id, ts: s?.ts ?? now(), text, streaming: false, ...(files.length ? { media: files } : {}) } as TranscriptItem, parent)
-          out.push({ type: 'upsert', item })
-        }
-      } else if (block.type === 'tool_use' || block.type === 'server_tool_use' || block.type === 'mcp_tool_use') {
-        const id = str(block.id)
-        if (!id) continue
-        const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
-        const name = str(block.name) || block.type
-        for (const p of inputPaths(name, input)) named.add(pathKey(p))
-        const prev = tools.get(id)
-        const item: ToolItem = withParent(
-          {
-            ...prev,
-            kind: 'tool_use',
-            id,
-            ts: prev?.ts ?? now(),
-            name,
-            input,
-            status: prev?.status ?? 'running',
-            startedAt: prev?.startedAt ?? now(),
-          },
-          parent,
-        )
-        tools.set(id, item)
-        prune()
-        out.push({ type: 'upsert', item })
-        if (name === 'TodoWrite') {
-          const todos = todosFrom(input)
-          if (todos) out.push({ type: 'upsert', item: { kind: 'todos', id: 'todos', ts: now(), todos } })
-        }
-        if (!parent && item.status === 'running') setActivity(out, describeToolActivity(name, input, opts.cwd))
-      }
+      if (block.type === 'text' || block.type === 'thinking') onTextBlock(out, block, `${msgId}:${index}`, parent)
+      else if (block.type === 'tool_use' || block.type === 'server_tool_use' || block.type === 'mcp_tool_use') onToolUseBlock(out, block, parent)
     }
+  }
+
+  // A finished text or thinking block: it replaces what streamed for it.
+  function onTextBlock(out: Emission[], block: Block, id: string, parent: string | null) {
+    const s = streamed.get(id)
+    streamed.delete(id)
+    const kind = block.type === 'text' ? 'assistant_text' : 'thinking'
+    // Thinking shown as "updates" finalizes with an empty block: keep what streamed.
+    const said = str(block.type === 'text' ? block.text : block.thinking) || s?.text || ''
+    const text = kind === 'assistant_text' ? rewriteLocalImages(said, named, media, opts.cwd) : said
+    const files = kind === 'assistant_text' ? namedMedia(said, media, opts.cwd, text) : []
+    if (text || s?.upserted) {
+      const item = withParent({ kind, id, ts: s?.ts ?? now(), text, streaming: false, ...(files.length ? { media: files } : {}) } as TranscriptItem, parent)
+      out.push({ type: 'upsert', item })
+    }
+  }
+
+  function onToolUseBlock(out: Emission[], block: Block, parent: string | null) {
+    const id = str(block.id)
+    if (!id) return
+    const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
+    const name = str(block.name) || block.type
+    for (const p of inputPaths(name, input)) named.add(pathKey(p))
+    const prev = tools.get(id)
+    const item: ToolItem = withParent(
+      {
+        ...prev,
+        kind: 'tool_use',
+        id,
+        ts: prev?.ts ?? now(),
+        name,
+        input,
+        status: prev?.status ?? 'running',
+        startedAt: prev?.startedAt ?? now(),
+      },
+      parent,
+    )
+    tools.set(id, item)
+    prune()
+    out.push({ type: 'upsert', item })
+    if (name === 'TodoWrite') {
+      const todos = todosFrom(input)
+      if (todos) out.push({ type: 'upsert', item: { kind: 'todos', id: 'todos', ts: now(), todos } })
+    }
+    if (!parent && item.status === 'running') setActivity(out, describeToolActivity(name, input, opts.cwd))
   }
 
   function finishTool(out: Emission[], id: string, result?: ToolResult) {
@@ -458,55 +463,69 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
     // A compaction's summary is shown by its compact_boundary line.
     if (msg.isCompactSummary === true || msg.isVisibleInTranscriptOnly === true) return
     const uuid = str(msg.uuid) || `user:${turn}:${now()}`
+    const { userText, images } = readUserBlocks(out, content, uuid, msg.isMeta === true)
+    if (userText.length || images.length) userTurn(out, uuid, userText, images)
+    let finishedMain = false
+    for (const b of content) {
+      if (b.type === 'tool_result' && onToolResult(out, b)) finishedMain = true
+    }
+    if (finishedMain) setActivity(out, mainActivityAfterTool())
+  }
+
+  /** The person's text and images in a user message's blocks. Harness notes and task notices go out as they are read. */
+  function readUserBlocks(out: Emission[], content: Block[], uuid: string, meta: boolean) {
     const userText: string[] = []
     const images: ImageRef[] = []
     let part = 0
     for (const b of content) {
-      if (b.type === 'image' && opts.echoUserText && msg.isMeta !== true) {
+      if (b.type === 'image' && opts.echoUserText && !meta) {
         const ref = imageBlockRef(b, media)
         if (ref) images.push(ref)
       }
       if (b.type !== 'text') continue
-      for (const p of classifyUserText(str(b.text), msg.isMeta === true)) {
+      for (const p of classifyUserText(str(b.text), meta)) {
         if (p.kind === 'user') userText.push(p.text)
         else if (p.kind === 'system') system(out, `${uuid}:sys:${part++}`, 'info', p.text)
-        else {
-          const next = taskItemFrom(p.task, tasks.get(p.task.taskId), now())
-          tasks.set(next.taskId, next)
-          out.push({ type: 'upsert', item: next })
-        }
+        else onTaskNotice(out, p.task)
       }
     }
-    if (userText.length || images.length) {
-      const item: Extract<TranscriptItem, { kind: 'user' }> = { kind: 'user', id: uuid, ts: now(), text: userText.join('\n\n') }
-      if (images.length) item.images = images
-      // Live, a program's note still shows (the runtime writes only the person's own prompts).
-      const turns = opts.echoUserText ? userTurns(item, media) : noteOf(item.text) ? userTurns(item, null) : []
-      for (const turn of turns) out.push({ type: 'upsert', item: turn })
+    return { userText, images }
+  }
+
+  function onTaskNotice(out: Emission[], notice: TaskNotice) {
+    const next = taskItemFrom(notice, tasks.get(notice.taskId), now())
+    tasks.set(next.taskId, next)
+    out.push({ type: 'upsert', item: next })
+  }
+
+  function userTurn(out: Emission[], uuid: string, userText: string[], images: ImageRef[]) {
+    const item: Extract<TranscriptItem, { kind: 'user' }> = { kind: 'user', id: uuid, ts: now(), text: userText.join('\n\n') }
+    if (images.length) item.images = images
+    // Live, a program's note still shows (the runtime writes only the person's own prompts).
+    const turns = opts.echoUserText ? userTurns(item, media) : noteOf(item.text) ? userTurns(item, null) : []
+    for (const turn of turns) out.push({ type: 'upsert', item: turn })
+  }
+
+  /** Finishes the tool a tool_result block answers; true when that tool is on the main thread. */
+  function onToolResult(out: Emission[], b: Block): boolean {
+    const id = str(b.tool_use_id)
+    const tool = tools.get(id)
+    if (!tool) return false
+    const result = toolResultText(b.content, b.is_error === true, media)
+    for (const p of result.text.match(IMAGE_PATH) ?? []) named.add(pathKey(p))
+    if (isSendFile(tool.name) && !result.isError) {
+      const files = (Array.isArray(tool.input.files) ? tool.input.files : []).filter((f): f is string => typeof f === 'string')
+      const refs = media ? files.map((f) => media.fileRef(f)).filter((r): r is ImageRef => !!r) : []
+      if (refs.length) result.images = [...(result.images ?? []), ...refs]
     }
-    let finishedMain = false
-    for (const b of content) {
-      if (b.type !== 'tool_result') continue
-      const id = str(b.tool_use_id)
-      const tool = tools.get(id)
-      if (!tool) continue
-      const result = toolResultText(b.content, b.is_error === true, media)
-      for (const p of result.text.match(IMAGE_PATH) ?? []) named.add(pathKey(p))
-      if (isSendFile(tool.name) && !result.isError) {
-        const files = (Array.isArray(tool.input.files) ? tool.input.files : []).filter((f): f is string => typeof f === 'string')
-        const refs = media ? files.map((f) => media.fileRef(f)).filter((r): r is ImageRef => !!r) : []
-        if (refs.length) result.images = [...(result.images ?? []), ...refs]
-      }
-      finishTool(out, id, result)
-      const background = BACKGROUND_TASK.exec(result.text)
-      if (background && !result.isError && !tasks.has(background[1]!)) {
-        const task = backgroundTaskItem(tool, background[1]!, now())
-        tasks.set(task.taskId, task)
-        out.push({ type: 'upsert', item: task })
-      }
-      if (!tool.parentToolUseId) finishedMain = true
+    finishTool(out, id, result)
+    const background = BACKGROUND_TASK.exec(result.text)
+    if (background && !result.isError && !tasks.has(background[1]!)) {
+      const task = backgroundTaskItem(tool, background[1]!, now())
+      tasks.set(task.taskId, task)
+      out.push({ type: 'upsert', item: task })
     }
-    if (finishedMain) setActivity(out, mainActivityAfterTool())
+    return !tool.parentToolUseId
   }
 
   // result (SDKResultMessage)
@@ -571,113 +590,139 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
       case 'init':
         if (msg.session_id) out.push({ type: 'chat', patch: { sessionId: str(msg.session_id) } })
         return
-      case 'status': {
-        // SDKStatusMessage: status 'compacting' | 'requesting' | null, permissionMode when it changed
-        const mode = msg.permissionMode as PermissionMode | undefined
-        if (mode && PERMISSION_MODES.includes(mode)) out.push({ type: 'chat', patch: { permissionMode: mode } })
-        if (msg.status === 'compacting') setActivity(out, 'Compacting')
+      case 'status':
+        onStatus(msg, out)
         return
-      }
-      case 'compact_boundary': {
-        const meta = (msg.compact_metadata ?? {}) as Loose
-        const after = meta.post_tokens !== undefined ? ` → ${kTokens(meta.post_tokens)}` : ''
-        system(out, `compact:${uuid}`, 'info', `Conversation compacted (${str(meta.trigger) || 'auto'}, ${kTokens(meta.pre_tokens)}${after} tokens)`)
+      case 'compact_boundary':
+        onCompact(msg, out, uuid)
         return
-      }
-      case 'api_retry': {
-        const status = typeof msg.error_status === 'number' ? ` ${msg.error_status}` : ''
-        const secs = typeof msg.retry_delay_ms === 'number' ? Math.round(msg.retry_delay_ms / 1000) : 0
-        system(out, `api_retry:${turn}`, 'warn', `API error${status} (${str(msg.error) || 'unknown'}), retrying in ${secs}s (attempt ${msg.attempt} of ${msg.max_retries})`)
+      case 'api_retry':
+        onApiRetry(msg, out)
         return
-      }
       case 'model_refusal_fallback':
         system(out, `refusal:${uuid}`, 'warn', str(msg.content) || `The model declined; retried on ${str(msg.fallback_model)}`)
         return
       case 'model_refusal_no_fallback':
         system(out, `refusal:${uuid}`, 'error', str(msg.content) || 'The model declined to answer')
         return
-      case 'hook_response': {
-        if (msg.outcome !== 'error') return
-        const exit = typeof msg.exit_code === 'number' ? ` (exit ${msg.exit_code})` : ''
-        const why = firstLine(str(msg.stderr) || str(msg.output) || str(msg.stdout))
-        system(out, `hook:${str(msg.hook_id) || uuid}`, 'warn', cut(`Hook ${str(msg.hook_name)} (${str(msg.hook_event)}) failed${exit}${why ? `: ${why}` : ''}`, 300))
+      case 'hook_response':
+        onHookResponse(msg, out, uuid)
         return
-      }
       case 'informational': {
         // level 'info' shows only in the CLI's transcript mode; skip it like the CLI does.
         if (msg.level === 'info') return
         system(out, `info:${uuid}`, msg.level === 'warning' ? 'warn' : 'info', str(msg.content))
         return
       }
-      case 'permission_denied': {
-        const id = str(msg.tool_use_id)
-        denied.add(id)
-        const tool = tools.get(id)
-        if (tool && tool.status !== 'running') finishTool(out, id, tool.result)
+      case 'permission_denied':
+        onPermissionDenied(str(msg.tool_use_id), out)
         return
-      }
-      case 'task_started': {
-        if (msg.skip_transcript || msg.ambient) return
-        const taskId = str(msg.task_id)
-        const item: TaskItem = { kind: 'task', id: `task:${taskId}`, ts: now(), taskId, description: str(msg.description), status: 'running' }
-        item.taskKind = TASK_TYPE_KIND[str(msg.task_type)] ?? (msg.workflow_name ? 'workflow' : 'agent')
-        if (msg.tool_use_id) item.toolUseId = str(msg.tool_use_id)
-        const command = str(tools.get(str(msg.tool_use_id))?.input.command)
-        if (command) item.command = cut(command, 500)
-        tasks.set(taskId, item)
-        out.push({ type: 'upsert', item })
+      case 'task_started':
+        onTaskStarted(msg, out)
         return
-      }
-      case 'task_updated': {
-        const t = tasks.get(str(msg.task_id))
-        const patch = (msg.patch ?? {}) as Loose
-        if (!t) return
-        const next: TaskItem = { ...t }
-        if (patch.status === 'completed' || patch.status === 'failed') next.status = patch.status
-        else if (patch.status === 'killed') next.status = 'stopped'
-        else if (patch.status) next.status = 'running'
-        if (typeof patch.description === 'string') next.description = patch.description
-        if (typeof patch.error === 'string' && patch.error) next.summary = patch.error
-        // Settled here: when (task_notification keeps it, unless its notice carries a duration).
-        if (t.status === 'running' && next.status !== 'running') next.durationMs = Math.max(0, now() - t.ts)
-        tasks.set(t.taskId, next)
-        out.push({ type: 'upsert', item: next })
+      case 'task_updated':
+        onTaskUpdated(msg, out)
         return
-      }
-      case 'task_progress': {
-        const t = tasks.get(str(msg.task_id))
-        if (!t) return
-        const next: TaskItem = withUsage({ ...t }, msg.usage)
-        if (typeof msg.summary === 'string' && msg.summary) next.summary = msg.summary
-        if (next.summary === t.summary && next.tokens === t.tokens && next.durationMs === t.durationMs) return
-        tasks.set(t.taskId, next)
-        out.push({ type: 'upsert', item: next })
+      case 'task_progress':
+        onTaskProgress(msg, out)
         return
-      }
-      case 'task_notification': {
-        const taskId = str(msg.task_id)
-        const t = tasks.get(taskId)
-        if (!t && (msg.skip_transcript || msg.ambient)) return
-        const status = msg.status === 'completed' || msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed'
-        const next: TaskItem = withUsage(
-          { ...(t ?? { kind: 'task', id: `task:${taskId}`, ts: now(), taskId, description: '' }), status },
-          msg.usage,
-        )
-        if (typeof msg.summary === 'string' && msg.summary) next.summary = cut(msg.summary, 280)
-        next.taskKind ??= taskKindOf(str(msg.summary))
-        if (msg.tool_use_id) next.toolUseId = str(msg.tool_use_id)
-        if (msg.output_file) next.outputFile = str(msg.output_file)
-        // ts + durationMs is when it settled, which also places it in its turn (transcript/lib/groups.ts): the
-        // notice's own duration, else from the task's start to now (a progress reading's duration is not the
-        // settle); with no start seen, it started that long before the notice.
-        const own = typeof (msg.usage as Loose | undefined)?.duration_ms === 'number'
-        if (t && !own && t.status === 'running') next.durationMs = Math.max(0, now() - t.ts)
-        if (!t && next.durationMs !== undefined) next.ts = Math.max(0, now() - next.durationMs)
-        tasks.set(taskId, next)
-        out.push({ type: 'upsert', item: next })
+      case 'task_notification':
+        onTaskNotification(msg, out)
         return
-      }
     }
+  }
+
+  // SDKStatusMessage: status 'compacting' | 'requesting' | null, permissionMode when it changed
+  function onStatus(msg: Loose, out: Emission[]) {
+    const mode = msg.permissionMode as PermissionMode | undefined
+    if (mode && PERMISSION_MODES.includes(mode)) out.push({ type: 'chat', patch: { permissionMode: mode } })
+    if (msg.status === 'compacting') setActivity(out, 'Compacting')
+  }
+
+  function onCompact(msg: Loose, out: Emission[], uuid: string) {
+    const meta = (msg.compact_metadata ?? {}) as Loose
+    const after = meta.post_tokens !== undefined ? ` → ${kTokens(meta.post_tokens)}` : ''
+    system(out, `compact:${uuid}`, 'info', `Conversation compacted (${str(meta.trigger) || 'auto'}, ${kTokens(meta.pre_tokens)}${after} tokens)`)
+  }
+
+  function onPermissionDenied(id: string, out: Emission[]) {
+    denied.add(id)
+    const tool = tools.get(id)
+    if (tool && tool.status !== 'running') finishTool(out, id, tool.result)
+  }
+
+  function onApiRetry(msg: Loose, out: Emission[]) {
+    const status = typeof msg.error_status === 'number' ? ` ${msg.error_status}` : ''
+    const secs = typeof msg.retry_delay_ms === 'number' ? Math.round(msg.retry_delay_ms / 1000) : 0
+    system(out, `api_retry:${turn}`, 'warn', `API error${status} (${str(msg.error) || 'unknown'}), retrying in ${secs}s (attempt ${msg.attempt} of ${msg.max_retries})`)
+  }
+
+  function onHookResponse(msg: Loose, out: Emission[], uuid: string) {
+    if (msg.outcome !== 'error') return
+    const exit = typeof msg.exit_code === 'number' ? ` (exit ${msg.exit_code})` : ''
+    const why = firstLine(str(msg.stderr) || str(msg.output) || str(msg.stdout))
+    system(out, `hook:${str(msg.hook_id) || uuid}`, 'warn', cut(`Hook ${str(msg.hook_name)} (${str(msg.hook_event)}) failed${exit}${why ? `: ${why}` : ''}`, 300))
+  }
+
+  function onTaskStarted(msg: Loose, out: Emission[]) {
+    if (msg.skip_transcript || msg.ambient) return
+    const taskId = str(msg.task_id)
+    const item: TaskItem = { kind: 'task', id: `task:${taskId}`, ts: now(), taskId, description: str(msg.description), status: 'running' }
+    item.taskKind = TASK_TYPE_KIND[str(msg.task_type)] ?? (msg.workflow_name ? 'workflow' : 'agent')
+    if (msg.tool_use_id) item.toolUseId = str(msg.tool_use_id)
+    const command = str(tools.get(str(msg.tool_use_id))?.input.command)
+    if (command) item.command = cut(command, 500)
+    tasks.set(taskId, item)
+    out.push({ type: 'upsert', item })
+  }
+
+  function onTaskUpdated(msg: Loose, out: Emission[]) {
+    const t = tasks.get(str(msg.task_id))
+    const patch = (msg.patch ?? {}) as Loose
+    if (!t) return
+    const next: TaskItem = { ...t }
+    if (patch.status === 'completed' || patch.status === 'failed') next.status = patch.status
+    else if (patch.status === 'killed') next.status = 'stopped'
+    else if (patch.status) next.status = 'running'
+    if (typeof patch.description === 'string') next.description = patch.description
+    if (typeof patch.error === 'string' && patch.error) next.summary = patch.error
+    // Settled here: when (task_notification keeps it, unless its notice carries a duration).
+    if (t.status === 'running' && next.status !== 'running') next.durationMs = Math.max(0, now() - t.ts)
+    tasks.set(t.taskId, next)
+    out.push({ type: 'upsert', item: next })
+  }
+
+  function onTaskProgress(msg: Loose, out: Emission[]) {
+    const t = tasks.get(str(msg.task_id))
+    if (!t) return
+    const next: TaskItem = withUsage({ ...t }, msg.usage)
+    if (typeof msg.summary === 'string' && msg.summary) next.summary = msg.summary
+    if (next.summary === t.summary && next.tokens === t.tokens && next.durationMs === t.durationMs) return
+    tasks.set(t.taskId, next)
+    out.push({ type: 'upsert', item: next })
+  }
+
+  function onTaskNotification(msg: Loose, out: Emission[]) {
+    const taskId = str(msg.task_id)
+    const t = tasks.get(taskId)
+    if (!t && (msg.skip_transcript || msg.ambient)) return
+    const status = msg.status === 'completed' || msg.status === 'failed' || msg.status === 'stopped' ? msg.status : 'completed'
+    const next: TaskItem = withUsage(
+      { ...(t ?? { kind: 'task', id: `task:${taskId}`, ts: now(), taskId, description: '' }), status },
+      msg.usage,
+    )
+    if (typeof msg.summary === 'string' && msg.summary) next.summary = cut(msg.summary, 280)
+    next.taskKind ??= taskKindOf(str(msg.summary))
+    if (msg.tool_use_id) next.toolUseId = str(msg.tool_use_id)
+    if (msg.output_file) next.outputFile = str(msg.output_file)
+    // ts + durationMs is when it settled, which also places it in its turn (transcript/lib/groups.ts): the
+    // notice's own duration, else from the task's start to now (a progress reading's duration is not the
+    // settle); with no start seen, it started that long before the notice.
+    const own = typeof (msg.usage as Loose | undefined)?.duration_ms === 'number'
+    if (t && !own && t.status === 'running') next.durationMs = Math.max(0, now() - t.ts)
+    if (!t && next.durationMs !== undefined) next.ts = Math.max(0, now() - next.durationMs)
+    tasks.set(taskId, next)
+    out.push({ type: 'upsert', item: next })
   }
 
   // tool_progress (SDKToolProgressMessage)
@@ -727,10 +772,8 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
     },
 
     markDenied(toolUseId: string): Emission[] {
-      denied.add(toolUseId)
       const out: Emission[] = []
-      const tool = tools.get(toolUseId)
-      if (tool && tool.status !== 'running') finishTool(out, toolUseId, tool.result)
+      onPermissionDenied(toolUseId, out)
       return out
     },
 
@@ -779,16 +822,7 @@ export function historyToItems(records: Iterable<unknown>, o: HistoryOptions = {
     if (!rec || typeof rec !== 'object' || rec.isSidechain === true) continue
     const t = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
     if (Number.isFinite(t)) clock = t
-    let msg: Loose | null = null
-    if (rec.type === 'user' || rec.type === 'assistant') msg = rec
-    else if (rec.type === 'system' && rec.subtype === 'compact_boundary') {
-      const meta = (rec.compactMetadata ?? {}) as Loose
-      msg = { ...rec, compact_metadata: { trigger: meta.trigger, pre_tokens: meta.preTokens, post_tokens: meta.postTokens } }
-    } else if (rec.type === 'attachment' && queuedNotification(rec)) {
-      msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: queuedNotification(rec) } }
-    } else if (rec.type === 'system' && rec.subtype === 'local_command') {
-      msg = { type: 'user', uuid: rec.uuid, message: { role: 'user', content: str(rec.content) } }
-    } else if (rec.type === 'system' && (rec.subtype === 'informational' || String(rec.subtype).startsWith('model_refusal'))) msg = rec
+    const msg = recordMessage(rec)
     if (!msg) continue
     for (const e of n.handle(msg as unknown as SDKMessage)) {
       if (e.type !== 'upsert') continue
@@ -796,13 +830,32 @@ export function historyToItems(records: Iterable<unknown>, o: HistoryOptions = {
       items.set(e.item.id, prev ? { ...e.item, ts: prev.ts } : e.item)
     }
   }
-  // The file ends mid-turn: what was still streaming is what it is.
   const cutoff = (o.now ?? Date.now)() - STALE_TASK_MS
-  return [...items.values()].map((it) => {
-    if ((it.kind === 'assistant_text' || it.kind === 'thinking') && it.streaming) return { ...it, streaming: false }
-    if (it.kind === 'task' && it.status === 'running' && it.ts < cutoff) return { ...it, status: 'stopped' as const }
-    return it
-  })
+  return [...items.values()].map((it) => settled(it, cutoff))
+}
+
+/** The SDK message a .jsonl record replays as; null for a record the transcript skips. */
+function recordMessage(rec: Loose): Loose | null {
+  if (rec.type === 'user' || rec.type === 'assistant') return rec
+  if (rec.type === 'attachment') {
+    const prompt = queuedNotification(rec)
+    return prompt ? { type: 'user', uuid: rec.uuid, message: { role: 'user', content: prompt } } : null
+  }
+  if (rec.type !== 'system') return null
+  if (rec.subtype === 'compact_boundary') {
+    const meta = (rec.compactMetadata ?? {}) as Loose
+    return { ...rec, compact_metadata: { trigger: meta.trigger, pre_tokens: meta.preTokens, post_tokens: meta.postTokens } }
+  }
+  if (rec.subtype === 'local_command') return { type: 'user', uuid: rec.uuid, message: { role: 'user', content: str(rec.content) } }
+  if (rec.subtype === 'informational' || String(rec.subtype).startsWith('model_refusal')) return rec
+  return null
+}
+
+/** The file ends mid-turn: what was still streaming is what it is, and a task launched before `cutoff` is gone. */
+function settled(it: TranscriptItem, cutoff: number): TranscriptItem {
+  if ((it.kind === 'assistant_text' || it.kind === 'thinking') && it.streaming) return { ...it, streaming: false }
+  if (it.kind === 'task' && it.status === 'running' && it.ts < cutoff) return { ...it, status: 'stopped' as const }
+  return it
 }
 
 /** Parses .jsonl text (a whole file or a tail that may start mid-line) into records; bad lines are skipped. */

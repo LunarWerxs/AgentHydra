@@ -86,7 +86,7 @@ async function submit() {
   <form :class="CARD" class="flex flex-col gap-4 p-4" @submit.prevent="submit">
     <Field v-if="!fixed" label="Server" :error="tried ? serverError : null">
       <template #default="{ id, describedBy, invalid }">
-        <select :id="id" v-model="server" :class="SELECT" class="max-w-[360px]" :aria-describedby="describedBy" :aria-invalid="invalid">
+        <select :id="id" v-model="server" :class="SELECT" class="max-w-90" :aria-describedby="describedBy" :aria-invalid="invalid">
           <option value="">Select a server</option>
           <option v-for="s in servers" :key="s.id" :value="s.id">{{ s.projectName }} · {{ s.name }}</option>
         </select>
@@ -108,8 +108,8 @@ async function submit() {
 
     <Field label="Threshold" :error="tried ? thresholdError : null" :help="metric === 'cpu' ? 'Percent of one core.' : 'Resident memory of the server and its children.'">
       <template #default="{ id, describedBy, invalid }">
-        <div class="relative max-w-[160px]">
-          <input :id="id" v-model="threshold" type="number" min="0" step="any" :class="INPUT" class="pr-9 tnum [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" :aria-describedby="describedBy" :aria-invalid="invalid" />
+        <div class="relative max-w-40">
+          <input :id="id" v-model="threshold" type="number" min="0" step="any" :class="INPUT" class="pe-9 tnum [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" :aria-describedby="describedBy" :aria-invalid="invalid" />
           <span class="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[12px] text-text-muted">{{ unit }}</span>
         </div>
       </template>
@@ -118,8 +118,8 @@ async function submit() {
     <Field label="Duration" :error="tried ? durationError : null" help="How long it must stay over the limit.">
       <template #default="{ id, describedBy, invalid }">
         <div class="flex flex-wrap items-center gap-2">
-          <div class="relative w-full max-w-[160px]">
-            <input :id="id" v-model="seconds" type="number" min="1" step="1" :class="INPUT" class="pr-9 tnum [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" :aria-describedby="describedBy" :aria-invalid="invalid" />
+          <div class="relative w-full max-w-40">
+            <input :id="id" v-model="seconds" type="number" min="1" step="1" :class="INPUT" class="pe-9 tnum [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none" :aria-describedby="describedBy" :aria-invalid="invalid" />
             <span class="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-[12px] text-text-muted">s</span>
           </div>
           <button
@@ -135,13 +135,13 @@ async function submit() {
       </template>
     </Field>
 
-    <p class="rounded-[var(--radius-6)] bg-fill-5 px-3 py-2 text-[13px] leading-5 text-text-2">
+    <p class="rounded-(--radius-6) bg-fill-5 px-3 py-2 text-[13px] leading-5 text-text-2">
       Alert if <span class="font-medium text-text">{{ preview.metric }}</span> stays over
       <span class="font-medium text-text tnum">{{ preview.limit }}</span> for <span class="font-medium text-text tnum">{{ preview.time }}</span>
     </p>
 
     <div class="flex flex-wrap items-center justify-end gap-2">
-      <p v-if="error" role="alert" class="mr-auto text-[12px] leading-4 text-danger-text">{{ error }}</p>
+      <p v-if="error" role="alert" class="me-auto text-[12px] leading-4 text-danger-text">{{ error }}</p>
       <button type="button" :class="BTN_GHOST" @click="emit('cancel')">Cancel</button>
       <button type="submit" :class="BTN_PRIMARY" :disabled="busy">{{ rule ? 'Save rule' : 'Add rule' }}</button>
     </div>

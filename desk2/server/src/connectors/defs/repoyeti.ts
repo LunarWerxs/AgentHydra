@@ -20,7 +20,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ConnectorDef, ConnectorFactory, Detected } from '../types'
-import { installedApp, installFromRelease, startHidden } from '../release'
+import { installedApp, installFromRelease, startHidden, whichOnce } from '../release'
 
 const REPO = 'LunarWerxs/RepoYeti'
 const ASSET = 'repoyeti-windows-x64.exe'
@@ -64,7 +64,7 @@ function machineExe(): string | null {
     process.env.ProgramFiles && join(process.env.ProgramFiles, 'RepoYeti', 'RepoYeti.exe')
   ]
   for (const c of candidates) if (c && existsSync(c)) return c
-  return Bun.which('repoyeti') ?? Bun.which('repoyeti-windows-x64')
+  return whichOnce('repoyeti') ?? whichOnce('repoyeti-windows-x64')
 }
 
 const repoyeti: ConnectorFactory = ({ home }): ConnectorDef => {

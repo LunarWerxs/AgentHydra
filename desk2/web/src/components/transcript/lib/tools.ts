@@ -243,63 +243,70 @@ function firstLine(s: string, max = 160): string {
 // Argument names an MCP tool's key argument is most often under, in order of preference.
 const MCP_KEYS = ['query', 'q', 'url', 'path', 'file_path', 'command', 'prompt', 'name', 'id', 'title', 'text']
 
-/** The key argument shown after the tool name: the Bash command, the file path, the pattern, the URL. */
-export function keyArgument(name: string, input: Record<string, unknown>, cwd?: string | null): string {
-  const path = (k = 'file_path') => shortPath(str(input[k]), cwd)
-  switch (name) {
-    case 'Bash':
-    case 'PowerShell':
-      return firstLine(str(input.command))
-    case 'BashOutput':
-      return str(input.bash_id)
-    case 'KillShell':
-      return str(input.shell_id)
-    case 'Read': {
-      const off = typeof input.offset === 'number' ? input.offset : null
-      const lim = typeof input.limit === 'number' ? input.limit : null
-      if (off !== null && lim !== null) return `${path()} · lines ${off}-${off + lim - 1}`
-      if (off !== null) return `${path()} · from line ${off}`
-      if (lim !== null) return `${path()} · lines 1-${lim}`
-      return path()
-    }
-    case 'NotebookRead':
-    case 'NotebookEdit':
-      return path('notebook_path')
-    case 'Edit':
-    case 'MultiEdit':
-    case 'Write':
-      return path()
-    case 'Grep': {
-      const where = str(input.path) ? shortPath(str(input.path), cwd) : str(input.glob)
-      const pat = str(input.pattern)
-      return where ? `${pat} · ${where}` : pat
-    }
-    case 'Glob': {
-      const where = str(input.path) ? shortPath(str(input.path), cwd) : ''
-      return where ? `${str(input.pattern)} · ${where}` : str(input.pattern)
-    }
-    case 'LS':
-      return path('path')
-    case 'WebFetch':
-      return str(input.url)
-    case 'WebSearch':
-      return str(input.query)
-    case 'TodoWrite': {
-      const todos = Array.isArray(input.todos) ? input.todos : []
-      const done = todos.filter((t: any) => t?.status === 'completed').length
-      return `${done}/${todos.length} done`
-    }
-    case 'Agent':
-    case 'Task': {
-      const d = str(input.description) || firstLine(str(input.prompt), 100)
-      const t = str(input.subagent_type)
-      return t && t !== 'general-purpose' ? `${d} · ${t}` : d
-    }
-  }
-  if (isCliMayteTool(name)) {
-    const tasks = Array.isArray(input.tasks) ? input.tasks : null
-    if (tasks) return `${tasks.length} task${tasks.length === 1 ? '' : 's'}`
-  }
+type KeyArg = (input: Record<string, unknown>, cwd?: string | null) => string
+
+const pathArg =
+  (key: string): KeyArg =>
+  (input, cwd) =>
+    shortPath(str(input[key]), cwd)
+
+function readKey(input: Record<string, unknown>, cwd?: string | null): string {
+  const path = shortPath(str(input.file_path), cwd)
+  const off = typeof input.offset === 'number' ? input.offset : null
+  const lim = typeof input.limit === 'number' ? input.limit : null
+  if (off !== null && lim !== null) return `${path} · lines ${off}-${off + lim - 1}`
+  if (off !== null) return `${path} · from line ${off}`
+  if (lim !== null) return `${path} · lines 1-${lim}`
+  return path
+}
+
+function grepKey(input: Record<string, unknown>, cwd?: string | null): string {
+  const where = str(input.path) ? shortPath(str(input.path), cwd) : str(input.glob)
+  const pat = str(input.pattern)
+  return where ? `${pat} · ${where}` : pat
+}
+
+function globKey(input: Record<string, unknown>, cwd?: string | null): string {
+  const where = str(input.path) ? shortPath(str(input.path), cwd) : ''
+  return where ? `${str(input.pattern)} · ${where}` : str(input.pattern)
+}
+
+function todoKey(input: Record<string, unknown>): string {
+  const todos = Array.isArray(input.todos) ? input.todos : []
+  const done = todos.filter((t: any) => t?.status === 'completed').length
+  return `${done}/${todos.length} done`
+}
+
+function subagentKey(input: Record<string, unknown>): string {
+  const d = str(input.description) || firstLine(str(input.prompt), 100)
+  const t = str(input.subagent_type)
+  return t && t !== 'general-purpose' ? `${d} · ${t}` : d
+}
+
+const bashKey: KeyArg = (input) => firstLine(str(input.command))
+
+const KEY_ARGS = new Map<string, KeyArg>([
+  ['Bash', bashKey],
+  ['PowerShell', bashKey],
+  ['BashOutput', (input) => str(input.bash_id)],
+  ['KillShell', (input) => str(input.shell_id)],
+  ['Read', readKey],
+  ['NotebookRead', pathArg('notebook_path')],
+  ['NotebookEdit', pathArg('notebook_path')],
+  ['Edit', pathArg('file_path')],
+  ['MultiEdit', pathArg('file_path')],
+  ['Write', pathArg('file_path')],
+  ['Grep', grepKey],
+  ['Glob', globKey],
+  ['LS', pathArg('path')],
+  ['WebFetch', (input) => str(input.url)],
+  ['WebSearch', (input) => str(input.query)],
+  ['TodoWrite', todoKey],
+  ['Agent', subagentKey],
+  ['Task', subagentKey],
+])
+
+function fallbackArgument(input: Record<string, unknown>, cwd?: string | null): string {
   for (const k of MCP_KEYS) {
     const v = input[k]
     if (typeof v === 'string' && v.trim()) return firstLine(k.includes('path') ? shortPath(v, cwd) : v, 120)
@@ -308,6 +315,17 @@ export function keyArgument(name: string, input: Record<string, unknown>, cwd?: 
     if (typeof v === 'string' && v.trim()) return firstLine(v, 120)
   }
   return ''
+}
+
+/** The key argument shown after the tool name: the Bash command, the file path, the pattern, the URL. */
+export function keyArgument(name: string, input: Record<string, unknown>, cwd?: string | null): string {
+  const known = KEY_ARGS.get(name)
+  if (known) return known(input, cwd)
+  if (isCliMayteTool(name)) {
+    const tasks = Array.isArray(input.tasks) ? input.tasks : null
+    if (tasks) return `${tasks.length} task${tasks.length === 1 ? '' : 's'}`
+  }
+  return fallbackArgument(input, cwd)
 }
 
 /** Bash exit state from the result text: Claude Code reports a failing command as "Exit code N". */

@@ -23,27 +23,27 @@ const mockSelected = ref({ kind: 'chat', id: chatFixtures[0]?.id || '' })
   <div class="space-y-8">
     <!-- CliMayte Panel -->
     <div class="space-y-2">
-      <h3 class="text-sm font-semibold text-[var(--text)]">CliMayte Panel</h3>
-      <div class="h-96 border border-[var(--border)] rounded overflow-hidden">
+      <h3 class="text-sm font-semibold text-(--text)">CliMayte Panel</h3>
+      <div class="h-96 border border-(--border) rounded overflow-hidden">
         <CliMaytePanel :origin-session-id="mockChats[0]?.id" />
       </div>
     </div>
 
     <!-- External Session List -->
     <div class="space-y-2">
-      <h3 class="text-sm font-semibold text-[var(--text)]">External Session List</h3>
-      <div class="h-96 border border-[var(--border)] rounded overflow-hidden">
+      <h3 class="text-sm font-semibold text-(--text)">External Session List</h3>
+      <div class="h-96 border border-(--border) rounded overflow-hidden">
         <ExternalSessionList />
       </div>
     </div>
 
     <!-- External Session View -->
     <div class="space-y-2">
-      <h3 class="text-sm font-semibold text-[var(--text)]">External Session View</h3>
-      <div v-if="mockExternal.length > 0" class="h-96 border border-[var(--border)] rounded overflow-hidden">
+      <h3 class="text-sm font-semibold text-(--text)">External Session View</h3>
+      <div v-if="mockExternal.length > 0" class="h-96 border border-(--border) rounded overflow-hidden">
         <ExternalSessionView :session-id="mockExternal[0].id" />
       </div>
-      <div v-else class="h-96 border border-[var(--border)] rounded flex items-center justify-center text-[var(--text-muted)]">
+      <div v-else class="h-96 border border-(--border) rounded flex items-center justify-center text-(--text-muted)">
         No sessions available
       </div>
     </div>

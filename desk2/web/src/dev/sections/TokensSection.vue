@@ -24,7 +24,7 @@ const shadows = ['menu', 'composer', 'popover']
 <template>
   <div class="space-y-6 text-[13px]">
     <div class="flex flex-wrap gap-3">
-      <div v-for="[name, hex] in colors" :key="name" class="w-[132px]">
+      <div v-for="[name, hex] in colors" :key="name" class="w-33">
         <div class="h-10 rounded-6 border border-border" :style="{ background: `var(${name})` }" />
         <div class="mt-1 text-text">{{ name }}</div>
         <div class="tnum text-text-muted">{{ hex }}</div>
@@ -42,7 +42,7 @@ const shadows = ['menu', 'composer', 'popover']
               ? { border: '1.5px solid var(--status-limited)' }
               : { background: `var(${name})` }"
         />
-        <span :class="name === '--status-limited' ? 'text-[var(--status-limited-text)]' : 'text-text-2'">{{ label }}</span>
+        <span :class="name === '--status-limited' ? 'text-(--status-limited-text)' : 'text-text-2'">{{ label }}</span>
       </div>
     </div>
 
@@ -67,12 +67,12 @@ const shadows = ['menu', 'composer', 'popover']
     <div class="space-y-1">
       <div class="font-sans text-[14px] leading-5 text-text">Sans 14/20: system-ui, Segoe UI. The quick brown fox 0123456789</div>
       <div class="font-sans text-[13px] text-text-2">Sans 13px, text-2 · <span class="text-text-muted">muted</span> · <span class="text-text-shortcut">Ctrl+N</span></div>
-      <div class="font-mono text-[13px] leading-[19px] text-text">Mono 13/19: Consolas / Cascadia — const x = a !== b ? 1 : 2 <code class="rounded-5 border border-border bg-fill-5 px-1 text-[12.6px] text-code-text">inline</code></div>
+      <div class="font-mono text-[13px] leading-4.75 text-text">Mono 13/19: Consolas / Cascadia — const x = a !== b ? 1 : 2 <code class="rounded-5 border border-border bg-fill-5 px-1 text-[12.6px] text-code-text">inline</code></div>
       <div class="tnum text-text-muted">tabular 11:11 22:22 00:00 · 1,111 2,222</div>
     </div>
 
     <div class="code-scroll h-16 w-80 overflow-auto rounded-8 border border-border bg-bg-deepest p-2 font-mono text-[13px]">
-      <div class="w-[600px] whitespace-pre">code-scroll: 8px scrollbar on a 5% track</div>
+      <div class="w-150 whitespace-pre">code-scroll: 8px scrollbar on a 5% track</div>
       <div>line</div><div>line</div><div>line</div><div>line</div>
     </div>
   </div>

@@ -61,6 +61,53 @@ function ended(s: StatusState, status: ChatStatus): StatusState {
   return { ...s, status, activity: null, turnStartedAt: null, pendingCount: 0 }
 }
 
+function onUserSent(s: StatusState, now: number): StatusState {
+  if (isBusy(s.status)) return { ...s, queuedCount: s.queuedCount + 1 }
+  if (s.status === 'starting') {
+    // The first message waits for the runtime; any further one queues behind it.
+    return s.turnStartedAt === null ? { ...s, turnStartedAt: now, unread: false } : { ...s, queuedCount: s.queuedCount + 1 }
+  }
+  if (s.status === 'closed') {
+    return { ...s, status: 'starting', activity: null, turnStartedAt: now, lastError: null, limitResetsAt: null, unread: false }
+  }
+  return { ...s, status: 'working', activity: null, turnStartedAt: now, lastError: null, limitResetsAt: null, unread: false }
+}
+
+function onStateChanged(s: StatusState, e: Extract<StatusEvent, { type: 'stateChanged' }>): StatusState {
+  if (s.status === 'closed') return s
+  if (e.state === 'running') {
+    return {
+      ...s,
+      status: s.pendingCount > 0 ? 'needs_you' : 'working',
+      turnStartedAt: s.turnStartedAt ?? e.now,
+      lastError: null,
+      limitResetsAt: null,
+    }
+  }
+  if (e.state === 'requires_action') {
+    return { ...s, status: 'needs_you', turnStartedAt: s.turnStartedAt ?? e.now, unread: true }
+  }
+  // idle: authoritative turn-over. A stop, an error or a limit keeps saying why it ended.
+  return {
+    ...ended(s, STICKY_END.includes(s.status) ? s.status : 'idle'),
+    queuedCount: 0,
+    unread: s.unread || isBusy(s.status),
+  }
+}
+
+function onRequest(s: StatusState, opened: boolean): StatusState {
+  if (opened) {
+    return {
+      ...s,
+      pendingCount: s.pendingCount + 1,
+      status: s.status === 'working' || s.status === 'starting' ? 'needs_you' : s.status,
+      unread: true,
+    }
+  }
+  const pendingCount = Math.max(0, s.pendingCount - 1)
+  return { ...s, pendingCount, status: pendingCount === 0 && s.status === 'needs_you' ? 'working' : s.status }
+}
+
 export function nextStatus(s: StatusState, e: StatusEvent): StatusState {
   switch (e.type) {
     case 'runtimeStarting':
@@ -72,36 +119,10 @@ export function nextStatus(s: StatusState, e: StatusEvent): StatusState {
       return s.turnStartedAt !== null ? { ...s, status: 'working' } : { ...s, status: 'idle' }
 
     case 'userSent':
-      if (isBusy(s.status)) return { ...s, queuedCount: s.queuedCount + 1 }
-      if (s.status === 'starting') {
-        // The first message waits for the runtime; any further one queues behind it.
-        return s.turnStartedAt === null ? { ...s, turnStartedAt: e.now, unread: false } : { ...s, queuedCount: s.queuedCount + 1 }
-      }
-      if (s.status === 'closed') {
-        return { ...s, status: 'starting', activity: null, turnStartedAt: e.now, lastError: null, limitResetsAt: null, unread: false }
-      }
-      return { ...s, status: 'working', activity: null, turnStartedAt: e.now, lastError: null, limitResetsAt: null, unread: false }
+      return onUserSent(s, e.now)
 
     case 'stateChanged':
-      if (s.status === 'closed') return s
-      if (e.state === 'running') {
-        return {
-          ...s,
-          status: s.pendingCount > 0 ? 'needs_you' : 'working',
-          turnStartedAt: s.turnStartedAt ?? e.now,
-          lastError: null,
-          limitResetsAt: null,
-        }
-      }
-      if (e.state === 'requires_action') {
-        return { ...s, status: 'needs_you', turnStartedAt: s.turnStartedAt ?? e.now, unread: true }
-      }
-      // idle: authoritative turn-over. A stop, an error or a limit keeps saying why it ended.
-      return {
-        ...ended(s, STICKY_END.includes(s.status) ? s.status : 'idle'),
-        queuedCount: 0,
-        unread: s.unread || isBusy(s.status),
-      }
+      return onStateChanged(s, e)
 
     case 'interrupted':
       if (s.status === 'closed') return s
@@ -119,17 +140,8 @@ export function nextStatus(s: StatusState, e: StatusEvent): StatusState {
       return { ...ended(s, 'closed'), queuedCount: 0 }
 
     case 'requestOpened':
-      return {
-        ...s,
-        pendingCount: s.pendingCount + 1,
-        status: s.status === 'working' || s.status === 'starting' ? 'needs_you' : s.status,
-        unread: true,
-      }
-
-    case 'requestClosed': {
-      const pendingCount = Math.max(0, s.pendingCount - 1)
-      return { ...s, pendingCount, status: pendingCount === 0 && s.status === 'needs_you' ? 'working' : s.status }
-    }
+    case 'requestClosed':
+      return onRequest(s, e.type === 'requestOpened')
 
     case 'turnEnded':
       if (e.queued === undefined) return s

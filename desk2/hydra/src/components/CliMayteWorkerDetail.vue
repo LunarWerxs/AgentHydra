@@ -653,7 +653,7 @@ async function onStop() {
           <h4 class="text-xs font-medium text-warning">{{ $t('climayte.question') }}</h4>
           <div class="flex flex-col gap-1 rounded-md bg-muted p-2.5 text-xs">
             <p class="wrap-break-word whitespace-pre-wrap">{{ $pii(worker.question.text) }}</p>
-            <ul v-if="worker.question.options?.length" class="list-disc pl-4">
+            <ul v-if="worker.question.options?.length" class="list-disc ps-4">
               <li v-for="(o, i) in worker.question.options" :key="i">{{ $pii(o) }}</li>
             </ul>
             <p v-if="worker.question.context" class="wrap-break-word text-muted-foreground">

@@ -53,16 +53,16 @@ function onCloseFocus(e: Event) {
     :side-offset="6"
     role="dialog"
     aria-label="Message queue"
-    :class="[MENU, 'w-[360px] max-w-none gap-0 overflow-y-auto']"
+    :class="[MENU, 'w-90 max-w-none gap-0 overflow-y-auto']"
     @interact-outside="onOutside"
     @escape-key-down="onEscape"
     @close-auto-focus="onCloseFocus"
   >
     <div :id="panelId" class="flex flex-col">
-      <div class="flex items-center gap-1.5 pr-1">
+      <div class="flex items-center gap-1.5 pe-1">
         <h2 :class="HEADER" class="flex-1">
           Queue
-          <span class="tnum ml-1.5 font-normal">{{ queue?.items.length ?? 0 }}{{ queue?.paused ? ', paused' : '' }}</span>
+          <span class="tnum ms-1.5 font-normal">{{ queue?.items.length ?? 0 }}{{ queue?.paused ? ', paused' : '' }}</span>
         </h2>
         <button type="button" :class="TOOL_BUTTON" @click="act(() => source.queueSettings?.({ paused: !queue?.paused }))">
           {{ queue?.paused ? 'Resume' : 'Pause' }}
@@ -78,7 +78,7 @@ function onCloseFocus(e: Event) {
           role="radio"
           :aria-checked="queue?.sendMode === m.value"
           :class="ITEM"
-          class="flex w-full cursor-default items-center py-1 text-left outline-none hover:bg-[var(--fill-hover)]"
+          class="flex w-full cursor-default items-center py-1 text-start outline-none hover:bg-(--fill-hover)"
           @click="act(() => source.queueSettings?.({ sendMode: m.value }))"
         >
           <span class="flex min-w-0 flex-1 flex-col">
@@ -86,7 +86,7 @@ function onCloseFocus(e: Event) {
             <span :class="DESCRIPTION">{{ m.hint }}</span>
           </span>
           <span class="flex w-4 shrink-0 items-center justify-center">
-            <Check v-if="queue?.sendMode === m.value" class="size-3.5 text-[var(--accent)]" :stroke-width="3" />
+            <Check v-if="queue?.sendMode === m.value" class="size-3.5 text-(--accent)" :stroke-width="3" />
           </span>
         </button>
       </div>
@@ -96,24 +96,24 @@ function onCloseFocus(e: Event) {
       <div
         v-for="h in holds"
         :key="h.chatId"
-        class="mb-1 flex items-center gap-2 rounded-[var(--radius-6)] bg-[var(--warning-bg)] py-1 pl-2 pr-1 text-[var(--warning-text)]"
+        class="mb-1 flex items-center gap-2 rounded-(--radius-6) bg-(--warning-bg) py-1 ps-2 pe-1 text-(--warning-text)"
       >
         <span class="min-w-0 flex-1 truncate">{{ h.text }}</span>
         <button type="button" :class="TOOL_BUTTON" @click="act(() => source.queueResume?.(h.chatId))">Resume</button>
       </div>
 
-      <p v-if="!rows.length" class="px-2 py-1.5 text-[var(--text-muted)]">Nothing queued. Ctrl+Enter adds a message.</p>
+      <p v-if="!rows.length" class="px-2 py-1.5 text-(--text-muted)">Nothing queued. Ctrl+Enter adds a message.</p>
       <ul v-else role="list" aria-label="Queued messages" class="flex flex-col">
         <li
           v-for="row in rows"
           :key="row.item.id"
-          class="group/q relative flex gap-2 rounded-[var(--radius-6)] px-2 py-1 focus-within:bg-[var(--fill-hover)] hover:bg-[var(--fill-hover)]"
+          class="group/q relative flex gap-2 rounded-(--radius-6) px-2 py-1 focus-within:bg-(--fill-hover) hover:bg-(--fill-hover)"
         >
-          <span class="tnum w-3 shrink-0 text-right text-[var(--text-muted)]">{{ row.position }}</span>
+          <span class="tnum w-3 shrink-0 text-end text-(--text-muted)">{{ row.position }}</span>
           <div class="min-w-0 flex-1">
             <span
               v-if="row.chip"
-              class="inline-block max-w-full truncate rounded-[var(--radius-4)] bg-[var(--fill-secondary)] px-1 align-top text-[11px] leading-4 text-[var(--text-2)]"
+              class="inline-block max-w-full truncate rounded-(--radius-4) bg-(--fill-secondary) px-1 align-top text-[11px] leading-4 text-(--text-2)"
             >{{ row.chip }}</span>
             <template v-if="editing === row.item.id">
               <textarea
@@ -121,15 +121,15 @@ function onCloseFocus(e: Event) {
                 v-model="draft"
                 rows="3"
                 aria-label="Edit queued message"
-                class="block w-full resize-none rounded-[var(--radius-6)] bg-[var(--bg-page)] px-1.5 py-1 text-[13px] leading-[19px] text-[var(--text)] outline-none"
+                class="block w-full resize-none rounded-(--radius-6) bg-(--bg-page) px-1.5 py-1 text-[13px] leading-4.75 text-(--text) outline-none"
                 @keydown="onEditKey($event, row.item)"
               />
-              <p class="text-[12px] leading-4 text-[var(--text-muted)]">Enter saves, Shift+Enter adds a line, Esc cancels</p>
+              <p class="text-[12px] leading-4 text-(--text-muted)">Enter saves, Shift+Enter adds a line, Esc cancels</p>
             </template>
-            <p v-else class="line-clamp-2 whitespace-pre-wrap break-words">{{ row.text }}</p>
-            <p v-if="row.images || row.badge" class="flex gap-1.5 text-[12px] leading-4 text-[var(--text-muted)]">
+            <p v-else class="line-clamp-2 whitespace-pre-wrap wrap-break-word">{{ row.text }}</p>
+            <p v-if="row.images || row.badge" class="flex gap-1.5 text-[12px] leading-4 text-(--text-muted)">
               <span v-if="row.images" class="shrink-0">{{ row.images }}</span>
-              <span v-if="row.badge" class="min-w-0" :class="row.badge.tone === 'warn' ? 'text-[var(--warning-text)]' : ''">
+              <span v-if="row.badge" class="min-w-0" :class="row.badge.tone === 'warn' ? 'text-(--warning-text)' : ''">
                 {{ row.badge.label }}{{ row.badge.reason ? `: ${row.badge.reason}` : '' }}
               </span>
             </p>
@@ -146,7 +146,7 @@ function onCloseFocus(e: Event) {
         </li>
       </ul>
 
-      <p v-if="error" class="px-2 pb-0.5 pt-1 text-[12px] text-[var(--warning-text)]" role="alert">{{ error }}</p>
+      <p v-if="error" class="px-2 pb-0.5 pt-1 text-[12px] text-(--warning-text)" role="alert">{{ error }}</p>
     </div>
   </PopoverContent>
 </template>

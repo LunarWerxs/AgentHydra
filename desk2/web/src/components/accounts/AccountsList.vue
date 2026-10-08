@@ -100,12 +100,12 @@ onMounted(async () => {
 })
 
 const ROW =
-  'flex h-7 w-full cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left text-[13px] leading-[19px] transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none aria-disabled:hover:bg-transparent'
+  'flex h-7 w-full cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-start text-[13px] leading-[19px] transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none aria-disabled:hover:bg-transparent'
 </script>
 
 <template>
-  <div class="flex max-h-[70vh] w-[340px] flex-col p-1 text-[13px] leading-[19px] text-text">
-    <div class="flex h-[23px] shrink-0 items-center px-2 text-[13px] font-medium text-text-muted">Account for new chats</div>
+  <div class="flex max-h-[70vh] w-85 flex-col p-1 text-[13px] leading-4.75 text-text">
+    <div class="flex h-5.75 shrink-0 items-center px-2 text-[13px] font-medium text-text-muted">Account for new chats</div>
 
     <div v-if="error" class="shrink-0 px-2 py-1 text-[12px] text-danger-text">{{ error }}</div>
     <div v-else-if="loaded && accounts.length === 0" class="shrink-0 px-2 py-1 text-[12px] text-text-muted">No accounts. Is AgentHydra running?</div>
@@ -135,7 +135,7 @@ const ROW =
           <span class="min-w-0 truncate" :class="row.disabled ? 'text-text-muted' : ''">{{ row.label }}</span>
           <span
             v-if="row.plan"
-            class="flex h-4 shrink-0 items-center rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted"
+            class="flex h-4 shrink-0 items-center rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted"
             :class="row.disabled ? 'opacity-60' : ''"
           >{{ row.plan }}</span>
           <span class="min-w-2 flex-1" />
@@ -144,10 +144,10 @@ const ROW =
           <span v-else class="flex shrink-0 items-center gap-2.5">
             <span v-for="w in windows(row.account)" :key="w.name" class="flex items-center gap-1">
               <span class="text-[10px] leading-4 text-text-muted">{{ w.name }}</span>
-              <span class="h-1 w-7 overflow-hidden rounded-full bg-[var(--fill-secondary)]">
+              <span class="h-1 w-7 overflow-hidden rounded-full bg-(--fill-secondary)">
                 <span class="block h-full rounded-full" :style="{ width: `${Math.max(0, Math.min(100, w.pct ?? 0))}%`, background: barColor(w.pct) }" />
               </span>
-              <span class="tnum w-[26px] text-right text-[11px] leading-4" :class="w.pct == null ? 'text-text-muted' : 'text-text-2'">{{ pctText(w.pct) }}</span>
+              <span class="tnum w-6.5 text-end text-[11px] leading-4" :class="w.pct == null ? 'text-text-muted' : 'text-text-2'">{{ pctText(w.pct) }}</span>
             </span>
           </span>
         </button>
@@ -157,12 +157,12 @@ const ROW =
     <div class="mx-2 my-1 h-px shrink-0 bg-border" />
     <button
       type="button"
-      class="flex h-6 w-full shrink-0 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-left hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none"
+      class="flex h-6 w-full shrink-0 cursor-default items-center gap-1.5 rounded-(--radius-6) px-2 text-start hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none"
       @click="emit('settings')"
     >
       <component :is="shellIcons.settings" class="size-4 text-text-2" />
       Settings
     </button>
-    <p class="shrink-0 px-2 pb-1 pt-1 text-[12px] leading-4 text-text-muted">{{ ACCOUNTS_HINT }}</p>
+    <p class="shrink-0 px-2 py-1 text-[12px] leading-4 text-text-muted">{{ ACCOUNTS_HINT }}</p>
   </div>
 </template>

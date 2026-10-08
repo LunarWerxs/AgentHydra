@@ -148,10 +148,10 @@ describe('labels', () => {
 
 describe('keys', () => {
   const idle = { empty: false, busy: false }
-  it('Enter sends, Shift+Enter is a new line, IME composition is left alone', () => {
+  // A key pressed mid-composition never reaches these handlers: the document guard stops it (lib/ime-composition-guard.test.ts).
+  it('Enter sends, Shift+Enter is a new line', () => {
     expect(composerKeyAction({ key: 'Enter' }, idle)).toBe('send')
     expect(composerKeyAction({ key: 'Enter', shiftKey: true }, idle)).toBe('none')
-    expect(composerKeyAction({ key: 'Enter', isComposing: true }, idle)).toBe('none')
     // The box is empty and the button shows Stop (the message just went out): Enter is not a Stop.
     expect(composerKeyAction({ key: 'Enter' }, { empty: true, busy: true, stop: true })).toBe('swallow')
   })
@@ -159,7 +159,6 @@ describe('keys', () => {
     expect(composerKeyAction({ key: 'Enter', ctrlKey: true }, idle)).toBe('queue')
     expect(composerKeyAction({ key: 'Enter', metaKey: true }, { empty: false, busy: true })).toBe('queue')
     expect(composerKeyAction({ key: 'Enter', ctrlKey: true, shiftKey: true }, idle)).toBe('none')
-    expect(composerKeyAction({ key: 'Enter', ctrlKey: true, isComposing: true }, idle)).toBe('none')
   })
   it('Esc interrupts only while a turn runs', () => {
     expect(composerKeyAction({ key: 'Escape' }, { empty: true, busy: true })).toBe('interrupt')

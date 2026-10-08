@@ -1,8 +1,8 @@
 // The found list (<home>/devservers/found.json: what every scan found, merged by path) and the ignored folders
 // (<home>/devservers/ignored.json: folders a scan no longer offers). The list the page shows leaves out what is added,
-// ignored or gone from disk, so the file itself only ever grows by merging and shrinks by `forget`.
+// ignored or gone from disk; a merge drops what is gone from disk, and `forget` empties it.
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { type DevWebFound, type DevWebFoundItem, type DevWebScanPreset, type DevWebScanResult, folderContains } from '@shared/devwebui'
 import { normalizePath, parseJsonText, samePath, writeJsonAtomic } from './project-file'
@@ -18,6 +18,9 @@ interface FoundFile {
 const foundPath = (home: string): string => path.join(dataDir(home), 'found.json')
 const ignoredPath = (home: string): string => path.join(dataDir(home), 'ignored.json')
 
+/** How long a found item's folder is taken as still on disk (or gone) before it is checked again. */
+const EXISTS_MS = 10_000
+
 function readJson(file: string): unknown {
   try {
     return parseJsonText(readFileSync(file, 'utf8'))
@@ -26,10 +29,25 @@ function readJson(file: string): unknown {
   }
 }
 
+/** The last parse of each found.json, kept until the file's mtime or size moves (the page polls the list every 2 s). */
+const foundCache = new Map<string, { mtimeMs: number; size: number; value: FoundFile }>()
+
 export function readFound(home: string): FoundFile {
-  const raw = readJson(foundPath(home)) as Partial<FoundFile> | null
+  const file = foundPath(home)
+  let st: { mtimeMs: number; size: number } | null = null
+  try {
+    st = statSync(file)
+  } catch {
+    // floor-ok: a missing file reads as empty below
+  }
+  const hit = foundCache.get(file)
+  if (st && hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.value
+  const raw = readJson(file) as Partial<FoundFile> | null
   const items = Array.isArray(raw?.items) ? raw.items.filter((i): i is DevWebFoundItem => !!i && typeof i.path === 'string' && (i.kind === 'file' || i.kind === 'detected')) : []
-  return { items, lastScan: raw?.lastScan && typeof raw.lastScan === 'object' ? raw.lastScan : null }
+  const value = { items, lastScan: raw?.lastScan && typeof raw.lastScan === 'object' ? raw.lastScan : null }
+  if (st) foundCache.set(file, { mtimeMs: st.mtimeMs, size: st.size, value })
+  else foundCache.delete(file)
+  return value
 }
 
 function writeFound(home: string, f: FoundFile): void {
@@ -37,10 +55,23 @@ function writeFound(home: string, f: FoundFile): void {
   writeJsonAtomic(foundPath(home), f, false)
 }
 
-/** Merges a scan's finds in by normalized path, keeping the `foundAt` of the first find. */
+const existsCache = new Map<string, { at: number; yes: boolean }>()
+
+/** existsSync, remembered for EXISTS_MS (the found list checks every item on every poll). */
+function stillThere(p: string): boolean {
+  const now = Date.now()
+  const hit = existsCache.get(p)
+  if (hit && now - hit.at < EXISTS_MS) return hit.yes
+  if (existsCache.size > 20_000) existsCache.clear()
+  const yes = existsSync(p)
+  existsCache.set(p, { at: now, yes })
+  return yes
+}
+
+/** Merges a scan's finds in by normalized path, keeping the `foundAt` of the first find; items gone from disk are dropped. */
 export function mergeScan(home: string, res: DevWebScanResult, preset: DevWebScanPreset, at: number): void {
   const cur = readFound(home)
-  const byPath = new Map(cur.items.map((i) => [normalizePath(i.path), i]))
+  const byPath = new Map(cur.items.filter((i) => existsSync(i.path)).map((i) => [normalizePath(i.path), i]))
   const put = (item: Omit<DevWebFoundItem, 'foundAt'>) => {
     const key = normalizePath(item.path)
     byPath.set(key, { ...item, foundAt: byPath.get(key)?.foundAt ?? at })
@@ -95,7 +126,7 @@ export function listFound(home: string, registry: string[], ignored: string[]): 
   const dirs = registry.map((f) => path.dirname(f))
   return readFound(home)
     .items.filter((i) => {
-      if (!existsSync(i.path)) return false
+      if (!stillThere(i.path)) return false
       if (i.kind === 'file' ? registry.some((f) => samePath(f, i.path)) : dirs.some((d) => folderContains(d, i.path))) return false
       return !ignored.some((g) => folderContains(g, itemDir(i)))
     })

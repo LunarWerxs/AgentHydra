@@ -72,7 +72,7 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
 <template>
   <div class="flex min-h-full flex-col gap-4 p-4">
     <section :class="[CARD, 'flex items-start gap-3 p-4']">
-      <span class="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-10)] bg-fill-5 text-text-2">
+      <span class="flex size-10 shrink-0 items-center justify-center rounded-(--radius-10) bg-fill-5 text-text-2">
         <component :is="item.kind === 'file' ? FileCode : Folder" class="size-5" aria-hidden="true" />
       </span>
       <div class="flex min-w-0 flex-1 flex-col gap-1.5">
@@ -92,9 +92,9 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
 
     <div v-if="!preview && !error" role="status" class="flex flex-col gap-2" aria-busy="true">
       <span class="sr-only">Reading it…</span>
-      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
-      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
-      <div class="h-11 animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-11 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-11 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-11 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
     </div>
 
     <template v-else-if="preview?.kind === 'file'">
@@ -104,7 +104,7 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
           <li v-for="p in preview.processes" :key="p.id" class="flex min-h-11 items-center gap-2 px-4 py-2">
             <span class="shrink-0 text-[13px] text-text">{{ p.name }}</span>
             <span v-if="p.port" :class="[CHIP, 'tnum']">:{{ p.port }}</span>
-            <span :class="[MONO, 'min-w-0 flex-1 truncate text-right text-text-muted']" :title="p.command">{{ p.command }}</span>
+            <span :class="[MONO, 'min-w-0 flex-1 truncate text-end text-text-muted']" :title="p.command">{{ p.command }}</span>
           </li>
         </ul>
       </Card>

@@ -22,7 +22,7 @@
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { linuxProcTable } from './core/process'
-import { nativeProcessInfo, nativeProcessTable } from './core/win-process-table'
+import { INFO_WORKING_SET, nativeProcessInfo, nativeProcessTable } from './core/win-process-table'
 
 const GIB = 2 ** 30
 
@@ -206,7 +206,7 @@ export function readTreeWorkingSets(pids: (number | null)[]): (number | null)[] 
         .map((r) => ({
           pid: r.pid,
           ppid: r.ppid,
-          workingSet: nativeProcessInfo(r.pid)?.workingSetSize ?? null,
+          workingSet: nativeProcessInfo(r.pid, INFO_WORKING_SET)?.workingSetSize ?? null,
         }))
       return treeSums(pids, rows)
     }
