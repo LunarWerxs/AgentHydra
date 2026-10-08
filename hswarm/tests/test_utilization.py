@@ -299,7 +299,7 @@ def test_decide_books_its_jev_spend_as_a_utilization(tmp_path, monkeypatch):
     async def fake_decide(items, mgr, **kw):
         return {"answers": [{"id": "a", "answer": "yes", "source": "jev"}], "summary": {"items": 1},
                 "_jev_stats": {"calls": 3, "in": 120, "out": 9, "cost_usd": 0.0001, "secs": 0.4, "model": "jev-1.13.0"},
-                "_fallback_results": []}
+                "_stand_in_stats": None, "_fallback_results": []}
 
     monkeypatch.setattr(decisions, "decide", fake_decide)  # hswarm_decide imports it at call time
     out = asyncio.run(mcp_server.hswarm_decide([{"id": "a", "state": "x", "question": "q?", "type": "yesno"}]))

@@ -46,6 +46,10 @@ def _isolated_home(tmp_path, monkeypatch, request):
         for provider in config.PROVIDERS.values():
             for env in provider.get("key_env", ()):
                 monkeypatch.delenv(env, raising=False)
+        # Clef's token and account are no provider's key_env, and with both set decide's Jev-down tests would call
+        # Workers AI for real (decisions.stand_in_answers).
+        for env in ("CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"):
+            monkeypatch.delenv(env, raising=False)
         # A unit test never starts the real Claude Code, and a CI runner has none: `claude` is the replay mock.
         monkeypatch.setenv("HSWARM_CLAUDE_BIN", str(MOCK_CLAUDE))
     from hswarm import keys as _keys

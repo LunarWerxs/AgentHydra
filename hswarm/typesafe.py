@@ -74,6 +74,12 @@ def clef_keys() -> list[str]:
     return list(dict.fromkeys(env + config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")))
 
 
+def clef_account() -> str:
+    """The Cloudflare account Workers AI bills: CLOUDFLARE_ACCOUNT_ID, then ~/.hswarm/secrets/cloudflare_account_id, so a
+    caller started without the variable (a Dredd bridge, the CreAitor) still reaches the stand-in."""
+    return os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip() or next(iter(config._read_key_lines(config.SECRETS_DIR / "cloudflare_account_id")), "")
+
+
 class Jev:
     """Async client: round-robin over the key pool, backoff on limits and overload (honouring retry-after),
     a key that answers 401/402/403 leaves the rotation for the life of this client.
@@ -106,7 +112,7 @@ class Jev:
             return cls(concurrency=min(concurrency, 2), url=SIMPLE_JEV_DEMO_URL, usd_per_input_token=0.0, keyless=True,
                        min_interval=SIMPLE_JEV_DEMO_INTERVAL, **kw)
         if model in CLEF_PRICES:
-            account = os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+            account = clef_account()
             return cls(keys=clef_keys() if account else [], concurrency=concurrency, url=CLEF_URL.format(account=account, model=model),
                        usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
         return cls(concurrency=concurrency, **kw)

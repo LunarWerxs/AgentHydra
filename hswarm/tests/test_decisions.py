@@ -103,6 +103,27 @@ def test_jev_down_at_escalate_below_zero_leaves_every_item_unanswered():
     assert all("402" in a["jev"]["error"] and "402" in a["error"] and "fallback" not in a for a in out["answers"])
 
 
+def test_clef_stands_in_when_every_jev_key_is_refused_and_is_held_to_its_own_scale():
+    # TypeSafe answered 402 to every key from 2026-10-06 to 2026-10-08; Clef answers instead, as the typed leg.
+    jev = FakeJev({}, fail={"status": "error", "error": "HTTP 402: no credit", "http": 402})
+    clef = FakeJev({"Which team?": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.5, "technical": 0.3, "sales": 0.2}, "confidence": 0.45},
+                    "Urgent?": {"type": "noul", "noul": 0.9}})
+    mgr = FakeMgr("FINAL: technical")
+    out = asyncio.run(d.decide([_item("Which team?"), {"state": "s", "question": "Urgent?"}], mgr, jev=jev, stand_in=clef, escalate_below=0.7))
+    team, urgent = out["answers"]
+    # 0.45 clears Clef's equivalent of 0.7 (0.415) where it would not clear Jev's, so nothing escalates
+    assert (team["answer"], team["source"], team["jev"]["model"]) == ("billing", "jev:clef", "clef") and mgr.prompts == []
+    assert (urgent["answer"], urgent["source"]) == ("yes", "jev:clef")
+    assert out["summary"]["stand_in"]["items"] == 2 and out["summary"]["by_jev"] == 2
+
+
+def test_a_malformed_question_is_not_handed_to_the_stand_in():
+    jev = FakeJev({}, fail={"status": "error", "error": "HTTP 422: criteria required", "http": 422})
+    clef = FakeJev({"Urgent?": {"type": "noul", "noul": 0.9}})
+    out = asyncio.run(d.decide([{"state": "s", "question": "Urgent?"}], FakeMgr(), jev=jev, stand_in=clef, escalate_below=0))
+    assert clef.calls == [] and out["answers"][0]["answer"] is None and "stand_in" not in out["summary"]
+
+
 def test_yesno_and_score_answers():
     jev = FakeJev({"Urgent?": {"type": "noul", "noul": 0.97}, "How angry?": {"type": "score", "score": 1.1, "probabilities": {"0": 0.0, "1": 0.9, "2": 0.1}, "confidence": 0.9}})
     items = [{"state": "s", "question": "Urgent?"}, {"state": "s", "question": "How angry?", "type": "score", "options": ["calm", "cross", "furious"]}]

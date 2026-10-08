@@ -563,7 +563,9 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     optional {yes: ..., no: ...} descriptions for yesno. Put the facts the decision needs in state, nothing else.
     TypeSafe's Jev answers every item first (~0.15 s and ~$0.00004 each, with a calibrated confidence); an answer
     under escalate_below confidence is re-asked through the published decision capability profile.
-    If no valid stronger answer is obtained, the decision remains unanswered with an explicit error.
+    If no valid stronger answer is obtained, the decision remains unanswered with an explicit error. When no TypeSafe
+    key works (none set, or all refused), Cloudflare's Clef answers the typed leg instead (source 'jev:clef', its
+    confidence held to escalate_below scaled to its own scale), given a Cloudflare token and account id.
     The desktop orchestrator retains final authority. escalate_below=0 is Jev alone: nothing escalates, and an item
     Jev could not answer (no key, HTTP 402) stays unanswered with Jev's error, for the caller's own fallback.
     1.01 sends everything to the fallback. Items with the same state always share one Jev call (the
@@ -581,15 +583,16 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     from .spec import Result, now_iso
 
     out = await decide(items, manager(), escalate_below=escalate_below, fallback_model=fallback_model, model=model, batch=batch)
-    stats = out.pop("_jev_stats")
     fallbacks = out.pop("_fallback_results")
     jev: tuple = ()
-    if stats.get("calls"):
-        # The Jev part is one ledger line (all its calls), costed like an ask; the caller stamp is added in _book_asks.
-        jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend="typesafe", model=stats.get("model") or model,
-                    usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),
-                    seconds=round(stats.get("secs", 0.0), 3), turns=stats["calls"], finished=now_iso())
-        jev = ((jr, {"provider": "typesafe", "job": "decide"}),)
+    # The Jev part, and Clef's when it stood in, is one ledger line each (all its calls), costed like an ask; the caller
+    # stamp is added in _book_asks.
+    for stats, provider, name in ((out.pop("_jev_stats"), "typesafe", model), (out.pop("_stand_in_stats") or {}, "cloudflare", "clef")):
+        if stats.get("calls"):
+            jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend=provider, model=stats.get("model") or name,
+                        usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),
+                        seconds=round(stats.get("secs", 0.0), 3), turns=stats["calls"], finished=now_iso())
+            jev += ((jr, {"provider": provider, "job": "decide"}),)
     return out | await _book_asks(fallbacks, "decide", jev)
 
 
