@@ -11,7 +11,7 @@ options = []
 
 # The LM Studio model key, as `lms ls` prints it once downloaded.
 [models.lmstudio-qwen3-30b-a3b]
-api_id = "qwen3-30b-a3b-2507"
+api_id = "qwen3-30b-a3b-instruct-2507"
 ctx = 32768
 max_out = 4096
 price = { hit = 0.0, miss = 0.0, out = 0.0 }
