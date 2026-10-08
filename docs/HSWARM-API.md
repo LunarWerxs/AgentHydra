@@ -146,7 +146,7 @@ not know is refused the same way.
 | `schema` | a JSON schema whenever the answer is data. The worker must call `submit_result` with it, and the parsed object comes back in `data`. The WHOLE schema is enforced (nested `required`, `minItems`, types), so say `minItems` / `minProperties` where an empty answer is wrong. On the api backend the root must be an object. A schema that is not valid JSON Schema, or that no answer can meet (`minItems` above `maxItems`, a required key `additionalProperties: false` forbids), is refused before any paid call. An all-empty payload is pushed back once. A leg that keeps breaking the schema fails over (`InvalidStructuredAnswer`) |
 | `system` | a system prompt for the worker |
 | `timeout_s` | RUN time per task, default 600. A task queued at a busy provider's gate spends none of it |
-| `max_turns` | default 24 on api, 40 on cc (a cc worker pays the repo's CLAUDE.md and rules first) |
+| `max_turns` | default 24 on api, 40 on cc (a cc worker pays the repo's CLAUDE.md and rules first). The TASK's, however many keys or legs serve it: when one dies (a spent key, a leg that cannot serve), the next runs on the turns left. A cc run counts the model calls it made, not Claude Code's `num_turns`, which also counts the call a 402 or the turn cap cut off |
 | `max_tokens`, `max_context` | the output-token limit per reply (default 16,000) and the context limit (default 400,000) |
 
 ### Model and route

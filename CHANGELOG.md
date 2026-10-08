@@ -28,6 +28,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The new window opens sooner, closes at once and fills in faster**
 - **AgentHydra no longer freezes for seconds at a time**
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
+- **HSwarm's Claude Code workers keep their turns when a key runs out of credit**
 
 **Everything in 2.0.0**
 
@@ -136,6 +137,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder.** Each one used to leave an
   empty folder there that nothing removed. They now live with CliMayte's other files and are cleared with them,
   two weeks after the task last ran.
+- **HSwarm's Claude Code workers keep their turns when a key runs out of credit.** A key that ran dry used to cost
+  the task a turn even when it had done nothing, so a short task could reach the next key with too few turns left
+  and stop at its limit. Now only the turns a key really ran are taken off.
 
 ### Removed
 
