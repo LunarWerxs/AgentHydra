@@ -301,76 +301,72 @@ function describeNudgedLine(
     : `nudge${on} did not start the window: ${e.notice ?? '?'}`
 }
 
+/** `cwd-changed`: the folder it continues in, now or from its next launch. */
+function describeCwdChangedLine(e: CliMayteJournalEntry): string {
+  return e.pending
+    ? `asked to continue in ${e.cwd ?? '?'}${e.from ? ` (now ${e.from})` : ''}, from its next launch`
+    : `continues in ${e.cwd ?? '?'}${e.from ? ` (was ${e.from})` : ''}${e.copied === false ? ' (no transcript to carry; the session starts fresh there)' : ''}`
+}
+
+/** The pieces several lines share, worked out once per entry. */
+interface DescribeParts {
+  on: string
+  pick: string
+  runs: string
+  at: (iso: string | undefined) => string
+}
+
+type Describe = (e: CliMayteJournalEntry, p: DescribeParts) => string
+
+/** One line per event; an event not listed reads as its own name. */
+const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
+  dispatched: (e, p) => describeDispatchLine(e, p.runs),
+  launched: (e, p) => describeLaunchLine(e, p.on, p.pick, p.runs),
+  moved: (e) => describeMovedLine(e),
+  limit: (e, p) => describeLimitLine(e, p.on, p.at),
+  'signed-out': (e, p) => describeSignedOutLine(e, p.on, p.at),
+  'handoff-requested': (e, p) => describeHandoffRequestedLine(e, p.on),
+  'handoff-written': (e, p) => describeShortLine(e, p.on, 'handoff-written'),
+  'handoff-resumed': (_e, p) => `resumed from its handoff${p.on} ${p.pick}${p.runs}`,
+  'follow-up-queued': (e, p) => describeFollowUpQueuedLine(e, p.runs),
+  'follow-up-delivered': (_e, p) => `follow-up delivered${p.on} ${p.pick}${p.runs}`,
+  asked: (e, p) => `asked${p.on}${e.said ? `: ${e.said}` : ''}`,
+  retry: (e, p) => describeRetryLine(e, p.on),
+  cleaned: (e, p) => describeShortLine(e, p.on, 'cleaned'),
+  interrupted: (e, p) =>
+    `interrupted${p.on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`,
+  waiting: (e, p) => describeWaitingLine(e, p.at),
+  spill: (e, p) => `spilled past its group's per_account${p.on}: ${e.notice ?? ''}`,
+  'start-short': (e, p) => `started short${p.on}: ${e.notice ?? ''}`,
+  'turn-done': (e, p) => describeDoneTurnLine(e, p.on, 'turn-done'),
+  'turn-end': (e, p) => `turn ended${p.on}${e.said ? `: ${e.said}` : ''}`,
+  check: (e, p) => describeShortLine(e, p.on, 'check'),
+  verdict: (e, p) => describeVerdictLine(e, p.runs),
+  'cwd-changed': (e) => describeCwdChangedLine(e),
+  priority: (e) => `priority set to ${e.priority ?? 0} (was ${e.was ?? 0})`,
+  nudged: (e, p) => describeNudgedLine(e, p.on, p.at),
+  done: (e, p) => describeDoneTurnLine(e, p.on, 'done'),
+  failed: (e, p) => `failed${p.on}: ${e.error ?? '?'}`,
+  cancelled: (e, p) =>
+    `cancelled${p.on}${e.pending ? `; ${e.pending} queued message(s) kept for when it is continued` : ''}`,
+}
+
 /** What happened, in words (the part of a readable line after the worker's id and title). */
 export function describeJournalEntry(e: CliMayteJournalEntry, now: Date = new Date()): string {
-  const on = e.account ? ` on ${e.account}` : ''
-  const pick = `(session ${pct(e.sessionPct)}, week ${pct(e.weekPct)}, ${e.active ?? 0} active)`
+  // A line read back from disk can name any event, so only the table's own keys are looked up.
+  const describe = Object.hasOwn(DESCRIBE, e.event) ? DESCRIBE[e.event] : undefined
+  if (!describe) return String(e.event)
   // The model and effort asked for, when either was (the entry records null for the CLI's default).
   const runs =
     e.model || e.effort
       ? ` with ${e.model ?? 'the default model'}, effort ${e.effort ?? 'default'}`
       : ''
-  const at = (iso: string | undefined): string => (iso ? journalTime(iso, now) : '?')
-  switch (e.event) {
-    case 'dispatched':
-      return describeDispatchLine(e, runs)
-    case 'launched':
-      return describeLaunchLine(e, on, pick, runs)
-    case 'moved':
-      return describeMovedLine(e)
-    case 'limit':
-      return describeLimitLine(e, on, at)
-    case 'signed-out':
-      return describeSignedOutLine(e, on, at)
-    case 'handoff-requested':
-      return describeHandoffRequestedLine(e, on)
-    case 'handoff-written':
-      return describeShortLine(e, on, 'handoff-written')
-    case 'handoff-resumed':
-      return `resumed from its handoff${on} ${pick}${runs}`
-    case 'follow-up-queued':
-      return describeFollowUpQueuedLine(e, runs)
-    case 'follow-up-delivered':
-      return `follow-up delivered${on} ${pick}${runs}`
-    case 'asked':
-      return `asked${on}${e.said ? `: ${e.said}` : ''}`
-    case 'retry':
-      return describeRetryLine(e, on)
-    case 'cleaned':
-      return describeShortLine(e, on, 'cleaned')
-    case 'interrupted':
-      return `interrupted${on} (AgentHydra restarted or the process was killed); resuming, retry ${e.retry ?? '?'}/3`
-    case 'waiting':
-      return describeWaitingLine(e, at)
-    case 'spill':
-      return `spilled past its group's per_account${on}: ${e.notice ?? ''}`
-    case 'start-short':
-      return `started short${on}: ${e.notice ?? ''}`
-    case 'turn-done':
-      return describeDoneTurnLine(e, on, 'turn-done')
-    case 'turn-end':
-      return `turn ended${on}${e.said ? `: ${e.said}` : ''}`
-    case 'check':
-      return describeShortLine(e, on, 'check')
-    case 'verdict':
-      return describeVerdictLine(e, runs)
-    case 'cwd-changed':
-      return e.pending
-        ? `asked to continue in ${e.cwd ?? '?'}${e.from ? ` (now ${e.from})` : ''}, from its next launch`
-        : `continues in ${e.cwd ?? '?'}${e.from ? ` (was ${e.from})` : ''}${e.copied === false ? ' (no transcript to carry; the session starts fresh there)' : ''}`
-    case 'priority':
-      return `priority set to ${e.priority ?? 0} (was ${e.was ?? 0})`
-    case 'nudged':
-      return describeNudgedLine(e, on, at)
-    case 'done':
-      return describeDoneTurnLine(e, on, 'done')
-    case 'failed':
-      return `failed${on}: ${e.error ?? '?'}`
-    case 'cancelled':
-      return `cancelled${on}${e.pending ? `; ${e.pending} queued message(s) kept for when it is continued` : ''}`
-    default:
-      return String(e.event)
-  }
+  return describe(e, {
+    on: e.account ? ` on ${e.account}` : '',
+    pick: `(session ${pct(e.sessionPct)}, week ${pct(e.weekPct)}, ${e.active ?? 0} active)`,
+    runs,
+    at: (iso) => (iso ? journalTime(iso, now) : '?'),
+  })
 }
 
 /** One readable line: `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.

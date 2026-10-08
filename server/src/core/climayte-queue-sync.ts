@@ -505,6 +505,29 @@ async function queueRows(io: QueueIo): Promise<Array<{ pc: string; version: numb
   return list.json.queues
 }
 
+/** Another PC's snapshot, opened with this PC's key, and the version it was stored at. */
+async function downloadQueue(
+  io: QueueIo,
+  row: { pc: string; version: number },
+): Promise<{ snap: QueueSnapshot; version: number }> {
+  // Through the mirror: a version it already holds is not fetched again.
+  const r = io.mirror
+    ? await io.mirror.getItem('queues', row.pc)
+    : await io.call('GET', `/v1/queues/${row.pc}`)
+  if (r.status !== 200 || typeof r.json?.blob !== 'string')
+    throw queueFailure('Downloading the other PC’s queue', r)
+  const snap = openQueue(io.key, row.pc, r.json.blob)
+  if (!snap) throw new Error('The other PC’s queue does not open with this PC’s key.')
+  return { snap, version: r.json.version ?? row.version }
+}
+
+/** Whether another PC's snapshot is news against the one held for it: new, or a worker's shape or a
+ *  live bucket changed. */
+function remoteNews(snap: QueueSnapshot): boolean {
+  const prev = remoteSnapshots().find((s) => s.pc === snap.pc)
+  return !prev || shapePrint(prev) !== shapePrint(snap) || livePrint(prev) !== livePrint(snap)
+}
+
 /** One queue pass: upload this PC's snapshot when a worker's shape changed, when the live readings
  *  moved a bucket or a worker's activity, cost or clocks changed (those two at most every
  *  LIVE_GATE_MS), download every other PC's that changed. Throws the
@@ -545,18 +568,9 @@ export async function syncQueueDetail(
   for (const row of others) {
     if (remoteVersion(row.pc) === row.version) continue
     try {
-      // Through the mirror: a version it already holds is not fetched again.
-      const r = io.mirror
-        ? await io.mirror.getItem('queues', row.pc)
-        : await io.call('GET', `/v1/queues/${row.pc}`)
-      if (r.status !== 200 || typeof r.json?.blob !== 'string')
-        throw queueFailure('Downloading the other PC’s queue', r)
-      const snap = openQueue(io.key, row.pc, r.json.blob)
-      if (!snap) throw new Error('The other PC’s queue does not open with this PC’s key.')
-      const prev = remoteSnapshots().find((s) => s.pc === row.pc)
-      if (!prev || shapePrint(prev) !== shapePrint(snap) || livePrint(prev) !== livePrint(snap))
-        moved = true
-      setRemote(snap, r.json.version ?? row.version)
+      const { snap, version } = await downloadQueue(io, row)
+      if (remoteNews(snap)) moved = true
+      setRemote(snap, version)
     } catch (err) {
       problem ??= err instanceof Error ? err : new Error(String(err))
     }

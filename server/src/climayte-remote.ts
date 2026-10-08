@@ -115,9 +115,12 @@ export interface QueueSnapshot {
 /** A PC whose commit is older than this one's by more than this reads as behind. */
 export const BEHIND_MS = 60 * 60_000
 
+// The note around the date is an English sentence, so its month is named in English too.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
 const fmtDate = (iso: string): string => {
   const d = new Date(iso)
-  const mon = d.toLocaleString('en-US', { month: 'short', timeZone: 'UTC' })
+  const mon = MONTHS[d.getUTCMonth()]
   const p = (n: number) => String(n).padStart(2, '0')
   return `${mon} ${d.getUTCDate()}, ${p(d.getUTCHours())}:${p(d.getUTCMinutes())} UTC`
 }

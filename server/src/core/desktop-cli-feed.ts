@@ -27,13 +27,11 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from 'node:path'
 import { listCliInstances } from './cli-instances'
 import { credPath } from './cli-login-move'
-import { pairDesktopCliLogins } from './desktop-cli-pairing'
 import { readDesktopTokens } from './desktop-login-sync'
 
 const CLAUDE_CODE_SCOPE = 'user:sessions:claude_code'
 /** A grant this close to its end is not worth writing: the CLI would open on an expired login. */
 const MIN_LEFT_MS = 10 * 60_000
-export const FEED_EVERY_MS = 60_000
 
 interface CliOauth {
   accessToken: string
@@ -129,34 +127,4 @@ export async function feedLinkedCliLogins(): Promise<number> {
     }
   }
   return fed
-}
-
-/** One timer pass: pair any new signed-in desktop with a CLI instance (core/desktop-cli-pairing.ts),
- *  then feed, so a CLI instance made now is signed in in the same pass. */
-async function feedPass(): Promise<number> {
-  await pairDesktopCliLogins()
-  return feedLinkedCliLogins()
-}
-
-let timer: ReturnType<typeof setInterval> | null = null
-/** Start the feed (daemon boot): now-ish, then every FEED_EVERY_MS. */
-export function startDesktopCliFeed(): void {
-  if (timer || process.platform !== 'win32') return
-  // A pass that throws is logged, never left to reject: an unhandled rejection from a timer can
-  // take the daemon down (scripts/checks/timer-callback-can-kill-the-daemon.mjs).
-  timer = setInterval(
-    () => void feedPass().catch((err) => console.error('[desktop-cli-feed] pass failed:', err)),
-    FEED_EVERY_MS,
-  )
-  timer.unref?.()
-  setTimeout(
-    () => void feedPass().catch((err) => console.error('[desktop-cli-feed] pass failed:', err)),
-    20_000,
-  ).unref?.()
-}
-
-/** Stop the feed (daemon shutdown). */
-export function stopDesktopCliFeed(): void {
-  if (timer) clearInterval(timer)
-  timer = null
 }

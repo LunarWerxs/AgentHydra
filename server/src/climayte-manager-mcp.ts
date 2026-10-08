@@ -95,6 +95,36 @@ function startTask(wave: CliMayteWave, task: Task): Record<string, unknown> {
   }
 }
 
+/** wave_dispatch on the manager's wave: each key started or refused. */
+function dispatchKeys(wave: CliMayteWave, keys: string[]): Record<string, unknown> {
+  if (wave.status !== 'running') return { error: `the wave is ${wave.status}` }
+  return {
+    results: keys.map((key) => {
+      const task = taskOf(wave, key)
+      if (!task) return { key, refused: 'no such key in this wave' }
+      const why = refusal(wave, task)
+      return why ? { key, refused: why } : startTask(wave, task)
+    }),
+  }
+}
+
+/** wave_cancel on the manager's wave: stop the task's worker and fail the task. */
+function cancelTask(wave: CliMayteWave, key: unknown): Record<string, unknown> {
+  const task = taskOf(wave, key)
+  if (!task) return { error: `no such key: ${str(key)}` }
+  if (!task.workerId) return { error: `${task.key} has no worker to cancel` }
+  if (task.state === 'passed') return { error: `${task.key} already passed` }
+  const { cancelled } = climayteCancel({ id: task.workerId })
+  task.state = 'failed'
+  task.proof = {
+    check: task.proof?.check ?? null,
+    commits: task.proof?.commits ?? [],
+    paths: task.proof?.paths ?? null,
+    note: 'Cancelled by the manager.',
+  }
+  return { key: task.key, cancelled, state: task.state }
+}
+
 /** The seven wave tools, bound to the wave of `managerId`. Each writes the wave record after a
  *  change and answers compact JSON. */
 export function managerTools(managerId: string): McpEngineTool[] {
@@ -128,17 +158,7 @@ export function managerTools(managerId: string): McpEngineTool[] {
       run: async (args) => {
         const keys = Array.isArray(args.keys) ? args.keys.map(String) : []
         if (!keys.length) return { error: 'keys must be a non-empty array of task keys' }
-        return onWave(managerId, (wave) => {
-          if (wave.status !== 'running') return { error: `the wave is ${wave.status}` }
-          return {
-            results: keys.map((key) => {
-              const task = taskOf(wave, key)
-              if (!task) return { key, refused: 'no such key in this wave' }
-              const why = refusal(wave, task)
-              return why ? { key, refused: why } : startTask(wave, task)
-            }),
-          }
-        })
+        return onWave(managerId, (wave) => dispatchKeys(wave, keys))
       },
     },
     {
@@ -169,22 +189,7 @@ export function managerTools(managerId: string): McpEngineTool[] {
         properties: { key: { type: 'string', description: 'The task key.' } },
         required: ['key'],
       },
-      run: async (args) =>
-        onWave(managerId, (wave) => {
-          const task = taskOf(wave, args.key)
-          if (!task) return { error: `no such key: ${str(args.key)}` }
-          if (!task.workerId) return { error: `${task.key} has no worker to cancel` }
-          if (task.state === 'passed') return { error: `${task.key} already passed` }
-          const { cancelled } = climayteCancel({ id: task.workerId })
-          task.state = 'failed'
-          task.proof = {
-            check: task.proof?.check ?? null,
-            commits: task.proof?.commits ?? [],
-            paths: task.proof?.paths ?? null,
-            note: 'Cancelled by the manager.',
-          }
-          return { key: task.key, cancelled, state: task.state }
-        }),
+      run: async (args) => onWave(managerId, (wave) => cancelTask(wave, args.key)),
     },
     {
       name: 'wave_escalate',
