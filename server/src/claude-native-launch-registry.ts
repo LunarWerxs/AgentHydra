@@ -97,6 +97,17 @@ function Command-Executable($command) {
   }
   return ($command -split '\s+', 2)[0]
 }
+function Restore-Owned($original, [bool]$recursive, [string]$ownerKey, [string]$owner, [bool]$isCommand) {
+  # Another managed launch's app can register itself while this one restores. While the key still
+  # names this launch it is put back again; once it names anything else it is that writer's to restore.
+  for ($attempt = 0; $attempt -lt 3; $attempt++) {
+    $named = Default-Value $ownerKey
+    if ($isCommand) { $named = Command-Executable $named }
+    if (-not (Same-Path $named $owner)) { return $false }
+    if (Restore-Tree $original $recursive) { return $true }
+  }
+  throw 'Registry restoration readback differs from snapshot'
+}
 function Restore-Values($row) {
   $key = $cu.CreateSubKey([string]$row.path)
   try {
@@ -134,7 +145,7 @@ function Restore-Tree($original, [bool]$recursive) {
     }
   }
   $after = if ($recursive) { Read-Tree $original.path } else { Read-Single $original.path }
-  if ((Canonical-Tree $original) -cne (Canonical-Tree $after)) { throw 'Registry restoration readback differs from snapshot' }
+  return ((Canonical-Tree $original) -ceq (Canonical-Tree $after))
 }
 function Canonical-Tree($tree) {
   $keys = @($tree.keys | Sort-Object path | ForEach-Object {
@@ -164,9 +175,7 @@ export function nativeRegistryRestoreScript(
   $restored = @(); $preserved = @(); $errors = @()
   $protocol = $p.snapshot.protocol
   try {
-    $command = Default-Value ($protocol.path + '\\shell\\open\\command')
-    if (Same-Path (Command-Executable $command) $p.managedBinary) {
-      Restore-Tree $protocol $true
+    if (Restore-Owned $protocol $true ($protocol.path + '\\shell\\open\\command') $p.managedBinary $true) {
       $restored += $protocol.path
     } else { $preserved += $protocol.path }
   } catch { $errors += ($protocol.path + ': ' + $_.Exception.Message) }
@@ -181,13 +190,11 @@ export function nativeRegistryRestoreScript(
   } catch { $manifestOwned = $false }
   foreach ($browser in $p.snapshot.browsers) {
     try {
-      $current = Default-Value $browser.path
-      if ($manifestOwned -and (Same-Path $current $manifestPath)) {
-        Restore-Tree $browser $false
+      if ($manifestOwned -and (Restore-Owned $browser $false $browser.path $manifestPath $false)) {
         $restored += $browser.path
       } else {
         $preserved += $browser.path
-        if ($null -eq $current -and $browser.exists) { $errors += ($browser.path + ': registration disappeared; ownership is uncertain') }
+        if ($null -eq (Default-Value $browser.path) -and $browser.exists) { $errors += ($browser.path + ': registration disappeared; ownership is uncertain') }
       }
     } catch { $errors += ($browser.path + ': ' + $_.Exception.Message) }
   }
@@ -292,13 +299,15 @@ export interface NativeLaunchRegistryLease {
  * reason, each waiting for the one before it to be fully up (2026-10-08, owner: "Why are launching
  * accounts in this fucking thing so slow?"). Now the first launch reads the baseline, every launch that
  * begins while any is under way shares it, and a new one is read only once all of them have ended and
- * their restorations have finished. Each launch still restores only what still names it.
+ * their restorations have finished. Each launch still restores only what still names it, and the
+ * restorations run one at a time: two at once would each read the other's half-written tree back.
  */
 export function createNativeLaunchRegistryGuard(deps: NativeLaunchRegistryDependencies = {}): {
   begin(profile: string): Promise<NativeLaunchRegistryLease>
 } {
   let baseline: { snapshot: Promise<Snapshot>; leases: number } | null = null
   const restoring = new Set<Promise<unknown>>()
+  let lastRestore: Promise<unknown> = Promise.resolve()
   return {
     async begin(profile) {
       if ((deps.platform ?? process.platform) !== 'win32')
@@ -333,7 +342,7 @@ export function createNativeLaunchRegistryGuard(deps: NativeLaunchRegistryDepend
         restore(managedBinary) {
           // Never replay an uncertain restore. The caller can report its failure and preserve evidence.
           if (restored) return restored
-          restored = Promise.resolve()
+          restored = lastRestore
             .then(() => {
               assertWindowsPath(managedBinary)
               return runJson(nativeRegistryRestoreScript(managedBinary, profile, snapshot), deps)
@@ -341,6 +350,7 @@ export function createNativeLaunchRegistryGuard(deps: NativeLaunchRegistryDepend
             .then(restoreResult)
           // Recorded before the lease ends, so a baseline read after the last lease waits for it.
           const tracked = restored.catch(() => undefined)
+          lastRestore = tracked
           restoring.add(tracked)
           void tracked.then(() => restoring.delete(tracked))
           end()

@@ -199,6 +199,25 @@ describe('managed Claude launch registry guard', () => {
     ;(await d).release()
     expect(calls).toEqual(['snapshot', 'restore C:\\A', 'snapshot'])
   })
+
+  test('restorations of overlapping launches run one at a time', async () => {
+    let running = 0
+    let most = 0
+    const guard = createNativeLaunchRegistryGuard({
+      platform: 'win32',
+      run: async (argv) => {
+        const payload = decodePayload(argv.at(-1)!) as Partial<RestorePayload>
+        if (!payload.snapshot) return success(snapshot())
+        most = Math.max(most, ++running)
+        await Bun.sleep(10)
+        running--
+        return success({ restored: [], preserved: [], errors: [] })
+      },
+    })
+    const leases = await Promise.all(['C:\\A', 'C:\\B', 'C:\\C'].map((dir) => guard.begin(dir)))
+    await Promise.all(leases.map((lease) => lease.restore(binary)))
+    expect(most).toBe(1)
+  })
 })
 
 // These Windows checks execute only an inert branch harness or PowerShell's parser. They never
@@ -252,6 +271,9 @@ async function branches(options: {
   manifestBinary: string
   browserValue: string | null
   browserExisted?: boolean
+  /** What another launch's app writes while each key is first being restored: that readback
+   *  differs, and the key then holds this. */
+  raced?: { command: string; browserValue: string | null }
 }) {
   const baseline = snapshot()
   if (options.browserExisted)
@@ -266,11 +288,17 @@ async function branches(options: {
   return powershell(`
     $ErrorActionPreference = 'Stop'
     $fake = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${fake}')) | ConvertFrom-Json
+    $script:command = $fake.command; $script:browserValue = $fake.browserValue; $script:raced = @{}
     function Default-Value([string]$path) {
-      if ($path.EndsWith('shell\\open\\command')) { return $fake.command }
-      return $fake.browserValue
+      if ($path.EndsWith('shell\\open\\command')) { return $script:command }
+      return $script:browserValue
     }
-    function Restore-Tree($original, [bool]$recursive) { }
+    function Restore-Tree($original, [bool]$recursive) {
+      if ($null -eq $fake.raced -or $script:raced.ContainsKey($original.path)) { return $true }
+      $script:raced[$original.path] = $true
+      if ($recursive) { $script:command = $fake.raced.command } else { $script:browserValue = $fake.raced.browserValue }
+      return $false
+    }
     function Get-Content { param($LiteralPath, [switch]$Raw)
       return ([pscustomobject]@{ name = 'com.anthropic.claude_browser_extension'; path = $fake.manifestBinary } | ConvertTo-Json -Compress)
     }
@@ -327,6 +355,31 @@ windowsTest(
     expect(result.errors).toEqual([
       `${CLAUDE_NATIVE_HOST_KEYS[0]}: registration disappeared; ownership is uncertain`,
     ])
+  },
+  SPAWN_TIMEOUT_MS,
+)
+
+windowsTest(
+  'a registration rewritten during restoration is restored again while it names this launch, and left to its new owner after',
+  async () => {
+    const ownHost = `${profile}\\ChromeNativeHost\\com.anthropic.claude_browser_extension.json`
+    const result = await branches({
+      command: `"${binary}" "%1"`,
+      manifestBinary: 'C:\\Managed Claude\\2.2553.1\\resources\\chrome-native-host.exe',
+      browserValue: ownHost,
+      // Another account opened from the same managed copy re-registers the handler; its browser
+      // hosts name its own profile.
+      raced: {
+        command: `"${binary}" "%1"`,
+        browserValue:
+          'C:\\OtherProfile\\ChromeNativeHost\\com.anthropic.claude_browser_extension.json',
+      },
+    })
+    expect(result).toEqual({
+      restored: [protocol],
+      preserved: CLAUDE_NATIVE_HOST_KEYS,
+      errors: [],
+    })
   },
   SPAWN_TIMEOUT_MS,
 )

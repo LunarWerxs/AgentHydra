@@ -332,7 +332,10 @@ waited for the previous one to be fully up): overlapping startups share one
 baseline, read before the first of them, and a new baseline is read only once every
 startup has ended and its restoration has finished (`claude-native-launch-registry.ts`).
 Restoration waits for Claude's browser-host startup task, restores only values
-still owned by that launch, and preserves unrelated concurrent changes.
+still owned by that launch, and preserves unrelated concurrent changes. Restorations
+run one at a time. If another startup's app rewrites a key while it is being restored,
+the key is restored again while it still names this launch (up to three tries), and
+left for its new owner once it names another profile.
 
 The copy for a newly installed Claude build is made ahead of time: the daemon looks
 once a minute and builds it as soon as the build is installed

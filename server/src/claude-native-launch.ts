@@ -438,7 +438,7 @@ function sharedPrepare(
   managedRoot: string,
   build: Readonly<ClaudeManagedBuild>,
 ): Promise<string> {
-  const key = `${managedRoot}\0${sourceBinary}`
+  const key = `${managedRoot}\0${sourceBinary}\0${copyName(build)}`
   const pending = preparing.get(key)
   if (pending) return pending
   const operation = prepareCopy(sourceBinary, managedRoot, build).finally(() => {

@@ -56,7 +56,8 @@ test('an unreadable process table removes nothing', async () => {
 
 test('a staging or set-aside folder untouched for over an hour is removed; a fresh one is not', async () => {
   const dir = await root(['a', 'b'])
-  for (const name of ['.building-old', '.stale-old', '.building-new']) await mkdir(join(dir, name))
+  for (const name of ['.building-old', '.stale-old', '.building-new', '.stale-new'])
+    await mkdir(join(dir, name))
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60_000)
   for (const name of ['.building-old', '.stale-old'])
     await utimes(join(dir, name), twoHoursAgo, twoHoursAgo)

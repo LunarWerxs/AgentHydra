@@ -30,26 +30,28 @@ function managedLaunchesConfigured(): boolean {
 }
 
 async function prewarmOnce(): Promise<void> {
-  if (running || process.platform !== 'win32' || !managedLaunchesConfigured()) return
-  running = true
-  const started = Date.now()
   try {
-    const binary = await resolveLaunchBinary()
-    if (!binary) return
-    const result = await prewarmClaudeNativeCopy(binary)
-    lastFailure = ''
-    if (result.built)
-      console.log(
-        `[claude-native] prepared the managed copy of Claude ${result.version} ahead of the next Open (${((Date.now() - started) / 1000).toFixed(1)} s)`,
-      )
+    if (running || process.platform !== 'win32' || !managedLaunchesConfigured()) return
+    running = true
+    const started = Date.now()
+    try {
+      const binary = await resolveLaunchBinary()
+      if (!binary) return
+      const result = await prewarmClaudeNativeCopy(binary)
+      lastFailure = ''
+      if (result.built)
+        console.log(
+          `[claude-native] prepared the managed copy of Claude ${result.version} ahead of the next Open (${((Date.now() - started) / 1000).toFixed(1)} s)`,
+        )
+    } finally {
+      running = false
+    }
   } catch (error) {
     // The Open that needs the copy makes it itself and reports any refusal to the person opening.
     const message = error instanceof Error ? error.message : String(error)
     if (message !== lastFailure)
       console.warn(`[claude-native] managed copy not prepared ahead: ${message}`)
     lastFailure = message
-  } finally {
-    running = false
   }
 }
 
@@ -57,9 +59,9 @@ export function startClaudeNativePrewarm(): void {
   if (timer) return
   // This process exits on an unhandled rejection: prewarmOnce never rejects, and neither timer
   // keeps the process alive.
-  firstRun = setTimeout(() => void prewarmOnce(), FIRST_PREWARM_MS)
+  firstRun = setTimeout(prewarmOnce, FIRST_PREWARM_MS)
   firstRun.unref()
-  timer = setInterval(() => void prewarmOnce(), PREWARM_EVERY_MS)
+  timer = setInterval(prewarmOnce, PREWARM_EVERY_MS)
   timer.unref()
 }
 
