@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Folder, FolderPlus } from '@lucide/vue'
+import { Folder, FolderPlus, LayoutList } from '@lucide/vue'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Tip } from '@/components/ui/tooltip'
 import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
 import { addProjectFolder, filterProjects, PROJECT_ACTIONS, type ProjectAction, type ProjectMenuApi, runProjectAction, syncLabel } from './projects'
+import { showProjectDetails } from './projectDetails'
 
 // The new-session screen above the composer: greeting, then either the user's projects (the default; clicking one
 // starts a new chat in its folder) or the stats card behind a Stats tab (owner, 2026-10-08: "I click New Chat, and
@@ -88,13 +90,31 @@ function addFolder(kind: 'folders' | 'roots'): void {
 
 const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-[12px] leading-4'
 const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text' : 'text-text-muted hover:text-text-2']
+
+// A tile that stops matching the filter (owner, 2026-10-08: "those kinda like nicely animated filtering ... instead of
+// everything just kinda disappears") fades and shrinks out where it stands. It goes absolute at its spot so it does not
+// hold its grid cell while it leaves, which the remaining tiles need to glide into. Reduced motion turns all of it off.
+function pinLeaving(el: Element): void {
+  const tile = el as HTMLElement
+  tile.style.left = `${tile.offsetLeft}px`
+  tile.style.top = `${tile.offsetTop}px`
+  tile.style.width = `${tile.offsetWidth}px`
+}
+
+// The details of a tile: in its flow when the toggle is on (the tile is its old, taller self), otherwise a layer under
+// the tile that shows on hover or keyboard focus and takes no room, so the grid never moves (owner, 2026-10-08: "only
+// display that on hover. So it fits more vertically").
+const TILE = 'group/tile relative flex min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 p-3 text-start hover:bg-fill-hover'
+const DETAILS_HOVER = 'pointer-events-none absolute inset-x-0 top-full z-20 mt-1 hidden min-w-0 flex-col gap-2 rounded-(--radius-8) bg-(--bg-popover) p-2 group-hover/tile:flex group-focus-visible/tile:flex'
+const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2'
 </script>
 
 <template>
   <!-- m-auto rather than justify-center: when the window is too short the column starts at the top and
        scrolls, instead of its top being cut off. -->
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
-    <div class="m-auto flex w-full max-w-3xl flex-col items-center py-6">
+    <!-- The projects tab leaves 16px more under the tiles (owner, 2026-10-08: the folder row below ran into them); the composer's row is not changed. -->
+    <div class="m-auto flex w-full max-w-3xl flex-col items-center" :class="tab === 'projects' ? 'pt-6 pb-10' : 'py-6'">
       <h1 class="flex items-center justify-center gap-1.75 text-center text-[22px] font-normal leading-7 text-text">
         <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (Jacob, 2026-10-06). -->
         <img src="/favicon.svg" alt="" class="relative top-px size-5.5 shrink-0" />
@@ -109,6 +129,11 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
       <template v-if="tab === 'projects'">
         <div class="mt-3 flex w-full items-center gap-1.5">
           <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-[13px] leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
+          <Tip :label="showProjectDetails ? 'Hide folders and git status on every project' : 'Show folders and git status on every project'">
+            <button type="button" aria-label="Folders and git status on every project" :aria-pressed="showProjectDetails" :class="[TOGGLE, showProjectDetails ? 'bg-fill-hover text-text' : 'bg-fill-5 hover:bg-fill-hover']" @click="showProjectDetails = !showProjectDetails">
+              <LayoutList class="size-4" aria-hidden="true" />
+            </button>
+          </Tip>
           <DropdownMenu v-if="src.pickFolder && src.changeProjectChoice">
             <DropdownMenuTrigger as-child>
               <button type="button" aria-label="Choose project folders" title="Choose project folders" class="flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) bg-fill-5 text-text-2 hover:bg-fill-hover">
@@ -126,28 +151,42 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
         <p v-if="problem && !answer" class="mt-4 text-[12px] leading-4 text-text-muted">Could not load your projects: {{ problem }}</p>
         <p v-else-if="!answer && loading" class="mt-4 text-[12px] leading-4 text-text-muted">Loading your projects…</p>
         <p v-else-if="!listed.length" class="mt-4 text-[12px] leading-4 text-text-muted">{{ query ? 'No project matches that.' : 'No projects yet. Start a chat in a folder and it shows up here.' }}</p>
-        <div v-else class="mt-3 grid w-full grid-cols-3 gap-2">
-          <ContextMenu v-for="p in listed" :key="p.path">
-            <ContextMenuTrigger as-child>
-              <button type="button" :title="p.path" class="flex min-w-0 flex-col gap-2 rounded-(--radius-12) bg-fill-5 p-3 text-start hover:bg-fill-hover" @click="open(p)">
-                <span class="flex min-w-0 items-center gap-2">
-                  <img v-if="p.icon" :src="p.icon" alt="" class="size-7 shrink-0 rounded-(--radius-6)" />
-                  <span v-else class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted">
-                    <Folder class="size-4" aria-hidden="true" />
+        <TransitionGroup
+          v-else
+          tag="div"
+          class="relative mt-3 grid w-full grid-cols-3 gap-2"
+          enter-active-class="transition-[opacity,scale] duration-[220ms] ease-(--ease-out) motion-reduce:transition-none"
+          enter-from-class="opacity-0 scale-95"
+          leave-active-class="pointer-events-none absolute transition-[opacity,scale] duration-[220ms] ease-(--ease-out) motion-reduce:transition-none"
+          leave-to-class="opacity-0 scale-95"
+          move-class="transition-transform duration-[220ms] ease-(--ease-snap) motion-reduce:transition-none"
+          @before-leave="pinLeaving"
+        >
+          <div v-for="p in listed" :key="p.path" class="min-w-0">
+            <ContextMenu>
+              <ContextMenuTrigger as-child>
+                <button type="button" :title="p.path" :class="[TILE, showProjectDetails ? 'flex-col' : 'items-center']" @click="open(p)">
+                  <span class="flex min-w-0 items-center gap-2">
+                    <img v-if="p.icon" :src="p.icon" alt="" class="size-7 shrink-0 rounded-(--radius-6)" />
+                    <span v-else class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted">
+                      <Folder class="size-4" aria-hidden="true" />
+                    </span>
+                    <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
                   </span>
-                  <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
-                </span>
-                <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
-                <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
-              </button>
-            </ContextMenuTrigger>
-            <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-              <ContextMenuItem v-for="item in PROJECT_ACTIONS" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
-                {{ item.label }}
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        </div>
+                  <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
+                    <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
+                    <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
+                  </span>
+                </button>
+              </ContextMenuTrigger>
+              <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+                <ContextMenuItem v-for="item in PROJECT_ACTIONS" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
+                  {{ item.label }}
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          </div>
+        </TransitionGroup>
         <p v-if="answer?.hydra.found && answer.hydra.problem" class="mt-3 text-[11px] leading-4 text-text-muted">Project Hydra: {{ answer.hydra.problem }}</p>
         <ProjectFoldersDialog :open="managing" :choices="choices" @update:open="(o: boolean) => (managing = o)" @changed="load" @failed="fail" />
       </template>
