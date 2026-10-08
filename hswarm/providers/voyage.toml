@@ -1,0 +1,32 @@
+# Voyage AI's embeddings and reranking models, through its REST API.
+base_url = "https://api.voyageai.com/v1"
+transport = "service"
+about = "Voyage AI text embeddings and reranking. Operations use the provider's documented JSON request schema."
+website = "https://www.voyageai.com"
+key_url = "https://dashboard.voyageai.com/organization/api-keys"
+docs = "https://docs.voyageai.com/reference/embeddings-api"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+key_billing = "unknown"  # token-priced, with keys that may be free-tier or paid; the ledger leaves `billed` off
+capabilities = ["embeddings", "reranking"]
+# No check_path: no free GET is documented to confirm a key, and a model call is billed.
+
+# Voyage documents rate limits per organization ("apply to your entire organization"), not per API key, so
+# no key_rpm is set: a per-key figure would not match what the provider enforces across a shared account.
+# Source: https://docs.voyageai.com/docs/rate-limits
+
+[operations.embeddings]
+method = "POST"
+path = "/embeddings"
+capability = "embeddings"
+input = "json"
+response = "json"
+docs = "https://docs.voyageai.com/reference/embeddings-api"
+
+[operations.rerank]
+method = "POST"
+path = "/rerank"
+capability = "reranking"
+input = "json"
+response = "json"
+docs = "https://docs.voyageai.com/reference/reranker-api"
