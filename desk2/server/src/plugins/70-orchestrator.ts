@@ -93,12 +93,15 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const rows: OrchestratorRow[] = []
     for (const { s, items } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
-      rows.push(afterGivingUp(classify(s, busy ? null : await get<TranscriptItem[]>(items), now), tries))
+      rows.push(classify(s, busy ? null : await get<TranscriptItem[]>(items), now))
     }
     return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null }
   }
 
-  function plan(rows: OrchestratorRow[], days: number): OrchestratorPlan {
+  /** The plan as the page shows it: a chat the orchestrator gave up on reads as left to a person. Only the shown
+   *  rows say so; the tick decides on the chat's own move, or the given-up chat would count as a good turn. */
+  function plan(read: OrchestratorRow[], days: number): OrchestratorPlan {
+    const rows = read.map((r) => afterGivingUp(r, tries))
     const counts: OrchestratorPlan['counts'] = {}
     for (const r of rows) counts[r.move] = (counts[r.move] ?? 0) + 1
     return { at: Date.now(), mode: armed ? 'armed' : 'shadow', days, creaitor: creaitorTool() !== null, rows: rank(rows), counts, acts: [...acts] }

@@ -167,9 +167,10 @@ test('armed, it continues each Desk chat a limit or an error stopped, twice at m
   const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
   expect([by.error.move, by.limited.move]).toEqual(['leave', 'leave'])
   expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
-  expect((await arm(true)).acts).toHaveLength(6)
+  // and stays given up while the chat stays stopped
+  for (const _ of [4, 5]) expect((await arm(true)).acts).toHaveLength(6)
   const off = await arm(false)
-  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', ['POST /api/diagnostics/orchestrator', 'POST /api/diagnostics/orchestrator'], []])
+  expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', Array(3).fill('POST /api/diagnostics/orchestrator'), []])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {
