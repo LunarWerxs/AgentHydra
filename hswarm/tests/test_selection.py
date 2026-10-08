@@ -155,7 +155,10 @@ def test_a_cc_leg_whose_key_cannot_take_a_workers_first_turn_is_unavailable_and_
     gone = {u["model"]: u["why"] for u in plan["unavailable"]}
     assert opus([{"model": m} for m in gone]) and all("10,000 input tokens per minute" in gone[m] for m in opus([{"model": m} for m in gone]))
 
-    input_limit.from_error(key, "claude-sonnet-5-5", said.format("claude-sonnet-5-5"))
+    # Every other Claude model the cc plan still offers on this key (Sonnet, and Haiku once it is ranked) hits the same wall.
+    for api_id in {config.MODELS[c["model"]].get("api_id") for c in plan["candidates"]
+                   if config.MODELS[c["model"]]["provider"] == "anthropic"}:
+        input_limit.from_error(key, api_id, said.format(api_id))
     task = Task.from_dict({"prompt": "x", "cwd": str(tmp_path), "tools": "read", "backend": "cc", "profile": "code"})
     with pytest.raises(ValueError, match="CliMayte") as refused:
         JobManager().submit([task])

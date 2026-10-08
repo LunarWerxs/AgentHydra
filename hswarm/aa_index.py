@@ -178,24 +178,34 @@ def _write_scope(doc: dict, tail: str) -> None:
 
 
 def refresh() -> dict:
-    """Rewrites every AA-sourced index point from its AA page. A point sourced elsewhere (a vendor's own scores) or
-    that AA does not score in full is kept as it is and reported."""
+    """Rewrites every AA-sourced index point from its AA page. A point sourced elsewhere (a vendor's launch scores, held
+    only until AA publishes the model) becomes AA's point once AA scores it in full: on 2026-10-07 claude-haiku-5-5 kept
+    its vendor estimate after AA had scored it, so its effort routes stayed unrankable. A point AA does not score in full
+    is kept as it is and reported."""
     doc = _read_index()
     hub = pool()
-    updated, kept = [], []
-    for item in doc["points"]:
-        fresh = (hub.get(item["slug"]) or point(item["slug"])) if item["source"].startswith(AA_HOST) else None
+    updated, upgraded, kept = [], [], []
+    for i, item in enumerate(doc["points"]):
+        fresh = hub.get(item["slug"]) or point(item["slug"])
         if fresh is None:
             kept.append(item["slug"])
+            continue
+        if not item["source"].startswith(AA_HOST):
+            # AA's numbers and source replace the estimate; fields AA's page does not carry (cache prices) stay.
+            vendor_only = ("evidence", "evidence_note", "cost_estimated")
+            doc["points"][i] = {**{k: v for k, v in item.items() if k not in vendor_only}, **fresh}
+            upgraded.append(item["slug"])
             continue
         for key in REFRESHED:
             item[key] = fresh[key]
         updated.append(item["slug"])
     today = dt.date.today().isoformat()
     doc["as_of_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+    if upgraded:
+        doc["scope"] += f" {', '.join(upgraded)} sourced from Artificial Analysis from {today}."
     _write_scope(doc, f" Numbers refreshed {today} from Artificial Analysis's model pages.")
     _write_index(doc)
-    return {"updated": updated, "kept": kept}
+    return {"updated": updated, "upgraded": upgraded, "kept": kept}
 
 
 def add(slugs: list[str]) -> dict:

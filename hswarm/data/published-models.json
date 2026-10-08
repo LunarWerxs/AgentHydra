@@ -1,5 +1,5 @@
 {
-  "as_of_utc": "2026-10-08T01:03:23.370173+00:00",
+  "as_of_utc": "2026-10-08T02:13:15.124575+00:00",
   "index_version": "4.3.2",
   "cost_unit": "USD per AA Intelligence Index task",
   "points": [
@@ -1442,34 +1442,43 @@
     },
     {
       "slug": "claude-haiku-5-5",
-      "name": "Claude Haiku 5.5 (max, vendor-reported)",
-      "short": "Haiku 5.5 (max, vendor)",
+      "name": "Claude Haiku 5.5 (Max)",
+      "short": "Claude Haiku 5.5 (max)",
       "creator": "Anthropic",
-      "score": null,
-      "cost": 0.38,
+      "score": 43.3950199670746,
+      "cost": 0.21276971216992022,
       "input": 0.1,
       "output": 0.5,
-      "source": "https://www.anthropic.com/claude-haiku-5-5",
+      "source": "https://artificialanalysis.ai/models/claude-haiku-5-5",
       "pareto": false,
       "full_name": "Claude Haiku 5.5 (Adaptive Reasoning, Max Effort)",
       "release_date": "2026-10-07",
       "scores": {
-        "aa-briefcase": 1578,
-        "gdpval-aa": 1620,
-        "terminalbench-4-0": 0.392,
-        "humanitys-last-exam": 0.459
+        "aa-briefcase": 1577.72,
+        "gdpval-aa": 1620.05,
+        "automationbench-aa": 0.35411015132783624,
+        "terminalbench-4-0": 0.328282828282828,
+        "scicode": 0.549768518518518,
+        "humanitys-last-exam": 0.443929564411492,
+        "gdp-pdf": 0.208,
+        "critpt": 0.188571428571429,
+        "omniscience": 10.666666666666666,
+        "long-context": 0.826666666666667
       },
       "score_sources": {
-        "aa-briefcase": "https://www.anthropic.com/claude-haiku-5-5",
-        "gdpval-aa": "https://www.anthropic.com/claude-haiku-5-5",
-        "terminalbench-4-0": "https://www.anthropic.com/claude-haiku-5-5",
-        "humanitys-last-exam": "https://www.anthropic.com/claude-haiku-5-5"
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "scicode": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "critpt": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "omniscience": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+        "long-context": "https://artificialanalysis.ai/models/claude-haiku-5-5"
       },
       "cached_input": 0.01,
-      "cache_write": 0.125,
-      "evidence": "vendor",
-      "evidence_note": "Anthropic's launch scores, read 2026-10-07; Artificial Analysis has not published Haiku 5.5. The effort behind each result was not stated and is taken as max (scores rise with effort). Only benchmarks that are the same test as this file's keys are mapped (Humanity's Last Exam is the no-tools result); every other key is absent, so a floor that needs it rejects this point. score (the AA index) is null: not measured.",
-      "cost_estimated": "not published: Sonnet 5.5 max's published cost (7.6) x 0.05, Haiku 5.5's low-tier price ratio to Sonnet 5.5 ($0.10 / $2 input, $0.50 / $10 output)"
+      "cache_write": 0.125
     },
     {
       "slug": "claude-fable-5",
@@ -2658,6 +2667,150 @@
         "omniscience": "https://artificialanalysis.ai/models/gpt-oss-20b",
         "long-context": "https://artificialanalysis.ai/models/gpt-oss-20b"
       }
+    },
+    {
+      "slug": "claude-haiku-5-5-medium",
+      "name": "Claude Haiku 5.5 (Medium)",
+      "short": "Claude Haiku 5.5 (medium)",
+      "creator": "Anthropic",
+      "score": 34.4646519474657,
+      "cost": 0.04703084793955566,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+      "release_date": "2026-10-07",
+      "scores": {
+        "aa-briefcase": 1371.7,
+        "gdpval-aa": 1276.84,
+        "automationbench-aa": 0.2858961481429316,
+        "terminalbench-4-0": 0.151515151515152,
+        "scicode": 0.489583333333333,
+        "humanitys-last-exam": 0.337812789620019,
+        "gdp-pdf": 0.152,
+        "critpt": 0.128571428571429,
+        "omniscience": 4.466666666666667,
+        "long-context": 0.773333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "scicode": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "critpt": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "omniscience": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium",
+        "long-context": "https://artificialanalysis.ai/models/claude-haiku-5-5-medium"
+      }
+    },
+    {
+      "slug": "claude-haiku-5-5-high",
+      "name": "Claude Haiku 5.5 (High)",
+      "short": "Claude Haiku 5.5 (high)",
+      "creator": "Anthropic",
+      "score": 37.8240211671094,
+      "cost": 0.07942671568737021,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+      "release_date": "2026-10-07",
+      "scores": {
+        "aa-briefcase": 1442.55,
+        "gdpval-aa": 1420.03,
+        "automationbench-aa": 0.3372685311767238,
+        "terminalbench-4-0": 0.217171717171717,
+        "scicode": 0.487268518518519,
+        "humanitys-last-exam": 0.3725671918443,
+        "gdp-pdf": 0.172,
+        "critpt": 0.185714285714286,
+        "omniscience": 5.75,
+        "long-context": 0.773333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "scicode": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "critpt": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "omniscience": "https://artificialanalysis.ai/models/claude-haiku-5-5-high",
+        "long-context": "https://artificialanalysis.ai/models/claude-haiku-5-5-high"
+      }
+    },
+    {
+      "slug": "claude-haiku-5-5-xhigh",
+      "name": "Claude Haiku 5.5 (Xhigh)",
+      "short": "Claude Haiku 5.5 (xhigh)",
+      "creator": "Anthropic",
+      "score": 41.2489304677024,
+      "cost": 0.12378561092096102,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+      "release_date": "2026-10-07",
+      "scores": {
+        "aa-briefcase": 1532.67,
+        "gdpval-aa": 1510.76,
+        "automationbench-aa": 0.35953889773428194,
+        "terminalbench-4-0": 0.292929292929293,
+        "scicode": 0.517361111111111,
+        "humanitys-last-exam": 0.42678405931418,
+        "gdp-pdf": 0.182,
+        "critpt": 0.225714285714286,
+        "omniscience": 6.05,
+        "long-context": 0.783333333333333
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "scicode": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "critpt": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "omniscience": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh",
+        "long-context": "https://artificialanalysis.ai/models/claude-haiku-5-5-xhigh"
+      }
+    },
+    {
+      "slug": "claude-haiku-5-5-low",
+      "name": "Claude Haiku 5.5 (Low)",
+      "short": "Claude Haiku 5.5 (low)",
+      "creator": "Anthropic",
+      "score": 29.4494981304947,
+      "cost": 0.02445936101890973,
+      "input": 0.1,
+      "output": 0.5,
+      "source": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+      "release_date": "2026-10-07",
+      "scores": {
+        "aa-briefcase": 1111.58,
+        "gdpval-aa": 1124.94,
+        "automationbench-aa": 0.22910812181110643,
+        "terminalbench-4-0": 0.126262626262626,
+        "scicode": 0.491898148148148,
+        "humanitys-last-exam": 0.270157553290083,
+        "gdp-pdf": 0.112,
+        "critpt": 0.0914285714285714,
+        "omniscience": 3.25,
+        "long-context": 0.72
+      },
+      "score_sources": {
+        "aa-briefcase": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "gdpval-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "automationbench-aa": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "terminalbench-4-0": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "scicode": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "humanitys-last-exam": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "gdp-pdf": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "critpt": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "omniscience": "https://artificialanalysis.ai/models/claude-haiku-5-5-low",
+        "long-context": "https://artificialanalysis.ai/models/claude-haiku-5-5-low"
+      }
     }
   ],
   "benchmarks": {
@@ -2722,7 +2875,7 @@
       "source": "https://artificialanalysis.ai/evaluations/critpt"
     }
   },
-  "scope": "63 selected exact configurations; not an exhaustive catalogue. All 630 component scores sourced, no new model benchmarks. kimi-k3 and nvidia-nemotron-3-ultra-550b-a55b were added 2026-09-27 from the same source, for their free NVIDIA routes. claude-haiku-5-5 was added 2026-10-07 from Anthropic's own launch scores (evidence: vendor), with an estimated cost, until Artificial Analysis publishes it. claude-fable-5, claude-opus-4-8, claude-opus-5, deepseek-v4-flash, glm-5-2, qwen3-5-397b-a17b, qwen3-6-27b, kimi-k2-6, glm-5-1, gemini-2-5-pro, gemini-3-1-flash-lite-preview, gemini-3-1-pro-preview, gemini-3-6-flash, grok-4-3, grok-4-5, grok-4-6, grok-4-7, kimi-k2-7-code, gpt-5-mini, gpt-5-4-mini, gpt-5-4-nano, gpt-5-5, gpt-5-6-luna, gpt-5-6-sol, gpt-5-6-terra, gpt-6-1-sol, qwen3-5-9b, qwen3-7-max, qwen3-7-plus, qwen3-8-2-4t-a95b, deepseek-r1-0120, ministral-3-14b, gpt-oss-20b added 2026-10-07 from Artificial Analysis's model pages. Numbers refreshed 2026-10-07 from Artificial Analysis's model pages.",
+  "scope": "67 selected exact configurations; not an exhaustive catalogue. All 670 component scores sourced, no new model benchmarks. kimi-k3 and nvidia-nemotron-3-ultra-550b-a55b were added 2026-09-27 from the same source, for their free NVIDIA routes. claude-haiku-5-5 was added 2026-10-07 from Anthropic's own launch scores (evidence: vendor), with an estimated cost, until Artificial Analysis publishes it. claude-fable-5, claude-opus-4-8, claude-opus-5, deepseek-v4-flash, glm-5-2, qwen3-5-397b-a17b, qwen3-6-27b, kimi-k2-6, glm-5-1, gemini-2-5-pro, gemini-3-1-flash-lite-preview, gemini-3-1-pro-preview, gemini-3-6-flash, grok-4-3, grok-4-5, grok-4-6, grok-4-7, kimi-k2-7-code, gpt-5-mini, gpt-5-4-mini, gpt-5-4-nano, gpt-5-5, gpt-5-6-luna, gpt-5-6-sol, gpt-5-6-terra, gpt-6-1-sol, qwen3-5-9b, qwen3-7-max, qwen3-7-plus, qwen3-8-2-4t-a95b, deepseek-r1-0120, ministral-3-14b, gpt-oss-20b added 2026-10-07 from Artificial Analysis's model pages. claude-haiku-5-5 sourced from Artificial Analysis from 2026-10-07. claude-haiku-5-5-medium, claude-haiku-5-5-high, claude-haiku-5-5-xhigh, claude-haiku-5-5-low added 2026-10-07 from Artificial Analysis's model pages.",
   "selection_policy": "Published task-specific evidence first; choose cheapest capable available Swarm route, escalate for quality or capacity. Desktop Opus 5.5 retains orchestration and final decisions.",
   "cost_note": "Measured AA index cost per task, rounded as published; not a prediction of production cost. Token rates are separate, current standard API reference rates.",
   "limitations": [
