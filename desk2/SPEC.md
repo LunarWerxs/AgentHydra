@@ -913,9 +913,12 @@ are always 0 (a free port).
 
 `launcher/start.ps1`: if `GET http://127.0.0.1:7798/api/health` fails, start the server hidden
 (`Start-Process -WindowStyle Hidden`, stdout/stderr to `~/.hydra-desk-2/logs/server.log`), wait for
-health, then open Microsoft Edge as an app window (`--app=http://127.0.0.1:7798
---user-data-dir=%LOCALAPPDATA%\HydraDesk2\window`) so it is its own window with its own taskbar entry.
-`launcher/install-shortcuts.ps1` makes Desktop and Start Menu shortcuts named "Hydra Desk" with an icon
+health, then open the window: `launcher/HydraDesk2.exe`, a native WebView2 host built from `launcher/host`
+(its data in `%LOCALAPPDATA%\HydraDesk2\webview`), so it is its own window with its own taskbar entry; it
+replaced the first design's Edge app window. The tray is looked for only after the window has started. When
+the server already answers and the host has run before, `launcher/start.vbs` runs the host itself and then
+`start.ps1 -NoWindow` for the tray (2026-10-08).
+`launcher/install-shortcuts.ps1` makes Desktop and Start Menu shortcuts named "AgentHydra" with an icon
 (AgentHydra's icon since 2026-10-06, compiled into `launcher/HydraDesk2.exe`). Never a visible console window.
 
 **Updates without losing the chats.** `launcher/stop.ps1` asks `POST /api/server/shutdown`, waits 15 s,

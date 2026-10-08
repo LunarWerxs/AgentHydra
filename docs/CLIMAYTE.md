@@ -49,6 +49,25 @@ Free accounts, then CliMayte, then HSwarm's paid API (owner, 2026-10-07: "the fr
 
 ## Server: `server/src/climayte.ts`
 
+`climayte.ts` keeps whatever starts, stops or schedules work: `tick`, `finish`, `climayteRun`, `climayteSend`,
+`climayteVerdict`, the checks' lifecycle, wave start and reconcile, and the ping wiring. It re-exports, by name,
+everything below, so the routes, MCP tools and tests import from it as before. The records and the pure decisions
+are in `climayte-lib.ts`; the store, the journal and reading an attempt's log in `climayte-core.ts`; starting an
+attempt in `climayte-launch.ts`; the scheduling pass in `climayte-schedule.ts`. What never drives the tick sits
+beside it (split 2026-10-08, when the file reached 4,428 lines against the Architect's 2,500-line gate), and none
+of these imports `climayte.ts` back:
+
+| File | Holds |
+| --- | --- |
+| `climayte-stops.ts` | attempt logs read, walls and live readings, runners found and killed, the wind-down, ceiling and overage stops, `climayteSignedOutReason` |
+| `climayte-dispatch.ts` | a dispatch's tasks checked, set (`runSetting`, `sizeTasks`) and made into workers |
+| `climayte-view.ts` | the read API: capacity, journal, list, get, wait, reports (`climayteReports`), scorecard |
+| `climayte-wave-ops.ts` | waves on the live workers: find, edit, hold, report, verify, resolve |
+| `climayte-settle.ts` | an attempt's outcome to its worker's next state (`settleWorker`) |
+| `climayte-steer.ts` | messages and verdicts checked and recorded (`verdictRecord`), `climayteAsk`, the stop hook |
+| `climayte-storage.ts` | the storage pass (`planStorage`, `storagePass`) |
+| `climayte-checks.ts` | a check command's plumbing |
+
 ### Records
 
 ```ts
@@ -1703,7 +1722,13 @@ chat's workers are listed under it in Desk 2's sidebar.
 
 ## Tests (`server/tests/climayte.test.ts`)
 
-One integration test and the pure helpers, per the test-audit bar:
+Two groups moved out whole on 2026-10-08, to keep each file under the Architect's 2,500-line gate:
+`server/tests/climayte-steering.test.ts` (steering a running worker, field notes 10 and 11, and a task judged by
+its check) and `server/tests/climayte-limits.test.ts` (sizing against a window, a session waiting for its own
+account's reset, the five-minute rule). Each sets up its own fake CLI, accounts and groups. Other areas have files
+of their own (`climayte-sealed`, `-storage`, `-wave`, `-scorecard`, `-ping` and the rest under `server/tests/`).
+
+The first tests here were one integration test and the pure helpers, per the test-audit bar:
 - `classifyAttempt`: done, quota (synthetic notice), auth, transient, and a model that merely
   TALKS about a session limit is still `done`.
 - `pickAccount`: skips walled and full accounts, excludes the failed account on a handoff, and
@@ -1970,7 +1995,8 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    every key's state and proof).
 2. **The hold.** `settleWorker` sets a manager with a live, unreported wave to `waiting` /
    `hold: 'wave'`; the tick's due filter (`tick`, `climayte.ts`) skips it; the stall rule (one nudge, then
-   failed). Files: `server/src/climayte.ts`, `server/src/climayte-wave.ts`,
+   failed). Files: `server/src/climayte.ts` (the due filter), `server/src/climayte-settle.ts` (the hold),
+   `server/src/climayte-wave-ops.ts` (`holdManagerForWave`, the stall rule), `server/src/climayte-wave.ts`,
    `server/tests/climayte-wave.test.ts`. Check: the same test file, with the fake CLI
    (`server/tests/mocks/fake-claude.ts`): a manager whose wave has a running task ends its turn
    `waiting`, launches nothing on the next ticks, and ends `done` once the wave is reported.
@@ -1992,6 +2018,7 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    provisional verdicts and counts only the newest verdict per span of work (a verdict with no
    attempt since the previous one replaces it); `by` keeps `wave` instead of folding it into
    `orchestrator` (`verdictRecord`, `climayte-steer.ts`). Files: `server/src/climayte-wave.ts`, `server/src/climayte.ts`,
+   `server/src/climayte-steer.ts`,
    `server/src/climayte-scorecard.ts`, `server/tests/climayte-scorecard.test.ts`,
    `server/tests/climayte-wave.test.ts`. Check:
    `bun test server/tests/climayte-scorecard.test.ts server/tests/climayte-wave.test.ts` (a temp git
@@ -2010,7 +2037,8 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    `POST /api/corch/waves`, `POST /api/corch/waves/:id/verify`, `GET /api/corch/waves` (`{ waves }`,
    newest first, each exactly the stored record) and `GET /api/corch/waves/:id` (404 if unknown), the under-3-tasks refusal, the
    answer carrying the waiter command, and `climayte_status { wave }`. Files: `server/src/mcp.ts`,
-   `server/src/routes/climayte.ts`, `server/src/climayte.ts`, `server/tests/climayte-wave.test.ts`.
+   `server/src/routes/climayte.ts`, `server/src/climayte.ts` (`climayteWaveStart`), `server/src/climayte-wave-ops.ts`
+   (`climayteWaveVerify`, `climayteWaves`, `climayteWave`), `server/tests/climayte-wave.test.ts`.
    Check: `bun test server/tests/climayte-wave.test.ts server/tests/climayte.test.ts`
    (verify `ok` confirms every provisional pass and records a pass on the manager; not `ok` confirms
    none).

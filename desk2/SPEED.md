@@ -151,3 +151,27 @@ base, new, new, base. Per idle minute:
 
 Server CPU with the window visible and with the pane open read inside the noise in the first round; with the full
 table on both sides, every new run came in under every base run, which is this file's rule for "better".
+
+## 2026-10-08, opening and closing the window
+
+The owner asked for the window to open, close and fill in faster. Measured on the live window from the shortcut,
+four runs a side:
+
+| what | before | after | how |
+| --- | --- | --- | --- |
+| launch to a visible window, server already up (median) | 591 ms | 200 ms | `launcher/start.vbs` checks `/api/health` itself (30 ms cold, 2 ms warm, 39 ms to give up on a closed port) and runs `HydraDesk2.exe` directly, then `start.ps1 -NoWindow` hidden for the tray; PowerShell's own startup was about a quarter of a second of every open (c6a778ab) |
+| first paint (median) | 1.3 s | 0.9 s | the same change |
+| tray check on the way to the window | 463 ms | 0 ms | `start.ps1` starts the window host before the WMI tray query; a `Get-Process` gate (about 80 ms) skips the query when no tray runs; health polled every 100 ms, not 250 ms (b64329ba) |
+| close | hidden in 14-22 ms | unchanged | the host's `CloseRequested` hides the window before the event loop exits, so tearing down the WebView2s (about 0.55 s) happens off screen (e9982f31) |
+
+Every new run came in under every old run. What fills in faster, which this table does not time (e9982f31,
+b64329ba): a reload draws the chat list from its localStorage copy before the server's hello, every lazy panel and
+every AgentHydra-pane tab is fetched one at a time on `requestIdleCallback` once the sidebar has data, and the Home
+stats card shows its last answer while the next one is read (its four daemon reads took 3 s cold).
+
+The daemon behind the pane was the other half. Its `STALL` lines (`daemon.log`), which since 57904add and f017a013
+carry a profile for each long block and sample from boot, found where the event loop was held: a synchronous chat
+list and process queries (31dd5ec8), a `spawnSync` in message delivery that froze it for 18.5 s and got it restarted
+by the watchdog, a synchronous agent-catalog walk (19d99db5), CliMayte's boot reading every finished worker
+(42c1ed70) and the HSwarm account map read on every ask (a54954be). Seconds blocked went from 40 per 15 minutes
+before to none in a 30-minute busy sample after; `/api/health` from 1.8 s on average to 2 ms.

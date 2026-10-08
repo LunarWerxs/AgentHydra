@@ -67,7 +67,7 @@ From the code (agent inventory, file:line) and the 7-minute stat sample:
 | `DATA_DIR/usage-history.json` (`usage-history.ts:58-89`) | 2.2 MB | Non-atomic full rewrite per recorded sample | full parse per forecast/budget call | Biggest whole-file rewrite; the key count is unbounded |
 | `DATA_DIR/usage-cache.json` (`usage-cache.ts`) | 46 KB | Non-atomic RMW per usage check per account | re-read from disk on **every** get, with no memory cache | One of six usage stores (see Overlaps) |
 | `DATA_DIR/price-catalog.json` | 2.26 MB | Non-atomic, at most daily | once at boot | fine; could be zstd (JSON) |
-| `corch/workers.json` (`climayte-core.ts:568`) | 231-270 KB | Atomic rewrite on every `changed(w)`, **no lock** | once at boot | Rewritten on every worker change. The rewrite counter was still queued at writing time (see Open). |
+| `corch/workers.json` (`save`, `climayte-core.ts`) | 231-270 KB | Atomic rewrite on every `changed(w)`, **no lock** | once at boot | Rewritten on every worker change. The rewrite counter was still queued at writing time (see Open). |
 | `corch/live.json` | 6.6 KB | at most once a tick (1-15 s) | at boot | fine |
 | `CONFIG_DIR/cli-instances.json` (`json-store`) | 47 KB | lock + atomic, including `lastUsageCheck` on every usage check | per UI poll (~4 s) | A volatile field in a registry file |
 | `CONFIG_DIR/login-sync.json` | 14 KB | atomic rewrite on **every pass** (`cli-login-sync.ts:1214`) | **every 30 s tick** | Rewritten even when nothing changed but `lastSyncAt` |
@@ -81,7 +81,7 @@ From the code (agent inventory, file:line) and the 7-minute stat sample:
 
 | Store | Size | Rate | Retention / compression |
 |---|---|---|---|
-| `corch/logs/*.jsonl` (CliMayte stream logs) | 809 MB (652 MB plain in 1,141 files + 186 MB zst in 847 files) | **~58 MB/h** in the 7-minute sample; 641 MB in the last 24 h | zstd-packed only 24 h after the attempt ends, ≤32 MiB per hourly pass (`climayte.ts:1019-1047`). Plain files older than 2 days: 0, so packing does keep up. |
+| `corch/logs/*.jsonl` (CliMayte stream logs) | 809 MB (652 MB plain in 1,141 files + 186 MB zst in 847 files) | **~58 MB/h** in the 7-minute sample; 641 MB in the last 24 h | zstd-packed only 24 h after the attempt ends, ≤32 MiB per hourly pass, at writing. Plain files older than 2 days: 0, so packing does keep up. Since piece 6: 10 minutes after it settles, ≤128 MiB a pass (`packOldLogs` in `climayte.ts`, `planStorage` in `climayte-storage.ts`). |
 | `corch/journal.jsonl` + `.1` | 0.2 + 5.2 MB | append per state change | one 5 MiB generation |
 | `corch/prompts` 13 MB / 2,164 files; `handoffs` 4.7 MB / 581; `done` 17 MB / 1,059; `hooks`, `signals` | 35 MB | several new files per attempt | **no cleanup** |
 | `corch/archive/<stamp>` | 47 MB | on remove | never deleted |
@@ -250,6 +250,11 @@ the change.
    `corch/prompts|handoffs|signals|hooks` of finished workers (e.g. 14 days) and for
    `corch/archive`. Measure: `du -sh ~/.agenthydra/corch/logs` and plain-vs-zst bytes (the
    python one-liner in §1c's source: sizes by extension and age). Expect 809 MB → ~250 MB.
+   **Done** (`planStorage`, `storagePass`): a settled log is packed 10 minutes after it ends, up to 128 MiB a
+   pass; a finished worker's prompts, handoffs, signals, hooks and sealed folder (`corch/sealed/<worker id>`,
+   since 2026-10-08, when sealed tasks stopped leaving a folder in `%TEMP%`) go 14 days after its last
+   attempt ended; a removed task's `corch/archive` folder goes after 30 days. Pinned by
+   `server/tests/climayte-storage.test.ts`.
 7. **Prune old `claude-native` builds.** Files: `server/src/claude-native-launch.ts`. Keep the build
    in use and one previous; never delete one a running Claude holds. Measure:
    `du -sh ~/.agenthydra/data/claude-native` (2.5 GB → ~1.2 GB).

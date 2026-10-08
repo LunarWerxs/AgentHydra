@@ -58,7 +58,10 @@ between server/ and web/.
 - `web/dist` and `hydra/dist` are what the running window serves, so `bun run build` never builds into them:
   `scripts/build-dist.ts` builds each app into `dist.next-<pid>` and swaps it in only when vite succeeded (2026-10-07: a
   hydra build failing on another session's half-made edits had left `/ah/` blank for ten minutes). A failed build
-  leaves the old dist as it was. Run `vite build` by hand only with `--outDir` pointing somewhere else.
+  leaves the old dist as it was. A build whose templates use a static class its CSS has no rule for is refused the
+  same way (`scripts/dead-classes.ts`, 2026-10-08: `size-screen`, which Tailwind v4 does not generate, left the page
+  shorter than the window with every other check green). Run `vite build` by hand only with `--outDir` pointing
+  somewhere else.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp

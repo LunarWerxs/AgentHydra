@@ -105,7 +105,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   Escape, the AgentHydra button again, or picking one of Desk's own chats slides the chat back. The pane
   has no strip of its own above the copy (owner, 2026-10-05: "remove the header bar ... and remove the
   logo"): the copy's top bar fills it, without the AgentHydra logo and title or the Queue button. It
-  opens at once: the copy loads in the background once Desk has painted and the window is idle, keeps
+  opens at once: the copy loads in the background once Desk has painted and the window is idle, then loads
+  the code of its other tabs one at a time while idle (`hydra/src/lib/lazy-view.ts`), keeps
   every tab it has opened, and keeps one shared store per kind of data (CLI and desktop instances,
   analytics, HSwarm, CliMayte), asked again about every 2 minutes while the window is visible and
   right when a page or the pane is shown, so every tab reads the same numbers (`hydra/src/lib/warm-data.ts`).
@@ -274,7 +275,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   HSwarm, Codex, OpenCode, DeepSeek) and the activity grid, for All, 30 days or 7 days. Desk's server
   gathers it in one route, `GET /api/stats/home?range=`, from AgentHydra's spend and activity reports,
   CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
-  and with AgentHydra away the card shows Desk's own chats and says so. Each square of the activity grid
+  and with AgentHydra away the card shows Desk's own chats and says so. Reopened after a minute, it shows
+  its last figures at once while it reads new ones, for up to 15 minutes after the last answer; past that
+  it waits for the read, so an AgentHydra that went down shows as down. Each square of the activity grid
   says its day and its number on hover (owner, 2026-10-05), and the Sources list folds up: folded at
   first, then as you last left it. The Models tab lists only the models that matter (owner, 2026-10-05:
   "it gets really, really long"): most sessions first, while each has at least 2% of the sessions and
@@ -458,7 +461,9 @@ Desktop and in the Start Menu. Clicking it starts the server in the background i
 waits for it to answer, then opens Hydra Desk in its own window (`launcher\HydraDesk2.exe`, which needs
 the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it
 never starts a second server. No console window appears: the shortcut runs `launcher\start.vbs`, which
-runs `launcher\start.ps1` hidden.
+runs `launcher\start.ps1` hidden. When the server already answers and the window has opened before,
+`start.vbs` runs `HydraDesk2.exe` itself and then `start.ps1 -NoWindow` for the tray, which saves PowerShell's
+startup on every open; `start.ps1` also opens the window before it looks for the tray.
 
 **AgentHydra's tray icon is Desk 2's** (owner, 2026-10-06: Desk 2 becomes AgentHydra 2.0, and the old
 AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\AgentHydra-Tray.exe
@@ -481,7 +486,8 @@ server log.
 
 **For development.** `bun install`, then `bun run dev` runs the server with reload on 7798 and the Vite
 dev server on 4798 (open http://127.0.0.1:4798). `bun run build` builds the window into `web/dist`,
-which the server on 7798 serves; the launcher's window needs that build. `bun test` and
+which the server on 7798 serves; the launcher's window needs that build. A build whose templates use a
+class its CSS has no rule for is refused and leaves the served build as it was (`scripts/dead-classes.ts`). `bun test` and
 `bun run typecheck` are the checks.
 
 `bun e2e/stream-frames.e2e.ts` streams a long reply (an em dash, a 240-line TypeScript block) into the transcript in headless chrome-headless-shell and writes `tmp/stream-frames.json`: frames over the 8.33 ms budget, style recalcs, layouts and DOM mutations per chunk (needs `bun add -d puppeteer`).

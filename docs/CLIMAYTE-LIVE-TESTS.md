@@ -1,7 +1,8 @@
 # CliMayte live tests
 
 `scripts/climayte-live.ts` runs CliMayte against the owner's real CLI accounts through the running
-daemon's HTTP API. The unit tests (`server/tests/climayte.test.ts`) pin the decisions with a fake CLI;
+daemon's HTTP API. The unit tests (`server/tests/climayte.test.ts`, `climayte-steering.test.ts`,
+`climayte-limits.test.ts` and the other `climayte-*.test.ts`) pin the decisions with a fake CLI;
 this script is the proof that the real CLI, the real accounts and a real daemon restart behave the
 same way. Each turn is a one-line reply, but it spends real quota: moving a session to another
 account costs one uncached prompt (about $0.50).

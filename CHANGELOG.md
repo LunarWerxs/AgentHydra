@@ -25,6 +25,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5**
 - **The download is about 12 MB instead of about 200 MB**
 - **AgentHydra 2.0 does much less in the background while you are not looking at it**
+- **The new window opens sooner, closes at once and fills in faster**
+- **AgentHydra no longer freezes for seconds at a time**
+- **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
 
 **Everything in 2.0.0**
 
@@ -96,6 +99,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   closed it stops asking for updates nobody would see, its pages refresh only what the page on screen shows, and a
   list of local servers asked for twice in a row is scanned once. It also starts with less in memory and loads a
   little less code when it opens.
+- **The new window opens sooner, closes at once and fills in faster.** When AgentHydra is already running, the
+  shortcut opens the window straight away instead of starting a script first, and the window no longer waits for
+  the tray icon check. Closing hides the window at once instead of leaving it on screen while it shuts down. A
+  reload shows your chat list right away, Settings and the other panels load while the window is idle so they
+  open without a wait, and Home shows its last figures while it reads new ones.
 - **Sidebar rows glide to their new place when the list reorders.** A chat that moves up or down slides there
   instead of jumping, unless your system asks for reduced motion.
 
@@ -119,6 +127,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   once they have built, so a failed build leaves the window as it was.
 - **Refreshing one provider's model list in HSwarm keeps the others.** It used to replace the whole saved list,
   prices included, with that one provider's models.
+- **AgentHydra no longer freezes for seconds at a time.** Listing your chats, checking which programs run,
+  sending a message to a chat and starting CliMayte could each hold the whole app still, and a long freeze made
+  the tray restart it. That work now happens without stopping everything else, so pages and tools answer at once.
+- **CliMayte's sealed tasks no longer leave a folder behind in your temp folder.** Each one used to leave an
+  empty folder there that nothing removed. They now live with CliMayte's other files and are cleared with them,
+  two weeks after the task last ran.
 
 ### Removed
 

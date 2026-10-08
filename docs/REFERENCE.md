@@ -506,6 +506,24 @@ scheduled task, no Startup shortcut and no Run key entry for this app; the live 
 a bare `cmd /c bun server/src/index.ts` typed five hours earlier, with nothing above it. Every piece
 needed to recover already existed and nothing ever called it.
 
+### Why it froze: the `STALL` lines
+
+The daemon runs on one thread, and the tray reaps it after three missed health probes in a row with a kill
+that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the thread was doing, in
+`logs/daemon.log`:
+
+- `STALL main thread unresponsive for N s ... in flight: ...` comes from a worker thread while the main thread
+  is stuck (from 2 s on), naming the requests in flight; `STALL over` says when it answered again.
+- `STALL one block of N s ...; it followed: ... | profile: ...` follows any single block of 2 s or more.
+- A saturated line follows many short blocks that add up to 5 s in 10 s, which look like no freeze at all yet
+  starve the health probe the same way.
+
+The profile comes from a sampler that runs from boot: `on top` is where the samples were,
+`innermost daemon frame` the daemon function closest to them and `outermost daemon frame` the timer or
+route that started it. That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
+delivery, a synchronous chat list and process queries, CliMayte's boot reading every finished worker), so read
+these lines before profiling a second daemon.
+
 ## Auto-update
 
 Background self-update, on by default since 2026-10-05 (it restarts the daemon; turn it off in
