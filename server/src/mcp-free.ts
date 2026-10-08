@@ -502,7 +502,10 @@ function recentThreads(): Promise<FreeThread[]> {
   if (!threadsRead || Date.now() - threadsRead.at > THREADS_TTL_MS)
     threadsRead = {
       at: Date.now(),
-      list: desk<FreeThread[]>('GET', '/threads').catch(() => []),
+      list: desk<FreeThread[]>('GET', '/threads').catch(() => {
+        threadsRead = null // only a read that worked is kept: the next call tries again
+        return []
+      }),
     }
   return threadsRead.list
 }
