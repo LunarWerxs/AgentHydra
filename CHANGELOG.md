@@ -30,6 +30,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
 - **HSwarm's Claude Code workers keep their turns when a key runs out of credit**
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone**
+- **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call**
 - **HSwarm's nightly upkeep finishes again instead of stopping at its two-hour limit**
 
 **Everything in 2.0.0**
@@ -145,6 +146,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone.** With the escalation threshold
   at 0, a question Jev could not answer, for example because it was out of credit, still went to a paid model. It
   now comes back unanswered with Jev's error, so your own fallback can answer it.
+- **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call.** `hswarm keys`
+  used to list such a key as ready, so nothing showed that Jev was down. Now it is marked out of credit, every
+  later call skips it, and it gets one try an hour so a topped-up key comes back by itself.
 - **HSwarm's nightly upkeep finishes again.** While indexing finished jobs it reopened a day's compressed history
   once for every job in it. With a few weeks of history it hit its two-hour limit every night, before it packed old
   jobs, recorded the day or rewrote its page. It now reads each day once, and a night with nothing new reads
