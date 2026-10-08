@@ -185,7 +185,8 @@ function refusal(
 // --- login detection ---------------------------------------------------------
 
 /** Why a login whose credential file exists is dead anyway, or null (null: trust the file). CliMayte
- *  registers its verified signed-out walls here (climayte.ts climayteSignedOutReason); nothing else does. */
+ *  registers its verified signed-out walls here (climayteSignedOutReason in climayte-stops.ts,
+ *  registered by climayte.ts); nothing else does. */
 let loginVeto: ((id: string, configDir: string) => string | null) | null = null
 export function setCliLoginVeto(
   fn: ((id: string, configDir: string) => string | null) | null,

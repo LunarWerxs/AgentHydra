@@ -1,6 +1,6 @@
 // Tokens a running CliMayte worker has spent so far. AgentHydra charges an attempt's tokens to the
-// worker only when the attempt ends (climayte.ts charge()), so while it runs the view's `tokens` lags
-// by the whole live attempt. This reads the worker's own Claude Code transcripts instead
+// worker only when the attempt ends (charge() in climayte-settle.ts), so while it runs the view's
+// `tokens` lags by the whole live attempt. This reads the worker's own Claude Code transcripts instead
 // (<configDir>/projects/<cwd slug>/<session>.jsonl under the CLI instance it ran on) and sums the
 // usage on its assistant messages: input + output + cache write, each message once (Claude Code
 // writes one line per content block, all carrying the message's usage). Cache reads are left out:

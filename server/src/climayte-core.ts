@@ -86,6 +86,14 @@ export const SIGNALS = join(ROOT, 'signals')
  *  the storage pass with the worker's other files. */
 export const SEALED = join(ROOT, 'sealed')
 
+export const HANDOFFS = join(ROOT, 'handoffs')
+
+export const isActive = (w: CliMayteWorker): boolean =>
+  w.status === 'queued' ||
+  w.status === 'running' ||
+  w.status === 'waiting' ||
+  w.status === 'checking'
+
 /** Forward slashes: the path goes into a bash command (the hook) and into the model's prompt. */
 export const slashed = (p: string): string => p.replace(/\\/g, '/')
 

@@ -286,7 +286,8 @@ const RESUMED = new Map<string, string | null>([
   ],
   ['The API was overloaded and this turn stopped part-way. Continue the task exactly where you left off. Do not redo steps that are already finished.', 'Continued after the API was overloaded.'],
 ])
-/** A failed verdict sent back to the worker (server/src/climayte.ts SENT_BACK and sendBack). */
+/** A failed verdict sent back to the worker (SENT_BACK in server/src/climayte-steer.ts, sendBack in
+ *  climayte.ts). */
 const SENT_BACK = /^The orchestrator checked your result and it did not pass\. What was wrong: [\s\S]*\n\nFix it, prove the fix with a command and what it printed, and report again\.$/
 
 /**

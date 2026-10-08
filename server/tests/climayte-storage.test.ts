@@ -1,4 +1,5 @@
-// The storage pass (climayte.ts planStorage): what it packs and removes, and what it never touches.
+// The storage pass (climayte-storage.ts planStorage): what it packs and removes, and what it never
+// touches.
 // CONFIG_DIR is a scratch dir (tests/setup.ts), so corch/ here is not a real install's.
 import { describe, expect, test } from 'bun:test'
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'

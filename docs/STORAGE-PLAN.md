@@ -245,7 +245,7 @@ the change.
 5. **Queue payload and download.** Files: `climayte-queue-sync.ts` (zstd, single base64,
    `mirror.getItem` for downloads; read both formats for one release). Measure: blob bytes
    (`meta`/log line) and `GET /v1/queues/:pc` count per hour.
-6. **Pack CliMayte logs on settle.** Files: `server/src/climayte.ts` (`PACK_AFTER_MS` 24 h → 10 min
+6. **Pack CliMayte logs on settle.** Files: `server/src/climayte-storage.ts` (`PACK_AFTER_MS` 24 h → 10 min
    after `logSettled`; raise `PACK_PASS_BYTES` or run every 10 min), plus a retention for
    `corch/prompts|handoffs|signals|hooks` of finished workers (e.g. 14 days) and for
    `corch/archive`. Measure: `du -sh ~/.agenthydra/corch/logs` and plain-vs-zst bytes (the

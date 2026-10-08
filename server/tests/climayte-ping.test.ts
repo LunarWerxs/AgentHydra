@@ -533,7 +533,7 @@ describe('the message', () => {
   })
 
   test("a failed worker's error holding its own report or stderr never reaches the chat", () => {
-    // climayte.ts settleWorker: a failed attempt's error is its result text, else its stderr.
+    // settleWorker (climayte-settle.ts): a failed attempt's error is its result text, else its stderr.
     const base = worker({ id: 'w-9c0d1e2f', title: 'Delete stale buckets' })
     const p = snapshotOf(base, null, T0)
     for (const error of [

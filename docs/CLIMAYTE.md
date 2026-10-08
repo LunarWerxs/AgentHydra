@@ -464,7 +464,7 @@ Production accounts: `listCliInstances()` filtered to `loggedIn`, each with `ses
 Tests replace the provider with `setCliMayteAccountsProvider(fn | null)`.
 
 The login a listing reports is honest (field note 3): `loggedIn` only proves a credential file
-exists, so climayte.ts registers `setCliLoginVeto(climayteSignedOutReason)` with `core/cli-instances.ts`.
+exists, so climayte.ts registers `setCliLoginVeto(climayteSignedOutReason)` (from `climayte-stops.ts`) with `core/cli-instances.ts`.
 An account CliMayte walls `signed out` (its last attempt failed `auth`, and its credential file has not
 changed since) lists `loggedIn: false` with a `loginNote` saying why, in `list_cli_instances` and
 the CLI tab alike, without running `claude auth status` per row. The wall is rechecked in the
@@ -1756,14 +1756,14 @@ per wave with a short report. Rules this design keeps:
 
 **How is a CLI worker woken when its sub-workers finish?** It is not, today; but the parts exist.
 A `claude -p` worker ends when its turn ends: `settleWorker` sets `done`, or `queued` when a message
-is pending (`server/src/climayte.ts:1424-1428`), and `finish` starts the check on `done`
-(`climayte.ts:1491`). A message from `climayteSend` (`climayte.ts:2171`) is held in `pending` while
+is pending (`server/src/climayte-settle.ts`), and `finish` starts the check on `done`
+(`climayte.ts`). A message from `climayteSend` (`climayte.ts`) is held in `pending` while
 a turn runs and then resumes the same session (`--resume`, `server/src/climayte-launch.ts:377`) with
 `followUpText` as the prompt (`climayte-launch.ts:192`); the tick starts it like any queued worker
-(`climayte.ts:966-971`). So the daemon can wake the manager the way `climayte_send` does: it appends
+(`tick`, `climayte.ts`). So the daemon can wake the manager the way `climayte_send` does: it appends
 the batch report to the manager's `pending`. The report text is the one the waiter prints: the waiter
 reads `GET /api/corch/workers?report=1&ids=` (`climayte_wait.py:123`), which is `climayteReports`
-(`climayte.ts:2049`), and holds changes into batches with `--batch`/`--settle-s` (`climayte_wait.py:21-27`,
+(`climayte-view.ts`), and holds changes into batches with `--batch`/`--settle-s` (`climayte_wait.py:21-27`,
 `holds` at `:243`, `wake` at `:271`). The design moves that batching into the daemon (piece 3), so
 the manager runs no waiter and spends no turn waiting.
 
@@ -1791,7 +1791,7 @@ fresh `claude -p` turn), and the tick counts only `running` workers per account
 (`server/src/climayte-schedule.ts:84-88`), so an idle manager holds no slot. A wake is a follow-up
 at home: `staysHome` keeps it on its own account (`climayte-schedule.ts:113-115`) and `waitsForRoom`
 never holds a session going on at home (`server/src/climayte-placement.ts:280-293`). But at dispatch
-`sizeTasks` (`climayte.ts:1835`) would price it with `expectedCost`, which for a kind with no record
+`sizeTasks` (`climayte-dispatch.ts`) would price it with `expectedCost`, which for a kind with no record
 falls to `DEFAULT_TASK_PCT` 25 (`climayte-placement.ts:28`, `:112-139`) and, once the kind has a
 record, to the cost of a whole wave, which can pass half a window and answer `split needed`
 (`sizeTask`, `climayte-placement.ts:162-171`). And its group would share `groupCap` with the wave
@@ -1803,8 +1803,8 @@ issue either: `notConverging` counts only attempts since the newest finished one
 **How would the manager's verdicts feed the scorecard?** Every verdict counts the same today:
 `scoreRows` sums every verdict of every task by kind and setting, whoever gave it
 (`server/src/climayte-scorecard.ts:152-176`); `by` is recorded (`climayte-scorecard.ts:110`) but
-anything not `check` or `owner` is stored as `orchestrator` (`climayte.ts:2289`). A verdict judges
-the work since the previous verdict (`verdictRecord`, `climayte.ts:2271-2290`), so a later fail with
+anything not `check` or `owner` is stored as `orchestrator` (`climayte-steer.ts`). A verdict judges
+the work since the previous verdict (`verdictRecord`, `climayte-steer.ts`), so a later fail with
 no attempt in between adds a 0-unit fail and leaves the earlier pass counted. A lenient manager
 would therefore teach `pickConfig` (`climayte-scorecard.ts:263`) to trust a cheap rung it should
 not. The design never lets the manager's model say pass (the daemon judges by command), holds those
@@ -1869,7 +1869,7 @@ Workers carry `wave?: string` (the wave they belong to; the manager carries it t
    against the task's `paths`. All present proofs pass, and at least the check or a commit with its
    paths exist: a pass verdict `by: 'wave'`, `provisional: true`. A proof that fails: a fail verdict
    `by: 'wave'` with the command and its output, sent back one rung up like a failed check
-   (`judgeCheck`, `climayte.ts:630-664`; three rounds, then the task is failed). Nothing provable (no
+   (`judgeCheck`, `climayte.ts`; three rounds, then the task is failed). Nothing provable (no
    check and `Commits: none`, as a review or a research task): no verdict, the key is escalated
    `unproven`.
 5. **Wake the manager** (piece 3). The daemon holds wave changes the way `--batch` does (wake when
@@ -1969,7 +1969,7 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    `bun test server/tests/climayte-wave.test.ts` (a wave survives a reload; the state text names
    every key's state and proof).
 2. **The hold.** `settleWorker` sets a manager with a live, unreported wave to `waiting` /
-   `hold: 'wave'`; the tick's due filter (`climayte.ts:966`) skips it; the stall rule (one nudge, then
+   `hold: 'wave'`; the tick's due filter (`tick`, `climayte.ts`) skips it; the stall rule (one nudge, then
    failed). Files: `server/src/climayte.ts`, `server/src/climayte-wave.ts`,
    `server/tests/climayte-wave.test.ts`. Check: the same test file, with the fake CLI
    (`server/tests/mocks/fake-claude.ts`): a manager whose wave has a running task ends its turn
@@ -1991,7 +1991,7 @@ alone. Checks run through the owner's `fairjob` wrapper (weight 3) from `app/`, 
    paths) chained after the check; verdicts `by: 'wave'` with `provisional`; `scoreRows` skips
    provisional verdicts and counts only the newest verdict per span of work (a verdict with no
    attempt since the previous one replaces it); `by` keeps `wave` instead of folding it into
-   `orchestrator` (`climayte.ts:2289`). Files: `server/src/climayte-wave.ts`, `server/src/climayte.ts`,
+   `orchestrator` (`verdictRecord`, `climayte-steer.ts`). Files: `server/src/climayte-wave.ts`, `server/src/climayte.ts`,
    `server/src/climayte-scorecard.ts`, `server/tests/climayte-scorecard.test.ts`,
    `server/tests/climayte-wave.test.ts`. Check:
    `bun test server/tests/climayte-scorecard.test.ts server/tests/climayte-wave.test.ts` (a temp git
