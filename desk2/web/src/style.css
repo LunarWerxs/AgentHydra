@@ -313,6 +313,25 @@ html.motion-paused *:not([data-state])::before,
 html.motion-paused *:not([data-state])::after {
   animation-play-state: paused !important;
 }
+/* The window's own title bar (lib/host-window.ts): once the host has taken Windows' caption off, the page's top row is
+   the title bar. Its `title-drag` parts drag the window (WebView2's non-client regions: a double-click maximizes, a
+   right-click opens the window menu), everything that takes a click inside them stays the page's, and anything that
+   can open over them (menus, dialogs, popovers) is never a drag area. --caption-w is the width of the three window
+   buttons (WindowControls.vue) that the title row keeps clear at its right end; host-window.ts sets it. */
+:root {
+  --caption-w: 0px;
+}
+html.own-frame .title-drag {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+html.own-frame .title-drag :is(button, a, input, textarea, select, [role='button'], [role='tab'], [role='radio'], [contenteditable]),
+html.own-frame :is([role='menu'], [role='dialog'], [role='listbox'], [role='tooltip'], [data-reka-popper-content-wrapper]),
+html.own-frame .no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
 /* The working mark (transcript/working-mark.css) keeps moving in a window that is on screen but not focused (owner,
    2026-10-08: "the animation, seems to pause when I click out of it"); hidden or minimized it holds still with the rest.
    A few small dots on transform and opacity: the compositor's cost, nothing more. */

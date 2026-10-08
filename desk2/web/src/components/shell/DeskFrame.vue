@@ -32,6 +32,8 @@ const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/Backgrou
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
 import ChromeBar from './ChromeBar.vue'
+import WindowControls from './WindowControls.vue'
+import { ownFrame, startOwnFrame } from '@/lib/host-window'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
@@ -682,6 +684,8 @@ function onKey(e: KeyboardEvent) {
 
 onMounted(() => {
   if (!props.demo) takeConnectReturn()
+  // In AgentHydra's own window the page draws the title bar from here on (lib/host-window.ts); a browser tab is untouched.
+  startOwnFrame()
   window.addEventListener('keydown', onKey)
   window.addEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.addEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
@@ -799,8 +803,8 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           :aria-hidden="pageOpen || undefined"
         >
           <div
-            class="col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
-            :class="sliding ? 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)' : ''"
+            class="title-drag col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
+            :class="[ownFrame && 'col-end-3', sliding && 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)']"
             :style="{ paddingInlineStart: `${titlePad}px` }"
           >
             <ShellHeader
@@ -852,11 +856,13 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           </main>
 
           <!-- Servers and Changes-with-RepoYeti take the full height of the chat area, from the title bar row down, so the title bar's
-               buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. -->
+               buttons end at the pane's left edge; plain Changes, Connections and CliMayte sit under the title bar. When
+               the window draws its own title bar (lib/host-window.ts) that row is the window's, across the whole width,
+               with the pane buttons beside the window's buttons, so every pane starts under it. -->
           <aside
             v-if="asideOpen"
             class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-s border-border"
-            :class="split ? 'row-span-2 row-start-1' : 'row-start-2 w-95'"
+            :class="split ? (ownFrame ? 'row-start-2' : 'row-span-2 row-start-1') : 'row-start-2 w-95'"
             :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
           >
             <div
@@ -882,7 +888,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           <aside
             v-if="tasks"
             class="flex min-w-0 pb-2 pe-2"
-            :class="tasks.expanded ? 'col-start-1 row-start-2 ps-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-110 pt-2'"
+            :class="tasks.expanded ? 'col-start-1 row-start-2 ps-2 pt-0.5' : ownFrame ? 'col-start-2 row-start-2 w-110 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-110 pt-2'"
           >
             <BackgroundTasksPanel
               :session-id="tasksSessionId"
@@ -930,5 +936,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
         <SettingsView />
       </DialogContent>
     </Dialog>
+
+    <WindowControls v-if="ownFrame" />
   </div>
 </template>

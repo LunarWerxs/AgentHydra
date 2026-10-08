@@ -128,9 +128,11 @@ const PANE_BTN =
 
 <template>
   <!-- Three columns: the title in the middle one, centred on the pane (Michael, 2026-10-04), with each side
-       column at least as wide as the buttons on the right so a long title stops short of them. -->
+       column at least as wide as the buttons on the right so a long title stops short of them. With the window's own
+       title bar (lib/host-window.ts) this row is the title bar: its right end keeps clear of the window's buttons
+       (--caption-w), so the pane buttons sit beside them (owner, 2026-10-08: "move these icons, here"). -->
   <header
-    class="grid h-8 min-w-0 grid-cols-[minmax(var(--side),1fr)_minmax(0,auto)_minmax(var(--side),1fr)] items-center ps-1 pe-3 text-[13px] leading-[19.5px]"
+    class="grid h-8 min-w-0 grid-cols-[minmax(var(--side),1fr)_minmax(0,auto)_minmax(var(--side),1fr)] items-center ps-1 pe-[calc(0.75rem_+_var(--caption-w))] text-[13px] leading-[19.5px]"
     :style="{ '--side': chat ? '144px' : external ? '58px' : '0px' }"
   >
     <span aria-hidden="true" />

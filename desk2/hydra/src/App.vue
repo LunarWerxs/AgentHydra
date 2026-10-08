@@ -356,7 +356,8 @@ onUnmounted(stopAvailabilityPolling)
     :style="{
       '--shell-max': fullWidth ? '100vw' : `${SHELL_BASE_MAX}px`,
       '--push-shift': `${shiftPx}px`,
-      '--header-pe': `calc(${shiftPx}px + 1rem)`,
+      // Inside Desk 2 with its own title bar, the right end keeps clear of the window's buttons (--desk-pad-right).
+      '--header-pe': `calc(${shiftPx}px + max(1rem, var(--desk-pad-right, 0px) + 0.5rem))`,
       '--header-ps': 'max(1rem, var(--desk-pad-left, 0px))',
     }"
   >

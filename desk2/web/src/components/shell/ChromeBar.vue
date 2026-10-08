@@ -18,7 +18,8 @@ import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-updat
 // "invert this. Make it default on. not blue and blue is off"). A thin divider sets Cloud and the toggles after
 // it apart from Menu and Hide sidebar. AgentHydra and Dev servers sit at the right end, after another: with the sidebar open, at its right edge; hidden, right after Clean sidebar. The bar's
 // width follows the sidebar's slide (`sliding`, DeskFrame's 300 ms snap), so the two glide left and right with it.
-// data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
+// data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame). title-drag: with the window's
+// own title bar (lib/host-window.ts) its gaps drag the window, as Claude Desktop's do.
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
 defineProps<{ sidebarOpen: boolean; width: number; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
@@ -35,7 +36,7 @@ const COLLAPSED_WIDTH = 246
 
 <template>
   <div
-    class="absolute left-0 top-0 z-21 flex h-9 items-center gap-1 ps-3"
+    class="title-drag absolute left-0 top-0 z-21 flex h-9 items-center gap-1 ps-3"
     :class="[sidebarOpen ? 'pe-2' : 'pe-1', sliding ? 'transition-[width,padding] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none' : '']"
     :style="{ width: `${sidebarOpen ? width : COLLAPSED_WIDTH}px` }"
     data-peek-zone="keep"

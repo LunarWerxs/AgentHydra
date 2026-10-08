@@ -2,6 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AH_SETTINGS_PAGES, type AhMessage, type AhSettingsPage } from '@shared/hydra-embed'
 import { attachHydraFrame, hydraReady, setAhUpdateWaiting, setHydraSidebar, setHydraVisible } from './api'
+import { CAPTION_W, ownFrame } from '@/lib/host-window'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
@@ -13,7 +14,8 @@ import { attachHydraFrame, hydraReady, setAhUpdateWaiting, setHydraSidebar, setH
 // pane shows AgentHydra at once, and then stays, so going back and forth keeps it where it was. There is no
 // header strip: the copy's own top bar fills the pane, and Escape (or the chrome bar's AgentHydra button)
 // closes it. Out of view the copy is told so (desk:visible) and its polls rest until it comes back.
-// The copy gets the room the chrome bar covers on the left as --desk-pad-left.
+// The copy gets the room the chrome bar covers on the left as --desk-pad-left, and the room the window's own buttons
+// cover on the right (lib/host-window.ts) as --desk-pad-right.
 const props = defineProps<{
   open: boolean
   /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number
@@ -44,12 +46,14 @@ function frameWindow(): Window | null {
 }
 function syncPad() {
   try {
-    frameWindow()?.document.documentElement.style.setProperty('--desk-pad-left', `${props.padLeft}px`)
+    const root = frameWindow()?.document.documentElement
+    root?.style.setProperty('--desk-pad-left', `${props.padLeft}px`)
+    root?.style.setProperty('--desk-pad-right', `${ownFrame.value ? CAPTION_W : 0}px`)
   } catch {
     /* not same-origin yet */
   }
 }
-watch(() => props.padLeft, syncPad)
+watch([() => props.padLeft, ownFrame], syncPad)
 watch(
   () => props.open,
   (open) => {
