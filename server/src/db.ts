@@ -318,7 +318,7 @@ create index if not exists idx_agent_status_at on agent_status(at);
   add('edit_survival', 'real')
   add('edit_survival_n', 'integer')
   add('edit_survival_due_at', 'integer')
-  // Token-sink evidence (analytics.ts SinkScan): skill-listing fingerprints, skill and MCP server
+  // Token-sink evidence (analytics-sinks.ts SinkScan): skill-listing fingerprints, skill and MCP server
   // names with counts, and a handful of numbers. Names only, like tools_json.
   add('sinks_json', 'text')
   // The list scanner's own verdict on whether this conversation stopped at a usage wall, folded

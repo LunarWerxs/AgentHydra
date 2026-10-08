@@ -1,4 +1,4 @@
-// server/src/analytics.ts token sinks - what a session carried in its prompt and never used.
+// server/src/analytics.ts token sinks (their evidence: analytics-sinks.ts) - what a session carried in its prompt and never used.
 //
 // These pin the evidence the scan keeps and the ranking the report builds from it. The cases that
 // matter are the ones where a plausible implementation is quietly wrong: a skill used by typing
@@ -10,12 +10,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  DEEP_CONTEXT_TOKENS,
-  refreshAnalytics,
-  scanSessionAnalytics,
-  sinkReport,
-} from '../src/analytics'
+import { refreshAnalytics, scanSessionAnalytics, sinkReport } from '../src/analytics'
+import { DEEP_CONTEXT_TOKENS } from '../src/analytics-sinks'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-sinks-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
