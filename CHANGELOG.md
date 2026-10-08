@@ -17,6 +17,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Dev servers list is grouped by company, folded until you open it, and shows what runs**
 - **Chats in the sidebar show their account number and when they were last active**
 - **Free accounts get a Tokens column and keep their readings current in the background**
+- **Free accounts show their email: hover the name to see it, click to copy it**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
 - **HSwarm can use Jina, Pinecone and StepFun**
 - **HSwarm keeps each key under its provider's rate limit and moves past keys that are out of credit**
@@ -50,6 +51,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Free table has a Tokens column, like the CLI and desktop tables.** Neither claude.ai nor ChatGPT reports
   tokens, so AgentHydra estimates them from the text each message sent and got back. The header switches between
   the current 5-hour window, the week and all time.
+- **Free accounts show their email.** Hover a Free account's name to see the email it is signed in with, and click
+  the name to copy it, as on the desktop and CLI tables. Accounts added before this fill in on their own within
+  about 15 minutes, or at once with Refresh.
 - **HSwarm can use Jina, Pinecone and StepFun.** Jina reads and searches the web and makes embeddings, Pinecone
   stores and searches vectors, and StepFun's chat models can be named directly. A StepFun key issued in China works
   once its China address is set in your own provider settings.

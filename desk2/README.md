@@ -582,11 +582,15 @@ neither copy the logins into a folder that is thrown away nor log every PC out (
 
 The table provides login checks, usage, Tokens, renaming, New private chat and Delete (the account, its chat
 handles and its saved login, here and on the other PCs; its chats stay at the provider).
+A row's name works as on the other tables (owner, 2026-10-08: "so when I click on them, it gives me their email
+accounts"): its hover leads with the account's address and a click copies it. Every login check reads the address
+(`account_email`, from Claude's `/api/account` or ChatGPT's session) into the account's `email`; a log out clears it.
 Claude reports no usage for a free account until it sends a message, so such a row says "No reading yet".
 
 **Desk keeps the readings current itself** (owner, 2026-10-06: the 5-hour and week cells "keep spinning every
 time I view the page"; `server/src/free-instances/refresh.ts`). One read a minute, from 90 s after Desk starts,
-of the most overdue account: a login never checked first, then a login checked over an hour ago (`auth`, which
+of the most overdue account: a login never checked first, then a login checked over an hour ago, or over 15
+minutes ago while its address was never read (`auth`, which
 also reads the private chat list and the usage) or a signed-in Claude account's usage over 15 minutes old
 (`usage`, by `usageReadAt`); each account at most once in 15 minutes. These reads, the keepalive's nudges and
 the check of a login another PC shared are Desk's own (`FreeJob.auto`): the table shows no spinner for them, and
