@@ -194,7 +194,8 @@ class Bench:
 
     async def ask_model(self, task: Task, num: int, model: str | None) -> tuple[object, dict]:
         """One message on account `num`, a new chat asking for `model`, polled to its end as free_route._serve does."""
-        item = {"prompt": free_route.shape(task), "name": f"bench {task.id}", "provider": "chatgpt", "account": num}
+        # Every item's Task has the id "ask", and Desk refuses a chat name already in use: each message gets its own.
+        item = {"prompt": free_route.shape(task), "name": f"bench {uuid.uuid4().hex[:8]}", "provider": "chatgpt", "account": num}
         if model:
             item["model"] = model
         started = time.monotonic()
@@ -217,7 +218,11 @@ class Bench:
         res, one, tries, num = None, {}, 0, None
         while res is None and tries < TRIES:
             tries += 1
-            num = await self.take(nums)
+            try:
+                num = await self.take(nums)
+            except TimeoutError as busy:  # the accounts stayed busy: this item goes unserved, the run goes on
+                one = {"error": f"busy: {busy}"}
+                break
             try:
                 # item-free's Task, so the model is the only difference
                 task = Task(prompt=D.render(it), id="ask", system=D.SYSTEM, schema=None, tools="none", profile="decision", timeout_s=120)
