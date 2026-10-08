@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import {
   appendFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -92,12 +93,16 @@ function fixture() {
     blockCopy: false,
     failResume: false,
     failArchive: false,
+    missingArchiveIndex: false,
+    staleArchivePath: false,
     failRead: false,
     mutateDuringImport: false,
+    failVisibility: false,
     secondPage: false,
   }
   const connect = async (home: string): Promise<CodexRpc> => {
     const side = home === sourceHome ? 'source' : 'target'
+    const archivePath = join(sourceHome, 'archived_sessions', 'chat.jsonl')
     calls.push(`${side}:connect`)
     return {
       close() {
@@ -110,13 +115,25 @@ function fixture() {
           if (state.secondPage && !params?.cursor)
             return { data: [thread], nextCursor: 'page-2' } as T
           return {
-            data: state.archived
-              ? []
-              : [{ ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) }],
+            data:
+              state.archived || (state.staleArchivePath && existsSync(archivePath))
+                ? []
+                : [{ ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) }],
             nextCursor: null,
           } as T
         }
         if (method === 'thread/resume') {
+          if (side === 'source') {
+            expect(params?.threadId).toBe(thread.id)
+            expect(params?.path).toBe(thread.path)
+            if (state.staleArchivePath) {
+              mkdirSync(join(sourceHome, 'archived_sessions'), { recursive: true })
+              throw new Error(
+                `cannot resume paginated thread ${thread.id} with stale path: requested ${thread.path}, current ${archivePath}; omit path and resume by thread id`,
+              )
+            }
+            return { thread } as T
+          }
           Object.assign(imported, params)
           if (state.mutateDuringImport)
             appendFileSync(
@@ -135,10 +152,16 @@ function fixture() {
           return {} as T
         }
         if (method === 'thread/read') {
+          if (side === 'source' && existsSync(archivePath))
+            return { thread: { ...thread, path: archivePath } } as T
           if (state.failRead) throw new Error('Verification failed')
           return { thread: { ...thread, id: params?.threadId, path: imported.path } } as T
         }
         if (method === 'thread/archive') {
+          if (state.missingArchiveIndex) {
+            state.missingArchiveIndex = false
+            throw new Error(`no rollout found for thread id ${thread.id}`)
+          }
           if (state.failArchive) throw new Error('Archive failed')
           state.archived = true
         }
@@ -154,6 +177,10 @@ function fixture() {
         : { state: 'stopped' as const },
     connect,
     journalPath: join(root, 'moves.json'),
+    showDestination: async () => {
+      calls.push('target:showDestination')
+      if (state.failVisibility) throw new Error('Destination sidebar update failed')
+    },
   }
   const request: CodexMoveRequest = {
     targetId: '1',
@@ -241,6 +268,7 @@ describe('Codex chat move', () => {
     f.state.failArchive = true
     const first = await moveCodexChat('0', f.request, f.deps)
     expect(first.ok).toBe(false)
+    expect(f.calls).not.toContain('source:thread/resume')
     expect(f.state.archived).toBe(false)
     expect(f.copies()).toHaveLength(1)
     f.state.failArchive = false
@@ -249,6 +277,38 @@ describe('Codex chat move', () => {
       destinationThreadId: first.destinationThreadId,
     })
     expect(f.copies()).toHaveLength(1)
+    expect(f.calls.filter((call) => call === 'target:thread/resume')).toHaveLength(1)
+  })
+  test('does not report success or archive until the destination sidebar is verified', async () => {
+    const f = fixture()
+    f.state.failVisibility = true
+    const first = await moveCodexChat('0', f.request, f.deps)
+    expect(first.ok).toBe(false)
+    expect(first.error).toContain('sidebar')
+    expect(f.state.archived).toBe(false)
+    expect(f.copies()).toHaveLength(1)
+    f.state.failVisibility = false
+    const second = await moveCodexChat('0', f.request, f.deps)
+    expect(second).toEqual({ ok: true, destinationThreadId: first.destinationThreadId })
+    expect(f.copies()).toHaveLength(1)
+    expect(f.calls.lastIndexOf('target:showDestination')).toBeLessThan(
+      f.calls.indexOf('source:thread/archive'),
+    )
+  })
+  test('repairs visibility on an older completed move without recopying or archiving again', async () => {
+    const f = fixture()
+    const first = await moveCodexChat('0', f.request, f.deps)
+    const journal = JSON.parse(readFileSync(f.deps.journalPath, 'utf8'))
+    for (const row of Object.values(journal) as { desktopVisible?: boolean }[])
+      delete row.desktopVisible
+    writeFileSync(f.deps.journalPath, JSON.stringify(journal))
+    f.state.failVisibility = true
+    expect((await moveCodexChat('0', f.request, f.deps)).ok).toBe(false)
+    f.state.failVisibility = false
+    expect(await moveCodexChat('0', f.request, f.deps)).toEqual(first)
+    expect(f.copies()).toHaveLength(1)
+    expect(f.calls.filter((call) => call === 'source:thread/archive')).toHaveLength(1)
+    expect(f.calls.filter((call) => call === 'target:thread/resume')).toHaveLength(1)
   })
   test('an unconfirmed copy never archives and cannot be repeated blindly', async () => {
     const f = fixture()
@@ -325,4 +385,27 @@ describe('Codex chat move', () => {
     expect(f.calls).not.toContain('target:thread/resume')
     expect(f.copies()).toHaveLength(0)
   })
+})
+test('repairs a missing source index through Codex after verifying the destination', async () => {
+  const f = fixture()
+  f.state.missingArchiveIndex = true
+  expect((await moveCodexChat('0', f.request, f.deps)).ok).toBe(true)
+  expect(f.calls.indexOf('target:showDestination')).toBeLessThan(
+    f.calls.indexOf('source:thread/resume'),
+  )
+  expect(f.calls).toContain('source:thread/unsubscribe')
+  expect(f.calls.filter((call) => call === 'source:thread/archive')).toHaveLength(2)
+  expect(f.state.archived).toBe(true)
+})
+test('restores the unchanged rollout to the exact archive path Codex already indexed', async () => {
+  const f = fixture()
+  f.state.missingArchiveIndex = true
+  f.state.staleArchivePath = true
+  expect((await moveCodexChat('0', f.request, f.deps)).ok).toBe(true)
+  expect(existsSync(f.thread.path)).toBe(false)
+  expect(readFileSync(join(f.sourceHome, 'archived_sessions', 'chat.jsonl'), 'utf8')).toBe(
+    rollout('chat-1', f.root),
+  )
+  expect(f.calls).toContain('source:thread/read')
+  expect(f.copies()).toHaveLength(1)
 })

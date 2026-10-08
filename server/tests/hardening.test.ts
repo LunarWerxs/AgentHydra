@@ -45,6 +45,23 @@ test('path containment rejects the root, siblings with a shared prefix, and trav
   expect(isPathInside(root, traversal)).toBe(false)
 })
 
+test.skipIf(process.platform !== 'win32')(
+  'path containment accepts Codex extended paths without accepting siblings',
+  () => {
+    const root = 'C:\\safe\\instances'
+    expect(isPathInside(root, '\\\\?\\C:\\safe\\instances\\sessions\\thread.jsonl')).toBe(true)
+    expect(isPathInside('\\\\?\\C:\\safe\\instances', 'C:\\safe\\instances\\sessions')).toBe(true)
+    expect(isPathInside(root, '\\\\?\\C:\\safe\\instances-evil\\thread.jsonl')).toBe(false)
+    expect(isPathInside(root, '\\\\?\\C:\\safe\\instances')).toBe(false)
+    expect(
+      isPathInside('\\\\server\\share\\safe', '\\\\?\\UNC\\server\\share\\safe\\sessions'),
+    ).toBe(true)
+    expect(isPathInside('\\\\server\\share\\safe', '\\\\?\\UNC\\server\\share\\outside')).toBe(
+      false,
+    )
+  },
+)
+
 test('body search rejects catastrophic regular expressions before scanning files', async () => {
   await expect(searchSessionBodies({ query: '(a+)+$', regex: true })).rejects.toThrow(
     'unsafe regular expression',

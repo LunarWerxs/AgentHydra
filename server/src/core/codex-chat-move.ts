@@ -4,15 +4,17 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   type Stats,
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join, relative, toNamespacedPath } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import type { CodexInstance } from '../types'
 import { codexDesktopRunState } from './codex-desktop'
 import { getCodexInstance } from './codex-instances'
+import { showMigratedCodexChat } from './codex-migration-visibility'
 import { type CodexRpc, connectCodexRpc } from './codex-rpc'
 import { copyCodexTranscript } from './codex-transcript-copy'
 import {
@@ -72,6 +74,7 @@ interface Receipt {
   ownerPid: number | null
   destination: string
   fingerprint: string
+  desktopVisible?: boolean
 }
 
 interface MoveDependencies {
@@ -79,12 +82,14 @@ interface MoveDependencies {
   runState: typeof codexDesktopRunState
   connect: (home: string) => Promise<CodexRpc>
   journalPath: string
+  showDestination: typeof showMigratedCodexChat
 }
 const defaults: MoveDependencies = {
   getInstance: getCodexInstance,
   runState: codexDesktopRunState,
   connect: connectCodexRpc,
   journalPath: join(CONFIG_DIR, 'codex-chat-moves.json'),
+  showDestination: showMigratedCodexChat,
 }
 
 function pair(
@@ -276,17 +281,17 @@ function destinationKey(to: CodexInstance, request: CodexMoveRequest): string {
   ])
 }
 
-function alreadyMovedResult(
+function alreadyMovedReceipt(
   journalPath: string,
   key: string,
   destination: string,
   updatedAt: number,
-): CodexMoveResult | null {
+): Receipt | null {
   const saved = readJsonStore(receiptStore(journalPath))
   if (saved.status !== 'ok') return null
   const old = saved.value[key]
   if (old?.phase === 'done' && old.destination === destination && old.updatedAt === updatedAt) {
-    return { ok: true, destinationThreadId: old.destinationThreadId }
+    return old
   }
   return null
 }
@@ -357,21 +362,23 @@ async function resumeAndVerifyDestination(
   receipt: Receipt,
 ): Promise<string> {
   const destinationThreadId = receipt.destinationThreadId!
-  await target.call('thread/resume', {
-    threadId: destinationThreadId,
-    path: receipt.transcriptPath,
-    cwd: thread.cwd,
-    excludeTurns: true,
-    ...(thread.model ? { model: thread.model } : {}),
-    ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
-    ...(thread.reasoningEffort
-      ? { config: { model_reasoning_effort: thread.reasoningEffort } }
-      : {}),
-  })
-  await target.call('thread/name/set', {
-    threadId: destinationThreadId,
-    name: chatRow(thread).title,
-  })
+  if (!receipt.desktopVisible) {
+    await target.call('thread/resume', {
+      threadId: destinationThreadId,
+      path: receipt.transcriptPath,
+      cwd: thread.cwd,
+      excludeTurns: true,
+      ...(thread.model ? { model: thread.model } : {}),
+      ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
+      ...(thread.reasoningEffort
+        ? { config: { model_reasoning_effort: thread.reasoningEffort } }
+        : {}),
+    })
+    await target.call('thread/name/set', {
+      threadId: destinationThreadId,
+      name: chatRow(thread).title,
+    })
+  }
   const copied = await target.call<{ thread: Thread }>('thread/read', {
     threadId: destinationThreadId,
     includeTurns: false,
@@ -384,7 +391,8 @@ async function resumeAndVerifyDestination(
     throw new Error('The destination copy could not be verified. The source was kept.')
   }
   // Unload the new task so app-server does not leave a live session behind when it exits.
-  await target.call('thread/unsubscribe', { threadId: destinationThreadId })
+  if (!receipt.desktopVisible)
+    await target.call('thread/unsubscribe', { threadId: destinationThreadId })
   return destinationThreadId
 }
 
@@ -411,6 +419,78 @@ async function assertSourceUnchanged(
   }
 }
 
+async function archiveSourceThread(
+  source: CodexRpc,
+  from: CodexInstance,
+  thread: Thread,
+  fingerprint: string,
+) {
+  try {
+    await source.call('thread/archive', { threadId: thread.id })
+  } catch (error) {
+    // An old import can leave the index pointing at a missing archived rollout
+    // while thread/list finds the intact active file. Re-index that exact file
+    // through Codex itself; the destination has already verified at this point.
+    if (
+      !(error instanceof Error) ||
+      error.message !== `no rollout found for thread id ${thread.id}`
+    )
+      throw error
+    let repaired: { thread: Thread }
+    try {
+      repaired = await source.call<{ thread: Thread }>('thread/resume', {
+        threadId: thread.id,
+        path: thread.path,
+        cwd: thread.cwd,
+        excludeTurns: true,
+      })
+    } catch (resumeError) {
+      const archivedPath = join(from.codexHome, 'archived_sessions', basename(thread.path!))
+      const expected = `cannot resume paginated thread ${thread.id} with stale path: requested ${thread.path}, current ${archivedPath}; omit path and resume by thread id`
+      if (
+        !(resumeError instanceof Error) ||
+        resumeError.message !== expected ||
+        existsSync(archivedPath) ||
+        !isPathInside(realpathSync(from.codexHome), realpathSync(dirname(archivedPath))) ||
+        createHash('sha256').update(readFileSync(thread.path!)).digest('hex') !== fingerprint
+      )
+        throw resumeError
+      // Codex confirms this exact archive location is already indexed. Restore
+      // the missing file there without changing database flags or transcript bytes.
+      renameSync(thread.path!, archivedPath)
+      const archived = await source.call<{ thread: Thread }>('thread/read', {
+        threadId: thread.id,
+        includeTurns: false,
+      })
+      if (
+        archived.thread.id !== thread.id ||
+        !archived.thread.path ||
+        relative(
+          toNamespacedPath(realpathSync(archived.thread.path)),
+          toNamespacedPath(realpathSync(archivedPath)),
+        ) !== '' ||
+        (await activeThreads(source)).some((row) => row.id === thread.id)
+      )
+        throw new Error(
+          'The repaired source archive could not be verified. The destination was kept.',
+        )
+      return
+    }
+    if (
+      repaired.thread.id !== thread.id ||
+      !repaired.thread.path ||
+      relative(
+        toNamespacedPath(realpathSync(repaired.thread.path)),
+        toNamespacedPath(realpathSync(thread.path!)),
+      ) !== '' ||
+      !isPathInside(realpathSync(from.codexHome), realpathSync(repaired.thread.path))
+    )
+      throw new Error('The source index repair could not be verified. Both chats were kept.')
+    await source.call('thread/unsubscribe', { threadId: thread.id })
+    await source.call('thread/archive', { threadId: thread.id })
+  }
+}
+
 /** Import into the destination's own home, verify it, then archive the source. No turn is started,
  * credentials are never copied, and an archive failure resumes from the saved destination id. */
 export async function moveCodexChat(
@@ -430,8 +510,19 @@ export async function moveCodexChat(
     source = await deps.connect(from.codexHome)
     key = moveKey(from, request)
     const destination = destinationKey(to, request)
-    const already = alreadyMovedResult(deps.journalPath, key, destination, request.updatedAt)
-    if (already) return already
+    const already = alreadyMovedReceipt(deps.journalPath, key, destination, request.updatedAt)
+    if (already) {
+      receipt = already
+      if (!already.destinationThreadId)
+        throw new Error('The completed move has no destination chat identity.')
+      // Upgrade older completed receipts too: saved history alone did not make the chat visible.
+      if (!already.desktopVisible) {
+        await deps.showDestination(to, already.destinationThreadId)
+        receipt = { ...already, desktopVisible: true }
+        saveReceipt(deps.journalPath, key, receipt)
+      }
+      return { ok: true, destinationThreadId: already.destinationThreadId }
+    }
 
     const thread = await findMovableThread(source, from, request)
     const before = statSync(thread.path!)
@@ -443,8 +534,11 @@ export async function moveCodexChat(
     receipt = await ensureCopied(receipt, deps, key, to, thread, transcript)
 
     const destinationThreadId = await resumeAndVerifyDestination(target, to, thread, receipt)
+    await deps.showDestination(to, destinationThreadId)
+    receipt = { ...receipt, desktopVisible: true }
+    saveReceipt(deps.journalPath, key, receipt)
     await assertSourceUnchanged(source, from, deps, thread, before)
-    await source.call('thread/archive', { threadId: thread.id })
+    await archiveSourceThread(source, from, thread, fingerprint)
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
     return { ok: true, destinationThreadId }

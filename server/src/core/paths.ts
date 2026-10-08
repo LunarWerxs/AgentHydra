@@ -238,7 +238,12 @@ export const normalizePath = normalizeInstancePath
  *  sibling whose name merely shares the same prefix). */
 export function isPathInside(root: string, candidate: string): boolean {
   try {
-    const rel = path.relative(path.resolve(root), path.resolve(candidate))
+    // Codex returns extended Windows paths while realpathSync can return a regular
+    // drive path. Compare both in the same namespace, including UNC paths.
+    const rel = path.relative(
+      path.toNamespacedPath(path.resolve(root)),
+      path.toNamespacedPath(path.resolve(candidate)),
+    )
     return rel !== '' && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel)
   } catch {
     return false

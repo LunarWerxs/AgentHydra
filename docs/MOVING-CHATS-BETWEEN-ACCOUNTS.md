@@ -1,7 +1,7 @@
 # Moving chats between accounts
 
 Claude Desktop archive and migration-source cleanup now prefer the production native
-connection. Enable **Instances tab → gear (Instances settings) → Claude native control → Start debugger automatically**
+connection. Enable **Settings → Instances → Desktop → Claude native control → Start debugger automatically**
 per profile, then use AgentHydra **Open** when that closed account is needed. The debugger starts
 on that launch without menus; saving settings does not restart an active desktop. New profiles
 need their own setting. See the [native-control operating guide](CLAUDE-DESKTOP-NATIVE-CONTROL.md)
@@ -195,6 +195,21 @@ tray icon and the fair share first), then reading two working chats' pids out of
 
 ## Moving a CODEX chat: a different mechanism, and not an MCP tool
 
+To transfer an account's active Codex chats in one command from a source checkout:
+
+```powershell
+bun scripts/move-codex-chats.ts --from "source account" --to here --all-active --close-source
+```
+
+The account selector must identify one managed instance; `here` resolves the caller's
+`CODEX_HOME`. Omit `--all-active` to print the plan without moving anything. The command
+uses the production mover for each chat, saves its plan and results under AgentHydra's
+local backups, and stops on a refusal. Re-running continues saved copies rather than
+creating duplicates. `--close-source` closes only the selected source desktop. Archived
+chats are excluded, and the original is archived only after its copy and sidebar
+membership verify. Destination pipe discovery is reused across the batch, with the
+destination process identity still checked before every native call.
+
 `move_chat` and `move_chats` are CLAUDE. A Codex chat cannot move that way, and the reason is not
 an omission: a Codex thread belongs to the home it was written in, and Codex has no verb that
 re-homes one. AgentHydra does it by copy, verify, then archive, driven from the Codex instances
@@ -208,6 +223,18 @@ POST /api/codex-instances/:id/move-chat                           # one reviewed
 The plan lists every active chat in the source home with its title, its folder and the account
 identity at both ends. The move then copies the rollout under a fresh id, imports it into the
 destination, confirms it really landed, and only then archives the source.
+
+On Windows, completion also opens the destination desktop and the imported chat, adds it to
+the **Migrated chats** sidebar section, and reads the native sidebar state back to confirm its
+membership. The user does not need to refresh or reopen the destination. The connection is
+selected by the OS-reported pipe server PID of the exact destination profile; it never uses a
+random open account or the daemon's inherited app-tools environment. No model turn is started.
+Other platforms currently refuse the visibility step and keep the source active.
+
+If the sidebar update fails, the copy is retained for a retry and the source stays active.
+Completed receipts from older versions also run this visibility step once when retried, using
+the existing destination chat without copying or archiving again. A successful file import
+alone is not reported as a completed move.
 
 **There is deliberately no `move_codex_chat` MCP tool.** The plan exists to be READ by a person
 first, and the destructive half only accepts a chat that came back from a plan, carrying its
@@ -305,7 +332,10 @@ After a migrate the chat has a metadata file in **both** profiles: fresh in the 
 source archived (by its own app when it runs, by the flag when it is closed). The one exception is
 a running source whose native archive refused or could not confirm: that record is deliberately
 left unarchived, so the store agrees with the screen, and the profile is named in
-`sourceStillShown` (see "The web UI's move settles its source the same way" below). Keeping both
+`sourceStillShown` (see "The web UI's move settles its source the same way" below). Since
+2026-10-08 a move's superseded source is the exception: once its landing is verified, the native
+archive goes ahead over an attached parent and other chats' previews (each named in the result),
+and a busy refusal is retried for 15 s first. Keeping both
 records is deliberate - nothing is destroyed - but it has a consequence nobody expects.
 
 AgentHydra's session -> instance map is keyed by transcript id and keeps **one** entry per
@@ -468,7 +498,9 @@ The Instances row menu's **Move chats to account** and the Sessions tab's migrat
 disk flag alone: every chat moved off an open account stayed in its sidebar, and the store's
 "archived" then made a second move from that account answer "No chats to move". The route now
 settles each old copy through `settleMovedSource` (`server/src/move-source-settle.ts`): a closed
-app gets the flag; a running app is archived natively; a native refusal is final and reported;
+app gets the flag; a running app is archived natively; a native refusal is final and reported
+(2026-10-08: except a move's superseded source, which the native archive now archives over an
+attached parent and other chats' previews, after a 15 s retry of a busy refusal);
 only an unavailable native connection takes the legacy path, and there the in-app click runs
 FIRST (a flag written first would confirm the click by itself). A click that does not settle
 writes NO flag under the running app, because that flag is the reported bug. It hides nothing,
