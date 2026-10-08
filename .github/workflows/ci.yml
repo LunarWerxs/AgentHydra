@@ -25,10 +25,13 @@ on:
   # waiting for the next real one. Release.yml already had this; CI should too.
   workflow_dispatch:
 
-# A newer push to the same ref supersedes an in-flight run.
+# A newer push to the same ref supersedes an in-flight run, except on main: there a run finishes and
+# only the newest push waits for it (GitHub keeps one pending run per group). On 2026-10-07 main took
+# a push every few minutes and every run was cancelled before the ~25 min Windows server tests ended,
+# so for over an hour no commit on main had a complete CI result.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
