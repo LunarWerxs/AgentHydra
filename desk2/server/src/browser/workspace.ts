@@ -19,8 +19,22 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
   }
 }
 
+/** A servers pane lists profiles every 2 s; a folder's git layout is remembered this long instead of two spawns each. */
+const CANDIDATES_TTL_MS = 60_000
+const candidatesMemo = new Map<string, { at: number; value: Promise<string[]> }>()
+
 /** Normalized folders to look for, most specific first. */
-export async function workspaceCandidates(cwd: string): Promise<string[]> {
+export function workspaceCandidates(cwd: string): Promise<string[]> {
+  const now = Date.now()
+  const hit = candidatesMemo.get(cwd)
+  if (hit && now - hit.at < CANDIDATES_TTL_MS) return hit.value
+  // ponytail: entries for folders never asked again stay until the next ask; prune by age if folders churn.
+  const value = readCandidates(cwd)
+  candidatesMemo.set(cwd, { at: now, value })
+  return value
+}
+
+async function readCandidates(cwd: string): Promise<string[]> {
   const out: string[] = [normalizePath(cwd)]
   const top = await git(cwd, ['rev-parse', '--show-toplevel'])
   if (top) out.push(normalizePath(top))

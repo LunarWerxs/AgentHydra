@@ -349,6 +349,7 @@ export class LiveSession {
   private tab: BrowserTab | null = null
   private lastTabs = ''
   private poll: ReturnType<typeof setInterval> | null = null
+  private soon: ReturnType<typeof setTimeout> | null = null
   private ended = false
   /** Bumped by every attach, so events of a socket that was replaced are dropped. */
   private epoch = 0
@@ -386,7 +387,8 @@ export class LiveSession {
     // A page that is not the front one of its Chrome paints no frames: the one asked for is brought to the front.
     if (this.bound) await fetch(`http://${HOST}:${this.port}/json/activate/${encodeURIComponent(tab.id)}`, { signal: AbortSignal.timeout(1500) }).catch(() => undefined)
     await this.attach(tab)
-    this.poll = setInterval(() => void this.watch(), 1000)
+    // Target events report tab changes as they happen; the slow poll catches whatever they miss.
+    this.poll = setInterval(() => void this.watch(), 5000)
   }
 
   private async attach(tab: BrowserTab): Promise<void> {
@@ -410,6 +412,8 @@ export class LiveSession {
     await this.call('Page.enable')
     if (this.size) await this.applySize(this.size)
     await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
+    // Tab changes arrive as Target events; a Chrome that refuses them is left to the poll.
+    await this.call('Target.setDiscoverTargets', { discover: true }).catch(() => undefined)
     await this.sendPage()
   }
 
@@ -471,6 +475,10 @@ export class LiveSession {
       }
       return
     }
+    if (msg.method === 'Target.targetCreated' || msg.method === 'Target.targetDestroyed' || msg.method === 'Target.targetInfoChanged') {
+      this.watchSoon()
+      return
+    }
     if (msg.method === 'Page.frameNavigated') {
       const frame = (msg.params?.frame ?? {}) as { parentId?: string }
       if (!frame.parentId) void this.sendPage()
@@ -489,7 +497,16 @@ export class LiveSession {
     }
   }
 
-  /** Every second: tabs that appeared or went, a title that changed, or a browser that is gone. */
+  /** A burst of target events (a new tab fires several) becomes one look at the tab list. */
+  private watchSoon(): void {
+    if (this.soon || this.ended) return
+    this.soon = setTimeout(() => {
+      this.soon = null
+      void this.watch()
+    }, 100)
+  }
+
+  /** On target events and every 5 s: tabs that appeared or went, a title that changed, or a browser that is gone. */
   private async watch(): Promise<void> {
     if (this.ended) return
     let tabs: BrowserTab[]
@@ -532,6 +549,8 @@ export class LiveSession {
     this.ended = true
     if (this.poll) clearInterval(this.poll)
     this.poll = null
+    if (this.soon) clearTimeout(this.soon)
+    this.soon = null
     this.epoch++
     // Give the page its own size back before the socket goes (best effort, sent raw: call() needs the session alive).
     if (this.size && this.cdp?.readyState === WebSocket.OPEN) {
@@ -580,19 +599,8 @@ export class LiveSession {
       case 'wheel':
         await this.call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: msg.x, y: msg.y, deltaX: msg.deltaX, deltaY: msg.deltaY })
         return
-      case 'key': {
-        const text = msg.text ?? (msg.key === 'Enter' ? '\r' : undefined)
-        await this.call('Input.dispatchKeyEvent', {
-          type: msg.event === 'up' ? 'keyUp' : text ? 'keyDown' : 'rawKeyDown',
-          key: msg.key,
-          code: msg.code,
-          modifiers: msg.modifiers,
-          windowsVirtualKeyCode: virtualKeyCode(msg.key),
-          ...(msg.event === 'down' && editCommands(msg.key, msg.modifiers) ? { commands: editCommands(msg.key, msg.modifiers) } : {}),
-          ...(msg.event === 'down' && text ? { text } : {}),
-        })
-        return
-      }
+      case 'key':
+        return this.key(msg)
       case 'text':
         await this.call('Input.insertText', { text: msg.text })
         return
@@ -602,92 +610,114 @@ export class LiveSession {
         this.out({ type: 'clipboard', text: typeof text === 'string' ? text : '' })
         return
       }
-      case 'navigate': {
-        let url: URL
-        try {
-          url = new URL(msg.url)
-        } catch {
-          return
-        }
-        if (url.protocol !== 'http:' && url.protocol !== 'https:') return
-        await this.call('Page.navigate', { url: url.href })
-        return
-      }
-      case 'history': {
-        if (msg.go === 'reload') {
-          await this.call('Page.reload')
-          return
-        }
-        const h = (await this.call('Page.getNavigationHistory')) as { currentIndex: number; entries: { id: number }[] }
-        const to = h.entries[h.currentIndex + (msg.go === 'back' ? -1 : 1)]
-        if (to) await this.call('Page.navigateToHistoryEntry', { entryId: to.id })
-        return
-      }
+      case 'navigate':
+        return this.navigate(msg.url)
+      case 'history':
+        return this.history(msg.go)
       case 'viewport': {
         await this.applySize(this.size!)
         await this.call('Page.stopScreencast')
         await this.call('Page.startScreencast', { format: 'jpeg', quality: 70, everyNthFrame: 1 })
         return
       }
-      case 'tab': {
-        const all = await pageTabs(this.port)
-        const target = (this.scope ? this.scope.visible(all) : all).find((t) => t.id === msg.id)
-        if (!target) return
-        await fetch(`http://${HOST}:${this.port}/json/activate/${encodeURIComponent(target.id)}`, { signal: AbortSignal.timeout(1500) }).catch(() => {
-          // floor-ok: a page that cannot be raised is still shown
-        })
-        await this.attach(target)
-        return
-      }
+      case 'tab':
+        return this.switchTab(msg.id)
     }
+  }
+
+  private async key(msg: Extract<BrowserLiveIn, { type: 'key' }>): Promise<void> {
+    const text = msg.text ?? (msg.key === 'Enter' ? '\r' : undefined)
+    await this.call('Input.dispatchKeyEvent', {
+      type: msg.event === 'up' ? 'keyUp' : text ? 'keyDown' : 'rawKeyDown',
+      key: msg.key,
+      code: msg.code,
+      modifiers: msg.modifiers,
+      windowsVirtualKeyCode: virtualKeyCode(msg.key),
+      ...(msg.event === 'down' && editCommands(msg.key, msg.modifiers) ? { commands: editCommands(msg.key, msg.modifiers) } : {}),
+      ...(msg.event === 'down' && text ? { text } : {}),
+    })
+  }
+
+  private async navigate(raw: string): Promise<void> {
+    let url: URL
+    try {
+      url = new URL(raw)
+    } catch {
+      return
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return
+    await this.call('Page.navigate', { url: url.href })
+  }
+
+  private async history(go: 'back' | 'forward' | 'reload'): Promise<void> {
+    if (go === 'reload') {
+      await this.call('Page.reload')
+      return
+    }
+    const h = (await this.call('Page.getNavigationHistory')) as { currentIndex: number; entries: { id: number }[] }
+    const to = h.entries[h.currentIndex + (go === 'back' ? -1 : 1)]
+    if (to) await this.call('Page.navigateToHistoryEntry', { entryId: to.id })
+  }
+
+  private async switchTab(id: string): Promise<void> {
+    const all = await pageTabs(this.port)
+    const target = (this.scope ? this.scope.visible(all) : all).find((t) => t.id === id)
+    if (!target) return
+    await fetch(`http://${HOST}:${this.port}/json/activate/${encodeURIComponent(target.id)}`, { signal: AbortSignal.timeout(1500) }).catch(() => {
+      // floor-ok: a page that cannot be raised is still shown
+    })
+    await this.attach(target)
   }
 }
 
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
+type Fields = Record<string, unknown>
+
+function parseMouse(m: Fields): BrowserLiveIn | null {
+  if (
+    (m.event === 'down' || m.event === 'up' || m.event === 'move') &&
+    isNum(m.x) &&
+    isNum(m.y) &&
+    (m.button === 'left' || m.button === 'middle' || m.button === 'right' || m.button === 'none') &&
+    isNum(m.clickCount) &&
+    isNum(m.modifiers)
+  )
+    return { type: 'mouse', event: m.event, x: m.x, y: m.y, button: m.button, clickCount: m.clickCount, modifiers: m.modifiers }
+  return null
+}
+
+function parseKey(m: Fields): BrowserLiveIn | null {
+  if ((m.event === 'down' || m.event === 'up') && typeof m.key === 'string' && typeof m.code === 'string' && isNum(m.modifiers))
+    return { type: 'key', event: m.event, key: m.key, code: m.code, modifiers: m.modifiers, ...(typeof m.text === 'string' ? { text: m.text } : {}) }
+  return null
+}
+
+const clampSize = (n: number): number => Math.min(4000, Math.max(200, Math.round(n)))
+
+/** One checker per message type; a type not named here is dropped. */
+const LIVE_IN: Record<string, (m: Fields) => BrowserLiveIn | null> = {
+  mouse: parseMouse,
+  wheel: (m) => (isNum(m.x) && isNum(m.y) && isNum(m.deltaX) && isNum(m.deltaY) ? { type: 'wheel', x: m.x, y: m.y, deltaX: m.deltaX, deltaY: m.deltaY } : null),
+  key: parseKey,
+  text: (m) => (typeof m.text === 'string' ? { type: 'text', text: m.text } : null),
+  copy: (m) => ({ type: 'copy', cut: m.cut === true }),
+  navigate: (m) => (typeof m.url === 'string' ? { type: 'navigate', url: m.url } : null),
+  history: (m) => (m.go === 'back' || m.go === 'forward' || m.go === 'reload' ? { type: 'history', go: m.go } : null),
+  tab: (m) => (typeof m.id === 'string' ? { type: 'tab', id: m.id } : null),
+  viewport: (m) => (isNum(m.width) && isNum(m.height) ? { type: 'viewport', width: clampSize(m.width), height: clampSize(m.height) } : null),
+}
+
 /** A message from the page checked field by field (it is JSON from a socket, not trusted to be a BrowserLiveIn). */
 export function parseLiveIn(raw: string): BrowserLiveIn | null {
-  let m: Record<string, unknown>
+  let m: Fields
   try {
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return null
-    m = parsed as Record<string, unknown>
+    m = parsed as Fields
   } catch {
     return null
   }
-  switch (m.type) {
-    case 'mouse':
-      if (
-        (m.event === 'down' || m.event === 'up' || m.event === 'move') &&
-        isNum(m.x) &&
-        isNum(m.y) &&
-        (m.button === 'left' || m.button === 'middle' || m.button === 'right' || m.button === 'none') &&
-        isNum(m.clickCount) &&
-        isNum(m.modifiers)
-      )
-        return { type: 'mouse', event: m.event, x: m.x, y: m.y, button: m.button, clickCount: m.clickCount, modifiers: m.modifiers }
-      return null
-    case 'wheel':
-      return isNum(m.x) && isNum(m.y) && isNum(m.deltaX) && isNum(m.deltaY) ? { type: 'wheel', x: m.x, y: m.y, deltaX: m.deltaX, deltaY: m.deltaY } : null
-    case 'key':
-      if ((m.event === 'down' || m.event === 'up') && typeof m.key === 'string' && typeof m.code === 'string' && isNum(m.modifiers))
-        return { type: 'key', event: m.event, key: m.key, code: m.code, modifiers: m.modifiers, ...(typeof m.text === 'string' ? { text: m.text } : {}) }
-      return null
-    case 'text':
-      return typeof m.text === 'string' ? { type: 'text', text: m.text } : null
-    case 'copy':
-      return { type: 'copy', cut: m.cut === true }
-    case 'navigate':
-      return typeof m.url === 'string' ? { type: 'navigate', url: m.url } : null
-    case 'history':
-      return m.go === 'back' || m.go === 'forward' || m.go === 'reload' ? { type: 'history', go: m.go } : null
-    case 'tab':
-      return typeof m.id === 'string' ? { type: 'tab', id: m.id } : null
-    case 'viewport':
-      return isNum(m.width) && isNum(m.height)
-        ? { type: 'viewport', width: Math.min(4000, Math.max(200, Math.round(m.width))), height: Math.min(4000, Math.max(200, Math.round(m.height))) }
-        : null
-    default:
-      return null
-  }
+  const parse = typeof m.type === 'string' && Object.hasOwn(LIVE_IN, m.type) ? LIVE_IN[m.type] : undefined
+  return parse ? parse(m) : null
 }

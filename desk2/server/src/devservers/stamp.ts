@@ -3,13 +3,21 @@
 // again when it looks; a difference means the service was started before the code changed.
 
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 
-/** desk2/: every path in the hash is relative to it, so two checkouts of the same code give the same stamp. */
-const ROOT = resolve(import.meta.dir, '../../..')
 const DIRS = ['server/src/devservers', 'server/src/localhost']
 const FILES = ['shared/devwebui.ts']
+
+/** desk2/: the nearest folder above this file that holds shared/devwebui.ts. Every path in the hash is relative to it. */
+function findRoot(from: string): string {
+  for (let dir = from; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, FILES[0] as string))) return dir
+    if (dirname(dir) === dir) throw new Error(`no ${FILES[0]} above ${from}`)
+  }
+}
+
+const ROOT = findRoot(import.meta.dir)
 
 function tsFiles(rel: string): string[] {
   const out: string[] = []
@@ -27,9 +35,23 @@ function tsFiles(rel: string): string[] {
   return out
 }
 
+/** The last stamp and the files' paths, mtimes and sizes it was computed from: the same list hashes the same. */
+let last: { key: string; value: string } | null = null
+
 /** sha256 over the source of the service (devservers/, localhost/ and shared/devwebui.ts), sorted by path. */
 export function serviceStamp(): string {
   const files = [...DIRS.flatMap(tsFiles), ...FILES].sort()
+  const key = files
+    .map((rel) => {
+      try {
+        const st = statSync(join(ROOT, rel))
+        return `${rel}:${st.mtimeMs}:${st.size}`
+      } catch {
+        return `${rel}:-`
+      }
+    })
+    .join('\n')
+  if (last?.key === key) return last.value
   const hash = createHash('sha256')
   for (const rel of files) {
     let text = ''
@@ -40,5 +62,6 @@ export function serviceStamp(): string {
     }
     hash.update(`${rel}\0${text}\0`)
   }
-  return hash.digest('hex')
+  last = { key, value: hash.digest('hex') }
+  return last.value
 }

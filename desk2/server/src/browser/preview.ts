@@ -49,7 +49,11 @@ export class PreviewCast implements Cast {
       if (!tab) return this.end('the browser has no page')
       await this.attach(tab.id)
       if (this.ended) return
-      this.poll = setInterval(() => void this.watch(), 2000)
+      // An open socket needs no look at the tab list: a page or browser that goes closes it, and onclose watches. A
+      // scoped cast still looks: its page can stop being this chat's (another chat's agent claims it) while it stays open.
+      this.poll = setInterval(() => {
+        if (this.scope || this.ws?.readyState !== WebSocket.OPEN) void this.watch()
+      }, 2000)
     } catch {
       this.end('the page could not be shown')
     }
@@ -111,7 +115,10 @@ export class PreviewCast implements Cast {
     }
   }
 
-  /** Every 2 s: the browser gone ends the cast; the page gone moves it to the first page left. */
+  /**
+   * On a closed socket, and every 2 s while there is none or the cast is scoped: the browser gone ends the cast; the page
+   * gone (or no longer the scope's) moves it to the first page left.
+   */
   private async watch(): Promise<void> {
     if (this.ended) return
     let tabs: BrowserTab[]

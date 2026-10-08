@@ -28,6 +28,6 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get(DW_LOCALHOST, async (c) => {
     const why = notOwnPage(c.req.raw.headers, 'the localhost list')
     if (why) return c.json({ error: why }, 403)
-    return c.json(await localhost.list(c.req.query('all') === '1'))
+    return c.json(await localhost.list(c.req.query('all') === '1', c.req.query('fresh') === '1'))
   })
 }

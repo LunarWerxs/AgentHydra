@@ -100,27 +100,30 @@ export function cleanSettingsPatch(patch: unknown, current?: DevWebSettings): Pa
     if (typeof patch[k] !== 'boolean') throw new DevServerError(`${k} must be true or false`, 400)
     out[k] = patch[k] as boolean
   }
-  if (patch.linkHost !== undefined) {
-    if (typeof patch.linkHost !== 'string') throw new DevServerError('linkHost must be text', 400)
-    const host = patch.linkHost.trim()
-    if (host.length > 253 || /[\s/\\?#@]/.test(host)) throw new DevServerError('linkHost must be a host name or address, such as my-pc or 192.168.1.20', 400)
-    out.linkHost = host
-  }
+  if (patch.linkHost !== undefined) out.linkHost = cleanLinkHost(patch.linkHost)
   if (patch.scanExclude !== undefined) {
     if (!Array.isArray(patch.scanExclude) || patch.scanExclude.some((x) => typeof x !== 'string')) throw new DevServerError('scanExclude must be a list of folder names or paths', 400)
     out.scanExclude = uniq(patch.scanExclude, false).slice(0, 500)
   }
-  if (patch.osSkip !== undefined) {
-    const os = patch.osSkip
-    if (!isObject(os)) throw new DevServerError('osSkip must map windows, mac and linux to folder name lists', 400)
-    // The lists the patch leaves out stay as they are now, not as the defaults.
-    const next = { ...(current?.osSkip ?? defaultSettings().osSkip) }
-    for (const k of OSES) {
-      if (os[k] === undefined) continue
-      if (!Array.isArray(os[k]) || (os[k] as unknown[]).some((x) => typeof x !== 'string')) throw new DevServerError(`osSkip.${k} must be a list of folder names`, 400)
-      next[k] = uniq(os[k] as unknown[], true).slice(0, 500)
-    }
-    out.osSkip = next
-  }
+  if (patch.osSkip !== undefined) out.osSkip = cleanOsSkip(patch.osSkip, current)
   return out
+}
+
+function cleanLinkHost(value: unknown): string {
+  if (typeof value !== 'string') throw new DevServerError('linkHost must be text', 400)
+  const host = value.trim()
+  if (host.length > 253 || /[\s/\\?#@]/.test(host)) throw new DevServerError('linkHost must be a host name or address, such as my-pc or 192.168.1.20', 400)
+  return host
+}
+
+function cleanOsSkip(os: unknown, current: DevWebSettings | undefined): DevWebSettings['osSkip'] {
+  if (!isObject(os)) throw new DevServerError('osSkip must map windows, mac and linux to folder name lists', 400)
+  // The lists the patch leaves out stay as they are now, not as the defaults.
+  const next = { ...(current?.osSkip ?? defaultSettings().osSkip) }
+  for (const k of OSES) {
+    if (os[k] === undefined) continue
+    if (!Array.isArray(os[k]) || (os[k] as unknown[]).some((x) => typeof x !== 'string')) throw new DevServerError(`osSkip.${k} must be a list of folder names`, 400)
+    next[k] = uniq(os[k] as unknown[], true).slice(0, 500)
+  }
+  return next
 }

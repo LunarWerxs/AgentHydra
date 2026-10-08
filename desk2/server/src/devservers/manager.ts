@@ -41,7 +41,7 @@ import {
   folderContains,
   processAddress
 } from '@shared/devwebui'
-import { killHostTree } from '../host/launch'
+import { killHostTree, pidAlive } from '../host/launch'
 import { type Scan, scanPorts } from '../localhost/ports'
 import { type AdoptContext, findByFolder, judgePort } from './adopt'
 import { stripAnsi } from './ansi'
@@ -76,8 +76,12 @@ const MAX_LOGS = 500
 const LOOK_MIN_MS = 1500
 /** A port scan is reused this long when a probe found a listener we do not own. */
 const SCAN_TTL_MS = 8000
+/** A port held by something judged a conflict is judged again at most this often while it stays held. */
+const CONFLICT_SCAN_MS = 30_000
 /** A server with no port is found by scanning; at most this often while it is down. */
-const PORTLESS_SCAN_MS = 10_000
+const PORTLESS_SCAN_MS = 30_000
+/** A scan (every process's command line) is let go this long after it was taken; no look reuses one this old. */
+const SCAN_KEEP_MS = 60_000
 /**
  * The longest a page read waits for a status look before answering with what is known; the look runs on and the next
  * poll shows it. A port scan took 1.8 to 5.3 s on a PC with 880 processes at full CPU (2026-10-07), and the page's poll
@@ -147,6 +151,15 @@ interface ComposeHold {
   modes: Set<string>
 }
 
+/** What one status look found: the probes, the scan it took (if any) and what is already some server's. */
+interface Look {
+  own: Set<number>
+  answers: Map<number, boolean>
+  scan: Scan | null
+  ctx: AdoptContext
+  claimed: { ports: Set<number>; pids: Set<number> }
+}
+
 interface Project {
   id: string
   name: string
@@ -156,6 +169,15 @@ interface Project {
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** The server a chat named (by id, local id or name), else the starred one, the autostart one or the only one. */
+function pickServer(procs: DevWebProcess[], server: string | undefined): DevWebProcess | undefined {
+  if (server) {
+    const want = server.trim().toLowerCase()
+    return procs.find((p) => [p.id, p.localId, p.name].some((n) => n.toLowerCase() === want))
+  }
+  return procs.find((p) => p.starred) ?? procs.find((p) => p.autostart) ?? (procs.length === 1 ? procs[0] : undefined)
+}
 
 function connects(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -185,6 +207,7 @@ class Manager implements DevServers {
   private readonly now: () => number
   private readonly kill: (pid: number) => void
   private readonly portListening: (port: number) => Promise<boolean>
+  private readonly alive: (pid: number) => boolean
   private readonly scanFn: () => Promise<Scan>
   private readonly deps: DevServersDeps
 
@@ -217,6 +240,8 @@ class Manager implements DevServers {
   private lastLookAt = Number.NEGATIVE_INFINITY
   private scanCache: { scan: Scan; at: number } | null = null
   private scanning: Promise<Scan> | null = null
+  /** When each probed port began answering (a port that goes quiet is forgotten). */
+  private answeringSince = new Map<number, number>()
 
   constructor(deps: DevServersDeps) {
     this.deps = deps
@@ -224,6 +249,7 @@ class Manager implements DevServers {
     this.now = deps.now ?? Date.now
     this.kill = deps.kill ?? killHostTree
     this.portListening = deps.portListening ?? defaultPortListening
+    this.alive = deps.alive ?? pidAlive
     this.scanFn = deps.scan ?? scanPorts
     this.vault = new LogVault(path.join(dataDir(this.home), 'logs'))
     this.errorStore = new ErrorStore(path.join(dataDir(this.home), 'errors.ndjson'))
@@ -425,6 +451,7 @@ class Manager implements DevServers {
       this.vault.delete(pid)
       this.errorStore.clear(pid)
       this.alertStore.removeForProcess(pid)
+      this.metricsRing.delete(pid)
       this.entries.delete(pid)
       this.forgetToggles([pid])
     }
@@ -652,6 +679,9 @@ class Manager implements DevServers {
       if (!this.settingsNow.monitorResources || !pids.length) return this.syncSampler()
       const got = await sampleMetrics(pids)
       if (this.closed) return
+      // An outside server whose pid is gone is down: the sampler stops once nothing else runs.
+      for (const e of this.entries.values()) if (!e.child && e.outside && !got[e.outside.pid] && !this.alive(e.outside.pid)) this.dropOutside(e)
+      if (![...this.entries.values()].some((e) => e.child || e.outside)) return this.syncSampler()
       this.lastMetrics.clear()
       const at = this.now()
       const samples = [...this.entries.values()].map((e) => {
@@ -832,7 +862,13 @@ class Manager implements DevServers {
     this.scanning = p
     try {
       const scan = await p
-      this.scanCache = scan.error ? null : { scan, at: this.now() }
+      const cached = scan.error ? null : { scan, at: this.now() }
+      this.scanCache = cached
+      if (cached) {
+        setTimeout(() => {
+          if (this.scanCache === cached) this.scanCache = null
+        }, SCAN_KEEP_MS).unref()
+      }
       return scan
     } finally {
       this.scanning = null
@@ -876,75 +912,99 @@ class Manager implements DevServers {
    */
   private async doLook(force: boolean): Promise<void> {
     const cands = [...this.entries.values()].filter((e) => !e.child && !e.pendingStart && !e.stopping)
+    const own = new Set<number>()
+    for (const e of this.entries.values()) if (e.child && e.def.port) own.add(e.def.port)
+    const answers = await this.probePorts(cands, own)
+    const scan = await this.pickScan(cands, answers, force)
+    const look: Look = { own, answers, scan, ctx: this.adoptContext(), claimed: this.claimed() }
+    for (const e of cands) {
+      // The state may have moved while the probes and the scan ran.
+      if (e.child || e.pendingStart || e.stopping) continue
+      if (e.def.port) this.lookAtPort(e, e.def.port, look)
+      else this.lookPortless(e, look)
+    }
+  }
+
+  /** Whether each candidate's port accepts a connection (a port this manager's own child holds counts as not). */
+  private async probePorts(cands: Entry[], own: Set<number>): Promise<Map<number, boolean>> {
     const ports = new Set<number>()
     for (const e of cands) {
       const p = e.def.port ?? e.outside?.port
       if (p) ports.add(p)
     }
-    const own = new Set<number>()
-    for (const e of this.entries.values()) if (e.child && e.def.port) own.add(e.def.port)
-
     const answers = new Map<number, boolean>()
     await Promise.all([...ports].map(async (p) => answers.set(p, own.has(p) ? false : await this.safeListening(p))))
-
-    const needVerdict = cands.filter((e) => e.def.port && answers.get(e.def.port) && e.outside?.port !== e.def.port)
-    // Before a start or stop acts on a server taken up as outside, the program on its port is looked at again.
-    const recheck = force && cands.some((e) => e.def.port && answers.get(e.def.port) && e.outside?.port === e.def.port)
-    const portless = cands.filter((e) => !e.def.port && !e.outside)
-    let scan: Scan | null = null
-    if (recheck) scan = await this.getScan(LOOK_MIN_MS)
-    else if (needVerdict.length) {
-      scan = await this.getScan(SCAN_TTL_MS)
-      const s = scan
-      if (needVerdict.some((e) => !s.listeners.some((l) => l.port === e.def.port))) scan = await this.getScan(LOOK_MIN_MS)
-    } else if (portless.length) {
-      scan = await this.getScan(force ? LOOK_MIN_MS : PORTLESS_SCAN_MS)
+    const at = this.now()
+    for (const [p, up] of answers) {
+      if (!up) this.answeringSince.delete(p)
+      else if (!this.answeringSince.has(p)) this.answeringSince.set(p, at)
     }
+    return answers
+  }
 
-    const ctx = this.adoptContext()
+  /** The scan this look needs, if any: a cached one unless something can have changed since it was taken. */
+  private async pickScan(cands: Entry[], answers: Map<number, boolean>, force: boolean): Promise<Scan | null> {
+    const answering = (e: Entry) => !!e.def.port && !!answers.get(e.def.port)
+    // Before a start or stop acts on a server taken up as outside, the program on its port is looked at again.
+    if (force && cands.some((e) => answering(e) && e.outside?.port === e.def.port)) return this.getScan(LOOK_MIN_MS)
+    const needVerdict = cands.filter((e) => answering(e) && e.outside?.port !== e.def.port)
+    if (needVerdict.length) {
+      // A conflict already judged stays one until its port goes quiet; it is judged again only now and then.
+      const scan = await this.getScan(needVerdict.every((e) => e.conflict) ? CONFLICT_SCAN_MS : SCAN_TTL_MS)
+      // A port missing from a scan taken before it began answering needs a fresh scan; one taken after it would not
+      // tell more, so it is not repeated on every look.
+      const scanAt = this.scanCache?.at ?? Number.NEGATIVE_INFINITY
+      const missed = needVerdict.some((e) => !scan.listeners.some((l) => l.port === e.def.port) && scanAt < (this.answeringSince.get(e.def.port as number) ?? 0))
+      return missed ? this.getScan(LOOK_MIN_MS) : scan
+    }
+    if (cands.some((e) => !e.def.port && !e.outside)) return this.getScan(force ? LOOK_MIN_MS : PORTLESS_SCAN_MS)
+    return null
+  }
+
+  /** The ports and pids already some server's, so a portless server is never matched to another's process. */
+  private claimed(): { ports: Set<number>; pids: Set<number> } {
     const claimed = { ports: new Set<number>(), pids: new Set<number>() }
     for (const e of this.entries.values()) {
       if (e.def.port) claimed.ports.add(e.def.port)
-      if (e.outside) {
-        claimed.pids.add(e.outside.pid)
-        if (e.outside.port) claimed.ports.add(e.outside.port)
-      }
+      if (!e.outside) continue
+      claimed.pids.add(e.outside.pid)
+      if (e.outside.port) claimed.ports.add(e.outside.port)
     }
+    return claimed
+  }
 
-    for (const e of cands) {
-      // The state may have moved while the probes and the scan ran.
-      if (e.child || e.pendingStart || e.stopping) continue
-      const port = e.def.port
-      if (port) {
-        if (own.has(port)) continue
-        if (!answers.get(port)) {
-          this.dropOutside(e)
-          e.conflict = null
-          continue
-        }
-        if (e.outside?.port === port) {
-          const pids = scan?.listeners.filter((l) => l.port === port).map((l) => l.pid) ?? []
-          // The same program, or no scan to tell: still the server taken up. Another program there is judged afresh.
-          if (!pids.length || pids.includes(e.outside.pid)) continue
-        }
-        if (!scan) continue
-        const v = judgePort(port, scan, ctx)
-        if (v.kind === 'outside') this.adopt(e, v.pid, port, scan)
-        else {
-          this.dropOutside(e)
-          e.conflict = v.text
-        }
-      } else if (e.outside) {
-        if (e.outside.port && !answers.get(e.outside.port)) this.dropOutside(e)
-      } else if (scan) {
-        const hit = findByFolder(e.def.cwd, scan, ctx, claimed)
-        if (hit) {
-          this.adopt(e, hit.pid, hit.port, scan)
-          claimed.pids.add(hit.pid)
-          claimed.ports.add(hit.port)
-        }
-      }
+  private lookAtPort(e: Entry, port: number, look: Look): void {
+    if (look.own.has(port)) return
+    if (!look.answers.get(port)) {
+      this.dropOutside(e)
+      e.conflict = null
+      return
     }
+    if (e.outside?.port === port) {
+      const pids = look.scan?.listeners.filter((l) => l.port === port).map((l) => l.pid) ?? []
+      // The same program, or no scan to tell: still the server taken up. Another program there is judged afresh.
+      if (!pids.length || pids.includes(e.outside.pid)) return
+    }
+    if (!look.scan) return
+    const v = judgePort(port, look.scan, look.ctx)
+    if (v.kind === 'outside') this.adopt(e, v.pid, port, look.scan)
+    else {
+      this.dropOutside(e)
+      e.conflict = v.text
+    }
+  }
+
+  private lookPortless(e: Entry, look: Look): void {
+    if (e.outside) {
+      if (e.outside.port && !look.answers.get(e.outside.port)) this.dropOutside(e)
+      return
+    }
+    if (!look.scan) return
+    const hit = findByFolder(e.def.cwd, look.scan, look.ctx, look.claimed)
+    if (!hit) return
+    this.adopt(e, hit.pid, hit.port, look.scan)
+    look.claimed.pids.add(hit.pid)
+    look.claimed.ports.add(hit.port)
   }
 
   // ---- starting -------------------------------------------------------------
@@ -971,20 +1031,7 @@ class Manager implements DevServers {
     if (e.pendingStart && !e.child) return this.answer(e, true, [])
     this.cancelQueued(e.def.id)
     const gen = ++e.generation
-    await this.refresh(true)
-    const overtaken = () => e.generation !== gen || this.entries.get(e.def.id) !== e || this.closed
-    if (overtaken()) return this.answer(e, false, [])
-    if (e.child && e.stopping) {
-      await new Promise<void>((r) => e.exitWaiters.push(r))
-      if (overtaken()) return this.answer(e, false, [])
-    }
-    // An outside server still going down holds its port: start once it has gone, or use it if it never goes.
-    if (e.outsideStop) {
-      await e.outsideStop
-      if (overtaken()) return this.answer(e, false, [])
-      await this.refresh(true)
-      if (overtaken()) return this.answer(e, false, [])
-    }
+    if (!(await this.clearToStart(e, gen))) return this.answer(e, false, [])
     if (this.isUp(e)) {
       if (e.outside) this.addLog(e, 'stdout', `[devservers] ${e.outside.port ? `port ${e.outside.port} already answers` : 'it already runs'}: using the server that runs there (pid ${e.outside.pid}).`)
       return this.answer(e, true, [])
@@ -992,33 +1039,57 @@ class Manager implements DevServers {
     if (e.conflict && !(await this.freeConflict(e))) throw new DevServerError(`${e.conflict}, so ${e.def.name} was not started (a program is never ended to free a port).`, 409)
 
     this.begin(e)
+    return this.answer(e, false, expand ? this.startExtras(e) : [])
+  }
 
-    let coStarted: string[] = []
-    if (expand) {
-      let extras = coStartIds(e.def, this.defsList())
-      // A waitForPort cycle among the extras must not block the anchor's real group: name it and start the rest.
-      for (;;) {
-        try {
-          orderByDependency(extras, this.defsById())
-          break
-        } catch (err) {
-          if (!(err instanceof DependencyCycleError)) throw err
-          for (const cid of err.cycle) {
-            const ce = this.entries.get(cid)
-            if (ce) this.addLog(ce, 'stderr', `[devservers] ${err.message}; not starting.`)
-          }
-          const cycle = new Set(err.cycle)
-          extras = extras.filter((x) => !cycle.has(x))
-        }
-      }
-      // What this action sets in motion: not what is up already, mid-start, queued, or refused.
-      coStarted = extras.filter((x) => {
-        const xe = this.entries.get(x)
-        return !!xe && !this.isUp(xe) && !xe.startOp && !this.queued.has(x) && !xe.conflict
-      })
-      if (extras.length) this.startMany(extras)
+  /** Waits out the look, a stop of its own child and an outside server going down; false when the start was overtaken. */
+  private async clearToStart(e: Entry, gen: number): Promise<boolean> {
+    await this.refresh(true)
+    const overtaken = () => e.generation !== gen || this.entries.get(e.def.id) !== e || this.closed
+    if (overtaken()) return false
+    if (e.child && e.stopping) {
+      await new Promise<void>((r) => e.exitWaiters.push(r))
+      if (overtaken()) return false
     }
-    return this.answer(e, false, coStarted)
+    // An outside server still going down holds its port: start once it has gone, or use it if it never goes.
+    if (e.outsideStop) {
+      await e.outsideStop
+      if (overtaken()) return false
+      await this.refresh(true)
+      if (overtaken()) return false
+    }
+    return true
+  }
+
+  /** Starts the anchor's linked group and companions; answers what this action set in motion. */
+  private startExtras(e: Entry): string[] {
+    const extras = this.withoutCycles(coStartIds(e.def, this.defsList()))
+    // What this action sets in motion: not what is up already, mid-start, queued, or refused.
+    const coStarted = extras.filter((x) => {
+      const xe = this.entries.get(x)
+      return !!xe && !this.isUp(xe) && !xe.startOp && !this.queued.has(x) && !xe.conflict
+    })
+    if (extras.length) this.startMany(extras)
+    return coStarted
+  }
+
+  /** A waitForPort cycle among the extras must not block the anchor's real group: name it and start the rest. */
+  private withoutCycles(ids: string[]): string[] {
+    let extras = ids
+    for (;;) {
+      try {
+        orderByDependency(extras, this.defsById())
+        return extras
+      } catch (err) {
+        if (!(err instanceof DependencyCycleError)) throw err
+        for (const cid of err.cycle) {
+          const ce = this.entries.get(cid)
+          if (ce) this.addLog(ce, 'stderr', `[devservers] ${err.message}; not starting.`)
+        }
+        const cycle = new Set(err.cycle)
+        extras = extras.filter((x) => !cycle.has(x))
+      }
+    }
   }
 
   /** The synchronous part of a start: the waitForPort wait, or the spawn. */
@@ -1544,7 +1615,10 @@ class Manager implements DevServers {
       })
     )
     this.forgetToggles(p.processIds)
-    for (const pid of p.processIds) this.alertStore.removeForProcess(pid)
+    for (const pid of p.processIds) {
+      this.alertStore.removeForProcess(pid)
+      this.metricsRing.delete(pid)
+    }
     this.purge(id)
     this.registry = this.registry.filter((f) => !samePath(f, p.path))
     this.persistRegistry()
@@ -1687,12 +1761,9 @@ class Manager implements DevServers {
     const f = await this.folder(cwd)
     if ('nothing' in f) return { ok: false, error: f.nothing }
     const project = f.project
-    const procs = project.processes
-    const picked = server
-      ? procs.find((p) => [p.id, p.localId, p.name].some((n) => n.toLowerCase() === server.trim().toLowerCase()))
-      : (procs.find((p) => p.starred) ?? procs.find((p) => p.autostart) ?? (procs.length === 1 ? procs[0] : undefined))
+    const picked = pickServer(project.processes, server)
     if (!picked) {
-      const choices = procs.map((p) => p.localId)
+      const choices = project.processes.map((p) => p.localId)
       return { ok: false, error: server ? `${project.name} has no server "${server}".` : `${project.name} has several servers: say which one to start.`, choices }
     }
     const e = this.must(picked.id)
@@ -1703,26 +1774,32 @@ class Manager implements DevServers {
       if (err instanceof DevServerError) return { ok: false, error: err.message, process: this.view(e) }
       throw err
     }
-    const tail = () => e.logs.slice(-20).map((l) => l.line)
     if (wait) {
-      const deadline = Date.now() + ENSURE_WAIT_MS
-      for (;;) {
-        await this.refresh()
-        const status = this.view(e).status
-        if (status === 'running') break
-        if (status === 'stopped' || status === 'crashed') {
-          const code = e.exitCode === null ? '' : ` (exit code ${e.exitCode})`
-          return { ok: false, error: `${e.def.name} stopped right after it started${code}.`, process: this.view(e), logTail: tail() }
-        }
-        if (Date.now() >= deadline) {
-          const where = e.def.port ? ` on port ${e.def.port}` : ''
-          return { ok: false, error: `${e.def.name} did not answer${where} within ${ENSURE_WAIT_MS / 1000} s. It is still starting: look at its logs, and do not start a second copy.`, process: this.view(e), logTail: tail() }
-        }
-        await sleep(ENSURE_POLL_MS)
-      }
+      const failed = await this.waitRunning(e)
+      if (failed) return failed
     }
     const proc = this.view(e)
     return { ok: true, reused, process: proc, url: processAddress(proc), project: this.projectView(this.projects.get(e.def.projectId)!) }
+  }
+
+  /** Waits up to ENSURE_WAIT_MS for a started server to run; null once it does, else the answer that says why not. */
+  private async waitRunning(e: Entry): Promise<DevWebEnsure | null> {
+    const tail = () => e.logs.slice(-20).map((l) => l.line)
+    const deadline = Date.now() + ENSURE_WAIT_MS
+    for (;;) {
+      await this.refresh()
+      const status = this.view(e).status
+      if (status === 'running') return null
+      if (status === 'stopped' || status === 'crashed') {
+        const code = e.exitCode === null ? '' : ` (exit code ${e.exitCode})`
+        return { ok: false, error: `${e.def.name} stopped right after it started${code}.`, process: this.view(e), logTail: tail() }
+      }
+      if (Date.now() >= deadline) {
+        const where = e.def.port ? ` on port ${e.def.port}` : ''
+        return { ok: false, error: `${e.def.name} did not answer${where} within ${ENSURE_WAIT_MS / 1000} s. It is still starting: look at its logs, and do not start a second copy.`, process: this.view(e), logTail: tail() }
+      }
+      await sleep(ENSURE_POLL_MS)
+    }
   }
 
   // ---- what the service and the localhost list read -----------------------------

@@ -38,7 +38,7 @@ function realDirs(dir: string): string[] {
   try {
     return readdirSync(dir).filter((n) => {
       if (n.startsWith('.') || RESERVED.has(n)) return false
-      // lstat: a junction left at an old path by a re-homing is not a profile.
+      // lstat: a junction a re-homed profile left behind is not a profile.
       try {
         const st = lstatSync(join(dir, n))
         return st.isDirectory() && !st.isSymbolicLink()
