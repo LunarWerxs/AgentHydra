@@ -209,6 +209,61 @@ async def run(items_path: Path, out: Path, arms: list[str], limit: int | None) -
         await mgr.aclose()
 
 
+KINDS = {"choice": lambda r: r["type"] in CHOICE, "yesno": lambda r: r["type"] == "noul"}
+# each new arm against each per-item arm, in report order
+PAIRS = [(new, base) for new in ("batch4", "batch40", "item-free") for base in ("item-paid", "item-free") if new != base]
+
+
+def graded(r: dict, of) -> bool:
+    return of(r) and r.get("pass") is not None
+
+
+def arm_line(arm: str, rs: dict[tuple, dict]) -> dict:
+    """One arm's accuracy per kind, its messages when it is a batch arm, and its choice accuracy per model."""
+    line: dict = {}
+    for kind, of in KINDS.items():
+        ans = [r for r in rs.values() if graded(r, of)]
+        if ans:
+            line[kind] = {"answered": len(ans), "acc": round(sum(r["pass"] for r in ans) / len(ans), 4)}
+    msgs = {r["ask"]: r for r in rs.values() if arm.startswith("batch")}
+    if msgs:
+        line |= {"messages": len(msgs), "served": sum(m["served"] for m in msgs.values()),
+                 "first_try": sum(m["served"] and m["tries"] == 1 for m in msgs.values())}
+    line["models"] = {}
+    for r in rs.values():
+        if r.get("model") and graded(r, KINDS["choice"]):
+            m = line["models"].setdefault(r["model"], {"choice": 0, "right": 0})
+            m["choice"] += 1
+            m["right"] += r["pass"]
+    return line
+
+
+def bootstrap_ci95(groups: list[list[int]], rng: random.Random, boots: int) -> list[float]:
+    """The 95% interval of the mean difference, resampling whole asks."""
+    sims = []
+    for _ in range(boots):
+        pick = [groups[rng.randrange(len(groups))] for _ in groups]
+        sims.append(sum(sum(p) for p in pick) / sum(len(p) for p in pick))
+    sims.sort()
+    return [round(sims[int(0.025 * boots)], 4), round(sims[int(0.975 * boots)], 4)]
+
+
+def pair(new: dict[tuple, dict], base: dict[tuple, dict], of, rng: random.Random, boots: int) -> dict | None:
+    """Two arms' paired difference on the questions both graded; None when they share none."""
+    ks = [k for k, r in new.items() if graded(r, of) and base.get(k, {}).get("pass") is not None]
+    if not ks:
+        return None
+    d = [int(new[k]["pass"]) - int(base[k]["pass"]) for k in ks]
+    asks: dict[str, list[int]] = {}
+    for k, x in zip(ks, d):
+        asks.setdefault(k[0], []).append(x)
+    return {
+        "n": len(ks), "new_acc": round(sum(new[k]["pass"] for k in ks) / len(ks), 4),
+        "base_acc": round(sum(base[k]["pass"] for k in ks) / len(ks), 4), "diff": round(sum(d) / len(d), 4),
+        "ci95": bootstrap_ci95(list(asks.values()), rng, boots),
+        "new_only_right": sum(x > 0 for x in d), "base_only_right": sum(x < 0 for x in d)}
+
+
 def report(out: Path, boots: int = 10_000) -> dict:
     """Accuracy per arm on the graded choice/score and yes/no questions, and each new arm's paired difference from a
     per-item arm with a 95% interval from a bootstrap over asks (one ask's questions share a message)."""
@@ -217,49 +272,14 @@ def report(out: Path, boots: int = 10_000) -> dict:
     for r in rows:
         r["pass"] = passes(r.get("pred"), r.get("gold"))  # graded here, so a grading fix re-grades stored rows
         by.setdefault(r["arm"], {})[(r["ask"], r["id"])] = r
-    kinds = {"choice": lambda r: r["type"] in CHOICE, "yesno": lambda r: r["type"] == "noul"}
-    rep: dict = {"arms": {}, "pairs": {}}
-    for arm, rs in by.items():
-        line: dict = {}
-        for kind, of in kinds.items():
-            ans = [r for r in rs.values() if of(r) and r.get("pass") is not None]
-            if ans:
-                line[kind] = {"answered": len(ans), "acc": round(sum(r["pass"] for r in ans) / len(ans), 4)}
-        msgs = {r["ask"]: r for r in rs.values() if arm.startswith("batch")}
-        if msgs:
-            line |= {"messages": len(msgs), "served": sum(m["served"] for m in msgs.values()),
-                     "first_try": sum(m["served"] and m["tries"] == 1 for m in msgs.values())}
-        line["models"] = {}
-        for r in rs.values():
-            if r.get("model") and r["type"] in CHOICE and r.get("pass") is not None:
-                m = line["models"].setdefault(r["model"], {"choice": 0, "right": 0})
-                m["choice"] += 1
-                m["right"] += r["pass"]
-        rep["arms"][arm] = line
-    rng = random.Random(11)
-    for new in ("batch4", "batch40", "item-free"):
-        for base in ("item-paid", "item-free"):
-            if new == base or new not in by or base not in by:
-                continue
-            for kind, of in kinds.items():
-                ks = [k for k, r in by[new].items() if of(r) and r.get("pass") is not None and by[base].get(k, {}).get("pass") is not None]
-                if not ks:
-                    continue
-                d = [int(by[new][k]["pass"]) - int(by[base][k]["pass"]) for k in ks]
-                asks: dict[str, list[int]] = {}
-                for k, x in zip(ks, d):
-                    asks.setdefault(k[0], []).append(x)
-                groups = list(asks.values())
-                sims = []
-                for _ in range(boots):
-                    pick = [groups[rng.randrange(len(groups))] for _ in groups]
-                    sims.append(sum(sum(p) for p in pick) / sum(len(p) for p in pick))
-                sims.sort()
-                rep["pairs"][f"{new} - {base} ({kind})"] = {
-                    "n": len(ks), "new_acc": round(sum(by[new][k]["pass"] for k in ks) / len(ks), 4),
-                    "base_acc": round(sum(by[base][k]["pass"] for k in ks) / len(ks), 4), "diff": round(sum(d) / len(d), 4),
-                    "ci95": [round(sims[int(0.025 * boots)], 4), round(sims[int(0.975 * boots)], 4)],
-                    "new_only_right": sum(x > 0 for x in d), "base_only_right": sum(x < 0 for x in d)}
+    rep: dict = {"arms": {arm: arm_line(arm, rs) for arm, rs in by.items()}, "pairs": {}}
+    rng = random.Random(11)  # one stream across the pairs, drawn in PAIRS order
+    for new, base in PAIRS:
+        if new in by and base in by:
+            for kind, of in KINDS.items():
+                p = pair(by[new], by[base], of, rng, boots)
+                if p:
+                    rep["pairs"][f"{new} - {base} ({kind})"] = p
     return rep
 
 
