@@ -178,8 +178,18 @@ const FINGERPRINT = 64
  * each poll re-parsed them all, 0.6 to 1.6 s on the server's one thread, and every click waited behind it. An
  * unchanged one costs a stat; a changed one is read again from its tail.
  */
-const settled = new Map<string, Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items'>>()
+const settled = new Map<string, Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>>()
 const SETTLED_MAX = 1024
+/** Source bytes the settled items were made from, oldest dropped first past this; the items take a multiple of it. */
+const SETTLED_MAX_BYTES = 64 * 1024 * 1024
+let settledBytes = 0
+
+function unsettle(path: string): void {
+  const kept = settled.get(path)
+  if (!kept) return
+  settled.delete(path)
+  settledBytes -= kept.bytes
+}
 
 const unchanged = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: { ino: number; size: number; mtimeMs: number }) =>
   m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino
@@ -267,12 +277,13 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
   memo.delete(path)
   memo.set(path, fresh)
-  settled.delete(path)
+  unsettle(path)
   if (memo.size > MEMO_MAX) {
     const [old, out] = memo.entries().next().value!
     memo.delete(old)
-    settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items })
-    if (settled.size > SETTLED_MAX) settled.delete(settled.keys().next().value!)
+    settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
+    settledBytes += out.bytes
+    while (settled.size > SETTLED_MAX || settledBytes > SETTLED_MAX_BYTES) unsettle(settled.keys().next().value!)
   }
   return fresh.items
 }

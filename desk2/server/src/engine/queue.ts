@@ -67,6 +67,20 @@ type Stored = QueueItem & { sentUuid?: string }
 type MessageItem = Extract<Stored, { kind: 'message' }>
 type ChatItem = Extract<Stored, { kind: 'chat' }>
 
+/** One dispatcher pass: its clock, the soonest time to look again, and whether an item changed. */
+interface PumpRun {
+  now: number
+  wake: number
+  touched: boolean
+}
+
+/** The new-chat slots as one dispatcher pass uses them up. */
+interface NewChatRoom {
+  running: number
+  starting: boolean
+  autoWaits: boolean
+}
+
 interface QueueFile extends QueueState {
   items: Stored[]
   /** Chats with queued messages last seen with a turn running: a restart finds them killed mid-turn, however the server ended. */
@@ -328,11 +342,7 @@ export class QueueManager {
 
   private pump(): void {
     const now = this.now()
-    let wake = Infinity
-    let touched = false
-    const note = (item: Stored, reason: string | null) => {
-      if (this.set(item, 'waiting', reason)) touched = true
-    }
+    const run: PumpRun = { now, wake: Infinity, touched: false }
 
     const byChat = new Map<string, MessageItem[]>()
     for (const item of this.items) {
@@ -341,64 +351,77 @@ export class QueueManager {
       if (list) list.push(item)
       else byChat.set(item.chatId, [item])
     }
-    for (const [chatId, list] of byChat) {
-      const waiting = list.filter((i) => i.state === 'waiting')
-      // One in flight per chat; a held chat's items are 'held', not waiting.
-      if (!waiting.length || list.some((i) => i.state === 'sending') || this.held[chatId]) continue
-      const chat = this.chatOf(chatId)
-      if (!chat) {
-        for (const i of waiting) touched = this.set(i, 'failed', REASON.deleted) || touched
-        continue
-      }
-      const wait: { reason: string; at?: number } | null = this.paused ? { reason: REASON.paused } : this.waitOf(chat, now)
-      if (wait) {
-        for (const i of waiting) note(i, wait.reason)
-        if (wait.at !== undefined) wake = Math.min(wake, wait.at)
-        this.readySince.delete(chatId)
-        continue
-      }
-      for (const i of waiting) note(i, null)
-      const since = this.readySince.get(chatId) ?? now
-      this.readySince.set(chatId, since)
-      if (now < since + this.settleMs) {
-        wake = Math.min(wake, since + this.settleMs)
-        continue
-      }
-      this.readySince.delete(chatId)
-      void this.deliver(waiting[0]!, true).catch(logUnexpected)
-    }
+    for (const [chatId, list] of byChat) this.pumpChat(run, chatId, list)
 
     for (const id of this.started) if (!LIVE.has(this.seen.get(id) ?? 'closed')) this.started.delete(id)
-    let running = this.started.size
-    let starting = this.creating
-    // An 'auto' chat waiting for room keeps the 'auto' ones behind it waiting; a named account does not wait.
-    let autoWaits = false
+    const room: NewChatRoom = { running: this.started.size, starting: this.creating, autoWaits: false }
     for (const item of this.items) {
-      if (item.kind !== 'chat' || item.state !== 'waiting') continue
-      const auto = !item.accountId || item.accountId === 'auto'
-      if (this.paused) note(item, REASON.paused)
-      else if (auto && autoWaits) note(item, REASON.room)
-      else if (running >= this.maxNewChats) note(item, REASON.slot(this.maxNewChats))
-      else if ((this.roomRetryAt.get(item.id) ?? 0) > now) {
-        autoWaits ||= auto
-        wake = Math.min(wake, this.roomRetryAt.get(item.id)!)
-      } else if (!starting) {
-        // One create at a time: its end runs the dispatcher again.
-        starting = true
-        running++
-        this.roomRetryAt.delete(item.id)
-        this.creating = true
-        void this.start(item, true)
-          .catch(logUnexpected)
-          .finally(() => {
-            this.creating = false
-            this.kick()
-          })
-      }
+      if (item.kind === 'chat' && item.state === 'waiting') this.pumpNewChat(run, room, item)
     }
 
-    if (touched) this.changed()
-    this.arm(wake)
+    if (run.touched) this.changed()
+    this.arm(run.wake)
+  }
+
+  /** Marks a waiting item with why it waits (null: it does not). */
+  private note(run: PumpRun, item: Stored, reason: string | null): void {
+    if (this.set(item, 'waiting', reason)) run.touched = true
+  }
+
+  /** One chat's queued messages: the first goes once the chat has been ready for settleMs. */
+  private pumpChat(run: PumpRun, chatId: string, list: MessageItem[]): void {
+    const now = run.now
+    const waiting = list.filter((i) => i.state === 'waiting')
+    // One in flight per chat; a held chat's items are 'held', not waiting.
+    if (!waiting.length || list.some((i) => i.state === 'sending') || this.held[chatId]) return
+    const chat = this.chatOf(chatId)
+    if (!chat) {
+      for (const i of waiting) run.touched = this.set(i, 'failed', REASON.deleted) || run.touched
+      return
+    }
+    const wait: { reason: string; at?: number } | null = this.paused ? { reason: REASON.paused } : this.waitOf(chat, now)
+    if (wait) {
+      for (const i of waiting) this.note(run, i, wait.reason)
+      if (wait.at !== undefined) run.wake = Math.min(run.wake, wait.at)
+      this.readySince.delete(chatId)
+      return
+    }
+    for (const i of waiting) this.note(run, i, null)
+    const since = this.readySince.get(chatId) ?? now
+    this.readySince.set(chatId, since)
+    if (now < since + this.settleMs) {
+      run.wake = Math.min(run.wake, since + this.settleMs)
+      return
+    }
+    this.readySince.delete(chatId)
+    void this.deliver(waiting[0]!, true).catch(logUnexpected)
+  }
+
+  /**
+   * One waiting new chat: started when there is room, else marked with why it waits. An 'auto' chat waiting
+   * for room keeps the 'auto' ones behind it waiting; a named account does not wait.
+   */
+  private pumpNewChat(run: PumpRun, room: NewChatRoom, item: ChatItem): void {
+    const auto = !item.accountId || item.accountId === 'auto'
+    if (this.paused) this.note(run, item, REASON.paused)
+    else if (auto && room.autoWaits) this.note(run, item, REASON.room)
+    else if (room.running >= this.maxNewChats) this.note(run, item, REASON.slot(this.maxNewChats))
+    else if ((this.roomRetryAt.get(item.id) ?? 0) > run.now) {
+      room.autoWaits ||= auto
+      run.wake = Math.min(run.wake, this.roomRetryAt.get(item.id)!)
+    } else if (!room.starting) {
+      // One create at a time: its end runs the dispatcher again.
+      room.starting = true
+      room.running++
+      this.roomRetryAt.delete(item.id)
+      this.creating = true
+      void this.start(item, true)
+        .catch(logUnexpected)
+        .finally(() => {
+          this.creating = false
+          this.kick()
+        })
+    }
   }
 
   /** Why a chat's next message cannot go now (and when to look again); null when it is ready. */
@@ -692,27 +715,9 @@ export class QueueManager {
     this.sendMode = saved.sendMode
     this.maxNewChats = saved.maxNewChats
     this.rev = saved.rev
-    const delivered = (chatId: string, uuid: string | undefined) => uuid !== undefined && this.manager.listItems(chatId).some((i) => i.kind === 'user' && i.id === uuid)
     for (const entry of saved.items) {
-      let item: Stored = entry
-      if (item.kind === 'chat' && item.state === 'sending') {
-        const started = item.startedChatId && chats.has(item.startedChatId) ? item.startedChatId : null
-        if (started) item = asMessage(item, started)
-        else {
-          delete item.sentUuid
-          item.startedChatId = null
-          item.state = 'waiting'
-        }
-      }
-      if (item.kind === 'message') {
-        if (!chats.has(item.chatId)) continue
-        if (item.state === 'sending') {
-          if (delivered(item.chatId, item.sentUuid)) continue
-          delete item.sentUuid
-          item.state = 'waiting'
-        }
-      }
-      this.items.push(item)
+      const item = this.recoverItem(entry, chats)
+      if (item) this.items.push(item)
     }
     const worker = (id: string) => chats.get(id)?.workerId !== undefined
     for (const [id, why] of Object.entries(saved.held)) if (chats.has(id) && !(why === 'restart' && worker(id))) this.held[id] = why
@@ -721,6 +726,33 @@ export class QueueManager {
       for (const i of this.messages(id)) if (i.state === 'waiting') this.set(i, 'held', holdReason(why, chats.get(id) ?? null))
       if (!this.messages(id).some((i) => i.state !== 'failed')) delete this.held[id]
     }
+  }
+
+  /** One saved item as this start keeps it; null drops it (its chat is gone, or it was delivered). */
+  private recoverItem(entry: Stored, chats: Map<string, ChatSummary>): Stored | null {
+    let item: Stored = entry
+    if (item.kind === 'chat' && item.state === 'sending') {
+      const started = item.startedChatId && chats.has(item.startedChatId) ? item.startedChatId : null
+      if (started) item = asMessage(item, started)
+      else {
+        delete item.sentUuid
+        item.startedChatId = null
+        item.state = 'waiting'
+      }
+    }
+    if (item.kind !== 'message') return item
+    if (!chats.has(item.chatId)) return null
+    if (item.state === 'sending') {
+      if (this.delivered(item.chatId, item.sentUuid)) return null
+      delete item.sentUuid
+      item.state = 'waiting'
+    }
+    return item
+  }
+
+  /** The chat's transcript has a user line with this uuid: the send went out. */
+  private delivered(chatId: string, uuid: string | undefined): boolean {
+    return uuid !== undefined && this.manager.listItems(chatId).some((i) => i.kind === 'user' && i.id === uuid)
   }
 }
 

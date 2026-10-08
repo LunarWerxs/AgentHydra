@@ -13,7 +13,7 @@ import { JsonlLog } from './diagnostics'
 const DAY = 86_400_000
 const SLOWEST_TURNS = 20
 /** The MCP status of a starting process is read this often, each read given this long, for at most this long. */
-const MCP_POLL_MS = 500
+const MCP_POLL_MS = 1000
 const MCP_READ_MS = 2000
 const MCP_MAX_MS = 30_000
 /** SessionStart hooks that ended and were followed by nothing for this long are one finished group. */
@@ -147,6 +147,8 @@ interface SdkState {
   turns: Turn[]
   mcpTimer: ReturnType<typeof setTimeout> | null
   mcpSeen: Set<string>
+  /** system/init said no MCP server is still pending: the poll stops. */
+  mcpDone: boolean
 }
 
 interface WorkerTurn {
@@ -237,6 +239,7 @@ export class Timings {
       st.tools.clear()
       st.group = null
       st.mcpSeen.clear()
+      st.mcpDone = false
       if (!o.attach) this.pollMcp(chat, st, q, st.startedAt)
     })
   }
@@ -256,44 +259,61 @@ export class Timings {
 
   /** Every message of a running chat, live ones only. */
   sdkMessage(chat: ChatSummary, msg: SDKMessage): void {
-    this.guard(() => {
-      const st = this.sdk.get(chat.id)
-      if (!st || st.startedAt === null) return
-      const now = this.now()
-      const m = msg as { type: string; subtype?: string }
-      if (!st.sawMessage) {
-        st.sawMessage = true
-        this.put(chat, st, { stage: 'process_start', ms: now - st.startedAt })
-      }
-      if (m.type === 'system' && m.subtype === 'hook_started') return this.hookStarted(st, msg, now)
-      if (m.type === 'system' && m.subtype === 'hook_response') return this.hookEnded(chat, st, msg, now)
-      if (m.type === 'system' && m.subtype === 'init') {
-        this.flushGroup(chat, st)
-        const first = !st.inited
-        st.inited = true
-        if (first && st.warm) this.put(chat, st, { stage: 'warm', ms: now - st.startedAt })
-        const head = st.turns[0]
-        if (head && head.readyAt === null) this.ready(chat, st, head)
-        return
-      }
-      const head = st.turns[0]
-      if (m.type === 'stream_event' && (msg as { event?: { type?: string } }).event?.type === 'content_block_delta') return this.firstToken(chat, st, head, now)
-      if (m.type === 'assistant') {
-        this.firstToken(chat, st, head, now)
-        for (const b of blocks(msg)) if (b.type === 'tool_use' && typeof b.id === 'string') st.tools.set(b.id, { name: String(b.name ?? 'tool'), at: now })
-        return
-      }
-      if (m.type === 'user') {
-        for (const b of blocks(msg)) {
-          const t = b.type === 'tool_result' && typeof b.tool_use_id === 'string' ? st.tools.get(b.tool_use_id) : undefined
-          if (!t) continue
-          st.tools.delete(b.tool_use_id as string)
-          this.put(chat, st, { stage: 'tool', name: t.name, ms: now - t.at, ok: b.is_error !== true }, 'tools')
-        }
-        return
-      }
-      if (m.type === 'result') this.turnEnded(chat, st, msg, now)
-    })
+    this.guard(() => this.onSdkMessage(chat, msg))
+  }
+
+  private onSdkMessage(chat: ChatSummary, msg: SDKMessage): void {
+    const st = this.sdk.get(chat.id)
+    if (!st || st.startedAt === null) return
+    const now = this.now()
+    const m = msg as { type: string; subtype?: string }
+    if (!st.sawMessage) {
+      st.sawMessage = true
+      this.put(chat, st, { stage: 'process_start', ms: now - st.startedAt })
+    }
+    if (m.type === 'system') return this.onSystem(chat, st, msg, m.subtype, now)
+    const head = st.turns[0]
+    if (m.type === 'stream_event' && (msg as { event?: { type?: string } }).event?.type === 'content_block_delta') return this.firstToken(chat, st, head, now)
+    if (m.type === 'assistant') return this.onAssistant(chat, st, msg, head, now)
+    if (m.type === 'user') return this.toolsEnded(chat, st, msg, now)
+    if (m.type === 'result') this.turnEnded(chat, st, msg, now)
+  }
+
+  private onSystem(chat: ChatSummary, st: SdkState, msg: SDKMessage, subtype: string | undefined, now: number): void {
+    if (subtype === 'hook_started') return this.hookStarted(st, msg, now)
+    if (subtype === 'hook_response') return this.hookEnded(chat, st, msg, now)
+    if (subtype !== 'init') return
+    this.flushGroup(chat, st)
+    const first = !st.inited
+    st.inited = true
+    if (first && st.warm) this.put(chat, st, { stage: 'warm', ms: now - st.startedAt! })
+    const head = st.turns[0]
+    if (head && head.readyAt === null) this.ready(chat, st, head)
+    this.mcpFromInit(chat, st, msg)
+  }
+
+  /** system/init carries each MCP server's status: those it settled are timed now, and with none pending the poll stops. */
+  private mcpFromInit(chat: ChatSummary, st: SdkState, msg: SDKMessage): void {
+    const servers = (msg as { mcp_servers?: unknown }).mcp_servers
+    if (!Array.isArray(servers) || st.startedAt === null) return
+    if (this.noteMcp(chat, st, servers as { name: string; status: string }[], st.startedAt)) return
+    st.mcpDone = true
+    if (st.mcpTimer) clearTimeout(st.mcpTimer)
+    st.mcpTimer = null
+  }
+
+  private onAssistant(chat: ChatSummary, st: SdkState, msg: SDKMessage, head: Turn | undefined, now: number): void {
+    this.firstToken(chat, st, head, now)
+    for (const b of blocks(msg)) if (b.type === 'tool_use' && typeof b.id === 'string') st.tools.set(b.id, { name: String(b.name ?? 'tool'), at: now })
+  }
+
+  private toolsEnded(chat: ChatSummary, st: SdkState, msg: SDKMessage, now: number): void {
+    for (const b of blocks(msg)) {
+      const t = b.type === 'tool_result' && typeof b.tool_use_id === 'string' ? st.tools.get(b.tool_use_id) : undefined
+      if (!t) continue
+      st.tools.delete(b.tool_use_id as string)
+      this.put(chat, st, { stage: 'tool', name: t.name, ms: now - t.at, ok: b.is_error !== true }, 'tools')
+    }
   }
 
   private ready(chat: ChatSummary, st: SdkState, turn: Turn): void {
@@ -370,7 +390,7 @@ export class Timings {
   /** Each MCP server's time from the process start to its first answer other than 'pending' (resolution MCP_POLL_MS). */
   private pollMcp(chat: ChatSummary, st: SdkState, q: Query, startedAt: number): void {
     const again = (): void => {
-      if (st.startedAt !== startedAt || this.now() - startedAt > MCP_MAX_MS) return
+      if (st.startedAt !== startedAt || st.mcpDone || this.now() - startedAt > MCP_MAX_MS) return
       st.mcpTimer = setTimeout(() => void read(), MCP_POLL_MS)
       ;(st.mcpTimer as { unref?: () => void }).unref?.()
     }
@@ -384,17 +404,9 @@ export class Timings {
             ;(timer as { unref?: () => void }).unref?.()
           }),
         ])
-        if (st.startedAt !== startedAt) return
+        if (st.startedAt !== startedAt || st.mcpDone) return
         if (!list) return again()
-        let pending = false
-        for (const s of list) {
-          if (s.status === 'pending') pending = true
-          else if (s.status !== 'disabled' && !st.mcpSeen.has(s.name)) {
-            st.mcpSeen.add(s.name)
-            this.put(chat, st, { stage: 'mcp_connect', name: s.name, ms: this.now() - startedAt, ok: s.status === 'connected' })
-          }
-        }
-        if (pending) again()
+        if (this.noteMcp(chat, st, list, startedAt)) again()
       } catch {
         // an older CLI, or the process went away: no MCP timing for this start
       } finally {
@@ -404,9 +416,22 @@ export class Timings {
     again()
   }
 
+  /** Times each server that left 'pending' and was not timed yet; true while one is still pending. */
+  private noteMcp(chat: ChatSummary, st: SdkState, list: readonly { name: string; status: string }[], startedAt: number): boolean {
+    let pending = false
+    for (const s of list) {
+      if (s.status === 'pending') pending = true
+      else if (s.status !== 'disabled' && !st.mcpSeen.has(s.name)) {
+        st.mcpSeen.add(s.name)
+        this.put(chat, st, { stage: 'mcp_connect', name: s.name, ms: this.now() - startedAt, ok: s.status === 'connected' })
+      }
+    }
+    return pending
+  }
+
   private stateOf(chatId: string): SdkState {
     let st = this.sdk.get(chatId)
-    if (!st) this.sdk.set(chatId, (st = { startedAt: null, sawMessage: false, inited: false, warm: false, hooks: new Map(), group: null, tools: new Map(), turns: [], mcpTimer: null, mcpSeen: new Set() }))
+    if (!st) this.sdk.set(chatId, (st = { startedAt: null, sawMessage: false, inited: false, warm: false, hooks: new Map(), group: null, tools: new Map(), turns: [], mcpTimer: null, mcpSeen: new Set(), mcpDone: false }))
     return st
   }
 

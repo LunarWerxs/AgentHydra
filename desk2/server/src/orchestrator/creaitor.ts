@@ -27,23 +27,27 @@ export function askCreaitor(tool: string, question: string, options: readonly st
       process.env.HYDRA_DESK_PYTHON || 'python',
       args,
       { windowsHide: true, timeout: (ASK_TIMEOUT_S + 15) * 1000, maxBuffer: 1 << 20, encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' } },
-      (err, stdout) => {
-        try {
-          const r = JSON.parse(stdout) as Record<string, unknown>
-          const verdict = r.verdict === 'decide' || r.verdict === 'reversible' ? r.verdict : 'escalate'
-          resolve({
-            verdict,
-            answer: typeof r.answer === 'string' ? r.answer : '',
-            option: typeof r.option === 'string' ? r.option : '',
-            confidence: typeof r.confidence === 'number' ? r.confidence : 0,
-            basis: Array.isArray(r.basis) ? r.basis.filter((b): b is string => typeof b === 'string') : [],
-            needLine: typeof r.need_line === 'string' ? r.need_line : null,
-            mode: typeof r.mode === 'string' ? r.mode : 'shadow'
-          })
-        } catch {
-          resolve({ error: err ? (err.killed ? 'the CreAitor ran out of time' : err.message.split('\n')[0].slice(0, 200)) : 'the CreAitor gave no answer' })
-        }
-      }
+      (err, stdout) => resolve(readAnswer(err, stdout))
     )
   })
+}
+
+/** The tool's JSON answer, or why there is none. */
+function readAnswer(err: (Error & { killed?: boolean }) | null, stdout: string): CreaitorAnswer | { error: string } {
+  try {
+    const r = JSON.parse(stdout) as Record<string, unknown>
+    const verdict = r.verdict === 'decide' || r.verdict === 'reversible' ? r.verdict : 'escalate'
+    return {
+      verdict,
+      answer: typeof r.answer === 'string' ? r.answer : '',
+      option: typeof r.option === 'string' ? r.option : '',
+      confidence: typeof r.confidence === 'number' ? r.confidence : 0,
+      basis: Array.isArray(r.basis) ? r.basis.filter((b): b is string => typeof b === 'string') : [],
+      needLine: typeof r.need_line === 'string' ? r.need_line : null,
+      mode: typeof r.mode === 'string' ? r.mode : 'shadow'
+    }
+  } catch {
+    if (!err) return { error: 'the CreAitor gave no answer' }
+    return { error: err.killed ? 'the CreAitor ran out of time' : err.message.split('\n')[0].slice(0, 200) }
+  }
 }

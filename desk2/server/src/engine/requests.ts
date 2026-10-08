@@ -192,23 +192,10 @@ function coerce(f: ElicitationField, v: unknown): ElicitationValue | undefined {
   if (v === undefined || v === null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && v.length === 0)) return undefined
   const allowed = new Set(f.options?.map((o) => o.value))
   switch (f.type) {
-    case 'text': {
-      if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') throw new ElicitationAnswerError(`${f.label} must be text`)
-      const s = String(v)
-      // Counted as JSON Schema counts: in characters, not UTF-16 units.
-      const length = [...s].length
-      if (f.minLength !== undefined && length < f.minLength) throw new ElicitationAnswerError(`${f.label} must be at least ${f.minLength} characters`)
-      if (f.maxLength !== undefined && length > f.maxLength) throw new ElicitationAnswerError(`${f.label} must be at most ${f.maxLength} characters`)
-      return s
-    }
-    case 'number': {
-      const n = typeof v === 'number' ? v : typeof v === 'string' && DECIMAL.test(v.trim()) ? Number(v.trim()) : NaN
-      if (!Number.isFinite(n)) throw new ElicitationAnswerError(`${f.label} must be a number`)
-      if (f.integer && !Number.isInteger(n)) throw new ElicitationAnswerError(`${f.label} must be a whole number`)
-      if (f.min !== undefined && n < f.min) throw new ElicitationAnswerError(`${f.label} must be at least ${f.min}`)
-      if (f.max !== undefined && n > f.max) throw new ElicitationAnswerError(`${f.label} must be at most ${f.max}`)
-      return n
-    }
+    case 'text':
+      return coerceText(f, v)
+    case 'number':
+      return coerceNumber(f, v)
     case 'boolean':
       if (typeof v === 'boolean') return v
       if (v === 'true' || v === 'false') return v === 'true'
@@ -218,11 +205,33 @@ function coerce(f: ElicitationField, v: unknown): ElicitationValue | undefined {
       if (s === null || !allowed.has(s)) throw new ElicitationAnswerError(`${f.label} must be one of ${[...allowed].join(', ')}`)
       return f.numeric ? Number(s) : s
     }
-    case 'multichoice': {
-      const list = Array.isArray(v) ? v : [v]
-      const picked = list.map((x) => (typeof x === 'string' || typeof x === 'number' ? String(x) : null))
-      if (picked.some((x) => x === null || !allowed.has(x))) throw new ElicitationAnswerError(`${f.label} takes only ${[...allowed].join(', ')}`)
-      return [...new Set(picked as string[])]
-    }
+    case 'multichoice':
+      return coerceMulti(f, v, allowed)
   }
+}
+
+function coerceText(f: ElicitationField, v: unknown): string {
+  if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') throw new ElicitationAnswerError(`${f.label} must be text`)
+  const s = String(v)
+  // Counted as JSON Schema counts: in characters, not UTF-16 units.
+  const length = [...s].length
+  if (f.minLength !== undefined && length < f.minLength) throw new ElicitationAnswerError(`${f.label} must be at least ${f.minLength} characters`)
+  if (f.maxLength !== undefined && length > f.maxLength) throw new ElicitationAnswerError(`${f.label} must be at most ${f.maxLength} characters`)
+  return s
+}
+
+function coerceNumber(f: ElicitationField, v: unknown): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && DECIMAL.test(v.trim()) ? Number(v.trim()) : NaN
+  if (!Number.isFinite(n)) throw new ElicitationAnswerError(`${f.label} must be a number`)
+  if (f.integer && !Number.isInteger(n)) throw new ElicitationAnswerError(`${f.label} must be a whole number`)
+  if (f.min !== undefined && n < f.min) throw new ElicitationAnswerError(`${f.label} must be at least ${f.min}`)
+  if (f.max !== undefined && n > f.max) throw new ElicitationAnswerError(`${f.label} must be at most ${f.max}`)
+  return n
+}
+
+function coerceMulti(f: ElicitationField, v: unknown, allowed: Set<string>): string[] {
+  const list = Array.isArray(v) ? v : [v]
+  const picked = list.map((x) => (typeof x === 'string' || typeof x === 'number' ? String(x) : null))
+  if (picked.some((x) => x === null || !allowed.has(x))) throw new ElicitationAnswerError(`${f.label} takes only ${[...allowed].join(', ')}`)
+  return [...new Set(picked as string[])]
 }

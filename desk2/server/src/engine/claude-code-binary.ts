@@ -206,6 +206,27 @@ function normalizeTarPath(name: string): string {
   return name.replace(/\\/g, '/').replace(/^(\.\/)+/, '')
 }
 
+/** What the meta entries before a file say about it (GNU long name, pax), and the pax records for every file. */
+interface TarMeta {
+  longName: string | null
+  pax: Map<string, string> | null
+  globalPax: Map<string, string>
+}
+
+function readTarMeta(type: string, body: Uint8Array, meta: TarMeta): void {
+  if (type === 'L') meta.longName = cString(body, 0, body.length)
+  else if (type === 'x') meta.pax = paxRecords(body)
+  else meta.globalPax = new Map([...meta.globalPax, ...paxRecords(body)])
+}
+
+/** The header's name field, under its ustar prefix when it has one. */
+function headerName(header: Uint8Array): string {
+  const name = cString(header, 0, 100)
+  if (cString(header, 257, 5) !== 'ustar') return name
+  const prefix = cString(header, 345, 155)
+  return prefix ? `${prefix}/${name}` : name
+}
+
 /**
  * Streams the one file `wanted` out of a tar, calling `onFile` with a chunk writer; stops reading once it has it.
  * Understands the ustar prefix field, pax extended headers (path, size) and GNU long names. Returns false when the
@@ -213,9 +234,7 @@ function normalizeTarPath(name: string): string {
  */
 export async function untarFile(source: AsyncIterable<Uint8Array>, wanted: string, onFile: (chunk: Uint8Array) => Promise<void>): Promise<boolean> {
   const reader = new ByteReader(source)
-  let longName: string | null = null
-  let pax: Map<string, string> | null = null
-  let globalPax = new Map<string, string>()
+  const meta: TarMeta = { longName: null, pax: null, globalPax: new Map() }
   for (;;) {
     const header = await reader.take(TAR_BLOCK)
     if (!header || header.every((b) => b === 0)) return false
@@ -225,22 +244,14 @@ export async function untarFile(source: AsyncIterable<Uint8Array>, wanted: strin
     if (type === 'x' || type === 'g' || type === 'L') {
       if (size > MAX_TAR_META) throw new Error('tar header too large')
       const data = (await reader.take(padded)) ?? new Uint8Array(0)
-      const body = data.subarray(0, size)
-      if (type === 'L') longName = cString(body, 0, body.length)
-      else if (type === 'x') pax = paxRecords(body)
-      else globalPax = new Map([...globalPax, ...paxRecords(body)])
+      readTarMeta(type, data.subarray(0, size), meta)
       continue
     }
-    let name = cString(header, 0, 100)
-    if (cString(header, 257, 5) === 'ustar') {
-      const prefix = cString(header, 345, 155)
-      if (prefix) name = `${prefix}/${name}`
-    }
-    const path = pax?.get('path') ?? globalPax.get('path') ?? longName ?? name
-    const paxSize = pax?.get('size')
+    const path = meta.pax?.get('path') ?? meta.globalPax.get('path') ?? meta.longName ?? headerName(header)
+    const paxSize = meta.pax?.get('size')
     if (paxSize) size = Number.parseInt(paxSize, 10)
-    longName = null
-    pax = null
+    meta.longName = null
+    meta.pax = null
     const dataLen = Math.ceil(size / TAR_BLOCK) * TAR_BLOCK
     if ((type === '0' || type === '\0') && normalizeTarPath(path) === wanted) {
       await reader.stream(size, onFile)

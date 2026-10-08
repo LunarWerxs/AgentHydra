@@ -92,68 +92,86 @@ export function buildHandoff(h: HandoffInput): string {
   return cut(render(h, 0.05), MAX_HANDOFF_CHARS)
 }
 
+type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+type TextItem = Extract<TranscriptItem, { kind: 'assistant_text' }>
+type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
+
+const isUser = (i: TranscriptItem): i is UserItem => i.kind === 'user' && !i.queued && !!i.text.trim()
+const isText = (i: TranscriptItem): i is TextItem => i.kind === 'assistant_text' && !!i.text.trim()
+
+/** Each finished turn's last words (what it did), cut to `max`, and the index of the last finished turn's result. */
+function finishedTurns(items: TranscriptItem[], inTail: Set<string>, max: number): { done: string[]; lastResult: number } {
+  const done: string[] = []
+  let lastText: TextItem | null = null
+  let lastResult = -1
+  items.forEach((i, at) => {
+    if (isText(i)) lastText = i
+    if (i.kind !== 'result') return
+    if (lastText && !inTail.has(lastText.id)) done.push(cut(squash(lastText.text), max))
+    lastText = null
+    lastResult = at
+  })
+  return { done, lastResult }
+}
+
+function introSection(h: HandoffInput): string {
+  return `You were moved to another account mid-task because the previous one ${h.why === 'signed out' ? 'was signed out' : `hit its ${h.why}`}. This is a fresh session: the old one had grown to about ${Math.round(h.tokens / 1000)}k tokens, so instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.`
+}
+
+function historySection(h: HandoffInput): string {
+  const [current, ...older] = h.sessions
+  return [
+    '## Where the full history is',
+    `Hydra Desk chat "${h.title}" (id ${h.chatId}), folder ${h.cwd}. If you need a detail left out here:`,
+    `- GET ${h.deskUrl}/api/chats/${h.chatId}/transcript (the whole chat as JSON items, oldest first; add ?format=jsonl for one item per line)`,
+    ...(current ? [`- the agenthydra MCP's history_search / history_read tools with session_id ${current}${older.length ? ` (earlier sessions of this chat: ${older.join(', ')})` : ''}`] : []),
+  ].join('\n')
+}
+
+function laterSection(later: UserItem[], limit: number, max: number): string {
+  const shown = later.slice(-limit)
+  const skipped = later.length - shown.length
+  return `## The owner's later instructions, oldest first\n${skipped ? `(${skipped} earlier ones left out)\n` : ''}${shown.map((u) => `- ${cut(squash(u.text), max)}`).join('\n')}`
+}
+
+function progressSection(said: TextItem | undefined, tools: ToolItem[], inTail: Set<string>, n: (x: number) => number): string {
+  const lines = ['## In progress when the session was cut']
+  if (said && !inTail.has(said.id)) lines.push(cut(said.text.trim(), n(800)))
+  if (tools.length) lines.push(`Its last tool calls:\n${tools.map((t) => `- ${toolLine(t, n(160))}`).join('\n')}`)
+  return lines.join('\n')
+}
+
+function tailSection(tail: TranscriptItem[], max: number): string {
+  return `## The last exchanges, verbatim\n${tail.map((i) => `${i.kind === 'user' ? '**Owner:**' : '**You:**'} ${cut((i as { text: string }).text.trim(), max)}`).join('\n\n')}`
+}
+
 function render(h: HandoffInput, scale: number): string {
   const n = (x: number): number => Math.max(40, Math.round(x * scale))
   const count = (x: number): number => Math.max(1, Math.round(x * scale))
   // The main thread only: a sub-agent's lines are its own business.
   const items = h.items.filter((i) => !i.parentToolUseId)
-  const users = items.filter((i): i is Extract<TranscriptItem, { kind: 'user' }> => i.kind === 'user' && !i.queued && !!i.text.trim())
-  const texts = (i: TranscriptItem): i is Extract<TranscriptItem, { kind: 'assistant_text' }> => i.kind === 'assistant_text' && !!i.text.trim()
+  const users = items.filter(isUser)
 
   // The last exchanges, verbatim.
-  const tail = items.filter((i) => (i.kind === 'user' && !i.queued && i.text.trim()) || texts(i)).slice(-count(4))
+  const tail = items.filter((i) => isUser(i) || isText(i)).slice(-count(4))
   const inTail = new Set(tail.map((i) => i.id))
 
-  // Each finished turn's last words: what it did.
-  const done: string[] = []
-  let lastText: Extract<TranscriptItem, { kind: 'assistant_text' }> | null = null
-  let lastResult = -1
-  items.forEach((i, at) => {
-    if (texts(i)) lastText = i
-    if (i.kind === 'result') {
-      if (lastText && !inTail.has(lastText.id)) done.push(cut(squash(lastText.text), n(700)))
-      lastText = null
-      lastResult = at
-    }
-  })
+  const { done, lastResult } = finishedTurns(items, inTail, n(700))
 
   // What ran after the last finished turn: the cut one.
   const after = items.slice(lastResult + 1)
-  const said = after.filter(texts).at(-1)
-  const tools = after.filter((i): i is Extract<TranscriptItem, { kind: 'tool_use' }> => i.kind === 'tool_use').slice(-count(10))
+  const said = after.filter(isText).at(-1)
+  const tools = after.filter((i): i is ToolItem => i.kind === 'tool_use').slice(-count(10))
 
   const todos = items.filter((i): i is Extract<TranscriptItem, { kind: 'todos' }> => i.kind === 'todos').at(-1)?.todos.filter((t) => t.status !== 'completed') ?? []
 
-  const [current, ...older] = h.sessions
-  const out: string[] = []
-  out.push(
-    `You were moved to another account mid-task because the previous one ${h.why === 'signed out' ? 'was signed out' : `hit its ${h.why}`}. This is a fresh session: the old one had grown to about ${Math.round(h.tokens / 1000)}k tokens, so instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.`,
-  )
-  out.push(
-    [
-      '## Where the full history is',
-      `Hydra Desk chat "${h.title}" (id ${h.chatId}), folder ${h.cwd}. If you need a detail left out here:`,
-      `- GET ${h.deskUrl}/api/chats/${h.chatId}/transcript (the whole chat as JSON items, oldest first; add ?format=jsonl for one item per line)`,
-      ...(current ? [`- the agenthydra MCP's history_search / history_read tools with session_id ${current}${older.length ? ` (earlier sessions of this chat: ${older.join(', ')})` : ''}`] : []),
-    ].join('\n'),
-  )
+  const out: string[] = [introSection(h), historySection(h)]
   if (users[0]) out.push(`## The goal (the owner's first message)\n${cut(users[0].text.trim(), n(2000))}`)
   const later = users.slice(1).filter((u) => !inTail.has(u.id))
-  if (later.length) {
-    const shown = later.slice(-count(30))
-    const skipped = later.length - shown.length
-    out.push(`## The owner's later instructions, oldest first\n${skipped ? `(${skipped} earlier ones left out)\n` : ''}${shown.map((u) => `- ${cut(squash(u.text), n(240))}`).join('\n')}`)
-  }
+  if (later.length) out.push(laterSection(later, count(30), n(240)))
   if (done.length) out.push(`## Done so far (how earlier turns ended, oldest first)\n${done.slice(-count(6)).map((d) => `- ${d}`).join('\n')}`)
-  if (said || tools.length) {
-    const lines = ['## In progress when the session was cut']
-    if (said && !inTail.has(said.id)) lines.push(cut(said.text.trim(), n(800)))
-    if (tools.length) lines.push(`Its last tool calls:\n${tools.map((t) => `- ${toolLine(t, n(160))}`).join('\n')}`)
-    out.push(lines.join('\n'))
-  }
+  if (said || tools.length) out.push(progressSection(said, tools, inTail, n))
   if (todos.length) out.push(`## Open to-dos\n${todos.map((t) => `- [${t.status}] ${cut(squash(t.content), n(200))}`).join('\n')}`)
-  if (tail.length) {
-    out.push(`## The last exchanges, verbatim\n${tail.map((i) => `${i.kind === 'user' ? '**Owner:**' : '**You:**'} ${cut((i as { text: string }).text.trim(), n(1200))}`).join('\n\n')}`)
-  }
+  if (tail.length) out.push(tailSection(tail, n(1200)))
   return out.join('\n\n')
 }
