@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import config, taskstore  # noqa: E402
+from hswarm import archive, config, history, taskstore  # noqa: E402
 from hswarm.spec import Task  # noqa: E402
 
 
@@ -43,6 +43,28 @@ def test_finished_jobs_are_indexed_once_and_a_running_one_waits():
     row = taskstore.report(days=10000)[0]
     assert row["profile"] == "research" and row["tools"] == "read" and row["size"] == "s"
     assert (row["tasks"], row["ok"], row["cost_usd"]) == (1, 1, 0.5)
+
+
+def test_a_cold_day_is_read_once_and_a_packed_job_that_never_finished_is_not_read_again(monkeypatch):
+    # 2026-10-08: each cold job was read on its own, a pass over its day's archive up to it (2026-09-23: 438 MiB, 40 s
+    # a pass, 410 jobs), and the 72 that never finished were read again every night: maintain hit its two-hour limit
+    # in this step every night from 2026-10-04 on, and never reached the packing, the savings record or the page.
+    for i in range(3):
+        _job(f"20200101-00000{i}-aaaa", 0.5, journaled=True)
+    _job("20200101-000009-dddd", 0.1, finished=False)  # stopped mid-run: once packed, it can never finish
+    archive.archive_old(hours=0, apply=True)
+    assert history.pack_jobs()["jobs"] == 4
+    history._job_cache.clear()
+    passes = []
+    real = history._members
+    monkeypatch.setattr(history, "_members", lambda path: passes.append(path) or real(path))
+
+    first = taskstore.index_jobs()
+    again = taskstore.index_jobs()
+
+    assert first == {"jobs": 4, "tasks": 4, "skipped": 0, "errors": 0}  # the unfinished job's one finished task too
+    assert again == {"jobs": 0, "tasks": 0, "skipped": 0, "errors": 0}
+    assert len(passes) == 1  # one pass over the day, not one per job, and none the night after
 
 
 def test_a_task_with_no_named_cap_gets_one_its_shape_has_needed():

@@ -129,43 +129,71 @@ def rows_of(job_id: str, doc: dict, read_blob) -> list[tuple]:
 
 def index_jobs(limit: int | None = None) -> dict:
     """Add every finished job not yet in the table. {jobs, tasks, skipped, errors}: a job still running waits, and
-    one whose record cannot be read is counted and tried again next pass, never the end of it."""
-    from . import archive
+    one whose record cannot be read is counted and tried again next pass, never the end of it.
+
+    A packed job (a zip, or its day's archive) never changes again (archive_old leaves a running one alone), so one
+    that never finished is indexed with the tasks that did, not read again every night. Jobs past their warm week are
+    read a day at a time, one pass of the day's archive (history.each_cold_job). 2026-10-08: read one by one, the 817
+    cold jobs left (72 of them never finished, so retried every night) held maintain at its two-hour limit from 2026-10-04
+    on, so nothing after this step (packing, the savings record, the page) ran."""
+    from . import archive, history
     from .job import Job
 
     con = connect()
     done = {row[0] for row in con.execute("SELECT job_id FROM indexed_jobs")}
     out = {"jobs": 0, "tasks": 0, "skipped": 0, "errors": 0}
-    for job_id in archive.job_ids():
-        if job_id in done:
-            continue
+
+    def add(job_id: str) -> bool:
+        """Index one job; False once `limit` is reached."""
         try:
             # load_from_disk folds results.jsonl back in: since dad8ce6 a finished job.json leaves out every result
             # already journaled there, and the raw record indexed such a job with no tasks at all (review, 2026-10-02).
             doc = Job.load_from_disk(job_id)
         except KeyError:
             out["skipped"] += 1
-            continue
+            return True
         except (ValueError, TypeError, AttributeError, OSError):  # a damaged record (UnicodeDecodeError is a ValueError)
             out["errors"] += 1
-            continue
-        if not (doc.get("summary") or {}).get("finished"):
+            return True
+        if not (doc.get("summary") or {}).get("finished") and archive.job_dir(job_id).is_dir():
             out["skipped"] += 1
-            continue
+            return True
         try:
             rows = rows_of(job_id, doc, archive.blob_reader(job_id))
         except (ValueError, TypeError, AttributeError, OSError):
             out["errors"] += 1
-            continue
+            return True
         with con:
             con.executemany(f"INSERT OR REPLACE INTO tasks VALUES ({','.join('?' * 27)})", rows)
             con.execute("INSERT OR IGNORE INTO indexed_jobs VALUES (?)", (job_id,))
         out["jobs"] += 1
         out["tasks"] += len(rows)
-        if limit and out["jobs"] >= limit:
-            break
-    con.close()
-    return out
+        return not (limit and out["jobs"] >= limit)
+
+    cold = history.cold_jobs()
+    by_day: dict[str, set[str]] = {}
+    try:
+        for job_id in archive.job_ids():
+            if job_id in done:
+                continue
+            if job_id in cold and not archive.job_dir(job_id).is_dir() and not archive.archive_path(job_id).is_file():
+                by_day.setdefault(cold[job_id], set()).add(job_id)
+            elif not add(job_id):
+                return out
+        for day in sorted(by_day, reverse=True):  # newest first, as job_ids
+            left = set(by_day[day])
+            try:
+                for job_id in history.each_cold_job(day, by_day[day]):
+                    left.discard(job_id)
+                    if not add(job_id):
+                        return out
+            except history.READ_ERRORS:
+                out["errors"] += len(left)
+                continue
+            out["skipped"] += len(left)  # in the day's index, not in its archive
+        return out
+    finally:
+        con.close()
 
 
 _caps: dict = {"stamp": None, "by_shape": {}}

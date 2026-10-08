@@ -170,6 +170,38 @@ _job_cache: OrderedDict[str, tuple[tuple, dict[str, bytes]]] = OrderedDict()
 _JOB_CACHE = 3
 # Readers run on worker threads (the MCP server's to_thread calls), so the cache is touched under a lock.
 _job_lock = threading.Lock()
+# What reading a day's archive can raise: missing, cut short, or damaged.
+READ_ERRORS = (OSError, EOFError, lzma.LZMAError, tarfile.TarError)
+
+
+def _keep(job_id: str, stamp: tuple, got: dict[str, bytes]) -> None:
+    with _job_lock:
+        _job_cache[job_id] = (stamp, got)
+        while len(_job_cache) > _JOB_CACHE:
+            _job_cache.popitem(last=False)
+
+
+def each_cold_job(day: str, wanted: set[str]) -> Iterator[str]:
+    """Each job of `wanted` that a day's archive holds, all read in ONE streamed pass and each left in the cold cache
+    as it is yielded, so a reader of the whole set (taskstore.index_jobs) answers from memory. Read one by one, every
+    job cost a pass over its day up to it: 2026-10-08, 2026-09-23's 410 unindexed jobs (438 MiB, 40 s a pass) took about
+    20 s each and held every nightly maintain at its two-hour limit from 2026-10-04 on. Raises READ_ERRORS."""
+    path = day_path(JOBS, day)
+    st = path.stat()
+    stamp = (st.st_mtime_ns, st.st_size)
+    job, got = None, {}
+    for name, data in _members(path):
+        head, _, member = name.partition("/")
+        if head != job:
+            if job in wanted:
+                _keep(job, stamp, got)
+                yield job
+            job, got = head, {}  # a job's members are written together: a new head is the last one done
+        if head in wanted:
+            got[member] = data
+    if job in wanted:
+        _keep(job, stamp, got)
+        yield job
 
 
 def _cold_job(job_id: str) -> dict[str, bytes] | None:
@@ -196,12 +228,9 @@ def _cold_job(job_id: str) -> dict[str, bytes] | None:
                 got[name[len(head):]] = data
             elif got:
                 break  # a job's members are written together: past them, nothing more of it follows
-    except (OSError, EOFError, lzma.LZMAError, tarfile.TarError):
+    except READ_ERRORS:
         return None
-    with _job_lock:
-        _job_cache[job_id] = (stamp, got)
-        while len(_job_cache) > _JOB_CACHE:
-            _job_cache.popitem(last=False)
+    _keep(job_id, stamp, got)
     return got
 
 
@@ -256,7 +285,7 @@ def pack_jobs(after_days: float = COLD_AFTER_DAYS) -> dict:
                                     yield f"{z.stem}/{n}", zf.read(n)
 
                 _write_day(JOBS, day, stream(), names)
-        except (OSError, EOFError, zipfile.BadZipFile, lzma.LZMAError, tarfile.TarError) as exc:
+        except (*READ_ERRORS, zipfile.BadZipFile) as exc:
             # EOFError: the day's archive is cut short. Its sources stay, and the other days still pack.
             out["errors"].append(f"history: jobs of {day} not packed: {exc}")
             continue
@@ -304,7 +333,7 @@ def _pack_files(kind: str, root: Path, files: list[Path]) -> dict:
 
         try:
             _write_day(kind, day, stream(), names)
-        except (OSError, EOFError, lzma.LZMAError, tarfile.TarError) as exc:  # a damaged day: its files stay
+        except READ_ERRORS as exc:  # a damaged day: its files stay
             out["errors"].append(f"history: {kind} of {day} not packed: {exc}")
             continue
         for f, mtime in group:
