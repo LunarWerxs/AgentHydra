@@ -253,6 +253,20 @@ mod win {
             param: *const c_void,
         ) -> Hwnd;
         fn DestroyWindow(h: Hwnd) -> i32;
+        fn IsZoomed(h: Hwnd) -> i32;
+        fn GetDpiForWindow(h: Hwnd) -> u32;
+        fn GetSystemMetricsForDpi(index: i32, dpi: u32) -> i32;
+    }
+    // wry already subclasses the main window through this, so the exe imports it either way.
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(
+            h: Hwnd,
+            f: extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize,
+            id: usize,
+            data: usize,
+        ) -> i32;
+        fn DefSubclassProc(h: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
     }
     #[link(name = "dwmapi")]
     extern "system" {
@@ -465,6 +479,63 @@ mod win {
         };
     }
 
+    /// NCCALCSIZE_PARAMS: rgrc[0] is the window's proposed rectangle on the way in and the client rectangle on the way out.
+    #[repr(C)]
+    struct NcCalcSize {
+        rgrc: [RECT; 3],
+        pos: *const c_void,
+    }
+    const CAPTION_SUBCLASS: usize = 0x4147_4e43; // "AGNC": this window's own subclass, apart from wry's and tao's
+    const WM_NCCALCSIZE: u32 = 0x0083;
+    const SM_CYFRAME: i32 = 33;
+    const SM_CXPADDEDBORDER: i32 = 92;
+
+    /// The frame a maximized window hangs past its monitor's edges, at the window's dpi (96 if Windows does not say).
+    fn maximized_pad(h: Hwnd) -> i32 {
+        let dpi = match unsafe { GetDpiForWindow(h) } {
+            0 => 96,
+            d => d,
+        };
+        unsafe {
+            GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
+        }
+    }
+
+    /// Keeps the client area at the window's proposed top, so the caption is gone while the left, right and bottom
+    /// keep their native sizing borders and shadow. Maximized, the frame hangs past the monitor, so the client starts below it.
+    extern "system" fn caption_subclass(
+        h: Hwnd,
+        msg: u32,
+        wp: usize,
+        lp: isize,
+        _id: usize,
+        _data: usize,
+    ) -> isize {
+        if msg != WM_NCCALCSIZE || wp == 0 {
+            return unsafe { DefSubclassProc(h, msg, wp, lp) };
+        }
+        let p = lp as *mut NcCalcSize;
+        let proposed_top = unsafe { (*p).rgrc[0].top };
+        let r = unsafe { DefSubclassProc(h, msg, wp, lp) };
+        let pad = if unsafe { IsZoomed(h) } != 0 {
+            maximized_pad(h)
+        } else {
+            0
+        };
+        unsafe { (*p).rgrc[0].top = proposed_top + pad };
+        r
+    }
+
+    /// Takes Windows' caption off the main window (caption_subclass). False when the subclass could not be added.
+    pub fn remove_caption(h: Hwnd) -> bool {
+        if unsafe { SetWindowSubclass(h, caption_subclass, CAPTION_SUBCLASS, 0) } == 0 {
+            return false;
+        }
+        // SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE: the frame is worked out again, nothing moves.
+        unsafe { SetWindowPos(h, 0, 0, 0, 0, 0, 0x0020 | 0x0002 | 0x0001 | 0x0004 | 0x0010) };
+        true
+    }
+
     pub fn destroy(h: Hwnd) {
         unsafe { DestroyWindow(h) };
     }
@@ -571,6 +642,64 @@ fn parse_browser_cmd(text: &str) -> Option<BrowserCmd> {
     Some(cmd)
 }
 
+// ---- the window's own frame: the page's host bridge is the other end ----
+// The page draws its top row as the title bar: `ready` turns Windows' caption off (once), the page's own buttons ask for
+// minimize, maximize, close or a resize drag, and the window answers with an `agenthydra:window` event.
+
+/// What the window's page asks of the window (`{"op":"window","action":...}`).
+#[derive(Debug, PartialEq)]
+enum WindowCmd {
+    /// The page has loaded: turn the caption off (once) and say what the window is now.
+    Ready,
+    Minimize,
+    /// Maximize, or restore when maximized.
+    Maximize,
+    /// What the caption's X does: the placement is saved and the window closes.
+    Close,
+    /// Start a native resize drag from this edge.
+    Resize(Edge),
+}
+
+/// The edges the page starts a resize drag from (the top ones: the page draws those).
+#[derive(Debug, PartialEq)]
+enum Edge {
+    North,
+    NorthEast,
+    NorthWest,
+}
+
+/// A window message from the window's page, or None for anything else; an unknown action is ignored.
+fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
+    #[derive(Deserialize)]
+    struct Msg {
+        op: String,
+        action: String,
+        edge: Option<String>,
+    }
+    let m: Msg = serde_json::from_str(text).ok()?;
+    if m.op != "window" {
+        return None;
+    }
+    Some(match m.action.as_str() {
+        "ready" => WindowCmd::Ready,
+        "minimize" => WindowCmd::Minimize,
+        "maximize" => WindowCmd::Maximize,
+        "close" => WindowCmd::Close,
+        "resize" => WindowCmd::Resize(match m.edge.as_deref()? {
+            "n" => Edge::North,
+            "ne" => Edge::NorthEast,
+            "nw" => Edge::NorthWest,
+            _ => return None,
+        }),
+        _ => return None,
+    })
+}
+
+/// The script that tells the window's page its frame (the caption is gone) and whether it is maximized.
+fn window_event_script(frame: bool, maximized: bool) -> String {
+    format!("window.dispatchEvent(new CustomEvent('agenthydra:window',{{detail:{{frame:{frame},maximized:{maximized}}}}}))")
+}
+
 /// Where a page tab's view may go: http and https except AgentHydra's own window, and about: and blob: pages.
 fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
     let u = url.to_ascii_lowercase();
@@ -608,6 +737,24 @@ fn webview8(
     use wry::WebViewExtWindows;
     let core = unsafe { view.controller().CoreWebView2() }.ok()?;
     core.cast().ok()
+}
+
+/// Turns on WebView2's non-client region support for the main view: the page's `app-region: drag` areas drag the
+/// window, and double-click and the right-click system menu work there too. False on a runtime too old to have it.
+fn enable_non_client_regions(view: &wry::WebView) -> bool {
+    use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings9;
+    use windows::core::Interface;
+    use wry::WebViewExtWindows;
+    let Ok(core) = (unsafe { view.controller().CoreWebView2() }) else {
+        return false;
+    };
+    let Ok(settings) = (unsafe { core.Settings() }) else {
+        return false;
+    };
+    let Ok(s9) = settings.cast::<ICoreWebView2Settings9>() else {
+        return false;
+    };
+    unsafe { s9.SetIsNonClientRegionSupportEnabled(true) }.is_ok()
 }
 
 /// A view's (playing, muted) as the runtime reports them now.
@@ -748,6 +895,7 @@ enum Ev {
     /// The window's own page began loading a document: the page views it placed go with the page that made them.
     Reloading,
     Browser(BrowserCmd),
+    Window(WindowCmd),
     /// A page view's address or title changed.
     Page(String, PageOut),
     /// A page view asked for a new window: the address opens in that view instead.
@@ -944,9 +1092,10 @@ fn run(
     let proxy = event_loop.create_proxy();
     let window = build_window(&event_loop, &rect, maximized);
     let hwnd = window.hwnd();
+    let zoomed = window.is_maximized();
     let origin = origin_of(&url);
     let mut ctx = wry::WebContext::new(Some(udf.clone()));
-    let webview = build_webview(&mut ctx, &window, &url, &origin, &proxy);
+    let webview = build_webview(&mut ctx, &window, &url, &origin, &proxy, !side);
 
     if smoke {
         start_smoke_deadline();
@@ -967,6 +1116,9 @@ fn run(
         side,
         dirty: None,
         minimized: false,
+        ready_done: false,
+        caption_gone: false,
+        maximized: zoomed,
         pages: std::collections::HashMap::new(),
         ctx,
     };
@@ -1009,6 +1161,7 @@ fn build_webview(
     url: &str,
     origin: &str,
     proxy: &tao::event_loop::EventLoopProxy<Ev>,
+    main: bool,
 ) -> wry::WebView {
     use wry::{NewWindowResponse, WebViewBuilder};
 
@@ -1017,17 +1170,25 @@ fn build_webview(
     let ipc_origin = origin.to_string();
     let load_proxy = proxy.clone();
     let ipc_proxy = proxy.clone();
+    // The page's page tabs show their addresses in views of this window's own (native-browser.ts). frame: the main
+    // window's page draws its own title bar (the window's frame), a side window keeps Windows' caption.
+    let host = if main {
+        "window.agentHydraHost=Object.freeze({browser:1,audio:1,frame:1});"
+    } else {
+        "window.agentHydraHost=Object.freeze({browser:1,audio:1});"
+    };
     WebViewBuilder::new_with_web_context(ctx)
         .with_url(url)
         .with_background_color((BG.0, BG.1, BG.2, 255))
         .with_devtools(true)
-        // The page's page tabs show their addresses in views of this window's own (native-browser.ts).
-        .with_initialization_script("window.agentHydraHost=Object.freeze({browser:1,audio:1});")
+        .with_initialization_script(host)
         .with_ipc_handler(move |req| {
             if origin_of(&req.uri().to_string()) != ipc_origin {
                 return;
             }
-            if let Some(cmd) = parse_browser_cmd(req.body()) {
+            if let Some(cmd) = parse_window_cmd(req.body()) {
+                let _ = ipc_proxy.send_event(Ev::Window(cmd));
+            } else if let Some(cmd) = parse_browser_cmd(req.body()) {
                 let _ = ipc_proxy.send_event(Ev::Browser(cmd));
             }
         })
@@ -1103,6 +1264,12 @@ struct Host {
     side: bool,
     dirty: Option<Instant>,
     minimized: bool,
+    /// The page's first `ready` has been answered: the caption is taken off once, later ones only re-send the state.
+    ready_done: bool,
+    /// Windows' caption is off (non-client regions on and caption_subclass in).
+    caption_gone: bool,
+    /// The main window's maximized state, as the page was last told it.
+    maximized: bool,
     pages: std::collections::HashMap<String, PageView>,
     ctx: wry::WebContext,
     window: tao::window::Window,
@@ -1124,7 +1291,7 @@ impl Host {
             None => ControlFlow::Wait,
         };
         match event {
-            Event::UserEvent(ev) => self.user_event(ev),
+            Event::UserEvent(ev) => self.user_event(ev, flow),
             Event::WindowEvent {
                 event: WindowEvent::Moved(_) | WindowEvent::Resized(_),
                 ..
@@ -1132,21 +1299,61 @@ impl Host {
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
-            } => {
-                if !self.smoke && !self.side {
-                    save_placement(&self.state_file, &self.window);
-                }
-                // Gone from the screen at once: the exit then tears down the main WebView2 and one per
-                // browser pane, which held the window up visibly for as long as that took.
-                self.window.set_visible(false);
-                *flow = ControlFlow::Exit;
-            }
+            } => self.close(flow),
             Event::NewEvents(_) | Event::MainEventsCleared => self.save_if_due(),
             _ => {}
         }
     }
 
-    fn user_event(&mut self, ev: Ev) {
+    /// The title bar's X and the page's `close`: the placement is saved, then the window goes.
+    fn close(&mut self, flow: &mut tao::event_loop::ControlFlow) {
+        use tao::event_loop::ControlFlow;
+
+        if !self.smoke && !self.side {
+            save_placement(&self.state_file, &self.window);
+        }
+        // Gone from the screen at once: the exit then tears down the main WebView2 and one per
+        // browser pane, which held the window up visibly for as long as that took.
+        self.window.set_visible(false);
+        *flow = ControlFlow::Exit;
+    }
+
+    /// The page's `ready`: on the first one, turn the caption off if WebView2 can drag from the page's regions.
+    fn ready(&mut self) {
+        if !self.ready_done {
+            self.ready_done = true;
+            self.caption_gone =
+                enable_non_client_regions(&self.webview) && win::remove_caption(self.hwnd);
+        }
+        self.send_window_state();
+    }
+
+    fn send_window_state(&self) {
+        let _ = self
+            .webview
+            .evaluate_script(&window_event_script(self.caption_gone, self.maximized));
+    }
+
+    fn window_cmd(&mut self, cmd: WindowCmd, flow: &mut tao::event_loop::ControlFlow) {
+        use tao::window::ResizeDirection;
+
+        match cmd {
+            WindowCmd::Ready => self.ready(),
+            WindowCmd::Minimize => self.window.set_minimized(true),
+            WindowCmd::Maximize => self.window.set_maximized(!self.window.is_maximized()),
+            WindowCmd::Close => self.close(flow),
+            WindowCmd::Resize(edge) => {
+                let dir = match edge {
+                    Edge::North => ResizeDirection::North,
+                    Edge::NorthEast => ResizeDirection::NorthEast,
+                    Edge::NorthWest => ResizeDirection::NorthWest,
+                };
+                let _ = self.window.drag_resize_window(dir);
+            }
+        }
+    }
+
+    fn user_event(&mut self, ev: Ev, flow: &mut tao::event_loop::ControlFlow) {
         match ev {
             Ev::Loaded => {
                 if self.smoke {
@@ -1155,6 +1362,12 @@ impl Host {
                 }
             }
             Ev::Reloading => self.pages.clear(),
+            // The window's frame belongs to the main window: a side window's page has no frame to answer for.
+            Ev::Window(cmd) => {
+                if !self.side {
+                    self.window_cmd(cmd, flow);
+                }
+            }
             Ev::Browser(cmd) => browser_cmd(
                 cmd,
                 &mut self.pages,
@@ -1183,6 +1396,11 @@ impl Host {
 
         if !self.side {
             self.dirty = Some(Instant::now() + Duration::from_millis(400));
+            let maximized = self.window.is_maximized();
+            if maximized != self.maximized {
+                self.maximized = maximized;
+                self.send_window_state();
+            }
         }
         // wry skips SIZE_MINIMIZED, so the page would stay 'visible' while minimized.
         let min = self.window.is_minimized();
@@ -1464,6 +1682,48 @@ mod tests {
             },
         );
         assert!(a.contains(r#"{"id":"p","type":"audio","playing":true,"muted":false}"#));
+    }
+
+    #[test]
+    fn window_messages_parse_and_unknown_ones_are_ignored() {
+        let op = |action: &str| format!(r#"{{"op":"window","action":"{action}"}}"#);
+        assert_eq!(parse_window_cmd(&op("ready")), Some(WindowCmd::Ready));
+        assert_eq!(parse_window_cmd(&op("minimize")), Some(WindowCmd::Minimize));
+        assert_eq!(parse_window_cmd(&op("maximize")), Some(WindowCmd::Maximize));
+        assert_eq!(parse_window_cmd(&op("close")), Some(WindowCmd::Close));
+        for (edge, want) in [
+            ("n", Edge::North),
+            ("ne", Edge::NorthEast),
+            ("nw", Edge::NorthWest),
+        ] {
+            let text = format!(r#"{{"op":"window","action":"resize","edge":"{edge}"}}"#);
+            assert_eq!(parse_window_cmd(&text), Some(WindowCmd::Resize(want)));
+        }
+        // A resize needs a known edge; an unknown action is ignored; a browser message is not a window one.
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"resize"}"#),
+            None
+        );
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"resize","edge":"s"}"#),
+            None
+        );
+        assert_eq!(parse_window_cmd(&op("explode")), None);
+        assert_eq!(
+            parse_window_cmd(r#"{"kind":"browser","op":"close","id":"p"}"#),
+            None
+        );
+        assert_eq!(parse_window_cmd("not json"), None);
+        // The browser parser still ignores the window's messages.
+        assert_eq!(parse_browser_cmd(&op("close")), None);
+    }
+
+    #[test]
+    fn window_state_reaches_the_page_as_a_window_event() {
+        assert_eq!(
+            window_event_script(true, false),
+            "window.dispatchEvent(new CustomEvent('agenthydra:window',{detail:{frame:true,maximized:false}}))"
+        );
     }
 
     #[test]
