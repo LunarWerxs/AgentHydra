@@ -109,6 +109,9 @@ class _BatchTest(unittest.TestCase):
                    lambda instance: (1, "unit test: the real sidebar is out of reach"))
         # And the collateral watch, which would read every real chat store twice per batch.
         self.patch(migrate_batch.archivewatchlib, "snapshot", lambda *a, **k: None)
+        # And the engine release, which pauses chats inside a REAL running app (2026-10-07).
+        self.patch(migrate_chat, "release_landed",
+                   lambda profile_dir, ids: {sid: {"id": sid, "paused": True} for sid in ids})
 
     def stub_scan(self, outstanding: bool = False, raises: bool = False) -> None:
         """The resume window reads the landed chat's transcript for background jobs
@@ -180,9 +183,10 @@ class ResumeTest(_BatchTest):
             return entry
 
         def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
-                     hand_run=False, idle_after=None):
+                     hand_run=False, idle_after=None, row_budget_secs=None):
             courier_calls.append({"max": max_deliveries, "only": set(only), "act": act,
-                                  "hand_run": hand_run, "idle_after": dict(idle_after or {})})
+                                  "hand_run": hand_run, "idle_after": dict(idle_after or {}),
+                                  "row_budget_secs": row_budget_secs})
             results, skipped = [], []
             for did in sorted(only):
                 ok, why = courier_results.get(did, (True, "delivered"))
@@ -199,6 +203,29 @@ class ResumeTest(_BatchTest):
         self.patch(courier, "run", fake_run)
         self.stub_scan()
         return staged, courier_calls
+
+    def test_landed_engines_are_released_in_their_app_before_any_resume_is_staged(self):
+        # Owner, 2026-10-07: the engine and terminal the target app starts for a landed chat are
+        # shut down BEFORE a resume is sent, so the resume starts one fresh engine.
+        order: list[tuple] = []
+        self.stub_phases({"one": [(_landed("one", toNum=55), 0)]})
+        self.stub_resume({})
+        self.patch(migrate_batch.hydralib, "fleet", lambda: {"instances": [
+            {"num": 55, "name": "blaarrrggghhh", "dir": "C:/profiles/blaarrrggghhh"}]})
+
+        def fake_release(profile_dir, ids):
+            order.append(("release", profile_dir, tuple(ids)))
+            return {sid: {"id": sid, "paused": True} for sid in ids}
+
+        self.patch(migrate_chat, "release_landed", fake_release)
+        staging = migrate_batch.deliverylib.stage
+        self.patch(migrate_batch.deliverylib, "stage", lambda sid, text, **kw: (
+            order.append(("stage", sid)), staging(sid, text, **kw))[1])
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(order, [("release", "C:/profiles/blaarrrggghhh", ("sid-one",)),
+                                 ("stage", "sid-one")])
+        self.assertTrue(out["results"][0]["engineReleased"]["paused"])
 
     def test_one_reply_per_landed_chat_delivered_by_hand_and_each_result_says_so(self):
         calls = self.stub_phases({"three": [(_refused("three", "REFUSED: live engine"), 4)]})
@@ -348,9 +375,10 @@ class ResumeRetryTest(_BatchTest):
             return entry
 
         def fake_run(max_deliveries, only, act, running_now=None, cap_exempt=False,
-                     hand_run=False, idle_after=None):
+                     hand_run=False, idle_after=None, row_budget_secs=None):
             courier_calls.append({"only": set(only), "hand_run": hand_run,
-                                  "idle_after": dict(idle_after or {})})
+                                  "idle_after": dict(idle_after or {}),
+                                  "row_budget_secs": row_budget_secs})
             results, skipped = [], []
             for did in sorted(only):
                 queue = pending.get(did) or [("ok", "delivered")]
@@ -359,6 +387,10 @@ class ResumeRetryTest(_BatchTest):
                     results.append({"id": did, "ok": True, "outcome": why, "detail": ""})
                 elif kind == "fail":
                     results.append({"id": did, "ok": False, "outcome": why, "detail": why})
+                elif kind == "landed?":
+                    # Attempted, and it may have reached the chat (typed but unconfirmed).
+                    results.append({"id": did, "ok": False, "outcome": why, "detail": why,
+                                    "mayHaveLanded": True})
                 elif kind == "deferred":
                     # The courier's NOT-YET: the row stays staged, and the result says so.
                     results.append({"id": did, "ok": False, "outcome": why, "detail": why,
@@ -412,6 +444,34 @@ class ResumeRetryTest(_BatchTest):
 
         self.assertEqual(len(staged), 1, "a skip keeps its staged row - nothing to re-stage")
         self.assertEqual(len(calls), 1, "no second courier run for a deliberate deferral")
+
+    def test_a_batch_resume_row_gets_the_short_budget_not_the_full_row_budget(self):
+        """A batch waits behind every row it resumes, so a row that wedges must give up well
+        before the courier's own per-row budget."""
+        self.stub_phases({})
+        _staged, calls = self.stub_resume_with_failures({"d-sid-one": ("ok", "delivered")})
+        _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertTrue(calls)
+        for call in calls:
+            self.assertEqual(call["row_budget_secs"], courier.BATCH_RESUME_ROW_BUDGET_SECS)
+            self.assertLess(call["row_budget_secs"], courier.ROW_BUDGET_SECS)
+
+    def test_a_send_that_may_have_landed_is_never_retried_inside_the_batch(self):
+        """2026-10-08. The courier refuses to type twice when a send may have reached the chat
+        (typed but unconfirmed, a peer write the transcript grew under, a send cut at the
+        budget) - and the batch's one retry used to re-stage and send it anyway."""
+        self.stub_phases({})
+        staged, calls = self.stub_resume_with_failures(
+            {"d-sid-one": ("landed?", "typed, but the transcript did not grow")})
+        _code, out = _run(["--chat", "one", "--to", "55", "--resume", "carry on"])
+
+        self.assertEqual(len(calls), 1, "no second courier run into the same chat")
+        self.assertEqual(len(staged), 1, "the reply is not staged a second time")
+        verdict = out["results"][0]["resume"]
+        self.assertFalse(verdict["delivered"])
+        self.assertIn("may have landed", verdict["why"])
+        self.assertNotIn("retry", verdict, "the row is not staged: its retry would answer nothing")
 
     def test_a_deferred_result_is_a_skip_not_a_hard_failure(self):
         """FOUND WHILE FIXING THE COURIER (2026-09-14). A mid-turn chat's delivery is now kept

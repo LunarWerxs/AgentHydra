@@ -74,6 +74,39 @@ class MoveOneTest(unittest.TestCase):
         term.assert_not_called()
         self.assertIsNone(item.landing)
 
+    def test_forced_move_tries_once_with_no_idle_wait_before_the_kill(self):
+        argvs: list[list[str]] = []
+        events: list[str] = []
+        calls = iter([_Outcome(migrate_batch._EXIT_LIVE_ENGINE), _Outcome(0, landing=object())])
+
+        def fake_move(argv):
+            argvs.append(list(argv))
+            events.append("move")
+            return next(calls)
+
+        with mock.patch.object(migrate_batch.migrate_chat, "move_only", side_effect=fake_move), \
+             mock.patch.object(migrate_batch, "_full_source", return_value=None), \
+             mock.patch.object(migrate_batch, "_terminate_for",
+                               side_effect=lambda q: events.append("terminate") or {"stopped": True}):
+            migrate_batch._move_one("q", [], terminate_live=True)
+
+        self.assertEqual(events, ["move", "terminate", "move"])
+        self.assertEqual(argvs[0], ["q", "--idle-wait", "0"])
+        self.assertEqual(argvs[1], ["q"], "the post-kill move keeps the caller's own argv")
+
+    def test_unforced_move_keeps_its_argv_untouched(self):
+        argvs: list[list[str]] = []
+        calls = iter([_Outcome(0, landing=object())])
+
+        def fake_move(argv):
+            argvs.append(list(argv))
+            return next(calls)
+
+        with mock.patch.object(migrate_batch.migrate_chat, "move_only", side_effect=fake_move):
+            migrate_batch._move_one("q", [], terminate_live=False)
+
+        self.assertEqual(argvs, [["q"]])
+
 
 class StillShownTest(unittest.TestCase):
     def test_flagged_source_row_leads_the_report(self):

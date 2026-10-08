@@ -1362,6 +1362,10 @@ def _settle_source_row_core(match: dict, target: dict, fleet: dict, session_id: 
     a running app could re-save it, and the twins lane keeps watch), 'visible' the twin is
     still there. ⛔ CALLERS BRANCH ON THE STATE, NEVER ON THE PROSE: a batch caller sniffing
     the sentence for "STILL VISIBLE" is how nine warnings turned into nine ticks.
+
+    A native refusal leaves the row 'visible' for every caller except a move's superseded
+    source (set_superseded in phase_settle): that archive goes ahead over an attached parent
+    and other chats' previews, and a busy refusal is retried first (2026-10-08).
     """
     src_name = str(match.get("instance") or "")
     if not src_name or src_name.lower() == str(target.get("name", "")).lower():
@@ -2058,10 +2062,13 @@ def phase_settle(land: _Landing) -> None:
     full = source_at_limit(land) if land.source_app_running else None
     src_inst = resolve_instance(land.fleet, str(land.src_instance or "")) if full else None
     nativearchivelib.set_at_limit([src_inst.get("dir")] if src_inst and src_inst.get("dir") else ())
+    # The landing is verified before this phase runs, so the source row is superseded (2026-10-08).
+    nativearchivelib.set_superseded(True)
     try:
         land.settle_note, land.source_row = _settle_source_row(
             land.match, land.target, land.fleet, land.session_id, land.chat_title, sw=land.sw)
     finally:
+        nativearchivelib.set_superseded(False)
         nativearchivelib.set_at_limit(())
     land.stopped_bystanders = nativearchivelib.take_stopped(land.session_id)
     if land.stopped_bystanders:
@@ -2232,11 +2239,40 @@ def main(argv: list[str]) -> int:
     finish_move(outcome.landing)
     payload = landing_payload(outcome.landing)
     land = outcome.landing
+    payload["engineReleased"] = release_landed(
+        str(land.target.get("dir") or ""), [land.session_id])[land.session_id]
     if flag_collateral(payload, before,
                        archivewatchlib.ids_for_match(land.match, land.session_id),
                        f"migrate_chat {land.session_id}"):
         return out(payload, outcome.as_json, 2)
     return out(payload, outcome.as_json, 0)
+
+
+#: How long the target app may take to finish starting a landed chat's engine before its pause.
+RELEASE_WAIT_MS = 20_000
+
+
+def release_landed(profile_dir: str, session_ids: list[str]) -> dict[str, dict]:
+    """Release the engine and prewarmed terminal the TARGET app started for landed chats, once
+    they have landed and BEFORE any resume (owner, 2026-10-07: "it needs to be shut down before
+    you send a resume prompt"). The app starts both for every chat it shows - a 13-chat move left
+    13 engines and 13 shells running, 4.9 GB - and nothing released them; a resume then starts one
+    fresh engine, and a plain move leaves none. Through the app's own pauseSession (the daemon's
+    /api/claude-native/pause), never a process kill: that left every chat on the app's "restart
+    Claude Code" error the same day. One verdict per id; never raises, never fails the move.
+    Shared with migrate_batch."""
+    try:
+        got = hydralib.api_post_once(
+            "/api/claude-native/pause",
+            {"profileDir": profile_dir, "ids": session_ids, "waitMs": RELEASE_WAIT_MS},
+            timeout=RELEASE_WAIT_MS / 1000 + 90,
+        )
+    except Exception as err:  # transport or refusal: the same verdict for every chat asked
+        got = {"ok": False, "reason": str(err)[:200]}
+    got = got if isinstance(got, dict) else {}
+    per_id = {str(r.get("id")): r for r in (got.get("result") or {}).get("results") or []}
+    why = str(got.get("reason") or "no verdict")[:200]
+    return {sid: per_id.get(sid) or {"paused": False, "why": why} for sid in session_ids}
 
 
 def flag_collateral(payload: dict, before: dict | None, moved_ids: set[str], what: str) -> bool:

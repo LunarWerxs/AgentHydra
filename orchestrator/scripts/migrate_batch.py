@@ -598,8 +598,12 @@ def _move_one(query: str, passthrough: list[str], terminate_live: bool = False,
     item = _Item(query)
     started = time.time()
     argv = [query, *passthrough, *(["--title", chat_title] if chat_title else [])]
+    # ⛔ A FORCED MOVE DOES NOT WAIT FOR THE ENGINE TO GO QUIET FIRST (measured 2026-10-08: a 5-chat
+    # batch took 1105 s while its steps summed to 183 s). The live refusal is certain and the kill
+    # follows it at once, so the first attempt takes idle-wait 0; every gate after the kill stays.
+    first_argv = [*argv, "--idle-wait", "0"] if terminate_live else argv
     try:
-        outcome = migrate_chat.move_only(argv)
+        outcome = migrate_chat.move_only(first_argv)
         full = None
         if (outcome.landing is None and not terminate_live
                 and outcome.code == _EXIT_LIVE_ENGINE):
@@ -675,10 +679,13 @@ def _restage(item: _Item, sid: str, text: str) -> dict | None:
     try:
         match = hydralib.resolve_one(sid)
         evidence = stage_reply.gather_evidence(match, sid)
+        # The landed copy, as _stage_resume_for stages it: a moved chat keeps its session id on
+        # both accounts, so the resolved match alone can name the source copy (2026-10-08).
+        landed_on = item.landing.target.get("name") if item.landing is not None else None
         entry = deliverylib.stage(
             sid, text,
             title=str(match.get("title") or item.payload.get("title") or ""),
-            instance=str(match.get("instance") or item.payload.get("to") or ""),
+            instance=str(landed_on or match.get("instance") or item.payload.get("to") or ""),
             evidence=evidence, by="migrate-resume-retry", dedupe=True)
         return {**entry, "idleAfterSecs": _resume_window(match)}
     except Exception as err:
@@ -718,7 +725,8 @@ def _retry_hard_failures(hard: dict[str, _Item], text: str, tally: dict) -> None
         return
     try:
         report = courier.run(len(restaged), set(restaged), act=True, hand_run=True,
-                             idle_after=windows)
+                             idle_after=windows,
+                             row_budget_secs=courier.BATCH_RESUME_ROW_BUDGET_SECS)
     except Exception as err:
         for item in restaged.values():
             item.payload["resume"]["why"] += (
@@ -750,13 +758,15 @@ def _stage_resume_for(item: _Item, text: str) -> tuple[str, int] | None:
     try:
         match = hydralib.resolve_one(sid)
         evidence = stage_reply.gather_evidence(match, sid)
+        # The LANDED copy's instance, not the index's pick: the source copy keeps this session id.
+        landed_on = item.landing.target.get("name") if item.landing is not None else None
         # reuse_identical: a batch that was cancelled with this resume still staged and is
         # then fired again must not queue a SECOND copy of the same words (2026-09-14: two
         # rows each for two chats). Different text staged for the chat is left alone.
         entry = deliverylib.stage(
             sid, text,
             title=str(match.get("title") or item.payload.get("title") or ""),
-            instance=str(match.get("instance") or item.payload.get("to") or ""),
+            instance=str(landed_on or match.get("instance") or item.payload.get("to") or ""),
             evidence=evidence, by="migrate-resume", reuse_identical=True)
         window = _resume_window(match)
     except Exception as err:  # one chat's staging must not cost the others their resume
@@ -780,6 +790,12 @@ def _apply_resume_outcome(verdict: dict, res: dict | None, skip_why: str | None)
         verdict["why"] = str(res.get("outcome") or "delivered")
         verdict.pop("retry", None)
         return True
+    if res and res.get("mayHaveLanded"):
+        # No longer staged, and not to be sent again blind: its retry would answer "nothing staged".
+        verdict.pop("retry", None)
+        verdict["why"] = ("may have landed - check the chat before sending it again ("
+                          + str(res.get("detail") or res.get("outcome") or "") + ")")
+        return False
     verdict["why"] = str(skip_why or (res or {}).get("detail")
                          or (res or {}).get("outcome") or "not delivered - still staged")
     return False
@@ -793,8 +809,13 @@ def _is_hard_failure(did: str, res: dict | None, skipped: dict) -> bool:
     when the chat is mid-turn and tags its result `deferred` - but it still arrives in
     `results`, not `skipped`, so this test used to read it as "attempted and failed", re-staged
     a SECOND copy of the resume and fired the courier into the same live turn again. Two copies
-    of one resume are two wakes. A not-yet is a skip."""
-    return did not in skipped and res is not None and not res.get("deferred")
+    of one resume are two wakes. A not-yet is a skip.
+
+    ⛔ NOR IS A SEND THAT MAY HAVE LANDED (2026-10-08). The courier refuses to type twice when a
+    send may have reached the chat (`mayHaveLanded`: typed but unconfirmed, a peer write the
+    transcript grew under, a send cut at the budget); re-staging it here undid that refusal."""
+    return (did not in skipped and res is not None and not res.get("deferred")
+            and not res.get("mayHaveLanded"))
 
 
 def _record_resume_outcomes(by_delivery: dict[str, _Item], report: dict,
@@ -924,7 +945,8 @@ def _resume_landed(items: list[_Item], text: str) -> dict:
 
     try:
         report = courier.run(len(by_delivery), set(by_delivery), act=True, hand_run=True,
-                             idle_after=windows)
+                             idle_after=windows,
+                             row_budget_secs=courier.BATCH_RESUME_ROW_BUDGET_SECS)
     except Exception as err:
         for item in by_delivery.values():
             item.payload["resume"]["why"] = (
@@ -1655,6 +1677,32 @@ def _build_batch_payload(items: list, parsed, note: str, secs: float, resume) ->
     return payload
 
 
+def _release_landed_engines(items: list[_Item]) -> None:
+    """migrate_chat.release_landed for every landed chat, one call per target app, after the
+    finishing phases and BEFORE the resume phase - so a resume starts one fresh engine and a
+    plain move leaves none. Each verdict lands on the chat's payload as `engineReleased`."""
+    landed: dict[int, list[_Item]] = {}
+    for item in items:
+        p = item.payload or {}
+        if p.get("landed") and p.get("sessionId") and p.get("toNum") is not None:
+            landed.setdefault(int(p["toNum"]), []).append(item)
+    if not landed:
+        return
+    try:
+        fleet = hydralib.fleet()
+    except hydralib.DaemonError as err:
+        for group in landed.values():
+            for item in group:
+                item.payload["engineReleased"] = {"paused": False, "why": f"fleet unreadable: {err}"}
+        return
+    for num, group in landed.items():
+        target = hydralib.resolve_instance(fleet, str(num)) or {}
+        ids = [str(item.payload["sessionId"]) for item in group]
+        verdicts = migrate_chat.release_landed(str(target.get("dir") or ""), ids)
+        for item, sid in zip(group, ids):
+            item.payload["engineReleased"] = verdicts[sid]
+
+
 def main(argv: list[str]) -> int:
     clilib.use_utf8_console()
     if "--help" in argv or "-h" in argv:
@@ -1700,6 +1748,8 @@ def main(argv: list[str]) -> int:
     for item in items:
         _attach_terminated(item)
 
+    if not parsed.dry_run:
+        _release_landed_engines(items)
     resume = _run_resume_phase(items, parsed) if parsed.resume_text and not parsed.dry_run else None
     # PHASE FIVE, after the resume has spent real time: did a running source app write any
     # settled row back? (_recheck_provisional_settles - the 2026-09-18 resurrection.)
