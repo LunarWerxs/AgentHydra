@@ -82,6 +82,10 @@ export const HOOKS = join(ROOT, 'hooks')
 
 export const SIGNALS = join(ROOT, 'signals')
 
+/** A sealed task's folders, one per worker (`sealed/<worker id>`): empty, in no repo, and cleared by
+ *  the storage pass with the worker's other files. */
+export const SEALED = join(ROOT, 'sealed')
+
 /** Forward slashes: the path goes into a bash command (the hook) and into the model's prompt. */
 export const slashed = (p: string): string => p.replace(/\\/g, '/')
 

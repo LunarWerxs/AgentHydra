@@ -4,7 +4,16 @@ import { describe, expect, test } from 'bun:test'
 import { mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { planStorage } from '../src/climayte'
-import { HOOKS, LOGS, PROMPTS, packedPath, packLog, peekLog, ROOT } from '../src/climayte-core'
+import {
+  HOOKS,
+  LOGS,
+  PROMPTS,
+  packedPath,
+  packLog,
+  peekLog,
+  ROOT,
+  SEALED,
+} from '../src/climayte-core'
 
 const DAY = 24 * 3_600_000
 const now = Date.now()
@@ -51,6 +60,13 @@ describe('the storage pass', () => {
     const oldHook = file(join(HOOKS, 'w-dd.json'), 20 * DAY)
     const activePrompt = file(join(PROMPTS, 'w-ee-0.txt'), 20 * DAY)
     const recentPrompt = file(join(PROMPTS, 'w-ff-0.txt'), DAY)
+    // A sealed worker's folder (sealed/<id>) goes by the same rule as its other files.
+    const oldSealed = join(SEALED, 'w-dd')
+    const activeSealed = join(SEALED, 'w-ee')
+    for (const dir of [oldSealed, activeSealed]) {
+      mkdirSync(dir, { recursive: true })
+      utimesSync(dir, (now - 20 * DAY) / 1000, (now - 20 * DAY) / 1000)
+    }
     file(join(ROOT, 'archive', 'stamp-old', 'w-gg', 'x.txt'), 0)
     utimesSync(join(ROOT, 'archive', 'stamp-old'), (now - 40 * DAY) / 1000, (now - 40 * DAY) / 1000)
     const plan = planStorage(
@@ -66,6 +82,8 @@ describe('the storage pass', () => {
     expect(gone).toContain(oldHook)
     expect(gone).not.toContain(activePrompt)
     expect(gone).not.toContain(recentPrompt)
+    expect(gone).toContain(oldSealed)
+    expect(gone).not.toContain(activeSealed)
     expect(gone.some((p) => p.endsWith('stamp-old'))).toBe(true)
   })
 })

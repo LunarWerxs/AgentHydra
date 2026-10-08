@@ -25,7 +25,6 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -35,7 +34,6 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { stat as statAsync } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { claudeInstallState, INSTALL_BROKEN_HEAD, installStatusView } from './claude-install-guard'
 import {
@@ -72,6 +70,7 @@ import {
   ROOT,
   readInto,
   runnerSpecPath,
+  SEALED,
   SIGNALS,
   save,
   saveWalls,
@@ -1299,7 +1298,7 @@ export function planStorage(
     planPackFor(w, now, plan.pack)
   }
   const kept = new Map<string, boolean>()
-  for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS])
+  for (const dir of [PROMPTS, HANDOFFS, SIGNALS, HOOKS, SEALED])
     planDirRemovals(dir, byId, kept, now, plan.remove)
   const archive = join(ROOT, 'archive')
   try {
@@ -2400,11 +2399,16 @@ function newWorker(
   accounts: string[] | undefined,
   now: number,
 ): CliMayteWorker {
+  const id = `w-${hex(8)}`
+  // A sealed task runs in an empty folder named for its worker, so the storage pass clears it with
+  // the worker's other files. A temp folder per visit was never removed: 854 by 2026-10-08.
+  const cwd = t.sealed ? join(SEALED, id) : t.cwd
+  if (t.sealed) mkdirSync(cwd, { recursive: true })
   return {
-    id: `w-${hex(8)}`,
+    id,
     group,
     title: t.title?.trim() || t.prompt.replace(/\s+/g, ' ').trim().slice(0, 60),
-    cwd: t.sealed ? mkdtempSync(join(tmpdir(), 'climayte-sealed-')) : t.cwd,
+    cwd,
     prompt: t.prompt,
     pending: [],
     model: setting?.model ?? null,

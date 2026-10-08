@@ -574,7 +574,7 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 | Built-in tools | all | `--tools ""`: none |
 | MCP servers | the owner's and `climayte-worker`, written to `<hooks>/<id>.mcp.json`, never AgentHydra's own or magnific (`deniedMcpServers` by name and AgentHydra's endpoint by URL) | `--strict-mcp-config --mcp-config <mcpConfig>`: exactly that file's, AgentHydra's own when it names it (no deny list); no `climayte-worker`, so no `climayte_ask` |
 | Permissions | `--dangerously-skip-permissions` | `--permission-mode default` and `--allowedTools` exactly as given |
-| Folder | the task's `cwd` | a fresh empty temp folder (`climayte-sealed-*`), made at dispatch and again at launch if it was cleaned away |
+| Folder | the task's `cwd` | an empty folder of its own, `corch/sealed/<worker id>`, made at dispatch and again at launch if it was cleaned away; the storage pass clears it with the worker's other files |
 | Usage stops | the wind-down ask at the stop line, then the ceiling | the ceiling only: it has no Write tool for a handoff note, so it is never asked for one (`climayte_handoff` refuses it); stopped at the ceiling, its session moves to another account and resumes from its transcript |
 | Report | its final text, after the worker contract's steps | its final text; it has no Connections MCP, and nothing in the daemon asks it for the contract's `prompt_get` or rating (those come from the account's CLAUDE.md, which it never loads) |
 
