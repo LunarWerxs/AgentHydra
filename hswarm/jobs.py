@@ -678,19 +678,7 @@ class JobManager:
         profile = kw.pop("profile", None)
         purpose = kw.pop("purpose", "production")
         if profile or model == config.AUTO:
-            # The owner's Free web accounts answer first when one is idle (free_route.py). Every tool-free ask on auto
-            # comes through here: hswarm_ask, hswarm_decide's escalations (~4,900 a day that never tried one before
-            # 2026-10-08) and the role asks; free_route.eligible keeps critical and evaluation work off them.
-            if not kw.get("images"):
-                free = Task(prompt=prompt, id="ask", system=kw.get("system"), schema=kw.get("schema"), tools="none",
-                            profile=profile or "general", purpose=purpose, timeout_s=int(kw.get("timeout_s") or 120))
-                # Its own id per call: a Free thread's name must be unique on its account, and one fixed name refused
-                # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
-                served, _ = await free_route.consult(f"ask-{uuid.uuid4().hex[:8]}", free)
-                if served is not None:
-                    return served
-            from .dispatch import ask_selected
-            return await ask_selected(self, prompt, profile=profile or "general", route=route, purpose=purpose, **kw)
+            return await self._ask_selected(prompt, profile or "general", purpose, route, kw)
 
         # A leg whose breaker is open goes last (breaker.py): the ask goes straight to the fallback leg.
         legs = breaker.order(self.route_plan(model)) if route else [config.resolve_model(model)]
@@ -731,6 +719,22 @@ class JobManager:
         if too_large(res):
             res.error = too_large_for_route([(d.model, d.error or "") for d in dead] + [(res.model, res.error)], tool_free=True)
         return res
+
+    async def _ask_selected(self, prompt: str, profile: str, purpose: str, route: bool, kw: dict) -> Result:
+        """An ask on auto or with a profile (ask_routed's first branch)."""
+        # The owner's Free web accounts answer first when one is idle (free_route.py). Every tool-free ask on auto
+        # comes through here: hswarm_ask, hswarm_decide's escalations (~4,900 a day that never tried one before
+        # 2026-10-08) and the role asks; free_route.eligible keeps critical and evaluation work off them.
+        if not kw.get("images"):
+            free = Task(prompt=prompt, id="ask", system=kw.get("system"), schema=kw.get("schema"), tools="none",
+                        profile=profile, purpose=purpose, timeout_s=int(kw.get("timeout_s") or 120))
+            # Its own id per call: a Free thread's name must be unique on its account, and one fixed name refused
+            # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
+            served, _ = await free_route.consult(f"ask-{uuid.uuid4().hex[:8]}", free)
+            if served is not None:
+                return served
+        from .dispatch import ask_selected
+        return await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
 
     async def ask_role(self, role: str, prompt: str, **kw) -> Result:
         """One tool-free call for a role (judge, doubt, ...). A role left on AUTO runs its profile's plan over the
