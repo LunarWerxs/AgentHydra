@@ -23,6 +23,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
+import { startIdleSweep } from './claude-native-idle'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
@@ -1269,7 +1270,7 @@ if (IS_RELEASE && !isRelaunchSuccessor() && trayToolkit.dir === null) {
 }
 // The other half of the same story: this build HAS the tray toolkit and nothing started it. The
 // release ZIP says "double-click AgentHydra.exe", install.ps1's shortcut used to point at the exe,
-// and neither launches misc\lunarwerx-tray.exe - so the daemon ran, the UI opened, and the tray
+// and neither launches misc\AgentHydra-Tray.exe - so the daemon ran, the UI opened, and the tray
 // icon never appeared on a machine that did everything it was told (owner's PC, 2026-09-03). The
 // host is built to be started second: it finds this daemon and attaches (onStrayDaemon: attach).
 // Fire-and-forget after the port is published, because the host's first act is to look for us
@@ -1561,6 +1562,11 @@ startTitleSweep()
 // fleet, stages the current Claude Code into closed profiles and keeps the CLI install in step.
 // See version-drift.ts.
 startVersionDriftWatch()
+
+// Every 5 minutes: switches each managed app's own idle pause on (an off-screen idle chat gives
+// its ~260 MB engine back after claudeNativeIdleMinutes, default 10) and stops the prewarmed
+// terminals nobody used. See claude-native-idle.ts.
+startIdleSweep()
 
 // --- CliMayte (see server/src/climayte.ts, docs/CLIMAYTE.md) ----------------------------------------------
 // Watches the CLI workers a person delegated, and moves one to another account at a usage limit.

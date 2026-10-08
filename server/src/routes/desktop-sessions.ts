@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { pickCarriedSettings } from '../chat-settings-carry'
 import { isGenericChatTitle, resolveRequiredTitle } from '../chat-title'
 import { tryNativeArchiveChat } from '../claude-native-archive'
+import { idleMinutes, runIdleSweep, tryNativeIdle, tryNativePause } from '../claude-native-idle'
 import {
   getClaudeNativeSettings,
   parseClaudeNativeProfileConfig,
@@ -279,6 +280,39 @@ app.post('/api/claude-native/ultracode', async (c) => {
   return c.json(out, out.ok ? 200 : 409)
 })
 
+// Release idle engines and unused prewarmed terminals inside a RUNNING app (claude-native-idle.ts).
+// /idle switches the app's own idle pause on for one profile, or every native profile when none is
+// named; /pause pauses named chats now - a move calls it on the chats it landed, before any resume.
+app.post('/api/claude-native/idle', async (c) => {
+  const body = await jsonBody(c)
+  if (body.profileDir === undefined) return c.json(await runIdleSweep())
+  if (typeof body.profileDir !== 'string')
+    return c.json({ ok: false, reason: 'profileDir must be a string' }, 400)
+  const minutes = body.minutes === undefined ? idleMinutes() : Number(body.minutes)
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)
+    return c.json({ ok: false, reason: 'minutes must be 1-1440' }, 400)
+  const out = await tryNativeIdle(body.profileDir, minutes)
+  return c.json(out, out.ok ? 200 : 409)
+})
+app.post('/api/claude-native/pause', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.profileDir !== 'string' || !Array.isArray(body.ids) || body.ids.length === 0)
+    return c.json({ ok: false, reason: 'profileDir and ids are required' }, 400)
+  const waitMs = body.waitMs === undefined ? 20_000 : Number(body.waitMs)
+  if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 30_000)
+    return c.json({ ok: false, reason: 'waitMs must be 0-30000' }, 400)
+  try {
+    // Always 200 with per-chat results: a chat the app kept (work in flight) is an answer, not
+    // a failed request.
+    return c.json(await tryNativePause(body.profileDir, body.ids.map(String), waitMs))
+  } catch (error) {
+    return c.json(
+      { ok: false, reason: error instanceof Error ? error.message : String(error) },
+      400,
+    )
+  }
+})
+
 // Connections are opt-in per profile. launchDebugger applies on the next ordinary Open;
 // saving configuration does not launch or restart a desktop instance.
 app.get('/api/claude-native/settings', (c) => c.json(getClaudeNativeSettings()))
@@ -323,9 +357,11 @@ app.post('/api/sessions/:id/native-archive', async (c) => {
     : []
   // `sourceAtLimit`: the move is draining an account at its usage limit, so the archive goes
   // ahead even over another chat's servers and names each one it stopped (owner, 2026-09-26).
+  // `sourceSuperseded`: a move's source row after its landing is verified (2026-10-08).
   const result = await tryNativeArchiveChat(profile, c.req.param('id'), {
     leavingCliSessionIds: leaving,
     sourceAtLimit: body.sourceAtLimit === true,
+    sourceSuperseded: body.sourceSuperseded === true,
   })
   if (result.kind === 'unavailable')
     return c.json({ ...result, available: false, ok: false, verified: false })

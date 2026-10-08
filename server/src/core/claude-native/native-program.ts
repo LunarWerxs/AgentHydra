@@ -15,7 +15,14 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive' | 'ultracode'
+  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause'
+  /** idle only: how long a chat that is not on screen keeps its idle engine before the app's own
+   *  pause releases it. Applies only where the app's own setting is "never" (0). */
+  idleMs?: number
+  /** pause only: chats to release now - native ids (local_...) or CLI session ids. */
+  pauseIds?: string[]
+  /** pause only: how long to wait for an engine that is still starting before pausing it. */
+  waitMs?: number
   /** ultracode only: the effort to land (low..max; ultracode on needs xhigh or max). */
   effort?: string
   /** ultracode only: the ultracode flag to land. Default true; false lands a source that ran
@@ -28,6 +35,10 @@ export interface NativeProgramRequest {
    *  the source row (owner, 2026-09-26). Servers and HTML previews another chat owns under the
    *  cwd are stopped by that archive, and the result names each one (`stoppedBystanders`). */
   sourceAtLimit?: boolean
+  /** archive only: a move's source row, sent only once the target landing is verified (2026-10-08).
+   *  The archive goes ahead over an attached parent (named as `attachedParent`) and over the HTML
+   *  previews and servers another chat owns (named as `stoppedBystanders`), as sourceAtLimit does. */
+  sourceSuperseded?: boolean
   pid: number
   profileDir: string
   accountId?: string
@@ -397,7 +408,7 @@ function nativeCheckSiblingSessions(
 function nativeCheckPreviewPrefixes(
   previewManager: any,
   effectiveCwd: string,
-  sourceAtLimit = false,
+  overBystanders = false,
 ): any[] {
   const stopping: any[] = []
   for (const [previewId, preview] of previewManager.htmlPreviews.entries()) {
@@ -406,7 +417,7 @@ function nativeCheckPreviewPrefixes(
     }
     // Pinned stopServersForWorktree uses this raw prefix, even without a path separator.
     if (preview.cwd.startsWith(effectiveCwd)) {
-      if (!sourceAtLimit) {
+      if (!overBystanders) {
         nativeRefuse('shared working directory has HTML previews that archive would stop')
       }
       stopping.push({ kind: 'html-preview', id: String(previewId), cwd: preview.cwd })
@@ -419,9 +430,9 @@ function nativeCheckPreviewPrefixes(
  * A prefix-matched HTML preview can belong to a different directory, even when no other session
  * shares this exact cwd. No archive may stop a resource another chat owns: HTML previews under
  * the prefix refuse, and registry servers refuse unless the archived chat owns them all.
- * The one exception is a source at its usage limit (`sourceAtLimit`): the owner's order is that
- * a move off a walled account always archives the source row, so what the archive will stop is
- * returned for the result instead of refused.
+ * The exception is `overBystanders` (a source at its usage limit, or a superseded move source):
+ * the owner's order is that a move always archives the source row, so what the archive will stop
+ * is returned for the result instead of refused.
  */
 function nativeCheckSharedPreviewSafety(
   env: any,
@@ -430,7 +441,7 @@ function nativeCheckSharedPreviewSafety(
   session: any,
   effectiveCwd: string,
   leavingCliSessionIds: string[] = [],
-  sourceAtLimit = false,
+  overBystanders = false,
 ): any[] {
   nativeCheckMainIdentity(env, preview)
   nativeCheckSiblingSessions(env, manager, session, effectiveCwd)
@@ -456,7 +467,7 @@ function nativeCheckSharedPreviewSafety(
     return owner.isArchived !== true && !leavingCliSessionIds.includes(owner.cliSessionId)
   }
   const bystanders = servers.filter(bystander)
-  if (bystanders.length && !sourceAtLimit) {
+  if (bystanders.length && !overBystanders) {
     nativeRefuse('shared working directory has servers that archive would stop')
   }
   return [
@@ -465,7 +476,7 @@ function nativeCheckSharedPreviewSafety(
       id: String(server?.serverId ?? ''),
       sessionId: server?.sessionId ?? null,
     })),
-    ...nativeCheckPreviewPrefixes(previewManager, effectiveCwd, sourceAtLimit),
+    ...nativeCheckPreviewPrefixes(previewManager, effectiveCwd, overBystanders),
   ]
 }
 
@@ -509,11 +520,16 @@ function nativeManagerIsBusy(manager: any, sessionId: string): boolean {
   )
 }
 
-function nativeArchivePreconditions(found: any, session: any, before: any): void {
+function nativeArchivePreconditions(
+  found: any,
+  session: any,
+  before: any,
+  sourceSuperseded: boolean,
+): void {
   if (session.prewarmHidden || session.backend?.kind !== 'local' || session.backend?.remoteTarget) {
     nativeRefuse('only ordinary local Desktop sessions are supported')
   }
-  if (session.spawnedFrom && !session.lineageDetached) {
+  if (session.spawnedFrom && !session.lineageDetached && !sourceSuperseded) {
     nativeRefuse('attached parent could receive side effects')
   }
   if (
@@ -660,7 +676,9 @@ async function nativeArchive(
   const session = nativeSelect(manager, request)
   const before = nativeSnapshot(manager, session)
   if (before.isArchived) return nativeArchiveAlreadyResult(env, found, before, mainInfo, state)
-  nativeArchivePreconditions(found, session, before)
+  nativeArchivePreconditions(found, session, before, request.sourceSuperseded === true)
+  const attachedParent =
+    session.spawnedFrom && !session.lineageDetached ? (session.spawnedFrom.sessionId ?? null) : null
   const effectiveCwd = session.worktreePath || session.cwd
   if (typeof effectiveCwd !== 'string' || !effectiveCwd.trim()) {
     nativeRefuse('session working directory is unavailable')
@@ -676,7 +694,7 @@ async function nativeArchive(
     session,
     effectiveCwd,
     Array.isArray(request.leavingCliSessionIds) ? request.leavingCliSessionIds : [],
-    request.sourceAtLimit === true,
+    request.sourceAtLimit === true || request.sourceSuperseded === true,
   )
   // No await between the final guards and this native call. cleanupWorktree:false preserves
   // checkout files. The native method emits the same archived event used by the stock UI.
@@ -688,7 +706,11 @@ async function nativeArchive(
     nativeRefuse('session object changed during archive')
   const after = nativeSnapshot(manager, session)
   const result = nativeArchiveResult(env, found, session, before, after, flags, mainInfo, state)
-  return stoppedBystanders.length ? { ...result, stoppedBystanders } : result
+  return {
+    ...result,
+    ...(stoppedBystanders.length ? { stoppedBystanders } : {}),
+    ...(attachedParent ? { attachedParent } : {}),
+  }
 }
 
 /**
@@ -733,6 +755,206 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
   }
 }
 
+/**
+ * The app's own idle pause. Every Code chat keeps its engine (~260 MB) for as long as the app runs:
+ * the warm lifecycle pauses a chat that is not on screen only after `idleTimeoutMs`, and that
+ * comes from a remote flag which is 0 ("Idle timeout disabled, not arming" in main.log), so the
+ * app never releases one below its cap of one engine per 3 GB of RAM (21 on a 64 GB PC).
+ */
+function nativeIdleLifecycle(manager: any): any {
+  const lifecycle = manager.warmLifecycle
+  if (
+    !lifecycle?.config ||
+    Object.prototype.toString.call(lifecycle.sessions) !== '[object Map]' ||
+    typeof lifecycle.startIdleTimeout !== 'function' ||
+    typeof lifecycle.getTimeoutMs !== 'function' ||
+    typeof manager.pauseSession !== 'function'
+  ) {
+    nativeRefuse('native idle lifecycle unavailable')
+  }
+  return lifecycle
+}
+
+function nativeShellManager(manager: any): any {
+  const shells = manager.shellPty
+  if (
+    !shells ||
+    typeof shells.stopShellPty !== 'function' ||
+    Object.prototype.toString.call(shells.shellPtyProcesses) !== '[object Map]' ||
+    Object.prototype.toString.call(shells.shellPtyStats) !== '[object Map]'
+  ) {
+    nativeRefuse('native shell manager unavailable')
+  }
+  return shells
+}
+
+/** The app's own test for "this chat is on screen" (its QS: visibility known and the tab shown). */
+function nativeOnScreen(lifecycle: any, sessionId: string): boolean {
+  const state = lifecycle.sessions.get(sessionId)
+  return !!(state?.visibilityKnown && state?.isTabVisible)
+}
+
+/**
+ * Stops a chat's terminal shells that the app started ahead of time ("prewarm") and nobody has
+ * typed into or read, while the app knows the chat is off screen. The app opens one PowerShell
+ * (~90 MB + a conhost) for every chat it shows and keeps it until the chat is archived, engine or
+ * not; showing the chat again prewarms a new one. A shell anyone used, one the app opened for any
+ * other reason, one younger than `minAgeMs`, or one of a chat whose visibility the app has not
+ * reported is left alone.
+ */
+function nativeStopPrewarmShells(
+  shells: any,
+  lifecycle: any,
+  sessionId: string,
+  minAgeMs: number,
+): string[] {
+  const entry = lifecycle.sessions.get(sessionId)
+  if (!entry?.visibilityKnown || entry.isTabVisible) return []
+  const stopped: string[] = []
+  for (const key of [...shells.shellPtyProcesses.keys()]) {
+    if (key !== sessionId && !key.startsWith(`${sessionId}::`)) continue
+    const stats = shells.shellPtyStats.get(key)
+    if (stats?.spawnReason !== 'prewarm' || stats.hadInput !== false || stats.reads) continue
+    if (Date.now() - (stats.startedAt ?? Date.now()) < minAgeMs) continue
+    shells.stopShellPty(key, { noSweep: true })
+    stopped.push(key)
+  }
+  return stopped
+}
+
+/**
+ * Switches the app's own idle pause on for chats that are not on screen, in this app process only
+ * (a restart reverts it, so the daemon re-applies it on every pass). A non-zero value the app
+ * already has wins. Unarmed idle chats are armed at once instead of at the app's next 15-minute
+ * recheck. The pause itself is the app's (pauseSession), which declines any chat that is running,
+ * has a turn, background task, cron, loop wakeup or Remote Control bridge in flight. Then stops
+ * never-used prewarmed shells of chats that are off screen, with or without an engine: the shell
+ * only serves the terminal pane, which reopens one when the chat is shown again.
+ */
+async function nativeIdle(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  const lifecycle = nativeIdleLifecycle(manager)
+  const shells = nativeShellManager(manager)
+  const current = lifecycle.config.idleTimeoutMs
+  const original = current?.agentHydraOriginal ?? current
+  const policy: any = (sessionId: string) => {
+    const own = typeof original === 'function' ? original(sessionId) : original
+    return typeof own === 'number' && own > 0 ? own : policy.agentHydraIdleMs
+  }
+  policy.agentHydraOriginal = original
+  policy.agentHydraIdleMs = request.idleMs
+  state.dispatch = 'sent'
+  lifecycle.config.idleTimeoutMs = policy
+  const armed: string[] = []
+  const skipped: Record<string, number> = {}
+  const skip = (why: string) => {
+    skipped[why] = (skipped[why] ?? 0) + 1
+  }
+  for (const sessionId of [...lifecycle.sessions.keys()]) {
+    const entry = lifecycle.sessions.get(sessionId)
+    const session = manager.sessions.get(sessionId)
+    if (!session?.query) skip('noEngine')
+    else if (entry?.idleTimeoutId) skip('alreadyArmed')
+    else if (entry?.isWarmingUp) skip('warmingUp')
+    else if (nativeOnScreen(lifecycle, sessionId)) skip('onScreen')
+    else if (session.isRunning) skip('running')
+    else {
+      lifecycle.startIdleTimeout(sessionId)
+      if (lifecycle.sessions.get(sessionId)?.idleTimeoutId) armed.push(sessionId)
+      else skip('appDeclined')
+    }
+  }
+  const shellsStopped: string[] = []
+  const shellChats = new Set<string>(
+    [...shells.shellPtyProcesses.keys()].map((key: string) => key.split('::')[0]),
+  )
+  // Two minutes old at least, so a chat just opened keeps the shell its pane is about to show.
+  for (const sessionId of shellChats)
+    shellsStopped.push(...nativeStopPrewarmShells(shells, lifecycle, sessionId, 120_000))
+  nativeCheckIdentity(env, found, request, settled)
+  const sessions = [...manager.sessions.values()]
+  return {
+    ok: lifecycle.config.idleTimeoutMs === policy,
+    verified: lifecycle.config.idleTimeoutMs === policy,
+    dispatch: state.dispatch,
+    action: 'idle',
+    identity: nativeIdentity(env, found, null),
+    idleMs: request.idleMs,
+    armed,
+    skipped,
+    shellsStopped,
+    engines: sessions.filter((s: any) => s.query).length,
+    shells: shells.shellPtyProcesses.size,
+    evidence: "the app's warm lifecycle reads its idle timeout through this policy",
+  }
+}
+
+/**
+ * Releases named chats now through the app's own pauseSession - what its idle timer and its
+ * engine cap call - so the chat shows as paused, not crashed, and its next message starts a fresh
+ * engine. Killing the engine process from outside instead leaves the chat on the app's "restart
+ * Claude Code" error (2026-10-07: 13 migrated chats). A chat whose engine is still starting is
+ * waited for, then paused; the app declines a chat with work in flight, and the result says so.
+ */
+async function nativePause(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  const lifecycle = nativeIdleLifecycle(manager)
+  const shells = nativeShellManager(manager)
+  const starting = nativeStartingIds(manager)
+  const find = (id: string): any => {
+    const direct = manager.sessions.get(id) ?? manager.sessions.get(`local_${id}`)
+    if (direct) return direct
+    const matches = [...manager.sessions.values()].filter((s: any) => s.cliSessionId === id)
+    return matches.length === 1 ? matches[0] : null
+  }
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  const deadline = Date.now() + request.waitMs
+  const results: any[] = []
+  for (const id of request.pauseIds) {
+    let session = find(id)
+    if (!session) {
+      results.push({ id, paused: false, why: 'not loaded in this app' })
+      continue
+    }
+    const sessionId = session.sessionId
+    while (
+      Date.now() < deadline &&
+      (starting.has(sessionId) || session.lifecycleState === 'initializing')
+    ) {
+      await sleep(250)
+      session = manager.sessions.get(sessionId) ?? session
+    }
+    nativeCheckIdentity(env, found, request, settled)
+    const hadEngine = session.query != null
+    if (hadEngine) {
+      state.dispatch = 'sent'
+      lifecycle.disarmIdle?.(sessionId)
+      await manager.pauseSession(sessionId, 'idle_timeout')
+    }
+    const after = manager.sessions.get(sessionId)
+    const paused = !after?.query
+    const shellsStopped = paused ? nativeStopPrewarmShells(shells, lifecycle, sessionId, 0) : []
+    results.push({
+      id,
+      sessionId,
+      paused,
+      hadEngine,
+      shellsStopped,
+      ...(paused ? {} : { why: 'the app kept the engine: work is in flight' }),
+    })
+  }
+  nativeCheckIdentity(env, found, request, settled)
+  return {
+    ok: results.every((r) => r.paused),
+    verified: true,
+    dispatch: state.dispatch,
+    action: 'pause',
+    identity: nativeIdentity(env, found, null),
+    results,
+    evidence: "each chat's engine read back after the app's own pauseSession",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -745,6 +967,8 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const manager = found.manager
   if (request.action === 'ultracode')
     return await nativeUltracode(env, found, request, settled, state)
+  if (request.action === 'idle') return await nativeIdle(env, found, request, settled, state)
+  if (request.action === 'pause') return await nativePause(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -816,6 +1040,12 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeInspectResult,
     nativeArchive,
     nativeUltracode,
+    nativeIdleLifecycle,
+    nativeShellManager,
+    nativeOnScreen,
+    nativeStopPrewarmShells,
+    nativeIdle,
+    nativePause,
     nativeRun,
     nativeRuntime,
   ]
@@ -824,8 +1054,31 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 }
 
 export function nativeProgram(request: NativeProgramRequest): string {
-  if (!['inspect', 'archive', 'ultracode'].includes(request.action))
+  if (!['inspect', 'archive', 'ultracode', 'idle', 'pause'].includes(request.action))
     throw Error('Unsupported native action')
+  if (
+    request.action === 'idle' &&
+    !(
+      Number.isSafeInteger(request.idleMs) &&
+      request.idleMs! >= 60_000 &&
+      request.idleMs! <= 86_400_000
+    )
+  ) {
+    throw Error('Idle requires idleMs between one minute and one day')
+  }
+  if (request.action === 'pause') {
+    if (
+      !Array.isArray(request.pauseIds) ||
+      request.pauseIds.length === 0 ||
+      !request.pauseIds.every((id) => /^(local_)?[A-Za-z0-9-]{8,160}$/.test(String(id)))
+    ) {
+      throw Error('Pause requires pauseIds: native (local_...) or CLI session ids')
+    }
+    if (
+      !(Number.isSafeInteger(request.waitMs) && request.waitMs! >= 0 && request.waitMs! <= 30_000)
+    )
+      throw Error('Pause requires waitMs between 0 and 30000')
+  }
   if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
   if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
   if (
@@ -844,6 +1097,9 @@ export function nativeProgram(request: NativeProgramRequest): string {
   }
   if (request.sourceAtLimit !== undefined && typeof request.sourceAtLimit !== 'boolean') {
     throw Error('sourceAtLimit must be a boolean')
+  }
+  if (request.sourceSuperseded !== undefined && typeof request.sourceSuperseded !== 'boolean') {
+    throw Error('sourceSuperseded must be a boolean')
   }
   if (
     request.leavingCliSessionIds !== undefined &&
