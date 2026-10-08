@@ -48,6 +48,7 @@ import { createNormalizer, LIMIT_LABEL, type Emission, type Normalizer } from '.
 import { answersWithPictures, checkAnswer, elicitationItem, ruleLine, type ElicitationItem } from './requests'
 import { nextStatus, SESSION_STATE_ENV, statusEventsFor, type StatusEvent, type StatusState } from './status'
 import type { ChatStore } from './store'
+import { userTurns } from './system-text'
 import { hostedOf, type HostConnection, type HostedParams, type HostedQuery } from '../host/client'
 import { mediaCache, toStoredImage } from '../media/cache'
 
@@ -1269,7 +1270,9 @@ ${swap.real}` }
       this.replayed.set(item.id, item)
       return
     }
-    this.emitEvent({ type: 'item.upsert', chatId: this.chat.id, item })
+    // A user turn goes out as the transcript reads it back (store.ts): a program's ping is its note from the first
+    // moment, never the person's bubble until a reload. 2026-10-08, owner: "Did you not apply any of these fixes here?"
+    for (const shown of item.kind === 'user' ? userTurns(item, null) : [item]) this.emitEvent({ type: 'item.upsert', chatId: this.chat.id, item: shown })
     if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return

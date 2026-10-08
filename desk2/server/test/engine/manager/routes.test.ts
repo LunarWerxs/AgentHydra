@@ -532,6 +532,17 @@ describe('POST /api/sessions/:sessionId/ping (AgentHydra\'s CliMayte note to the
     expect(past.body).toMatchObject({ ok: true, chatId: 'c-past' })
   })
 
+  test('the window gets the ping as a note the moment it is sent, never as a message of the person', async () => {
+    const t = await bootWith([stored('c-live', { sessionId: 'sess-live', cwd: temp('desk-cwd-') })])
+    const { events } = await listen(t.desk)
+    const note = '[AgentHydra · CliMayte] Not from the user. Ping 2, 1 update since 09:00:\n• w-1 "Example task": done, check passed.'
+    await call(t.desk, 'POST', '/api/sessions/sess-live/ping', { text: note })
+    const live = () => events.filter((e): e is Extract<ServerEvent, { type: 'item.upsert' }> => e.type === 'item.upsert' && e.chatId === 'c-live')
+    await waitFor(() => live().length > 0)
+    expect(live().map((e) => e.item.kind)).not.toContain('user')
+    expect(live()[0]!.item).toMatchObject({ kind: 'note', from: 'AgentHydra · CliMayte', text: 'Ping 2, 1 update since 09:00:\n• w-1 "Example task": done, check passed.' })
+  })
+
   test('404 for an unknown session, an archived chat and a CliMayte worker chat', async () => {
     const t = await bootWith([stored('c-arch', { sessionId: 'sess-arch', archived: true }), stored('c-work', { sessionId: 'sess-work', workerId: 'w1' })])
     for (const sid of ['sess-unknown', 'sess-arch', 'sess-work']) {
