@@ -68,6 +68,7 @@ def _isolated_home(tmp_path, monkeypatch, request):
 
     monkeypatch.setattr(_free_route, "_LOGGED", set())
     monkeypatch.setattr(_free_route, "_ACTIVE", 0)
+    monkeypatch.setattr(_free_route, "_SENT", [])
     _faults.clear()
     # Crawl marks and provider load are process-wide (selection._CRAWL, _INFLIGHT, _SLOW): one test's crawling model
     # would move the next test's task off it after one turn.

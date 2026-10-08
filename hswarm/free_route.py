@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -28,6 +29,11 @@ WAIT_CAP_S = 240  # the longest a free account may hold a task before it goes ba
 HAIKU_PROFILES = ("routine", "general")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks on a free account right now, across every job of this process (route_via_free_max)
+# When this process last sent tasks: free_status shows a sent task's account busy once the daemon has started it
+# (a status read and one POST, well under a second), so until then the task is subtracted from the idle count. Kept
+# short: a sent task that free_status already shows is subtracted twice for this long, as _ACTIVE once was for good.
+_SENT: list[float] = []
+UNSEEN_S = 2.0
 SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, with no prose and no code fence:"
 
 
@@ -171,12 +177,18 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     except _ERRORS as e:
         _say(job_id, f"free accounts unavailable ({type(e).__name__}); tasks keep their API route")
         return None, None
-    # _idle already leaves out the accounts this process's own tasks hold, so _ACTIVE is checked only against the
-    # cap: comparing it with _idle counted each of them twice and stopped a process at 3 of 6 accounts.
-    if not isinstance(status, dict) or _idle(status) == 0 or _ACTIVE >= config.ROUTE_VIA_FREE_MAX:
+    # _idle already leaves out the accounts this process's running tasks hold (comparing _ACTIVE with it counted each
+    # of them twice and stopped a process at 3 of 6 accounts). What it cannot show yet is a task sent moments ago:
+    # tasks that read one snapshot at once would all take its one idle account, so those are subtracted here.
+    now = time.monotonic()
+    _SENT[:] = [t for t in _SENT if now - t < UNSEEN_S]
+    if not isinstance(status, dict) or _idle(status) - len(_SENT) <= 0 or _ACTIVE >= config.ROUTE_VIA_FREE_MAX:
         return None, None
-    _ACTIVE += 1  # taken before any await below
+    _SENT.append(now)
+    _ACTIVE += 1  # both taken before any await below
     try:
         return await _serve(job_id, task)
     finally:
         _ACTIVE -= 1
+        if now in _SENT:  # a finished task's account is free again, however recently it was sent
+            _SENT.remove(now)

@@ -261,7 +261,7 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
       model: result.model,
       response: result.response ?? '',
     })
-    if (result.warnings?.length) it.s.warnings = result.warnings
+    if (result.warnings?.length) it.s.warnings = [...(it.s.warnings ?? []), ...result.warnings]
     return
   }
   it.s.state = 'failed'
@@ -394,15 +394,18 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
         !(e instanceof DeskError && e.status === 400 && /Unknown operation option/.test(e.message))
       )
         throw e
-      const {
-        model: _model,
-        webSearch: _web,
-        ...plain
-      } = body as typeof body & {
+      const { model, webSearch, ...plain } = body as typeof body & {
         model?: unknown
         webSearch?: unknown
       }
       await desk('POST', '/jobs', plain)
+      // Said on the answer, so a caller that asked for a search never trusts one that did not search.
+      const dropped = [model && `model ${model}`, webSearch && 'web search'].filter(Boolean)
+      if (dropped.length)
+        it.s.warnings = [
+          ...(it.s.warnings ?? []),
+          `This Desk 2 is older than the daemon and refused ${dropped.join(' and ')}: sent without, so the answer used the account's usual model and no web search.`,
+        ]
     }
     lastPicked.set(account.id, Date.now())
     Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })

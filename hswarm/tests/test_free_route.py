@@ -207,6 +207,17 @@ def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
     assert res is not None and len(f.chats) == 1
 
 
+def test_tasks_reading_one_snapshot_take_its_one_idle_account_once(fake):
+    # free_status cannot show a task sent a moment ago: two tasks that both read "one idle" must not both be sent.
+    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 5 + [ACCOUNTS[0]])
+
+    async def both():
+        return await asyncio.gather(free_route.consult("j1", _task()), free_route.consult("j2", _task(id="t1")))
+
+    results = asyncio.run(both())
+    assert len(f.chats) == 1 and sum(r is not None for r, _ in results) == 1
+
+
 def test_a_failed_free_task_hands_the_task_back(fake):
     fake(state="failed", reply="")
     res, note = _consult(_task())
