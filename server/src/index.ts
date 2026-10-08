@@ -23,7 +23,7 @@ import {
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
 import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
-import { startIdleSweep } from './claude-native-idle'
+import { startIdleSweep, stopIdleSweep } from './claude-native-idle'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
@@ -1200,6 +1200,7 @@ function stopBackgroundTimers(): void {
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
+  stopIdleSweep()
   stopExtraUsageGuard()
   stopStallSentinel()
   stopCliMaytePing()

@@ -7,13 +7,14 @@
 // by its own /api/* route and passes every /api/* guard on the way, exactly as a call to /api/* would.
 import { statSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import type { Env, Hono } from 'hono'
+import type { Context, Env, Hono } from 'hono'
 
 const BASE = '/ah'
 const NOT_BUILT =
   '<main style="font:16px system-ui;padding:2rem"><h1>Quick Instances is not built yet</h1><p>Run <code>bun run build</code> in <code>desk2</code>, then launch instance mode again.</p></main>'
 
 const isFile = (path: string) => statSync(path, { throwIfNoEntry: false })?.isFile() === true
+const notFound = (c: Context) => c.text('not found', 404, { 'cache-control': 'no-store' })
 
 export function serveQuickInstancesPage<E extends Env>(app: Hono<E>, dist: string): void {
   const root = resolve(dist)
@@ -30,10 +31,14 @@ export function serveQuickInstancesPage<E extends Env>(app: Hono<E>, dist: strin
     })
   })
   app.get(`${BASE}/*`, (c) => {
-    const path = decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)
+    let path: string
+    try {
+      path = decodeURIComponent(new URL(c.req.url).pathname).slice(BASE.length)
+    } catch {
+      return notFound(c) // a malformed %-escape names no file
+    }
     const file = resolve(root, `.${path}`)
-    if (!file.startsWith(root + sep) || !isFile(file))
-      return c.text('not found', 404, { 'cache-control': 'no-store' })
+    if (!file.startsWith(root + sep) || !isFile(file)) return notFound(c)
     // Vite names every built asset by its content, so those keep; anything else is checked each time.
     const cacheControl = path.startsWith('/assets/')
       ? 'public, max-age=31536000, immutable'

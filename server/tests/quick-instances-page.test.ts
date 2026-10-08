@@ -37,6 +37,7 @@ test('the shortcut gets the page at /instances and its built files under /ah/, n
   expect(asset.headers.get('cache-control')).toContain('immutable')
   // An encoded slash keeps the request on /ah/* while it decodes to a step out of the build.
   expect((await app.request('/ah/..%2foutside.txt')).status).toBe(404)
+  expect((await app.request('/ah/%E0')).status).toBe(404)
 })
 
 test("the page's /ah/api/* calls reach the daemon's /api/* behind the same guard", async () => {
