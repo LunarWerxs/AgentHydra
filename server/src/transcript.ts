@@ -570,6 +570,41 @@ function nameMatcher(pattern: string): (rel: string, name: string) => boolean {
   return (rel) => glob.match(rel)
 }
 
+/** A pattern {@link scanRootAsync} does not walk, scanned whole by the glob engine. */
+async function scanRootGlobAsync(pattern: string, cwd: string): Promise<string[]> {
+  const out: string[] = []
+  try {
+    // See scanRootSync: a dot directory can hold real transcripts.
+    for await (const rel of new Bun.Glob(pattern).scan({ cwd, onlyFiles: true, dot: true }))
+      out.push(rel)
+  } catch {
+    // A missing root is an empty one.
+  }
+  return out
+}
+
+/** One directory of {@link scanRootAsync}'s level walk: subdirectories go to `next`, matching
+ *  files to `out`. A directory that cannot be read is skipped. */
+async function scanDirAsync(
+  cwd: string,
+  rel: string,
+  matches: (rel: string, name: string) => boolean,
+  next: string[],
+  out: string[],
+): Promise<void> {
+  let entries: Dirent[]
+  try {
+    entries = await readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const e of entries) {
+    const child = rel ? `${rel}/${e.name}` : e.name
+    if (e.isDirectory()) next.push(child)
+    else if (e.isFile() && matches(child, e.name)) out.push(child)
+  }
+}
+
 /** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
  *
  *  A single Bun glob scan held the loop ~270 ms on a 60,000-file Claude store, and scanning one
@@ -577,34 +612,13 @@ function nameMatcher(pattern: string): (rel: string, name: string) => boolean {
  *  here a level at a time with pooled readdirs, which are real I/O and a turn of the loop apiece.
  *  A pattern that does not start with `**` is scanned whole, as before. */
 async function scanRootAsync(pattern: string, cwd: string): Promise<string[]> {
+  if (!pattern.startsWith('**/')) return scanRootGlobAsync(pattern, cwd)
   const out: string[] = []
-  if (!pattern.startsWith('**/')) {
-    try {
-      // See scanRootSync: a dot directory can hold real transcripts.
-      for await (const rel of new Bun.Glob(pattern).scan({ cwd, onlyFiles: true, dot: true }))
-        out.push(rel)
-    } catch {
-      // A missing root is an empty one.
-    }
-    return out
-  }
   const matches = nameMatcher(pattern)
   let level: string[] = ['']
   while (level.length) {
     const next: string[] = []
-    await mapPool(level, SCAN_READDIR_WIDTH, async (rel) => {
-      let entries: Dirent[]
-      try {
-        entries = await readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true })
-      } catch {
-        return
-      }
-      for (const e of entries) {
-        const child = rel ? `${rel}/${e.name}` : e.name
-        if (e.isDirectory()) next.push(child)
-        else if (e.isFile() && matches(child, e.name)) out.push(child)
-      }
-    })
+    await mapPool(level, SCAN_READDIR_WIDTH, (rel) => scanDirAsync(cwd, rel, matches, next, out))
     level = next
   }
   return out

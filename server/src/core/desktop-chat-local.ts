@@ -155,6 +155,40 @@ function readDeskChats(home: string): DeskChat[] {
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
 
+/** A Hydra Desk chat as list() reports it, once its transcript was looked for (`found`). */
+function deskChatOf(
+  d: DeskChat,
+  home: string,
+  chat: { id: string; sessionId: string; cwd: string | null },
+  found: { project: string | null; size: number },
+  now: number,
+): LocalChat {
+  const { cwd } = chat
+  const archived = d.archived === true
+  const at = num(d.updatedAt)
+  const title = str(d.title)
+  const model = str(d.model)
+  const created = num(d.createdAt)
+  return {
+    id: chat.id,
+    sessionId: chat.sessionId,
+    project: found.project,
+    account: str(d.account?.id) ?? 'default',
+    org: basename(home),
+    record: {
+      ...(title ? { title } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(model ? { model } : {}),
+      isArchived: archived,
+      ...(at !== null ? { lastActivityAt: at } : {}),
+      ...(created !== null ? { createdAt: created } : {}),
+    },
+    archived,
+    size: found.size,
+    ...(!archived && now - (at ?? 0) > DESK_IDLE_MS ? { holdBack: true } : {}),
+  }
+}
+
 export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
   const roots = opts.profileRoots ?? defaultProfileRoots
   const projectsDir = opts.projectsDir ?? join(homedir(), '.claude', 'projects')
@@ -275,29 +309,7 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
         const cwd = str(d.cwd)
         const { project, size } = await locate(dir, sessionId, cwd)
         if (project && dir !== projectsDir) dirs.set(sessionId, dir)
-        const archived = d.archived === true
-        const at = num(d.updatedAt)
-        const title = str(d.title)
-        const model = str(d.model)
-        const created = num(d.createdAt)
-        out.push({
-          id,
-          sessionId,
-          project,
-          account: str(d.account?.id) ?? 'default',
-          org: basename(home),
-          record: {
-            ...(title ? { title } : {}),
-            ...(cwd ? { cwd } : {}),
-            ...(model ? { model } : {}),
-            isArchived: archived,
-            ...(at !== null ? { lastActivityAt: at } : {}),
-            ...(created !== null ? { createdAt: created } : {}),
-          },
-          archived,
-          size,
-          ...(!archived && now - (at ?? 0) > DESK_IDLE_MS ? { holdBack: true } : {}),
-        })
+        out.push(deskChatOf(d, home, { id, sessionId, cwd }, { project, size }, now))
       }
     }
     return out

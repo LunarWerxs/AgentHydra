@@ -104,27 +104,39 @@ function waitingQuestion(items: readonly TranscriptItem[]): { question: string; 
   return { question: asks.map((x) => (typeof x.question === 'string' ? x.question : '')).filter(Boolean).join(' / '), options: labels }
 }
 
+type Move = Pick<OrchestratorRow, 'move' | 'reason'>
+
+/** A person, or the orchestrator itself, wrote in the chat within PERSON_QUIET_MS: its move then, or null. */
+function recentMove(chat: Subject, all: readonly TranscriptItem[], now: number): Move | null {
+  const person = last(all, 'user')
+  if (person && now - person.ts < PERSON_QUIET_MS) {
+    const who = chat.source === 'climayte' ? 'its dispatcher' : 'a person' // a CliMayte worker's messages come from the chat that runs it
+    return { move: 'leave', reason: `${who} wrote in it ${Math.max(1, Math.round((now - person.ts) / 60_000))} min ago` }
+  }
+  // The armed orchestrator's own "continue" (act.ts) is a note, never the person's; it waits as long before another.
+  const sent = last(all, 'note')
+  if (sent?.from === ORCHESTRATOR_FROM && now - sent.ts < PERSON_QUIET_MS)
+    return { move: 'watch', reason: `the orchestrator continued it ${Math.max(1, Math.round((now - sent.ts) / 60_000))} min ago` }
+  return null
+}
+
+/** A chat its account's usage limit stopped: on auto the engine moves it, otherwise it resumes after the reset. */
+function limitMove(chat: Subject, now: number): Move {
+  if (chat.accountAuto) return { move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
+  const left = chat.limitResetsAt === null ? null : Math.ceil((chat.limitResetsAt - now) / 60_000)
+  const when = left === null ? 'resume when it resets' : left > 0 ? `it resets in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}` : 'it has reset since'
+  return { move: 'resume-after-limit', reason: `its account hit the usage limit; ${when}` }
+}
+
 /** The move for one chat. `items` is its transcript, or null when it was not read (a working chat needs none). */
 export function classify(chat: Subject, items: readonly TranscriptItem[] | null, now: number): OrchestratorRow {
   const row = { id: chat.id, title: chat.title, cwd: chat.cwd, account: chat.account, source: chat.source, status: chat.status, updatedAt: chat.updatedAt }
   if (chat.status === 'working' || chat.status === 'starting') return { ...row, move: 'watch', reason: chat.activity ? `working: ${chat.activity}` : chat.status }
   if (chat.queuedCount > 0) return { ...row, move: 'watch', reason: `${chat.queuedCount} message(s) queued; the engine takes them up` }
   const all = items ?? []
-  const person = last(all, 'user')
-  if (person && now - person.ts < PERSON_QUIET_MS) {
-    const who = chat.source === 'climayte' ? 'its dispatcher' : 'a person' // a CliMayte worker's messages come from the chat that runs it
-    return { ...row, move: 'leave', reason: `${who} wrote in it ${Math.max(1, Math.round((now - person.ts) / 60_000))} min ago` }
-  }
-  // The armed orchestrator's own "continue" (act.ts) is a note, never the person's; it waits as long before another.
-  const sent = last(all, 'note')
-  if (sent?.from === ORCHESTRATOR_FROM && now - sent.ts < PERSON_QUIET_MS)
-    return { ...row, move: 'watch', reason: `the orchestrator continued it ${Math.max(1, Math.round((now - sent.ts) / 60_000))} min ago` }
-  if (chat.status === 'limited') {
-    if (chat.accountAuto) return { ...row, move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
-    const left = chat.limitResetsAt === null ? null : Math.ceil((chat.limitResetsAt - now) / 60_000)
-    const when = left === null ? 'resume when it resets' : left > 0 ? `it resets in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}` : 'it has reset since'
-    return { ...row, move: 'resume-after-limit', reason: `its account hit the usage limit; ${when}` }
-  }
+  const recent = recentMove(chat, all, now)
+  if (recent) return { ...row, ...recent }
+  if (chat.status === 'limited') return { ...row, ...limitMove(chat, now) }
   if (chat.status === 'error') return { ...row, move: 'retry-error', reason: short(chat.lastError || 'the last turn failed', 200) }
   const asking = waitingQuestion(all)
   if (asking) return { ...row, move: 'answer-question', reason: 'a question waits for an answer', ...asking }

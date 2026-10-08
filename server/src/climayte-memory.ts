@@ -181,50 +181,65 @@ export function treeSums(
   })
 }
 
+/** Add `pid` and every descendant in `kids` to `wanted`. */
+function markTree(pid: number, kids: Map<number, number[]>, wanted: Set<number>): void {
+  if (wanted.has(pid)) return
+  wanted.add(pid)
+  for (const c of kids.get(pid) ?? []) markTree(c, kids, wanted)
+}
+
+/** Windows: working sets of the trees, asked only of the processes in them; null when the process
+ *  table cannot be read. */
+function windowsTreeWorkingSets(pids: (number | null)[]): (number | null)[] | null {
+  const table = nativeProcessTable()
+  if (!table) return null
+  const wanted = new Set<number>()
+  const kids = new Map<number, number[]>()
+  for (const r of table) {
+    const l = kids.get(r.ppid)
+    if (l) l.push(r.pid)
+    else kids.set(r.ppid, [r.pid])
+  }
+  for (const p of pids) if (p !== null) markTree(p, kids, wanted)
+  const rows = table
+    .filter((r) => wanted.has(r.pid))
+    .map((r) => ({
+      pid: r.pid,
+      ppid: r.ppid,
+      workingSet: nativeProcessInfo(r.pid, INFO_WORKING_SET)?.workingSetSize ?? null,
+    }))
+  return treeSums(pids, rows)
+}
+
+/** One process's resident bytes from /proc, null when it cannot be read. */
+function linuxWorkingSet(pid: number): number | null {
+  let workingSet: number | null = null
+  try {
+    workingSet = Number(readFileSync(`/proc/${pid}/statm`, 'utf8').split(' ')[1]) * 4096
+    if (!Number.isFinite(workingSet)) workingSet = null
+  } catch {
+    // raced with an exit
+  }
+  return workingSet
+}
+
+/** Linux: working sets of the trees; null when the process table cannot be read. */
+function linuxTreeWorkingSets(pids: (number | null)[]): (number | null)[] | null {
+  const table = linuxProcTable()
+  if (!table) return null
+  const rows = table.map((r) => {
+    const workingSet = linuxWorkingSet(r.pid)
+    return { pid: r.pid, ppid: r.ppid, workingSet }
+  })
+  return treeSums(pids, rows)
+}
+
 /** Working set of each pid's tree on this machine, null where it cannot be read. */
 export function readTreeWorkingSets(pids: (number | null)[]): (number | null)[] {
   const none = pids.map(() => null)
   try {
-    if (process.platform === 'win32') {
-      const table = nativeProcessTable()
-      if (!table) return none
-      const wanted = new Set<number>()
-      const kids = new Map<number, number[]>()
-      for (const r of table) {
-        const l = kids.get(r.ppid)
-        if (l) l.push(r.pid)
-        else kids.set(r.ppid, [r.pid])
-      }
-      const walk = (pid: number): void => {
-        if (wanted.has(pid)) return
-        wanted.add(pid)
-        for (const c of kids.get(pid) ?? []) walk(c)
-      }
-      for (const p of pids) if (p !== null) walk(p)
-      const rows = table
-        .filter((r) => wanted.has(r.pid))
-        .map((r) => ({
-          pid: r.pid,
-          ppid: r.ppid,
-          workingSet: nativeProcessInfo(r.pid, INFO_WORKING_SET)?.workingSetSize ?? null,
-        }))
-      return treeSums(pids, rows)
-    }
-    if (process.platform === 'linux') {
-      const table = linuxProcTable()
-      if (!table) return none
-      const rows = table.map((r) => {
-        let workingSet: number | null = null
-        try {
-          workingSet = Number(readFileSync(`/proc/${r.pid}/statm`, 'utf8').split(' ')[1]) * 4096
-          if (!Number.isFinite(workingSet)) workingSet = null
-        } catch {
-          // raced with an exit
-        }
-        return { pid: r.pid, ppid: r.ppid, workingSet }
-      })
-      return treeSums(pids, rows)
-    }
+    if (process.platform === 'win32') return windowsTreeWorkingSets(pids) ?? none
+    if (process.platform === 'linux') return linuxTreeWorkingSets(pids) ?? none
   } catch {
     // unreadable: every tree reserves in full
   }
