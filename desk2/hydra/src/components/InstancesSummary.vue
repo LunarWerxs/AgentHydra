@@ -7,7 +7,7 @@
 // the sparkline; the per-source spend is fetched only the first time the card is opened.
 import type { FleetUsageHistory } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
-import { useStorage } from '@vueuse/core'
+import { useElementSize, useStorage } from '@vueuse/core'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
@@ -82,22 +82,28 @@ const hasFleetData = computed(() => points.value.some((p) => p.week !== null || 
 const SPARK: PlotBox = { left: 0, top: 1, width: 120, height: 22 }
 const sparkPaths = computed(() => segmentPaths(weekValues.value, SPARK, 100))
 
-const FLEET_BOX: PlotBox = { left: 34, top: 8, width: 558, height: 128 }
-const FLEET_VIEW = { width: 600, height: 144 }
+// The chart is drawn at the card's own width, one SVG unit per pixel, so it fills the card at any size.
+const fleetEl = ref<HTMLElement | null>(null)
+const { width: fleetWidth } = useElementSize(fleetEl)
+const FLEET_HEIGHT = 160
+const fleetView = computed(() => ({ width: Math.max(320, Math.round(fleetWidth.value) || 600), height: FLEET_HEIGHT }))
+const fleetBox = computed<PlotBox>(() => ({ left: 34, top: 8, width: fleetView.value.width - 42, height: FLEET_HEIGHT - 16 }))
 const fleetMax = computed(() => {
   const all = [...weekValues.value, ...sessionValues.value].filter((v): v is number => v !== null)
   return axisMax(Math.max(100, ...all))
 })
 const fleetTicks = computed(() => ticks(fleetMax.value))
-const yAt = (v: number) => FLEET_BOX.top + FLEET_BOX.height - (v / fleetMax.value) * FLEET_BOX.height
-const weekPaths = computed(() => segmentPaths(weekValues.value, FLEET_BOX, fleetMax.value))
-const sessionPaths = computed(() => segmentPaths(sessionValues.value, FLEET_BOX, fleetMax.value))
+const yAt = (v: number) =>
+  fleetBox.value.top + fleetBox.value.height - (v / fleetMax.value) * fleetBox.value.height
+const weekPaths = computed(() => segmentPaths(weekValues.value, fleetBox.value, fleetMax.value))
+const sessionPaths = computed(() => segmentPaths(sessionValues.value, fleetBox.value, fleetMax.value))
 const pctOrGap = (v: number | null) => (v === null ? t('instances.summary.noSample') : `${Math.round(v)}%`)
 const fleetHits = computed(() => {
   const n = points.value.length
-  const slot = FLEET_BOX.width / Math.max(1, n)
+  const box = fleetBox.value
+  const slot = box.width / Math.max(1, n)
   return points.value.map((p, i) => ({
-    x: FLEET_BOX.left + (i / Math.max(1, n - 1)) * FLEET_BOX.width - slot / 2,
+    x: box.left + (i / Math.max(1, n - 1)) * box.width - slot / 2,
     tip: t('instances.summary.tipPoint', {
       time: formatAt(p.t),
       week: pctOrGap(p.week),
@@ -174,28 +180,28 @@ const tokensEmpty = computed(
         <p v-else-if="!hasFleetData" class="py-6 text-center text-2xs text-muted-foreground">
           {{ $t('instances.summary.noData') }}
         </p>
-        <template v-else>
+        <div v-else ref="fleetEl">
           <svg
-            :viewBox="`0 0 ${FLEET_VIEW.width} ${FLEET_VIEW.height}`"
+            :viewBox="`0 0 ${fleetView.width} ${fleetView.height}`"
             class="h-40 w-full overflow-visible"
             role="img"
             :aria-label="$t('instances.summary.fleetTitle')"
           >
             <g v-for="tk in fleetTicks" :key="tk">
               <line
-                :x1="FLEET_BOX.left"
-                :x2="FLEET_BOX.left + FLEET_BOX.width"
+                :x1="fleetBox.left"
+                :x2="fleetBox.left + fleetBox.width"
                 :y1="yAt(tk)"
                 :y2="yAt(tk)"
                 class="stroke-border"
                 stroke-width="1"
               />
               <text
-                :x="FLEET_BOX.left - 6"
+                :x="fleetBox.left - 6"
                 :y="yAt(tk) + 3"
                 text-anchor="end"
                 class="fill-muted-foreground"
-                font-size="9"
+                font-size="10"
               >{{ tk }}%</text>
             </g>
             <path
@@ -220,15 +226,15 @@ const tokensEmpty = computed(
               v-for="(h, i) in fleetHits"
               :key="i"
               :x="h.x"
-              :y="FLEET_BOX.top"
-              :width="FLEET_BOX.width / Math.max(1, points.length)"
-              :height="FLEET_BOX.height"
+              :y="fleetBox.top"
+              :width="fleetBox.width / Math.max(1, points.length)"
+              :height="fleetBox.height"
               fill="transparent"
             >
               <title>{{ h.tip }}</title>
             </rect>
           </svg>
-          <div class="mt-0.5 flex justify-between text-3xs text-muted-foreground tabular-nums">
+          <div class="mt-0.5 flex justify-between ps-[34px] text-3xs text-muted-foreground tabular-nums">
             <span>{{ fleetSpan.first }}</span>
             <span>{{ fleetSpan.last }}</span>
           </div>
@@ -238,7 +244,7 @@ const tokensEmpty = computed(
               {{ l.label }}
             </li>
           </ul>
-        </template>
+        </div>
       </div>
 
       <div>
