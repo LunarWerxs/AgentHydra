@@ -422,7 +422,7 @@ onBeforeUnmount(() => {
                 v-else-if="r.id === 'workingMark'"
                 role="radiogroup"
                 aria-label="Working animation"
-                class="flex shrink-0 gap-1.5"
+                class="grid shrink-0 grid-cols-4 gap-1.5"
                 @keydown="onMarkKey"
               >
                 <button

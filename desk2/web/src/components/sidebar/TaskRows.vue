@@ -100,7 +100,7 @@ const hot = ref<string | null>(null)
         <Cloud class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
         <span class="sr-only">{{ onPc(n.worker.pc) }}</span>
       </span>
-      <!-- Its account, in the colour of its dot on the row's CliMayte badge (account-tone.ts). -->
+      <!-- Its account, in that account's colour (account-tone.ts). -->
       <span v-if="n.worker.account" class="shrink-0 text-[11px] tnum" :style="{ color: accountTone(n.worker.account) ?? undefined }">{{ n.worker.account }}</span>
       <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>
       <span class="shrink-0 text-[11px] text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>

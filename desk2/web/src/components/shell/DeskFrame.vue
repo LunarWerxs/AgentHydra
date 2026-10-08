@@ -161,24 +161,47 @@ const storage = typeof localStorage === 'undefined' ? null : localStorage
 const savedWidth = Number(storage?.getItem(SIDEBAR_KEY))
 // A width saved before the minimum rose to 250 (Sidebar.vue's MIN_WIDTH) is raised to it.
 const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(250, savedWidth) : 288)
-// Open or hidden (header toggle, Ctrl+B), remembered; the width animates 300ms on the snap ease.
+// Open or hidden (header toggle, Ctrl+B), remembered; it slides 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
-const sliding = ref(false)
+// The slide moves layers, never a width (owner, 2026-10-08: "the sidebar does not animate open/closed"): animating
+// the column's width laid the whole chat out again on every frame, which a real transcript cannot do in 16ms, so it
+// jumped. While it slides the sidebar lies over the stage and both move by transform, the stage at the window's
+// full width; the grid takes its new columns once, when the slide ends. 'from' is drawn first with no transition,
+// 'to' animates. Pinning the hover flyout slides the stage alone: the sidebar is already on screen.
+const slide = ref<{ open: boolean; pin: boolean; at: 'from' | 'to' } | null>(null)
+const sliding = computed(() => slide.value !== null)
 let slideTimer: ReturnType<typeof setTimeout> | null = null
 function toggleSidebar(open = !sidebarOpen.value) {
   if (open === sidebarOpen.value) return
-  // Pinning the flyout open: it is already on screen, so the layout snaps under it without a slide.
-  const fromPeek = open && peekOpen.value
+  const pin = open && peekOpen.value
   peek.close()
   peekLive.value = false
   peekArmed = false
-  sliding.value = !fromPeek
+  slide.value = { open, pin, at: 'from' }
   sidebarOpen.value = open
   storage?.setItem(OPEN_KEY, open ? '1' : '0')
   if (slideTimer) clearTimeout(slideTimer)
-  if (!fromPeek) slideTimer = setTimeout(() => (sliding.value = false), 320)
+  void nextTick(() => {
+    // The 'from' places must be laid out before 'to' changes them, or there is nothing to animate from.
+    void stageEl.value?.offsetWidth
+    if (slide.value?.at === 'from') slide.value = { ...slide.value, at: 'to' }
+  })
+  slideTimer = setTimeout(() => (slide.value = null), 340)
 }
+const stageEl = ref<HTMLElement | null>(null)
+/** Where the sidebar and the stage sit during a slide (px from their resting places); undefined at rest. */
+const slideX = computed(() => {
+  const s = slide.value
+  if (!s) return undefined
+  const w = sidebarWidth.value
+  const end = s.at === 'to'
+  // A pin starts with the flyout already out; the stage starts where it was either way.
+  const sidebarOut = end ? s.open : !s.open || s.pin
+  const stagePushed = end ? s.open : !s.open
+  return { sidebar: sidebarOut ? 0 : -w, stage: stagePushed ? w : 0 }
+})
+const SLIDE_EASE = 'transition-transform duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none'
 const sidebar = ref<InstanceType<typeof Sidebar> | null>(null)
 
 // Collapsed, the sidebar slides in over the content (the layout stays) while the pointer is on the
@@ -724,10 +747,11 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       @settings="src.openSettings()"
     />
 
+    <!-- Sliding, it lies over the stage at its full width and moves by transform (slideX); at rest it is the grid's first column. -->
     <div
-      class="col-start-1 row-span-2 row-start-1 h-full overflow-hidden"
-      :class="sliding ? 'transition-[width] duration-(--dur-slow) ease-(--ease-snap)' : ''"
-      :style="{ width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
+      class="h-full overflow-hidden"
+      :class="slideX ? ['absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : 'col-start-1 row-span-2 row-start-1'"
+      :style="slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
       :inert="!sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
     >
@@ -755,7 +779,14 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
     <!-- Hydra Desk 2: the chat side and the page side (AgentHydra or the Dev servers page) on one track; their buttons
          slide it (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
     <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
-    <div class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden" data-testid="stage" @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)">
+    <div
+      ref="stageEl"
+      class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden"
+      :class="slideX && ['will-change-transform', slide?.at === 'to' && SLIDE_EASE]"
+      :style="slideX && { transform: `translateX(${slideX.stage}px)` }"
+      data-testid="stage"
+      @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)"
+    >
       <div
         class="flex h-full w-[200%] transition-transform duration-420 ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none"
         :style="{ transform: pageOpen ? 'translateX(-50%)' : 'translateX(0)' }"
@@ -798,7 +829,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :fold-thinking="!showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />

@@ -740,7 +740,8 @@ fn webview8(
 }
 
 /// Turns on WebView2's non-client region support for the main view: the page's `app-region: drag` areas drag the
-/// window, and double-click and the right-click system menu work there too. False on a runtime too old to have it.
+/// window, and double-click and the right-click system menu work there too. It applies from the next navigation, so
+/// it is called before the page loads. False on a runtime too old to have it.
 fn enable_non_client_regions(view: &wry::WebView) -> bool {
     use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings9;
     use windows::core::Interface;
@@ -1095,7 +1096,7 @@ fn run(
     let zoomed = window.is_maximized();
     let origin = origin_of(&url);
     let mut ctx = wry::WebContext::new(Some(udf.clone()));
-    let webview = build_webview(&mut ctx, &window, &url, &origin, &proxy, !side);
+    let (webview, regions) = build_webview(&mut ctx, &window, &url, &origin, &proxy, !side);
 
     if smoke {
         start_smoke_deadline();
@@ -1117,6 +1118,7 @@ fn run(
         dirty: None,
         minimized: false,
         ready_done: false,
+        regions,
         caption_gone: false,
         maximized: zoomed,
         pages: std::collections::HashMap::new(),
@@ -1162,7 +1164,7 @@ fn build_webview(
     origin: &str,
     proxy: &tao::event_loop::EventLoopProxy<Ev>,
     main: bool,
-) -> wry::WebView {
+) -> (wry::WebView, bool) {
     use wry::{NewWindowResponse, WebViewBuilder};
 
     let nav_origin = origin.to_string();
@@ -1177,8 +1179,11 @@ fn build_webview(
     } else {
         "window.agentHydraHost=Object.freeze({browser:1,audio:1});"
     };
-    WebViewBuilder::new_with_web_context(ctx)
-        .with_url(url)
+    // The main view loads its page only once non-client regions are on: WebView2 applies that setting from the next
+    // navigation, so turned on at the page's `ready` it would have waited for a reload before a drag worked.
+    let builder = WebViewBuilder::new_with_web_context(ctx);
+    let builder = if main { builder } else { builder.with_url(url) };
+    let view = builder
         .with_background_color((BG.0, BG.1, BG.2, 255))
         .with_devtools(true)
         .with_initialization_script(host)
@@ -1219,7 +1224,12 @@ fn build_webview(
             });
         })
         .build(window)
-        .expect("webview")
+        .expect("webview");
+    let regions = main && enable_non_client_regions(&view);
+    if main {
+        let _ = view.load_url(url);
+    }
+    (view, regions)
 }
 
 fn start_smoke_deadline() {
@@ -1266,6 +1276,8 @@ struct Host {
     minimized: bool,
     /// The page's first `ready` has been answered: the caption is taken off once, later ones only re-send the state.
     ready_done: bool,
+    /// The main view's non-client regions are on, so the page's `app-region: drag` areas drag the window.
+    regions: bool,
     /// Windows' caption is off (non-client regions on and caption_subclass in).
     caption_gone: bool,
     /// The main window's maximized state, as the page was last told it.
@@ -1322,8 +1334,7 @@ impl Host {
     fn ready(&mut self) {
         if !self.ready_done {
             self.ready_done = true;
-            self.caption_gone =
-                enable_non_client_regions(&self.webview) && win::remove_caption(self.hwnd);
+            self.caption_gone = self.regions && win::remove_caption(self.hwnd);
         }
         self.send_window_state();
     }

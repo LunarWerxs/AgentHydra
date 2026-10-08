@@ -313,6 +313,14 @@ html.motion-paused *:not([data-state])::before,
 html.motion-paused *:not([data-state])::after {
   animation-play-state: paused !important;
 }
+/* The working mark (transcript/working-mark.css) keeps moving in a window that is on screen but not focused (owner,
+   2026-10-08: "the animation, seems to pause when I click out of it"); hidden or minimized it holds still with the rest.
+   A few small dots on transform and opacity: the compositor's cost, nothing more. */
+html.motion-paused:not(.motion-hidden) .wm *,
+html.motion-paused:not(.motion-hidden) .wm *::before,
+html.motion-paused:not(.motion-hidden) .wm *::after {
+  animation-play-state: running !important;
+}
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse {
     animation: none;

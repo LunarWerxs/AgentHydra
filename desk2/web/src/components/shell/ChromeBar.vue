@@ -13,7 +13,9 @@ import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-updat
 // every session of both PCs), CliMayte (each session's running CliMayte tasks listed under it,
 // sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue)
 // and Clean sidebar (rows without their account number and times, sidebar/clean.ts).
-// Each shows when it is on: AgentHydra pressed, the other four blue. A thin divider sets Cloud and the toggles after
+// Each shows when it is on: AgentHydra pressed, Cloud, CliMayte and Dev servers blue. Clean sidebar is the other
+// way round: on by default and plain, blue while it is off and the rows show their details (owner, 2026-10-08:
+// "invert this. Make it default on. not blue and blue is off"). A thin divider sets Cloud and the toggles after
 // it apart from Menu and Hide sidebar. AgentHydra and Dev servers sit at the right end, after another: with the sidebar open, at its right edge; hidden, right after Clean sidebar. The bar's
 // width follows the sidebar's slide (`sliding`, DeskFrame's 300 ms snap), so the two glide left and right with it.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame).
@@ -87,7 +89,8 @@ const COLLAPSED_WIDTH = 246
       </button>
     </Tip>
     <Tip :label="cleanOn ? 'Show account numbers and times in the sidebar' : 'Clean sidebar: titles only, no account numbers or times'">
-      <button type="button" :class="[BTN_SHAPE, cleanOn ? 'text-accent-text' : 'text-text']" aria-label="Clean sidebar" :aria-pressed="!!cleanOn" @click="emit('clean')">
+      <!-- Pressed and blue while the details show, the state that is not the default. -->
+      <button type="button" :class="[BTN_SHAPE, cleanOn ? 'text-text' : 'text-accent-text']" aria-label="Account numbers and times in the sidebar" :aria-pressed="!cleanOn" @click="emit('clean')">
         <component :is="shellGlyphs.cleanSidebar" class="size-4" />
       </button>
     </Tip>

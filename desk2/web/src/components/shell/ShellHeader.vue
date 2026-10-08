@@ -117,6 +117,11 @@ const connectionsShown = computed(() => showConnectionsChip(connectorList.value)
 const logoFailed = ref(false)
 const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
 
+// The running-tasks count on Background tasks: gray, not the accent (owner, 2026-10-08: "an annoying blue icon, make it
+// grey"); a solid gray so the icon under its corner does not show through.
+const COUNT_BADGE =
+  'tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))] px-0.75 text-[10px] font-medium leading-none text-text'
+
 const PANE_BTN =
   'flex size-[26px] items-center justify-center rounded-[var(--radius-6)] text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text aria-pressed:bg-fill-selected aria-pressed:text-text aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-fill-hover aria-expanded:text-text'
 </script>
@@ -225,7 +230,7 @@ const PANE_BTN =
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
           <ListChecks class="size-4" />
-          <span v-if="tasksRunning" class="tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.75 text-[10px] font-medium leading-none text-white">{{ tasksRunning }}</span>
+          <span v-if="tasksRunning" :class="COUNT_BADGE">{{ tasksRunning }}</span>
         </button>
       </Tip>
       <Tip label="Changes">
@@ -262,16 +267,17 @@ const PANE_BTN =
         </span>
       </Tip>
     </div>
+    <!-- Session details first, Background tasks at the end (owner, 2026-10-08: "swap these buttons"). -->
     <div v-else-if="external" class="flex shrink-0 items-center gap-1">
-      <Tip label="Background tasks">
-        <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
-          <ListChecks class="size-4" />
-          <span v-if="tasksRunning" class="tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-accent px-0.75 text-[10px] font-medium leading-none text-white">{{ tasksRunning }}</span>
-        </button>
-      </Tip>
       <Tip :label="headerOpen ? 'Hide session details' : 'Show session details'">
         <button type="button" :class="PANE_BTN" :aria-label="headerOpen ? 'Hide session details' : 'Show session details'" @click="toggleSessionHeader">
           <component :is="headerOpen ? PanelTopClose : PanelTopOpen" class="size-4" />
+        </button>
+      </Tip>
+      <Tip label="Background tasks">
+        <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">
+          <ListChecks class="size-4" />
+          <span v-if="tasksRunning" :class="COUNT_BADGE">{{ tasksRunning }}</span>
         </button>
       </Tip>
     </div>

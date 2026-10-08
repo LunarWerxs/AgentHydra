@@ -1,6 +1,5 @@
-// Hydra Desk 2: the colour a CliMayte account is drawn in, in the sidebar: the dots on a row's CliMayte badge and the
-// account on each task line, so a dot and the lines it stands for match (owner, 2026-10-06: "CLImate options get their
-// own icon with accounts and colors"). AgentHydra's instance palette (hydra/src/lib/instance-appearance.ts COLOR_VALUES)
+// Hydra Desk 2: the colour a CliMayte account is drawn in, in the sidebar: the account on each task line (owner,
+// 2026-10-06: "CLImate options get their own icon with accounts and colors"; the badge's dots went on 2026-10-08). AgentHydra's instance palette (hydra/src/lib/instance-appearance.ts COLOR_VALUES)
 // without its blue and indigo, which are HSwarm's alone in the sidebar (owner, 2026-10-05: "Only the HSwarm items
 // should have blue"), and without the red, green and gray a task line's mark uses for failed, done and queued. Fixed
 // values, the same in either theme, as AgentHydra's are. Pure, so the window and the tests share it.

@@ -3,11 +3,12 @@
 // CliMayte as its workflows: one card per running unit (a CliMayte group, a lone worker, or one of
 // this chat's background tasks), its phases with progress squares and the agent table, then the
 // finished ones behind 'Finished N' (with nothing running, the panel is that row alone and All sits
-// beside its trash). A worker's own estimate (its `ETA:` line) shows after its time,
+// at its end). A worker's own estimate (its `ETA:` line) shows after its time,
 // '1m 20s / ~5m', and a running unit says about how long is left by its latest one. Stop cancels the
 // unit's active workers through AgentHydra, or stops a Desk chat's background task through the chat
 // (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
-// that for every running unit listed. The trash only hides finished units here.
+// that for every running unit listed. The trash in the header, beside Expand and Close (owner, 2026-10-08: "move
+// this here", from the Finished row), only hides finished units here.
 import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
@@ -163,6 +164,11 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
   <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-[13px] leading-5" aria-label="Background tasks">
     <header class="flex h-8.5 shrink-0 items-center ps-2 pe-1">
       <h2 class="min-w-0 flex-1 truncate font-normal text-(--text-2)">Background tasks</h2>
+      <Tip v-if="lists.finished.length" label="Clear finished" side="bottom">
+        <button type="button" :class="ICON_BTN" aria-label="Clear finished" @click="clearFinished(lists.finished.flatMap((u) => u.keys))">
+          <Trash2 class="size-3.5" :stroke-width="1.5" />
+        </button>
+      </Tip>
       <Tip :label="expanded ? 'Restore' : 'Expand'" side="bottom">
         <button type="button" :class="ICON_BTN" :aria-label="expanded ? 'Restore' : 'Expand'" @click="emit('toggle-expand')">
           <component :is="expanded ? Minimize2 : Maximize2" class="size-3.5" :stroke-width="1.5" />
@@ -307,16 +313,6 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
         </button>
         <span class="flex-1" />
         <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-(--text)' : 'text-(--text-muted)']" :aria-pressed="all" @click="toggleAll">All</button>
-        <Tip v-if="lists.finished.length" label="Clear finished" side="left">
-          <button
-            type="button"
-            class="flex size-6 items-center justify-center rounded-(--radius-6) text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
-            aria-label="Clear finished"
-            @click="clearFinished(lists.finished.flatMap((u) => u.keys))"
-          >
-            <Trash2 class="size-3.5" :stroke-width="1.5" />
-          </button>
-        </Tip>
       </div>
 
       <ul v-if="finishedOpen" class="mt-1 flex flex-col" aria-label="Finished">

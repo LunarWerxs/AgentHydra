@@ -53,7 +53,7 @@ export interface SubBadge {
   total: number
   /** The titles its tooltip lists, a CliMayte task after its account (`#68 · title`). */
   titles: string[]
-  /** The accounts its items run on (CliMayte's; HSwarm's jobs have none): its badge draws a dot per account in that account's colour (account-tone.ts). */
+  /** The accounts its items run on (CliMayte's; HSwarm's jobs have none): its badge's tooltip and label name them. */
   accounts: SubAccount[]
   /** Its lines are open under the row. */
   open: boolean

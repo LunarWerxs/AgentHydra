@@ -1,6 +1,7 @@
-/* The working mark (parts/WorkingMark.vue): four looks in Claude's orange (#d97757, --brand-hover), each slow and
-   drawn with transform and opacity only, so a long turn costs the compositor and nothing else. Every look sits
-   in the 16x20 cell the Claude Code spinner had. */
+/* The working mark (parts/WorkingMark.vue): seven looks in Claude's orange (#d97757, --brand-hover), each drawn with
+   transform and opacity only, so a long turn costs the compositor and nothing else. Every look glides: something is
+   always moving on an ease that starts and ends soft, never a jump then a rest (owner, 2026-10-08: "it needs to be
+   much more fluid-feeling"). Every look sits in the 16x20 cell the Claude Code spinner had. */
 .wm {
   position: relative;
   display: inline-flex;
@@ -32,52 +33,53 @@
   background: currentColor;
 }
 
-/* Square: three dots on the corners of a square, the fourth empty. The dot behind the gap steps into it, then
-   the next, so the gap travels backwards round the square while the dots climb forwards. One loop is twelve
-   steps (each dot moves on every third); every dot runs the same path, started a whole number of steps apart. */
+/* Square: three dots on the corners of a square, the fourth empty. The dot behind the gap glides into it, then the
+   next, so the gap travels backwards round the square while the dots climb forwards. One loop is twelve glides of
+   200ms back to back (each dot moves on every third), so exactly one dot is always on its way. Every dot runs the
+   same path, started a whole number of glides apart. */
 .wm[data-variant='square'] .wm-dot {
   width: 4px;
   height: 4px;
   border-radius: 9999px;
   background: currentColor;
-  animation: wm-square 3.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  animation: wm-square 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(1) {
-  animation-delay: -1.8s;
+  animation-delay: -1.2s;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(2) {
-  animation-delay: -0.6s;
+  animation-delay: -0.4s;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(3) {
-  animation-delay: -3s;
+  animation-delay: -2s;
 }
 @keyframes wm-square {
   0% {
     transform: translate(0, 0);
   }
-  4.5%,
+  8.333%,
   25% {
     transform: translate(8px, 0);
   }
-  29.5%,
+  33.333%,
   50% {
     transform: translate(8px, 8px);
   }
-  54.5%,
+  58.333%,
   75% {
     transform: translate(0, 8px);
   }
-  79.5%,
+  83.333%,
   100% {
     transform: translate(0, 0);
   }
 }
 
-/* Orbit: three dots going round a small circle on an ease that speeds up and slows down, a beat apart, so they
-   bunch on the climb and spread on the way down. Each dot rides an arm the size of the box that turns. */
+/* Orbit: three dots going round a small circle a beat apart, fading along the tail. Each dot rides an arm the size
+   of the box that turns; the ease only leans, so the turn never stalls. */
 .wm[data-variant='orbit'] .wm-dot {
   inset: 0;
-  animation: spin 2.4s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite;
+  animation: spin 1.6s cubic-bezier(0.45, 0.15, 0.55, 0.85) infinite;
 }
 .wm[data-variant='orbit'] .wm-dot::before {
   content: '';
@@ -91,33 +93,71 @@
   background: currentColor;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(1) {
-  animation-delay: -0.3s;
+  animation-delay: -0.24s;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(2) {
-  animation-delay: -0.15s;
-  opacity: 0.75;
+  animation-delay: -0.12s;
+  opacity: 0.65;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(3) {
-  opacity: 0.5;
+  opacity: 0.35;
 }
 
-/* Spark: the Claude Code spinner (a strip of glyphs stepped through by codeSpinnerSpin, style.css). The
-   keyframes step 2em at a time: 2em of the strip's 10px is one 20px glyph cell. */
-.wm[data-variant='spark'] {
-  align-items: flex-start;
+/* Wave: three dots in a row rising and settling one after another, the way a typing indicator does. */
+.wm[data-variant='wave'] .wm-dot {
+  top: 5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: wm-wave 1.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
-.wm-strip {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-  font-size: 10px;
-  text-align: center;
-  animation: codeSpinnerSpin 1.2s steps(1, end) infinite;
+.wm[data-variant='wave'] .wm-dot:nth-child(2) {
+  left: 4.5px;
+  animation-delay: -1.05s;
 }
-.wm-strip > span {
-  height: 20px;
-  line-height: 20px;
-  font-size: 14px;
+.wm[data-variant='wave'] .wm-dot:nth-child(3) {
+  left: 9px;
+  animation-delay: -0.9s;
+}
+@keyframes wm-wave {
+  0%,
+  60%,
+  100% {
+    transform: translateY(1px);
+    opacity: 0.45;
+  }
+  30% {
+    transform: translateY(-3px);
+    opacity: 1;
+  }
+}
+
+/* Ripple: a dot with two rings spreading out from it and fading, half a loop apart. */
+.wm[data-variant='ripple'] .wm-dot {
+  inset: 0;
+  border: 1.25px solid currentColor;
+  border-radius: 9999px;
+  animation: wm-ripple 2s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+}
+.wm[data-variant='ripple'] .wm-dot:nth-child(2) {
+  animation-delay: -1s;
+}
+.wm[data-variant='ripple'] .wm-dot:nth-child(3) {
+  inset: 4px;
+  border: 0;
+  background: currentColor;
+  animation: none;
+}
+@keyframes wm-ripple {
+  0% {
+    transform: scale(0.35);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 0;
+  }
 }
 
 /* Breathe: one dot that slowly swells and fades back. */
@@ -125,7 +165,7 @@
   inset: 2px;
   border-radius: 9999px;
   background: currentColor;
-  animation: wm-breathe 2.8s ease-in-out infinite;
+  animation: wm-breathe 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 @keyframes wm-breathe {
   0%,
@@ -139,16 +179,64 @@
   }
 }
 
+/* Tumble: a rounded square turning a quarter at a time, drawing in as it turns and out as it lands. */
+.wm[data-variant='tumble'] .wm-dot {
+  inset: 2.5px;
+  border-radius: 2px;
+  background: currentColor;
+  animation: wm-tumble 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+@keyframes wm-tumble {
+  0% {
+    transform: rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(45deg) scale(0.7);
+    opacity: 0.7;
+  }
+  50% {
+    transform: rotate(90deg) scale(1);
+    opacity: 1;
+  }
+  75% {
+    transform: rotate(135deg) scale(0.7);
+    opacity: 0.7;
+  }
+  100% {
+    transform: rotate(180deg) scale(1);
+  }
+}
+
+/* Spark: the Claude Code spinner's star, turning slowly and swelling as it turns, in place of its stepped strip of
+   glyphs. */
+.wm-glyph {
+  display: block;
+  width: 16px;
+  height: 20px;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: center;
+  animation: wm-spark 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes wm-spark {
+  0% {
+    transform: rotate(0deg) scale(0.8);
+  }
+  50% {
+    transform: rotate(180deg) scale(1.05);
+  }
+  100% {
+    transform: rotate(360deg) scale(0.8);
+  }
+}
+
 /* Asked for less motion: every look is a still orange dot. */
 @media (prefers-reduced-motion: reduce) {
   .wm-box,
-  .wm-strip {
+  .wm-glyph {
     display: none;
   }
   .wm-still {
     display: block;
-  }
-  .wm[data-variant='spark'] {
-    align-items: center;
   }
 }

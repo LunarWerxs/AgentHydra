@@ -4,6 +4,8 @@
 
 /** The root class `style.css` pauses animations under. */
 export const PAUSED_CLASS = 'motion-paused'
+/** Set beside it while the window is hidden or minimized: what keeps moving unfocused (the working mark) stops too. */
+export const HIDDEN_CLASS = 'motion-hidden'
 
 interface Win {
   addEventListener(type: 'focus' | 'blur', fn: () => void): void
@@ -20,7 +22,10 @@ export const motionPaused = (doc: Pick<Doc, 'visibilityState' | 'hasFocus'>): bo
 
 /** Keeps the root class in step with focus and visibility; call once at startup. */
 export function pauseMotionWhenAway(win: Win = window, doc: Doc = document): void {
-  const sync = () => void doc.documentElement.classList.toggle(PAUSED_CLASS, motionPaused(doc))
+  const sync = () => {
+    doc.documentElement.classList.toggle(PAUSED_CLASS, motionPaused(doc))
+    doc.documentElement.classList.toggle(HIDDEN_CLASS, doc.visibilityState === 'hidden')
+  }
   win.addEventListener('focus', sync)
   win.addEventListener('blur', sync)
   doc.addEventListener('visibilitychange', sync)

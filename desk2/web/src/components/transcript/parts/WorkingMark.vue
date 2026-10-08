@@ -1,5 +1,5 @@
 <script setup lang="ts">
-// The orange mark of a chat at work, in one of four looks (lib/working-mark.ts; the window's choice unless a
+// The orange mark of a chat at work, in one of seven looks (lib/working-mark.ts; the window's choice unless a
 // variant is given, as Settings does to show them side by side). Every look fits a 16x20 cell, the cell the
 // Claude Code spinner had, so the text after it stands where it always did. working-mark.css draws them.
 import { computed } from 'vue'
@@ -8,14 +8,15 @@ import '../working-mark.css'
 
 const props = defineProps<{ variant?: WorkingMarkVariant; /** Said to a screen reader; without it the mark is decoration. */ label?: string }>()
 const shown = computed(() => props.variant ?? workingMark.value)
-const GLYPHS = ['·', '✢', '✳', '✶', '✻']
+/** The dots each look draws (working-mark.css places them); Spark draws its star instead. */
+const DOTS: Record<Exclude<WorkingMarkVariant, 'spark'>, number> = { square: 3, orbit: 3, wave: 3, ripple: 3, breathe: 1, tumble: 1 }
 </script>
 
 <template>
   <span class="wm" :data-variant="shown" :role="label ? 'img' : undefined" :aria-label="label" :aria-hidden="label ? undefined : 'true'">
-    <span v-if="shown === 'spark'" class="wm-strip"><span v-for="g in GLYPHS" :key="g">{{ g }}</span></span>
+    <span v-if="shown === 'spark'" class="wm-glyph">✻</span>
     <span v-else class="wm-box">
-      <span v-for="n in shown === 'breathe' ? 1 : 3" :key="n" class="wm-dot" />
+      <span v-for="n in DOTS[shown]" :key="n" class="wm-dot" />
     </span>
     <span class="wm-still" />
   </span>
