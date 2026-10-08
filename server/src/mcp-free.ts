@@ -143,8 +143,22 @@ const ACCOUNT_CODES = new Set([
   'setup_failed',
 ])
 
-/** Records how an account's send ended: a success ends its rest, an account-wide failure starts one. */
-export function noteFreeOutcome(instanceId: string, code: string | null, now = Date.now()): void {
+/** When a nearly spent 5-hour window resets (Claude's reading), else null: ChatGPT reports no window. */
+export function windowResetAt(i: FreeInstance | undefined, now = Date.now()): number | null {
+  const w = i?.usage?.windows.find((x) => x.id === 'five_hour')
+  const at = w?.resets_at ? Date.parse(w.resets_at) : Number.NaN
+  return w && (w.used_percent ?? 0) >= 80 && at > now ? at : null
+}
+
+/** Records how an account's send ended: a success ends its rest, an account-wide failure starts one. A rate
+ *  limit with a nearly spent 5-hour window rests until the window resets (2026-10-08: three Claude accounts at
+ *  92-95% woke every 30 min only to be refused again). */
+export function noteFreeOutcome(
+  instanceId: string,
+  code: string | null,
+  now = Date.now(),
+  resetAt: number | null = null,
+): void {
   if (code == null) {
     rests.delete(instanceId)
     return
@@ -152,11 +166,10 @@ export function noteFreeOutcome(instanceId: string, code: string | null, now = D
   if (!ACCOUNT_CODES.has(code)) return
   const strikes = (rests.get(instanceId)?.strikes ?? 0) + 1
   const base = code === 'rate_limited' ? RATE_LIMIT_REST_MS : FAILURE_REST_MS
-  rests.set(instanceId, {
-    until: now + Math.min(base * 2 ** (strikes - 1), MAX_REST_MS),
-    code,
-    strikes,
-  })
+  let until = now + Math.min(base * 2 ** (strikes - 1), MAX_REST_MS)
+  if (code === 'rate_limited' && resetAt != null && resetAt > until)
+    until = Math.min(resetAt, now + 5 * 60 * 60_000)
+  rests.set(instanceId, { until, code, strikes })
 }
 
 export function restingFor(instanceId: string, now = Date.now()): Rest | null {
@@ -309,9 +322,10 @@ async function pollRunning(it: Item, tick: Tick) {
   try {
     const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
     if (job.state === 'done') {
-      finish(it, job.result, tick.byId.get(it.instanceId ?? ''))
+      const inst = tick.byId.get(it.instanceId ?? '')
+      finish(it, job.result, inst)
       const code = job.result?.ok ? null : (job.result?.error?.code ?? 'unknown')
-      if (it.instanceId) noteFreeOutcome(it.instanceId, code)
+      if (it.instanceId) noteFreeOutcome(it.instanceId, code, Date.now(), windowResetAt(inst))
       if (code) retryElsewhere(it, code)
     }
   } catch (e) {

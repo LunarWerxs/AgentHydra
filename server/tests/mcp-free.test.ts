@@ -2,7 +2,15 @@
 // on a free port (HYDRA_DESK_PORT), never the real one: which account a task goes to, one operation per
 // account at a time, and a continuation on its own thread's account.
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { FREE_TOOLS, type FreeInstance, pickFreeAccount } from '../src/mcp-free'
+import {
+  FREE_TOOLS,
+  type FreeInstance,
+  noteFreeOutcome,
+  pickFreeAccount,
+  resetFreeHealth,
+  restingFor,
+  windowResetAt,
+} from '../src/mcp-free'
 
 const usage = (fiveHour: number | null, week: number | null, unlimited = false) => ({
   available: true,
@@ -42,6 +50,29 @@ describe('pickFreeAccount', () => {
     expect(pickFreeAccount(INSTANCES, new Set(), { provider: 'claude' })?.num).toBe(1)
     expect(pickFreeAccount(INSTANCES, new Set(), { account: 4 })?.num).toBe(4)
     expect(pickFreeAccount(INSTANCES, new Set(), { account: 3 })).toBeNull()
+  })
+
+  test('a rate-limited account with a spent 5-hour window rests until it resets, not 30 minutes', () => {
+    resetFreeHealth()
+    const now = Date.UTC(2026, 9, 8, 12)
+    const resets = new Date(now + 3 * 3_600_000).toISOString()
+    const spent = {
+      ...INSTANCES[0],
+      usage: {
+        available: true,
+        windows: [{ id: 'five_hour', used_percent: 94, resets_at: resets }],
+      },
+    }
+    noteFreeOutcome('a', 'rate_limited', now, windowResetAt(spent, now))
+    expect(restingFor('a', now)?.until).toBe(Date.parse(resets))
+    // A window with room says the refusal was something shorter: the usual 30 minutes.
+    const roomy = {
+      ...spent,
+      usage: { ...spent.usage, windows: [{ ...spent.usage.windows[0], used_percent: 40 }] },
+    }
+    noteFreeOutcome('b', 'rate_limited', now, windowResetAt(roomy, now))
+    expect(restingFor('b', now)?.until).toBe(now + 30 * 60_000)
+    resetFreeHealth()
   })
 })
 
