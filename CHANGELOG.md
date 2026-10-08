@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-08
+
 **TL;DR**
 
 - **AgentHydra 2.0: the new window (it was Hydra Desk 2) now comes in the download on Windows, Linux and macOS**
@@ -32,6 +34,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone**
 - **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call**
 - **HSwarm's nightly upkeep finishes again instead of stopping at its two-hour limit**
+- **The old window is gone: the new window is AgentHydra's only one**
+- **A Codex chat moved to another account shows up in that account's Codex app**
 
 **Everything in 2.0.0**
 
@@ -64,6 +68,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm can use Jina, Pinecone and StepFun.** Jina reads and searches the web and makes embeddings, Pinecone
   stores and searches vectors, and StepFun's chat models can be named directly. A StepFun key issued in China works
   once its China address is set in your own provider settings.
+- **A Codex chat moved to another account shows up in that account's Codex app.** On Windows, a move
+  opens the chat in the destination's Codex app and files it under a Migrated chats section, and only then
+  archives the original. A new command moves every active chat of one account in one go.
 
 ### Changed
 
@@ -148,7 +155,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   now comes back unanswered with Jev's error, so your own fallback can answer it.
 - **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call.** `hswarm keys`
   used to list such a key as ready, so nothing showed that Jev was down. Now it is marked out of credit, every
-  later call skips it, and it gets one try an hour so a topped-up key comes back by itself.
+  later call skips it, and it gets one try a day so a topped-up key comes back by itself.
 - **HSwarm's nightly upkeep finishes again.** While indexing finished jobs it reopened a day's compressed history
   once for every job in it. With a few weeks of history it hit its two-hour limit every night, before it packed old
   jobs, recorded the day or rewrote its page. It now reads each day once, and a night with nothing new reads
@@ -159,7 +166,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Removed
 
-- **The old AgentHydra window.** Where the new window is installed, AgentHydra no longer shows the old one.
+- **The old AgentHydra window, and its portable window setting.** The new window is the only one now, and
+  the download no longer carries a copy of the old one.
 - **The separate DevWebUI copy.** Its own background program, tray and settings are gone; its projects carry over.
 
 ## [1.13.0] - 2026-10-06

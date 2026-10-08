@@ -32,7 +32,16 @@ name: Release
 on:
   push:
     tags: ['v*.*.*']
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      # A tentative release (owner, 2026-10-08: "release a tentative 2.0"): published as a GitHub
+      # pre-release, so it is never `releases/latest`, which is all an installed copy's updater asks
+      # for. Installed copies stay where they are until it is promoted (docs/RELEASING.md). A tag
+      # push has no inputs: there, a draft pre-release made before the tag is what keeps it one.
+      prerelease:
+        description: 'Publish as a pre-release (installed copies do not update to it)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -110,9 +119,6 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
-
-      - name: Build web SPA
-        run: bun run --cwd web build
 
       - name: Build desk2
         run: |
@@ -298,8 +304,15 @@ jobs:
       - name: Publish release with binaries attached
         env:
           GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ inputs.prerelease && 'true' || 'false' }}
         run: |
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # A release made ahead of its tag as a draft pre-release stays a pre-release: the tag push
+            # that builds it carries no input, and publishing it as a full release would hand it to
+            # every installed copy (docs/RELEASING.md, "A tentative release").
+            if [ "$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" = "true" ]; then
+              PRERELEASE=true
+            fi
             # Archives go first so pre-transition updaters, which selected the first matching
             # target asset, receive a bundle rather than the new human-facing direct executable.
             gh release upload "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz out/*.exe out/SHA256SUMS.txt \
@@ -309,10 +322,12 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --title "AgentHydra ${GITHUB_REF_NAME#v}" \
               --notes-file RELEASE_NOTES.md \
+              --prerelease="$PRERELEASE" \
               --draft=false
           else
             gh release create "$GITHUB_REF_NAME" out/*.zip out/*.tar.gz out/*.exe out/SHA256SUMS.txt \
               --repo "$GITHUB_REPOSITORY" \
               --title "AgentHydra ${GITHUB_REF_NAME#v}" \
-              --notes-file RELEASE_NOTES.md
+              --notes-file RELEASE_NOTES.md \
+              --prerelease="$PRERELEASE"
           fi

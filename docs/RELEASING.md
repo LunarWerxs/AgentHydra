@@ -298,6 +298,30 @@ on 2026-10-06), and one with Bun held back 90 s, where the ack deadline passes a
 over (about 167 s). It exits 0 only when both end with 2.0.0 healthy on the same port, the full layout on
 disk, no 1.13 process left and Desk 2 answering. Its first run found the checksum-list bug above.
 
+## A tentative release
+
+A release installed copies should not take yet (owner, 2026-10-08: "release a tentative 2.0") is
+published as a GitHub **pre-release**. Every installed copy's updater asks only for
+`releases/latest`, which is never a pre-release, so installs stay where they are while the page and
+its downloads are public for anyone who wants them. The site's sync also follows the latest release,
+so it keeps offering the previous one; skip step 7 until the release is promoted.
+
+1. **Before pushing the tag, make the release as a draft pre-release:**
+   ```sh
+   gh release create vX.Y.Z --draft --prerelease --title "AgentHydra X.Y.Z" --notes "Building."
+   ```
+   A tag push carries no workflow inputs, so this draft is what tells its Release run: the publish
+   step keeps a release that already exists as a pre-release a pre-release. Without it, the tag
+   push publishes a full release and every install updates to it.
+2. **Push the tag** as in step 6. The run attaches the downloads, writes the notes from
+   CHANGELOG.md and publishes the draft. A dispatch does the same:
+   `gh workflow run release.yml --ref vX.Y.Z -f prerelease=true`.
+3. **Promote it** once it has proved itself: `gh release edit vX.Y.Z --prerelease=false --latest`.
+   From then on installs update to it; run step 7 then.
+
+The version stays a plain X.Y.Z, never X.Y.Z-rc.N: the updater compares versions without their
+suffix, so an install of 2.0.0-rc.1 would never see 2.0.0 as newer.
+
 ## When a push doesn't trigger anything
 
 GitHub's standard mitigation for an Actions incident is to **throttle webhook triggers**, which
