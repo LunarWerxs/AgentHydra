@@ -49,6 +49,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ### Changed
 
+- **Undo asks before taking out more than your last message, and offers Fork instead.** Undo under an earlier message now shows how many of your messages and replies it would remove, and Fork instead keeps this chat and opens a new one from just before that message.
 - **CliMayte workers are stopped by the same command guards as your own chats.** Every Bash and PowerShell call a
   worker makes now goes through the guard hooks in your Claude profile that refuse destructive commands and force
   pushes, when you have them installed. Workers run with permissions skipped, so before this nothing stopped one

@@ -3,7 +3,8 @@
 // message row is hovered. Hydra Desk has Copy, Undo, Fork, "..." and the time; the real app's Pin and Read aloud
 // need server routes Hydra Desk does not have yet. Undo (a message of yours, or the reply ending its turn) is
 // Claude Code's rewind: this chat loses that message and all after it (a running turn is stopped), and the
-// message, pictures and all, goes back in the box to change and send again. Fork (a message of yours) opens a
+// message, pictures and all, goes back in the box to change and send again. Undo asks first when it would take
+// out more than your last message, with Fork instead in the dialog. Fork (a message of yours) opens a
 // new chat cut just before that message, the message waiting unsent in its box.
 // "..." (a message of yours) has Change project: a new chat in the folder chosen sends the same text and
 // pictures and opens; this chat is left as it is, the message and its reply still in it.
@@ -17,8 +18,10 @@ import { buildCopyHtml } from '@/lib/clipboard-images'
 import type { DraftImage } from '@/components/composer/draft-images'
 import ChangeProjectMenu from '@/components/composer/ChangeProjectMenu.vue'
 import { movedChat } from '@/components/composer/change-project'
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
+import { undoCount } from '../lib/undo-count'
 
 const props = defineProps<{
   text: string
@@ -49,8 +52,16 @@ const undoLabel = computed(() =>
     ? 'Undoing…'
     : undoState.value === 'failed'
       ? `Undo failed${undoError.value ? `: ${undoError.value}` : ''}`
-      : 'Undo: take your message and all after it out of this chat, and put it back in the box'
+      : 'Undo: take your message and all after it out of this chat, and put it back in the box. Asks first when that is more than your last message'
 )
+
+/** What an undo here takes out, or null when the chat's items are not known (then Undo goes straight through). */
+const undoTakes = computed(() => (undoAt.value && ctx.items ? undoCount(ctx.items.value, undoAt.value) : null))
+const askUndo = ref(false)
+const undoTime = computed(() => {
+  const at = ctx.items?.value.find((it) => it.id === undoAt.value)?.ts
+  return at === undefined ? '' : new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+})
 
 const canFork = computed(() => !!props.itemId && !ctx.readOnly.value && !!ctx.chatId.value)
 const forkState = ref<'idle' | 'forking' | 'failed'>('idle')
@@ -130,6 +141,17 @@ async function boxImages(): Promise<DraftImage[]> {
   )
 }
 
+/** Undo asks first when it takes out more than your last message; otherwise it goes straight through. */
+function askOrUndo() {
+  if ((undoTakes.value?.yours ?? 0) > 1) askUndo.value = true
+  else void undo()
+}
+
+function confirmUndo() {
+  askUndo.value = false
+  void undo()
+}
+
 /** Undo: the chat goes back to before the message, which waits in the box (its pictures read first, so a failed read changes nothing). */
 async function undo() {
   const r = props.resend
@@ -163,17 +185,28 @@ async function moveTo(cwd: string) {
   }
 }
 
-async function fork() {
-  if (!props.itemId || forkState.value === 'forking') return
+async function forkBefore(at: string, text: string) {
+  if (forkState.value === 'forking') return
   forkState.value = 'forking'
   try {
-    await desk.forkAt(ctx.chatId.value, props.itemId, { text: props.text, images: await boxImages() })
+    await desk.forkAt(ctx.chatId.value, at, { text, images: await boxImages() })
     forkState.value = 'idle'
   } catch (err) {
     forkError.value = err instanceof Error ? err.message : String(err)
     forkState.value = 'failed'
     setTimeout(() => (forkState.value = 'idle'), 4000)
   }
+}
+
+function fork() {
+  if (props.itemId) void forkBefore(props.itemId, props.text)
+}
+
+function forkInstead() {
+  const at = undoAt.value
+  if (!at || !props.resend) return
+  askUndo.value = false
+  void forkBefore(at, props.resend.text)
 }
 
 async function branch() {
@@ -208,10 +241,23 @@ async function branch() {
       :aria-label="undoLabel"
       :title="undoLabel"
       :disabled="undoState === 'undoing'"
-      @click="undo"
+      @click="askOrUndo"
     >
       <component :is="RotateCcw" class="size-4" :class="undoState === 'failed' && 'text-danger-text'" />
     </button>
+    <Dialog :open="askUndo" @update:open="(o: boolean) => !o && (askUndo = false)">
+      <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
+        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
+        <DialogDescription class="text-[13px] leading-[19px] text-text-2">
+          This takes your message from {{ undoTime }} and everything after it out of this chat: {{ undoTakes?.yours }} of your messages and {{ undoTakes?.replies }} replies. Fork instead keeps this chat as it is and opens a new chat from just before that message.
+        </DialogDescription>
+        <div class="flex justify-end gap-2 pt-1">
+          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="askUndo = false">Cancel</button>
+          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="forkInstead">Fork instead</button>
+          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmUndo">Undo {{ undoTakes?.total }} messages</button>
+        </div>
+      </DialogContent>
+    </Dialog>
     <button
       v-if="canFork"
       type="button"

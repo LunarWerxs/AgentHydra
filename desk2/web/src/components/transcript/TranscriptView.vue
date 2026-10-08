@@ -93,6 +93,7 @@ provideTranscript(
     readOnly: computed(() => !!props.readOnly),
     cwd: computed(() => chat.value?.cwd ?? null),
     children: computed(() => rows.value.children),
+    items: computed(() => props.items),
     newestBrowser: computed(() => newestBrowserCalls(props.items)),
     redesign: computed(() => redesignState(props.items)),
     background: computed(() => ({
