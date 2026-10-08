@@ -86,10 +86,37 @@ const BROWSER_VERBS: Record<string, string> = {
   profile_login: 'Sign-in window for',
   profile_find: 'Looked for a saved browser for',
   profiles: 'Listed saved browsers',
-  live: 'Showed live',
 }
 
 export const DEFAULT_BROWSER = 'default browser'
+export const YOUR_CHROME = 'Your Chrome'
+
+const LIVE_VERBS: Record<string, string> = {
+  open: 'Opened',
+  navigate: 'Opened',
+  read: 'Read',
+  click: 'Clicked',
+  type: 'Typed into',
+  key: 'Pressed a key',
+  wait: 'Waited for',
+  screenshot: 'Screenshot of',
+  close: 'Closed',
+  tabs: 'Listed tabs',
+  list: 'Listed tabs',
+}
+
+function paramsOf(input: Record<string, unknown>): Record<string, unknown> {
+  return input.params && typeof input.params === 'object' ? (input.params as Record<string, unknown>) : {}
+}
+
+function liveVerb(params: Record<string, unknown>): string {
+  const action = str(params.action)
+  if (action === 'steps') {
+    const n = Array.isArray(params.steps) ? params.steps.length : 0
+    return n ? `Ran ${n} ${n === 1 ? 'step' : 'steps'}` : 'Ran steps'
+  }
+  return LIVE_VERBS[action] ?? 'Showed live'
+}
 
 /**
  * What a Browser card shows. `name` is the browser tool ("browser_navigate") or the whole MCP call name (then the
@@ -102,10 +129,11 @@ export function parseBrowserCall(
   resultText?: string,
 ): { verb: string; url: string; profile: string } {
   const tool = (name.startsWith('mcp__') ? str(input.tool_name) : name).replace(/^browser_/, '')
-  const verb = BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser')
-  const params = input.params && typeof input.params === 'object' ? (input.params as Record<string, unknown>) : {}
+  const params = paramsOf(input)
+  const verb = tool === 'live' ? liveVerb(params) : (BROWSER_VERBS[tool] ?? (tool ? tool.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase()) : 'Browser'))
   const fromResult = resultText ? (/https?:\/\/[^\s"'<>)\]}\\]+/.exec(resultText)?.[0] ?? '') : ''
-  return { verb, url: str(params.url) || paramsScriptAddress(params) || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
+  const live = tool === 'live' ? liveResultUrl(resultText) : ''
+  return { verb, url: str(params.url) || paramsScriptAddress(params) || live || fromResult, profile: str(params.profile) || str(params.profile_id) || str(params.profileId) || DEFAULT_BROWSER }
 }
 
 const SCRIPT_KEYS = ['function', 'expression', 'code', 'script']
@@ -201,13 +229,102 @@ export function browserOpenRequest(info: { url: string; profile: string }): Brow
 
 /** The browser a chat's AI last used, as its Browser card would ask the pane for it; null when it used none. */
 export function lastBrowserRequest(items: TranscriptItem[]): BrowserOpenRequest | null {
-  const calls = items.filter((it): it is Extract<TranscriptItem, { kind: 'tool_use' }> => it.kind === 'tool_use' && isBrowserCall(it.name, it.input))
+  const calls = items.filter((it): it is Extract<TranscriptItem, { kind: 'tool_use' }> => it.kind === 'tool_use' && isBrowserCall(it.name, it.input) && !isOwnChromeCall(it.name, it.input))
   for (let i = calls.length - 1; i >= 0; i--) {
     const c = calls[i]
     const r = browserOpenRequest({ ...parseBrowserCall(c.name, c.input, c.result?.text), url: callAddress(calls, i) })
     if (r.profile || r.url) return r
   }
   return null
+}
+
+/** The Connections browser_live tool: the person's own Chrome window (no profile, never the default browser). */
+export function isOwnChromeCall(name: string, input: Record<string, unknown>): boolean {
+  return isBrowserCall(name, input) && input.tool_name === 'browser_live'
+}
+
+/** The first JSON object in a result's text; a note after it (a trailing line that is not JSON) is ignored. */
+export function leadingJson(text: string | undefined): Record<string, unknown> | null {
+  if (!text) return null
+  const start = text.indexOf('{')
+  if (start < 0) return null
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]
+    if (inString) {
+      if (c === '\\') i++
+      else if (c === '"') inString = false
+    } else if (c === '"') inString = true
+    else if (c === '{') depth++
+    else if (c === '}' && --depth === 0) {
+      try {
+        const v: unknown = JSON.parse(text.slice(start, i + 1))
+        return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+      } catch {
+        return null
+      }
+    }
+  }
+  return null
+}
+
+function liveResultUrl(text: string | undefined): string {
+  const u = str(leadingJson(text)?.url)
+  if (/^https?:\/\//i.test(u)) return u
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+(\/|$)/i.test(u) ? `https://${u}` : ''
+}
+
+type CallLike = { name: string; input: Record<string, unknown>; status?: string; result?: { text?: string; isError?: boolean } }
+
+/** null when the call succeeded; else the error code it reported ('' when it reported none). */
+export function callErrorCode(c: CallLike): string | null {
+  const parsed = leadingJson(c.result?.text)
+  const failed = c.status === 'error' || c.result?.isError === true || parsed?.ok === false || typeof parsed?.error === 'string'
+  return failed ? str(parsed?.error) : null
+}
+
+/** The AI's last browser_live action in words, e.g. Clicked 'Continue'. Typed text is never shown. */
+export function ownChromeAction(input: Record<string, unknown>): string {
+  const params = paramsOf(input)
+  const verb = liveVerb(params)
+  const action = str(params.action)
+  const target = action === 'steps' ? '' : action === 'open' || action === 'navigate' ? str(params.url) : str(params.name) || str(params.find)
+  return target ? `${verb} '${target}'` : verb
+}
+
+/** Whether a Your Chrome run ends with its tab closed: its newest call is a successful close, or failed because the
+ *  person closed or left the tab the chat opened. */
+export function ownChromeClosed(calls: readonly CallLike[]): boolean {
+  const own = calls.filter((c) => isOwnChromeCall(c.name, c.input))
+  const newest = own[own.length - 1]
+  if (!newest) return false
+  const code = callErrorCode(newest)
+  return code === null ? str(paramsOf(newest.input).action) === 'close' : code === 'browser_live_person_switched'
+}
+
+// A failure that names only its code, in words. Any other bare code reads as the generic line.
+const LIVE_ERRORS: Record<string, string> = {
+  browser_live_tab_not_front: 'The tab in front is not the one this chat opened',
+  browser_live_person_switched: 'The tab this chat opened was closed or left',
+  browser_live_wait_timeout: 'The page did not show what it waited for in time',
+  browser_live_not_clickable: 'That element could not be clicked',
+  browser_live_engine_failed: 'Chrome did not answer',
+}
+
+/** The headline and muted hint of a failed browser call. Error codes are never shown; text without JSON is shown as it is. */
+export function browserErrorSummary(text: string): { headline: string; hint: string } {
+  const parsed = leadingJson(text)
+  if (!parsed) return { headline: text.trim().slice(0, 240), hint: '' }
+  const hint = str(parsed.hint)
+  const code = str(parsed.error)
+  const detail = str(parsed.detail) || str(parsed.message) || LIVE_ERRORS[code] || (/^[a-z0-9]+(_[a-z0-9]+)+$/i.test(code) ? '' : code)
+  const failedAt = /^Step (\d+)\b[^:]*?\bfailed:\s*/i.exec(detail)
+  if (failedAt) {
+    const of = typeof parsed.of === 'number' ? ` of ${parsed.of}` : ''
+    return { headline: `Stopped at step ${failedAt[1]}${of}: ${detail.slice(failedAt[0].length) || 'the step did not finish'}`, hint }
+  }
+  return { headline: detail || 'The browser step did not finish', hint }
 }
 
 /** mcp__server__tool -> { server, tool }; null for built-in tools. */

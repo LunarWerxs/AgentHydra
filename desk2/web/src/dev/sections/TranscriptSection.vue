@@ -98,6 +98,36 @@ const browserNoShot: TranscriptItem[] = [
 ]
 const browserChat = { ...transcriptChat, id: 'gallery-browser', cwd: BROWSER_CWD, status: 'idle' } as typeof transcriptChat
 const browserChat2 = { ...browserChat, id: 'gallery-browser-2' }
+// The person's own Chrome (browser_live): an open, click and read run; a run that closes its tab; and a steps run whose last call failed.
+const ownChromeRun: TranscriptItem[] = [
+  { id: 'ocu', ts: Date.now(), kind: 'user', text: 'Check the checkout page in my Chrome.' },
+  call('oc1', 'browser_live', { action: 'open', url: 'https://app.example.com/checkout' }, '{"ok":true,"url":"https://app.example.com/checkout","title":"Checkout"}'),
+  call('oc2', 'browser_live', { action: 'click', name: 'Continue' }, '{"ok":true,"url":"https://app.example.com/checkout/review"}'),
+  call('oc3', 'browser_live', { action: 'read' }, '{"ok":true,"url":"https://app.example.com/checkout/review","text":"Order 1042 · 2 items · total 24.00"}'),
+  { id: 'oct', ts: Date.now(), kind: 'assistant_text', text: 'The review page shows order 1042 with a total of 24.00.' },
+]
+const ownChromeClosedRun: TranscriptItem[] = [
+  { id: 'ocv', ts: Date.now(), kind: 'user', text: 'Show me the status page in my Chrome, then close it.' },
+  call('ocv1', 'browser_live', { action: 'open', url: 'https://status.example.com/' }, '{"ok":true,"url":"https://status.example.com/","title":"Status"}'),
+  call('ocv2', 'browser_live', { action: 'screenshot' }, '[image]', {
+    result: { text: '[image]', isError: false, images: [{ mediaType: 'image/png', name: 'status.png', dataBase64: inventedPage() }] },
+  } as Partial<TranscriptItem>),
+  call('ocv3', 'browser_live', { action: 'close' }, '{"ok":true,"closed":1,"alreadyGone":0,"restoredFrontTab":null}'),
+  { id: 'ocvt', ts: Date.now(), kind: 'assistant_text', text: 'I closed the status page.' },
+]
+const stepsError =
+  '{"ok":false,"ran":2,"of":3,"error":"browser_live_not_clickable","detail":"Step 3 (click) failed: The Continue button is covered by another element.","hint":"Read the page to see what covers it."}\n - To: Example Owner'
+const ownChromeErrorRun: TranscriptItem[] = [
+  { id: 'oeu', ts: Date.now(), kind: 'user', text: 'Fill in the checkout form in my Chrome.' },
+  call('oe1', 'browser_live', { action: 'open', url: 'https://app.example.com/checkout' }, '{"ok":true,"url":"https://app.example.com/checkout"}'),
+  call('oe2', 'browser_live', { action: 'steps', steps: [{ action: 'click', name: 'Email' }, { action: 'type', text: 'owner@example.com' }, { action: 'click', name: 'Continue' }] }, stepsError, {
+    status: 'error',
+    result: { text: stepsError, isError: true },
+  } as Partial<TranscriptItem>),
+]
+const ownChromeChat = { ...browserChat, id: 'gallery-your-chrome' }
+const ownChromeClosedChat = { ...browserChat, id: 'gallery-your-chrome-closed' }
+const ownChromeErrorChat = { ...browserChat, id: 'gallery-your-chrome-error' }
 
 // The windowing check: 3,000 items, mount time, rows in the DOM, cost of each scroll step.
 const STRESS_N = 3000
@@ -180,6 +210,26 @@ onMounted(async () => {
         <h3 class="mb-2 text-[13px] text-text-muted">A Browser card with no picture</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-browser-noshot>
           <TranscriptView chat-id="gallery-browser-2" :items="browserNoShot" :chat="browserChat2" />
+        </div>
+      </div>
+    </div>
+    <div class="grid grid-cols-3 gap-4">
+      <div>
+        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: open, click and read in one turn</h3>
+        <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome>
+          <TranscriptView chat-id="gallery-your-chrome" :items="ownChromeRun" :chat="ownChromeChat" />
+        </div>
+      </div>
+      <div>
+        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: a run that closes its tab</h3>
+        <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome-closed>
+          <TranscriptView chat-id="gallery-your-chrome-closed" :items="ownChromeClosedRun" :chat="ownChromeClosedChat" />
+        </div>
+      </div>
+      <div>
+        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: the last call's steps failed</h3>
+        <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome-error>
+          <TranscriptView chat-id="gallery-your-chrome-error" :items="ownChromeErrorRun" :chat="ownChromeErrorChat" />
         </div>
       </div>
     </div>

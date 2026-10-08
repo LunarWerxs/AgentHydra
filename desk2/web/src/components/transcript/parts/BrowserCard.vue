@@ -7,12 +7,13 @@
 // was closed, or a look finds it not open) shows a quiet Closed and is not fed any more; the full-screen button and the
 // copy-the-calls button are the card's own, over the picture and the status. When the run ended on a blank address (the AI
 // left the page) or a live look finds a blank page, its last screenshot stays, dimmed, badged Page closed. With no real
-// address a click on the picture opens it full screen.
+// address a click on the picture opens it full screen. The person's own Chrome (browser_live) never opens the pane and is never fed live:
+// its card shows its last picture or a grey placeholder, and its click only shows a picture.
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Check, Copy, Globe, Maximize2 } from '@lucide/vue'
+import { Check, Copy, Globe, Maximize2, Monitor } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { BROWSER_CLOSED_EVENT, OPEN_BROWSER_EVENT } from '@shared/browser'
-import { browserOpenRequest, browserRunAddress, DEFAULT_BROWSER, parseBrowserCall } from '../lib/tools'
+import { browserErrorSummary, browserOpenRequest, browserRunAddress, DEFAULT_BROWSER, isOwnChromeCall, ownChromeAction, ownChromeClosed, parseBrowserCall, YOUR_CHROME } from '../lib/tools'
 import { imageSrc, openLightbox } from '../lib/media'
 import { browserCallsText } from '../lib/browserCopy'
 import { forgetProfiles, isBlankPicture, nextFrame, openPreviewStream, openProfiles, PreviewFeed, previewWanted, savedProfiles } from '../lib/browserPreview'
@@ -40,7 +41,13 @@ const host = computed(() => {
     return ''
   }
 })
-const error = computed(() => (props.item.status === 'error' || props.item.result?.isError ? (props.item.result?.text ?? 'Failed').trim().slice(0, 240) : ''))
+const error = computed(() => {
+  if (props.item.status !== 'error' && !props.item.result?.isError) return null
+  const text = (props.item.result?.text ?? '').trim()
+  return text ? browserErrorSummary(text) : { headline: 'Failed', hint: '' }
+})
+const ownChrome = computed(() => isOwnChromeCall(props.item.name, props.item.input))
+const ownAction = computed(() => ownChromeAction(props.item.input))
 // The run's latest screenshot picture, if any call carried one.
 const shot = computed(() => {
   for (let i = calls.value.length - 1; i >= 0; i--) {
@@ -75,7 +82,7 @@ const watching = computed(() => !closed.value && previewWanted({ named: named.va
 
 // The profile chip is the short label the Saved browsers list shows; the registry name is its hover.
 const label = ref<string | null>(null)
-const chip = computed(() => label.value ?? shortId(info.value.profile))
+const chip = computed(() => (ownChrome.value ? YOUR_CHROME : (label.value ?? shortId(info.value.profile))))
 async function loadLabel() {
   const cwd = ctx.cwd.value
   if (!cwd || !named.value) return
@@ -169,10 +176,15 @@ onBeforeUnmount(() => {
 })
 
 const picture = computed(() => live.value ?? shot.value)
+const gone = computed(() => (ownChrome.value ? ownChromeClosed(calls.value) : closed.value))
 // The picture is the AI's last screenshot of a page that is gone: the run ended on a blank address, or a live look found one.
-const past = computed(() => !closed.value && !live.value && !!shot.value && (address.value.left || sawBlank.value))
+const past = computed(() => !gone.value && !live.value && !!shot.value && (address.value.left || sawBlank.value))
+const surface = computed(() => (ownChrome.value && !picture.value ? 'div' : 'button'))
+const grey = computed(() => ownChrome.value || gone.value)
 const tip = computed(() => {
-  if (closed.value) return 'This browser is closed: open it again'
+  if (ownChrome.value)
+    return picture.value ? (gone.value ? 'Show the last screenshot full screen' : 'Show the picture full screen') : 'The AI worked in your own Chrome window'
+  if (gone.value) return 'This browser is closed: open it again'
   if (past.value)
     return `Page closed: this is the AI's last screenshot of it. ${info.value.url ? `Click to open ${info.value.url} again in the browser pane` : 'Click to see it full screen'}`
   if (named.value) return `Watch this browser live${info.value.url ? ': ' + info.value.url : ''}`
@@ -194,6 +206,10 @@ async function copyCalls() {
 }
 onBeforeUnmount(() => copiedTimer && clearTimeout(copiedTimer))
 function open() {
+  if (ownChrome.value) {
+    if (picture.value) openLightbox(picture.value, 'Browser')
+    return
+  }
   // No real address to open and a picture to show: the picture, not an empty pane tab.
   if (!named.value && !info.value.url && picture.value) return openLightbox(picture.value, 'Browser')
   window.dispatchEvent(new CustomEvent(OPEN_BROWSER_EVENT, { detail: browserOpenRequest(info.value) }))
@@ -202,28 +218,42 @@ function open() {
 
 <template>
   <div ref="root" class="group/card relative w-90 max-w-full">
-    <div class="tx-card overflow-hidden shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]">
-      <button
-        type="button"
+    <!-- The person's own Chrome and a closed browser are a flat neutral grey: no brand ring, nothing that looks like it is loading. -->
+    <div class="tx-card relative overflow-hidden" :class="grey ? '' : 'shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]'">
+      <component
+        :is="surface"
+        :type="surface === 'button' ? 'button' : undefined"
         class="group/open relative block aspect-16/10 w-full overflow-hidden rounded-[inherit] text-start outline-none focus-visible:ring-2 focus-visible:ring-brand"
-        :title="tip"
+        :class="grey ? 'bg-(--bg-picture)' : 'bg-fill-hover'"
+        :title="tip || undefined"
         @click="open"
       >
-        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="closed || past ? 'opacity-60 grayscale' : ''" draggable="false" />
-        <span v-else class="flex size-full flex-col items-center justify-center gap-1 bg-fill-hover text-text-muted">
-          <Globe class="size-5" aria-hidden="true" />
-          <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
+        <img v-if="picture" :src="picture" alt="" class="size-full rounded-[inherit] object-cover object-left-top" :class="gone ? 'opacity-25 grayscale' : past ? 'opacity-60 grayscale' : ''" draggable="false" />
+        <span
+          v-if="gone"
+          class="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-[color-mix(in_srgb,var(--bg-picture)_80%,transparent)] px-4 text-center text-text-muted"
+        >
+          <span class="text-[13px]">{{ ownChrome ? 'Tab closed' : 'Browser closed' }}</span>
+          <span v-if="shownUrl" class="max-w-full truncate font-mono text-[12px]">{{ shownUrl }}</span>
         </span>
-        <span v-if="closed" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Closed</span>
+        <span v-else-if="!picture" class="flex size-full flex-col items-center justify-center gap-1 text-text-muted">
+          <Monitor v-if="ownChrome" class="size-5" aria-hidden="true" />
+          <Globe v-else class="size-5" aria-hidden="true" />
+          <span v-if="ownChrome" class="text-[12px]">{{ YOUR_CHROME }}</span>
+          <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
+          <span v-if="ownChrome" class="mt-0.5 max-w-[90%] truncate rounded-full bg-black/10 px-2 py-0.5 text-[12px] text-text">{{ ownAction }}</span>
+        </span>
+        <span v-if="gone" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">× Closed</span>
         <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Page closed</span>
         <span
           class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-120 hover:opacity-100 group-focus-visible/open:opacity-100"
           :title="`${info.verb}${info.url ? ' ' + info.url : ''}`"
         >
           <span v-if="live" class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" title="Live" />
-          <Globe class="size-3.5 shrink-0" aria-hidden="true" />
-          <span class="min-w-0 truncate">{{ shownUrl || info.verb }}</span>
-          <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]" :title="info.profile">{{ chip }}</span>
+          <Monitor v-if="ownChrome" class="size-3.5 shrink-0" aria-hidden="true" />
+          <Globe v-else class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="min-w-0 truncate">{{ shownUrl && !gone ? shownUrl : ownChrome ? ownAction : info.verb }}</span>
+          <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]" :title="ownChrome ? 'Your own Chrome window' : info.profile">{{ chip }}</span>
           <!-- Room for the count and status drawn over this end: the address truncates before the chip meets them. -->
           <span class="invisible flex shrink-0 items-center gap-1.5 tabular-nums" aria-hidden="true">
             <span class="w-5" />
@@ -231,7 +261,7 @@ function open() {
             <span class="size-3.5" />
           </span>
         </span>
-      </button>
+      </component>
       <!-- Over the caption's right end, not inside its button: the count and status, with Copy the calls on hover. -->
       <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-[12px] text-white">
         <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-120 focus-within:opacity-100 hover:opacity-100">
@@ -261,6 +291,10 @@ function open() {
     >
       <Maximize2 class="size-3.5" aria-hidden="true" />
     </button>
-    <p v-if="error" class="mt-1 whitespace-pre-wrap wrap-break-word px-1 text-[12px] text-danger-text">{{ error }}</p>
+    <!-- A failure in words, at most two lines: the headline in the danger colour, its hint muted; the full text on hover. -->
+    <p v-if="error" class="mt-1 line-clamp-2 min-w-0 wrap-break-word px-1 text-[12px]" :title="[error.headline, error.hint].filter(Boolean).join(' — ')">
+      <span class="text-danger-text">{{ error.headline }}</span>
+      <span v-if="error.hint" class="text-text-muted"> — {{ error.hint }}</span>
+    </p>
   </div>
 </template>
