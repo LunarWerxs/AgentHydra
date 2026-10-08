@@ -13,7 +13,10 @@
 // can know. CliMayte workers use their own status (running/checking = working).
 //
 // WHICH SESSIONS. The union, deduplicated by session id, in this order of precedence: active CliMayte
-// workers, live Claude Desktop chats (/api/chats), the live registry (/api/sessions/live), hook rows
+// workers, this PC's unarchived Claude Desktop chats (/api/chats), running or not (owner, 2026-10-08: with the
+// cloud off "I should see all my chats"; a chat whose engine had stopped left the list while the cloud list
+// kept it, so the two lists looked like they disagreed about which chats are local; the other PC's chats
+// never come through /api/chats), the live registry (/api/sessions/live), hook rows
 // that say working or blocked, and any indexed transcript written in the last 10 minutes (a CLI or Codex
 // session outside ~/.claude; working for its first 30 s, idle after), or of any age when it is the one
 // session asked for by id. Minus the session ids of Hydra Desk's own chats, and minus HSwarm's job
@@ -100,7 +103,7 @@ export function mapExternal(
 ): ExternalSession[] {
   const hooks = new Map(inp.agentStatus.filter((h) => !h.restoredUnconfirmed).map((h) => [h.sessionId, h]))
   const index = new Map(inp.sessions.map((s) => [s.session_id, s]))
-  const chats = new Map(inp.chats.filter((c) => c.live && c.sessionId).map((c) => [c.sessionId, c]))
+  const chats = new Map(inp.chats.filter((c) => c.sessionId && !c.archived).map((c) => [c.sessionId, c]))
   const out = new Map<string, ExternalSession>()
   const add = (s: ExternalSession) => {
     if (!s.id || exclude.has(s.id) || out.has(s.id)) return

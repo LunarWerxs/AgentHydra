@@ -159,6 +159,24 @@ describe('external sessions', () => {
     expect(row(false)).toMatchObject({ source: 'desktop', status: 'idle', unread: false })
   })
 
+  // With the cloud off the list is all of this PC's chats (owner, 2026-10-08), not only the ones whose engine runs.
+  test('a Desktop chat whose engine is not running is still listed; an archived one is not', () => {
+    const chat = (n: number, archived: boolean) => ({
+      instance: 'Claude-9',
+      chatId: `local_chat${n}`,
+      sessionId: sid(n),
+      title: 'Invented chat',
+      archived,
+      lastActivityAt: new Date(NOW - 3 * 3600_000).toISOString(),
+      cwd: null,
+      live: false,
+      unread: true,
+    })
+    const list = mapExternal({ ...inputs, chats: [chat(890, false), chat(891, true)] }, new Set(), NOW)
+    expect(list.find((x) => x.id === sid(890))).toMatchObject({ source: 'desktop', status: 'stale', unread: true })
+    expect(list.some((x) => x.id === sid(891))).toBe(false)
+  })
+
   test('merges workers, desktop chats, the live registry, hooks and fresh transcripts', () => {
     const list = mapExternal(inputs, new Set(), NOW)
     const by = new Map(list.map((x) => [x.id, x]))

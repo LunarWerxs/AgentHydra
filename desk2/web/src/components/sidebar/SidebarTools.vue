@@ -35,7 +35,7 @@ const { showHidden } = useHiddenGroups()
 const narrowed = computed(() => (cloud.on.value ? scopesNarrowed(cloud.scopes.value) : props.filter !== 'active') || showHidden.value || activeOnly.value)
 // The colour is apart so the Filter's blue (a filter is narrowing the list) replaces it rather than racing it.
 const toggleActive = () => (activeOnly.value = !activeOnly.value)
-const ACTIVE_TIP = 'Show only the sessions running, starting or waiting on you, and those with background work still running, in both lists'
+const ACTIVE_TIP = 'Show only the sessions running or starting, those with background work still running, and those waiting on you (a question, a reply you have not read, an error), in both lists'
 const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover'
 const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`
 

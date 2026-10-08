@@ -370,11 +370,11 @@ export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): St
       return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you elsewhere' }
     case 'stale':
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, active: false, label: 'Unread' }
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, active: true, label: 'Unread' }
         : { shape: 'ring', tone: 'muted', motion: 'none', dim: true, active: false, label: 'Stale' }
     default:
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, active: false, label: 'Unread' }
+        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, active: true, label: 'Unread' }
         : { shape: 'ring', tone: 'muted', motion: 'none', dim: false, active: false, label: 'Idle elsewhere' }
   }
 }
@@ -396,7 +396,7 @@ export interface StatusGlyph {
   tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
   dim: boolean // the row title is dimmed (closed)
-  active: boolean // what Active only keeps (isActive): running, starting, waiting on you, or background work still running
+  active: boolean // what Active only keeps (isActive): running, starting, background work still running, or waiting on you: a question, a reply not read yet, an error
   label: string // aria-label of the dot, in words
 }
 
@@ -423,7 +423,7 @@ export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { wai
     case 'needs_you':
       return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you' }
     case 'error':
-      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, active: false, label: 'Error' }
+      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, active: true, label: 'Error' }
     case 'limited':
       return { shape: 'ring', tone: 'limited', motion: 'none', dim: false, active: false, label: 'Usage limit' }
     case 'closed':
@@ -443,7 +443,7 @@ function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: num
   const background = (chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0
   if (background) return { shape: 'dot', tone: 'warning', motion: 'none', dim, active: true, label: 'Replied, background tasks running' }
   return chat.unread
-    ? { shape: 'dot', tone: 'success', motion: 'none', dim, active: false, label: 'Done, unread' }
+    ? { shape: 'dot', tone: 'success', motion: 'none', dim, active: true, label: 'Done, unread' }
     : { shape: 'ring', tone: 'muted', motion: 'none', dim, active: false, label: idle }
 }
 

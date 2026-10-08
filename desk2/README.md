@@ -54,6 +54,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   Cloud off too (owner, 2026-10-07). Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves
   each row's account number, its time since the last activity, a working chat's elapsed time and the AgentHydra
   lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
+  It is on by default and its button is plain then; the button turns blue while it is off and the details show
+  (owner, 2026-10-08).
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
   Instances has a page per kind: CLI (the Claude CLI kind shown, Keep windows running and its weekly
   floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI, DeepSeek; the one "Show
@@ -198,9 +200,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   Filter menu item says what it does when the pointer rests on it, and that word draws over the menu
   (`ui/tooltip/TitleTips.vue` sits on the page body above every menu) (owner, 2026-10-05).
 - **Active only.** The Filter menu's Active only, above Show hidden groups, lists only the rows whose dot is
-  active (`isActive` in `sidebar/logic.ts`): running, starting, waiting on you, or done with background work
-  still running. Both lists and every row kind follow it, and it is remembered (`sidebar/active.ts`) (owner,
-  2026-10-07). An inactive chat is dimmed with Cloud on or off: the dim rule is one (`dimText` in `sidebar/rowClasses.ts`).
+  active (`isActive` in `sidebar/logic.ts`): running, starting, done with background work still running, or
+  waiting on you, which includes a reply you have not read and an error (owner, 2026-10-08: "ones that are
+  waiting on me to view it or do something"). Both lists and every row kind follow it, and it is remembered
+  (`sidebar/active.ts`) (owner, 2026-10-07). An inactive chat is dimmed with Cloud on or off: the dim rule is one (`dimText` in `sidebar/rowClasses.ts`).
 - **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,

@@ -18,6 +18,7 @@ import { openHydra } from '@/components/hydra/api'
 import {
   ARCHIVED_LABELS,
   ARCHIVED_VALUES,
+  DEFAULT_SCOPES,
   DISPATCHED_LABELS,
   DISPATCHED_VALUES,
   INSTANCE_DEFAULT,
@@ -57,6 +58,7 @@ const hiddenTip = computed(() =>
 const s = computed(() => cloud.scopes.value)
 const local = computed(() => localOnly(s.value, cloud.thisPc.value))
 const claude = computed(() => s.value.apps.includes('claude'))
+const allApps = computed(() => SOURCE_VALUES.every((v) => s.value.apps.includes(v)))
 
 function set(patch: Partial<CloudScopes>) {
   cloud.scopes.value = { ...cloud.scopes.value, ...patch }
@@ -153,6 +155,17 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
 <template>
   <!-- One click per app; Claude alone until ticked otherwise (owner, 2026-10-05: "I need the ability to toggle on and off, certain items"). -->
   <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[13px] font-medium text-text-muted">Apps</DropdownMenuLabel>
+  <!-- Every app in one click, and back to the default from there (owner, 2026-10-08: "I need to be able to select all, but Claude is the default"). -->
+  <DropdownMenuItem
+    role="menuitemcheckbox"
+    :aria-checked="allApps"
+    :title="allApps ? 'Back to Claude alone, the default' : 'Show every app\'s sessions'"
+    :class="ITEM"
+    @select.prevent="set({ apps: allApps ? [...DEFAULT_SCOPES.apps] : [...SOURCE_VALUES] })"
+  >
+    <span class="flex-1">All</span>
+    <component :is="icons.check" v-if="allApps" class="ms-3" />
+  </DropdownMenuItem>
   <DropdownMenuItem
     v-for="v in SOURCE_VALUES"
     :key="v"
