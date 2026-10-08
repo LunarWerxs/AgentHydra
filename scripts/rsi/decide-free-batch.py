@@ -29,9 +29,11 @@ import argparse
 import asyncio
 import json
 import random
+import re
 import sys
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -47,6 +49,7 @@ ARMS = ("item-paid", "item-free", "batch4", "batch40")  # plus jev when TypeSafe
 # Per-item arms on a named ChatGPT account, by the model a new chat asks for (None: the account's default, Luna).
 MODEL_ARMS = {"item-luna": None, "item-gpt6": "gpt-6", "item-thinking": "luna-thinking"}
 MODEL_WAIT_S = 900  # a message waits this long for its account (shared with live HSwarm work) and for its answer
+PACED_UNTIL = re.compile(r"until (\S+)")  # free_status: "until 2026-10-08T22:28:20.525Z (35 new chats per 30 min)"
 CHOICE = ("choice", "score")
 
 
@@ -180,18 +183,26 @@ class Bench:
     async def take(self, nums: list[int]) -> int:
         """One of these accounts that free_status shows idle (signed in, not busy, resting or paced) and no message of
         this run holds. A named account skips the daemon's pacer, so the pacer is honoured here: a paced account is
-        never taken. Waits for one, up to MODEL_WAIT_S."""
-        for _ in range(MODEL_WAIT_S // 2):
+        never taken. Waits for one, up to MODEL_WAIT_S past the end of any pacing pause free_status names: a pause
+        (about 35 new chats per 30 minutes per account) is a known wait, not a busy account."""
+        deadline = time.time() + MODEL_WAIT_S
+        while time.time() < deadline:
             try:
                 st = await free_route._call("free_status", {}, free_route.STATUS_TIMEOUT_S)
             except free_route._ERRORS:
                 st = {}
             for acc in st.get("accounts") or []:
                 n = acc.get("num")
-                if (n in nums and n not in self.held and acc.get("signedIn") and not acc.get("busy")
+                if n not in nums:
+                    continue
+                if (n not in self.held and acc.get("signedIn") and not acc.get("busy")
                         and not acc.get("resting") and not acc.get("paced")):
                     self.held.add(n)
                     return n
+                until = PACED_UNTIL.match(acc.get("paced") or "")
+                if until:
+                    ends = datetime.fromisoformat(until.group(1).replace("Z", "+00:00")).timestamp()
+                    deadline = max(deadline, ends + MODEL_WAIT_S)
             await asyncio.sleep(2)
         raise TimeoutError(f"none of accounts {nums} was idle for {MODEL_WAIT_S} s")
 
