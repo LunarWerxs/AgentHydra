@@ -25,11 +25,13 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { stat as statAsync } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { REMOTE_CHATS_DIR } from '../config'
-import { collectChats } from './chat-store-scan'
+import { collectChats, collectChatsAsync } from './chat-store-scan'
 import type { ChatLocal, LocalChat, RetireOutcome } from './desktop-chat-types'
+import { mapPool } from './map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -215,26 +217,52 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     }
   }
 
-  function findProject(dir: string, sessionId: string, cwd: string | null): string | null {
+  /** The transcript's size, or null when it is not there (or not a transcript's name). */
+  async function sizeAt(dir: string, project: string, sessionId: string): Promise<number | null> {
+    const path = fileIn(dir, project, sessionId)
+    if (!path) return null
+    try {
+      return (await statAsync(path)).size
+    } catch {
+      return null
+    }
+  }
+
+  /** The folder under `dir` that holds the session's transcript (null when none), and its size, in
+   *  one stat each on the thread pool. list() once looked the folder up and then sized it for every
+   *  chat on the daemon's thread: with collectChats's stat per record that was ~10,000 sync calls a
+   *  pass, 3 s of a 9.3 s stall (2026-10-08). */
+  async function locate(
+    dir: string,
+    sessionId: string,
+    cwd: string | null,
+  ): Promise<{ project: string | null; size: number }> {
     const key = `${dir}\0${sessionId}`
     const seen = projectOf.get(key)
-    if (seen?.project && existsSync(join(dir, seen.project, `${sessionId}.jsonl`)))
-      return seen.project
-    if (seen && !seen.project && Date.now() - seen.at < MISS_MS) return null
-    const found = (() => {
-      // The folder is the chat's cwd with every non-alphanumeric turned to `-`: try it first.
-      const guess = cwd ? cwd.replace(/[^A-Za-z0-9]/g, '-') : null
-      if (guess && existsSync(join(dir, guess, `${sessionId}.jsonl`))) return guess
-      // One existsSync proves the index's answer: a transcript moved since the index was read is a miss.
+    if (seen?.project) {
+      const size = await sizeAt(dir, seen.project, sessionId)
+      if (size !== null) return { project: seen.project, size }
+    } else if (seen && Date.now() - seen.at < MISS_MS) return { project: null, size: 0 }
+    // The folder is the chat's cwd with every non-alphanumeric turned to `-`: try it first.
+    const guess = cwd ? cwd.replace(/[^A-Za-z0-9]/g, '-') : null
+    let size = guess ? await sizeAt(dir, guess, sessionId) : null
+    let project = size === null ? null : guess
+    if (project === null) {
+      // One stat proves the index's answer: a transcript moved since the index was read is a miss.
       const hit = sessionIndex(dir).get(sessionId)
-      return hit && existsSync(join(dir, hit, `${sessionId}.jsonl`)) ? hit : null
-    })()
-    projectOf.set(key, { project: found, at: Date.now() })
-    return found
+      size = hit ? await sizeAt(dir, hit, sessionId) : null
+      if (size !== null) project = hit ?? null
+    }
+    projectOf.set(key, { project, at: Date.now() })
+    return { project, size: size ?? 0 }
   }
 
   /** Hydra Desk's chats, each session once and none a desktop record already lists (`listed`). */
-  function deskChats(listed: Set<string>, now: number): LocalChat[] {
+  async function deskChats(
+    listed: Set<string>,
+    now: number,
+    dirs: Map<string, string>,
+  ): Promise<LocalChat[]> {
     const out: LocalChat[] = []
     for (const home of deskHomes) {
       for (const d of readDeskChats(home)) {
@@ -245,8 +273,8 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
         const config = str(d.account?.configDir)
         const dir = config ? join(config, 'projects') : projectsDir
         const cwd = str(d.cwd)
-        const project = findProject(dir, sessionId, cwd)
-        if (project && dir !== projectsDir) dirOf.set(sessionId, dir)
+        const { project, size } = await locate(dir, sessionId, cwd)
+        if (project && dir !== projectsDir) dirs.set(sessionId, dir)
         const archived = d.archived === true
         const at = num(d.updatedAt)
         const title = str(d.title)
@@ -267,7 +295,7 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
             ...(created !== null ? { createdAt: created } : {}),
           },
           archived,
-          size: project ? sizeOf(fileIn(dir, project, sessionId)) : 0,
+          size,
           ...(!archived && now - (at ?? 0) > DESK_IDLE_MS ? { holdBack: true } : {}),
         })
       }
@@ -275,11 +303,11 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     return out
   }
 
-  function list(): LocalChat[] {
+  async function list(): Promise<LocalChat[]> {
     const dirs = roots()
-    const out: LocalChat[] = []
-    dirOf.clear()
-    for (const c of collectChats(dirs.map((dir) => ({ dir, label: dir })))) {
+    const shown: Omit<LocalChat, 'project' | 'size'>[] = []
+    const cwds: (string | null)[] = []
+    for (const c of await collectChatsAsync(dirs.map((dir) => ({ dir, label: dir })))) {
       if (c.staleLogin || !isUuid(c.cliSessionId)) continue
       const id = c.chatId?.startsWith('local_') ? c.chatId.slice('local_'.length) : null
       if (!isUuid(id)) continue
@@ -287,19 +315,27 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
       if (!where) continue
       const record = recordOf(c)
       if (!record) continue
-      const project = findProject(projectsDir, c.cliSessionId, c.cwd)
-      out.push({
+      shown.push({
         id,
         sessionId: c.cliSessionId,
-        project,
         account: where.account,
         org: where.org,
         record,
         archived: c.archived,
-        size: project ? sizeOf(fileIn(projectsDir, project, c.cliSessionId)) : 0,
       })
+      cwds.push(c.cwd)
     }
-    out.push(...deskChats(new Set(out.map((c) => c.sessionId)), Date.now()))
+    const located = await mapPool(
+      shown.map((c, i) => [c.sessionId, cwds[i] ?? null] as const),
+      16,
+      ([sessionId, cwd]) => locate(projectsDir, sessionId, cwd),
+    )
+    const out: LocalChat[] = shown.map((c, i) => ({ ...c, ...located[i]! }))
+    // Swapped in whole once the pass is done: read() goes on finding the last pass's folders meanwhile.
+    const desk = new Map<string, string>()
+    out.push(...(await deskChats(new Set(out.map((c) => c.sessionId)), Date.now(), desk)))
+    dirOf.clear()
+    for (const [sessionId, dir] of desk) dirOf.set(sessionId, dir)
     return out
   }
 

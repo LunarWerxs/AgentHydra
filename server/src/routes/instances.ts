@@ -93,14 +93,32 @@ app.get('/api/desktop-install', async (c) => {
 // `POST /api/instances/thomas/open` launched claude.exe with a --user-data-dir under System32
 // (2026-09-03; see core/instance-dir.ts). routes/usage.ts and the lightweight instance-mode.ts
 // daemon gate theirs the same way, and scripts/checks/instance-dir-route-gate.mjs holds all three.
+// A live answer is kept per profile and signed-in login for LIVE_ACCOUNT_MS: the AgentHydra pane
+// resolves every row live each time it opens, a token decrypt and a profile call apiece (16
+// profiles at 200-820 ms each, 2026-10-08). A new login is a new key, so a switched account never
+// shows the old one; an answer that did not come back live is not kept; concurrent calls for one
+// key share one resolve.
+const LIVE_ACCOUNT_MS = 5 * 60_000
+const liveAccounts = new Map<string, { at: number; account: ReturnType<typeof resolveAccount> }>()
 app.get('/api/instances/:dir/account', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
   const noNetwork = c.req.query('noNetwork')
-  const account = await resolveAccount(dir, {
-    noNetwork: noNetwork === '1' || noNetwork === 'true',
-  })
-  return c.json(account)
+  if (noNetwork === '1' || noNetwork === 'true')
+    return c.json(await resolveAccount(dir, { noNetwork: true }))
+  const key = `${dir}|${readLoginUuid(dir) ?? ''}`
+  const held = liveAccounts.get(key)
+  if (held && Date.now() - held.at < LIVE_ACCOUNT_MS) return c.json(await held.account)
+  const account = resolveAccount(dir)
+  liveAccounts.set(key, { at: Date.now(), account })
+  try {
+    const answer = await account
+    if (answer.status !== 'live') liveAccounts.delete(key)
+    return c.json(answer)
+  } catch (err) {
+    liveAccounts.delete(key)
+    throw err
+  }
 })
 // Every account this profile has been signed into, newest first (core/login-history.ts): what the
 // row shows when its current account is signed out or unknown and you need to know where it went.

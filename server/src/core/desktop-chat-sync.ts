@@ -442,7 +442,7 @@ export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> 
   }
   const opened = await openFresh(io, rows, state)
 
-  const local = io.local.list()
+  const local = await io.local.list()
   const sharer = pickSharers(local, rows, state)
 
   // A chat this PC shared or took whose row is no longer listed left the store.
@@ -493,7 +493,7 @@ async function uploadBytes(
     }
     win = WINDOW
     budget -= buf.length
-    for (const ch of cutChunks(io.key, c.sessionId, seq, buf.subarray(0, end))) {
+    for (const ch of await cutChunks(io.key, c.sessionId, seq, buf.subarray(0, end))) {
       const r = await io.call('PUT', `/v1/chats/${c.sessionId}/chunks/${ch.seq}`, {
         blob: ch.blob,
         by: io.pc,

@@ -37,14 +37,15 @@ const ENV_SCRUB =
 const WORK_DIR = join(DATA_DIR, 'cli-limit-reset')
 const TOTAL_MS = 75_000
 
+const ESC = String.fromCharCode(27)
+const BEL = String.fromCharCode(7)
+const OSC_RE = new RegExp(`${ESC}\\][^${BEL}${ESC}]*(${BEL}|${ESC}\\\\)`, 'g')
+const CSI_RE = new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, 'g')
+const CHARSET_RE = new RegExp(`${ESC}[=>()][0-9A-Za-z]?`, 'g')
+
 /** Terminal escape sequences out, so the screen can be matched as text. */
 function plain(s: string): string {
-  const ESC = String.fromCharCode(27)
-  const BEL = String.fromCharCode(7)
-  return s
-    .replace(new RegExp(`${ESC}\\][^${BEL}${ESC}]*(${BEL}|${ESC}\\\\)`, 'g'), '')
-    .replace(new RegExp(`${ESC}\\[[0-9;?]*[ -/]*[@-~]`, 'g'), '')
-    .replace(new RegExp(`${ESC}[=>()][0-9A-Za-z]?`, 'g'), '')
+  return s.replace(OSC_RE, '').replace(CSI_RE, '').replace(CHARSET_RE, '')
 }
 
 /**
@@ -203,7 +204,12 @@ function typeInto(run: ResetRun, s: string): void {
   }
 }
 
-const screenOf = (run: ResetRun): string => plain(run.out.raw)
+/** How much of the newest output counts as the screen. The CLI redraws its whole screen many times a
+ *  second, so the output grows by megabytes while waitUntil reads it four times a second
+ *  (2026-10-08: 16% of a 5.7 s daemon stall); what is on screen now is in the newest of it. */
+const SCREEN_TAIL = 256 * 1024
+
+const screenOf = (run: ResetRun): string => plain(run.out.raw.slice(-SCREEN_TAIL))
 
 /** Poll `test` every quarter second for up to `ms`, bounded by the run's deadline unless
  *  `capped` is false, and stop early when the CLI exits. The test's last word is the answer. */

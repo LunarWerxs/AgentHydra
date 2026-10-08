@@ -87,7 +87,7 @@ function pc(name: string, useKey = key): Pc {
   const sizeAt = (path: string) => (existsSync(path) ? statSync(path).size : 0)
   const textAt = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : '')
   const local: ChatLocal = {
-    list: () =>
+    list: async () =>
       chats.map((c) => ({ ...c, size: c.project ? sizeAt(own(c.project, c.sessionId)) : 0 })),
     read: (project, sessionId, from, to) =>
       new Uint8Array(readFileSync(own(project, sessionId)).subarray(from, to)),
