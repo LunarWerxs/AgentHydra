@@ -124,21 +124,25 @@ let timer: ReturnType<typeof setInterval> | null = null
 let firstRun: ReturnType<typeof setTimeout> | null = null
 
 function tick(): void {
-  runIdleSweep()
-    .then((results) => {
-      for (const [profile, r] of Object.entries(results)) {
-        if (!r.ok) console.warn(`[agenthydra] idle sweep: ${profile}: ${r.reason}`)
-        else if (r.result?.armed?.length || r.result?.shellsStopped?.length)
-          console.log(
-            `[agenthydra] idle sweep: ${profile}: armed ${r.result.armed.length} idle engine(s), stopped ${r.result.shellsStopped.length} unused terminal(s); ${r.result.engines} engine(s) left`,
-          )
-      }
-    })
-    .catch((err) => console.error('[agenthydra] idle sweep error:', err))
+  try {
+    runIdleSweep()
+      .then((results) => {
+        for (const [profile, r] of Object.entries(results)) {
+          if (!r.ok) console.warn(`[agenthydra] idle sweep: ${profile}: ${r.reason}`)
+          else if (r.result?.armed?.length || r.result?.shellsStopped?.length)
+            console.log(
+              `[agenthydra] idle sweep: ${profile}: armed ${r.result.armed.length} idle engine(s), stopped ${r.result.shellsStopped.length} unused terminal(s); ${r.result.engines} engine(s) left`,
+            )
+        }
+      })
+      .catch((err) => console.error('[agenthydra] idle sweep error:', err))
+  } catch (err) {
+    console.error('[agenthydra] idle sweep error:', err)
+  }
 }
 
 /** Every 5 minutes (first pass 45s after start), like the other standing sweeps: never keeps the
- *  process alive and always ends its chain in .catch. */
+ *  process alive, and a throw before the chain starts is caught too, so a failed tick is skipped. */
 export function startIdleSweep(): void {
   if (timer) return
   firstRun = setTimeout(tick, FIRST_SWEEP_DELAY_MS)
