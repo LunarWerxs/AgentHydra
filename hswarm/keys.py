@@ -208,40 +208,61 @@ async def check(provider: str, fingerprint: str) -> dict:
     pool = KeyPool([key], provider)
     try:
         if model_check:
-            async with ChatClient(api_keys=[key], provider=provider) as c:
-                # A one-token chat on a free model: OpenRouter's /key answered 200 for keys whose account was deleted
-                # (70 such keys were put back on 2026-09-26 and every one failed its first real call).
-                r = await c._http.post("/chat/completions", headers=c._auth(key),
-                                       json={"model": spec["check_model"], "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1})
-                if not r.is_success:
-                    raise ApiError(r.status_code, r.text, provider)
+            await _check_by_model(provider, spec, key)
         else:
-            from .provider_auth import request_headers
-
-            headers = request_headers(spec, key)
-            if spec.get("transport") == "anthropic":
-                from . import anthropic_native
-
-                headers = {**(spec.get("headers") or {}), "x-api-key": key, "anthropic-version": anthropic_native.VERSION}
-                headers.pop("Authorization", None)
-            async with httpx.AsyncClient(base_url=spec["base_url"], timeout=30, follow_redirects=False) as client:
-                response = await client.get(path, headers=headers)
-            if not response.is_success:
-                raise ApiError(response.status_code, response.text, provider)
+            await _check_by_get(provider, spec, key, path)
     except ApiError as e:
-        # A service 403 can mean the key lacks permission for this endpoint, rather than being invalid.
-        if e.status == 401 or (not service and e.status == 403) or (e.status == 400 and "api key" in (e.body or "").lower()):
+        if _is_rejection(e, service):
             pool.disable(key, reason=f"{provider} rejected this key (HTTP {e.status})", status=e.status)
             return {**out, "result": "rejected", "status": e.status,
                     "note": f"{provider} rejected this key (HTTP {e.status}): check it was copied whole, or make a new one"}
         return {**out, "result": "unchecked", "status": e.status, "note": f"{provider} answered HTTP {e.status}, so the key could not be checked now"}
     except httpx.HTTPError as e:
         return {**out, "result": "unchecked", "note": f"could not reach {provider} ({type(e).__name__})"}
+    _enable_if_rejected_before(pool, key, fingerprint)
+    return {**out, "result": "ok", "note": f"{provider} accepted this credential; paid credit was not checked"}
+
+
+async def _check_by_model(provider: str, spec: dict, key: str) -> None:
+    from .usage import ApiError
+
+    async with ChatClient(api_keys=[key], provider=provider) as c:
+        # A one-token chat on a free model: OpenRouter's /key answered 200 for keys whose account was deleted
+        # (70 such keys were put back on 2026-09-26 and every one failed its first real call).
+        r = await c._http.post("/chat/completions", headers=c._auth(key),
+                               json={"model": spec["check_model"], "messages": [{"role": "user", "content": "ok"}], "max_tokens": 1})
+        if not r.is_success:
+            raise ApiError(r.status_code, r.text, provider)
+
+
+async def _check_by_get(provider: str, spec: dict, key: str, path: str) -> None:
+    from .provider_auth import request_headers
+    from .usage import ApiError
+
+    headers = request_headers(spec, key)
+    if spec.get("transport") == "anthropic":
+        from . import anthropic_native
+
+        headers = {**(spec.get("headers") or {}), "x-api-key": key, "anthropic-version": anthropic_native.VERSION}
+        headers.pop("Authorization", None)
+    async with httpx.AsyncClient(base_url=spec["base_url"], timeout=30, follow_redirects=False) as client:
+        response = await client.get(path, headers=headers)
+    if not response.is_success:
+        raise ApiError(response.status_code, response.text, provider)
+
+
+def _is_rejection(e, service: bool) -> bool:
+    """A refusal of the key itself. A service 403 can mean the key lacks permission for this endpoint, rather than
+    being invalid."""
+    return e.status == 401 or (not service and e.status == 403) or (e.status == 400 and "api key" in (e.body or "").lower())
+
+
+def _enable_if_rejected_before(pool: KeyPool, key: str, fingerprint: str) -> None:
+    """Take an accepted key out of the slot when an earlier check (not a credit failure) put it there."""
     row = next((r for r in pool.status() if r.get("fingerprint") == fingerprint), {})
     reason = str(row.get("disabled_reason") or "").lower()
     if row.get("disabled") and pool._entry(key).get("disabled_status") in (400, 401, 403) and ("rejected this key" in reason or "revoked" in reason):
         pool.enable(key)
-    return {**out, "result": "ok", "note": f"{provider} accepted this credential; paid credit was not checked"}
 
 
 def set_enabled(fingerprint: str | None, enabled: bool, only: str | None = None, all_keys: bool = False, reason: str = "disabled by hand") -> dict:

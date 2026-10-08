@@ -1043,7 +1043,7 @@ that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends no or
   manager. The manager worker carries the origin of the chat that called `climayte_manage`.
 - The tool's answer says which: `ping: "on: <first 8 of the session id> is messaged when work
   settles (<how>)"`, `ping: "on: manager <id> is sent a message when work settles"`, or
-  `ping: "off: <why>; run python ~/.claude/tools/climayte_wait.py --group <g>"`.
+  `ping: "off: <why>; run python ~/.claude/tools/climayte_wait.py --group <g>"` (the owner's waiter script, which polls the workers endpoint until the group settles; see [CLIMAYTE-FIELD-NOTES.md](CLIMAYTE-FIELD-NOTES.md)).
 
 **What triggers a ping.** Each worker change is diffed against the last snapshot of that worker.
 Things the chat must act on: done with the check passed, done and needing a verdict, check failed
@@ -1397,13 +1397,13 @@ beside `login-sync.json` and survives turning the switch off. Status carries `sh
 
 **View only (owner, 2026-10-05):** "I don't want them to actually sync back and forth. I just want to
 view the ones running on his computer, and he can view the ones running on mine." The two-way sync had
-landed the other PC's chats in this PC's Claude Desktop sidebar (written into `~/.claude/projects`,
+landed the other PC's chats in this PC's Claude Desktop sidebar (written into `~/.claude/projects` ([CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)),
 then imported), where someone could go on in them and send turns back. Now:
 
 - Only the PC a chat started on (`origin.pc`) writes it. A copy of another PC's chat is never sent,
   however it grows here.
 - Another PC's chats come down into the viewer, `DATA_DIR/remote-chats/<project>/<session>.jsonl`
-  (`REMOTE_CHATS_DIR`), never into `~/.claude` or a desktop chat list. The session list reads it as a
+  (`REMOTE_CHATS_DIR`), never into `~/.claude` ([CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) or a desktop chat list. The session list reads it as a
   Claude store marked `remote`, so Sessions and Desk 2's cloud list show those rows with `from_pc` and
   the origin's title and archive state.
 - When the store's copy of a PC's own chat is not what that PC last wrote (a chat the two-way sync
@@ -1422,7 +1422,7 @@ works in Hydra Desk shared almost nothing: on 2026-10-07 the other PC's 23 chats
 in three days had none in the store, against its 6 desktop chats. `core/desktop-chat-local.ts` now lists
 the chats of Jacob's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
 `~/.hydra-desk-2`, never a throwaway Desk's home) beside the desktop records, view only like them. A
-chat's transcript is read from its account's own folder (`account.configDir`, else `~/.claude`); a
+chat's transcript is read from its account's own folder (`account.configDir`, else the default login's config dir `~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)); a
 session a desktop record already lists goes once, as that record; one idle over a week that was never
 shared is held back (`holdBack`, `DESK_IDLE_MS`), so the store's room goes to what runs. A PC shares its
 Desk chats once it runs this version; the PC that views them needs nothing new.
@@ -1780,7 +1780,7 @@ gives it a separate, small endpoint instead (piece 4).
 
 **How does the orchestrator's waiter wait on just the manager?** The waiter exits when the wave's
 status leaves `running` or the manager worker failed or was cancelled. The orchestrator runs
-`python ~/.claude/tools/climayte_wait.py --wave <id> --timeout-s 7200`
+`python ~/.claude/tools/climayte_wait.py --wave <id> --timeout-s 7200` (the owner's waiter script, which polls the workers endpoint until the wave settles; see [CLIMAYTE-FIELD-NOTES.md](CLIMAYTE-FIELD-NOTES.md))
 and wakes once per wave when the manager reports the wave done, rejected, verified, or failed,
 or when the manager dies. This ensures the orchestrator wakes only once per wave, not at every
 manager turn (piece 2).

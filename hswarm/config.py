@@ -395,41 +395,57 @@ def _add_models(provider: str, models, user: bool) -> None:
             continue
         name, spec = str(raw).strip().lower(), dict(spec)
         if user:  # the console's switches, kept beside the model they switch
-            if spec.pop("enabled", True) is False:
-                DISABLED_MODELS.add(name)
-            if (n := _rank(spec.pop("priority", None))) is not None:
-                PRIORITY[name] = n
+            _take_switches(name, spec)
         if not spec:
             continue  # switches only: the model itself is defined in a shipped file
-        for alias in spec.pop("aliases", None) or ():
-            ALIASES[str(alias).strip().lower()] = name
-        for key, table in (("route", ROUTES), ("route_cc", ROUTES_CC)):
-            legs = spec.pop(key, None)
-            if isinstance(legs, list) and legs:
-                table[name] = tuple(str(x).strip().lower() for x in legs)
-                if key == "route" and user and "route_cc" not in spec:
-                    ROUTES_CC.pop(name, None)  # a hand-written order wins for cc too, unless route_cc says otherwise
-        ref = spec.pop("price_ref", None)  # the price lives in data/prices.json (prices.py); the registry carries its resolved shape
-        if ref and "price" not in spec and "peak" not in spec:
-            found = prices.registry_price(str(ref))
-            if found is None:
-                print(f"[hswarm] {provider}/{name}: price_ref {ref!r} is not in data/prices.json; the model stays unpriced", file=sys.stderr)
-            else:
-                spec["peak" if found[1] else "price"] = found[0]
-                if over := prices.registry_price_over(str(ref)):
-                    spec["price_over"] = over  # a long prompt's tier (Haiku 5.5): price() picks it per call
-        old = MODELS.get(name, {})
-        merged = {**old, **spec}
-        # A table changes only what it names, one level down too: `price = {out = 0.5}` keeps the shipped hit and
-        # miss rates rather than pricing them at zero, and so on for peak and extra.
-        for k in ("price", "peak", "extra"):
-            if isinstance(old.get(k), dict) and isinstance(spec.get(k), dict):
-                merged[k] = {**old[k], **spec[k]}
-        if "price" in spec and "peak" not in spec:
-            merged.pop("peak", None)  # a price written here is the price; a shipped peak table would win over it
-        if "price" in spec and "price_over" not in spec:
-            merged.pop("price_over", None)  # and a shipped long-prompt tier would replace it on long prompts
-        MODELS[name] = {**merged, "provider": provider}
+        _take_routes(name, spec, user)
+        _resolve_price_ref(provider, name, spec)
+        _store_model(provider, name, spec)
+
+
+def _take_switches(name: str, spec: dict) -> None:
+    if spec.pop("enabled", True) is False:
+        DISABLED_MODELS.add(name)
+    if (n := _rank(spec.pop("priority", None))) is not None:
+        PRIORITY[name] = n
+
+
+def _take_routes(name: str, spec: dict, user: bool) -> None:
+    for alias in spec.pop("aliases", None) or ():
+        ALIASES[str(alias).strip().lower()] = name
+    for key, table in (("route", ROUTES), ("route_cc", ROUTES_CC)):
+        legs = spec.pop(key, None)
+        if isinstance(legs, list) and legs:
+            table[name] = tuple(str(x).strip().lower() for x in legs)
+            if key == "route" and user and "route_cc" not in spec:
+                ROUTES_CC.pop(name, None)  # a hand-written order wins for cc too, unless route_cc says otherwise
+
+
+def _resolve_price_ref(provider: str, name: str, spec: dict) -> None:
+    ref = spec.pop("price_ref", None)  # the price lives in data/prices.json (prices.py); the registry carries its resolved shape
+    if ref and "price" not in spec and "peak" not in spec:
+        found = prices.registry_price(str(ref))
+        if found is None:
+            print(f"[hswarm] {provider}/{name}: price_ref {ref!r} is not in data/prices.json; the model stays unpriced", file=sys.stderr)
+        else:
+            spec["peak" if found[1] else "price"] = found[0]
+            if over := prices.registry_price_over(str(ref)):
+                spec["price_over"] = over  # a long prompt's tier (Haiku 5.5): price() picks it per call
+
+
+def _store_model(provider: str, name: str, spec: dict) -> None:
+    old = MODELS.get(name, {})
+    merged = {**old, **spec}
+    # A table changes only what it names, one level down too: `price = {out = 0.5}` keeps the shipped hit and
+    # miss rates rather than pricing them at zero, and so on for peak and extra.
+    for k in ("price", "peak", "extra"):
+        if isinstance(old.get(k), dict) and isinstance(spec.get(k), dict):
+            merged[k] = {**old[k], **spec[k]}
+    if "price" in spec and "peak" not in spec:
+        merged.pop("peak", None)  # a price written here is the price; a shipped peak table would win over it
+    if "price" in spec and "price_over" not in spec:
+        merged.pop("price_over", None)  # and a shipped long-prompt tier would replace it on long prompts
+    MODELS[name] = {**merged, "provider": provider}
 
 
 def _inherit() -> None:

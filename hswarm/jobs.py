@@ -302,6 +302,46 @@ def remaining(task: Task, res: Result) -> Task | None:
     return child
 
 
+def _no_key_why(pool, model: str, short: set[str], tried: set[str], key: str | None, wait_s: float) -> str:
+    """Why a cc task has no key to run on: all disabled, all resting too long, or every live key too small for cc."""
+    why = ("every key in the pool is disabled" if key is None
+           else f"every key with balance is resting, the soonest wakes in {wait_s:.0f} s")
+    if key is None and short and pool.live_besides(tried - short) == 0 and pool.live_besides(set(pool.keys) - short):
+        why = input_limit.why_short([input_limit.limit(k, model) or 0 for k in short], model)
+    return why
+
+
+def _no_key_result(task: Task, res: Result | None, dead: list[dict], why: str) -> tuple[Result, list[dict]]:
+    """The result a cc task ends on when no key is left, and the dead runs still to fold into it."""
+    if res is None:
+        res = Result(id=task.id, backend="cc", model=task.model, status="error", started=now_iso(), finished=now_iso(),
+                     error=f"NoUsableKey: no key to run on: {why}; top up and run `hswarm keys probe`, or `hswarm keys enable <fingerprint>`")
+        return res, dead
+    if dead[-1].get("short"):
+        res.error = f"{res.error or ''} (key {dead[-1]['key']} cannot take a cc worker's first turn; NoUsableKey: {why})".strip()
+    elif dead[-1].get("revoked"):
+        res.error = f"{res.error or ''} (key {dead[-1]['key']} refused by the provider (401/403); NoUsableKey: no usable key left to retry on: {why})".strip()
+    else:
+        res.error = f"{res.error or ''} (key {dead[-1]['key']} disabled as out of credit; NoUsableKey: no key with credit left to retry on: {why})".strip()
+    return res, dead[:-1]  # this result IS the last dead run; its own spend is already in it
+
+
+def _settle_cc_key(pool, key: str, model: str, short: set[str], res: Result, revoked: bool) -> bool:
+    """True when the cc run's result stands; otherwise mark its key (too small, refused or spent) for the next run."""
+    limited = res.status == "error" and input_limit.from_error(key, model, res.error)
+    if limited and limited < config.CC_FIRST_TURN_TOKENS:
+        short.add(key)  # the key is fine: it stays enabled, only no cc worker starts on it (input_limit.py)
+    elif not revoked and not out_of_balance(res):
+        return True
+    elif revoked:
+        # A refused key rests with a strike, the same ladder the API client uses for a 401/403, and
+        # the task goes again on the next key instead of ending here.
+        pool.rest(key, 0, status=401, dead=True, gone=account_gone(res.error))
+    else:
+        pool.broke(key, status=402, until=regain_at(res.error))
+    return False
+
+
 class _Slot:
     """A task's place in its backend's concurrency semaphore, given back while the task rests between dead reruns.
     Measured 2026-09-26 (jobs 20260926-050510-e32e, -a7f8, -ef64 and 20260926-050505-d332): the rest ran inside
@@ -1216,22 +1256,8 @@ class JobManager:
         while True:
             key, wait_s = pool.next_with_balance(exclude=tried)
             if key is None or waited + wait_s > CC_KEY_WAIT_S:
-                why = ("every key in the pool is disabled" if key is None
-                       else f"every key with balance is resting, the soonest wakes in {wait_s:.0f} s")
-                if key is None and short and pool.live_besides(tried - short) == 0 and pool.live_besides(set(pool.keys) - short):
-                    why = input_limit.why_short([input_limit.limit(k, model) or 0 for k in short], model)
-                if res is None:
-                    res = Result(id=task.id, backend="cc", model=task.model, status="error", started=now_iso(), finished=now_iso(),
-                                 error=f"NoUsableKey: no key to run on: {why}; top up and run `hswarm keys probe`, or `hswarm keys enable <fingerprint>`")
-                    earlier = dead
-                else:
-                    if dead[-1].get("short"):
-                        res.error = f"{res.error or ''} (key {dead[-1]['key']} cannot take a cc worker's first turn; NoUsableKey: {why})".strip()
-                    elif dead[-1].get("revoked"):
-                        res.error = f"{res.error or ''} (key {dead[-1]['key']} refused by the provider (401/403); NoUsableKey: no usable key left to retry on: {why})".strip()
-                    else:
-                        res.error = f"{res.error or ''} (key {dead[-1]['key']} disabled as out of credit; NoUsableKey: no key with credit left to retry on: {why})".strip()
-                    earlier = dead[:-1]  # this result IS the last dead run; its own spend is already in it
+                why = _no_key_why(pool, model, short, tried, key, wait_s)
+                res, earlier = _no_key_result(task, res, dead, why)
                 self._fold_dead_runs(res, transcript, earlier, restarted)
                 return res, transcript
             if wait_s > 0:
@@ -1256,18 +1282,9 @@ class JobManager:
             res, transcript = await run_cc_task(left, key, after)
             restarted = restarted or bool(dead and not (isinstance(transcript, dict) and transcript.get("resumed")))
             revoked = key_revoked(res)
-            limited = res.status == "error" and input_limit.from_error(key, model, res.error)
-            if limited and limited < config.CC_FIRST_TURN_TOKENS:
-                short.add(key)  # the key is fine: it stays enabled, only no cc worker starts on it (input_limit.py)
-            elif not revoked and not out_of_balance(res):
+            if _settle_cc_key(pool, key, model, short, res, revoked):
                 self._fold_dead_runs(res, transcript, dead, restarted)
                 return res, transcript
-            elif revoked:
-                # A refused key rests with a strike, the same ladder the API client uses for a 401/403, and
-                # the task goes again on the next key instead of ending here.
-                pool.rest(key, 0, status=401, dead=True, gone=account_gone(res.error))
-            else:
-                pool.broke(key, status=402, until=regain_at(res.error))
             dead.append({"key": config.fingerprint(key), "error": res.error, "cost_usd": res.cost_usd, "usage": dict(res.usage),
                          "turns": res.turns, "seconds": res.seconds, "transcript": transcript, "taint": res.taint, "revoked": revoked,
                          "short": key in short})

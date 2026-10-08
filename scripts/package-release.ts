@@ -25,10 +25,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
+import { findRepoRoot } from '../tests/repo-root'
 import { buildLauncher } from './build-launcher'
 import { writePosixLauncher } from './launcher-posix'
 
-const ROOT = resolve(import.meta.dir, '..')
+const ROOT = findRepoRoot(import.meta.dir)
 const VERSION: string = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version
 const TARGETS = ['windows-x64', 'linux-x64', 'linux-arm64', 'darwin-x64', 'darwin-arm64']
 const NODE_OS: Record<string, string> = { windows: 'win32', linux: 'linux', darwin: 'darwin' }

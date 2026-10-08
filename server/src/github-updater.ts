@@ -702,6 +702,71 @@ export interface ReconcileDeps {
   stamp?: string
 }
 
+interface ReconcileCtx {
+  src: string
+  cur: string
+  stamp: string
+  copy: (from: string, to: string) => void
+  rename: RenameFn
+  locked: string[]
+  removed: string[]
+  movedAside: string[]
+}
+
+/** Rename a file in use out of the way; its aside path, or null when even that is refused. */
+function moveAside(ctx: ReconcileCtx, rel: string): string | null {
+  const aside = `${join(ctx.cur, rel)}.old-${ctx.stamp}`
+  try {
+    ctx.rename(join(ctx.cur, rel), aside)
+    return aside
+  } catch {
+    return null
+  }
+}
+
+/** Copy one shipped file over, moving an in-use one aside first; records what it could not touch. */
+function reconcileShippedFile(ctx: ReconcileCtx, rel: string): void {
+  const dest = join(ctx.cur, rel)
+  try {
+    mkdirSync(dirname(dest), { recursive: true })
+    ctx.copy(join(ctx.src, rel), dest)
+    return
+  } catch {
+    /* in use, most likely: try to move it aside below */
+  }
+  const aside = moveAside(ctx, rel)
+  if (!aside) {
+    ctx.locked.push(rel)
+    return
+  }
+  try {
+    ctx.copy(join(ctx.src, rel), dest)
+    ctx.movedAside.push(rel)
+  } catch {
+    // The new file did not land: put the old one back rather than leave a hole.
+    try {
+      rmSync(dest, { force: true })
+      ctx.rename(aside, dest)
+    } catch {
+      /* the aside stays under its .old- name */
+    }
+    ctx.locked.push(rel)
+  }
+}
+
+/** Delete one file the release no longer ships, or move it aside when it is in use. */
+function removeRetiredFile(ctx: ReconcileCtx, rel: string): void {
+  try {
+    rmSync(join(ctx.cur, rel), { force: true })
+    ctx.removed.push(rel)
+  } catch {
+    if (moveAside(ctx, rel)) {
+      ctx.removed.push(rel)
+      ctx.movedAside.push(rel)
+    } else ctx.locked.push(rel)
+  }
+}
+
 /**
  * Bring one reconcile-strategy component to the bundle's exact content, file by file, without
  * ever renaming the folder: copy every shipped file over, delete every file the release no longer
@@ -735,57 +800,13 @@ export function reconcileComponent(
     output.push(`could not create ${comp.name}/: ${e instanceof Error ? e.message : String(e)}`)
     return { installed: false, removed, locked, movedAside }
   }
-  /** Rename a file in use out of the way; its aside path, or null when even that is refused. */
-  const moveAside = (rel: string): string | null => {
-    const aside = `${join(cur, rel)}.old-${stamp}`
-    try {
-      rename(join(cur, rel), aside)
-      return aside
-    } catch {
-      return null
-    }
-  }
-  for (const rel of wanted) {
-    const dest = join(cur, rel)
-    try {
-      mkdirSync(dirname(dest), { recursive: true })
-      copy(join(src, rel), dest)
-      continue
-    } catch {
-      /* in use, most likely: try to move it aside below */
-    }
-    const aside = moveAside(rel)
-    if (!aside) {
-      locked.push(rel)
-      continue
-    }
-    try {
-      copy(join(src, rel), dest)
-      movedAside.push(rel)
-    } catch {
-      // The new file did not land: put the old one back rather than leave a hole.
-      try {
-        rmSync(dest, { force: true })
-        rename(aside, dest)
-      } catch {
-        /* the aside stays under its .old- name */
-      }
-      locked.push(rel)
-    }
-  }
+  const ctx: ReconcileCtx = { src, cur, stamp, copy, rename, locked, removed, movedAside }
+  for (const rel of wanted) reconcileShippedFile(ctx, rel)
   for (const rel of listFilesRecursive(cur)) {
     // An aside from this or an earlier update is cleanup's to remove, not a retired release file.
     if (wanted.has(rel) || rel === RELEASE_VERSION_FILE || ASIDE_RE.test(rel)) continue
     if (underPreserved(rel, comp)) continue
-    try {
-      rmSync(join(cur, rel), { force: true })
-      removed.push(rel)
-    } catch {
-      if (moveAside(rel)) {
-        removed.push(rel)
-        movedAside.push(rel)
-      } else locked.push(rel)
-    }
+    removeRetiredFile(ctx, rel)
   }
   try {
     writeFileSync(join(cur, RELEASE_VERSION_FILE), `${version}\n`)
