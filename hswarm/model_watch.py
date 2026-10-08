@@ -228,9 +228,27 @@ async def scan(providers: list[str] | None = None) -> dict:
         else:
             models = before
         table[provider] = {"checked_at": now, "error": error, "models": models}
+    state = {"scanned_at": now, "providers": table}
+    scored = await _scored(digest(state)["providers"])
+    state["scored_unindexed"] = scored[0]
     path().parent.mkdir(parents=True, exist_ok=True)
-    shared.atomic_write(path(), json.dumps({"scanned_at": now, "providers": table}, indent=2, sort_keys=True) + "\n", private=True)
-    return digest({"scanned_at": now, "providers": table}, {p for p, _, _ in results})
+    shared.atomic_write(path(), json.dumps(state, indent=2, sort_keys=True) + "\n", private=True)
+    scanned = {p for p, _, _ in results}
+    out = digest(state, scanned)
+    out["scored_unindexed"] = [r for r in scored[0] if r["provider"] in scanned]
+    out["scored_unindexed_error"] = scored[1]
+    return out
+
+
+async def _scored(providers: dict) -> tuple[list[dict], str | None]:
+    """The unbenchmarked models Artificial Analysis scores in full, or none with the reason when its page cannot be read.
+    The Artificial Analysis read is extra: the scan's own table stands without it. Owner, 2026-10-07."""
+    from . import aa_index
+
+    try:
+        return await asyncio.to_thread(aa_index.scored_unindexed, providers), None
+    except Exception as e:  # noqa: BLE001 - one unreadable page must not fail the scan
+        return [], f"{type(e).__name__}: {e}"[:200]
 
 
 def summary() -> str:
@@ -243,7 +261,8 @@ def summary() -> str:
     ub = sum(len(r["unbenchmarked"]) for r in rows.values())
     secs = time.time() - _epoch(state["scanned_at"])
     age = f"{secs / 3600:.1f} h" if secs < 48 * 3600 else f"{secs / 86400:.1f} days"
-    text = f"last scan {age} ago: {bu} benchmarked but unrouted, {ub} unbenchmarked"
+    sc = len(state.get("scored_unindexed") or [])
+    text = f"last scan {age} ago: {bu} benchmarked but unrouted, {ub} unbenchmarked, {sc} scored by Artificial Analysis and not indexed"
     failing = sorted(p for p, r in rows.items() if r["error"])
     if failing:
         text += f", failing: {', '.join(failing)}"

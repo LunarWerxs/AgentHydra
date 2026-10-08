@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from hswarm import client, model_watch
+from hswarm import aa_index, client, model_watch
 
 
 @pytest.mark.parametrize("raw, want", [
@@ -93,6 +93,7 @@ class FakeClient:
 
 def test_a_failing_provider_is_recorded_and_hides_none_of_the_others(monkeypatch):
     monkeypatch.setattr(client, "DeepSeekClient", FakeClient)
+    monkeypatch.setattr(aa_index, "scored_unindexed", lambda providers: [])
     FakeClient.answers = {"example-a": RuntimeError("HTTP 503"), "example-b": [{"id": "example-gamma"}, "Example-Delta-TEE"]}
     first = asyncio.run(model_watch.scan(["example-a", "example-b"]))
     assert first["providers"]["example-a"]["error"] == "RuntimeError: HTTP 503"

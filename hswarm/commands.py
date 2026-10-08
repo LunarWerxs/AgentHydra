@@ -729,10 +729,16 @@ async def cmd_models(a) -> int:
         _print(out) if a.json else print(out["note"])
         return 0
     if getattr(a, "watch", False):
-        from . import model_watch
+        from . import aa_index, model_watch
 
         out = await model_watch.scan()
-        _print(out) if a.json else print(model_watch.render(out))
+        if a.json:
+            _print(out)
+            return 0
+        print(model_watch.render(out))
+        print("\n".join(aa_index.render(out["scored_unindexed"])))
+        if out.get("scored_unindexed_error"):
+            print(f"Artificial Analysis not read, unbenchmarked models not checked against it: {out['scored_unindexed_error']}")
         return 0
     if getattr(a, "routes", False):
         out = await asyncio.to_thread(catalogue.routes_view)
@@ -761,6 +767,28 @@ async def cmd_models(a) -> int:
         print(f"{r['model']:58} {str(r['provider'] or '-'):11} {rate}")
     print(f"\n{out['shown']} of {out['count']} models | catalogue: {out['catalogue']}")
     return 0
+
+
+async def cmd_index(a) -> int:
+    from . import aa_index
+
+    if a.index_cmd == "refresh":
+        out = await asyncio.to_thread(aa_index.refresh)
+        if a.json:
+            _print(out)
+        else:
+            print(f"index refreshed: {len(out['updated'])} points updated from Artificial Analysis; kept as they were "
+                  f"(not scored in full there): {', '.join(out['kept']) or '-'}")
+        return 0
+    out = await asyncio.to_thread(aa_index.add, a.slugs)
+    if a.json:
+        _print(out)
+    else:
+        for slug in out["added"]:
+            print(f"added {slug}")
+        for slug, why in out["refused"].items():
+            print(f"not added {slug}: {why}")
+    return 1 if out["refused"] else 0
 
 
 async def cmd_web(a) -> int:
@@ -817,5 +845,5 @@ COMMANDS = {
     "service": cmd_service,
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
-    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
+    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "index": cmd_index, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
 }

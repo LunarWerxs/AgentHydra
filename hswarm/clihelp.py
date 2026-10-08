@@ -57,6 +57,10 @@ META: dict[str, dict] = {
     "models": {"effect": WRITE, "guide": "Listing is read-only; --refresh rewrites ~/.hswarm/openrouter-models.json from the provider's catalogue; "
                "--watch makes one free model-list GET per chat provider with a live key and rewrites ~/.hswarm/model-watch.json.",
                "examples": ["hswarm models --grep glm --json", "hswarm models --routes", "hswarm models --watch"]},
+    "index": {"effect": WRITE, "guide": "Rewrites hswarm/data/published-models.json (the bundled benchmark index, to be committed): `add` appends "
+              "the named models' points, `refresh` rewrites the numbers of the points already there. Both read one Artificial Analysis model page "
+              "(a free GET, cached in ~/.hswarm/aa-cache.json for a day). The index is read when hswarm starts, so restart after a change.",
+              "examples": ["hswarm index refresh", "hswarm index add gpt-6-sol"]},
     "ask": {"effect": SPEND, "guide": "One paid, tool-free model call. Prefer the hswarm_ask MCP tool inside a Claude session; --json returns data.",
             "examples": ["hswarm ask \"Classify this: ...\" --json", "hswarm ask \"...\" --role search"]},
     "run": {"effect": SPEND, "guide": "Runs a whole tasks file of paid workers. Set --budget (USD ceiling) and check the task count before running; --check validates the file and the route without sending anything.",

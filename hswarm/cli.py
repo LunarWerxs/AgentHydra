@@ -111,6 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
     md.add_argument("--limit", type=int, default=60)
     md.add_argument("--json", action="store_true")
 
+    ix = sub.add_parser("index", help="the benchmark index: add models Artificial Analysis scores in full, or refresh its numbers from the same source")
+    ixs = ix.add_subparsers(dest="index_cmd", required=True)
+    ixa = ixs.add_parser("add", help="append the named models' points to the index, sourced from their Artificial Analysis model pages")
+    ixa.add_argument("slugs", nargs="+", metavar="SLUG")
+    ixa.add_argument("--json", action="store_true")
+    ixr = ixs.add_parser("refresh", help="rewrite every index point's numbers from Artificial Analysis's model pages")
+    ixr.add_argument("--json", action="store_true")
+
     q = sub.add_parser("ask", help="one tool-free question")
     q.add_argument("prompt")
     q.add_argument("--system")
