@@ -2,9 +2,8 @@ import './relaunch-identity-boot'
 import { spawn } from 'node:child_process'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import net from 'node:net'
-import { join, relative } from 'node:path'
+import { join } from 'node:path'
 import { bodyLimit } from 'hono/body-limit'
-import { serveStatic } from 'hono/bun'
 import { cors } from 'hono/cors'
 import { warmAnalyticsInBackground } from './analytics'
 import { apiOriginAllowlist } from './api-origins'
@@ -39,11 +38,9 @@ import {
   LAUNCHER_PATH,
   noAutoOpen,
   PORT,
-  PORTABLE_WINDOW_SIZE,
   QUICK_INSTANCES_DIST,
   SERVICE_NAME,
   VERSION,
-  WEB_DIST_CANDIDATES,
 } from './config'
 import {
   buildAuthorizeUrl,
@@ -139,7 +136,6 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
-import { openPortableWindow } from './portable-window.mjs'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -173,7 +169,6 @@ import {
 } from './usage-refresh'
 import { checkUsageForCliInstance, checkUsageForDesktop } from './usage-service'
 import { startVersionDriftWatch } from './version-drift'
-import { WINDOW_SIZE_HINT_PARAM, windowSizeHintFor } from './window-size'
 
 // The daemon never runs the blocking cold index build; see forbidSyncIndexBuild.
 forbidSyncIndexBuild()
@@ -239,16 +234,7 @@ process.on('exit', (code) => {
 // every request is on its in-flight list. See stall-sentinel.ts.
 app.use('*', startStallSentinel(logFilePath()))
 
-// --- portable mode (server/src/db.ts settings table; see server/src/portable-window.mjs) ---
-function portableModeEnabled(): boolean {
-  return getSetting('portable_mode') === '1'
-}
-function setPortableMode(value: boolean): void {
-  setSetting('portable_mode', value ? '1' : '0')
-  updateInstanceInfo({ portableMode: value })
-}
-
-// --- hide tray icon (server/src/db.ts settings table; read live by misc/AgentHydra-Tray.ps1) ---
+// --- hide tray icon (server/src/db.ts settings table; read live by the tray host) ---
 function hideTrayIconEnabled(): boolean {
   return getSetting('hide_tray_icon') === '1'
 }
@@ -579,9 +565,8 @@ app.post('/api/update/settings', async (c) => {
   return c.json({ enabled: autoUpdateEnabled(), intervalSecs: getAutoUpdateIntervalSecs() })
 })
 
-// --- app settings (portable mode, hide tray icon, usage auto-refresh; see server/src/db.ts) ------
+// --- app settings (hide tray icon, usage auto-refresh; see server/src/db.ts) ------
 const appSettings = () => ({
-  portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
   desktopCliPairing: getSetting('desktop_cli_pairing') === '1',
   transcriptEditor: getSetting('transcript_editor'),
@@ -628,7 +613,6 @@ app.post('/api/ui-prefs', async (c) => c.json({ prefs: writeUiPrefs(await jsonBo
 app.get('/api/settings', (c) => c.json(appSettings()))
 app.post('/api/settings', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.portableMode === 'boolean') setPortableMode(body.portableMode)
   if (typeof body.hideTrayIcon === 'boolean') setHideTrayIcon(body.hideTrayIcon)
   // Applied IMMEDIATELY, not at the next boot: a toggle whose effect you cannot see until you
   // restart is a toggle nobody trusts, and the failure this exists to fix was invisible enough
@@ -852,33 +836,6 @@ await import('./routes/climayte')
 await import('./routes/hswarm')
 await import('./routes/routing')
 
-// --- portable window (opens this daemon's own UI in a chromeless app window) -------------------
-app.post('/api/portable-window', async (c) => {
-  // readInstanceInfo() is populated at boot (writeInstanceInfo below) before the server starts
-  // accepting requests, so it always reflects the port we actually bound; PORT is just a
-  // last-resort fallback for an unusual boot order.
-  const url = readInstanceInfo()?.url ?? `http://${HOST}:${PORT}`
-  const profileDir = join(CONFIG_DIR, 'portable-profile')
-  // First-run size only — openPortableWindow yields to the profile's saved placement once the
-  // user has resized the window themselves (see PORTABLE_WINDOW_SIZE in config.ts). A forwarded
-  // --app launch (a window already open on this profile) ignores --window-size AND the saved
-  // placement, so also tag the URL with the size this window should have and the page corrects
-  // itself with resizeTo (web/src/lib/window-size-hint.ts). The query string is not part of
-  // Chromium's placement key; a URL that won't parse just goes out un-hinted.
-  let target = url
-  try {
-    const hint = windowSizeHintFor(profileDir, url, PORTABLE_WINDOW_SIZE)
-    if (hint) {
-      const u = new URL(url)
-      u.searchParams.set(WINDOW_SIZE_HINT_PARAM, hint)
-      target = u.toString()
-    }
-  } catch {
-    // unparseable base URL: open it un-hinted rather than fail the route
-  }
-  return c.json(await openPortableWindow(target, { profileDir, initialSize: PORTABLE_WINDOW_SIZE }))
-})
-
 // --- full-shutdown sentinel (web-UI "Shut down") -----------------------------
 // A marker file the PowerShell tray host polls (misc/Tray-Host.ps1 watch timer) so a user "Shut
 // down" from the web UI tears the WHOLE app down — window + daemon + tray icon — instead of the
@@ -938,73 +895,33 @@ app.post('/api/shutdown', (c) => {
 })
 
 // --- the window ---------------------------------------------------------------
-// AgentHydra 2.0 (owner, 2026-10-06): where Desk 2 is beside the daemon (desk2.ts), the old window is
-// retired. A page asked of the daemon, the Connections sign-in's return included, goes on to Desk 2 with
-// its query once Desk 2 answers; while it does not, the daemon starts it and answers a small "Starting
-// AgentHydra..." page that goes on by itself. /api stays the daemon's. Elsewhere (no desk2/ beside the
-// daemon) it serves the old window, the built SPA below.
-const embeddedWeb = (
-  globalThis as {
-    __AGENTHYDRA_EMBEDDED_WEB__?: Readonly<Record<string, string>>
-  }
-).__AGENTHYDRA_EMBEDDED_WEB__
-const dist = WEB_DIST_CANDIDATES.find((p) => existsSync(p))
-const serveEmbeddedWeb = async (c: { req: { url: string } }) => {
-  let pathname = decodeURIComponent(new URL(c.req.url).pathname)
-  if (pathname === '/' || pathname === '') pathname = '/index.html'
-  const lastSeg = pathname.slice(pathname.lastIndexOf('/') + 1)
-  const isAsset = pathname.startsWith('/assets/') || /\.[a-z0-9]+$/i.test(lastSeg)
-  const embeddedPath = embeddedWeb?.[pathname]
-  if (embeddedPath) {
-    return new Response(Bun.file(embeddedPath), {
-      headers: {
-        'cache-control': pathname.startsWith('/assets/')
-          ? 'public, max-age=31536000, immutable'
-          : 'no-cache',
-      },
-    })
-  }
-  if (isAsset)
-    return new Response('not found', { status: 404, headers: { 'cache-control': 'no-store' } })
-  return new Response(Bun.file(embeddedWeb?.['/index.html'] ?? ''), {
-    headers: { 'cache-control': 'no-cache', 'content-type': 'text/html; charset=utf-8' },
-  })
-}
+// AgentHydra 2.0 (owner, 2026-10-06): the window is Desk 2 (desk2.ts). A page asked of the daemon, the
+// Connections sign-in's return included, goes on to Desk 2 with its query once Desk 2 answers; while it
+// does not, the daemon starts it and answers a small "Starting AgentHydra..." page that goes on by
+// itself. /api stays the daemon's, and so does the quick-instances window (/instances), AgentHydra
+// 2.0's copy of it served by the daemon itself (quick-instances-page.ts).
 // The starting page polls this: it is the daemon's own answer, so it needs no cross-origin call to Desk 2.
 app.get('/api/desk2/status', async (c) => c.json(await desk2.status()))
-// In 2.0, the launcher repairs a missing desk2/ before the daemon starts; this check handles edge cases
-// (tests, manual folder deletion, or a corrupt install directory).
-const desk2Wanted = desk2.present() || (IS_RELEASE && missingComponents(APP_ROOT).includes('desk2'))
-if (desk2Wanted) {
-  // The quick-instances window (/instances) is AgentHydra 2.0's copy of it, which this daemon serves
-  // itself (quick-instances-page.ts). Every other page goes to Desk 2.
-  serveQuickInstancesPage(app, QUICK_INSTANCES_DIST)
-  app.get('/*', async (c) => {
-    const url = new URL(c.req.url)
-    if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)
-    const answer = await desk2.page(url)
-    if (answer) return answer
-    // desk2/ is not here and nothing is installing it: the old window, as before 2.0.
-    if (!desk2.present() && embeddedWeb) return serveEmbeddedWeb(c)
-    return c.json({ error: 'not found' }, 404)
-  })
-} else if (embeddedWeb) {
-  app.get('/*', serveEmbeddedWeb)
-} else if (dist) {
-  const root = relative(process.cwd(), dist).replaceAll('\\', '/') || '.'
-  app.use('/assets/*', serveStatic({ root }))
-  // a stale hashed chunk must 404, not fall through to index.html (wrong MIME → module load error)
-  app.get('/assets/*', (c) => c.text('not found', 404, { 'cache-control': 'no-store' }))
-  // root-level public files (favicon.svg/.ico, …) must resolve as real files; without this the
-  // SPA fallback below answers the browser's favicon request with index.html and the tab icon
-  // (and the header logo, which uses the same asset) never loads.
-  app.use('/*', serveStatic({ root }))
-  app.get('/*', serveStatic({ path: `${root}/index.html` }))
-}
+serveQuickInstancesPage(app, QUICK_INSTANCES_DIST)
+app.get('/*', async (c) => {
+  const url = new URL(c.req.url)
+  if (url.pathname.startsWith('/api/')) return c.json({ error: 'not found' }, 404)
+  const answer = await desk2.page(url)
+  if (answer) return answer
+  // desk2/ is not beside the daemon and nothing is installing it (a release repairs it before the
+  // daemon starts, so this is a deleted or broken install).
+  return c.text(
+    "AgentHydra's window (desk2/) is missing beside the daemon: reinstall AgentHydra.",
+    503,
+    {
+      'cache-control': 'no-store',
+    },
+  )
+})
 
 /** Opens AgentHydra for a person: Desk 2 where it is beside the daemon (Windows: its launcher, which
- *  starts the server and the native window; elsewhere its server and the default browser), else the old
- *  window at the daemon's URL. */
+ *  starts the server and the native window; elsewhere its server and the default browser), else the
+ *  daemon's URL, whose page says what is missing. */
 function openWindow(url: string): boolean {
   if (desk2.present()) {
     void desk2.open({ hydraUrl: url }).catch(() => undefined)
@@ -1148,7 +1065,6 @@ if (process.env.AGENTHYDRA_PORT_FIXED !== '1') {
 }
 
 writeInstanceInfo(boundPort, {
-  portableMode: portableModeEnabled(),
   hideTrayIcon: hideTrayIconEnabled(),
 })
 // THE POINTER HEALS ITSELF (2026-09-12). Once a minute: if runtime.json is gone, or names another
@@ -1164,7 +1080,6 @@ const POINTER_REASSERT_MS = 60_000
 // for the process to stay alive, which it must never be.
 const pointerReassertTimer = setInterval(() => {
   reassertInstancePointer(boundPort, () => ({
-    portableMode: portableModeEnabled(),
     hideTrayIcon: hideTrayIconEnabled(),
   }))
     .then((verdict) => {

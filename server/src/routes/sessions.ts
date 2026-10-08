@@ -609,9 +609,7 @@ app.post('/api/sessions/:id/open-file', async (c) => {
     return c.json({ error: 'OpenCode and Hermes sessions are stored in a shared database' }, 409)
   // A DeepSeek Harness log IS a file — it is just Zstandard frames, so an editor would show binary
   // and the person would read that as a corrupted session. Refused with the reason and the way out,
-  // rather than spawning an editor on bytes nobody can read. The SPA hides the action for the same
-  // reason (SOURCE_FILE_IS_TEXT in web/src/lib/session-labels.ts); this is the API's own answer, for
-  // a caller that never saw that menu.
+  // rather than spawning an editor on bytes nobody can read.
   if (tf.source === 'dsh')
     return c.json(
       {

@@ -287,7 +287,7 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       `,
     ],
     fixed: [
-      // The actual shape web/src/components/SessionsView.vue ships today: IconTooltip contains a
+      // The shape the old window's SessionsView.vue shipped: IconTooltip contains a
       // <span> anchor, which contains the whole DropdownMenu including its own trigger and content.
       `
       <IconTooltip :label="$t('sessions.listOptions')">

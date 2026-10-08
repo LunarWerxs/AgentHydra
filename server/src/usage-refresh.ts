@@ -47,7 +47,7 @@ import {
  * the instances. I only want it to do it when I tell it to... or maybe at best, every 30 minutes."*
  * Thirty is a CEILING on unattended checking, not a tuning knob - do not lower it back toward 15
  * for freshness. The Refresh button is the on-demand path and always forces a real probe; the
- * window-open catch-up in web/src/lib/usage-catchup.ts is pinned to this same number on purpose,
+ * window-open catch-up in desk2/hydra/src/lib/usage-catchup.ts is pinned to this same number on purpose,
  * so reopening the app can never become a way to buy a probe round.
  */
 const DEFAULT_INTERVAL_MIN = 30

@@ -75,9 +75,6 @@ export type {
 // are pure literal constants; ./core/shared imports nothing runtime-heavy, so pulling them into
 // the browser bundle is safe.
 export { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS, INSTANCE_LABEL_MAX } from './core/shared'
-/** Portable-window opener result (see ./portable-window.mjs), re-exported here so the web
- * app only ever imports types from this one module, same as every other DTO in this file. */
-export type { PortableWindowResult } from './portable-window.mjs'
 /** Self-updater DTOs (see ./updater-engine.mjs), re-exported here so the web app only
  * ever imports types from this one module, same as every other DTO in this file. */
 export type { UpdateApplyResult, UpdateStatus } from './updater-engine.mjs'
@@ -977,10 +974,8 @@ export interface SchedulerState {
   tomorrow_time: string
 }
 
-/** Portable-window setting: open the UI in a chromeless Chromium app window instead of a
- * browser tab (both the in-app toggle and the desktop tray launcher honor it). */
-export interface PortableModeSettings {
-  portableMode: boolean
+/** The tray's setting. */
+export interface TraySettings {
   /** Hide the tray's NotifyIcon (the daemon keeps running; the tray keeps re-reading this
    *  live so re-enabling it here restores the icon without a restart). */
   hideTrayIcon: boolean

@@ -670,7 +670,6 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   spacing_seconds: '60',
   poll_seconds: '5',
   max_concurrent: '3',
-  portable_mode: '0',
   hide_tray_icon: '0',
   connections_sync: '',
   // '' = auto-detect an editor (server/src/transcript-open.ts); set to an absolute path to override.

@@ -241,7 +241,7 @@ if (-not $DryRun -and $Direction -eq 'forward' -and $script:Problems.Count -eq 0
 }
 
 # =============================================================================================
-# 2. Dependencies and the web build in the live checkout
+# 2. Dependencies and Desk 2's build in the live checkout
 # =============================================================================================
 Section 'Install and build in the live checkout'
 $bunDir = Join-Path $env:USERPROFILE '.bun\bin'
@@ -254,7 +254,6 @@ if ($Direction -eq 'forward') {
   # 2026-10-08 this script left live\desk2 with no node_modules and no web\dist.
   $LiveDesk = Join-Path $Live 'desk2'
   Step "bun install          in $Live   via $via   (when HEAD moved or node_modules is missing)"
-  Step "bun run build        in $Live   via $via   (web\dist; when HEAD moved or it is missing)"
   Step "bun install          in $LiveDesk   via $via   (Desk 2; when HEAD moved or node_modules is missing)"
   Step "bun run build        in $LiveDesk   via $via   (Desk 2's web\dist and hydra; when HEAD moved or web\dist is missing)"
   if (-not $DryRun -and $script:Problems.Count -eq 0) {
@@ -262,7 +261,6 @@ if ($Direction -eq 'forward') {
     $headAfter = (Invoke-Git @('rev-parse', 'HEAD') $Live).Out
     $moved = ($headBefore -ne $headAfter)
     if ($moved -or -not (Test-Path -LiteralPath (Join-Path $Live 'node_modules'))) { Invoke-Heavy 'bun install' $Live } else { Info '[skip] bun install: up to date' }
-    if ($moved -or -not (Test-Path -LiteralPath (Join-Path $Live 'web\dist\index.html'))) { Invoke-Heavy 'bun run build' $Live } else { Info '[skip] web build: up to date' }
     if (Test-Path -LiteralPath (Join-Path $LiveDesk 'package.json')) {
       if ($moved -or -not (Test-Path -LiteralPath (Join-Path $LiveDesk 'node_modules'))) { Invoke-Heavy 'bun install' $LiveDesk } else { Info '[skip] Desk 2 bun install: up to date' }
       if ($moved -or -not (Test-Path -LiteralPath (Join-Path $LiveDesk 'web\dist\index.html'))) { Invoke-Heavy 'bun run build' $LiveDesk } else { Info '[skip] Desk 2 build: up to date' }

@@ -2,8 +2,8 @@
 // apply one from outside. --window-size and even the saved placement are IGNORED when a
 // Chromium instance on the profile is already running — the forwarded --app launch inherits
 // the existing window's geometry (verified Edge 150, 2026-07-16). So the daemon appends
-// WINDOW_SIZE_HINT_PARAM to the URL (server/src/index.ts) and the page resizes itself
-// (web/src/lib/window-size-hint.ts). These tests pin the daemon's halves: the hint format,
+// WINDOW_SIZE_HINT_PARAM to the URL (server/src/instance-mode-window.ts) and the page resizes
+// itself (desk2/hydra/src/lib/window-size-hint.ts). These tests pin the daemon's halves: the hint format,
 // the profile reader, and windowSizeHintFor's remembered/first-run/maximized decision.
 
 import { afterAll, expect, test } from 'bun:test'

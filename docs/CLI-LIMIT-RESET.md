@@ -3,7 +3,7 @@
 Using a Claude CLI account's limit reset from AgentHydra: the "Use limit reset" item in a CLI
 row's menu, and the `cli_limit_reset` MCP tool. Code: `server/src/core/cli-limit-reset.ts`, route
 `POST /api/cli-instances/:id/limit-reset` (`{ check?: boolean }`), UI
-`web/src/components/CliLimitResetDialog.vue` and `CliLimitResetIcon.vue`.
+`desk2/hydra/src/components/CliLimitResetDialog.vue` and `CliLimitResetIcon.vue`.
 
 ## What a "reset" is here
 

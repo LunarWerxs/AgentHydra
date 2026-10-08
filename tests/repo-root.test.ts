@@ -14,7 +14,7 @@ import { findRepoRoot, REPO_ROOT } from './repo-root'
 describe('repo root binding', () => {
   test('resolves to a directory that proves it is this repo', () => {
     expect(existsSync(join(REPO_ROOT, 'package.json'))).toBe(true)
-    for (const landmark of ['misc', 'server', 'web', 'scripts']) {
+    for (const landmark of ['misc', 'server', 'desk2', 'scripts']) {
       expect(existsSync(join(REPO_ROOT, landmark))).toBe(true)
     }
   })

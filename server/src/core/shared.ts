@@ -146,7 +146,7 @@ export function resolvePlanLabel(
 
 /** Curated glyph set for the per-instance icon (which replaces the plain status dot in the
  *  UI). These string keys are the single source of truth; the web app maps each one to a
- *  Lucide component in web/src/lib/instance-appearance.ts. */
+ *  Lucide component in desk2/hydra/src/lib/instance-appearance.ts. */
 export const INSTANCE_ICON_KEYS = [
   'box',
   'boxes',
@@ -168,7 +168,7 @@ export const INSTANCE_ICON_KEYS = [
 export type InstanceIconKey = (typeof INSTANCE_ICON_KEYS)[number]
 
 /** Curated color palette for the per-instance icon. Keys map to fixed oklch values (chosen to
- *  read on both light and dark backgrounds) in web/src/lib/instance-appearance.ts. */
+ *  read on both light and dark backgrounds) in desk2/hydra/src/lib/instance-appearance.ts. */
 export const INSTANCE_COLOR_KEYS = [
   'slate',
   'red',

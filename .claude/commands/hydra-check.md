@@ -6,7 +6,7 @@ Run every gate this repo has, in order, and report the real verdict. Do not push
 declare it green on a partial run. Extra instructions, if any: $ARGUMENTS
 
 1. `bunx biome check --write .` - format and lint.
-2. `bun run --cwd server typecheck` and `bun run --cwd web typecheck`.
+2. `bun run --cwd server typecheck` and `bun run --cwd desk2 typecheck`.
 3. `bun run test` - the full suite (parallel, four workers; see the workflow comment for why CI
    itself stays serial).
 4. `python ~/.claude/tools/localci.py` - **the one that matters**: it reads this repo's own

@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 const ID = 'fixer-only-called-by-its-test'
 
 // The folders that hold this repo's TypeScript and JavaScript, production and test alike.
-const ROOTS = ['server', 'web', 'orchestrator', 'cloud', 'scripts', 'tests']
+const ROOTS = ['server', 'desk2/hydra', 'orchestrator', 'cloud', 'scripts', 'tests']
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'tmp', '.output', '__pycache__'])
 const CODE_FILE = /\.(?:[cm]?[jt]sx?|vue)$/
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/

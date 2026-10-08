@@ -82,22 +82,21 @@ states. Facts, not code, were taken; no source was copied.
 
 ## pingdotgg/t3code, getpaseo/paseo and omnigent-ai/omnigent
 
-The open session's work rows (`web/src/lib/transcript-groups.ts`,
-`web/src/components/TranscriptWorkGroup.vue`) and its compaction and usage-limit dividers take
-their ideas from <https://github.com/pingdotgg/t3code> (MIT, T3 Tools Inc.: one row per run of work
+The open session's work rows and its compaction and usage-limit dividers in the old window
+(removed in 2.0.0) took their ideas from <https://github.com/pingdotgg/t3code> (MIT, T3 Tools Inc.: one row per run of work
 with a sentence summary, a live shimmer and a system divider), <https://github.com/getpaseo/paseo>
 (Apache-2.0: folding a run of tool calls into one row, and finding a Claude subagent's run from the
 call that started it, which `tailSubagent` in `server/src/transcript.ts` does) and
 <https://github.com/omnigent-ai/omnigent>
 (Apache-2.0: verb-based labels, a tool's input one argument a line), all read on 2026-10-04. The
 loop detector (`server/src/loop-detector.ts`: a session repeating one failing tool call becomes an
-incident) is Omnigent's idea, and privacy mode (`web/src/lib/privacy.ts`,
-`web/src/composables/usePrivacy.ts`: account addresses masked on screen) is T3 Code's. Ideas, not
+incident) is Omnigent's idea, and privacy mode (`desk2/hydra/src/lib/privacy.ts`,
+`desk2/hydra/src/composables/usePrivacy.ts`: account addresses masked on screen) is T3 Code's. Ideas, not
 code, were taken; no source was copied.
 
 ## junegunn/fzf and microsoft/terminal
 
-`web/src/lib/fuzzy.ts`, the session search box's scorer, is a TypeScript port of fzf's
+`desk2/hydra/src/lib/fuzzy.ts`, the session search box's scorer, is a TypeScript port of fzf's
 `FuzzyMatchV2` (<https://github.com/junegunn/fzf>, `src/algo/algo.go`, MIT), written with
 microsoft/terminal's C++ port of the same algorithm (<https://github.com/microsoft/terminal>,
 `src/cascadia/fzf/fzf.cpp`, MIT) as the second reference for the highlight runs. The scoring

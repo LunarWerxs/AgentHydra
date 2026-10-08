@@ -40,8 +40,6 @@ import type {
   NotificationSettings,
   NotifyDeliveryResult,
   PermissionMode,
-  PortableModeSettings,
-  PortableWindowResult,
   ProjectSummary,
   ProviderSettings,
   QueueItem,
@@ -61,6 +59,7 @@ import type {
   TailResult,
   TokenSinkReport,
   TranscriptSettings,
+  TraySettings,
   UpdateApplyResult,
   UpdateStatus,
   UsageCheckResult,
@@ -121,8 +120,6 @@ export type {
   NotificationSettings,
   NotifyDeliveryResult,
   PermissionMode,
-  PortableModeSettings,
-  PortableWindowResult,
   ProjectSummary,
   ProviderSettings,
   QueueItem,
@@ -154,6 +151,7 @@ export type {
   TokenSink,
   TokenSinkReport,
   TranscriptSettings,
+  TraySettings,
   UpdateApplyResult,
   UpdateStatus,
   UsageAdvice,
@@ -713,9 +711,9 @@ export const shutdownApp = () =>
     headers: { 'x-agenthydra-shutdown-source': 'ui' },
   })
 
-// --- app settings (portable mode, hide tray icon, usage auto-refresh + section visibility) -------
-/** Everything /api/settings returns: window/tray, usage, provider, editor, and notification settings. */
-export type AppSettings = PortableModeSettings &
+// --- app settings (hide tray icon, usage auto-refresh + section visibility) -------
+/** Everything /api/settings returns: tray, usage, provider, editor, and notification settings. */
+export type AppSettings = TraySettings &
   UsageSettings &
   ProviderSettings &
   TranscriptSettings &
@@ -745,8 +743,6 @@ export const updateUiPrefs = (patch: Record<string, string | null>) =>
     method: 'POST',
     body: JSON.stringify(patch),
   })
-export const openPortableWindow = () =>
-  j<PortableWindowResult>('/api/portable-window', { method: 'POST' })
 export const createChatGptContextPack = (cwd: string, task: string) =>
   j<ChatGptContextPack>('/api/chatgpt/context-pack', {
     method: 'POST',

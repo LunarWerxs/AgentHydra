@@ -6,19 +6,6 @@
 import { expect, test } from 'bun:test'
 import { getSetting, setSetting } from '../server/src/db'
 
-test('portable_mode defaults to off ("0") when never set', () => {
-  // db.ts seeds DEFAULT_SETTINGS at import time, so this is already '0' by the time any test
-  // runs; assert the value rather than the absence of a row.
-  expect(getSetting('portable_mode')).toBe('0')
-})
-
-test('setSetting/getSetting round-trips portable_mode on', () => {
-  setSetting('portable_mode', '1')
-  expect(getSetting('portable_mode')).toBe('1')
-  setSetting('portable_mode', '0')
-  expect(getSetting('portable_mode')).toBe('0')
-})
-
 test('hide_tray_icon defaults to off ("0") when never set', () => {
   // db.ts seeds DEFAULT_SETTINGS at import time, so this is already '0' by the time any test
   // runs; assert the value rather than the absence of a row.

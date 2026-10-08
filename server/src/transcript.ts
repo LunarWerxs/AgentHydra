@@ -1002,8 +1002,7 @@ function dshRecords(root: string, tool = 'deepseek-harness'): TranscriptFile[] {
  *  index rows. The source AND the tool stay `'zswarm'`: the source is a frozen MCP API value, and
  *  the tool is half of every job's identity (the done-mark key `zswarm:<id>` in session_marks, the
  *  locator, the search index's docKey), so renaming it would orphan the marks people already set
- *  (2026-10-03). Only what a person reads says HSwarm: TOOL_NAME.zswarm in
- *  web/src/lib/session-labels.ts, and agent-catalog.ts's row name.
+ *  (2026-10-03). Only what a person reads says HSwarm, agent-catalog.ts's row name among it.
  *
  *  Unlike dshRecords above, there is only ONE root: HSwarm is not a login product with a home per
  *  account, so its home (hswarmHome()) is read directly here the same way OPENCODE_DB_PATH is,
@@ -1209,7 +1208,7 @@ function finishIndex(
     const withSiblings = rest.length ? { ...file, siblingPaths: rest } : file
     // Computed once per sweep, not on demand: every row gets a stable public identity whether or
     // not a caller ever asks for it, so a session found through the plain list is immediately
-    // addressable by locator (see routes/sessions.ts and web/src/lib/api.ts).
+    // addressable by locator (see routes/sessions.ts and desk2/hydra/src/lib/api.ts).
     return { ...withSiblings, locator: makeLocator(file) }
   })
   // A map lookup and nothing else. Working out WHICH session continued which means reading whole
@@ -1998,8 +1997,7 @@ export function tailKeeper(opts: TailOptions): (e: TailEvent) => boolean {
 
 /**
  * The window counts MESSAGES, and tool traffic and reasoning ride along with the messages around
- * them. The viewer folds a run of tool calls into one work row (web/src/lib/transcript-groups.ts),
- * so counting each call as a turn would spend a 40-turn window on one busy stretch of work and show
+ * them. A viewer folds a run of tool calls into one work row, so counting each call as a turn would spend a 40-turn window on one busy stretch of work and show
  * three messages; counted this way, 40 turns is 40 messages and the work between them.
  *
  * Unbounded, a session that ran 500 tools between two messages would ship all of them on every 4 s

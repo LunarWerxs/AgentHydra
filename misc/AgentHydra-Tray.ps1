@@ -21,13 +21,13 @@ param([int]$Port = 7787, [switch]$SelfTest)
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $appRoot = Split-Path -Parent $scriptDir
 
-# Dev-only gate for "Rebuild & Restart": a distributed build ships a prebuilt web\dist and no
+# Dev-only gate for "Rebuild & Restart": a distributed build ships a prebuilt desk2 and no
 # server\src tree, so rebuilding there would just fail. Dev-only via AGENTHYDRA_DEV=1 — public/
 # source-checkout users never see "Rebuild & Restart"; they use misc/rebuild_agenthydra.bat instead.
 $isDevTree = ($env:AGENTHYDRA_DEV -eq "1")
 
 # Release layout (the GitHub-release zip): a compiled AgentHydra.exe sits at the app root, next
-# to web\dist — start THAT instead of `bun server/src/index.ts`, skip the bun-based first run, and
+# to desk2 — start THAT instead of `bun server/src/index.ts`, skip the bun-based first run, and
 # don't require bun on PATH at all (the exe embeds its runtime). A source checkout has no exe at
 # the root, so this stays the dev/bun path there.
 $exeFile = Join-Path $appRoot "AgentHydra.exe"
@@ -66,11 +66,12 @@ function Resolve-BunPath {
 $bunPath = Resolve-BunPath
 $bunCmd = if ($bunPath -eq "bun") { "bun" } else { "`"$bunPath`"" }
 
-# First run (blocking, once, cold start only): install deps and build the GUI if missing.
+# First run (blocking, once, cold start only): install deps and build the window (desk2) if missing.
 $firstRun = {
   param($root)
   if (-not (Test-Path (Join-Path $root "node_modules"))) { & cmd.exe /c "cd /d `"$root`" && bun install" | Out-Null }
-  if (-not (Test-Path (Join-Path $root "web\dist"))) { & cmd.exe /c "cd /d `"$root`" && bun run build" | Out-Null }
+  if (-not (Test-Path (Join-Path $root "desk2\node_modules"))) { & cmd.exe /c "cd /d `"$root\desk2`" && bun install" | Out-Null }
+  if (-not (Test-Path (Join-Path $root "desk2\hydra\dist"))) { & cmd.exe /c "cd /d `"$root`" && bun run build" | Out-Null }
 }
 
 $TrayConfig = @{
@@ -101,17 +102,6 @@ $TrayConfig = @{
   # (which stands the watchdog down for an attached instance owned by another session) to preserve
   # that parity: an attached daemon crashing still gets revived by this tray.
   WatchdogRequiresOwnership = $false
-  # Portable-window sizing (engine: Open-AppUi). First-run size = the daemon's measured
-  # PORTABLE_WINDOW_SIZE (server/src/config.ts — the sessions sidebar rail-collapses below a
-  # 1024px viewport, so 1060 outer clears it with slack; 800 tall ≈ the header + ~10 session
-  # rows), so a COLD tray start (tray boots the daemon and opens the window itself, before
-  # the daemon's own POST /api/portable-window path exists) stops opening a never-seen
-  # profile at ~the whole work area. PortableWindowSizeHint is safe here: the web build now
-  # applies ?window-size via resizeTo (web/src/lib/window-size-hint.ts), the only fix that
-  # reaches a FORWARDED --app launch (a window already open on the profile, which ignores
-  # --window-size and the saved placement alike).
-  PortableWindowSize     = @{ Width = 1060; Height = 800 }
-  PortableWindowSizeHint = $true
   SelfTestMarker       = "AGENTHYDRA_TRAY_SELFTEST"
   MenuOpenLabel        = "Open AgentHydra"
   MutexName            = "AgentHydraTrayHost"

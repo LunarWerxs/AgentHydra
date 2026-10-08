@@ -28,8 +28,7 @@ right-click menus, pop-ups or developer-menu toggles.
   need a developer-menu click at every launch. A direct Claude shortcut bypasses
   this launch setting.
 - The user-facing control is **Settings → Instances → Desktop → Claude native
-  control → Start debugger automatically**, per account (in a 1.x release's old
-  window: Instances tab → gear). Preserve existing port and routing
+  control → Start debugger automatically**, per account. Preserve existing port and routing
   mode; each profile must have a distinct debugger port. New profiles are not
   automatically opted in. Check saved settings instead of assuming a fleet-wide
   default.
@@ -71,8 +70,7 @@ diagnostics/history, not instructions to repeat the old menu activation process.
 
 Keep unrelated working-tree changes intact. The main UI is AgentHydra 2.0's window in
 `desk2/` (`desk2/web`, with AgentHydra's own pages in `desk2/hydra`); build and check it there.
-`web/` is the old window, served only where `desk2/` is missing; `orchestrator/web/` is a
-separate interface. Configuration/API details and
+The old window (`web/`) was removed in 2.0.0; `orchestrator/web/` is a separate interface. Configuration/API details and
 the current compiler compatibility note are in the native-control runbook.
 
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)

@@ -356,36 +356,13 @@ export const HOST = validateBindHost(process.env.HOST)
 /** Service identity — used in /api/health and the runtime.json pointer (single-instance). */
 export const SERVICE_NAME = 'agenthydra'
 
-/** Built Vue SPA: web/dist under APP_ROOT in BOTH modes (repo checkout, or beside the binary in
- *  the release zip). Kept as a candidate list so a future layout can add entries, not re-plumb. */
-export const WEB_DIST_CANDIDATES = [join(APP_ROOT, 'web', 'dist')]
-
 /** The quick-instances window's build: AgentHydra 2.0's copy (desk2/hydra), under APP_ROOT in both modes;
  *  a release ships it built (scripts/package-release.ts). Served by quick-instances-page.ts. */
 export const QUICK_INSTANCES_DIST = join(APP_ROOT, 'desk2', 'hydra', 'dist')
 
-/**
- * First-run outer size of the portable app window (what Chromium's `--window-size` takes).
- * Only applies to a window the dedicated profile has NEVER seen — the kit's
- * openPortableWindow probes the profile's saved placement first, so a size the user picked
- * themselves (or a maximize) wins on every later launch. Without it a never-seen window
- * opens at Chromium's default of ~the whole work area (~1905x2092 on a 4K display).
- *
- * Measured against the real UI, not guessed. Width: the fixed-viewport shell caps at
- * SHELL_BASE_MAX = 1000px (web/src/composables/useShellWidth.ts) and the page never
- * scrolls, but the binding constraint is the sessions sidebar, which rail-collapses below a
- * `(min-width: 1024px)` viewport (web/src/components/SessionsView.vue) — 1024 + ~16px frame
- * = 1040 outer is the floor below which a first-run window opens onto the collapsed rail;
- * 1060 clears it with slack for frame variance. Height is a density pick: a 758px viewport
- * fits the ~48px header, the sidebar's search toolbar and ~10 session rows, with matching
- * reading room in the transcript pane — 800 outer (outer = viewport + ~34 title + ~8 frame;
- * Chromium draws its title bar inside the client area). The tray's cold start carries the
- * same numbers (misc/AgentHydra-Tray.ps1 PortableWindowSize) — keep them in step.
- */
-export const PORTABLE_WINDOW_SIZE = { width: 1060, height: 800 }
-
-/** Compact first-run size for `/instances`. The pathname gives Chromium independent remembered
- * geometry from the full manager window, so resizing either surface never disturbs the other. */
+/** First-run outer size of the quick-instances window (what Chromium's `--window-size` takes). The
+ * kit's openPortableWindow probes the profile's saved placement first, so a size the person picked
+ * wins on every later launch. */
 export const INSTANCE_MODE_WINDOW_SIZE = { width: 700, height: 760 }
 
 /**

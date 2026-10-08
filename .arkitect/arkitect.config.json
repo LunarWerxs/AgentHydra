@@ -5,7 +5,7 @@
   },
   "checks": {
     "account-scoped-storage-keys": {
-      "$reason": "Device-level by design: AgentHydra's web UI has no signed-in app account (a local dashboard over the same-origin daemon). agenthydra.app.view is the per-window tab choice, rebrandNoticePending a one-shot upgrade flag, and the usage-filter keys are display preferences over the whole account list. AgentHydra 2.0's window (desk2/web) and its copy of these pages (desk2/hydra) are the same single-user local window over the loopback server with no app sign-in: their agenthydra.* and hydra-desk* keys hold panel, width, layout, sort, filter, period, privacy-blur, dismissal and last-view choices, and hydra-desk-drafts names the composer's image-draft database. The old window (web/src) keeps the same kind of choices under agenthydra.* (folded tables, token windows, session-list display and copy-path options, sidebar width) and agenthydra.sessions.seen, which sessions this screen has opened.",
+      "$reason": "Device-level by design: AgentHydra's web UI has no signed-in app account (a local dashboard over the same-origin daemon). agenthydra.app.view is the per-window tab choice, rebrandNoticePending a one-shot upgrade flag, and the usage-filter keys are display preferences over the whole account list. AgentHydra 2.0's window (desk2/web) and its copy of these pages (desk2/hydra) are the same single-user local window over the loopback server with no app sign-in: their agenthydra.* and hydra-desk* keys hold panel, width, layout, sort, filter, period, privacy-blur, dismissal and last-view choices, and hydra-desk-drafts names the composer's image-draft database.",
       "deviceGlobalAllow": [
         "agenthydra.app.view",
         "${PREFIX}rebrandNoticePending",
@@ -56,25 +56,11 @@
         "hydra-desk:dictation-lang",
         "hydra-desk:dock-dismissed",
         "hydra-desk:screen",
-        "hydra-desk:view",
-        "agenthydra.cli.accountsOpen",
-        "agenthydra.climayte.wavesOpen",
-        "agenthydra.cliTokens.window",
-        "agenthydra.sessions.advancedCaseSensitive",
-        "agenthydra.sessions.compact",
-        "agenthydra.sessions.copyPathIncludeName",
-        "agenthydra.sessions.copyPathIncludePrompt",
-        "agenthydra.sessions.copyPathPrompt",
-        "agenthydra.sessions.humanOnly",
-        "agenthydra.sessions.seen",
-        "agenthydra.sessions.showThinking",
-        "agenthydra.sessions.showTools",
-        "agenthydra.sessions.sidebarWidth",
-        "agenthydra.sessions.workRowsOn"
+        "hydra-desk:view"
       ]
     },
     "ime-composition-enter-guard": {
-      "$reason": "This repo has FOUR files matching the default `/src/main.ts` suffix and only two of them are browser entries. `server/src/main.ts` and `orchestrator/server/src/main.ts` are Bun process entries - an argv dispatcher and an HTTP daemon, no DOM in their reach at all - so asking them to install a keydown guard is asking for code that could never run. The two real browser entries, `web/src/main.ts` and `orchestrator/web/src/main.ts`, both call `installImeCompositionGuard()` already. Every browser entry in this repo lives under a `web/` directory, so the suffix is narrowed to that; the rule is unchanged and still gates.",
+      "$reason": "This repo has several files matching the default `/src/main.ts` suffix and only some of them are browser entries. `server/src/main.ts` and `orchestrator/server/src/main.ts` are Bun process entries - an argv dispatcher and an HTTP daemon, no DOM in their reach at all - so asking them to install a keydown guard is asking for code that could never run. The browser entries this suffix reaches, `orchestrator/web/src/main.ts` and `desk2/web/src/main.ts`, call `installImeCompositionGuard()` already (so does `desk2/hydra/src/main.ts`). The suffix is narrowed to `web/` directories; the rule is unchanged and still gates.",
       "bootFileSuffixes": [
         "/web/src/main.ts",
         "/web/src/main.tsx",

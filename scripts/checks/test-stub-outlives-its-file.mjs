@@ -10,7 +10,7 @@
 // whenever the split happens to isolate it - and land on whichever file runs next. Found the hard
 // way on 2026-09-05, twice in one day. First, three probe tests parked under tmp/ patched fetch and
 // node:child_process at module scope and broke instance-pointer + updater-engine in the serial run
-// (bunfig.toml now ignores tmp/). Then request-generations.test.ts mock.module'd web/src/lib/api and
+// (bunfig.toml now ignores tmp/). Then request-generations.test.ts mock.module'd the old window's api and
 // resource-status.test.ts, next in order, imported the real runQueueItem and awaited a getQueue
 // nothing would ever resolve: three 5s timeouts, and because a timed-out test never reaches its
 // `finally`, ITS fetch stub then leaked on to instance-pointer as well. One unrestored mock, three
@@ -19,11 +19,11 @@
 // The rule, mechanical on purpose:
 //   1. A global stubbed at MODULE SCOPE or inside beforeAll/beforeEach must be assigned again inside
 //      afterAll/afterEach. A stub made inside a test body is that test's own business and is not
-//      examined; the shape this repo uses there is try/finally (web/tests/resource-status.test.ts).
+//      examined; the shape this repo uses there is try/finally.
 //   2. Every mock.module(SPEC) outside an after* hook must have a mock.module(SPEC) inside one,
 //      re-mocking to a copy of the real exports taken BEFORE the fake was installed. Taken after,
 //      the copy IS the fake: mock.module rewrites the live bindings of a namespace that was already
-//      imported. web/tests/request-generations.test.ts is the worked example. Where the module under
+//      imported. server/tests/chats-route-empty-account.test.ts is the worked example. Where the module under
 //      test allows it, inject the dependency instead and mock nothing (tests/monitor.test.ts).
 //
 // Comments and string interiors are blanked before the scan (the same scanner as
@@ -301,7 +301,7 @@ function explain(hit) {
       fix:
         `Keep the original (const real = ${hit.name === 'fetch' ? 'globalThis.fetch' : hit.name}) ` +
         'and assign it back in afterAll, or stub inside the test with a try/finally restore ' +
-        'the way web/tests/resource-status.test.ts does.',
+        'around the stub.',
     }
   if (hit.kind === 'module')
     return {
@@ -309,7 +309,7 @@ function explain(hit) {
       message:
         `mock.module(${JSON.stringify(hit.name)}) is global for the whole bun test run and ` +
         'mock.restore() does not undo it: every file that loads this module after this one ' +
-        'gets the fake. request-generations.test.ts did this to web/src/lib/api on ' +
+        "gets the fake. request-generations.test.ts did this to the old window's api on " +
         '2026-09-05 and resource-status.test.ts, next in the serial order, waited 5s three ' +
         'times on a getQueue nothing would ever resolve.',
       fix:

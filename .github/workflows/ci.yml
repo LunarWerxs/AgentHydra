@@ -102,9 +102,6 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: i18n check (web)
-        run: bun run --cwd web check:i18n
-
       # Repo guardrail (Architect custom check, run standalone, no npx/network): fails if a reka
       # popper root (DropdownMenu/Popover/etc) wraps AROUND an <IconTooltip> that contains its own
       # trigger, instead of living inside it. reka anchors to the nearest PopperRoot in the Vue
@@ -170,7 +167,7 @@ jobs:
       # global stubbed at module scope (or in a before* hook) with no after* restore, and any
       # mock.module() with no re-mock to the real exports, is what the NEXT file's code calls.
       # 2026-09-05, twice: probe tests under tmp/ broke instance-pointer + updater-engine, then
-      # request-generations' mock of web/src/lib/api hung resource-status for three 5s timeouts.
+      # request-generations' mock of the old window's api client hung resource-status for three 5s timeouts.
       # Every file involved passes alone; only the serial run below sees it. See the check's header.
       - name: Guardrail (a test stub must not outlive its file)
         run: bun scripts/checks/test-stub-outlives-its-file.mjs
@@ -205,9 +202,6 @@ jobs:
       # ends a "..." string early: `powershell -File install.ps1` could not even parse (2026-09-28).
       - name: Guardrail (install.ps1 parses under Windows PowerShell 5.1)
         run: bun scripts/checks/ps1-read-as-ansi.mjs
-
-      - name: Build (web SPA)
-        run: bun run build
 
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s

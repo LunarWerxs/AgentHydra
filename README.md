@@ -27,16 +27,12 @@ account you use. No cloud service, no sign-up.
 - **Where the time and money went:** cost by day, model, project and account, and what is wasting it
 - **Every Claude and Codex account in one table:** plan, 5-hour and weekly quota, open, quit, create
 - **For agents too:** the whole thing over MCP, including "which account am I, and how much is left"
-- **AgentHydra 2.0**, a new window (it was Hydra Desk 2), comes with the next release
+- **AgentHydra 2.0:** one native window (it was Hydra Desk 2), every chat in its sidebar and all of the above beside them
 
 <details>
 <summary><b>Read more: what each part does</b></summary>
 
 ### Every session, in one list
-
-![The sessions view: a searchable list on the left holding Claude, Codex and OpenCode transcripts together, each badged with the tool that wrote it, one open on the right with a message box at the bottom](.github/screenshots/sessions.png)
-
-<sub>Screenshots use demo data.</sub>
 
 - Claude Code, Codex and OpenCode conversations on your machine, newest first. Filter by provider or
   recency; Claude sessions also by project or Desktop instance. Open one to read it and follow it live.
@@ -74,6 +70,8 @@ The old run queue stays as a read-only record. Starting a new headless run is re
 ### Where the time and the money went
 
 ![The analytics view: headline cost, session and agent-hour tiles above where the tokens went, tokens by tool across Claude, Codex, OpenCode and Hermes, a cost-by-day bar chart, and cost broken down by model and project](.github/screenshots/analytics.png)
+
+<sub>Screenshots use demo data.</sub>
 
 - Cost by day, model, project and account (at list prices: what the same work would cost on the
   API). When in the week you work, how many sessions ran at once, which tools were used.
@@ -129,7 +127,7 @@ from source with [Bun](https://bun.sh):
 
 ```sh
 git clone https://github.com/LunarWerxs/AgentHydra.git
-cd AgentHydra && bun install
+cd AgentHydra && bun install && bun install --cwd desk2
 bun run build && bun run start
 ```
 

@@ -109,7 +109,7 @@ follow-ups; a stopped attempt now shows its spend ($0.25 for one cut mid-command
 ## Round four, 2026-09-30: never spend overage, faster starts, what a move carries
 
 The owner's rule is to never go into paid extra usage. It is now a setting, **Settings > Instances > Desktop
-> Allow paid extra usage** (the old window: Instances tab > gear) (since `d3010f9` it covers all of AgentHydra, not only CliMayte), off by default and never synced to another machine
+> Allow paid extra usage** (since `d3010f9` it covers all of AgentHydra, not only CliMayte), off by default and never synced to another machine
 (`350a078`). With it off:
 
 - On an account that CAN bill (usage events say `overageStatus: "allowed"`; of the four, only #90

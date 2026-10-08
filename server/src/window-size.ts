@@ -1,9 +1,8 @@
 // What size hint a portable window's URL should carry (the `?window-size=WxH` param the
-// portable-window route appends), decided from the Chromium profile the daemon owns. The
-// hint exists because a forwarded `--app` launch (a window already open on the profile)
+// quick-instances window's opener appends), decided from the Chromium profile the daemon owns.
+// The hint exists because a forwarded `--app` launch (a window already open on the profile)
 // ignores both `--window-size` and the saved placement, so the page corrects itself
-// (web/src/lib/window-size-hint.ts). Its one caller is the portable-window route
-// (server/src/index.ts).
+// (desk2/hydra/src/lib/window-size-hint.ts). Its one caller is instance-mode-window.ts.
 //
 // The param name and the "WxH" shape are a contract shared with the web applier and the
 // tray (misc/Tray-Host.ps1) — keep the three in step. Deliberately its own module with no

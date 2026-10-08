@@ -5,7 +5,7 @@
 //
 // The real cause: reka positions a popper by having its trigger's anchor component (MenuAnchor /
 // PopperAnchor) call injectPopperRootContext(), which walks the VUE COMPONENT TREE for the NEAREST
-// PopperRoot. IconTooltip (web/src/shell/IconTooltip.vue) renders its own <Tooltip>, which is
+// PopperRoot. IconTooltip (desk2/hydra/src/shell/IconTooltip.vue) renders its own <Tooltip>, which is
 // itself a PopperRoot. So when a menu/popover root WRAPS AROUND an <IconTooltip> that contains that
 // root's trigger:
 //
@@ -66,7 +66,7 @@ const TRIGGER_TO_ROOT = {
 
 const TRIGGER_TAG = new RegExp(`<(${Object.keys(TRIGGER_TO_ROOT).join("|")})\\b`, "g");
 
-// Dirs never worth scanning. web/src/components/ui is the generated shadcn kit; misc/ is Windows
+// Dirs never worth scanning. desk2/hydra/src/components/ui is the generated shadcn kit; misc/ is Windows
 // launcher tooling; both are also excluded in arkitect.config.json.
 const SKIP_DIRS = new Set([
   "node_modules", "dist", ".git", "tmp", ".arkitect", "coverage", "build", "ui", "misc",
@@ -128,7 +128,7 @@ export const audit = {
   gating: true, // block --fail-on-drift: this exact shape silently breaks a control (and freezes the app for modal poppers)
   async run(ctx) {
     const root = ctx?.root ?? process.cwd();
-    const start = existsSync(join(root, "web", "src")) ? join(root, "web", "src") : root;
+    const start = existsSync(join(root, "desk2", "hydra", "src")) ? join(root, "desk2", "hydra", "src") : root;
     const findings = [];
 
     for (const file of vueFiles(start)) {

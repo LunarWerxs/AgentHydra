@@ -261,14 +261,13 @@ rmSync(stage, { recursive: true, force: true })
 mkdirSync(stage, { recursive: true })
 console.log(`Packaging AgentHydra ${VERSION} for ${target} into ${stage} (Bun ${bunVersion})`)
 
-// The daemon as app/ (server.js, its web assets, release.json and bun-version, the pin the launcher
+// The daemon as app/ (server.js, its misc assets, release.json and bun-version, the pin the launcher
 // downloads), then the launcher that runs it.
 run(
   process.execPath,
   [
     'scripts/build.ts',
     '--bundle',
-    '--skip-web',
     '--target',
     target,
     '--outdir',

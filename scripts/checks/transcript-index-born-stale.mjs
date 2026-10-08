@@ -216,7 +216,7 @@ export function findViolations(text) {
   return out
 }
 
-const POLL_SOURCE = 'web/src/composables/useData.ts'
+const POLL_SOURCE = 'desk2/hydra/src/composables/useData.ts'
 
 /**
  * The interval the web app re-asks for the session list, or null if it cannot be read.

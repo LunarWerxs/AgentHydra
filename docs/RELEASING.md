@@ -37,7 +37,7 @@
 Every bundle (`AgentHydra-<version>-<target>`, a `.zip` on Windows, a `.tar.gz` elsewhere) holds:
 
 - the launcher (`AgentHydra.exe` on Windows, the sh script `agenthydra` elsewhere), `app/` (the
-  daemon as plain JS in `app/server.js`, its web assets, `release.json`, and `bun-version`, the Bun
+  daemon as plain JS in `app/server.js`, its misc assets, `release.json`, and `bun-version`, the Bun
   this release runs on) and `orchestrator/`; on Windows also `misc/` (the tray) and the lone
   `.exe` beside the archive, which is the same launcher;
 - `desk2/`, AgentHydra 2.0's window: its server source, `shared/`, production `node_modules`

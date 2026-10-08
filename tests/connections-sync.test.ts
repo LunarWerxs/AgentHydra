@@ -221,7 +221,6 @@ beforeEach(async () => {
   await disable(true)
   // bun test shares one module instance (and settings DB) across every file in the run with no
   // per-test reset, so any row this file writes must be put back for sibling files.
-  setSetting('portable_mode', '0')
   setSetting('hide_tray_icon', '0')
   setSetting('scheduler_enabled', '0')
   setSetting('spacing_seconds', '60')

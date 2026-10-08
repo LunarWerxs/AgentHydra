@@ -1,12 +1,12 @@
 # AgentHydra 2.0: Hydra Desk 2 becomes AgentHydra's only window
 
 The owner's decision (2026-10-06): Hydra Desk 2 (`desk2/`) is AgentHydra 2.0. Opening AgentHydra shows
-Desk 2, which will carry the name AgentHydra. The old AgentHydra window (`web/`, served by the daemon on
-7787) retires, and Hydra Desk 1 (`desk/`) is removed from the repo (2026-10-07). The daemon (`server/`, 7787) stays: it is
+Desk 2, which carries the name AgentHydra. The old AgentHydra window (`web/`, served by the daemon on
+7787) is removed in 2.0.0, and Hydra Desk 1 (`desk/`) is removed from the repo (2026-10-07). The daemon (`server/`, 7787) stays: it is
 Desk 2's engine, and Desk 2 reaches it through its `/ah/api` proxy.
 
-This file is the checklist for that move: what is done, what still ties AgentHydra to the old window
-(file and line as of 2026-10-06, after steps 1 and 2), and the order to undo it in.
+This file is the checklist for that move. Every step is done; 2.0.0 is the first release without the old
+window.
 
 ## Done
 
@@ -17,8 +17,7 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   tray opens Desk 2.
 - **Parity with the old window.** The ten commits to `web/src` after Desk 2's copy (`779aa0fd`) were
   checked one by one. What Desk 2 lacked was ported in `2a62884c`: "Copy up to here into a new chat" on an
-  outside Claude Code session's reply, the auto-update label, and two class fixes. Until `web/` is
-  deleted, a change to `web/src` is made in `desk2/hydra/src` too.
+  outside Claude Code session's reply, the auto-update label, and two class fixes.
 - **The name is AgentHydra** (owner, 2026-10-06). The window title, the shortcut (`desk2/launcher/install-shortcuts.ps1`
   writes **AgentHydra** and recycles the old "Hydra Desk 2" ones), the launcher's message boxes and Desk's Settings say
   AgentHydra. The internal names below are unchanged.
@@ -38,7 +37,7 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   sign-in's return included, goes on to Desk 2 when it answers; when it does not, the daemon starts it and shows a
   "Starting AgentHydra" page that moves on by itself or names the log, never a dead port. A release exe's
   double-click and boot open Desk 2 (Windows: its `start.vbs`; elsewhere its server and the default browser), and
-  a checkout's self-update builds `desk2`. `/api` is untouched. Only an install with no `desk2/` still serves `web/`.
+  a checkout's self-update builds `desk2`. `/api` is untouched.
 - **The quick-instances window is Desk 2's copy (2026-10-08).** The "AgentHydra Instances" shortcut still starts the
   light daemon (`server/src/instance-mode.ts`), or opens `/instances` on a full daemon that is already up, and
   both now serve `desk2/hydra`'s page from `desk2/hydra/dist` (`server/src/quick-instances-page.ts`: the page at
@@ -49,51 +48,19 @@ This file is the checklist for that move: what is done, what still ties AgentHyd
   holding what the tables' gears held; see `desk2/README.md`.
 - **Hydra Desk 1 is off the owner's PC.** Its shortcuts and data went to the Recycle Bin. `desk/` was
   removed from the repo on 2026-10-07 (the owner's call; history keeps it).
+- **The old window is gone (Order step 4, 2.0.0).** `web/` was deleted with everything that served,
+  built or checked it: the daemon's static serving and the release bundle's embedded copy, the portable
+  window and its `portable_mode` setting, the `web` workspace and scripts, its CI and release steps, the tray's
+  first-run build (it builds `desk2` now), the live checkout's build, and the checks and tools that read
+  `web/src` (they read `desk2/hydra/src`, AgentHydra 2.0's copy, or were cut). A page asked of the daemon goes
+  to Desk 2; an install whose `desk2/` is missing gets a page saying so. The README screenshot tool and the
+  SUE demo server run on `desk2/hydra` at `/ah/`. The shared kit's AgentHydra entry keeps its server libraries
+  and tray and has no web tree.
 
-## What still ties AgentHydra to the old window
-
-### The daemon serves and opens it
-
-| Where | What it does | At cutover |
-| --- | --- | --- |
-| `server/src/config.ts:354` `WEB_DIST_CANDIDATES` | where the built old window is | drop |
-| `server/src/index.ts` `embeddedWeb` and `dist` | serves the old window, from the release bundle's embedded copy (`app/server.js`) or from `web/dist`, only where `desk2/` is missing | drop the static serving; `/api/*` stays |
-| `server/src/index.ts:839` `/api/portable-window`, `:232-235` `portable_mode` | the chromeless "portable" window of the old UI | drop with the setting (Desk 2 left portable mode behind) |
-
-### Build, packaging and release
-
-- `package.json:8` workspace `web`, scripts `dev:web`, `build`, `check` and `typecheck` (lines 16-33).
-- `scripts/build.ts` embeds `web/dist` in `app/server.js` (`__AGENTHYDRA_EMBEDDED_WEB__`) and builds `web`
-  unless `--skip-web`.
-- `.github/workflows/release.yml` still builds `web` ("Build web SPA"), and the release bundle embeds it for an
-  install with no `desk2/`.
-- `.github/workflows/ci.yml:103` `check:i18n` on `web`, `:207` builds it.
-- The tray's first run builds `web\dist` (`misc/AgentHydra-Tray.json:44`; the legacy host
-  `misc/AgentHydra-Tray.ps1:73`).
-- `scripts/live-checkout.ps1:253,259` rebuilds `web` for the live checkout.
-
-### Scripts, checks and tests
-
-- `tests/repo-root.ts:31` finds the repo root by a `web` folder.
-- `scripts/checks/transcript-index-born-stale.mjs:219`, `scripts/checks/reka-popper-root-inside-tooltip.mjs:131`
-  and `scripts/checks/fixer-only-called-by-its-test.mjs:40` read or scan `web/src`.
-- `scripts/sue-demo/serve.ts:21` serves `web/dist`; `scripts/screenshots/capture.mjs:317` starts `web`'s dev
-  server.
-- `bunfig.toml:18` keeps `desk2/` out of the root suite: Desk 2 runs its own (`bun test ./server/test ./web/test`
-  in `desk2/`, and the `desk2` job in `ci.yml`).
-
-### Docs that send people to the old window
-
-`README.md:259` ("the UI is at <http://localhost:7787>"), `README.md:174`, `:287`, `:292`, `AGENTS.md:10`
-and `:30`, `docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md:64`, `docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md:4` and `:478`,
-`docs/CLIMAYTE-LIVE-TESTS.md:110` ("Instances tab → gear"), and `docs/REFERENCE.md:381` (7787 as the "UI
-port"). The daemon's own URLs (`/api/mcp`, HSwarm's and the orchestrator's `AGENTHYDRA_URL`) are the API
-and stay.
-
-### What the old window has that Desk 2 left out on purpose
+## What the old window had that Desk 2 left out on purpose
 
 Shut down (the daemon is Desk 2's engine), the theme picker (Desk has one theme) and portable mode
-(`desk2/web/src/components/panes/agenthydra.ts:6-8`). Desk 2 has the rest:
+(`desk2/web/src/components/panes/agenthydra.ts`). Desk 2 has the rest:
 updates (`agenthydra.ts:214`), transcript export (`desk2/web/src/components/session-header/ah.ts:43`),
 the queue, Free instances, notifications and the shortcut sheet.
 
@@ -106,8 +73,6 @@ the queue, Free instances, notifications and the shortcut sheet.
 3. **Rename Hydra Desk 2 to AgentHydra.** User-facing: done 2026-10-06 (above). Internal, each needing a
    migration if renamed: `HydraDesk2.exe`, the mutexes `Local\HydraDesk2Launcher` and `Local\HydraDesk2Host`,
    `~/.hydra-desk-2/`, `%LOCALAPPDATA%\HydraDesk2`, port 7798 and the `desk2/` folder.
-4. **Remove `web/`**: the static serving and embedding, the workspace and scripts, the CI steps, the checks
-   and tests above, the docs, then the folder. Nothing in 2.0 needs `web/` since 2026-10-08 (the quick-instances
-   window moved, above); it goes when 2.0.0 ships. `orchestrator/web/`, the remote gateway, is a separate
+4. **Remove `web/`.** Done for 2.0.0 (above). `orchestrator/web/`, the remote gateway, is a separate
    interface and stays.
 5. **`desk/`**: removed 2026-10-07 (the owner's call; history keeps it).

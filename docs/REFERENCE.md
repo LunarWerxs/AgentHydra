@@ -556,7 +556,7 @@ Written down here because "where is this name coming from?" is otherwise unanswe
 
 | Shown as | Source | Changes when |
 |---|---|---|
-| **Name** column | `label` from `instance-meta.json`, else the account's friendly name, else the folder basename (`web/src/lib/instance-appearance.ts` `displayName`) | you rename the instance |
+| **Name** column | `label` from `instance-meta.json`, else the account's friendly name, else the folder basename (`desk2/hydra/src/lib/instance-appearance.ts` `displayName`) | you rename the instance |
 | **Instance account** column | the local part of the account's email, one rule for every row (`accountHandle`) | the profile signs into a different account |
 | the hover on that badge | the full email, plus the Anthropic profile display name (`full_name`) when the account has one | that account's profile is edited at Anthropic |
 | profile **folder** | fixed by the name typed at creation (`server/src/core/lifecycle.ts`), sanitized | never |
@@ -572,7 +572,7 @@ Appearance metadata `{ label, icon, color }` lives in
 instance is deleted. `POST /api/instances/:dir/meta` applies a present value, clears a field when it
 is `null`, and leaves an absent field unchanged. The curated icon/color keys live in
 `server/src/core/shared.ts`; the web mapping and deterministic defaults live in
-`web/src/lib/instance-appearance.ts`.
+`desk2/hydra/src/lib/instance-appearance.ts`.
 
 ### The usage numbers on a row
 
@@ -593,7 +593,7 @@ workers' streamed readings and limit walls over both routes (docs/CLIMAYTE.md).
 before the clear, so a signed-out row stays blank and a signed-in one fills in again at its next
 check. CliMayte, fan_out and the account survey read the stores directly, never these routes, so a
 clear never changes where work goes. The open browser keeps the clear time too
-(`web/src/composables/useUsage.ts`), because its usage maps only ever merge and a poll in flight at
+(`desk2/hydra/src/composables/useUsage.ts`), because its usage maps only ever merge and a poll in flight at
 the click would otherwise put the old number back until a reload.
 
 ## The analytics kit routes
@@ -684,7 +684,8 @@ next one.
 server/        Bun + Hono daemon: sqlite, Claude/Codex/OpenCode/Hermes/DSH session readers, transcript tail,
                dispatch, scheduler, instance pointer, core/ (Claude + Codex Desktop/CLI instances,
                DeepSeek Harness homes)
-web/           Vue 3 SPA (Sessions / Queue / Instances views)
+desk2/         AgentHydra 2.0's window (its own README): desk2/web, and desk2/hydra, its copy of
+               AgentHydra's pages, served at /ah/
 orchestrator/  THE ORCHESTRATOR - the Python toolbox that decides what should happen to a chat
                (orch.py + scripts/), its own tests (scripts/tests/), and its remote front-end
                (orchestrator/server + orchestrator/web). Driven by the daemon through
@@ -747,7 +748,7 @@ orchestrator/README.md, "Moving a machine off the standalone checkout".
 
 ## Screenshots
 
-The three README images are generated, not hand-taken:
+The README's Instances and Analytics images are generated, not hand-taken:
 
 ```
 bun run screenshots                 # shoot and install into .github/screenshots/
@@ -755,8 +756,8 @@ bun run screenshots -- --keep       # write to tmp/screenshots/ instead, to eyeb
 bun run screenshots -- --url <url>  # reuse a server you already have running
 ```
 
-It starts its own web server on a private port (5199, so an open dev session on 5173 is neither
-disturbed nor photographed), drives headless Chrome over the DevTools protocol, and writes one PNG
+It starts a dev server of AgentHydra 2.0's copy of the pages (`desk2/hydra`, at `/ah/`) on a
+private port (5199, so an open dev session on 5173 is neither disturbed nor photographed), drives headless Chrome over the DevTools protocol, and writes one PNG
 per view at a viewport sized to that view's max-width shell.
 
 **Nothing real is ever in frame.** These images are public, so instead of pointing a daemon at a
@@ -771,14 +772,16 @@ Requires a Chromium-based browser; set `CHROME_PATH` if it is not in a standard 
 
 ## Checks
 
-`bun run check` runs Biome + the i18n gate + a kit drift-check. The kit check needs an internal
+`bun run check` runs Biome + a kit drift-check. The kit check needs an internal
 LunarWerx kit checkout, so it's **owner-only and skipped in CI**; external contributors should run
 the individual checks instead:
 
 - `bun run lint`: Biome.
-- `bun run --cwd web check:i18n`: no hardcoded UI strings; every `t()` key resolves (also gates `build`).
+- `bun run --cwd desk2/hydra check:i18n`: no hardcoded UI strings in AgentHydra's pages; every `t()` key
+  resolves (also gates Desk 2's `build`).
 - `bun test`: includes the Windows-gated tray launcher guard and instance/crypto tests.
-- `bun run typecheck`: web (`vue-tsc`) + server (`tsc`).
+- `bun run typecheck`: the server and the orchestrator (`tsc`, `vue-tsc`); Desk 2 has its own,
+  `bun run --cwd desk2 typecheck`.
 
 `bun run check:local` is the owner-only half on its own: today it is just `check:kit`, split out under a
 name a pre-push runner can look for. It exists because the kit check is the one gate CI *structurally*

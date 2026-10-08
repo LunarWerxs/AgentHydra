@@ -4,15 +4,15 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync
 import { basename, dirname, join, relative, resolve } from 'node:path'
 /**
  * Build the AgentHydra daemon as a bun bundle: `<outdir>/app/` holds server.js (`bun build --target=bun`
- * of the daemon's entry), the assets it reads at run time (the built web UI, the misc files it hands out
- * and the tray toolkit, all beside server.js), release.json (what marks a release) and bun-version (the
- * bun the launcher downloads to run it). The launcher (AgentHydra.exe / agenthydra) starts it.
+ * of the daemon's entry), the assets it reads at run time (the misc files it hands out and the tray
+ * toolkit, beside server.js), release.json (what marks a release) and bun-version (the bun the launcher
+ * downloads to run it). The launcher (AgentHydra.exe / agenthydra) starts it. The window is desk2/,
+ * which scripts/package-release.ts builds and ships beside app/.
  *
  * Options:
  *   --bundle                  required: the only mode there is
  *   --outdir <dir>            where app/ goes (default dist/; a default dist/ is emptied first)
  *   --bun-version x.y.z       the bun this build pins (default: the running Bun.version)
- *   --skip-web
  *   --target windows-x64 | ... only decides whether the Windows tray toolkit is included
  */
 import { $ } from 'bun'
@@ -30,16 +30,6 @@ function option(name: string): string | undefined {
   if (index >= 0) return process.argv[index + 1]
   const prefix = `${name}=`
   return process.argv.find((argument) => argument.startsWith(prefix))?.slice(prefix.length)
-}
-
-function filesUnder(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const path = join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...filesUnder(path))
-    else if (entry.isFile()) out.push(path)
-  }
-  return out.sort()
 }
 
 function importPath(fromFile: string, target: string): string {
@@ -120,7 +110,7 @@ function runtimeMiscPaths(): string[] {
 
 /**
  * The generated entry: it tells the daemon where the assets beside server.js are, then loads
- * server/src/main.ts. The lookups the daemon already has (web, tray, misc) are filled with real paths
+ * server/src/main.ts. The lookups the daemon already has (tray, misc) are filled with real paths
  * under `import.meta.dir`, which in a bundle is the folder server.js sits in.
  */
 function writeReleaseEntrypoint(
@@ -131,13 +121,6 @@ function writeReleaseEntrypoint(
   rmSync(TMP, { recursive: true, force: true })
   mkdirSync(TMP, { recursive: true })
   const entry = join(TMP, 'entry.ts')
-  const webRoot = join(ROOT, 'web', 'dist')
-  const webRoutes = filesUnder(webRoot).map((file) => {
-    const rel = relative(webRoot, file).replaceAll('\\', '/')
-    mkdirSync(dirname(join(outApp, 'web', rel)), { recursive: true })
-    copyFileSync(file, join(outApp, 'web', rel))
-    return rel
-  })
   const miscNames = [...trayToolkitPaths(embedTray), ...runtimeMiscPaths()].map((file) => {
     mkdirSync(join(outApp, 'misc'), { recursive: true })
     copyFileSync(file, join(outApp, 'misc', basename(file)))
@@ -154,9 +137,6 @@ ${list.map((name) => `  ${JSON.stringify(name)}: join(here, ${JSON.stringify(dir
     `import { join } from "node:path";
 const here = import.meta.dir;
 const g = globalThis as Record<string, unknown>;
-g.__AGENTHYDRA_EMBEDDED_WEB__ = Object.freeze({
-${webRoutes.map((rel) => `  ${JSON.stringify(`/${rel}`)}: join(here, "web", ${JSON.stringify(rel)}),`).join('\n')}
-});
 ${
   trayNames.size === 0
     ? ''
@@ -248,9 +228,7 @@ function describeLockHolders(dir: string): Array<{ pid: number; path: string }> 
 }
 
 if (!process.argv.includes('--bundle')) {
-  throw new Error(
-    'usage: bun scripts/build.ts --bundle [--outdir <dir>] [--bun-version x.y.z] [--skip-web]',
-  )
+  throw new Error('usage: bun scripts/build.ts --bundle [--outdir <dir>] [--bun-version x.y.z]')
 }
 const target = option('--target')
 const windowsTarget = target ? target.startsWith('windows-') : process.platform === 'win32'
@@ -261,11 +239,6 @@ if (!requestedOutdir) clearDistDir(outDir)
 // A bundle from an earlier build must not leave files behind that this one no longer ships.
 rmSync(outApp, { recursive: true, force: true })
 mkdirSync(outApp, { recursive: true })
-
-if (!process.argv.includes('--skip-web')) {
-  console.log('→ build web')
-  await $`bun run --cwd ${join(ROOT, 'web')} build`
-}
 
 console.log('→ bundle daemon')
 const stamp = buildStamp()

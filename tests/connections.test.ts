@@ -28,7 +28,7 @@ import { getSetting, setSetting } from '../server/src/db'
 const SETTINGS_KEY = 'connections_sync'
 
 // Machine-local settings that must NEVER be part of what syncs (see PREF_KEYS in connections.ts).
-const MACHINE_LOCAL_KEYS = ['portable_mode', 'hide_tray_icon']
+const MACHINE_LOCAL_KEYS = ['hide_tray_icon']
 // The allowlisted portable prefs that DO sync.
 const PREF_KEYS = ['scheduler_enabled', 'spacing_seconds', 'poll_seconds', 'max_concurrent']
 
@@ -41,7 +41,6 @@ beforeEach(async () => {
   // bun test shares one module instance (and one settings DB) across every file in the run with
   // no per-test reset, so any PREF_KEYS / machine-local row this file writes must be put back;
   // otherwise a later file (e.g. tests/settings.test.ts) sees this file's leftovers.
-  setSetting('portable_mode', '0')
   setSetting('hide_tray_icon', '0')
   setSetting('scheduler_enabled', '0')
   setSetting('spacing_seconds', '60')
@@ -176,7 +175,6 @@ describe('settings allowlist', () => {
   })
 
   test('machine-local settings are never part of the persisted sync-state row', async () => {
-    setSetting('portable_mode', '1')
     setSetting('hide_tray_icon', '1')
     await enable({ theme: 'dark' })
     await updateAppearance({ theme: 'dark' })
@@ -186,7 +184,6 @@ describe('settings allowlist', () => {
       expect(raw).not.toContain(key)
     }
     // Sanity: the machine-local settings table rows themselves are untouched by sync.
-    expect(getSetting('portable_mode')).toBe('1')
     expect(getSetting('hide_tray_icon')).toBe('1')
   })
 

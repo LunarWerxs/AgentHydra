@@ -23,7 +23,7 @@
 //
 // Off by default: with sync disabled (the default), nothing here runs. What syncs is a
 // small ALLOWLIST of portable scheduler prefs (PREF_KEYS) + the web's appearance blob
-// (theme). Never machine-specific settings (portable_mode, hide_tray_icon) and never secrets.
+// (theme). Never machine-specific settings and never secrets.
 //
 // @cnct/connect is a regular dependency here (server/package.json) — dynamically imported
 // below anyway, so a boot with sync untouched never pays for the SDK.
@@ -69,7 +69,6 @@ export const PREF_KEYS = [
   'tomorrow_time',
   // How you like the app to present itself. The old comment called these "machine-specific";
   // they are not — "don't show me a tray icon" is a preference about you, not about the PC.
-  'portable_mode',
   'hide_tray_icon',
   'show_cli_instances',
   'show_desktop_instances',

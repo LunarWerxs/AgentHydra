@@ -19,7 +19,7 @@
 // a dialogue. See `hswarm/job.py` for the shapes read here; nothing is inferred.
 //
 // job.json IS PLAIN JSON (not zstd, not sqlite), so unlike dsh this store is real TEXT: an editor can
-// open it, and SOURCE_FILE_IS_TEXT (web/src/lib/session-labels.ts) says so.
+// open it.
 //
 // READONLY, ALWAYS. HSwarm owns these files; this reader opens them for reading and never writes,
 // moves or repairs one - same contract as every other store AgentHydra reads.

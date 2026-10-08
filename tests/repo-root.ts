@@ -22,13 +22,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** The workspace root's package.json is the ONLY one in the tree with both this name and a
- *  `workspaces` array: `server/` and `web/` publish as `@agenthydra/server` and `@agenthydra/web`.
+ *  `workspaces` array: `server/` publishes as `@agenthydra/server`.
  *  So a start directory nested inside a workspace cannot stop early on the wrong package. */
 const ROOT_PKG_NAME = 'agenthydra'
 
 /** Directories the suites actually reach into. A "root" missing these is not the root whatever
  *  its package.json claims, so a stray fixture or a scratch checkout cannot impersonate it. */
-const LANDMARKS = ['misc', 'server', 'web', 'scripts']
+const LANDMARKS = ['misc', 'server', 'desk2', 'scripts']
 
 /** Does this exact directory prove itself to be the AgentHydra workspace root? */
 function isRepoRoot(dir: string): boolean {

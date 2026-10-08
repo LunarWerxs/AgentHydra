@@ -24,8 +24,8 @@
 // formats that are unmistakable, and it is not a promise that nothing sensitive remains. Anyone
 // exporting a session should still read it before sending it.
 //
-// The HTML is produced by escaping first and assembling tags after, the same property the web
-// renderer holds (web/src/lib/markdown.ts): every tag in the output is one this file wrote.
+// The HTML is produced by escaping first and assembling tags after: every tag in the output is one
+// this file wrote.
 
 import { readDshSession } from './dsh-sessions'
 import { readForeignSession } from './foreign-sessions'
