@@ -40,7 +40,18 @@ async function guard<T>(fn: () => Promise<T>): Promise<T | null> {
 /** Translate an event into the toast copy. Kept beside the poll so the two can't drift. */
 type Translate = (key: string, named?: Record<string, unknown>) => string
 
-const TOAST_DURATION_MS = 20_000
+/** 8s, hover holds it (sonner). It was 20s: in Desk 2 the cards sat over the page long after they were read (owner,
+ *  2026-10-08: "these never seem to expire ... they kinda just pop up and they're in the way"). */
+const TOAST_DURATION_MS = 8_000
+
+/**
+ * Only an event noticed in the last two minutes is toasted. The poll rests while the page is off screen (Desk 2 slides
+ * this page away, visible-poll.ts) and catches up the moment it comes back, so every reset noticed meanwhile used to
+ * pop up at once, over the page just opened. Those are old news: the daemon's own notification told the owner when
+ * they happened, and the header badge still counts them until acknowledged.
+ */
+const FRESH_MS = 2 * 60_000
+const isFresh = (ev: ResetEvent, now: number) => now - Date.parse(ev.detectedAt) <= FRESH_MS
 
 /**
  * Gap between two toasts in one batch. This is a WORKAROUND for a real defect in vue-sonner 2.0.9
@@ -114,9 +125,12 @@ async function raiseBatch(batch: ResetEvent[], t: Translate): Promise<void> {
   // An id the daemon no longer lists cannot be re-listed, so forgetting it keeps the set to the open events.
   const listed = new Set(batch.map((ev) => ev.id))
   for (const id of toasted) if (!listed.has(id)) toasted.delete(id)
-  const fresh = batch.filter((ev) => !ev.acknowledged && !toasted.has(ev.id))
+  const now = Date.now()
+  const open = batch.filter((ev) => !ev.acknowledged && !toasted.has(ev.id))
+  // Old ones are marked too, so they never toast later either.
+  for (const ev of open) toasted.add(ev.id)
+  const fresh = open.filter((ev) => isFresh(ev, now))
   if (fresh.length === 0) return
-  for (const ev of fresh) toasted.add(ev.id)
   if (fresh.length > MAX_INDIVIDUAL_TOASTS) {
     raiseSummary(fresh, t)
     return

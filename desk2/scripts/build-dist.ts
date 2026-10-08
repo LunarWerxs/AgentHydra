@@ -2,11 +2,13 @@
 // finished takes the place of dist/. web/dist and hydra/dist are what the running window serves, and vite empties its outDir
 // before it starts: a build that failed on another session's half-made edit blanked /ah/ for ten minutes (2026-10-07).
 // Each run has its own folder (dist.next-<pid>), so two sessions building at once never write into one. A build whose
-// templates use a class its CSS has no rule for is refused the same way (dead-classes.ts).
+// templates use a class its CSS has no rule for is refused the same way (dead-classes.ts), and so is one with a .vue file
+// the Vue compiler refuses (sfc-errors.ts), checked before vite starts.
 
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { deadClasses } from './dead-classes'
+import { sfcErrors } from './sfc-errors'
 
 const app = process.cwd()
 const live = join(app, 'dist')
@@ -27,6 +29,12 @@ async function rename(from: string, to: string): Promise<void> {
   }
 }
 
+const broken = sfcErrors(app, join(app, 'src'))
+if (broken.length) {
+  const list = broken.map((e) => `  ${relative(app, e.file)}:${e.line}: ${e.message}`).join('\n')
+  console.error(`build failed: the Vue compiler refuses these files, and the dev server answers each with a 500:\n${list}\n${live} was left as it was`)
+  process.exit(1)
+}
 const built = Bun.spawnSync([process.execPath, 'run', 'vite', 'build', '--outDir', next, '--emptyOutDir'], { cwd: app, stdio: ['inherit', 'inherit', 'inherit'] })
 if (built.exitCode !== 0 || !existsSync(join(next, 'index.html'))) {
   rmSync(next, { recursive: true, force: true })

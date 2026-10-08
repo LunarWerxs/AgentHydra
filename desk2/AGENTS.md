@@ -60,7 +60,9 @@ between server/ and web/.
   hydra build failing on another session's half-made edits had left `/ah/` blank for ten minutes). A failed build
   leaves the old dist as it was. A build whose templates use a static class its CSS has no rule for is refused the
   same way (`scripts/dead-classes.ts`, since 2026-10-08: on 2026-10-07 `size-screen`, which Tailwind v4 does not
-  generate, left the page shorter than the window with every other check green). Run `vite build` by hand only with `--outDir` pointing
+  generate, left the page shorter than the window with every other check green). So is one with a `.vue` file the Vue compiler
+  refuses (`scripts/sfc-errors.ts`, since 2026-10-08: two `:class` bindings on one element built green, while the dev
+  server answered the file with a 500 and every dev-server probe saw a blank page). Run `vite build` by hand only with `--outDir` pointing
   somewhere else.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
