@@ -12,6 +12,8 @@ const instances = ref<CMInstance[]>([])
 const loading = ref(false)
 const resolvingAccounts = ref(false)
 const busyDirs = ref<Set<string>>(new Set())
+/** The dirs an Open is under way for, so the row can show it is starting rather than just greyed. */
+const openingDirs = ref<Set<string>>(new Set())
 const lastError = ref<string | null>(null)
 // When each dir was last auto-resolved, so a poll tick doesn't re-hit one every 4 seconds.
 // See autoResolveAccounts() for what actually gets retried and why.
@@ -58,11 +60,15 @@ function guard<T>(p: Promise<T>): Promise<T | undefined> {
   })
 }
 
-function setBusy(dir: string, busy: boolean) {
-  const next = new Set(busyDirs.value)
-  if (busy) next.add(dir)
+function toggled(set: Set<string>, dir: string, on: boolean): Set<string> {
+  const next = new Set(set)
+  if (on) next.add(dir)
   else next.delete(dir)
-  busyDirs.value = next
+  return next
+}
+
+function setBusy(dir: string, busy: boolean) {
+  busyDirs.value = toggled(busyDirs.value, dir, busy)
 }
 
 function upsert(next: CMInstance) {
@@ -227,6 +233,7 @@ function showConfirmed(dir: string, running: boolean, pid: number | null) {
  *  the caller can surface the server's failure message (e.g. the MSIX-only explanation). */
 async function open(dir: string): Promise<api.CMActionResult | undefined> {
   setBusy(dir, true)
+  openingDirs.value = toggled(openingDirs.value, dir, true)
   try {
     const result = await guard(api.openInstance(dir))
     if (result?.ok) {
@@ -235,6 +242,7 @@ async function open(dir: string): Promise<api.CMActionResult | undefined> {
     }
     return result
   } finally {
+    openingDirs.value = toggled(openingDirs.value, dir, false)
     setBusy(dir, false)
   }
 }
@@ -362,6 +370,7 @@ export function useInstances() {
     loading,
     resolvingAccounts,
     busyDirs,
+    openingDirs,
     lastError,
     refreshInstances,
     startPolling,
