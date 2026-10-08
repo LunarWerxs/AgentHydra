@@ -23,6 +23,12 @@ import type { ServerEvent, ChatSummary, TranscriptItem } from '@shared/protocol'
 
 // Mock WebSocket
 class MockWebSocket {
+  // The real constants: the store compares readyState with WebSocket.OPEN and WebSocket.CONNECTING.
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSING = 2
+  static readonly CLOSED = 3
+  static last: MockWebSocket | null = null
   url: string
   readyState = 0
   onopen: (() => void) | null = null
@@ -32,6 +38,7 @@ class MockWebSocket {
 
   constructor(url: string) {
     this.url = url
+    MockWebSocket.last = this
     setTimeout(() => {
       this.readyState = 1
       this.onopen?.()
@@ -133,6 +140,9 @@ describe('useDesk store', () => {
 
     // Give the WebSocket time to connect and trigger hello
     await new Promise((resolve) => setTimeout(resolve, 20))
+    MockWebSocket.last!.simulateMessage(helloEvent)
+    expect(desk.chats.value.map((c) => c.id)).toEqual(['chat-1'])
+    expect(desk.settings.value?.defaultEffort).toBe('medium')
   })
 
   it('updates items on upsert event', async () => {
@@ -150,8 +160,9 @@ describe('useDesk store', () => {
       } as TranscriptItem
     }
 
-    // Manually trigger since we can't access the WS
-    await new Promise((resolve) => setTimeout(resolve, 20))
+    desk.itemsByChat.value.set('chat-1', [])
+    MockWebSocket.last!.simulateMessage(upsertEvent)
+    expect(desk.itemsByChat.value.get('chat-1')).toEqual([expect.objectContaining({ id: 'item-1', text: 'Hello' })])
   })
 
   it('appends text on delta event', async () => {
@@ -176,7 +187,8 @@ describe('useDesk store', () => {
       text: ' world'
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    MockWebSocket.last!.simulateMessage(deltaEvent)
+    expect(desk.itemsByChat.value.get('chat-1')).toEqual([expect.objectContaining({ id: 'item-1', text: 'Hello world' })])
   })
 
   it('selects chat', () => {
