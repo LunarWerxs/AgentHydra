@@ -1,8 +1,8 @@
 // Types for tray-bootstrap.mjs — the shared "this build HAS a tray, and it is running" primitive.
 // Hand-written so the TypeScript apps get a typed import without depending on the kit's toolchain.
 
-/** The kit's tray host binary, as it is named in every app's misc\ directory. */
-export const TRAY_HOST_EXE: string;
+/** The tray host's exe for one app, `<App>-Tray.exe`, paired with that app's `<App>-Tray.json`. */
+export function trayHostExeFor(configFile: string): string;
 
 /** Every file a tray host needs to run, for an app that names its config and icon like this. */
 export function trayToolkitFiles(names: { configFile: string; iconFile: string }): string[];
@@ -71,16 +71,24 @@ export function materializeTrayToolkit(deps: TrayToolkitDeps): Promise<TrayToolk
 /** The probe's stdout -> true / false / null (null = could not tell). */
 export function parseTrayHostCount(stdout: string): boolean | null;
 
-/** Is a tray host FOR THIS APP alive right now? true / false / null = could not tell. Every kit app
- *  runs the same binary name, so `configFile` (which the host carries on its command line) is what
- *  keeps a sibling's host from answering for yours. Omitting it counts any host. */
-export function trayHostProcessState(opts?: {
+/** Is a tray host FOR THIS APP alive right now? true / false / null = could not tell. The host's
+ *  exe is named for its app, so `configFile` decides which exe is counted. */
+export function trayHostProcessState(opts: {
   spawnProbe?: (argv: string[]) => Promise<string>;
-  configFile?: string;
+  configFile: string;
 }): Promise<boolean | null>;
 
 /** The probe's command line, exported so the filter can be asserted without spawning anything. */
-export function trayHostProbeArgv(configFile?: string): string[];
+export function trayHostProbeArgv(configFile: string): string[];
+
+/** Stop this install's pre-rename host, delete its old exe and retarget its shortcuts at the new one.
+ *  Resolves the PowerShell exit code, or null off Windows. */
+export function retireLegacyTrayHost(opts: {
+  appRoot: string;
+  configFile: string;
+  platform?: string;
+  runPowerShell?: (script: string, env: Record<string, string>) => Promise<number>;
+}): Promise<number | null>;
 
 export type TrayHostSkipReason =
   | 'not-windows'

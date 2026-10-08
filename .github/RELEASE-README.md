@@ -7,7 +7,7 @@ to the executable.
 ## Run it
 
 - **Windows**: double-click `AgentHydra.exe` (or run it from a terminal). The system-tray icon
-  (Open / Restart / Quit) is drawn by `misc\lunarwerx-tray.exe`, a small separate launcher; when
+  (Open / Restart / Quit) is drawn by `misc\AgentHydra-Tray.exe`, a small separate launcher; when
   that folder is beside the executable the daemon starts the launcher itself if nothing else has,
   so the icon appears either way. `misc\Create-Shortcut.ps1` makes an `AgentHydra` shortcut beside
   the executable that launches through the tray host directly, which is the tidier way in. If the

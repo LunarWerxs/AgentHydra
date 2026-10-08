@@ -173,7 +173,7 @@ try {
       join(bundle, 'desk2/launcher/HydraDesk2.exe'),
     )
     for (const f of [
-      'lunarwerx-tray.exe',
+      'AgentHydra-Tray.exe',
       'AgentHydra-Tray.json',
       'AgentHydra.ico',
       'Create-Shortcut.ps1',

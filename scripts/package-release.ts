@@ -35,7 +35,7 @@ const NODE_OS: Record<string, string> = { windows: 'win32', linux: 'linux', darw
 /** The Windows archive must stay a small download: Bun and Claude Code are fetched on first run. */
 const WINDOWS_ARCHIVE_LIMIT = 30 * 1024 * 1024
 const MISC_FILES = [
-  'lunarwerx-tray.exe',
+  'AgentHydra-Tray.exe',
   'AgentHydra-Tray.json',
   'AgentHydra.ico',
   'Create-Shortcut.ps1',

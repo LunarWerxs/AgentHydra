@@ -43,14 +43,13 @@
 # orphans, and headless daemons.
 #
 # WHY THE NATIVE HOST IS A KILL TARGET TOO (2026-09-26, AgentHydra down until fixed by hand):
-# Every app's shortcut now runs the NATIVE host, `misc\lunarwerx-tray.exe <App>-Tray.json`, not a
+# Every app's shortcut now runs the NATIVE host, `misc\<App>-Tray.exe <App>-Tray.json`, not a
 # powershell. This script still looked only for powershell running "<App>-Tray.ps1", so it saw no
 # tray host, left the native one alive, and relaunched Tray-Launch.vbs. That PowerShell host lost
 # the app's tray mutex to the native one and quit, and the surviving native host never revived the
 # daemon we had killed: every AgentHydra MCP tool stayed down until someone replaced the native
-# host by hand. The native host is matched by the config filename on its command line. Every kit
-# app runs the SAME lunarwerx-tray.exe, so matching the binary name alone would kill a sibling
-# app's tray (tray-bootstrap.mjs hit exactly that on 2026-09-11). The relaunch starts the native
+# host by hand. The native host is matched by the config filename on its command line, not by the
+# binary name alone: two apps sharing an exe name would otherwise kill each other's tray. The relaunch starts the native
 # host whenever the app ships one, and falls back to Tray-Launch.vbs only when it does not.
 #
 # WHY THE RELAUNCH GOES THROUGH WMI:
@@ -149,21 +148,19 @@ function Test-PredatesRestart {
 
 # --- Tray hosts ------------------------------------------------------------------------------------
 # The daemon's supervisor, in one of two forms:
-#   · NATIVE, what every app's shortcut runs: misc\lunarwerx-tray.exe <App>-Tray.json.
+#   · NATIVE, what every app's shortcut runs: misc\<App>-Tray.exe <App>-Tray.json.
 #   · POWERSHELL, the -Legacy rollback: a hidden powershell running the sibling "<App>-Tray.ps1"
 #     adapter, launched by Tray-Launch.vbs.
 # Either one's watchdog revives a killed daemon within seconds, so a restart that leaves it alive
 # restarts NOTHING durably -- see the zero-instance incident in the header. Each is matched by a
 # name unique to THIS app: the adapter filename (RepoYeti-Tray.ps1, DevWebUI-Tray.ps1, ...) in a
 # powershell command line, and the config filename (RepoYeti-Tray.json, ...) in a
-# lunarwerx-tray.exe command line -- including a mutex-loser zombie stuck on its "already
+# <App>-Tray.exe command line -- including a mutex-loser zombie stuck on its "already
 # starting" MessageBox.
 $miscDir = Join-Path $Root 'misc'
 $trayAdapter = Get-ChildItem -LiteralPath $miscDir -Filter '*-Tray.ps1' -ErrorAction SilentlyContinue |
   Select-Object -First 1
 
-$nativeExeName = 'lunarwerx-tray.exe'
-$nativeExe = Join-Path $miscDir $nativeExeName
 # The config the native host runs with: the adapter's twin (<App>-Tray.ps1 -> <App>-Tray.json)
 # when there is one, otherwise the only *-Tray.json in misc\. Two candidates and no twin means we
 # cannot say which one is ours, so no native host is matched or launched.
@@ -176,6 +173,8 @@ if (-not $nativeConfig) {
   $configs = @(Get-ChildItem -LiteralPath $miscDir -Filter '*-Tray.json' -ErrorAction SilentlyContinue)
   if ($configs.Count -eq 1) { $nativeConfig = $configs[0] }
 }
+$nativeExeName = if ($nativeConfig) { $nativeConfig.BaseName + '.exe' } else { $null }
+$nativeExe = if ($nativeConfig) { Join-Path $miscDir $nativeExeName } else { $null }
 # The config filename as a WHOLE argument, bare, quoted or at the end of a path. That also finds a
 # compiled build's host, which tray-bootstrap.mjs materializes under the app's state dir and starts
 # with the same bare filename. Every kit app runs the same binary, so this filename is the only

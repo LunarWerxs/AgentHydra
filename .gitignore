@@ -58,7 +58,7 @@ docs/HANDOFF_MICHAEL.md
 # dist/ (ignored above); this is the copy people leave beside the checkout after downloading a
 # release asset or hand-copying one out of dist/. It is ~100 MB, so an accidental `git add` here
 # is expensive and irreversible on a public repo. Named exactly, NOT as a blanket *.exe, because
-# misc/lunarwerx-tray.exe is a tracked, committed part of the tray toolkit.
+# misc/AgentHydra-Tray.exe is a tracked, committed part of the tray toolkit.
 /AgentHydra.exe
 
 # Local investigation write-ups: internal working notes, same convention as

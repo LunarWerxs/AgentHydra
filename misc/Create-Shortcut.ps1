@@ -15,14 +15,14 @@ $root = Split-Path -Parent $scriptDir
 
 . (Join-Path $scriptDir "New-TrayShortcut.ps1")
 
-# The main shortcut runs the NATIVE tray host (misc\lunarwerx-tray.exe; source vendored beside it in
+# The main shortcut runs the NATIVE tray host (misc\AgentHydra-Tray.exe; source vendored beside it in
 # misc\tray-host-native\, kit source lunarwerx-ui/src/tray-host-native), not wscript +
 # Tray-Launch.vbs + AgentHydra-Tray.ps1. Measured on the author's machine, alternating runs: the
 # PowerShell chain started the daemon at +475ms and was serving at +745-1115ms; the native host
 # starts it at +25ms and serves at ~400ms through the real shortcut. Almost all of the difference is
 # script-host overhead (wscript, the CLR, Add-Type of WinForms, and parsing 1,215 lines) rather than
 # anything the app does.
-$native = @{ ExeFile = "lunarwerx-tray.exe"; ExeArguments = "AgentHydra-Tray.json" }
+$native = @{ ExeFile = "AgentHydra-Tray.exe"; ExeArguments = "AgentHydra-Tray.json" }
 if ($Legacy) { $native = @{} }
 New-TrayShortcut -Root $root -ScriptDir $scriptDir `
   -LnkName "AgentHydra" `

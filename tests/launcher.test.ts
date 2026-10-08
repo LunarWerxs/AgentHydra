@@ -82,7 +82,7 @@ describe.skipIf(!win)('tray launcher', () => {
     // The main shortcut runs these two files and nothing else, so a missing or malformed pair is
     // an app that will not open at all. Asserted here rather than only through the .lnk because
     // this failure is silent: the shortcut still resolves, it just launches nothing useful.
-    const exe = join(APP, 'misc', 'lunarwerx-tray.exe')
+    const exe = join(APP, 'misc', 'AgentHydra-Tray.exe')
     const cfgPath = join(APP, 'misc', 'AgentHydra-Tray.json')
     expect(existsSync(exe)).toBe(true)
     expect(existsSync(cfgPath)).toBe(true)
@@ -272,7 +272,7 @@ describe.skipIf(!win)('tray launcher', () => {
   // 5s default (flaked the 2026-07-16 run); the assertions are unchanged, only the allowance.
   test('the desktop shortcut points at the native tray host + the icon', () => {
     // was: asserted wscript.exe + the shared Tray-Launch.vbs. The main shortcut now runs
-    // misc\lunarwerx-tray.exe directly: the .vbs existed only to launch PowerShell without a
+    // misc\AgentHydra-Tray.exe directly: the .vbs existed only to launch PowerShell without a
     // console flash, and a native host suppresses its own console, so both layers are gone.
     // Measured, alternating runs: the wscript -> powershell chain started the daemon at +475ms and
     // served at +745-1115ms; the native host starts it at +25ms and serves at ~400ms.
@@ -297,7 +297,7 @@ describe.skipIf(!win)('tray launcher', () => {
       ],
       { encoding: 'utf8' },
     )
-    expect(out.toLowerCase()).toContain('lunarwerx-tray.exe')
+    expect(out.toLowerCase()).toContain('agenthydra-tray.exe')
     // The config filename IS the per-app surface: the host binary is generic and shared, so a
     // shortcut that lost this argument would start a tray host with nothing to host.
     expect(out).toContain('AgentHydra-Tray.json')

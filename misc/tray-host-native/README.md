@@ -1,4 +1,4 @@
-# lunarwerx-tray (spike)
+# Native tray host (spike)
 
 A native Windows tray host, built to answer one question: **how much of an app's launch time is the
 PowerShell tray host itself?**
@@ -9,7 +9,7 @@ paths saw identical conditions:
 | | daemon process starts | app serving |
 |---|---|---|
 | `Tray-Launch.vbs` -> `Tray-Host.ps1` | +475 ms | +745-1115 ms |
-| `lunarwerx-tray.exe` | **+25-27 ms** | **+274 ms** (clean port) / +439-452 ms (same kill-race harness as the PowerShell column) |
+| native host (`<App>-Tray.exe`) | **+25-27 ms** | **+274 ms** (clean port) / +439-452 ms (same kill-race harness as the PowerShell column) |
 
 Where the PowerShell time goes, measured in isolation (5 runs each):
 
@@ -90,7 +90,7 @@ URL instead, checked at each Open. Name it whenever the window can be missing fr
 `wscript //B` on a missing script fails without a word, so Open would do nothing. A command that
 cannot be started falls back to the URL. A malformed `openCommand` is ignored.
 
-**`--background`** (`lunarwerx-tray.exe App-Tray.json --background`) starts the tray without
+**`--background`** (`<App>-Tray.exe <App>-Tray.json --background`) starts the tray without
 opening anything, and exits quietly when the tray is already running. It is for an app's own window
 launcher, which starts the tray beside the window it is opening anyway.
 
@@ -153,7 +153,7 @@ happened":
 
 ```
 cargo build --release
-# write lunarwerx-tray.json beside the exe, then:
+# write <App>-Tray.json beside the exe, then:
 LUNARWERX_TRAY_BENCH=1 ./target/release/lunarwerx-tray.exe   # prints timings, no icon
 ./target/release/lunarwerx-tray.exe                          # real run
 LUNARWERX_TRAY_DIAG=1 ./target/release/lunarwerx-tray.exe    # + window/icon diagnostics

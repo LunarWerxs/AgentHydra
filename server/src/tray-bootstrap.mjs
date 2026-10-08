@@ -4,7 +4,7 @@
  * ⛔ WHY EVERY KIT APP NEEDS THIS (owner, 2026-09-11, on finding a freshly compiled AgentHydra with
  * no icon): "if we're not including a tray in that compiled executable, that's a [bug] - it needs to
  * be fixed in this and probably a couple of the others." He was right on both counts. Every kit app
- * ships `misc\lunarwerx-tray.exe` (340 KB, src/tray-host-native) and every kit app also builds a
+ * ships `misc\<App>-Tray.exe` (340 KB, src/tray-host-native) and every kit app also builds a
  * SINGLE-FILE exe with `bun build --compile` that embeds the web assets and nothing else. So the
  * download most people take could never show an icon, never offer Quit, and never get the
  * auto-restart supervisor - and each app's README had simply written that down as a limitation.
@@ -20,7 +20,7 @@
  *      Version-scoped: Windows cannot overwrite a running image, and the EACCES it raises reads as
  *      a permissions problem that isn't one.
  *   2. PROBE - answer "is a host running?" as a TRI-STATE. ⛔ The first version of this asked
- *      `Get-Process -Name lunarwerx-tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id`
+ *      `Get-Process -Name <App>-Tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id`
  *      and read a non-zero exit as "running". SilentlyContinue suppresses the error TEXT, not the
  *      error RECORD: with no such process powershell.exe exits 1. Measured 2026-09-11: absent ->
  *      exit 1, present -> exit 0. The one case the probe exists for was the one it got backwards,
@@ -39,12 +39,14 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 
-/** The kit's tray host binary, as it is named in every app's misc\ directory. */
-export const TRAY_HOST_EXE = 'lunarwerx-tray.exe'
+/** The tray host's exe for one app, `<App>-Tray.exe`, paired with that app's `<App>-Tray.json`. */
+export function trayHostExeFor(configFile) {
+  return configFile.replace(/\.json$/, '.exe')
+}
 
 /** Every file a tray host needs to run, for an app that names its config and icon like this. */
 export function trayToolkitFiles({ configFile, iconFile }) {
-  return [TRAY_HOST_EXE, configFile, iconFile]
+  return [trayHostExeFor(configFile), configFile, iconFile]
 }
 
 /**
@@ -108,7 +110,7 @@ function trayIo(deps) {
 async function writeTrayToolkit(dir, embedded, deps, io, wrote) {
   const { joinPath, dirOf, baseOf, exists, sizeOf, readBytes, readText, writeBytes, writeText } = io
   io.mkdir(dir)
-  for (const name of [TRAY_HOST_EXE, deps.iconFile]) {
+  for (const name of [trayHostExeFor(deps.configFile), deps.iconFile]) {
     const from = embedded[name]
     if (!from) continue
     const to = joinPath(dir, name)
@@ -144,13 +146,14 @@ export async function materializeTrayToolkit(deps) {
   if (platform !== 'win32') return { dir: null, reason: 'not-windows', wrote: [] }
 
   const files = trayToolkitFiles({ configFile: deps.configFile, iconFile: deps.iconFile })
+  const exe = trayHostExeFor(deps.configFile)
   const io = trayIo(deps)
   const { joinPath, exists } = io
 
   // 1. A real misc\ beside the app wins: the source checkout and the extracted zip, where the files
   //    are the ones the build shipped and rewriting them would be meddling.
   const sidecar = joinPath(deps.appRoot, 'misc')
-  if (exists(joinPath(sidecar, TRAY_HOST_EXE)) && exists(joinPath(sidecar, deps.configFile)))
+  if (exists(joinPath(sidecar, exe)) && exists(joinPath(sidecar, deps.configFile)))
     return { dir: sidecar, reason: 'sidecar', wrote: [] }
 
   // 2. Only a compiled build carries embedded copies; a dev run with no misc\ has nothing to place.
@@ -165,7 +168,7 @@ export async function materializeTrayToolkit(deps) {
   } catch (error) {
     // A write that failed on a file already there is survivable - use what is on disk. Anything
     // else leaves no runnable host, and the caller says so out loud.
-    if (exists(joinPath(dir, TRAY_HOST_EXE)) && exists(joinPath(dir, deps.configFile)))
+    if (exists(joinPath(dir, exe)) && exists(joinPath(dir, deps.configFile)))
       return { dir, reason: 'already-materialized', wrote, error: String(error) }
     return { dir: null, reason: 'write-failed', wrote, error: String(error) }
   }
@@ -184,15 +187,10 @@ export function parseTrayHostCount(stdout) {
 /**
  * Is a tray host FOR THIS APP alive right now? `true` / `false` / `null` = could not tell.
  *
- * ⛔ WHICH APP'S HOST? (found live, 2026-09-11, minutes after the embed landed). Every kit app runs
- * the SAME binary name, `lunarwerx-tray.exe`, so a probe that counts by process name answers "yes,
- * running" for an app whose icon is nowhere - it is seeing a SIBLING's host. Measured: AgentHydra's
- * host was up, DevWebUI placed its toolkit correctly, then skipped with 'already-running' and
- * showed no icon. With four apps sharing the binary, only the first one to start would ever get a
- * tray. The host's own command line carries its config filename (`lunarwerx-tray.exe
- * DevWebUI-Tray.json`) - that IS the per-app discriminator, and the host already uses a per-app
- * named mutex for the same reason. Without a configFile this counts any host, which is the old
- * behaviour and only correct for a machine running one kit app.
+ * ⛔ WHICH APP'S HOST? (found live, 2026-09-11, minutes after the embed landed). When every kit app
+ * shipped the SAME binary name, a probe that counted by process name answered "yes, running" for an
+ * app whose icon was nowhere - it was seeing a SIBLING's host. Each app's host is now named for the
+ * app (`<App>-Tray.exe`), so the exe name alone identifies it, and the probe filters on exactly that.
  *
  * The count cannot raise an error record at all, which is the other half of this function's story
  * (see the file header). PowerShell is a console program, hence windowsHide.
@@ -201,7 +199,7 @@ export function parseTrayHostCount(stdout) {
  *  stuck - and a caller waiting on the tray's state must never be the thing that hangs. */
 const TRAY_PROBE_TIMEOUT_MS = 10_000
 
-export async function trayHostProcessState({ spawnProbe, configFile } = {}) {
+export async function trayHostProcessState({ spawnProbe, configFile }) {
   try {
     const run =
       spawnProbe ??
@@ -246,16 +244,15 @@ export async function trayHostProcessState({ spawnProbe, configFile } = {}) {
 /** The probe command line. Exported so its shape is testable without spawning anything: the
  *  filter is the whole correctness question, and it is a string built at runtime. */
 export function trayHostProbeArgv(configFile) {
-  // Only the characters a config filename can legitimately hold, so nothing here can close the
+  // Only the characters an exe filename can legitimately hold, so nothing here can close the
   // quote and continue the command - this string is interpolated into a shell.
-  const safe = String(configFile ?? '').replace(/[^A-Za-z0-9._-]/g, '')
-  const mine = safe ? ` | Where-Object { $_.CommandLine -like '*${safe}*' }` : ''
+  const exe = trayHostExeFor(configFile).replace(/[^A-Za-z0-9._-]/g, '')
   return [
     'powershell',
     '-NoProfile',
     '-NonInteractive',
     '-Command',
-    `@(Get-CimInstance Win32_Process -Filter "Name='${TRAY_HOST_EXE}'"${mine}).Count`,
+    `@(Get-CimInstance Win32_Process -Filter "Name='${exe}'").Count`,
   ]
 }
 
@@ -309,7 +306,7 @@ export function isHeadlessEnv(env = process.env) {
 
 export async function startTrayHostIfMissing(deps) {
   const toolkitDir = deps.toolkitDir || join(deps.appRoot, 'misc')
-  const exe = join(toolkitDir, TRAY_HOST_EXE)
+  const exe = join(toolkitDir, trayHostExeFor(deps.configFile))
   const exists = deps.exists ?? existsSync
   const platform = deps.platform ?? process.platform
   const headless = deps.headless ?? isHeadlessEnv(deps.env)
@@ -338,4 +335,56 @@ export async function startTrayHostIfMissing(deps) {
   })
   if (decision.start) (deps.spawnHost ?? defaultSpawnHost)(exe, toolkitDir, deps.configFile)
   return { ...decision, exe }
+}
+
+/** The host every kit app shipped before the exe was named per app. Only the migration names it. */
+const LEGACY_TRAY_EXE = 'lunarwerx-tray.exe'
+
+// Matched by the exact path of THIS install's old exe AND this app's config on the command line:
+// a sibling app's old host sits at a different path, and a host of this app's config elsewhere is
+// not ours to stop.
+const RETIRE_LEGACY_SCRIPT = `
+$ErrorActionPreference = 'SilentlyContinue'
+$oldExe = $env:LEGACY_TRAY_OLD_EXE
+$config = $env:LEGACY_TRAY_CONFIG
+$hosts = @(Get-CimInstance Win32_Process -Filter "Name='${LEGACY_TRAY_EXE}'" |
+  Where-Object { $_.ExecutablePath -ieq $oldExe -and $_.CommandLine -like "*$config*" })
+foreach ($h in $hosts) { Stop-Process -Id $h.ProcessId -Force }
+if ($hosts.Count) { Wait-Process -Id $hosts.ProcessId -Timeout 10 }
+Remove-Item -LiteralPath $oldExe -Force
+$shell = New-Object -ComObject WScript.Shell
+$lnks = @(Get-ChildItem -LiteralPath @([Environment]::GetFolderPath('Programs'), [Environment]::GetFolderPath('Startup')) -Filter '*.lnk' -Recurse) + @(Get-ChildItem -LiteralPath $env:LEGACY_TRAY_ROOT -Filter '*.lnk')
+foreach ($f in $lnks) {
+  $s = $shell.CreateShortcut($f.FullName)
+  if ($s.TargetPath -ieq $oldExe) { $s.TargetPath = $env:LEGACY_TRAY_NEW_EXE; $s.Save() }
+}
+`
+
+function runHiddenPowerShell(script, env) {
+  return Bun.spawn(
+    ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script],
+    { env: { ...process.env, ...env }, windowsHide: true, stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' },
+  ).exited
+}
+
+/**
+ * ⛔ THE ONE PLACE THAT KNOWS THE OLD NAME, and it exists only to carry an INSTALLED app across the
+ * rename: stop this install's old host, delete its old exe now, and point the app's existing Start
+ * Menu, Startup and root shortcuts at the new exe. Call it after the update has placed the new host.
+ * Resolves the PowerShell exit code, or null off Windows. Delete it once no install can still be on
+ * a build that shipped the old name.
+ */
+export function retireLegacyTrayHost({
+  appRoot,
+  configFile,
+  platform = process.platform,
+  runPowerShell = runHiddenPowerShell,
+}) {
+  if (platform !== 'win32') return Promise.resolve(null)
+  return runPowerShell(RETIRE_LEGACY_SCRIPT, {
+    LEGACY_TRAY_CONFIG: configFile,
+    LEGACY_TRAY_OLD_EXE: join(appRoot, 'misc', LEGACY_TRAY_EXE),
+    LEGACY_TRAY_NEW_EXE: join(appRoot, 'misc', trayHostExeFor(configFile)),
+    LEGACY_TRAY_ROOT: appRoot,
+  })
 }

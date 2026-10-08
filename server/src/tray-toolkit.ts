@@ -3,7 +3,7 @@
 // ⛔ THE DEFECT (owner, 2026-09-11, on a build he had just made): "if we're not including a tray in
 // that compiled executable, that's a [bug] - it needs to be fixed in this and probably a couple of
 // the others." Both halves were true. The single-file exe embedded every Vite asset and nothing
-// from misc\, so misc\lunarwerx-tray.exe could not exist beside it, startTrayHostIfMissing skipped
+// from misc\, so misc\AgentHydra-Tray.exe could not exist beside it, startTrayHostIfMissing skipped
 // with 'no-tray-toolkit' forever, the tray INVARIANT exempted the build entirely, and index.ts
 // fired a toast telling the person to download a different artifact. And the same was true of
 // RepoYeti, DevWebUI and ReDesign, each of which had written it into its README as a limitation.

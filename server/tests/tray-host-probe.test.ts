@@ -1,7 +1,7 @@
 // server/tests/tray-host-probe.test.ts — "is the tray running?" answered BACKWARDS (2026-09-11).
 //
 // ⛔ THE BUG, found live while fixing the compiled build's missing tray toolkit. The probe ran
-//   Get-Process -Name lunarwerx-tray -ErrorAction SilentlyContinue | Select -ExpandProperty Id
+//   Get-Process -Name <tray host exe> -ErrorAction SilentlyContinue | Select -ExpandProperty Id
 // and treated a NON-ZERO EXIT as "running". But -ErrorAction SilentlyContinue suppresses the error
 // TEXT, not the error RECORD: with no such process powershell.exe exits 1. Measured on this machine
 // that day: absent -> exit 1, present -> exit 0. So the single case the function exists to detect

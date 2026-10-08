@@ -222,7 +222,7 @@ jobs:
         shell: bash
         run: |
           cd "$BUNDLE_DIR"
-          for f in lunarwerx-tray.exe AgentHydra-Tray.json AgentHydra.ico \
+          for f in AgentHydra-Tray.exe AgentHydra-Tray.json AgentHydra.ico \
                    Create-Shortcut.ps1 New-TrayShortcut.ps1 Tray-Host.ps1 \
                    AgentHydra-Tray.ps1 Tray-Launch.vbs Instance-Launch.vbs; do
             test -f "misc/$f" || { echo "bundle is missing misc/$f"; exit 1; }

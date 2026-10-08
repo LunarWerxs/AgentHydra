@@ -6,7 +6,7 @@
 #      appended to ~/.hydra-desk-2/logs/server.log, its pids in ~/.hydra-desk-2/server.pid (stop.ps1 reads it).
 #      A server this launcher started that is still booting is waited on, never started twice.
 #   3. Wait for health up to 20 s; if it never answers, show a message box naming the log and exit 1.
-#   4. Start AgentHydra's tray icon (misc/lunarwerx-tray.exe AgentHydra-Tray.json --background) when it is
+#   4. Start AgentHydra's tray icon (misc/AgentHydra-Tray.exe AgentHydra-Tray.json --background) when it is
 #      not running: the icon goes with this window, and its Open runs this launcher (openCommand).
 #   5. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
 #      ~/.hydra-desk-2/window.json, then shows; a second run only focuses the open window. On the host's
@@ -41,7 +41,7 @@ $PidFile = Join-Path $DeskHome 'server.pid'
 $WindowProfile = Join-Path $env:LOCALAPPDATA 'HydraDesk2\window'  # the old Edge app profile (hand-over only)
 $WebViewData = Join-Path $env:LOCALAPPDATA 'HydraDesk2\webview'
 $HealthTimeoutSec = 20
-$TrayExe = Join-Path (Split-Path -Parent $DeskRoot) 'misc\lunarwerx-tray.exe'
+$TrayExe = Join-Path (Split-Path -Parent $DeskRoot) 'misc\AgentHydra-Tray.exe'
 $TrayConfig = 'AgentHydra-Tray.json'
 
 function Say([string]$msg) {
@@ -219,7 +219,7 @@ function Start-Server {
 }
 
 function Get-TrayHost {
-  Get-CimInstance Win32_Process -Filter "Name='lunarwerx-tray.exe'" -ErrorAction SilentlyContinue |
+  Get-CimInstance Win32_Process -Filter "Name='AgentHydra-Tray.exe'" -ErrorAction SilentlyContinue |
     Where-Object { ([string]$_.CommandLine).ToLowerInvariant().Contains($TrayConfig.ToLowerInvariant()) } | Select-Object -First 1
 }
 

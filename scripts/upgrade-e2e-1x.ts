@@ -222,7 +222,7 @@ function build113(): void {
     log(`1.13 exe --version: ${v.stdout.trim()}`)
     mkdirSync(join(stage, 'misc'), { recursive: true })
     for (const f of [
-      'lunarwerx-tray.exe',
+      'AgentHydra-Tray.exe',
       'AgentHydra-Tray.json',
       'AgentHydra.ico',
       'Create-Shortcut.ps1',
@@ -367,7 +367,7 @@ async function startFakes(ports: { api: number; rel: number; bun: number; proxy:
         const upstream = `https://github.com/oven-sh/bun/releases/download/bun-v${ver}/${file}`
         log(`[bun mirror] fetching ${upstream} once`)
         const r = await fetch(upstream, { redirect: 'follow' })
-        if (!r.ok) return new Response('upstream ' + r.status, { status: 502 })
+        if (!r.ok) return new Response(`upstream ${r.status}`, { status: 502 })
         mkdirSync(join(BUN_CACHE, `v${ver}`), { recursive: true })
         writeFileSync(cached, new Uint8Array(await r.arrayBuffer()))
       }

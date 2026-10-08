@@ -44,6 +44,8 @@ import { APP_ROOT, appEnv, IS_RELEASE, LAUNCHER_PATH, SERVICE_NAME, VERSION } fr
 import { getSetting, setSetting } from './db'
 import { desk2 } from './desk2'
 import { orchestratorBusy } from './orchestrator'
+import { retireLegacyTrayHost } from './tray-bootstrap.mjs'
+import { TRAY_HOST_CONFIG } from './tray-host'
 import {
   beginUpdateProgress,
   finishUpdateProgress,
@@ -1200,6 +1202,12 @@ async function swapInBundle(
       copy: ctx.copy,
     })
   }
+  const legacyTrayExit = await retireLegacyTrayHost({
+    appRoot: installDir,
+    configFile: TRAY_HOST_CONFIG,
+  })
+  if (legacyTrayExit !== null)
+    output.push(`retired the pre-rename tray host (exit ${legacyTrayExit})`)
 
   // The previous component copies are only garbage once the whole update has landed.
   for (const { aside } of componentAsides) rmSync(aside, { recursive: true, force: true })

@@ -1,4 +1,4 @@
-//! lunarwerx-tray — the native tray host.
+//! The native tray host. Each app ships this build under its own `<App>-Tray.exe` name.
 //!
 //! A port of misc/Tray-Host.ps1, which did its job well but cost ~520 ms of Windows script-host
 //! overhead before the daemon process was even created: ~154 ms for wscript.exe plus the .vbs that

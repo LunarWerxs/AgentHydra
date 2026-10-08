@@ -1,7 +1,7 @@
 # Builds misc\climayte-runner.exe, the runner AgentHydra starts for each CliMayte worker on Windows.
 # The exe is committed (release.yml copies misc\ into the release), so rebuild and commit it with any
 # change to this crate. Local paths are remapped, so the binary names no machine paths (c2aaedcf did
-# the same for lunarwerx-tray.exe), and the build refuses an exe that still carries one.
+# the same for the tray host), and the build refuses an exe that still carries one.
 #
 #   powershell -NoProfile -File misc\climayte-runner-native\build.ps1
 $ErrorActionPreference = 'Stop'

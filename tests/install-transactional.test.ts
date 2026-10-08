@@ -22,7 +22,7 @@
 // about refusing under a running instance, and passing it removes a real, environment-dependent
 // failure mode: if a developer happens to have the actual AgentHydra tray open while running
 // `bun test`, the process-name check would otherwise see a genuine 'AgentHydra' or
-// 'lunarwerx-tray' process and refuse every scenario there. The running-instance guard itself is
+// 'AgentHydra-Tray' process and refuse every scenario there. The running-instance guard itself is
 // covered by the SECOND describe (added 2026-09-06 — it had no test at all until then), which
 // drives it through the isolatable runtime-pointer half; see its own header for why.
 
@@ -432,7 +432,7 @@ for (const host of PS_HOSTS) {
 // still the documented way past it. This block closes that.
 //
 // It drives the guard through the RUNTIME POINTER half rather than the process-name half.
-// `Get-Process -Name AgentHydra,lunarwerx-tray` reads the whole machine and cannot be isolated -
+// `Get-Process -Name AgentHydra,AgentHydra-Tray` reads the whole machine and cannot be isolated -
 // a test written against it would pass or fail on whether the owner happened to have the tray up.
 // The pointer half is the same `if ($runningProcs -or $liveFromPointer)` branch and IS isolatable:
 // $env:AGENTHYDRA_HOME picks the config dir, so a temp runtime.json naming a pid that is certainly
@@ -521,7 +521,7 @@ for (const host of PS_HOSTS) {
           [
             '-NoProfile',
             '-Command',
-            "@(Get-Process -Name 'AgentHydra','lunarwerx-tray' -ErrorAction SilentlyContinue).Count",
+            "@(Get-Process -Name 'AgentHydra','AgentHydra-Tray' -ErrorAction SilentlyContinue).Count",
           ],
           { timeout: 20_000, encoding: 'utf8' },
         ).trim()

@@ -268,7 +268,7 @@ try {
 
     # --- (c) refuse to swap under a running instance, unless told otherwise ------------------
     if (-not $Force) {
-      $runningProcs = Get-Process -Name 'AgentHydra', 'lunarwerx-tray' -ErrorAction SilentlyContinue
+      $runningProcs = Get-Process -Name 'AgentHydra', 'AgentHydra-Tray' -ErrorAction SilentlyContinue
       $configDir = if ($env:AGENTHYDRA_HOME) { $env:AGENTHYDRA_HOME } else { Join-Path $env:USERPROFILE '.agenthydra' }
       $runtimeFile = Join-Path $configDir 'runtime.json'
       $liveFromPointer = $false
@@ -283,6 +283,13 @@ try {
         throw "AgentHydra appears to be running$(if ($names) { " (process: $names)" }). Quit it from the tray (or pass -Force) and run this again."
       }
     }
+
+    # The tray host this install ran before it was renamed to AgentHydra-Tray.exe holds its old exe
+    # open, so stop it here; matched by this install's exact path and its config, never by name alone.
+    $legacyExe = Join-Path $InstallDir 'misc\lunarwerx-tray.exe'
+    Get-CimInstance Win32_Process -Filter "Name='lunarwerx-tray.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.ExecutablePath -ieq $legacyExe -and $_.CommandLine -like '*AgentHydra-Tray.json*' } |
+      ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
     # --- (d) swap each release-owned component atomically, with a same-transaction rollback --
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
@@ -348,7 +355,7 @@ try {
 
   if (-not $NoShortcut) {
     Write-Step 'Creating the tray shortcut'
-    # The shortcut launches misc\lunarwerx-tray.exe, NOT AgentHydra.exe. The exe on its own runs
+    # The shortcut launches misc\AgentHydra-Tray.exe, NOT AgentHydra.exe. The exe on its own runs
     # the daemon and opens the UI; the tray icon, the auto-restart supervisor and Quit all live in
     # the tray HOST. A shortcut aimed at the bare exe (which is what this block used to make)
     # produced a working app with no tray on every machine that never also ran
@@ -362,7 +369,7 @@ try {
       -LnkName 'AgentHydra' `
       -IconFile 'AgentHydra.ico' `
       -Description 'Launch AgentHydra (system tray)' `
-      -ExeFile 'lunarwerx-tray.exe' `
+      -ExeFile 'AgentHydra-Tray.exe' `
       -ExeArguments 'AgentHydra-Tray.json'
     $lnk = Join-Path $InstallDir 'AgentHydra.lnk'
     if (-not $NoLaunch) {

@@ -461,7 +461,7 @@ never starts a second server. No console window appears: the shortcut runs `laun
 runs `launcher\start.ps1` hidden.
 
 **AgentHydra's tray icon is Desk 2's** (owner, 2026-10-06: Desk 2 becomes AgentHydra 2.0, and the old
-AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\lunarwerx-tray.exe
+AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\AgentHydra-Tray.exe
 AgentHydra-Tray.json --background`, hidden, through WMI like the server) whenever it is not running, and
 the tray keeps the AgentHydra daemon alive as before. The tray's Open (its menu, a double-click, the
 AgentHydra shortcut, the tray's own start) runs this launcher (`openCommand` in `..\misc\AgentHydra-Tray.json`),

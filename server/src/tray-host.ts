@@ -1,7 +1,7 @@
 // server/src/tray-host.ts - AgentHydra's binding to the SHARED tray bootstrap.
 //
 // THE FIELD FAILURE THIS ANSWERS (owner's PC, 2026-09-03): a release ZIP, extracted, misc\ intact,
-// lunarwerx-tray.exe sitting right beside the daemon - and no tray icon, ever. The daemon had been
+// AgentHydra-Tray.exe sitting right beside the daemon - and no tray icon, ever. The daemon had been
 // started by double-clicking AgentHydra.exe, which is what the release notes say to do and what
 // install.ps1's Start Menu shortcut did too. The exe runs the daemon and opens the UI; the tray
 // icon, the auto-restart supervisor and Quit all live in the tray HOST, and nothing in that launch
@@ -18,7 +18,6 @@
 
 export {
   parseTrayHostCount,
-  TRAY_HOST_EXE,
   type TrayHostDecision,
   type TrayHostSkipReason,
   trayHostDecision,
@@ -29,21 +28,21 @@ import { nativeProcessesNamed } from './core/win-process-table'
 import {
   type StartTrayHostDeps,
   startTrayHostIfMissing as startShared,
-  TRAY_HOST_EXE,
   type TrayHostDecision,
+  trayHostExeFor,
   trayHostProcessState,
 } from './tray-bootstrap.mjs'
 
 export const TRAY_HOST_CONFIG = 'AgentHydra-Tray.json'
+export const TRAY_HOST_EXE = trayHostExeFor(TRAY_HOST_CONFIG)
 
 /** The tray-INVARIANT's view of the probe: an unknown reads as RUNNING. That invariant can shut
  *  the daemon down, so every ambiguity there must resolve towards staying alive - the opposite of
  *  the start path, where an unknown means "start it" because a named mutex makes a double start
  *  harmless. Two callers, two defaults, one honest tri-state underneath (tray-invariant.ts). */
 export async function trayHostRunning(): Promise<boolean> {
-  // Scoped to THIS app's config: every kit app runs the same lunarwerx-tray.exe, so an unscoped
-  // count answers "running" for whichever sibling happens to be up (measured 2026-09-11, when
-  // DevWebUI skipped its own tray because AgentHydra's host was alive).
+  // Counted by this app's own exe name AND its config, so a sibling's host never answers for this
+  // one (measured 2026-09-11, when DevWebUI skipped its own tray because AgentHydra's host was alive).
   // In-process first (core/win-process-table.ts): this runs every 30 s, and the kit probe is a
   // PowerShell + WMI read of every process. A host whose command line cannot be read counts as
   // this app's, for the same stay-alive reason as above.

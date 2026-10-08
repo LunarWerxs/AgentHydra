@@ -21,18 +21,20 @@ import {
   materializeTrayToolkit,
   parseTrayHostCount,
   patchTrayConfig,
+  retireLegacyTrayHost,
   startTrayHostIfMissing,
-  TRAY_HOST_EXE,
   trayHostDecision,
+  trayHostExeFor,
   trayHostProbeArgv,
   trayToolkitFiles,
 } from '../../src/tray-bootstrap.mjs'
 
 const CONFIG = 'DemoApp-Tray.json'
 const ICON = 'DemoApp.ico'
-const FILES = [TRAY_HOST_EXE, CONFIG, ICON]
+const EXE = trayHostExeFor(CONFIG)
+const FILES = [EXE, CONFIG, ICON]
 const EMBEDDED = {
-  [TRAY_HOST_EXE]: '/$bunfs/tray.exe',
+  [EXE]: '/$bunfs/tray.exe',
   [CONFIG]: '/$bunfs/tray.json',
   [ICON]: '/$bunfs/tray.ico',
 }
@@ -72,7 +74,7 @@ function fakeDisk(seed: Record<string, string | Uint8Array> = {}) {
 
 const seeded = () =>
   fakeDisk({
-    [EMBEDDED[TRAY_HOST_EXE]!]: new Uint8Array(340_480),
+    [EMBEDDED[EXE]!]: new Uint8Array(340_480),
     [EMBEDDED[CONFIG]!]: SHIPPED,
     [EMBEDDED[ICON]!]: new Uint8Array(35_943),
   })
@@ -125,7 +127,7 @@ describe('a compiled build places its own tray', () => {
 
   test('a misc\\ sidecar wins and is never rewritten', async () => {
     const disk = fakeDisk({
-      [j('D:', 'Downloads', 'misc', TRAY_HOST_EXE)]: new Uint8Array(1),
+      [j('D:', 'Downloads', 'misc', EXE)]: new Uint8Array(1),
       [j('D:', 'Downloads', 'misc', CONFIG)]: SHIPPED,
     })
     const got = await place(disk)
@@ -139,9 +141,9 @@ describe('a compiled build places its own tray', () => {
     expect((await place(seeded(), { embedded: null })).reason).toBe('nothing-embedded')
     // Half a toolkit is not a toolkit.
     expect(
-      (await place(seeded(), { embedded: { [TRAY_HOST_EXE]: '/$bunfs/tray.exe' } })).reason,
+      (await place(seeded(), { embedded: { [EXE]: '/$bunfs/tray.exe' } })).reason,
     ).toBe('nothing-embedded')
-    expect(isCompleteTrayToolkit({ [TRAY_HOST_EXE]: 'x' }, FILES)).toBe(false)
+    expect(isCompleteTrayToolkit({ [EXE]: 'x' }, FILES)).toBe(false)
     expect(isCompleteTrayToolkit(EMBEDDED, FILES)).toBe(true)
     expect(trayToolkitFiles({ configFile: CONFIG, iconFile: ICON })).toEqual(FILES)
   })
@@ -163,30 +165,67 @@ describe('a compiled build places its own tray', () => {
 })
 
 describe('the probe asks about THIS app', () => {
-  // ⛔ Found live: every kit app runs the same `lunarwerx-tray.exe`, so counting by process name
-  // answered "running" for DevWebUI while the host it saw belonged to AgentHydra. DevWebUI placed
-  // its toolkit, skipped with 'already-running', and showed no icon. With four apps sharing the
-  // binary, only the first to start would ever get a tray.
-  test('the filter narrows to the config this app passes', () => {
-    const argv = trayHostProbeArgv(CONFIG)
-    const command = argv[argv.length - 1] ?? ''
-    expect(command).toContain(`Name='${TRAY_HOST_EXE}'`)
-    expect(command).toContain(`-like '*${CONFIG}*'`)
-  })
-
-  test('no config counts any host - the old behaviour, correct only on a one-app machine', () => {
-    const command = trayHostProbeArgv().at(-1) ?? ''
-    expect(command).toContain(`Name='${TRAY_HOST_EXE}'`)
-    expect(command).not.toContain('Where-Object')
+  // ⛔ Found live: every kit app ran the same binary name, so counting by process name answered
+  // "running" for DevWebUI while the host it saw belonged to AgentHydra. DevWebUI placed its
+  // toolkit, skipped with 'already-running', and showed no icon.
+  test('the filter names the exe of the app it is called for', () => {
+    const command = trayHostProbeArgv(CONFIG).at(-1) ?? ''
+    expect(command).toContain(`Name='${EXE}'`)
   })
 
   test('a config name cannot close the quote and continue the command', () => {
     // The danger is punctuation, not vocabulary: what must not survive is the quote that would end
-    // the argument and the semicolon that would start a second command. The surviving letters are
-    // inert inside a -like pattern.
+    // the argument and the semicolon that would start a second command.
     const command = trayHostProbeArgv("x'; Remove-Item C:\\ -Recurse; '").at(-1) ?? ''
     expect(command).not.toContain(';')
-    expect(command).toContain("-like '*xRemove-ItemC-Recurse*'")
+    expect(command).toContain("Name='xRemove-ItemC-Recurse'")
+  })
+})
+
+describe('the legacy host is retired in place, for this install only', () => {
+  const appRoot = nodeJoin('C:', 'app')
+  const recorder = () => {
+    const calls: Array<{ script: string; env: Record<string, string> }> = []
+    return {
+      calls,
+      runPowerShell: async (script: string, env: Record<string, string>) => {
+        calls.push({ script, env })
+        return 0
+      },
+    }
+  }
+
+  test('does nothing off Windows', async () => {
+    const rec = recorder()
+    const got = await retireLegacyTrayHost({
+      appRoot,
+      configFile: CONFIG,
+      platform: 'linux',
+      runPowerShell: rec.runPowerShell,
+    })
+    expect(got).toBeNull()
+    expect(rec.calls).toEqual([])
+  })
+
+  test('points the script at the old and new exe of this install, and passes the config as data', async () => {
+    const rec = recorder()
+    const got = await retireLegacyTrayHost({
+      appRoot,
+      configFile: CONFIG,
+      platform: 'win32',
+      runPowerShell: rec.runPowerShell,
+    })
+    expect(got).toBe(0)
+    const [call] = rec.calls
+    expect(call!.env).toEqual({
+      LEGACY_TRAY_CONFIG: CONFIG,
+      LEGACY_TRAY_OLD_EXE: nodeJoin(appRoot, 'misc', 'lunarwerx-tray.exe'),
+      LEGACY_TRAY_NEW_EXE: nodeJoin(appRoot, 'misc', EXE),
+      LEGACY_TRAY_ROOT: appRoot,
+    })
+    // Paths and config travel as data, never as script text.
+    expect(call!.script).not.toContain(CONFIG)
+    expect(call!.script).not.toContain(appRoot)
   })
 })
 
@@ -250,7 +289,7 @@ describe('starting the host', () => {
     const s = start(async () => false, { toolkitDir: dir })
     await s.run()
     expect(s.spawned[0]).toEqual({
-      exe: nodeJoin(dir, TRAY_HOST_EXE),
+      exe: nodeJoin(dir, EXE),
       cwd: dir,
       config: CONFIG,
     })

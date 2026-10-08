@@ -12,7 +12,7 @@ queue upload failed.)
 | What | Runs from | Notes |
 | --- | --- | --- |
 | Daemon (`server/src/index.ts --port 7787`), CliMayte runners, HSwarm sidecar | `live/` | The runners and the sidecar start from the daemon's root. |
-| Tray (`misc\lunarwerx-tray.exe AgentHydra-Tray.json`) | `live/` | Its config is relative (`appRoot ".."`), so only the shortcut moves. |
+| Tray (`misc\AgentHydra-Tray.exe AgentHydra-Tray.json`) | `live/` | Its config is relative (`appRoot ".."`), so only the shortcut moves. |
 | `AgentHydra Daemon Supervisor`, `AgentHydra Daemon Watchdog` tasks | `live\misc\Supervisor-Tick.vbs`, `live\scripts\watchdog.vbs` | Same `wscript` switches, same triggers. |
 | `Orchestrator-*` tasks and the dashboard (7799) | the job wrappers in the state dir, which run `live\orchestrator\...` | Wrappers are rewritten by text, not regenerated. |
 | Anything not on `origin/main` (for example an uncommitted switch-card watcher) | stays on `app/` | `-Plan` warns about each one. Push it, then rerun `-Apply`. |

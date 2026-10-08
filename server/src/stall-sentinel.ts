@@ -1,7 +1,7 @@
 // server/src/stall-sentinel.ts - notice when the daemon's one thread stops answering, and write
 // down WHAT it was doing while there is still a process to write it.
 //
-// ⛔ WHY (2026-09-27). The tray watchdog (lunarwerx-tray, misc/AgentHydra-Tray.json) probes
+// ⛔ WHY (2026-09-27). The tray watchdog (AgentHydra-Tray.exe, misc/AgentHydra-Tray.json) probes
 // GET /api/health every 5 s with a 400 ms budget and, after three misses in a row, reaps the
 // daemon with `taskkill /T /F`. That kill is untrappable: exit code 1, no uncaughtException, no
 // 'exit' listener, so crash-record.ts's two lines never reach daemon.log. move_chats died that way

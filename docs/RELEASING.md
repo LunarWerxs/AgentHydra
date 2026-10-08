@@ -232,7 +232,7 @@ Two shapes to keep intact if the workflow is ever restructured:
 into a staging directory beside `-InstallDir` (same volume, so the real swap is a rename) and
 validates the complete staged payload: the launcher, `app/`, `desk2/`, `misc/` and `orchestrator/` present, and the
 `--version` canary run **on the staged copy** before anything real is touched, then refuses to
-proceed under a detected running instance (`AgentHydra`/`lunarwerx-tray` process, or a live pid in
+proceed under a detected running instance (`AgentHydra`/`AgentHydra-Tray` process, or a live pid in
 `<config dir>\runtime.json`) unless `-Force` is passed. The five release-owned components
 (`AgentHydra.exe`, `app/`, `desk2/`, `misc/`, `orchestrator/`) are then swapped one at a time: each is renamed aside (`<name>.old-<stamp>`),
 the staged copy is moved into place, and orchestrator's user-owned `state/` directory is carried

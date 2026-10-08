@@ -68,7 +68,7 @@ function fixture(): { root: string; bundle: string; install: string } {
   put(bundle, 'orchestrator/orch.py', 'new driver')
   put(bundle, 'orchestrator/scripts/lib/hydralib.py', 'new lib')
   put(bundle, 'orchestrator/new-payload.txt', 'new')
-  put(bundle, 'misc/lunarwerx-tray.exe', 'new tray')
+  put(bundle, 'misc/AgentHydra-Tray.exe', 'new tray')
   put(bundle, 'misc/new-component.txt', 'new')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
@@ -81,7 +81,7 @@ function fixture(): { root: string; bundle: string; install: string } {
   put(install, 'orchestrator/old-payload.txt', 'old')
   put(install, 'orchestrator/state/holds.json', '{"held":["abc"]}')
   put(install, 'orchestrator/state/trash/abc/manifest.json', '{}')
-  put(install, 'misc/lunarwerx-tray.exe', 'old tray')
+  put(install, 'misc/AgentHydra-Tray.exe', 'old tray')
   put(install, 'misc/obsolete-component.txt', 'retired')
   return { root, bundle, install }
 }
@@ -203,7 +203,7 @@ test('reconcile brings misc/ to the release content and removes the retired side
     const r = reconcileComponent(bundle, install, MISC, '9.9.9', output)
     expect(r.installed).toBe(true)
     const m = join(install, 'misc')
-    expect(readFileSync(join(m, 'lunarwerx-tray.exe'), 'utf8')).toBe('new tray')
+    expect(readFileSync(join(m, 'AgentHydra-Tray.exe'), 'utf8')).toBe('new tray')
     expect(existsSync(join(m, 'new-component.txt'))).toBe(true)
     expect(existsSync(join(m, 'obsolete-component.txt'))).toBe(false)
     expect(r.removed).toEqual(['obsolete-component.txt'])
@@ -260,14 +260,14 @@ function applyFixture(): { root: string; bundle: string; install: string } {
   put(bundle, 'app/server.js', 'new daemon')
   put(bundle, 'app/release.json', '{"version":"9.9.9"}')
   put(bundle, 'orchestrator/orch.py', 'new driver')
-  put(bundle, 'misc/lunarwerx-tray.exe', 'new tray')
+  put(bundle, 'misc/AgentHydra-Tray.exe', 'new tray')
   put(bundle, 'desk2/server/src/index.ts', 'new desk')
   put(bundle, 'desk2/runtime/bun.exe', 'new bun')
   put(install, 'AgentHydra.exe', 'old exe')
   put(install, 'app/server.js', 'old daemon')
   put(install, 'app/release.json', '{"version":"9.9.8"}')
   put(install, 'orchestrator/orch.py', 'old driver')
-  put(install, 'misc/lunarwerx-tray.exe', 'old tray')
+  put(install, 'misc/AgentHydra-Tray.exe', 'old tray')
   put(install, 'desk2/server/src/index.ts', 'old desk')
   put(install, 'desk2/runtime/bun.exe', 'old bun')
   return { root, bundle, install }
@@ -329,7 +329,7 @@ test('applyUpdate refuses while a toolbox script is running and changes nothing 
     // Nothing moved: refused before any component swap or the exe rename.
     expect(readFileSync(join(install, 'AgentHydra.exe'), 'utf8')).toBe('old exe')
     expect(readFileSync(join(install, 'orchestrator/orch.py'), 'utf8')).toBe('old driver')
-    expect(readFileSync(join(install, 'misc/lunarwerx-tray.exe'), 'utf8')).toBe('old tray')
+    expect(readFileSync(join(install, 'misc/AgentHydra-Tray.exe'), 'utf8')).toBe('old tray')
     expect(readdirSync(install).some((n) => n.includes('.old-'))).toBe(false)
   } finally {
     rmSync(root, { recursive: true, force: true })
@@ -381,7 +381,7 @@ test('missingComponents names a component that is absent from a bundle install',
   const root = scratchRoot()
   try {
     put(root, 'AgentHydra.exe', 'exe')
-    put(root, 'misc/lunarwerx-tray.exe', 'tray')
+    put(root, 'misc/AgentHydra-Tray.exe', 'tray')
     put(root, 'desk2/server/src/index.ts', 'desk')
     expect(missingComponents(root)).toEqual(['app', 'orchestrator'])
     put(root, 'orchestrator/orch.py', 'driver')

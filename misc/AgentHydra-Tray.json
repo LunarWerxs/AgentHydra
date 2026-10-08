@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "AgentHydra's tray-host config, read by misc/lunarwerx-tray.exe (kit source:",
+    "AgentHydra's tray-host config, read by misc/AgentHydra-Tray.exe (kit source:",
     "lunarwerx-ui/src/tray-host-native). This file is the whole per-app surface; the host binary is",
     "generic and shared, exactly as AgentHydra-Tray.ps1's $TrayConfig hashtable was.",
     "",
