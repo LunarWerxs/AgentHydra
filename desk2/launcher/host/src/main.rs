@@ -585,10 +585,19 @@ fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 enum PageOut {
-    Url { url: String, loading: bool },
-    Title { title: String, url: String },
+    Url {
+        url: String,
+        loading: bool,
+    },
+    Title {
+        title: String,
+        url: String,
+    },
     /// Whether the view's document is playing sound, and whether the view is muted.
-    Audio { playing: bool, muted: bool },
+    Audio {
+        playing: bool,
+        muted: bool,
+    },
 }
 
 /// The view's ICoreWebView2_8, or None when the WebView2 runtime is too old to have it.
@@ -851,9 +860,9 @@ fn build_page(
         Ok(view) => {
             watch_audio(&view, id, proxy);
             Some(PageView {
-            view: Some(view),
-            holder,
-            shown: false,
+                view: Some(view),
+                holder,
+                shown: false,
             })
         }
         Err(_) => {
@@ -929,17 +938,52 @@ fn run(
     smoke: bool,
     side: bool,
 ) {
-    use tao::{
-        dpi::{PhysicalPosition, PhysicalSize},
-        event::{Event, WindowEvent},
-        event_loop::{ControlFlow, EventLoopBuilder},
-        platform::windows::{WindowBuilderExtWindows, WindowExtWindows},
-        window::{Theme, WindowBuilder},
-    };
-    use wry::{MemoryUsageLevel, NewWindowResponse, WebContext, WebViewBuilder, WebViewExtWindows};
+    use tao::{event_loop::EventLoopBuilder, platform::windows::WindowExtWindows};
 
     let event_loop = EventLoopBuilder::<Ev>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    let window = build_window(&event_loop, &rect, maximized);
+    let hwnd = window.hwnd();
+    let origin = origin_of(&url);
+    let mut ctx = wry::WebContext::new(Some(udf.clone()));
+    let webview = build_webview(&mut ctx, &window, &url, &origin, &proxy);
+
+    if smoke {
+        start_smoke_deadline();
+    } else {
+        window.set_visible(true);
+        window.set_focus();
+    }
+
+    let mut host = Host {
+        window,
+        webview,
+        hwnd,
+        proxy,
+        origin,
+        udf,
+        state_file,
+        smoke,
+        side,
+        dirty: None,
+        minimized: false,
+        pages: std::collections::HashMap::new(),
+        ctx,
+    };
+    event_loop.run(move |event, _, flow| host.handle(event, flow));
+}
+
+fn build_window(
+    event_loop: &tao::event_loop::EventLoop<Ev>,
+    rect: &Rect,
+    maximized: bool,
+) -> tao::window::Window {
+    use tao::{
+        dpi::{PhysicalPosition, PhysicalSize},
+        platform::windows::{WindowBuilderExtWindows, WindowExtWindows},
+        window::{Theme, WindowBuilder},
+    };
+
     let window = WindowBuilder::new()
         .with_title(TITLE)
         .with_visible(false)
@@ -947,25 +991,34 @@ fn run(
         .with_position(PhysicalPosition::new(rect.left, rect.top))
         .with_inner_size(PhysicalSize::new(rect.w() as u32, rect.h() as u32))
         .with_undecorated_shadow(true)
-        .build(&event_loop)
+        .build(event_loop)
         .expect("window");
     let hwnd = window.hwnd();
-    win::set_outer_rect(hwnd, &rect);
+    win::set_outer_rect(hwnd, rect);
     win::title_bar(hwnd, BG, TEXT);
     win::set_icon(hwnd);
     if maximized {
         window.set_maximized(true);
     }
+    window
+}
 
-    let origin = origin_of(&url);
-    let nav_origin = origin.clone();
-    let win_origin = origin.clone();
-    let ipc_origin = origin.clone();
-    let mut ctx = WebContext::new(Some(udf.clone()));
+fn build_webview(
+    ctx: &mut wry::WebContext,
+    window: &tao::window::Window,
+    url: &str,
+    origin: &str,
+    proxy: &tao::event_loop::EventLoopProxy<Ev>,
+) -> wry::WebView {
+    use wry::{NewWindowResponse, WebViewBuilder};
+
+    let nav_origin = origin.to_string();
+    let win_origin = origin.to_string();
+    let ipc_origin = origin.to_string();
     let load_proxy = proxy.clone();
     let ipc_proxy = proxy.clone();
-    let webview = WebViewBuilder::new_with_web_context(&mut ctx)
-        .with_url(&url)
+    WebViewBuilder::new_with_web_context(ctx)
+        .with_url(url)
         .with_background_color((BG.0, BG.1, BG.2, 255))
         .with_devtools(true)
         // The page's page tabs show their addresses in views of this window's own (native-browser.ts).
@@ -1004,111 +1057,158 @@ fn run(
                 wry::PageLoadEvent::Finished => Ev::Loaded,
             });
         })
-        .build(&window)
-        .expect("webview");
+        .build(window)
+        .expect("webview")
+}
 
-    if smoke {
-        let started = Instant::now();
-        std::thread::spawn(move || {
-            while started.elapsed() < Duration::from_secs(20) {
-                std::thread::sleep(Duration::from_millis(200));
-            }
-            std::process::exit(2);
-        });
-    } else {
-        window.set_visible(true);
-        window.set_focus();
-    }
-
-    let mut dirty: Option<Instant> = None;
-    let save_now = move |window: &tao::window::Window| {
-        if let Some((outer, normal, max)) = win::read_placement(window.hwnd()) {
-            save_atomic(
-                &state_file,
-                &Saved {
-                    left: outer.left,
-                    top: outer.top,
-                    right: outer.right,
-                    bottom: outer.bottom,
-                    maximized: max,
-                    window: normal,
-                },
-            );
+fn start_smoke_deadline() {
+    let started = Instant::now();
+    std::thread::spawn(move || {
+        while started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(200));
         }
-    };
-    let mut minimized = false;
-    let mut pages: std::collections::HashMap<String, PageView> = std::collections::HashMap::new();
-    event_loop.run(move |event, _, flow| {
-        *flow = match dirty {
+        std::process::exit(2);
+    });
+}
+
+fn save_placement(state_file: &Path, window: &tao::window::Window) {
+    use tao::platform::windows::WindowExtWindows;
+
+    if let Some((outer, normal, max)) = win::read_placement(window.hwnd()) {
+        save_atomic(
+            state_file,
+            &Saved {
+                left: outer.left,
+                top: outer.top,
+                right: outer.right,
+                bottom: outer.bottom,
+                maximized: max,
+                window: normal,
+            },
+        );
+    }
+}
+
+/// Everything the event loop owns. The WebContext stays alive for as long as the views made from it.
+// Fields drop in this order: the views (webview, pages) first, then the WebContext they were made in, and the
+// window that holds them last.
+struct Host {
+    webview: wry::WebView,
+    hwnd: isize,
+    proxy: tao::event_loop::EventLoopProxy<Ev>,
+    origin: String,
+    udf: PathBuf,
+    state_file: PathBuf,
+    smoke: bool,
+    side: bool,
+    dirty: Option<Instant>,
+    minimized: bool,
+    pages: std::collections::HashMap<String, PageView>,
+    ctx: wry::WebContext,
+    window: tao::window::Window,
+}
+
+impl Host {
+    fn handle(
+        &mut self,
+        event: tao::event::Event<'_, Ev>,
+        flow: &mut tao::event_loop::ControlFlow,
+    ) {
+        use tao::{
+            event::{Event, WindowEvent},
+            event_loop::ControlFlow,
+        };
+
+        *flow = match self.dirty {
             Some(t) => ControlFlow::WaitUntil(t),
             None => ControlFlow::Wait,
         };
         match event {
-            Event::UserEvent(Ev::Loaded) => {
-                if smoke {
-                    let _ = std::fs::remove_dir_all(&udf);
-                    std::process::exit(0);
-                }
-            }
-            Event::UserEvent(Ev::Reloading) => pages.clear(),
-            Event::UserEvent(Ev::Browser(cmd)) => {
-                browser_cmd(cmd, &mut pages, &mut ctx, hwnd, &proxy, &origin)
-            }
-            Event::UserEvent(Ev::Page(id, mut out)) => {
-                let Some(p) = pages.get(&id) else { return };
-                if let PageOut::Title { url, .. } = &mut out {
-                    *url = p.view().url().unwrap_or_default();
-                }
-                let _ = webview.evaluate_script(&page_event_script(&id, &out));
-            }
-            Event::UserEvent(Ev::OpenHere(id, url)) => {
-                if let Some(p) = pages.get(&id) {
-                    let _ = p.view().load_url(&url);
-                }
-            }
+            Event::UserEvent(ev) => self.user_event(ev),
             Event::WindowEvent {
                 event: WindowEvent::Moved(_) | WindowEvent::Resized(_),
                 ..
-            } if !smoke => {
-                if !side {
-                    dirty = Some(Instant::now() + Duration::from_millis(400));
-                }
-                // wry skips SIZE_MINIMIZED, so the page would stay 'visible' while minimized.
-                let min = window.is_minimized();
-                if min != minimized {
-                    minimized = min;
-                    if min {
-                        let _ = webview.set_visible(false);
-                        let _ = webview.set_memory_usage_level(MemoryUsageLevel::Low);
-                    } else {
-                        let _ = webview.set_visible(true);
-                        let _ = webview.set_memory_usage_level(MemoryUsageLevel::Normal);
-                    }
-                    for p in pages.values().filter(|p| p.shown) {
-                        let _ = p.view().set_visible(!min);
-                    }
-                }
-            }
+            } if !self.smoke => self.moved_or_resized(),
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
                 ..
             } => {
-                if !smoke && !side {
-                    save_now(&window);
+                if !self.smoke && !self.side {
+                    save_placement(&self.state_file, &self.window);
                 }
                 *flow = ControlFlow::Exit;
             }
-            Event::NewEvents(_) | Event::MainEventsCleared => {
-                if let Some(t) = dirty {
-                    if Instant::now() >= t {
-                        dirty = None;
-                        save_now(&window);
-                    }
-                }
-            }
+            Event::NewEvents(_) | Event::MainEventsCleared => self.save_if_due(),
             _ => {}
         }
-    });
+    }
+
+    fn user_event(&mut self, ev: Ev) {
+        match ev {
+            Ev::Loaded => {
+                if self.smoke {
+                    let _ = std::fs::remove_dir_all(&self.udf);
+                    std::process::exit(0);
+                }
+            }
+            Ev::Reloading => self.pages.clear(),
+            Ev::Browser(cmd) => browser_cmd(
+                cmd,
+                &mut self.pages,
+                &mut self.ctx,
+                self.hwnd,
+                &self.proxy,
+                &self.origin,
+            ),
+            Ev::Page(id, mut out) => {
+                let Some(p) = self.pages.get(&id) else { return };
+                if let PageOut::Title { url, .. } = &mut out {
+                    *url = p.view().url().unwrap_or_default();
+                }
+                let _ = self.webview.evaluate_script(&page_event_script(&id, &out));
+            }
+            Ev::OpenHere(id, url) => {
+                if let Some(p) = self.pages.get(&id) {
+                    let _ = p.view().load_url(&url);
+                }
+            }
+        }
+    }
+
+    fn moved_or_resized(&mut self) {
+        use wry::{MemoryUsageLevel, WebViewExtWindows};
+
+        if !self.side {
+            self.dirty = Some(Instant::now() + Duration::from_millis(400));
+        }
+        // wry skips SIZE_MINIMIZED, so the page would stay 'visible' while minimized.
+        let min = self.window.is_minimized();
+        if min == self.minimized {
+            return;
+        }
+        self.minimized = min;
+        if min {
+            let _ = self.webview.set_visible(false);
+            let _ = self.webview.set_memory_usage_level(MemoryUsageLevel::Low);
+        } else {
+            let _ = self.webview.set_visible(true);
+            let _ = self
+                .webview
+                .set_memory_usage_level(MemoryUsageLevel::Normal);
+        }
+        for p in self.pages.values().filter(|p| p.shown) {
+            let _ = p.view().set_visible(!min);
+        }
+    }
+
+    fn save_if_due(&mut self) {
+        if let Some(t) = self.dirty {
+            if Instant::now() >= t {
+                self.dirty = None;
+                save_placement(&self.state_file, &self.window);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
