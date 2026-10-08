@@ -28,6 +28,8 @@ class _Slot:
 
 
 _SLOTS: dict[tuple[str, str, str], _Slot] = {}  # (provider, key fingerprint, name) -> counts
+# (provider, key fingerprint, name as asked) -> the slots its acquires took, so release frees exactly those.
+_HELD: dict[tuple[str, str, str], list[tuple[str, str, str]]] = {}
 _WAITERS: list[asyncio.Future] = []
 
 
@@ -85,7 +87,7 @@ async def acquire(provider: str, pick: Callable[[frozenset[str]], str], name: st
     no key is left; a full key is skipped, and when every key is full this waits. Pair each call with release()."""
     from .client import NoUsableKey
 
-    name = _name(provider, name)
+    asked, name = name, _name(provider, name)
     conc, rpm = limits_for(provider, name)
     skip = frozenset(exclude)
     full: dict[str, float] = {}
@@ -102,22 +104,28 @@ async def acquire(provider: str, pick: Callable[[frozenset[str]], str], name: st
         if conc is None and rpm is None:
             return key
         now = _clock()
-        slot = _SLOTS.setdefault((provider, config.fingerprint(key), name), _Slot())
+        fp = config.fingerprint(key)
+        slot = _SLOTS.setdefault((provider, fp, name), _Slot())
         until = _until(slot, conc, rpm, now)
         if until is None:
             slot.inflight += 1
             if rpm is not None:
                 slot.starts.append(now)
+            _HELD.setdefault((provider, fp, asked), []).append((provider, fp, name))
             return key
         full[key] = until
 
 
 def release(provider: str, key: str, name: str = "") -> None:
-    name = _name(provider, name)
-    conc, rpm = limits_for(provider, name)
-    if conc is None and rpm is None:
+    """Frees the slot this key's acquire took, whatever the provider's [limits] say now: the long-lived server re-reads
+    its provider files on every call, and a table removed between acquire and release would hold the slot for good."""
+    mark = (provider, config.fingerprint(key), name)
+    held = _HELD.get(mark)
+    if not held:
         return
-    slot = _SLOTS.get((provider, config.fingerprint(key), name))
+    slot = _SLOTS.get(held.pop())
+    if not held:
+        del _HELD[mark]
     if slot is not None and slot.inflight:
         slot.inflight -= 1
     _wake()

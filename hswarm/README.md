@@ -66,13 +66,16 @@ active lists, and preserves existing keys omitted from the export. New alive evi
 classifications. Credit and manual disables remain local measurements. The import also moves legacy provider TOML
 keys into the shared lists while preserving their settings, then syncs the encrypted vault. Output contains counts,
 never key values. Existing `<provider>_api_keys` lists and a legacy clone's `.secrets/` folder are accepted too.
+Exporter aliases declared by a provider share its canonical pool: `google_*_keys.txt` imports into
+`gemini_api_keys`. Unconfigured providers in checker exports fail before editing any lists; add their provider
+configuration first. Alias routing is included in the count report.
 
 ### Key vault
 
 Keys follow you between machines, encrypted, never through git. `$HSWARM_HOME/secrets/` holds one list per provider
 (`openrouter_api_keys`, plus `.dead` and `.unfunded` lists). The vault is one encrypted file on a server only you can
-reach, and every paired machine merges its lists with it every two minutes while `mcp --http` runs. It is ZSwarm's
-vault (ported from `zswarm/vault.py`): the same file, merge and pairing code, so an HSwarm and a ZSwarm can share one.
+reach, and every paired H Swarm merges its lists with it every two minutes while `mcp --http` runs. The format
+remains compatible with the legacy Z Swarm vault, so H Swarm can adopt an existing vault after Z Swarm is retired.
 
 ```bash
 python -m hswarm vault init ssh://user@host/hswarm-vault   # first machine: makes the vault from the keys it has

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 
 from . import config, zdr
-from .client import ChatClient
+from .client import ChatClient, model_rows
 
 PER_M = 1_000_000.0
 
@@ -50,7 +50,7 @@ def build(models: list[dict], provider: str = "openrouter") -> dict:
     out: dict = {}
     for m in models:
         mid = str(m.get("id") or "").strip()
-        if not mid:
+        if not config.provider_chat_model(provider, mid):
             continue
         entry: dict = {"provider": provider, "api_id": mid, "passthrough": True}
         ctx = m.get("context_length")
@@ -72,20 +72,36 @@ async def refresh(provider: str = "openrouter") -> dict:
         raise SystemExit(f"hswarm models: unknown provider {provider!r}; known: {sorted(config.PROVIDERS)}")
     if not config.PROVIDERS[provider].get("passthrough"):
         raise SystemExit(f"hswarm models: {provider} has no passthrough catalogue to refresh; add its models under [models.<name>] in {config.user_file(provider)}")
+    if not config.PROVIDERS[provider].get("models_path"):
+        raise SystemExit(f"hswarm models: {provider} has no configured chat catalog endpoint; use an explicit model ID or `hswarm service {provider}` for its service catalog")
     async with ChatClient(provider=provider) as c:
         body = await c.get_json(config.PROVIDERS[provider]["models_path"])
-    rows = [m for m in (body.get("data") or []) if isinstance(m, dict)]
-    doc = build(rows, provider)
+    rows = [m for m in model_rows(body) if isinstance(m, dict)]
+    fresh = build(rows, provider)["models"]
     config.CATALOGUE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    config.CATALOGUE_FILE.write_text(json.dumps(doc, indent=1, ensure_ascii=False), encoding="utf-8")
+    config.CATALOGUE_FILE.write_text(json.dumps(_merged(fresh, provider), indent=1, ensure_ascii=False), encoding="utf-8")
     config.reload()
     zdr_note = await refresh_zdr(provider)
-    priced = sum(1 for e in doc["models"].values() if e.get("price"))
-    free = sum(1 for k in doc["models"] if k.endswith(":free"))
-    return {"provider": provider, "models": len(doc["models"]), "priced": priced, "unpriced": len(doc["models"]) - priced,
+    priced = sum(1 for e in fresh.values() if e.get("price"))
+    free = sum(1 for k in fresh if k.endswith(":free"))
+    prefix = config.PROVIDERS[provider]["passthrough"][0]
+    return {"provider": provider, "models": len(fresh), "priced": priced, "unpriced": len(fresh) - priced,
             "free_models": free, "file": str(config.CATALOGUE_FILE), "zdr": zdr_note,
-            "note": f"{len(doc['models'])} {provider} models addressable as 'or:<id>' ({priced} priced, {free} free); "
+            "note": f"{len(fresh)} {provider} models addressable as '{prefix}<id>' ({priced} priced, {free} free); "
                     f"a price written in {config.PROVIDERS_DIR} still wins"}
+
+
+def _merged(fresh: dict, provider: str) -> dict:
+    """The catalogue file with this provider's entries replaced and every other provider's kept. The file is shared:
+    found 2026-10-07, a refresh of one provider rewrote it with that provider alone, so `--refresh stepfun` erased
+    every OpenRouter entry and its price."""
+    try:
+        have = json.loads(config.CATALOGUE_FILE.read_text(encoding="utf-8")).get("models")
+    except (OSError, ValueError, AttributeError):
+        have = None
+    kept = {k: e for k, e in (have if isinstance(have, dict) else {}).items()
+            if isinstance(e, dict) and e.get("provider") != provider}
+    return {"_generated_by": "hswarm models --refresh <provider>", "models": {**kept, **fresh}}
 
 
 async def refresh_zdr(provider: str = "openrouter") -> str:

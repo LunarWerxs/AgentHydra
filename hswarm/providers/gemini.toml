@@ -2,6 +2,7 @@
 # `anthropic_url = "facade"` runs `cc` workers through hswarm's local Anthropic Messages facade.
 
 base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+import_aliases = ["google"]
 about = "Google's Gemini models. Has a free tier."
 key_url = "https://aistudio.google.com/apikey"  # where a person makes an API key
 website = "https://ai.google.dev"  # the company's site; the console shows its favicon

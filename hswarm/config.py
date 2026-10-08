@@ -576,6 +576,17 @@ def provider_chat(provider: str) -> bool:
     return spec.get("transport", "openai") in ("openai", "anthropic") and "chat" in spec.get("capabilities", ("chat",))
 
 
+def provider_chat_model(provider: str, model_id: str | None) -> bool:
+    """A mixed catalog may declare which IDs its chat endpoint accepts; unknown catalogs remain unchanged."""
+    if not isinstance(model_id, str) or not model_id.strip():
+        return False
+    pattern = PROVIDERS.get(provider, {}).get("chat_model_pattern")
+    try:
+        return not pattern or re.fullmatch(pattern, model_id.strip(), re.IGNORECASE) is not None
+    except (re.error, TypeError) as exc:
+        raise ValueError(f"{provider} has an invalid chat_model_pattern configuration") from exc
+
+
 # 2026-10-03: AgentHydra has no launcher script and the package is not installed, so `python -m hswarm` only worked from
 # the AgentHydra root. This bootstrap puts the package's parent (argv[1]) on sys.path and runs the module, so it
 # starts from any folder with no install. No backslash and no double quote, so one command string, a stdio
@@ -611,6 +622,9 @@ def _register_passthrough(name: str, original: str | None = None) -> str | None:
                 api_id, host = api_id.strip(), host.strip()
                 if not api_id:
                     return None
+                if not provider_chat_model(provider, api_id):
+                    raise ValueError(f"{provider} model {api_id!r} is outside its documented chat model families; "
+                                     f"use `hswarm service {provider}` for its other capabilities")
                 entry: dict = {"provider": provider, "api_id": api_id, "passthrough": True}
                 if host and spec.get("host_pin") == "suffix":
                     entry["api_id"] = f"{api_id}:{host}"  # Hugging Face: the host is part of the model id

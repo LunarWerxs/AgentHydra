@@ -125,3 +125,61 @@ def test_input_conflicts_and_bad_lines_fail_without_writes(tmp_path):
         key_import.run(source)
     assert "secret-extra" not in str(exc.value)
     assert not config.SECRETS_DIR.exists()
+
+
+def test_google_exports_merge_into_gemini_and_sync_one_canonical_pool(tmp_path):
+    source = tmp_path / "export"
+    old, revived, new = "fake-google-old-0001", "fake-google-revived-0002", "fake-google-new-0003"
+    put(config.SECRETS_DIR, "gemini_api_keys", old)
+    put(config.SECRETS_DIR, "gemini_api_keys.dead", revived)
+    put(source, "google_alive_keys.txt", revived, new)
+    put(source, "gemini_alive_keys.txt", new)
+    vault.init(f"dir:{tmp_path / 'backend'}")
+    out = key_import.run(source)
+    assert out["provider_routes"] == {"google": "gemini"}
+    assert out["incoming_alive"] == 2 and out["added"] == 2
+    assert set(config.all_keys("gemini")) == {old, revived, new}
+    assert not (config.SECRETS_DIR / "google_api_keys").exists()
+    state = vault.fetch_state()
+    assert "google_api_keys" not in state["lists"]
+    assert {e["k"] for e in state["lists"]["gemini_api_keys"].values() if e["k"]} == {old, revived, new}
+
+
+def test_alias_dead_lists_and_cross_name_conflicts_use_canonical_provider(tmp_path):
+    source = tmp_path / "export"
+    dead, live = "fake-google-dead-0001", "fake-google-live-0002"
+    put(config.SECRETS_DIR, "gemini_api_keys", dead, live)
+    put(source, "google_dead_keys.txt", dead)
+    key_import.run(source)
+    assert config.all_keys("gemini") == [live]
+    put(source, "gemini_alive_keys.txt", dead)
+    with pytest.raises(key_import.KeyImportError, match="both alive and dead"):
+        key_import.run(source)
+
+
+def test_a_legacy_alias_list_joins_the_canonical_pool(tmp_path):
+    # The old clone's .secrets names lists by file: google_api_keys must land in gemini's pool, never in a list no
+    # provider reads.
+    source = tmp_path / "clone"
+    live, dead = "fake-google-live-0001", "fake-google-dead-0002"
+    put(config.SECRETS_DIR, "gemini_api_keys", dead)
+    put(source / ".secrets", "google_api_keys", live)
+    put(source / ".secrets", "google_api_keys.dead", dead)
+    out = key_import.run(source)
+    assert out["provider_routes"] == {"google": "gemini"}
+    assert config.all_keys("gemini") == [live]
+    assert not (config.SECRETS_DIR / "google_api_keys").exists()
+
+
+def test_unknown_export_and_ambiguous_alias_fail_without_writes(tmp_path, monkeypatch):
+    source = tmp_path / "export"
+    put(source, "unknownservice_alive_keys.txt", "fake-unknown-key-0001")
+    with pytest.raises(key_import.KeyImportError, match="no H Swarm provider"):
+        key_import.run(source)
+    assert not config.SECRETS_DIR.exists()
+    (source / "unknownservice_alive_keys.txt").unlink()
+    put(source, "google_alive_keys.txt", "fake-google-key-0002")
+    monkeypatch.setitem(config.PROVIDERS, "google", {"base_url": "https://example.invalid"})
+    with pytest.raises(key_import.KeyImportError, match="ambiguous"):
+        key_import.run(source)
+    assert not config.SECRETS_DIR.exists()

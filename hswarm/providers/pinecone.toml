@@ -1,0 +1,71 @@
+# One project API key covers its control plane, hosted inference and index data plane.
+base_url = "https://api.pinecone.io"
+transport = "service"
+about = "Pinecone vector database and hosted embedding/reranking APIs. Vector operations require your index_host from describe_index, using a key for the same project."
+website = "https://www.pinecone.io"
+key_url = "https://app.pinecone.io"
+docs = "https://docs.pinecone.io/reference/api/2025-10"
+auth_header = "Api-Key"
+auth_prefix = ""
+capabilities = ["index-management", "embeddings", "reranking", "vector-search", "vector-storage", "index-statistics"]
+check_path = "/indexes"  # authenticated control-plane metadata GET; no vector/inference spend
+
+# Every operation here was checked against 2025-10, which Pinecone made stable on 2025-11-19 and supports at least 12
+# months (docs.pinecone.io/reference/api/versioning; no end date published as of 2026-10-07). 2026-07, the newest stable,
+# changes the describe_index answer (dimension, metric and vector_type move into `schema`) and gives each index one data
+# plane, Vectors or Documents; its query and upsert pages were not confirmed, so the pin stays where everything is.
+[headers]
+X-Pinecone-Api-Version = "2025-10"
+
+[operations.list_indexes]
+method = "GET"
+path = "/indexes"
+capability = "index-management"
+response = "json"
+
+[operations.describe_index]
+method = "GET"
+path = "/indexes/{index_name}"
+capability = "index-management"
+response = "json"
+
+[operations.embed]
+method = "POST"
+path = "/embed"
+capability = "embeddings"
+response = "json"
+docs = "https://docs.pinecone.io/reference/api/2025-10/inference/generate-embeddings"
+
+[operations.rerank]
+method = "POST"
+path = "/rerank"
+capability = "reranking"
+response = "json"
+docs = "https://docs.pinecone.io/reference/api/2025-10/inference/rerank"
+
+[operations.query]
+method = "POST"
+path = "/query"
+capability = "vector-search"
+response = "json"
+base_url_field = "index_host"
+allowed_host_pattern = '^[a-z0-9][a-z0-9-]*\.svc\.[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.pinecone\.io$'
+docs = "https://docs.pinecone.io/reference/api/2025-10/data-plane/query"
+
+[operations.upsert]
+method = "POST"
+path = "/vectors/upsert"
+capability = "vector-storage"
+response = "json"
+base_url_field = "index_host"
+allowed_host_pattern = '^[a-z0-9][a-z0-9-]*\.svc\.[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.pinecone\.io$'
+docs = "https://docs.pinecone.io/reference/api/2025-10/data-plane/upsert"
+
+[operations.index_stats]
+method = "POST"
+path = "/describe_index_stats"
+capability = "index-statistics"
+response = "json"
+base_url_field = "index_host"
+allowed_host_pattern = '^[a-z0-9][a-z0-9-]*\.svc\.[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.pinecone\.io$'
+docs = "https://docs.pinecone.io/reference/api/2025-10/data-plane/describeindexstats"

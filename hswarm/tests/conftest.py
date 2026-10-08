@@ -83,6 +83,12 @@ def _isolated_home(tmp_path, monkeypatch, request):
     from hswarm import breaker as _breaker
 
     monkeypatch.setattr(_breaker, "_LEGS", {})
+    # Per-key limits are process-wide (keylimits): one test's requests on a key_rpm provider must not park the next's.
+    from hswarm import keylimits as _keylimits
+
+    monkeypatch.setattr(_keylimits, "_SLOTS", {})
+    monkeypatch.setattr(_keylimits, "_WAITERS", [])
+    monkeypatch.setattr(_keylimits, "_HELD", {})
     # The merged keys.json write is process-wide (client._last_flush, its timer, _LIVE_POOLS): one test's write must
     # not defer the next test's first one, and a finished test's pools must not ride along in the next one's write.
     from hswarm import client as _client

@@ -1,0 +1,59 @@
+# Jina's search foundation services use the same Bearer key on distinct official hosts.
+# Reader/Search are service calls, not chat completions; their JSON payloads are {url: ...}/{q: ...}.
+base_url = "https://api.jina.ai"
+transport = "service"
+about = "Jina AI embeddings, reranking, web reading and web search. Operations use the provider's documented JSON request schema."
+website = "https://jina.ai"
+key_url = "https://jina.ai/api-dashboard/key-manager"
+docs = "https://api.jina.ai/scalar"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+key_billing = "unknown"
+capabilities = ["embeddings", "reranking", "reader", "search"]
+# No check_path: Reader/Search can consume tokens and a public index is not key validation.
+# Per-key limits (a request with a key is counted against that key, not the address): Search 100 a minute on any key;
+# Embeddings and Reranker 100 a minute on a free key (500 paid); Reader 500 a minute. The lowest is set, Reader its own.
+# Source: https://jina.ai/api-dashboard/pricing
+[limits]
+key_rpm = 100
+
+[limits.read]
+key_rpm = 500
+
+[operations.embeddings]
+method = "POST"
+path = "/v1/embeddings"
+capability = "embeddings"
+input = "json"
+response = "json"
+docs = "https://api.jina.ai/scalar"
+
+[operations.rerank]
+method = "POST"
+path = "/v1/rerank"
+capability = "reranking"
+input = "json"
+response = "json"
+docs = "https://api.jina.ai/scalar"
+
+[operations.read]
+method = "POST"
+base_url = "https://r.jina.ai"
+allowed_hosts = ["r.jina.ai"]
+path = "/"
+capability = "reader"
+input = "json"
+response = "json"
+headers = { Accept = "application/json" }
+docs = "https://jina.ai/reader"
+
+[operations.search]
+method = "POST"
+base_url = "https://s.jina.ai"
+allowed_hosts = ["s.jina.ai"]
+path = "/"
+capability = "search"
+input = "json"
+response = "json"
+headers = { Accept = "application/json" }
+docs = "https://github.com/jina-ai/meta-prompt/blob/main/v12.txt"

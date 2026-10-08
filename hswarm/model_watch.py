@@ -166,7 +166,8 @@ async def _list(provider: str) -> list[str]:
 
     client = DeepSeekClient(provider=provider)
     try:
-        return ids_of(await client.get_json(client.spec["models_path"]))
+        return [mid for mid in ids_of(await client.get_json(client.spec["models_path"]))
+                if config.provider_chat_model(provider, mid)]
     finally:
         await client.aclose()
 

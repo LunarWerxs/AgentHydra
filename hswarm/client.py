@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - POSIX
     msvcrt = None
     import fcntl
 
-from . import anthropic_native, config, egress, faults, input_limit, keystate
+from . import anthropic_native, config, egress, faults, input_limit, keylimits, keystate
 from . import zdr as zdr_mod
 from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-exported
 
@@ -108,7 +108,7 @@ MODEL_OUTPUT_RETRIES = 3
 # zhipu keys are unfunded, so without this the glm leg spends its whole budget rediscovering them. The
 # repo's rule is that a key which has run out goes to the disabled slot and is never retried, so route
 # these to broke() like a 402. A real rate-limit 429 does not match and still just rests.
-_OUT_OF_CREDIT_429 = re.compile(r"[Ii]nsufficient balance|no resource pack|balance is insufficient|arrears|欠费", re.I)
+_OUT_OF_CREDIT_429 = re.compile(r"[Ii]nsufficient (?:account )?balance|no resource pack|balance is insufficient|arrears|欠费", re.I)
 # The same for a 400: groq answers a key whose organisation hit its spend alert with 400 `spend_limit_reached`
 # ("Organization has blocked API access because a spend alert threshold was met"). It is per KEY (each key is its own
 # organisation), so it disables that key and the next one serves. 2026-09-27: one Odin refresh run met it 20 times on
@@ -472,15 +472,16 @@ class KeyPool:
     a free balance probe that sees a top-up, or `hswarm keys enable <fingerprint>`.
     """
 
-    def __init__(self, keys: list[str], provider: str = config.DEFAULT_PROVIDER, state: dict | None = None):
+    def __init__(self, keys: list[str], provider: str = config.DEFAULT_PROVIDER, state: dict | None = None, start: int = 0):
         """`state`: the shared file already read (read_key_state), for a caller that builds many pools at once only
-        to show them (the console's snapshot read the 1.8 MB file twice per provider, 0.3 s per page)."""
+        to show them (the console's snapshot read the 1.8 MB file twice per provider, 0.3 s per page). `start`: where
+        the round-robin begins, for a pool that lives for one call (ServiceClient), whose first pick is its only one."""
         if not keys:
             raise RuntimeError(config.no_key_message(provider))
         self.provider = provider
         self._keys = list(dict.fromkeys(keys))
         self._fp = {k: config.fingerprint(k) for k in self._keys}
-        self._i = 0
+        self._i = start
         self._state: dict[str, dict] = {}
         self._state_checked = 0.0
         self._rev: int | None = None  # the newest keystate row this pool has seen; None until its first read
@@ -1140,7 +1141,8 @@ class ChatClient:
     async def models(self) -> list[str]:
         if not self.spec.get("models_path"):
             return []
-        return [m["id"] for m in model_rows(await self.get_json(self.spec["models_path"]))]
+        return [m["id"] for m in model_rows(await self.get_json(self.spec["models_path"]))
+                if isinstance(m, dict) and config.provider_chat_model(self.provider, m.get("id"))]
 
     async def balance(self) -> dict:
         if not self.spec.get("balance_path"):
@@ -1347,12 +1349,22 @@ class ChatClient:
                                     f"of every {self.provider} key that could take it; not sent", self.provider)
             attempt += 1
             self.calls += 1
-            key = self._pick(free, skip, affinity)  # NoUsableKey when every key is disabled: fail loudly, do not hammer
-            # One receipt per attempt: every retry is another copy of the bytes leaving. Fail-closed raises here, unsent.
-            # In a thread: the append takes a file lock and reads the ledger's tail, 272k times a day on the server's
-            # loop (2026-10-02). to_thread copies the context, so egress.fail_closed still holds there.
-            await asyncio.to_thread(egress.record, sink, payload, provider=self.provider, model=model_id)
+            transport_failed = False
+            # A key with headroom under the provider's [limits] (keylimits), waiting unsent while every key is full; with no
+            # [limits] it is self._pick's key at once, as before. NoUsableKey when every key is disabled: fail loudly, do not
+            # hammer. A call with another leg waits no longer than its rest budget: past it, the 429 fails the task over.
             try:
+                async with asyncio.timeout(rest_budget_s):
+                    key = await keylimits.acquire(self.provider, lambda ex: self._pick(free, ex, affinity), model_id, skip)
+            except TimeoutError:
+                raise ApiError(429, self._rate_limited_message(rest_budget_s, 0.0, rest_budget_s, last_leg,
+                                                               f"every key is at {self.provider}'s own [limits]"), self.provider) from None
+            # Nothing awaits between the acquire and the try, so the finally below always releases it.
+            try:
+                # One receipt per attempt: every retry is another copy of the bytes leaving. Fail-closed raises here, unsent.
+                # In a thread: the append takes a file lock and reads the ledger's tail, 272k times a day on the server's
+                # loop (2026-10-02). to_thread copies the context, so egress.fail_closed still holds there.
+                await asyncio.to_thread(egress.record, sink, payload, provider=self.provider, model=model_id)
                 r = await self._http.post(self._chat_url, content=payload, headers={**headers_json, **self._auth(key)}, timeout=req_timeout)
             except httpx.ReadTimeout:
                 self.stalls += 1
@@ -1365,6 +1377,12 @@ class ChatClient:
                 if attempt >= self.max_attempts:
                     raise
                 self.retries += 1
+                transport_failed = True
+            finally:
+                # Once per acquire, however the attempt ended; before any backoff, so a sleeping retry holds no slot, and
+                # before the next attempt's acquire, so a move to another key frees this one.
+                keylimits.release(self.provider, key, model_id)
+            if transport_failed:
                 await asyncio.sleep(self._backoff(attempt))
                 continue
             if self.native:  # Anthropic names the key's input-tokens-per-minute limit on every answer; cc reads it (input_limit.py)

@@ -1,0 +1,30 @@
+# International standard API. China accounts use a separate API at https://api.stepfun.com/v1;
+# configure that base_url locally for China-issued keys. Never try a key against both regions.
+# Subscription Step Plan accounts also have a separate /step_plan/v1 API.
+base_url = "https://api.stepfun.ai/v1"
+transport = "openai"
+about = "StepFun's international standard API for the Step chat and reasoning model family. China and Step Plan accounts require their account-specific endpoint."
+website = "https://www.stepfun.com"
+key_url = "https://platform.stepfun.ai"
+docs = "https://platform.stepfun.ai/docs/en/api-reference/chat/chat-completion-create"
+auth_header = "Authorization"
+auth_prefix = "Bearer "
+key_env = ["STEPFUN_API_KEYS", "STEPFUN_API_KEY", "STEP_API_KEY"]
+key_billing = "unknown"
+capabilities = ["chat", "model-catalog"]
+chat_path = "/chat/completions"
+models_path = "/models"
+passthrough = ["stepfun:"]
+# The model catalog also lists TTS/image models. Only the documented Step, Step-R, Step-1o vision and StepAudio chat families
+# are candidates for chat routing/refresh; the complete catalog remains available as a service operation.
+chat_model_pattern = 'step-[0-9]+(?:\.[0-9]+)?v?(?:-.*)?|step-1o-(?:turbo-)?vision(?:-.*)?|step-r[0-9]+(?:-.*)?|stepaudio-[0-9]+(?:\.[0-9]+)?-chat(?:-.*)?'
+options = ["reasoning_effort", "reasoning_format"]
+anthropic_url = "facade"
+# The authenticated model catalog is documented; no free credential-check guarantee is published.
+
+[operations.list_models]
+method = "GET"
+path = "/models"
+capability = "model-catalog"
+response = "json"
+docs = "https://platform.stepfun.ai/docs/en/api-reference/models/list"

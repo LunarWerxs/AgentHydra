@@ -41,22 +41,54 @@ def _lines(path: Path) -> list[str]:
     return list(dict.fromkeys(out))
 
 
-def read_export(source: Path) -> dict[str, list[str]]:
+def _import_aliases() -> dict[str, str]:
+    """Provider-owned aliases route exporter names into the same canonical vault list."""
+    config.refresh()
+    aliases: dict[str, str] = {}
+    for provider, spec in config.PROVIDERS.items():
+        names = spec.get("import_aliases", ())
+        if not isinstance(names, (list, tuple)):
+            raise KeyImportError(f"invalid import_aliases for {provider}")
+        for name in names:
+            if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,62}", name):
+                raise KeyImportError(f"invalid import alias for {provider}")
+            if name == provider:
+                continue
+            if name in config.PROVIDERS or (name in aliases and aliases[name] != provider):
+                raise KeyImportError(f"ambiguous provider import alias: {name}")
+            aliases[name] = provider
+    return aliases
+
+
+def read_export(source: Path) -> tuple[dict[str, list[str]], dict[str, str]]:
     if not source.is_dir() or source.is_symlink():
         raise KeyImportError("the source must be a real directory of key-list files")
     # Retain the old clone/.secrets input, without its previous destructive copy.
     folder = source / ".secrets" if (source / ".secrets").is_dir() else source
     if folder.is_symlink():
         raise KeyImportError("refusing a linked source directory")
+    aliases = _import_aliases()
+    routes: dict[str, str] = {}
     lists: dict[str, list[str]] = {}
     for path in sorted(folder.iterdir()):
         name = path.name
         match = EXPORT_RX.fullmatch(name)
         if match:
             provider, status = match.groups()
+            canonical = aliases.get(provider, provider)
+            if canonical not in config.PROVIDERS:
+                raise KeyImportError(f"no H Swarm provider for export: {provider}; add its provider configuration first")
+            if canonical != provider:
+                routes[provider] = canonical
+            provider = canonical
             name = f"{provider}_api_keys" + ({"dead": ".dead", "unfunded": ".unfunded"}.get(status, ""))
         elif not vault.LIST_RX.fullmatch(name):
             continue
+        else:
+            base = name.removesuffix(".dead").removesuffix(".unfunded").removesuffix("_api_keys")
+            if base in aliases:
+                routes[base] = aliases[base]
+                name = aliases[base] + name[len(base):]
         if not path.is_file():
             raise KeyImportError(f"expected a regular key-list file: {path.name}")
         lists[name] = list(dict.fromkeys([*lists.get(name, []), *_lines(path)]))
@@ -67,7 +99,7 @@ def read_export(source: Path) -> dict[str, list[str]]:
             continue
         if set(values) & set(lists.get(name + ".dead", ())):
             raise KeyImportError(f"the export marks the same key both alive and dead in {name}")
-    return lists
+    return lists, routes
 
 
 def _state_snapshot() -> dict:
@@ -194,11 +226,11 @@ def _restore_revoked(incoming: dict[str, list[str]]) -> int:
 
 
 def run(source: Path, *, dry_run: bool = False) -> dict:
-    incoming = read_export(source)
+    incoming, routes = read_export(source)
     if dry_run:
         with vault.local_lock():
             report, _changed, _edits = _plan(incoming)
-        return {**report, "dry_run": True, "vault_configured": vault.configured()}
+        return {**report, "provider_routes": routes, "dry_run": True, "vault_configured": vault.configured()}
 
     # Include the latest shared additions/evidence before calculating removals. Keep the usual
     # guard for pre-existing local changes; only the subsequent evidence-based edit allows removals.
@@ -226,7 +258,7 @@ def run(source: Path, *, dry_run: bool = False) -> dict:
                 else:
                     atomic_write(path, data, private=True)
             raise
-        return {**report, "dry_run": False, "revoked_states_restored": restored}
+        return {**report, "provider_routes": routes, "dry_run": False, "revoked_states_restored": restored}
 
     # Deletions are backed by explicit dead lists, never by absence from the export.
     return vault.mutate_local(change, allow_removals=True)

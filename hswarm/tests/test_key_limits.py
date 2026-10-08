@@ -68,6 +68,22 @@ def test_two_keys_at_concurrency_one_never_have_more_than_two_in_flight(monkeypa
     assert peak["per_key"] == 1
 
 
+def test_release_frees_the_slot_it_took_after_the_limits_table_changes(monkeypatch):
+    # The long-lived server re-reads provider files on every call: a [limits] table removed mid-request must not leave
+    # its slot held, or the key stays one short (at key_concurrency 1, closed) until a restart.
+    monkeypatch.setitem(config.PROVIDERS, "limitdemo", {"limits": {"key_concurrency": 1}})
+    pick = _pick(KEYS[:1])
+
+    async def run():
+        key = await keylimits.acquire("limitdemo", pick)
+        monkeypatch.setitem(config.PROVIDERS, "limitdemo", {})
+        keylimits.release("limitdemo", key)
+        monkeypatch.setitem(config.PROVIDERS, "limitdemo", {"limits": {"key_concurrency": 1}})
+        return await asyncio.wait_for(keylimits.acquire("limitdemo", pick), 1.0)
+
+    assert asyncio.run(run()) == KEYS[0]
+
+
 def test_a_third_request_on_a_key_at_two_a_minute_waits_for_the_window(monkeypatch):
     clock = FakeClock()
     monkeypatch.setattr(keylimits, "_clock", clock)
