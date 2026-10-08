@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime as dt
 import os
 from shutil import which
 
@@ -69,6 +70,7 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     out["breakers_open"] = breaker.report()
     # The code this process runs, and whether a source file changed on disk since it loaded (shared.behind).
     out["code"] = {**shared.code_stamp(), **({"behind": behind} if (behind := shared.behind()) else {})}
+    out["maintain"] = maintain_status()
     # An armed fault spec (faults.py) fails real calls on purpose: one left in the environment must show here.
     try:
         if armed := faults.armed():
@@ -78,6 +80,24 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     if out["key"]["present"]:
         await _default_pool(m, out, verbose)
     return out
+
+
+def maintain_status() -> str:
+    """Whether the daily `maintain` runs to the end, from what it leaves behind: it moves every job zip past its warm
+    week into the day's archive, so a zip older than that (with two days' grace) means it has not finished since.
+    2026-10-08: it had hit its task's two-hour limit every night for five nights, and nothing said so."""
+    from . import history
+
+    cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=history.COLD_AFTER_DAYS + 2)).strftime("%Y%m%d")
+    try:
+        with os.scandir(config.JOBS_DIR) as entries:
+            late = sorted(e.name[:8] for e in entries if e.name.endswith(".zip") and e.name[:8] < cutoff)
+    except OSError:
+        late = []
+    if late:
+        return (f"WARNING: {len(late)} job zip(s) past their warm week, the oldest from {late[0]}: the daily `hswarm maintain` "
+                "has not run to the end since (hswarm install schedules it; savings.log in the home gets a line when it does)")
+    return "ok"
 
 
 async def _reachable(m: JobManager, providers: dict) -> None:
