@@ -95,11 +95,13 @@ _ERRORS = (OSError, ValueError, KeyError, IndexError, TypeError, asyncio.Timeout
 
 
 def _idle(status: dict) -> int:
-    """Signed-in accounts neither busy nor resting after a failed send (mcp-free.ts restingFor)."""
+    """Signed-in accounts neither busy, resting after a failed send (mcp-free.ts restingFor) nor paced out of
+    new chats for now (mcp-free.ts pacedOut)."""
     if not status.get("ready"):
         return 0
     return sum(1 for a in status.get("accounts") or []
-               if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting"))
+               if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting")
+               and not a.get("paced"))
 
 
 def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Result | None:

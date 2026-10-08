@@ -6,6 +6,8 @@ import {
   FREE_TOOLS,
   type FreeInstance,
   noteFreeOutcome,
+  noteFreeSend,
+  paceCap,
   pickFreeAccount,
   resetFreeHealth,
   restingFor,
@@ -72,6 +74,24 @@ describe('pickFreeAccount', () => {
     }
     noteFreeOutcome('b', 'rate_limited', now, windowResetAt(roomy, now))
     expect(restingFor('b', now)?.until).toBe(now + 30 * 60_000)
+    resetFreeHealth()
+  })
+
+  test('a ChatGPT account at its cap of new chats waits; a lockout lowers the cap, a window it held raises it', () => {
+    // 2026-10-08: ChatGPT Free locked out for 30-60 min after ~75 new chats in half an hour, 17 times on two accounts.
+    resetFreeHealth()
+    const gpt = INSTANCES[1]
+    const now = Date.now()
+    for (let n = 0; n < 70; n++) noteFreeSend('b', now - n * 1000)
+    expect(pickFreeAccount([gpt], new Set(), {})).toBeNull()
+    expect(pickFreeAccount([gpt, INSTANCES[0]], new Set(), {})?.num).toBe(1)
+    expect(pickFreeAccount([gpt], new Set(), { account: 2 })?.num).toBe(2) // a named account is never held back
+    expect(paceCap(gpt, now + 30 * 60_000)).toBe(73)
+    // Locked out with 60 chats allowed in the window: the cap goes a tenth under that.
+    resetFreeHealth()
+    for (let n = 0; n < 61; n++) noteFreeSend('b', now - n * 1000)
+    noteFreeOutcome('b', 'rate_limited', now)
+    expect(paceCap(gpt, now)).toBe(54)
     resetFreeHealth()
   })
 })

@@ -2,10 +2,15 @@
 // logins in AgentHydra 2.0's Instances → Free (desk2/server/src/free-instances). A chat sends work into
 // them the way climayte_run sends it into the CLI accounts (owner, 2026-10-06: "orchestrate threads into
 // free accounts"). They live in Desk 2's server, not this daemon, so every tool calls Desk 2's
-// /api/free (desk2/README.md, "Free instances"); this file keeps no account state of its own, only the
-// batches it is sending. Each Free account runs one operation at a time, so a batch waits for an idle
-// account rather than ever being refused for a busy one.
+// /api/free (desk2/README.md, "Free instances"); this file keeps no account state of its own beyond the
+// batches it is sending, the rests after failed sends and each ChatGPT account's learned pace (free-pace.json).
+// Each Free account runs one operation at a time, so a batch waits for an idle account rather than ever being
+// refused for a busy one.
 import { randomUUID } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DATA_DIR } from './config'
+import { writeJsonStoreAtomic } from './core/json-store'
 import { desk2Present, desk2Url } from './desk2'
 import { MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
@@ -164,6 +169,7 @@ export function noteFreeOutcome(
     return
   }
   if (!ACCOUNT_CODES.has(code)) return
+  if (code === 'rate_limited') paceLockout(instanceId, now)
   const strikes = (rests.get(instanceId)?.strikes ?? 0) + 1
   const base = code === 'rate_limited' ? RATE_LIMIT_REST_MS : FAILURE_REST_MS
   let until = now + Math.min(base * 2 ** (strikes - 1), MAX_REST_MS)
@@ -177,10 +183,115 @@ export function restingFor(instanceId: string, now = Date.now()): Rest | null {
   return rest && rest.until > now ? rest : null
 }
 
-/** For tests: forget every rest and pick. */
+// ChatGPT Free answered about 75 new chats in half an hour and then refused every send for 30-60 minutes (owner,
+// 2026-10-08: "automatically, dynamically adjust cooldown rates globally to keep them from hitting their burst
+// rate"; that day #2 and #6 locked out 17 times, at exactly 75 in the trailing 30 minutes 9 times). Every free
+// send on this PC goes through here (HSwarm, agents' free_chat), so the daemon paces each account to a cap of
+// sends per window: a lockout sets the cap a tenth under what the window held, and a window that hit the cap
+// without a lockout raises it a little, so the cap follows the provider's limit wherever it moves. Claude Free is
+// paced by its own 5-hour reading instead (roomBand, the rest until its window resets).
+const PACE_WINDOW_MS = 30 * 60_000
+const PACE_FIRST_CAP = 70
+const PACE_MIN_CAP = 15
+const PACE_MAX_CAP = 150
+const PACE_STEP_UP = 3
+interface Pace {
+  cap: number
+  /** When the cap last changed; a window after it that reached the cap with no lockout raises it. */
+  since: number
+  /** Set when the cap kept the account from a send since `since`. */
+  held?: boolean
+}
+const sends = new Map<string, number[]>()
+let paces: Record<string, Pace> | null = null
+const paceFile = () => join(DATA_DIR, 'free-pace.json')
+function loadPaces(): Record<string, Pace> {
+  if (!paces) {
+    try {
+      paces = JSON.parse(readFileSync(paceFile(), 'utf8')) as Record<string, Pace>
+    } catch {
+      paces = {}
+    }
+  }
+  return paces
+}
+function savePaces(): void {
+  try {
+    writeJsonStoreAtomic(paceFile(), loadPaces())
+  } catch {
+    /* a lost write costs one learned cap, relearned at the next lockout */
+  }
+}
+function paceOf(id: string, now: number): Pace {
+  const all = loadPaces()
+  if (!all[id]) all[id] = { cap: PACE_FIRST_CAP, since: now }
+  return all[id]
+}
+function sentWithin(id: string, now: number): number {
+  const list = (sends.get(id) ?? []).filter((t) => now - t < PACE_WINDOW_MS)
+  sends.set(id, list)
+  return list.length
+}
+/** Records a send now (startTask), or one Desk's thread list shows from before this daemon started. */
+export function noteFreeSend(id: string, at = Date.now()): void {
+  const list = sends.get(id) ?? []
+  list.push(at)
+  sends.set(id, list)
+}
+/** The cap on sends per PACE_WINDOW_MS for a ChatGPT account, raised once a window has passed in which it held. */
+export function paceCap(i: Pick<FreeInstance, 'id' | 'provider'>, now = Date.now()): number | null {
+  if (i.provider !== 'chatgpt') return null
+  const p = paceOf(i.id, now)
+  if (p.held && now - p.since >= PACE_WINDOW_MS) {
+    Object.assign(p, { cap: Math.min(PACE_MAX_CAP, p.cap + PACE_STEP_UP), since: now, held: false })
+    savePaces()
+  }
+  return p.cap
+}
+/** Whether the account has used its cap for the window (it takes no new send until one ages out). */
+export function pacedOut(i: Pick<FreeInstance, 'id' | 'provider'>, now = Date.now()): boolean {
+  const cap = paceCap(i, now)
+  if (cap == null || sentWithin(i.id, now) < cap) return false
+  const p = loadPaces()[i.id]
+  if (p && !p.held) {
+    p.held = true
+    savePaces()
+  }
+  return true
+}
+/** A lockout: the cap goes a tenth under what the window held when it came. */
+function paceLockout(id: string, now: number): void {
+  const p = paceOf(id, now)
+  const held = Math.max(0, sentWithin(id, now) - 1) // the refused send is not one the provider allowed
+  p.cap = Math.max(PACE_MIN_CAP, Math.min(p.cap, Math.floor(held * 0.9)))
+  p.since = now
+  p.held = false
+  savePaces()
+}
+/** The new chats Desk's thread list shows in the last window, once per daemon: a restart must not forget the
+ *  sends just before it and burst an account into its lockout. */
+let seeded = false
+const BOOTED = Date.now() // a send this daemon made is in `sends` already
+function seedSends(threads: readonly FreeThread[], now = Date.now()): void {
+  if (seeded || !threads.length) return
+  seeded = true
+  for (const t of threads)
+    if (now - t.createdAt < PACE_WINDOW_MS && t.createdAt < BOOTED)
+      noteFreeSend(t.instanceId, t.createdAt)
+}
+/** When the account takes a send again: its oldest send in the window ages out. */
+function pacedUntil(id: string, now: number): number {
+  const oldest = Math.min(...(sends.get(id) ?? [now]))
+  return oldest + PACE_WINDOW_MS
+}
+
+/** For tests: forget every rest, pick, send and learned cap. */
 export function resetFreeHealth(): void {
   rests.clear()
   lastPicked.clear()
+  sends.clear()
+  paces = {}
+  seeded = false
 }
 
 const lastUse = (i: FreeInstance) => Math.max(i.lastActiveAt ?? 0, lastPicked.get(i.id) ?? 0)
@@ -209,7 +320,10 @@ export function pickFreeAccount(
   busy: ReadonlySet<string>,
   want: { account?: number; provider?: Provider },
 ): FreeInstance | null {
-  const free = eligibleAccounts(instances, want).filter((i) => !busy.has(i.id))
+  // A paced account is busy for now, not ineligible: the task waits for its next send, never fails for it.
+  const free = eligibleAccounts(instances, want).filter(
+    (i) => !busy.has(i.id) && (want.account != null || !pacedOut(i)),
+  )
   free.sort(
     (a, b) =>
       roomBand(a) - roomBand(b) ||
@@ -422,6 +536,7 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
         ]
     }
     lastPicked.set(account.id, Date.now())
+    if (!it.task.chat_id) noteFreeSend(account.id)
     Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
     Object.assign(it.s, {
       state: 'running',
@@ -442,6 +557,7 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
   const cache: { threads: FreeThread[] | null } = { threads: null }
+  if (!seeded) seedSends(await recentThreads())
   while (pending(b)) {
     let status: { instances: FreeInstance[]; jobs: FreeJob[] }
     try {
@@ -530,10 +646,14 @@ async function freeStatus() {
     recentThreads(),
   ])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
+  seedSends(threads)
+  const now = Date.now()
   return {
     ready: status.ready,
     accounts: status.instances.map((i) => {
       const rest = restingFor(i.id)
+      const cap = paceCap(i, now)
+      const paced = cap != null && pacedOut(i, now)
       return {
         account: accountLabel(i),
         num: i.num,
@@ -546,6 +666,14 @@ async function freeStatus() {
               resting: `until ${new Date(rest.until).toISOString()} after ${rest.code} (x${rest.strikes})`,
             }
           : {}),
+        // Also not idle to HSwarm: its cap of new chats per half hour is used (the pacing above).
+        ...(paced
+          ? {
+              paced: `until ${new Date(pacedUntil(i.id, now)).toISOString()} (${cap} new chats per 30 min)`,
+            }
+          : cap != null
+            ? { pace: `${sentWithin(i.id, now)} of ${cap} new chats in the last 30 min` }
+            : {}),
         usage: !i.usage?.available
           ? 'no reading yet (Claude reports usage once the account has chatted)'
           : i.usage.unlimited_text

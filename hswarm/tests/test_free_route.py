@@ -193,7 +193,8 @@ def test_an_unreachable_daemon_falls_back_without_an_error(monkeypatch):
 
 def test_no_idle_account_falls_back_without_calling_free_chat(fake):
     f = fake(accounts=[{**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "signedIn": False},
-                       {**ACCOUNTS[0], "resting": "until 2026-10-08T08:00:00Z after http_rejected (x1)"}])
+                       {**ACCOUNTS[0], "resting": "until 2026-10-08T08:00:00Z after http_rejected (x1)"},
+                       {**ACCOUNTS[0], "paced": "until 2026-10-08T08:00:00Z (69 new chats per 30 min)"}])
     assert _consult(_task()) == (None, None)
     assert f.chats == []
 
