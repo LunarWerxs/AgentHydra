@@ -18,6 +18,7 @@ import type {
   Query,
   SDKMessage,
   SDKUserMessage,
+  Settings,
 } from '@anthropic-ai/claude-agent-sdk'
 import { sdkQuery } from '../host/sdk'
 import { claudeCodeBinaryFor, describeProgress, type ClaudeCodeBinary } from './claude-code-binary'
@@ -224,6 +225,23 @@ export function workerRulesSwap(configDir: string | null, mainFile: string | nul
   }
 }
 
+/**
+ * The owner's own hooks (the ~/.claude/settings.json beside the main config) for a chat on an extra account. That
+ * folder is the chat's user settings, and AgentHydra carries no hooks into it (climayte-owner-sync.ts: they can
+ * block a headless worker), so an interactive chat there ran none of them, the CreAitor's pop-up gate and its
+ * NEED-line answers among them (found 2026-10-08). A default-account chat already loads them as user settings and,
+ * given them again, would run each twice: null there, and when the owner has none.
+ */
+export function ownerHooks(configDir: string | null, mainFile: string | null): Settings['hooks'] | null {
+  if (!configDir || !mainFile) return null
+  try {
+    const { hooks } = JSON.parse(readFileSync(join(dirname(mainFile), '.claude', 'settings.json'), 'utf8')) as Settings
+    return hooks && typeof hooks === 'object' && !Array.isArray(hooks) && Object.keys(hooks).length ? hooks : null
+  } catch {
+    return null
+  }
+}
+
 export class ChatRuntime {
   readonly chat: ChatSummary
   private readonly store: ChatStore
@@ -384,8 +402,9 @@ export class ChatRuntime {
       if (at) options.resumeSessionAt = at
     }
     const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
+    const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
+    if (swap || hooks) options.settings = { ...(swap ? { claudeMdExcludes: swap.excludes } : {}), ...(hooks ? { hooks } : {}) }
     if (swap) {
-      options.settings = { claudeMdExcludes: swap.excludes }
       options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}
 
 # User instructions (~/.claude/CLAUDE.md)

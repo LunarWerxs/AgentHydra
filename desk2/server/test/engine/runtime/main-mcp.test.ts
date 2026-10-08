@@ -88,3 +88,23 @@ describe('the worker-rules CLAUDE.md copy', () => {
     expect(runtime(temp(), main, acct).buildOptions().settings).toBeUndefined()
   })
 })
+
+describe('the owner\'s hooks', () => {
+  test('run in a chat on an extra account, whose folder carries none; a default-account chat already loads them', () => {
+    const root = temp()
+    mkdirSync(join(root, '.claude'))
+    const hooks = { PreToolUse: [{ matcher: 'AskUserQuestion', hooks: [{ type: 'command', command: 'fake-gate' }] }] }
+    writeFileSync(join(root, '.claude', 'settings.json'), JSON.stringify({ hooks, theme: 'dark' }))
+    writeFileSync(join(root, '.claude', 'CLAUDE.md'), 'REAL pointer instructions')
+    const main = join(root, '.claude.json')
+    writeFileSync(main, '{}')
+    const acct = temp()
+    expect((runtime(temp(), main, acct).buildOptions().settings as { hooks: unknown }).hooks).toEqual(hooks)
+    // the worker-rules copy is still skipped beside them
+    writeFileSync(join(acct, 'CLAUDE.md'), '# Rules for a CliMayte worker\n\nyou are headless')
+    const o = runtime(temp(), main, acct).buildOptions().settings as { hooks: unknown; claudeMdExcludes: string[] }
+    expect([o.hooks, o.claudeMdExcludes]).toEqual([hooks, [join(acct, 'CLAUDE.md').replace(/\\/g, '/')]])
+    // given again on the default account, every hook would run twice
+    expect(runtime(temp(), main, null).buildOptions().settings).toBeUndefined()
+  })
+})
