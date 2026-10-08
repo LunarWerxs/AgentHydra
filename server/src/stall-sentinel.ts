@@ -22,10 +22,10 @@
 // Nothing here can stop a kill; it makes the next one explain itself.
 //
 // ⛔ AND NAMES THE FUNCTIONS (2026-10-04). On a loaded box the daemon was reaped every few minutes
-// with every SATURATED line blaming "(no request: timers/background work)": true, and no help. The
-// first time the loop is late by PROFILE_FROM_MS in a window, JSC's sampling profiler starts (Bun
-// has no stop; at Windows' timer tick it takes ~120 samples a second, drained every PROFILE_BUCKET_MS
-// into counts), and every SATURATED line then says which functions the samples were in.
+// with every SATURATED line blaming "(no request: timers/background work)": true, and no help. JSC's
+// sampling profiler runs from boot (BOOT_SAMPLING; Bun has no stop; at Windows' timer tick it takes
+// ~120 samples a second, drained every PROFILE_BUCKET_MS into counts), and every SATURATED line, and
+// every single block of LONG_BLOCK_MS, says which functions the samples were in.
 
 import * as jsc from 'bun:jsc'
 import type { MiddlewareHandler } from 'hono'
@@ -41,8 +41,9 @@ const SATURATED_QUIET_MS = 30_000
 /** Heartbeat lateness below this is scheduling noise, not a block. */
 const LATE_FLOOR_MS = 50
 
-/** Start sampling once a window holds this much lateness: a healthy daemon never pays for it. */
-const PROFILE_FROM_MS = 1_000
+// BOOT_SAMPLING: the sampler starts with the sentinel, because a sampler started by lateness misses the
+// block that started it, and the boot steps are where a block comes first (2026-10-07: every daemon
+// process was late within two minutes of boot, two of four at 4 s, so it was running regardless).
 /** Samples are drained into counts this often and kept for WINDOW_MS. */
 const PROFILE_BUCKET_MS = 2_000
 const PROFILE_TOP = 5
@@ -232,12 +233,17 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   let lastBeat = Date.now()
   let lastSaturatedLog = 0
   let lastLongBlockLog = 0
-  // The sampler (PROFILE_FROM_MS): off until the loop is first late, then drained into counts every
-  // PROFILE_BUCKET_MS, the last WINDOW_MS of them kept for the next SATURATED line.
+  // The sampler: on from boot (BOOT_SAMPLING), drained into counts every PROFILE_BUCKET_MS, the last
+  // WINDOW_MS of them kept for the next SATURATED line.
   const sampler = jsc as unknown as Sampler
   let sampling = false
-  let samplerMissing = false
-  let lastDrain = 0
+  let lastDrain = Date.now()
+  try {
+    sampler.startSamplingProfiler()
+    sampling = true
+  } catch {
+    // not this runtime: the blame stays per request
+  }
   const buckets: Array<{ at: number; counts: SampleCounts }> = []
   const drain = () => countSamples(sampler.samplingProfilerStackTraces().traces ?? [])
   // A tick that throws is a tick skipped, never a dead daemon (scripts/checks/
@@ -253,15 +259,6 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
       if (lateMs >= LATE_FLOOR_MS) window.push({ at: now, lateMs, blame })
       while (window.length && (window[0] as Late).at < now - WINDOW_MS) window.shift()
       const blocked = window.reduce((sum, w) => sum + w.lateMs, 0)
-      if (!sampling && !samplerMissing && blocked >= PROFILE_FROM_MS) {
-        try {
-          sampler.startSamplingProfiler()
-          sampling = true
-          lastDrain = now
-        } catch {
-          samplerMissing = true // not this runtime: the blame stays per request
-        }
-      }
       if (sampling && lateMs >= LONG_BLOCK_MS && now - lastLongBlockLog >= SATURATED_QUIET_MS) {
         // The samples since the last drain are this block's: drained now, they also stay in the
         // window for a SATURATED line.
