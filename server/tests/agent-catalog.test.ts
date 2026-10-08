@@ -118,12 +118,12 @@ describe('resolving roots on a real machine', () => {
 })
 
 describe('detection', () => {
-  test('reports only what is installed, with a file count and a date', () => {
+  test('reports only what is installed, with a file count and a date', async () => {
     mkdirSync(join(home, '.grok', 'sessions'), { recursive: true })
     writeFileSync(join(home, '.grok', 'sessions', 'a.jsonl'), '{}\n')
     writeFileSync(join(home, '.grok', 'sessions', 'b.jsonl'), '{}\n')
 
-    const found = detectAgentTools(home)
+    const found = await detectAgentTools(home)
     const grok = found.find((t) => t.id === 'grok')
     expect(grok?.files).toBe(2)
     expect(grok?.lastActivityAt).toBeGreaterThan(0)
@@ -134,13 +134,15 @@ describe('detection', () => {
     expect(found.find((t) => t.id === 'qwen')).toBeUndefined()
   })
 
-  test('a readable tool reports the reader that handles it', () => {
-    expect(detectAgentTools(home).find((t) => t.id === 'claude-code')?.format).toBe('claude')
+  test('a readable tool reports the reader that handles it', async () => {
+    expect((await detectAgentTools(home)).find((t) => t.id === 'claude-code')?.format).toBe(
+      'claude',
+    )
   })
 
-  test('a tool with no parser reports null, which the UI shows as "not read yet"', () => {
+  test('a tool with no parser reports null, which the UI shows as "not read yet"', async () => {
     mkdirSync(join(home, '.qwen', 'projects'), { recursive: true })
     writeFileSync(join(home, '.qwen', 'projects', 'a.jsonl'), '{}')
-    expect(detectAgentTools(home).find((t) => t.id === 'qwen')?.format).toBeNull()
+    expect((await detectAgentTools(home)).find((t) => t.id === 'qwen')?.format).toBeNull()
   })
 })
