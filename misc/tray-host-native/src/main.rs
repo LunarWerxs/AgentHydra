@@ -1084,39 +1084,16 @@ fn main() {
     let mutex = unsafe { CreateMutexW(null_mut(), 1, mutex_name.as_ptr()) };
     let already_hosted = mutex.is_null() || unsafe { GetLastError() } == ERROR_ALREADY_EXISTS;
     if already_hosted {
-        if background {
-            return;
-        }
-        match daemon::live_url(&cfg, daemon::PROBE_POLL) {
-            Some(url) => browser::open_ui(&cfg, &url),
-            // Nothing serving yet means the winner is still cold-starting. Opening a browser at a
-            // guessed URL would just show connection-refused, so say so instead.
-            None => win::message_box(
-                &cfg.display_name,
-                &format!(
-                    "{} is already starting in the tray. Wait a moment, then open it from the tray icon.",
-                    cfg.display_name
-                ),
-                MB_ICONWARNING,
-            ),
+        if !background {
+            open_running_host(&cfg);
         }
         return;
     }
 
     // Is a daemon already alive without our tray?
     let existing = daemon::live_url(&cfg, daemon::PROBE_FAST);
-    if let Some(url) = &existing {
-        if cfg.on_stray_daemon == StrayPolicy::Warn {
-            win::message_box(
-                &cfg.display_name,
-                &format!(
-                    "{} is already serving at {url}, but the tray icon is not running. Stop that process, then run the shortcut again.",
-                    cfg.display_name
-                ),
-                MB_ICONWARNING,
-            );
-            return;
-        }
+    if warned_about_stray_daemon(&cfg, existing.as_deref()) {
+        return;
     }
 
     let started_by_us = existing.is_none();
@@ -1172,24 +1149,66 @@ fn main() {
             open_current_ui();
         }
 
-        let mut msg: MSG = std::mem::zeroed();
-        while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-
-        UI.with(|ui| {
-            let mut slot = ui.borrow_mut();
-            if let Some(ui) = slot.as_mut() {
-                Shell_NotifyIconW(NIM_DELETE, &mut ui.nid);
-                if !ui.mutex.is_null() {
-                    ReleaseMutex(ui.mutex);
-                    CloseHandle(ui.mutex);
-                }
-            }
-        });
+        run_message_loop();
+        remove_tray_icon();
         DestroyWindow(hwnd);
     }
+}
+
+/// The loser of the single-instance race: open the running UI, or say the winner is still starting.
+fn open_running_host(cfg: &Config) {
+    match daemon::live_url(cfg, daemon::PROBE_POLL) {
+        Some(url) => browser::open_ui(cfg, &url),
+        // Nothing serving yet means the winner is still cold-starting. Opening a browser at a
+        // guessed URL would just show connection-refused, so say so instead.
+        None => win::message_box(
+            &cfg.display_name,
+            &format!(
+                "{} is already starting in the tray. Wait a moment, then open it from the tray icon.",
+                cfg.display_name
+            ),
+            MB_ICONWARNING,
+        ),
+    }
+}
+
+/// True when a daemon is serving without our tray and the policy says to warn and stop.
+fn warned_about_stray_daemon(cfg: &Config, existing: Option<&str>) -> bool {
+    let Some(url) = existing else { return false };
+    if cfg.on_stray_daemon != StrayPolicy::Warn {
+        return false;
+    }
+    win::message_box(
+        &cfg.display_name,
+        &format!(
+            "{} is already serving at {url}, but the tray icon is not running. Stop that process, then run the shortcut again.",
+            cfg.display_name
+        ),
+        MB_ICONWARNING,
+    );
+    true
+}
+
+unsafe fn run_message_loop() {
+    let mut msg: MSG = std::mem::zeroed();
+    while GetMessageW(&mut msg, null_mut(), 0, 0) > 0 {
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+}
+
+/// Removes the tray icon and releases the single-instance mutex.
+unsafe fn remove_tray_icon() {
+    UI.with(|ui| {
+        let mut slot = ui.borrow_mut();
+        if let Some(ui) = slot.as_mut() {
+            Shell_NotifyIconW(NIM_DELETE, &mut ui.nid);
+            if !ui.mutex.is_null() {
+                ReleaseMutex(ui.mutex);
+                CloseHandle(ui.mutex);
+            }
+        }
+    });
 }
 
 #[cfg(test)]
