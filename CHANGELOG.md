@@ -29,6 +29,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **AgentHydra no longer freezes for seconds at a time**
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
 - **HSwarm's Claude Code workers keep their turns when a key runs out of credit**
+- **HSwarm's decide no longer pays a fallback model when you asked for Jev alone**
 
 **Everything in 2.0.0**
 
@@ -140,6 +141,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's Claude Code workers keep their turns when a key runs out of credit.** A key that ran dry used to cost
   the task a turn even when it had done nothing, so a short task could reach the next key with too few turns left
   and stop at its limit. Now only the turns a key really ran are taken off.
+- **HSwarm's decide no longer pays a fallback model when you asked for Jev alone.** With the escalation threshold
+  at 0, a question Jev could not answer, for example because it was out of credit, still went to a paid model. It
+  now comes back unanswered with Jev's error, so your own fallback can answer it.
 
 ### Removed
 

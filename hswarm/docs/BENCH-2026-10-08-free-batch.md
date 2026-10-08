@@ -29,7 +29,9 @@ Arms, all on the same questions, run 2026-10-08 from 08:45 to 09:00 UTC:
 | batch40 | one Free message per ask with all 40 questions (Dredd's whole ask while Jev is down) |
 
 Jev could not be measured: TypeSafe has answered every call with HTTP 402 (no credit) since 2026-10-06 10:08 UTC, so
-every decide item escalates today and the escalated subset is all of them. Paired differences carry a 95% interval
+every decide item escalated that day and the escalated subset is all of them. (Later the same day, 6d3e0fef made
+`escalate_below=0` escalate nothing, Jev failures included. Dredd asks its yes/no questions at 0, so with Jev down an
+ask now escalates only its 4 choice/score questions, and batch40's case no longer happens.) Paired differences carry a 95% interval
 from a bootstrap over asks (one ask's questions share a message). Every Free message was served (batches: 174 of 174, 172 on
 the first try; one question each: 165 of 165). The paid arm cost $0.21 for 558 calls (DeepSeek V4.1 Flash on most, GPT-6.1 Sol on 7).
 
