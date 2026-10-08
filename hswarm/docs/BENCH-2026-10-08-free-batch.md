@@ -73,7 +73,9 @@ batches of 40; GPT-5.6 mini scored 82.4%, 86.8% and 82.0%.
   plan set before the run, so it is a hypothesis for a fresh run, not a result.
 - The per-item Free leg that `ask_routed` already takes for escalations is itself 4.8 points under paid on choice
   questions here (interval -9.6 to 0.0).
-- Re-run the harness when the Free accounts' models change, or once Jev has credit again (then only Jev's unsure items
-  escalate, and those are the ones to grade).
+- Re-run the harness when the Free accounts' models change, or once a typed model answers first again (Jev with
+  credit, or Cloudflare's Clef, which now stands in when every TypeSafe key is refused): then only its unsure items
+  escalate, and those are the ones to grade. The harness's `jev` arm (`--arms jev,...`) asks TypeSafe's Jev for that
+  split; it does not reach Clef.
 
 </details>

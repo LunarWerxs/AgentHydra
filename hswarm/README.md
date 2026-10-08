@@ -179,6 +179,13 @@ leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a fr
 failed, slow or unparseable reply keeps the API route. `selection.route` shows it (`via: free`), the ledger line says
 provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default 6), `route_via_free_profiles`.
 
+`hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
+one Free message was measured on Dredd's gold asks and not shipped (2026-10-08,
+[docs/BENCH-2026-10-08-free-batch.md](docs/BENCH-2026-10-08-free-batch.md)): batching cost 1-2 points against the
+same Free models one question at a time, but the Free models scored 4.8 points under the paid route on choice
+questions, so a batch that replaces paid escalations loses 6-7 points. Re-run `scripts/rsi/decide-free-batch.py`
+before routing more decisions to the Free accounts.
+
 ## One tool with CliMayte
 
 Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default
