@@ -322,6 +322,16 @@ html.motion-paused *:not([data-state])::after {
   }
 }
 
+/* A row that moves in a reordering list (TransitionGroup) glides to its place. */
+.v-move {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .v-move {
+    transition: none;
+  }
+}
+
 .tip[data-state] {
   animation: tip-in var(--dur-fast) var(--ease-out);
 }
