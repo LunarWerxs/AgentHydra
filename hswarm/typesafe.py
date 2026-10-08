@@ -42,6 +42,9 @@ MODEL = "jev-1.13.0"
 USD_PER_INPUT_TOKEN = 0.042 / 1_000_000
 RETRYABLE = {429, 500, 502, 503, 504, 529}
 KEY_DEAD = {401, 402, 403}  # a bad, unpaid or unpermitted key does not heal inside a run
+# A key in the shared disabled slot for credit gets one try this often (KeyPool.probation): TypeSafe has no balance
+# endpoint that could see a top-up, and a failed try costs one refused request, not a charge.
+JEV_RECHECK_S = 3600.0
 SIMPLE_JEV_PREFIX = "featherless-ai/"
 SIMPLE_JEV_DEMO_URL = "https://simple-jev-demo-api.featherless.ai/v1/systemone"
 SIMPLE_JEV_DEMO_INTERVAL = 0.5  # the demo's 2 requests/second
@@ -72,7 +75,12 @@ def clef_keys() -> list[str]:
 
 class Jev:
     """Async client: round-robin over the key pool, backoff on limits and overload (honouring retry-after),
-    a key that answers 401/402/403 leaves the rotation for the life of this client."""
+    a key that answers 401/402/403 leaves the rotation for the life of this client.
+
+    A client on the configured pool (no `keys=`) also shares those refusals through HSwarm's disabled slot
+    (client.KeyPool), so a key one process found out of credit is skipped by every later one (each Dredd ask is a
+    new process) and `hswarm keys` shows it. Until 2026-10-08 a key TypeSafe had refused with 402 for two days
+    still read "ok" there, and nobody knew Jev was down."""
 
     # 30 s: an answer takes 0.15-2 s, so a longer wait is a hung connection, and a timeout is retried like a 5xx.
     def __init__(self, keys: list[str] | None = None, concurrency: int = 16, timeout: float = 30.0, http: httpx.AsyncClient | None = None,
@@ -80,7 +88,8 @@ class Jev:
                  provider: str = "typesafe"):
         self.url, self.keyless, self.min_interval, self.provider = url, keyless, min_interval, provider
         self.usd_per_input_token = usd_per_input_token
-        self.keys = [] if keyless else list(keys if keys is not None else load_keys())
+        self._pool, self.disabled = None, 0
+        self.keys = [] if keyless else list(keys if keys is not None else self._live_pool_keys())
         self.sem = asyncio.Semaphore(concurrency)
         self._http = http
         self._own = http is None
@@ -101,9 +110,40 @@ class Jev:
                        usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
         return cls(concurrency=concurrency, **kw)
 
+    def _live_pool_keys(self) -> list[str]:
+        """The configured keys minus those in the disabled slot, after letting out any disabled for credit more than
+        JEV_RECHECK_S ago."""
+        from .keys import pool_for
+
+        loaded = load_keys()
+        self._pool = pool_for(self.provider) if loaded else None
+        if self._pool is None:
+            return loaded
+        self._pool.probation(JEV_RECHECK_S)
+        off = set(self._pool.disabled())
+        live = [k for k in loaded if config.fingerprint(k) not in off]
+        self.disabled = len(loaded) - len(live)
+        return live
+
+    def _shelve(self, key: str, status: int) -> None:
+        """Put a refused key in the shared slot: out of credit (402) at once, revoked (401/403) once it strikes out."""
+        if self._pool is None:
+            return
+        if status == 402:
+            self._pool.broke(key, status=402)
+        else:
+            self._pool.rest(key, 0, status=status, dead=True)
+
     @property
     def usable(self) -> bool:
         return self.keyless or bool(self.keys)
+
+    @property
+    def unusable_reason(self) -> str:
+        if self.disabled and not self.keys:
+            return (f"every {self.provider} key ({self.disabled}) is in the disabled slot, out of credit or revoked: "
+                    f"`hswarm keys --provider {self.provider}` lists them")
+        return NO_KEY.get(self.provider, f"no usable {self.provider} key")
 
     async def _pace(self) -> None:
         """Hold this request until the endpoint's next free slot. No await sits between reading and booking the
@@ -135,7 +175,7 @@ class Jev:
 
     async def ask(self, state, questions: dict, model: str = MODEL, attempts: int = 7) -> dict:
         """{"status": "ok", answers, secs, in, out, model, cost_usd} or {"status": "error", error, http}."""
-        last: dict = {"status": "error", "error": NO_KEY.get(self.provider, f"no usable {self.provider} key"), "http": None}
+        last: dict = {"status": "error", "error": self.unusable_reason, "http": None}
         body = {"state": state, "model": model, "questions": questions}
         # Serialised once so the egress receipt hashes the exact bytes that leave (egress.py).
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -159,6 +199,8 @@ class Jev:
                 data = resp.json()
                 if isinstance(data.get("result"), dict):  # Workers AI wraps the System One answer: {"result": ..., "success": ...}
                     data = data["result"]
+                if self._pool is not None:
+                    self._pool.recover(key)  # a struck key that answers is healthy again
                 usage = data.get("usage") or {}
                 tin = int(usage.get("input_tokens") or 0)
                 return {"status": "ok", "answers": data.get("answers") or {}, "secs": secs, "in": tin, "out": int(usage.get("output_tokens") or 0),
@@ -169,6 +211,7 @@ class Jev:
                     if self.keyless:
                         return last  # no key to rotate: a keyless endpoint that refuses us keeps refusing
                     self.keys = [k for k in self.keys if k != key]
+                    self._shelve(key, resp.status_code)
                     continue
                 if resp.status_code not in RETRYABLE:
                     return last  # a 422 is a malformed question: resending it unchanged fails the same way

@@ -262,7 +262,7 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
     try:
         if own:
             await jev.__aenter__()
-        jres, stats = await jev_answers(jev, items, model, batch) if jev.usable else ([{"status": "error", "error": f"no {jev.provider} key"} for _ in items], {"calls": 0, "errors": 0, "cost_usd": 0.0})
+        jres, stats = await jev_answers(jev, items, model, batch) if jev.usable else ([{"status": "error", "error": jev.unusable_reason} for _ in items], {"calls": 0, "errors": 0, "cost_usd": 0.0})
     finally:
         if own:
             await jev.__aexit__(None, None, None)

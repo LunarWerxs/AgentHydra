@@ -186,6 +186,36 @@ def test_jev_client_rotates_out_a_dead_key_and_backs_off_on_a_limit(monkeypatch)
     assert res["status"] == "ok" and res["in"] == 50 and keys == ["good"] and "dead" in seen
 
 
+def test_a_key_out_of_credit_is_shelved_for_every_later_client_and_retried_after_the_window(monkeypatch):
+    # 2026-10-08: TypeSafe refused a key with 402 for two days while `hswarm keys` still read it "ok", and every Dredd
+    # ask (a new process) asked it again first.
+    from hswarm import config, keys
+
+    monkeypatch.setenv("TYPESAFE_API_KEYS", "good-key-0000,dead-key-0000")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        key = request.headers["authorization"].split()[-1]
+        seen.append(key)
+        if key == "dead-key-0000":
+            return httpx.Response(402, json={"detail": "no credit"})
+        return httpx.Response(200, json={"model": "jev-1.13.0", "answers": {"q": {"type": "noul", "noul": 0.8}}, "usage": {"input_tokens": 5}})
+
+    async def ask_once():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            jev = typesafe.Jev(http=http)
+            return jev, await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}})
+
+    jev, res = asyncio.run(ask_once())
+    assert res["status"] == "ok" and seen == ["dead-key-0000", "good-key-0000"]
+    assert config.fingerprint("dead-key-0000") in keys.pool_for("typesafe").disabled()
+    seen.clear()
+    jev, res = asyncio.run(ask_once())
+    assert (jev.keys, jev.disabled, seen) == (["good-key-0000"], 1, ["good-key-0000"])
+    monkeypatch.setattr(typesafe, "JEV_RECHECK_S", -1.0)  # the window has passed: the shelved key gets one try
+    assert typesafe.Jev().keys == ["good-key-0000", "dead-key-0000"]
+
+
 def test_jev_client_fails_fast_on_a_malformed_question():
     def handler(request):
         return httpx.Response(422, json={"detail": "criteria required"})
