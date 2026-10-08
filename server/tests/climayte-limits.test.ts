@@ -124,7 +124,12 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
     const wholeId = whole.workers[0]?.id as string
     expect(whole.workers[0]?.size).toMatchObject({ window: 85, roomOn: '#41' })
     expect(whole.workers[0]?.size?.basis).toBe('debug on claude-sonnet-5-5 low, 1 finished')
-    expect(Math.round(whole.workers[0]?.size?.expected ?? 0)).toBe(split?.expected as number)
+    // Sized on the same estimate as the split. The split names it in whole percent and the size
+    // to a tenth, so the two agree to within half a percent: 120.46 is 120 there and 120.5 here,
+    // which rounding again made 121 (every Windows run, 2026-10-08).
+    expect(
+      Math.abs((whole.workers[0]?.size?.expected ?? 0) - (split?.expected as number)),
+    ).toBeLessThanOrEqual(0.5)
     expect(['running', 'done']).toContain((await settle(wholeId))?.status)
 
     // A Max 20x window holds twenty Pro windows: the same task fits it whole.

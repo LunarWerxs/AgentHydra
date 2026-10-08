@@ -1532,16 +1532,25 @@ describe('integration: paid extra usage is never spent', () => {
 
 describe('the totals read tokens and $ from the kit', () => {
   test("CliMayte's calls in the kit are the counter, whatever the attempts recorded", () => {
-    const store = new KitStore(':memory:')
-    const ts = Date.now() - 60_000
-    store.upsertEvents([
-      { id: 'k1', ts, source: 'climayte', model: 'm', input: 100, output: 50, list_usd: 1.5 },
-      { id: 'k2', ts, source: 'climayte', model: 'm', input: 10, output: 5, list_usd: 0.25 },
-      { id: 'k3', ts, source: 'cli', model: 'm', input: 9_999, output: 1, list_usd: 99 },
-    ])
-    const totals = climayteTotals(0, { store })
-    expect(totals.tokens).toEqual({ input: 110, output: 55, cacheRead: 0, cacheWrite: 0 })
-    expect(totals.costUsd).toBeCloseTo(1.75, 6)
+    // Only this kit: CI's `bun test` runs every file in one process, and the tasks other files ran
+    // stay in `workers`, where an attempt the kit never saw counts its own recorded tokens (the
+    // sizing tests' 2.26M output tokens did, on every serial run).
+    const others = new Map(workers)
+    workers.clear()
+    try {
+      const store = new KitStore(':memory:')
+      const ts = Date.now() - 60_000
+      store.upsertEvents([
+        { id: 'k1', ts, source: 'climayte', model: 'm', input: 100, output: 50, list_usd: 1.5 },
+        { id: 'k2', ts, source: 'climayte', model: 'm', input: 10, output: 5, list_usd: 0.25 },
+        { id: 'k3', ts, source: 'cli', model: 'm', input: 9_999, output: 1, list_usd: 99 },
+      ])
+      const totals = climayteTotals(0, { store })
+      expect(totals.tokens).toEqual({ input: 110, output: 55, cacheRead: 0, cacheWrite: 0 })
+      expect(totals.costUsd).toBeCloseTo(1.75, 6)
+    } finally {
+      for (const [id, w] of others) workers.set(id, w)
+    }
   })
 })
 
