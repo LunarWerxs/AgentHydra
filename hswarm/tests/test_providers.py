@@ -60,7 +60,7 @@ def test_without_the_overlay_the_builtins_stand():
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",
         "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash",
         "glm-4.5-air", "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b", "jev-latest",
-        "magistral-medium", "ministral-8b", "mistral-medium-3.5",
+        "lmstudio-qwen3-30b-a3b", "magistral-medium", "ministral-8b", "mistral-medium-3.5",
     ]
     with pytest.raises(ValueError, match="PROVIDERS.md"):
         config.resolve_model("kimi-test")

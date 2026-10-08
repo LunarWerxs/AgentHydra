@@ -1,0 +1,17 @@
+# LM Studio on this PC: an OpenAI-compatible server at 127.0.0.1:1234, started and stopped by MonkeyWerx's
+# packages/ugc/llmserver.py. Keyless and free: no account is charged. It has no benchmark_slug, so AUTO never picks
+# it; a call has to name the model.
+
+base_url = "http://127.0.0.1:1234/v1"
+about = "A model on this PC through LM Studio. Costs nothing and sends nothing off the machine."
+keyless = true
+key_billing = "free"
+free_calls = true
+options = []
+
+# The LM Studio model key, as `lms ls` prints it once downloaded.
+[models.lmstudio-qwen3-30b-a3b]
+api_id = "qwen3-30b-a3b-2507"
+ctx = 32768
+max_out = 4096
+price = { hit = 0.0, miss = 0.0, out = 0.0 }

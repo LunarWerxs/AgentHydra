@@ -923,7 +923,11 @@ def all_keys(provider: str = DEFAULT_PROVIDER) -> list[str]:
 def load_api_keys(provider: str = DEFAULT_PROVIDER) -> list[str]:
     """all_keys, or empty when the provider is switched off in settings: no key is what makes every route treat it
     as unavailable."""
-    return all_keys(provider) if provider_enabled(provider) else []
+    if not provider_enabled(provider):
+        return []
+    if PROVIDERS.get(provider, {}).get("keyless"):
+        return ["keyless"]  # a local server takes no key; the pool needs one to hand out
+    return all_keys(provider)
 
 
 def no_key_message(provider: str = DEFAULT_PROVIDER) -> str:
