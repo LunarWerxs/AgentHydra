@@ -188,7 +188,7 @@ export function instanceScopeMatches(tf: TranscriptFile, scope: string): boolean
   return want.toLowerCase() === inst.name.toLowerCase()
 }
 
-let cache: { at: number; files: TranscriptFile[] } | null = null
+let cache: { at: number; files: TranscriptFile[]; seeded?: true } | null = null
 /**
  * How long a snapshot is trusted before a background sweep is started.
  *
@@ -455,7 +455,7 @@ export function listTranscriptFiles(force = false): TranscriptFile[] {
     // what the setTimeout here used to do — held the event loop for the entire sweep, so the
     // "background" refresh was really a full stop for every request in flight. Measured: an
     // /api/health that reads nothing answered in 6.6 s while one of these ran.
-    if (now - cache.at >= TTL_MS) void startIndexBuild()
+    if (cache.seeded || now - cache.at >= TTL_MS) void startIndexBuild()
     return cache.files
   }
   return coldIndexFallback()
@@ -1266,8 +1266,10 @@ async function seedIndexFromSnapshot(): Promise<void> {
       files?: unknown
     }
     if (cache || saved?.v !== INDEX_SNAPSHOT_VERSION || !Array.isArray(saved.files)) return
-    // Stale on arrival: whoever asks first gets these rows and starts the real sweep.
-    cache = { at: performance.now() - TTL_MS, files: saved.files as TranscriptFile[] }
+    // Stale on arrival: whoever asks first gets these rows and starts the real sweep. Marked
+    // `seeded` rather than back-dated, so the stamp stays the moment it was stored (rule B of
+    // scripts/checks/transcript-index-born-stale.mjs); the sweep's own snapshot clears it.
+    cache = { at: performance.now(), files: saved.files as TranscriptFile[], seeded: true }
   } catch {
     // none yet, or unreadable: the first sweep builds the index as before
   }
@@ -1544,7 +1546,7 @@ async function buildTranscriptIndexAsync(): Promise<TranscriptFile[]> {
  */
 export async function ensureTranscriptIndex(force = false): Promise<TranscriptFile[]> {
   const now = performance.now()
-  if (!force && cache && now - cache.at < TTL_MS) return cache.files
+  if (!force && cache && !cache.seeded && now - cache.at < TTL_MS) return cache.files
   const build = startIndexBuild()
   if (!force && cache) return cache.files
   return build
