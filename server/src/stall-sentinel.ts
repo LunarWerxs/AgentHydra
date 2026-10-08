@@ -46,6 +46,12 @@ const PROFILE_FROM_MS = 1_000
 /** Samples are drained into counts this often and kept for WINDOW_MS. */
 const PROFILE_BUCKET_MS = 2_000
 const PROFILE_TOP = 5
+/**
+ * One beat this late is one block, named on its own line with its samples. A lone 2-3 s freeze never
+ * fills SATURATED_MS, so after the 2026-10-07 fixes the stalls left were all "in flight: none" and no
+ * profile: nine in 47 minutes that said nothing about what held the loop.
+ */
+const LONG_BLOCK_MS = 2_000
 
 /** What the tray does to a daemon that stops answering, stated where a reader of the log needs it. */
 const WATCHDOG_NOTE =
@@ -225,6 +231,7 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   const window: Late[] = []
   let lastBeat = Date.now()
   let lastSaturatedLog = 0
+  let lastLongBlockLog = 0
   // The sampler (PROFILE_FROM_MS): off until the loop is first late, then drained into counts every
   // PROFILE_BUCKET_MS, the last WINDOW_MS of them kept for the next SATURATED line.
   const sampler = jsc as unknown as Sampler
@@ -254,6 +261,18 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
         } catch {
           samplerMissing = true // not this runtime: the blame stays per request
         }
+      }
+      if (sampling && lateMs >= LONG_BLOCK_MS && now - lastLongBlockLog >= SATURATED_QUIET_MS) {
+        // The samples since the last drain are this block's: drained now, they also stay in the
+        // window for a SATURATED line.
+        lastLongBlockLog = now
+        lastDrain = now
+        const counts = drain()
+        buckets.push({ at: now, counts })
+        const profile = profileText(counts)
+        console.error(
+          `[agenthydra] STALL one block of ${(lateMs / 1000).toFixed(1)}s pid=${process.pid}; it followed: ${blameText([{ lateMs, blame }])}${profile ? ` | profile: ${profile}` : ''}`,
+        )
       }
       if (sampling && now - lastDrain >= PROFILE_BUCKET_MS) {
         lastDrain = now
