@@ -228,28 +228,7 @@ export async function climayteAttemptRuns(
   const live = new Set(paths)
   for (const p of paths) {
     try {
-      const st = await stat(p)
-      let rec = climayteFiles.get(p)
-      if (!rec || rec.mtimeMs !== st.mtimeMs || rec.size !== st.size) {
-        const parsed = JSON.parse(await readFile(p, 'utf8'))
-        const runs: { id: string; run: AttemptRun }[] = []
-        for (const w of Array.isArray(parsed?.workers) ? parsed.workers : [parsed])
-          for (const a of Array.isArray(w?.attempts) ? w.attempts : [])
-            if (typeof a?.sessionId === 'string' && a.sessionId)
-              runs.push({
-                id: a.sessionId,
-                run: {
-                  startedAt: typeof a.startedAt === 'number' ? a.startedAt : 0,
-                  configDir:
-                    typeof a.account?.configDir === 'string' && a.account.configDir
-                      ? a.account.configDir
-                      : null,
-                },
-              })
-        rec = { mtimeMs: st.mtimeMs, size: st.size, runs }
-        climayteFiles.set(p, rec)
-      }
-      for (const { id, run } of rec.runs) {
+      for (const { id, run } of await fileAttemptRuns(p)) {
         const list = out.get(id) ?? []
         list.push(run)
         out.set(id, list)
@@ -261,6 +240,36 @@ export async function climayteAttemptRuns(
   for (const p of climayteFiles.keys()) if (!live.has(p)) climayteFiles.delete(p)
   for (const list of out.values()) list.sort((x, y) => x.startedAt - y.startedAt)
   return out
+}
+
+/** One corch file's attempts, parsed again only when its size or mtime moved. */
+async function fileAttemptRuns(p: string): Promise<{ id: string; run: AttemptRun }[]> {
+  const st = await stat(p)
+  let rec = climayteFiles.get(p)
+  if (!rec || rec.mtimeMs !== st.mtimeMs || rec.size !== st.size) {
+    rec = { mtimeMs: st.mtimeMs, size: st.size, runs: attemptRunsIn(await readFile(p, 'utf8')) }
+    climayteFiles.set(p, rec)
+  }
+  return rec.runs
+}
+
+/** workers.json lists `workers`; a done/*.json file is one worker. A worker's attempts are under `attempts`. */
+function attemptRunsIn(text: string): { id: string; run: AttemptRun }[] {
+  const parsed = JSON.parse(text)
+  const runs: { id: string; run: AttemptRun }[] = []
+  for (const w of Array.isArray(parsed?.workers) ? parsed.workers : [parsed])
+    for (const a of Array.isArray(w?.attempts) ? w.attempts : [])
+      if (typeof a?.sessionId === 'string' && a.sessionId)
+        runs.push({ id: a.sessionId, run: attemptRun(a) })
+  return runs
+}
+
+function attemptRun(a: { startedAt?: unknown; account?: { configDir?: unknown } }): AttemptRun {
+  return {
+    startedAt: typeof a.startedAt === 'number' ? a.startedAt : 0,
+    configDir:
+      typeof a.account?.configDir === 'string' && a.account.configDir ? a.account.configDir : null,
+  }
 }
 
 /** Session ids of every CliMayte attempt. */
@@ -413,33 +422,44 @@ async function walkRoot(
   for (let level = [root]; level.length > 0; ) {
     const next: string[] = []
     await pool(level, async (dir) => {
-      const st = await stat(dir).catch(() => null)
-      if (!st) return
-      const mtimeMs = Math.floor(st.mtimeMs)
-      let node = old?.get(dir)
-      if (!node || relist || node.mtimeMs !== mtimeMs) {
-        let entries: import('node:fs').Dirent[]
-        try {
-          entries = await readdir(dir, { withFileTypes: true })
-        } catch {
-          return
-        }
-        node = { mtimeMs, dirs: [], files: [] }
-        for (const e of entries) {
-          const p = join(dir, e.name)
-          if (e.isDirectory()) node.dirs.push(p)
-          else if (e.name.endsWith('.jsonl')) {
-            const c = classify(root, p)
-            if (c) node.files.push({ path: p, ...c })
-          }
-        }
-      }
+      const node = await dirNode(root, dir, old, relist)
+      if (!node) return
       tree.set(dir, node)
       for (const d of node.dirs) next.push(d)
     })
     level = next
   }
   return tree
+}
+
+/** One folder's node: the previous listing while its mtime holds (and no `relist`), else a new one; null when it is gone. */
+async function dirNode(
+  root: string,
+  dir: string,
+  old: Map<string, DirNode> | undefined,
+  relist: boolean,
+): Promise<DirNode | null> {
+  const st = await stat(dir).catch(() => null)
+  if (!st) return null
+  const mtimeMs = Math.floor(st.mtimeMs)
+  const node = old?.get(dir)
+  if (node && !relist && node.mtimeMs === mtimeMs) return node
+  let entries: import('node:fs').Dirent[]
+  try {
+    entries = await readdir(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  const fresh: DirNode = { mtimeMs, dirs: [], files: [] }
+  for (const e of entries) {
+    const p = join(dir, e.name)
+    if (e.isDirectory()) fresh.dirs.push(p)
+    else if (e.name.endsWith('.jsonl')) {
+      const c = classify(root, p)
+      if (c) fresh.files.push({ path: p, ...c })
+    }
+  }
+  return fresh
 }
 
 /**
@@ -668,103 +688,35 @@ export async function ingestClaude(
   const pc = opts.pc ?? null
   const attempts = opts.attempts ?? new Map<string, readonly AttemptRun[]>()
   const climayte = opts.climayte ?? new Set<string>(attempts.keys())
-  const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p))
   const rootDirs = new Set(roots.map((r) => norm(r.dir)))
   const throttle = makeThrottle(opts.maxBytesPerSec ?? DEFAULT_MAX_BYTES_PER_SEC)
   const priceVer = pricesAsOf()
   const rawCutoff = hourStart(now - RAW_RETENTION_DAYS * DAY_MS)
   await upgradeClaudeStore(store, roots, now)
   const mem = memoryOf(store)
-  const accountIds = new Map<string, string>()
-  const accountId = (uuid: string | null): string | null => {
-    if (!uuid) return null
-    const known = accountIds.get(uuid)
-    if (known) return known
-    const id = hswarmAccountId(uuid)
-    accountIds.set(uuid, id)
-    return id
-  }
+  const accountId = accountIdLookup()
 
   // 1. Which files exist, and which have something new.
   const cursors = mem.cursors
-  const stats = new Map<string, { size: number; mtimeMs: number }>()
-  const todo: Candidate[] = []
-  let seen = 0
-  for (const root of roots) {
-    await loadCursors(store, mem, root.dir)
-    // The first pass over a root, and every full pass, lists every folder again.
-    const tree = await walkRoot(root.dir, mem.trees.get(root.dir), fullPass)
-    mem.trees.set(root.dir, tree)
-    const owners = new Map<string, ClaudeFileOwner | null>()
-    for (const node of tree.values()) {
-      for (const f of node.files) {
-        if (++seen % 2000 === 0) await yieldLoop()
-        if (!owners.has(f.session)) owners.set(f.session, root.owner(f.session))
-        const owner = owners.get(f.session)
-        if (!owner) continue
-        const cur = cursors.get(f.path)
-        if (cur && cur.version === CLAUDE_INGEST_VERSION && cur.mtime < now - QUIET_MS && !fullPass)
-          sum.unchanged++
-        else todo.push({ ...f, owner, rootDir: root.dir })
-      }
-    }
-  }
-  const runDir = (run: AttemptRun | undefined) =>
-    run?.configDir ? norm(join(run.configDir, 'projects')) : null
-  const ranFirstIn = (c: Candidate) => runDir(attempts.get(c.session)?.[0]) === norm(c.rootDir)
-  let next = 0
-  await Promise.all(
-    Array.from({ length: STAT_WORKERS }, async () => {
-      for (; next < todo.length; ) {
-        const c = todo[next++] as Candidate
-        const st = await stat(c.path).catch(() => null)
-        if (st) stats.set(c.path, { size: st.size, mtimeMs: Math.floor(st.mtimeMs) })
-      }
-    }),
-  )
-  const work = todo
-    .filter((c) => {
-      const st = stats.get(c.path)
-      if (!st || st.mtimeMs < (opts.minMtimeMs ?? 0)) return false
-      const cur = cursors.get(c.path)
-      const same = cur && cur.version === CLAUDE_INGEST_VERSION && cur.size === st.size
-      if (same) sum.unchanged++
-      return !same
-    })
-    .sort(
-      (a, b) =>
-        (stats.get(a.path)?.mtimeMs ?? 0) - (stats.get(b.path)?.mtimeMs ?? 0) ||
-        // equal mtimes (a copy keeps the original's): the dir the session first ran in goes first, then by path
-        Number(ranFirstIn(b)) - Number(ranFirstIn(a)) ||
-        (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
-    )
+  const todo = await candidates(store, mem, roots, { now, fullPass, sum })
+  const stats = await statAll(todo)
+  const work = changedFiles(todo, stats, cursors, {
+    minMtimeMs: opts.minMtimeMs ?? 0,
+    attempts,
+    sum,
+  })
 
   // 2. Read them, oldest first.
   for (const c of work) {
     const st = stats.get(c.path) as { size: number; mtimeMs: number }
-    const cur = cursors.get(c.path)
-    const known = cur && cur.version === CLAUDE_INGEST_VERSION ? cur : null
-    let start = known ? known.offset : 0
-    // Shrunk (or the offset lies past the end): the file was rewritten, read it whole.
-    const reset = known !== null && (st.size < known.size || start > st.size)
-    if (reset) start = 0
+    const start = startOffset(cursors.get(c.path), st)
     const ctx = {
       session: c.session,
       agent: c.agent,
       agentId: c.agentId,
       owner: c.owner,
       source: climayte.has(c.session) ? 'climayte' : c.owner.source,
-      ran: attempts.get(c.session)
-        ? (ts: number) => {
-            // the attempt that was running at `ts` is the latest one started by then
-            let run: AttemptRun | undefined
-            for (const r of attempts.get(c.session) ?? []) if (r.startedAt <= ts) run = r
-            const dir = runDir(run)
-            if (!dir) return 'unknown' as const
-            if (dir === norm(c.rootDir)) return 'self' as const
-            return rootDirs.has(dir) ? ('other' as const) : ('unknown' as const)
-          }
-        : undefined,
+      ran: ranIn(attempts.get(c.session), c.rootDir, rootDirs),
       pc,
       priceVer,
       accountId,
@@ -785,6 +737,130 @@ export async function ingestClaude(
   return sum
 }
 
+const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p))
+/** The `projects` folder an attempt ran in, or null when it is not recorded. */
+const runDir = (run: AttemptRun | undefined) =>
+  run?.configDir ? norm(join(run.configDir, 'projects')) : null
+
+/** Account uuid to HSwarm account id, each uuid worked out once per sweep. */
+function accountIdLookup(): (uuid: string | null) => string | null {
+  const accountIds = new Map<string, string>()
+  return (uuid) => {
+    if (!uuid) return null
+    const known = accountIds.get(uuid)
+    if (known) return known
+    const id = hswarmAccountId(uuid)
+    accountIds.set(uuid, id)
+    return id
+  }
+}
+
+/** Every transcript under `roots` with an owner, less the ones read and quiet for an hour (unless `fullPass`). */
+async function candidates(
+  store: KitStore,
+  mem: SweepMemory,
+  roots: readonly ClaudeRoot[],
+  o: { now: number; fullPass: boolean; sum: ClaudeIngestSummary },
+): Promise<Candidate[]> {
+  const todo: Candidate[] = []
+  let seen = 0
+  for (const root of roots) {
+    await loadCursors(store, mem, root.dir)
+    // The first pass over a root, and every full pass, lists every folder again.
+    const tree = await walkRoot(root.dir, mem.trees.get(root.dir), o.fullPass)
+    mem.trees.set(root.dir, tree)
+    const owners = new Map<string, ClaudeFileOwner | null>()
+    for (const f of [...tree.values()].flatMap((node) => node.files)) {
+      if (++seen % 2000 === 0) await yieldLoop()
+      if (!owners.has(f.session)) owners.set(f.session, root.owner(f.session))
+      const owner = owners.get(f.session)
+      if (!owner) continue
+      const cur = mem.cursors.get(f.path)
+      if (
+        cur &&
+        cur.version === CLAUDE_INGEST_VERSION &&
+        cur.mtime < o.now - QUIET_MS &&
+        !o.fullPass
+      )
+        o.sum.unchanged++
+      else todo.push({ ...f, owner, rootDir: root.dir })
+    }
+  }
+  return todo
+}
+
+async function statAll(todo: Candidate[]): Promise<Map<string, { size: number; mtimeMs: number }>> {
+  const stats = new Map<string, { size: number; mtimeMs: number }>()
+  let next = 0
+  await Promise.all(
+    Array.from({ length: STAT_WORKERS }, async () => {
+      for (; next < todo.length; ) {
+        const c = todo[next++] as Candidate
+        const st = await stat(c.path).catch(() => null)
+        if (st) stats.set(c.path, { size: st.size, mtimeMs: Math.floor(st.mtimeMs) })
+      }
+    }),
+  )
+  return stats
+}
+
+/** The candidates whose size moved since their cursor, oldest first. */
+function changedFiles(
+  todo: Candidate[],
+  stats: Map<string, { size: number; mtimeMs: number }>,
+  cursors: Map<string, IngestCursor>,
+  o: {
+    minMtimeMs: number
+    attempts: ReadonlyMap<string, readonly AttemptRun[]>
+    sum: ClaudeIngestSummary
+  },
+): Candidate[] {
+  const ranFirstIn = (c: Candidate) => runDir(o.attempts.get(c.session)?.[0]) === norm(c.rootDir)
+  return todo
+    .filter((c) => {
+      const st = stats.get(c.path)
+      if (!st || st.mtimeMs < o.minMtimeMs) return false
+      const cur = cursors.get(c.path)
+      const same = cur && cur.version === CLAUDE_INGEST_VERSION && cur.size === st.size
+      if (same) o.sum.unchanged++
+      return !same
+    })
+    .sort(
+      (a, b) =>
+        (stats.get(a.path)?.mtimeMs ?? 0) - (stats.get(b.path)?.mtimeMs ?? 0) ||
+        // equal mtimes (a copy keeps the original's): the dir the session first ran in goes first, then by path
+        Number(ranFirstIn(b)) - Number(ranFirstIn(a)) ||
+        (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
+    )
+}
+
+/** Where a file's read starts: its cursor's offset, or 0 for a file new to this version or rewritten. */
+function startOffset(cur: IngestCursor | undefined, st: { size: number }): number {
+  const known = cur && cur.version === CLAUDE_INGEST_VERSION ? cur : null
+  const start = known ? known.offset : 0
+  // Shrunk (or the offset lies past the end): the file was rewritten, read it whole.
+  const reset = known !== null && (st.size < known.size || start > st.size)
+  return reset ? 0 : start
+}
+
+/** Who ran a CliMayte session's call at a time, by its attempts; undefined for a session with none. */
+function ranIn(
+  runs: readonly AttemptRun[] | undefined,
+  rootDir: string,
+  rootDirs: ReadonlySet<string>,
+): ((ts: number) => 'self' | 'other' | 'unknown') | undefined {
+  if (!runs) return undefined
+  return (ts) => {
+    // the attempt that was running at `ts` is the latest one started by then
+    let run: AttemptRun | undefined
+    for (const r of runs) if (r.startedAt <= ts) run = r
+    const dir = runDir(run)
+    if (!dir) return 'unknown'
+    if (dir === norm(rootDir)) return 'self'
+    return rootDirs.has(dir) ? 'other' : 'unknown'
+  }
+}
+
 async function readFileInto(
   store: KitStore,
   path: string,
@@ -800,8 +876,7 @@ async function readFileInto(
   try {
     let pos = start // next byte to read
     let carry: Buffer = Buffer.alloc(0) // bytes after the last newline read so far
-    let raw = new Map<string, UsageEventInput>()
-    let old = new Map<string, UsageEventInput>()
+    const batch: Batch = { raw: new Map(), old: new Map() }
     let sinceFlush = 0
     // A session moved to another account's config dir (a CliMayte handoff) leaves its messages in both
     // dirs under the same ids, and only the first dir's account ran them. The first to claim an id keeps
@@ -820,10 +895,10 @@ async function readFileInto(
     // run cut short re-reads the file from the old cursor, and both writes tolerate seeing a call twice
     // (a raw row is replaced by id, an old call is dropped by its claim).
     const commit = async (offset: number, size: number) => {
-      const rows = [...raw.values()]
-      const olds = [...old.values()]
-      raw = new Map()
-      old = new Map()
+      const rows = [...batch.raw.values()]
+      const olds = [...batch.old.values()]
+      batch.raw = new Map()
+      batch.old = new Map()
       sinceFlush = 0
       for (let i = 0; i < rows.length; i += WRITE_SLICE) {
         out.events += store.upsertEvents(unclaimed(rows.slice(i, i + WRITE_SLICE)))
@@ -855,21 +930,7 @@ async function readFileInto(
       if (nl < 0) {
         carry = Buffer.from(data) // one long line still arriving
       } else {
-        let t0 = performance.now()
-        let n = 0
-        for (const line of data.toString('utf8', 0, nl).split('\n')) {
-          // 2 MB of lines is tens of ms of JSON.parse: hand the loop back every ~15 ms of it.
-          if (++n % 64 === 0 && performance.now() - t0 > 15) {
-            await new Promise<void>((r) => setImmediate(r))
-            t0 = performance.now()
-          }
-          const ev = claudeLineEvent(line, st.mtimeMs, ctx)
-          if (!ev) continue
-          const who = ctx.ran?.(ev.ts)
-          if (who === 'other') continue // a copy of the session in another dir ran this call
-          if (who === 'self') ran.add(ev.id)
-          ;(ev.ts >= rawCutoff ? raw : old).set(ev.id, ev)
-        }
+        await readLines(data.toString('utf8', 0, nl), st.mtimeMs, ctx, rawCutoff, batch, ran)
         carry = Buffer.from(data.subarray(nl + 1))
       }
       if (sinceFlush >= FLUSH_BYTES) await commit(pos - carry.length, pos)
@@ -880,4 +941,36 @@ async function readFileInto(
     await fh.close()
   }
   return out
+}
+
+/** Calls read since the last commit, by id: raw-window calls and older ones. */
+interface Batch {
+  raw: Map<string, UsageEventInput>
+  old: Map<string, UsageEventInput>
+}
+
+/** Complete lines into the batch; `ran` collects the calls this dir's own attempt ran. */
+async function readLines(
+  text: string,
+  fallbackTs: number,
+  ctx: Parameters<typeof claudeLineEvent>[2],
+  rawCutoff: number,
+  batch: Batch,
+  ran: Set<string>,
+): Promise<void> {
+  let t0 = performance.now()
+  let n = 0
+  for (const line of text.split('\n')) {
+    // 2 MB of lines is tens of ms of JSON.parse: hand the loop back every ~15 ms of it.
+    if (++n % 64 === 0 && performance.now() - t0 > 15) {
+      await new Promise<void>((r) => setImmediate(r))
+      t0 = performance.now()
+    }
+    const ev = claudeLineEvent(line, fallbackTs, ctx)
+    if (!ev) continue
+    const who = ctx.ran?.(ev.ts)
+    if (who === 'other') continue // a copy of the session in another dir ran this call
+    if (who === 'self') ran.add(ev.id)
+    ;(ev.ts >= rawCutoff ? batch.raw : batch.old).set(ev.id, ev)
+  }
 }

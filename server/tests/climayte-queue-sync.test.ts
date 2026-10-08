@@ -123,7 +123,7 @@ describe('the queue snapshot', () => {
 
   test('carries the sender’s build through the seal, and an old snapshot without one still opens', () => {
     const pc = randomUUID()
-    const build = { version: '1.2.3', commit: 'abc1234', date: '2026-10-02T18:40:00.000Z' }
+    const build = { version: '1.2.3', commit: 'abc1234', date: '2020-10-02T18:40:00.000Z' }
     expect(openQueue(key, pc, sealQueue(key, { ...snapshot(pc, []), build }))?.build).toEqual(build)
     expect(openQueue(key, pc, sealQueue(key, snapshot(pc, [])))?.build).toBeUndefined()
   })
@@ -145,7 +145,7 @@ describe('the queue snapshot', () => {
       state: 'running',
       tasks: 3,
       counts: { ok: 1, pending: 2, running: 0 },
-      created: '2026-10-05T10:00:00+00:00',
+      created: '2020-10-05T10:00:00+00:00',
       finished: null,
       cost_usd: 0.5,
       dir: 'C:/secret/jobs/j-1',
@@ -167,7 +167,7 @@ describe('the queue snapshot', () => {
           job_id: 'j-2',
           state: 'done',
           counts: { ok: 3 },
-          finished: '2026-10-05T10:05:00+00:00',
+          finished: '2020-10-05T10:05:00+00:00',
           caller_ids: undefined,
         }),
       ])
@@ -179,7 +179,7 @@ describe('the queue snapshot', () => {
           state: 'running',
           tasks: 3,
           counts: { ok: 1 },
-          created: '2026-10-05T10:00:00+00:00',
+          created: '2020-10-05T10:00:00+00:00',
           finished: null,
           callerSessionId: '11111111-2222-3333-4444-555555555555',
           callerChatId: 'c-1',
@@ -191,8 +191,8 @@ describe('the queue snapshot', () => {
           state: 'done',
           tasks: 3,
           counts: { ok: 3 },
-          created: '2026-10-05T10:00:00+00:00',
-          finished: '2026-10-05T10:05:00+00:00',
+          created: '2020-10-05T10:00:00+00:00',
+          finished: '2020-10-05T10:05:00+00:00',
           callerSessionId: null,
           callerChatId: null,
           folder: null,
@@ -208,7 +208,7 @@ describe('the queue snapshot', () => {
           row({
             job_id: `j-f${i}`,
             state: 'done',
-            finished: `2026-10-05T11:${String(i).padStart(2, '0')}:00+00:00`,
+            finished: `2020-10-05T11:${String(i).padStart(2, '0')}:00+00:00`,
           }),
         ),
       ])
@@ -244,8 +244,8 @@ describe('the queue snapshot', () => {
       state: 'done',
       tasks: 2,
       counts: { ok: 2 },
-      created: '2026-10-05T10:00:00+00:00',
-      finished: '2026-10-05T10:05:00+00:00',
+      created: '2020-10-05T10:00:00+00:00',
+      finished: '2020-10-05T10:05:00+00:00',
       callerSessionId: null,
       callerChatId: null,
     }
@@ -355,7 +355,7 @@ describe('the queue snapshot', () => {
 })
 
 describe('whether the other PC runs an older AgentHydra', () => {
-  const mine = { version: '1.0.0', commit: 'bbbbbbb', date: '2026-10-03T12:00:00.000Z' }
+  const mine = { version: '1.0.0', commit: 'bbbbbbb', date: '2020-10-03T12:00:00.000Z' }
   const at = (iso: string) => ({ version: '1.0.0', commit: 'abc1234', date: iso })
 
   test('no build at all reads as behind', () => {
@@ -365,17 +365,17 @@ describe('whether the other PC runs an older AgentHydra', () => {
   })
 
   test('an older commit reads behind, naming its commit and date', () => {
-    const s = buildStatus('CornuCopia', at('2026-10-02T18:40:00.000Z'), mine)
+    const s = buildStatus('CornuCopia', at('2020-10-02T18:40:00.000Z'), mine)
     expect(s.behind).toBe(true)
     expect(s.behindNote).toContain('abc1234, Oct 2, 18:40 UTC')
     expect(s.behindNote).toContain('Update it there in Settings')
   })
 
   test('a newer commit says this PC is behind, and the same hour says nothing', () => {
-    const newer = buildStatus('CornuCopia', at('2026-10-04T00:00:00.000Z'), mine)
+    const newer = buildStatus('CornuCopia', at('2020-10-04T00:00:00.000Z'), mine)
     expect(newer.behind).toBe(false)
     expect(newer.behindNote).toContain('This PC is behind CornuCopia')
-    expect(buildStatus('CornuCopia', at('2026-10-03T11:30:00.000Z'), mine)).toMatchObject({
+    expect(buildStatus('CornuCopia', at('2020-10-03T11:30:00.000Z'), mine)).toMatchObject({
       behind: false,
       behindNote: null,
     })
@@ -517,7 +517,7 @@ describe('a pass through the store', () => {
       state: 'running',
       tasks: 4,
       counts: { ok: 1 },
-      created: '2026-10-05T10:00:00+00:00',
+      created: '2020-10-05T10:00:00+00:00',
       finished: null,
       callerSessionId: '11111111-2222-3333-4444-555555555555',
       callerChatId: null,

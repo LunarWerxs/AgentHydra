@@ -211,125 +211,144 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
   if (account && it.s.chat_id) it.s.error += ` Read it with free_read before sending again.`
 }
 
+const pending = (b: Batch) =>
+  b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')
+
+function failQueued(b: Batch, error: string) {
+  for (const it of b.items)
+    if (it.s.state === 'queued') Object.assign(it.s, { state: 'failed', error })
+}
+
+/** One tick's view of Desk 2: its accounts and the ones busy with a running operation. */
+interface Tick {
+  instances: FreeInstance[]
+  byId: Map<string, FreeInstance>
+  busy: Set<string>
+}
+
+function readTick(b: Batch, status: { instances: FreeInstance[]; jobs: FreeJob[] }): Tick {
+  const byId = new Map(status.instances.map((i) => [i.id, i]))
+  const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
+  for (const it of b.items) if (it.s.state === 'running' && it.instanceId) busy.add(it.instanceId)
+  return { instances: status.instances, byId, busy }
+}
+
+async function pollRunning(it: Item, tick: Tick) {
+  try {
+    const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
+    if (job.state === 'done') finish(it, job.result, tick.byId.get(it.instanceId ?? ''))
+  } catch (e) {
+    if ((e as DeskError).status === 404)
+      finish(
+        it,
+        {
+          ok: false,
+          error: {
+            code: 'operation_lost',
+            message: 'Desk 2 no longer holds this operation (it restarted, or 15 minutes passed).',
+          },
+        },
+        undefined,
+      )
+  }
+}
+
+function noAccountError(task: FreeTask): string {
+  const asked =
+    task.account != null
+      ? `account #${task.account}`
+      : task.provider
+        ? `a ${task.provider} account`
+        : 'an account'
+  return `No signed-in Free ${asked} can take it${task.account == null ? ' (accounts at 90% of their week are skipped)' : ''}. free_status shows them.`
+}
+
+/** The account a queued task starts on this tick; undefined while that account is busy or after the
+ *  task is failed for having none. `cache.threads` is read once per batch, when first needed. */
+async function accountFor(
+  it: Item,
+  tick: Tick,
+  cache: { threads: FreeThread[] | null },
+): Promise<FreeInstance | undefined> {
+  if (it.task.chat_id) {
+    cache.threads ??= await desk<FreeThread[]>('GET', '/threads').catch(() => null)
+    const thread = cache.threads?.find((t) => t.chatId === it.task.chat_id)
+    const account = thread ? tick.byId.get(thread.instanceId) : undefined
+    if (!account) {
+      Object.assign(it.s, {
+        state: 'failed',
+        error: `No Free thread has chat_id ${it.task.chat_id} (free_threads lists them).`,
+      })
+      return undefined
+    }
+    return tick.busy.has(account.id) ? undefined : account
+  }
+  if (!eligibleAccounts(tick.instances, it.task).length) {
+    Object.assign(it.s, { state: 'failed', error: noAccountError(it.task) })
+    return undefined
+  }
+  return pickFreeAccount(tick.instances, tick.busy, it.task) ?? undefined
+}
+
+function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
+  return {
+    requestId,
+    instanceId: account.id,
+    provider: account.provider,
+    command: task.chat_id ? 'resume' : 'chat',
+    prompt: task.prompt,
+    ...(task.chat_id ? { chatId: task.chat_id } : task.name ? { name: task.name } : {}),
+    ...(task.web_search && account.provider === 'claude' ? { webSearch: true } : {}),
+    // A continued thread keeps its model; the family only picks a new Claude chat's (owner, 2026-10-07).
+    ...(task.model && !task.chat_id && account.provider === 'claude' ? { model: task.model } : {}),
+  }
+}
+
+async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
+  const requestId = randomUUID()
+  const body = jobBody(it.task, account, requestId)
+  try {
+    await desk('POST', '/jobs', body)
+    Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
+    Object.assign(it.s, {
+      state: 'running',
+      account: accountLabel(account),
+      chat_id: it.task.chat_id,
+      thread: it.task.name,
+    })
+    busy.add(account.id)
+  } catch (e) {
+    // Busy since the status was read (another chat, a keepalive nudge): the next tick tries again.
+    if ((e as DeskError).status === 409) busy.add(account.id)
+    else Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+  }
+}
+
 /** Sends a batch: each queued task starts on an idle account (a continuation on its thread's own),
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
-  let threads: FreeThread[] | null = null
-  while (b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')) {
+  const cache: { threads: FreeThread[] | null } = { threads: null }
+  while (pending(b)) {
     let status: { instances: FreeInstance[]; jobs: FreeJob[] }
     try {
       status = await desk('GET', '/status')
     } catch (e) {
       // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
-      if (Date.now() > until || (e as DeskError).status !== 0) {
-        for (const it of b.items)
-          if (it.s.state === 'queued')
-            Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-      }
+      if (Date.now() > until || (e as DeskError).status !== 0)
+        failQueued(b, String((e as Error).message))
       await sleep(TICK_MS * 2)
       if (Date.now() > until) break
       continue
     }
-    const byId = new Map(status.instances.map((i) => [i.id, i]))
-    const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
-    for (const it of b.items) if (it.s.state === 'running' && it.instanceId) busy.add(it.instanceId)
-
-    for (const it of b.items.filter((x) => x.s.state === 'running')) {
-      try {
-        const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
-        if (job.state === 'done') finish(it, job.result, byId.get(it.instanceId ?? ''))
-      } catch (e) {
-        if ((e as DeskError).status === 404)
-          finish(
-            it,
-            {
-              ok: false,
-              error: {
-                code: 'operation_lost',
-                message:
-                  'Desk 2 no longer holds this operation (it restarted, or 15 minutes passed).',
-              },
-            },
-            undefined,
-          )
-      }
-    }
-
+    const tick = readTick(b, status)
+    for (const it of b.items.filter((x) => x.s.state === 'running')) await pollRunning(it, tick)
     for (const it of b.items.filter((x) => x.s.state === 'queued')) {
-      let account: FreeInstance | undefined
-      if (it.task.chat_id) {
-        threads ??= await desk<FreeThread[]>('GET', '/threads').catch(() => null)
-        const thread = threads?.find((t) => t.chatId === it.task.chat_id)
-        account = thread ? byId.get(thread.instanceId) : undefined
-        if (!account) {
-          Object.assign(it.s, {
-            state: 'failed',
-            error: `No Free thread has chat_id ${it.task.chat_id} (free_threads lists them).`,
-          })
-          continue
-        }
-        if (busy.has(account.id)) continue
-      } else {
-        if (!eligibleAccounts(status.instances, it.task).length) {
-          const asked =
-            it.task.account != null
-              ? `account #${it.task.account}`
-              : it.task.provider
-                ? `a ${it.task.provider} account`
-                : 'an account'
-          Object.assign(it.s, {
-            state: 'failed',
-            error: `No signed-in Free ${asked} can take it${it.task.account == null ? ' (accounts at 90% of their week are skipped)' : ''}. free_status shows them.`,
-          })
-          continue
-        }
-        account = pickFreeAccount(status.instances, busy, it.task) ?? undefined
-        if (!account) continue
-      }
-      const requestId = randomUUID()
-      const body = {
-        requestId,
-        instanceId: account.id,
-        provider: account.provider,
-        command: it.task.chat_id ? 'resume' : 'chat',
-        prompt: it.task.prompt,
-        ...(it.task.chat_id
-          ? { chatId: it.task.chat_id }
-          : it.task.name
-            ? { name: it.task.name }
-            : {}),
-        ...(it.task.web_search && account.provider === 'claude' ? { webSearch: true } : {}),
-        // A continued thread keeps its model; the family only picks a new Claude chat's (owner, 2026-10-07).
-        ...(it.task.model && !it.task.chat_id && account.provider === 'claude'
-          ? { model: it.task.model }
-          : {}),
-      }
-      try {
-        await desk('POST', '/jobs', body)
-        Object.assign(it, { instanceId: account.id, requestId, startedAt: Date.now() })
-        Object.assign(it.s, {
-          state: 'running',
-          account: accountLabel(account),
-          chat_id: it.task.chat_id,
-          thread: it.task.name,
-        })
-        busy.add(account.id)
-      } catch (e) {
-        // Busy since the status was read (another chat, a keepalive nudge): the next tick tries again.
-        if ((e as DeskError).status === 409) busy.add(account.id)
-        else Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-      }
+      const account = await accountFor(it, tick, cache)
+      if (account) await startTask(it, account, tick.busy)
     }
-    if (Date.now() > until)
-      for (const it of b.items)
-        if (it.s.state === 'queued')
-          Object.assign(it.s, {
-            state: 'failed',
-            error: 'No Free account was idle within 30 minutes.',
-          })
-    if (b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running'))
-      await sleep(TICK_MS)
+    if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+    if (pending(b)) await sleep(TICK_MS)
   }
 }
 

@@ -31,8 +31,8 @@ const toolLine = (name: string, input: Record<string, unknown>, at: string) =>
 
 describe('editedPaths', () => {
   test('names what Edit, Write, MultiEdit and NotebookEdit changed, never what Read opened', () => {
-    const at = '2026-10-05T12:00:00.000Z'
-    const later = '2026-10-05T12:05:00.000Z'
+    const at = '2020-10-05T12:00:00.000Z'
+    const later = '2020-10-05T12:05:00.000Z'
     const text = [
       '{"cut first line',
       toolLine('Read', { file_path: '/repo/read-only.ts' }, at),

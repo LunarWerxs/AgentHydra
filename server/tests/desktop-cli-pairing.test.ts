@@ -26,8 +26,15 @@ import { instancesRoot } from '../src/core/paths'
 import { setSetting } from '../src/db'
 import './no-chats'
 
-// The default install's folder must not be the developer's real one.
-process.env.APPDATA = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
+// The default install's folder must not be the developer's real one. APPDATA keeps naming it for the
+// test files that run after this one in the same process, so it goes when the process exits.
+const appData = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
+process.env.APPDATA = appData
+process.on('exit', () => {
+  try {
+    rmSync(appData, { recursive: true, force: true, maxRetries: 10 })
+  } catch {}
+})
 
 const far = Date.now() + 30 * 86_400_000
 const grant = (expiresAt: number) =>

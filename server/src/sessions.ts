@@ -300,7 +300,7 @@ function peekMeta(tf: TranscriptFile): ScannedMeta | null {
 /** What a row shows for a transcript that has not been parsed yet: the last parse of an earlier
  *  revision when there is one, else only what the index knows. Title is the index's own (the
  *  first prompt, where its store records one) or the file name; model, status, counts and the
- *  rest stay blank until the parse lands. Never cached, so the real parse replaces it. */
+ *  rest stay blank until the transcript is parsed. Never cached, so the real parse replaces it. */
 function provisionalMeta(tf: TranscriptFile): ScannedMeta {
   const earlier = metaCache.get(cacheKey(tf))?.meta ?? readScanCache(tf, cacheKey(tf), true)
   if (earlier) return earlier
@@ -646,53 +646,101 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return true
 }
 
+/** A fold state and the bytes it folds next, which start at file offset `base`. */
+interface FoldRead {
+  state: ParseState
+  base: number
+  bytes: Uint8Array
+}
+
+/** The saved state with the bytes from just before where it stopped when the file only grew,
+ *  else a fresh state over the 12 MB window. Throws when the file cannot be read. */
+async function readForFold(tf: TranscriptFile, key: string): Promise<FoldRead> {
+  const file = Bun.file(tf.path)
+  const prev = parseStates.get(key)
+  if (prev && file.size >= prev.consumed) {
+    const base = prev.consumed - prev.check.length
+    const bytes = new Uint8Array(await file.slice(base).arrayBuffer())
+    if (
+      bytes.length >= prev.check.length &&
+      sameBytes(bytes.subarray(0, prev.check.length), prev.check)
+    ) {
+      return { state: prev, base, bytes }
+    }
+  }
+  const base = Math.max(0, file.size - READ_WINDOW_BYTES)
+  const bytes = new Uint8Array(await (base > 0 ? file.slice(base) : file).arrayBuffer())
+  const state: ParseState = {
+    consumed: base,
+    check: new Uint8Array(0),
+    acc: newAccumulator(),
+    /**
+     * "Did this conversation stop at a usage wall?", answered on the way past.
+     *
+     * The fold already JSON.parse-es every record of the transcript, so the verdict costs one
+     * extra function call per line and no extra I/O — which is the whole reason the sessions
+     * list can offer a "stopped by a usage limit" filter at all. rate-limit-discovery.ts
+     * answers the same question from a 256 KB tail for the auto-resume monitor; both call the
+     * SAME tracker so the badge and the monitor can never disagree.
+     *
+     * Claude only. The tracker's evidence gate keys on `isApiErrorMessage` / `<synthetic>`,
+     * which are Claude Code's own markers, so a Codex rollout would simply never trip it — but
+     * say so out loud rather than relying on that, because a detector that silently no-ops on
+     * a provider looks exactly like a provider that never hits limits.
+     */
+    limits: tf.source === 'claude' ? createLimitStopTracker() : null,
+  }
+  return { state, base, bytes }
+}
+
+/** Folds bytes[from..lastNl], decoded a slice at a time, each ending on a newline: decoding a
+ *  12 MB window whole is a block of its own (80-100 ms), and a newline byte never sits inside a
+ *  UTF-8 sequence. */
+async function foldSlices(
+  state: ParseState,
+  tf: TranscriptFile,
+  bytes: Uint8Array,
+  from: number,
+  lastNl: number,
+): Promise<void> {
+  for (let at = from; at <= lastNl; ) {
+    let stop = at + DECODE_SLICE_BYTES
+    if (stop > lastNl) stop = lastNl + 1
+    else {
+      const nlAt = bytes.indexOf(0x0a, stop)
+      stop = nlAt === -1 || nlAt > lastNl ? lastNl + 1 : nlAt + 1
+    }
+    await foldLines(state, tf, utf8.decode(bytes.subarray(at, stop)))
+    at = stop
+  }
+}
+
+/** Folds a last line with no newline yet if it parses; true when it did or was blank, false while
+ *  it is still being written. */
+function foldTail(state: ParseState, tf: TranscriptFile, rest: Uint8Array): boolean {
+  const tail = utf8.decode(rest).trim()
+  if (!tail) return true
+  let ev: any
+  try {
+    ev = JSON.parse(tail)
+  } catch {
+    return false
+  }
+  applyMetaLine(state.acc, tf, ev, state.limits)
+  return true
+}
+
 /** The transcript's fold state, brought up to its current end: resumed from the last read when
  *  the file only grew, rebuilt from the 12 MB window otherwise. Null when it cannot be read. */
 async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState | null> {
-  const file = Bun.file(tf.path)
-  let state: ParseState | null = null
-  let base = 0
-  let bytes = new Uint8Array(0)
+  let read: FoldRead
   try {
-    const prev = parseStates.get(key)
-    if (prev && file.size >= prev.consumed) {
-      base = prev.consumed - prev.check.length
-      bytes = new Uint8Array(await file.slice(base).arrayBuffer())
-      if (
-        bytes.length >= prev.check.length &&
-        sameBytes(bytes.subarray(0, prev.check.length), prev.check)
-      ) {
-        state = prev
-      }
-    }
-    if (!state) {
-      base = Math.max(0, file.size - READ_WINDOW_BYTES)
-      bytes = new Uint8Array(await (base > 0 ? file.slice(base) : file).arrayBuffer())
-      state = {
-        consumed: base,
-        check: new Uint8Array(0),
-        acc: newAccumulator(),
-        /**
-         * "Did this conversation stop at a usage wall?", answered on the way past.
-         *
-         * The fold already JSON.parse-es every record of the transcript, so the verdict costs one
-         * extra function call per line and no extra I/O — which is the whole reason the sessions
-         * list can offer a "stopped by a usage limit" filter at all. rate-limit-discovery.ts
-         * answers the same question from a 256 KB tail for the auto-resume monitor; both call the
-         * SAME tracker so the badge and the monitor can never disagree.
-         *
-         * Claude only. The tracker's evidence gate keys on `isApiErrorMessage` / `<synthetic>`,
-         * which are Claude Code's own markers, so a Codex rollout would simply never trip it — but
-         * say so out loud rather than relying on that, because a detector that silently no-ops on
-         * a provider looks exactly like a provider that never hits limits.
-         */
-        limits: tf.source === 'claude' ? createLimitStopTracker() : null,
-      }
-    }
+    read = await readForFold(tf, key)
   } catch {
     parseStates.delete(key)
     return null
   }
+  const { state, base, bytes } = read
 
   // Only whole lines are folded (a newline byte never sits inside a UTF-8 sequence, so splitting
   // on it is safe). A last line with no newline yet is folded only once it parses: a record is an
@@ -701,37 +749,10 @@ async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState
   const lastNl = bytes.lastIndexOf(0x0a)
   let end = from
   if (lastNl >= from) {
-    // Decoded a slice at a time, each ending on a newline: decoding a 12 MB window whole is a
-    // block of its own (80-100 ms), and a newline byte never sits inside a UTF-8 sequence.
-    for (let at = from; at <= lastNl; ) {
-      let stop = at + DECODE_SLICE_BYTES
-      if (stop > lastNl) stop = lastNl + 1
-      else {
-        const nlAt = bytes.indexOf(0x0a, stop)
-        stop = nlAt === -1 || nlAt > lastNl ? lastNl + 1 : nlAt + 1
-      }
-      await foldLines(state, tf, utf8.decode(bytes.subarray(at, stop)))
-      at = stop
-    }
+    await foldSlices(state, tf, bytes, from, lastNl)
     end = lastNl + 1
   }
-  if (end < bytes.length) {
-    const tail = utf8.decode(bytes.subarray(end)).trim()
-    let ev: any
-    let whole = !tail
-    if (tail) {
-      try {
-        ev = JSON.parse(tail)
-        whole = true
-      } catch {
-        /* still being written */
-      }
-    }
-    if (whole) {
-      if (tail) applyMetaLine(state.acc, tf, ev, state.limits)
-      end = bytes.length
-    }
-  }
+  if (end < bytes.length && foldTail(state, tf, bytes.subarray(end))) end = bytes.length
   state.consumed = base + end
   state.check = bytes.slice(Math.max(0, end - RESUME_CHECK_BYTES), end)
   parseStates.delete(key) // re-inserted last: the Map's order is the eviction order
@@ -1527,10 +1548,7 @@ function queueParse(tf: TranscriptFile): Promise<boolean> {
     if (tf.mtime_ms > queued.tf.mtime_ms) queued.tf = tf
     return queued.done
   }
-  let finish!: (parsed: boolean) => void
-  const done = new Promise<boolean>((resolve) => {
-    finish = resolve
-  })
+  const { promise: done, resolve: finish } = Promise.withResolvers<boolean>()
   parseQueue.set(key, { tf, done, finish })
   if (!draining) {
     draining = true
