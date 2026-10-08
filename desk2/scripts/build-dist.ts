@@ -1,10 +1,12 @@
 // `bun run build` of web/ and hydra/ (run in that app's folder): vite builds into a folder of its own, and only a build that
 // finished takes the place of dist/. web/dist and hydra/dist are what the running window serves, and vite empties its outDir
 // before it starts: a build that failed on another session's half-made edit blanked /ah/ for ten minutes (2026-10-07).
-// Each run has its own folder (dist.next-<pid>), so two sessions building at once never write into one.
+// Each run has its own folder (dist.next-<pid>), so two sessions building at once never write into one. A build whose
+// templates use a class its CSS has no rule for is refused the same way (dead-classes.ts).
 
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative } from 'node:path'
+import { deadClasses } from './dead-classes'
 
 const app = process.cwd()
 const live = join(app, 'dist')
@@ -30,6 +32,13 @@ if (built.exitCode !== 0 || !existsSync(join(next, 'index.html'))) {
   rmSync(next, { recursive: true, force: true })
   console.error(`build failed: ${live} was left as it was`)
   process.exit(built.exitCode || 1)
+}
+const dead = deadClasses(join(app, 'src'), next)
+if (dead.length) {
+  rmSync(next, { recursive: true, force: true })
+  const list = dead.map((d) => `  ${relative(app, d.file)}: ${d.cls}`).join('\n')
+  console.error(`build failed: these classes have no CSS rule, so they do nothing:\n${list}\n${live} was left as it was`)
+  process.exit(1)
 }
 if (existsSync(live)) await rename(live, old)
 try {

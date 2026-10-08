@@ -52,7 +52,7 @@ onBeforeUnmount(() => observer?.disconnect())
 </script>
 
 <template>
-  <div ref="root" class="tx-gallery flex w-full flex-wrap gap-2" :class="align === 'end' ? 'justify-end' : 'justify-start'" data-testid="image-gallery">
+  <div ref="root" class="flex w-full flex-wrap gap-2" :class="align === 'end' ? 'justify-end' : 'justify-start'" data-testid="image-gallery">
     <template v-for="(img, i) in images" :key="i">
       <button
         v-if="imageSrc(img)"

@@ -48,7 +48,7 @@ const DemoFrame = defineAsyncComponent(async () => {
 
 <template>
   <Gallery v-if="route === 'gallery'" />
-  <div v-else class="size-screen">
+  <div v-else class="size-full">
     <DemoFrame v-if="route === 'demo'" :key="hash" :start="hash.split('/')[3] ?? ''" />
     <DeskFrame v-else />
     <TitleTips />

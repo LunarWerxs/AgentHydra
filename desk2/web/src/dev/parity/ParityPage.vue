@@ -127,7 +127,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="size-screen overflow-hidden bg-bg-page text-text">
+  <div class="size-full overflow-hidden bg-bg-page text-text">
     <p v-if="!scene" class="p-6 text-sm">Unknown parity scene '{{ name }}'. Known: {{ Object.keys(PARITY_SCENES).join(', ') }}</p>
     <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" />
   </div>

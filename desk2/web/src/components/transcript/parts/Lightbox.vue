@@ -215,7 +215,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-150">
-      <div v-if="lightbox && current" class="tx-viewer fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
+      <div v-if="lightbox && current" class="fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
         <Annotator v-if="annotating" ref="annotator" :src="current.src" :name="current.alt" @cancel="annotating = false" @save="onAnnotated" />
         <template v-else>
           <div
