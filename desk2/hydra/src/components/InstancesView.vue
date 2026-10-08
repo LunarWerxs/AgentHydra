@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Funnel,
   Gauge,
+  LoaderCircle,
   LogIn,
   LogOut,
   MessagesSquare,
@@ -125,6 +126,7 @@ const {
   loading,
   resolvingAccounts,
   busyDirs,
+  openingDirs,
   startPolling,
   refreshInstances,
   open,
@@ -800,21 +802,31 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
-/** The header's + menu (InstanceSectionHeader): one item per provider switched on, then the Free
- *  accounts. Free's ids carry a prefix because its 'claude' would otherwise be Claude's id. */
+/** The header's + menu (InstanceSectionHeader): what the chosen kind can create. The Free view offers
+ *  only Free accounts, Desktop and CLI only the providers switched on, and All both under their own
+ *  headings (owner, 2026-10-08: the Free view's menu listed "New Claude instance" and a bare "Claude",
+ *  two Claudes nobody could tell apart). Free's ids carry a prefix because its 'claude' would
+ *  otherwise be Claude's id. */
 const FREE_CREATE_PREFIX = 'free:'
-const createOptions = computed(() => [
-  ...createProviders.value.map((provider) => ({
+const createOptions = computed(() => {
+  const desktop = createProviders.value.map((provider) => ({
     id: provider,
     provider,
     label: t(CREATE_LABEL[provider]),
-  })),
-  ...FREE_PROVIDERS.map((p) => ({
+  }))
+  const free = FREE_PROVIDERS.map((p) => ({
     id: `${FREE_CREATE_PREFIX}${p}`,
     provider: freeLogo(p),
-    label: t(p === 'claude' ? 'freeInstances.claude' : 'freeInstances.chatgpt'),
-  })),
-])
+    label: t(p === 'claude' ? 'instances.createFreeClaude' : 'instances.createFreeChatgpt'),
+  }))
+  if (kindView.value === 'free') return free
+  if (kindView.value !== 'all' && desktop.length) return desktop
+  if (!desktop.length) return free
+  return [
+    ...desktop.map((o) => ({ ...o, section: t('instances.createSectionApps') })),
+    ...free.map((o) => ({ ...o, section: t('instances.createSectionFree') })),
+  ]
+})
 
 /**
  * "New … instance". A kind or provider the table is leaving out is listed again first, so the row
@@ -1726,7 +1738,8 @@ onUnmounted(() => {
                   :disabled="isBusy(inst)"
                   @click="onOpen(inst)"
                 >
-                  <Play />
+                  <LoaderCircle v-if="openingDirs.has(inst.dir)" class="animate-spin" />
+                  <Play v-else />
                 </Button>
               </IconTooltip>
               <!-- running: the primary action is Focus (bring the window forward); Quit moves

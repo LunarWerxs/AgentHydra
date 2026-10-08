@@ -11,7 +11,8 @@
 // Refresh (the desktop table's usage-mode switch and filter menus).
 //
 // A table that mixes providers (desktop, Free) passes `createOptions`: the plus then opens one item
-// per provider, its logo and label, and `create` carries the chosen option's id.
+// per provider, its logo and label, and `create` carries the chosen option's id. An option's
+// `section` starts a heading (after a separator) wherever it changes.
 import { ChevronDown, Plus, RefreshCw } from '@lucide/vue'
 import ProviderLogo, { type LogoProvider } from '@/components/ProviderLogo.vue'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import IconTooltip from '@/shell/IconTooltip.vue'
@@ -43,7 +46,7 @@ withDefaults(
     /** The create button's label, its tooltip; omitted means no create button. */
     createLabel?: string
     /** One menu item per provider under the create button, instead of a plain button. */
-    createOptions?: { id: string; provider: LogoProvider; label: string }[]
+    createOptions?: { id: string; provider: LogoProvider; label: string; section?: string }[]
     /** False hides the chevron (a table switched off in Settings has nothing to fold). */
     collapsible?: boolean
   }>(),
@@ -114,14 +117,16 @@ defineEmits<{ refresh: []; create: [id?: string] }>()
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem
-                v-for="option in createOptions"
-                :key="option.id"
-                @click="$emit('create', option.id)"
-              >
-                <ProviderLogo :provider="option.provider" class="size-3.5" />
-                {{ option.label }}
-              </DropdownMenuItem>
+              <template v-for="(option, i) in createOptions" :key="option.id">
+                <template v-if="option.section && option.section !== createOptions[i - 1]?.section">
+                  <DropdownMenuSeparator v-if="i > 0" />
+                  <DropdownMenuLabel>{{ option.section }}</DropdownMenuLabel>
+                </template>
+                <DropdownMenuItem @click="$emit('create', option.id)">
+                  <ProviderLogo :provider="option.provider" class="size-3.5" />
+                  {{ option.label }}
+                </DropdownMenuItem>
+              </template>
             </DropdownMenuContent>
           </DropdownMenu>
         </span>

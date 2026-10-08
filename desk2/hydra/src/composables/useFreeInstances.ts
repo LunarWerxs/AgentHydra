@@ -1,6 +1,6 @@
 import { computed, reactive, ref, shallowRef } from 'vue'
 import type { FreeCommand, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
-import { FreeApiError, freeApi, rememberedJob } from '@/lib/free-instances'
+import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
 const instances = ref<FreeInstance[]>([])
@@ -41,6 +41,15 @@ async function snapshot(): Promise<void> {
   loaded.value = true
 }
 
+/** One read of a job, asked again while Desk is too busy to answer in time: a read changes nothing, and the job runs on
+ *  either way (2026-10-08: one slow read ended a check as "signal timed out" while the login was fine). */
+async function readJob(id: string): Promise<FreeJob> {
+  for (let tries = 1; ; tries++) {
+    try { return await freeApi.job(id) }
+    catch (error) { if (!isTimeout(error) || tries >= 4) throw error }
+  }
+}
+
 function follow(first: FreeJob): Promise<FreeResult | null> {
   const existing = followers.get(first.id)
   if (existing) return existing
@@ -50,7 +59,7 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
     try {
       while (job.state === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1000))
-        job = await freeApi.job(job.id)
+        job = await readJob(job.id)
         jobs[job.instanceId] = job
       }
       rememberedJob(job.instanceId, null)
@@ -60,7 +69,7 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
       await snapshot().catch(() => {})
       return job.result ?? null
     } catch (error) {
-      errors[job.instanceId] = error instanceof Error ? error.message : 'Connection interrupted. Check the operation before sending again.'
+      errors[job.instanceId] = freeErrorText(error, 'Connection interrupted. Check the operation before sending again.')
       // A lost acknowledgement must not unlock Send or replay the POST.
       if (error instanceof FreeApiError && error.status === 404) { delete jobs[job.instanceId]; rememberedJob(job.instanceId, null) }
       return null
@@ -74,9 +83,9 @@ async function recover(id: string): Promise<FreeResult | null> {
   const jobId = rememberedJob(id) || jobs[id]?.id
   if (!jobId) return null
   errors[id] = ''
-  try { return await follow(await freeApi.job(jobId)) }
+  try { return await follow(await readJob(jobId)) }
   catch (error) {
-    errors[id] = error instanceof Error ? error.message : 'The operation could not be checked.'
+    errors[id] = freeErrorText(error, 'The operation could not be checked.')
     if (error instanceof FreeApiError && error.status === 404) { delete jobs[id]; rememberedJob(id, null) }
     return null
   }
@@ -90,7 +99,10 @@ async function run(instance: FreeInstance, command: FreeCommand, options: Pick<F
   jobs[instance.id] = { id: operation.requestId, instanceId: instance.id, provider: instance.provider, command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: operation.chatId }
   try { return await follow(await freeApi.start(operation)) }
   catch (error) {
-    errors[instance.id] = error instanceof Error ? error.message : 'Connection interrupted. Check the operation before sending again.'
+    // A start that timed out may have begun all the same: its request UUID finds it with a read, never a second POST.
+    const started = isTimeout(error) ? await readJob(operation.requestId).catch(() => null) : null
+    if (started) return follow(started)
+    errors[instance.id] = freeErrorText(error, 'Connection interrupted. Check the operation before sending again.')
     if (error instanceof FreeApiError) { delete jobs[instance.id]; rememberedJob(instance.id, null) }
     return null
   }
@@ -106,7 +118,7 @@ async function logout(instance: FreeInstance): Promise<boolean> {
     if (index >= 0) instances.value.splice(index, 1, updated)
     return true
   } catch (error) {
-    errors[instance.id] = error instanceof Error ? error.message : 'Could not log out. Try again.'
+    errors[instance.id] = freeErrorText(error, 'Could not log out. Try again.')
     // The server may still have finished (a timed-out request): show what it holds now.
     await snapshot().catch(() => {})
     return false
@@ -124,7 +136,7 @@ async function remove(instance: FreeInstance): Promise<boolean> {
     threads.value = threads.value.filter(t => t.instanceId !== instance.id)
     return true
   } catch (error) {
-    errors[instance.id] = error instanceof Error ? error.message : 'Could not delete. Try again.'
+    errors[instance.id] = freeErrorText(error, 'Could not delete. Try again.')
     // The server may still have finished (a timed-out request): show what it holds now.
     await snapshot().catch(() => {})
     return false
@@ -139,7 +151,7 @@ async function forgetThread(thread: FreeThread): Promise<boolean> {
     await freeApi.forgetThread(thread.id)
   } catch (error) {
     if (!(error instanceof FreeApiError && error.status === 404)) {
-      errors[thread.instanceId] = error instanceof Error ? error.message : 'Could not forget this chat. Try again.'
+      errors[thread.instanceId] = freeErrorText(error, 'Could not forget this chat. Try again.')
       return false
     }
   }
@@ -165,7 +177,7 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
         if (running?.state === 'running') void follow(running)
         else if (rememberedJob(instance.id)) void recover(instance.id)
       }
-    } catch (error) { loadError.value = error instanceof Error ? error.message : 'Free instances could not be loaded.' }
+    } catch (error) { loadError.value = freeErrorText(error, 'Free instances could not be loaded.') }
     finally { loading.value = false; refreshing = null }
   })()
   return refreshing

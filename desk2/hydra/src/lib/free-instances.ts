@@ -11,6 +11,16 @@ export class FreeApiError extends Error {
   constructor(message: string, public status: number) { super(message) }
 }
 
+/** The request's own time limit ran out: AgentHydra (Desk) was too slow to answer, which says nothing of the account. */
+export const isTimeout = (error: unknown): boolean => error instanceof DOMException && error.name === 'TimeoutError'
+
+/** A failed request's reason for a person. The browser's own "signal timed out" read as a dead login (owner, 2026-10-08:
+ *  "are they dead and do I need to re-log in?"), when only Desk, busy on a pinned PC, had not answered in time. */
+export function freeErrorText(error: unknown, fallback: string): string {
+  if (isTimeout(error)) return 'AgentHydra was too busy to answer in time. This says nothing about the login: try again in a minute.'
+  return error instanceof Error ? error.message : fallback
+}
+
 /** Desk's own API; /ah/api is the separate Desktop/CLI daemon. Never retry a POST. */
 async function request<T>(path: string, method = 'GET', body?: unknown, timeout = 15_000): Promise<T> {
   const response = await fetch(`/api/free/${path}`, {

@@ -46,3 +46,35 @@ it('a check that finished keeps its result when the list refresh after it fails'
     globalThis.fetch = realFetch
   }
 })
+
+// 2026-10-08: on a pinned PC one read of a running check took over 15 s, and the check ended as "signal timed out",
+// which the owner read as a dead login ("do I need to re-log in?") while the account was answering HSwarm all along.
+it('a check outlives one read Desk was too slow to answer, and a timeout never reads as the login', async () => {
+  const timedOut = () => Promise.reject(new DOMException('signal timed out', 'TimeoutError'))
+  const realFetch = globalThis.fetch
+  let reads = 0
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    const path = String(url)
+    if (init?.method === 'POST') {
+      const { requestId } = JSON.parse(String(init.body))
+      return new Response(JSON.stringify({ id: requestId, instanceId: account.id, provider: 'claude', command: 'auth', state: 'running', phase: 'working', startedAt: 1 }), { status: 202 })
+    }
+    if (path.includes('/jobs/')) {
+      if (++reads === 1) return timedOut()
+      return new Response(JSON.stringify({ id: path.split('/jobs/')[1], instanceId: account.id, provider: 'claude', command: 'auth', state: 'done', phase: 'done', startedAt: 1, result: { ok: true, authenticated: true } }), { status: 200 })
+    }
+    return new Response('{}', { status: 502 })
+  }) as typeof fetch
+  try {
+    const free = useFreeInstances()
+    const result = await free.run(account, 'auth')
+    expect([result?.ok, result?.authenticated, free.errors[account.id]]).toEqual([true, true, ''])
+    // Desk never answers at all: the reason says it was Desk, not the account.
+    globalThis.fetch = (() => timedOut()) as unknown as typeof fetch
+    expect(await free.run(account, 'auth')).toBeNull()
+    expect(free.errors[account.id]).not.toContain('signal timed out')
+    expect(free.errors[account.id]).toContain('says nothing about the login')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
