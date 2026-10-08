@@ -28,13 +28,23 @@ const analyticsPeriod = (c: { req: { query: (k: string) => string | undefined } 
   return periodCutoffMs(period)
 }
 let agentToolsCache: { at: number; tools: AgentPresence[] } | null = null
+let agentToolsRead: Promise<AgentPresence[]> | null = null
 const AGENT_TOOLS_TTL_MS = 60_000
-function cachedAgentTools(): AgentPresence[] {
-  const now = Date.now()
-  if (agentToolsCache && now - agentToolsCache.at < AGENT_TOOLS_TTL_MS) return agentToolsCache.tools
-  const tools = detectAgentTools()
-  agentToolsCache = { at: now, tools }
-  return tools
+/** The last detection, refreshed behind it once a minute old; only the first ever call waits for the walk. */
+function cachedAgentTools(): Promise<AgentPresence[]> {
+  if (agentToolsCache && Date.now() - agentToolsCache.at < AGENT_TOOLS_TTL_MS)
+    return Promise.resolve(agentToolsCache.tools)
+  agentToolsRead ??= detectAgentTools()
+    .then((tools) => {
+      agentToolsCache = { at: Date.now(), tools }
+      return tools
+    })
+    .finally(() => {
+      agentToolsRead = null
+    })
+  if (!agentToolsCache) return agentToolsRead
+  agentToolsRead.catch(() => undefined)
+  return Promise.resolve(agentToolsCache.tools)
 }
 
 // `source` is a comma list of toolkit sources; absent = all, and `none` = nothing ticked.
@@ -90,7 +100,7 @@ app.get('/api/analytics/corrections', async (c) =>
  * Cached for a minute: it is a bounded directory walk, the answer changes when someone installs a
  * tool, and the UI asks for it on every visit to the analytics tab.
  */
-app.get('/api/agent-tools', (c) => c.json({ tools: cachedAgentTools() }))
+app.get('/api/agent-tools', async (c) => c.json({ tools: await cachedAgentTools() }))
 // Recompute on demand. Bounded by the same wall-clock budget the warm uses, so a click cannot
 // wedge the daemon on a store with thousands of transcripts in it.
 app.post('/api/analytics/refresh', async (c) =>

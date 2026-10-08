@@ -1,12 +1,21 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { spawnCaptured } from '../core/process'
 import { app } from '../http-app'
 import { findTranscriptById } from '../live-registry'
 import { DELIVERY_ACTUATOR_FILE, resolveMiscAsset } from '../misc-assets'
 import { samePathKey } from '../path-key'
 import { jsonBody } from '../route-helpers'
 import { desktopHomeFor, liveSessionEntry } from '../session-launch'
+
+let actuatorQueue: Promise<unknown> = Promise.resolve()
+/** Runs `run` once every actuator started before it has finished, whatever they returned or threw. */
+function actuatorTurn<T>(run: () => Promise<T>): Promise<T> {
+  const turn = actuatorQueue.then(run, run)
+  actuatorQueue = turn.catch(() => undefined)
+  return turn
+}
 
 /** Deliver a message into a desktop chat end to end - the real message endpoint. See index.ts for
  *  the app-wide middleware this route runs behind. */
@@ -206,7 +215,6 @@ app.post('/api/sessions/:id/message', async (c) => {
       422,
     )
 
-  const { spawnSync } = await import('node:child_process')
   // ⛔ TWO WAYS THIS PATH HAS BEEN WRONG, so it is resolved in one place now and never joined
   // here. It was process.cwd() once: a daemon started in server/ looked for server/misc/ and
   // every delivery failed. It was join(APP_ROOT, 'misc', ...) after that, which is right for a
@@ -225,31 +233,38 @@ app.post('/api/sessions/:id/message', async (c) => {
       },
       500,
     )
+  // Awaited, never spawnSync: the actuator drives the app's window for seconds to minutes, and a
+  // synchronous spawn held the daemon's one thread for all of it (2026-10-08: 18.5 s, every route
+  // and /api/health unanswered, and the tray watchdog started a second daemon). One actuator at a
+  // time (actuatorTurn), as the blocking spawn made it: two would type into the same window.
   const type = () =>
-    spawnSync(
-      'powershell',
-      [
-        '-NoProfile',
-        '-ExecutionPolicy',
-        'Bypass',
-        '-File',
-        actuator,
-        '-Title',
-        meta.title ?? '',
-        '-Message',
-        text,
-        '-VerifyText',
-        verify,
-        '-IfBusyAbort',
-        '-SearchByContent',
-        '-Instance',
-        inst.name,
-      ],
-      { timeout: 240000, windowsHide: true, encoding: 'utf8' },
-    )
+    actuatorTurn(async () => {
+      const run = await spawnCaptured(
+        [
+          'powershell',
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          actuator,
+          '-Title',
+          meta.title ?? '',
+          '-Message',
+          text,
+          '-VerifyText',
+          verify,
+          '-IfBusyAbort',
+          '-SearchByContent',
+          '-Instance',
+          inst.name,
+        ],
+        { timeoutMs: 240000 },
+      )
+      return { status: run.timedOut ? null : run.code, stdout: run.stdout, stderr: run.stderr }
+    })
 
   const before = sizeOf()
-  let attempt = type()
+  let attempt = await type()
   let rendered = attempt.status === 0
   let rerendered = false
   const saidNotRendered = /not rendered/i.test(`${attempt.stdout}${attempt.stderr}`)
@@ -324,7 +339,7 @@ app.post('/api/sessions/:id/message', async (c) => {
       )
     await new Promise((r) => setTimeout(r, 8000))
     rerendered = true
-    attempt = type()
+    attempt = await type()
     rendered = attempt.status === 0
     // A freshly re-rendered conversation paints its content ASYNC: the row selects but the
     // pane can still be loading when the verify check looks (measured live 2026-09-01 -
@@ -335,7 +350,7 @@ app.post('/api/sessions/:id/message', async (c) => {
       /does not show the expected text/i.test(`${attempt.stdout}${attempt.stderr}`)
     ) {
       await new Promise((r) => setTimeout(r, 8000))
-      attempt = type()
+      attempt = await type()
       rendered = attempt.status === 0
     }
   }

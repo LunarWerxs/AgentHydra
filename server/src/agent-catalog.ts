@@ -30,7 +30,8 @@
 // format claim yields a store that parses to zero sessions. Neither can corrupt the three stores
 // that were here first, because nothing here changes how they are read.
 
-import { type Dirent, existsSync, readdirSync, statSync } from 'node:fs'
+import { type Dirent, existsSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentPresence, SessionSource } from './types'
@@ -860,51 +861,58 @@ const DETECT_FILE_CAP = 1000
  *  shallow enough that pointing a root at a home directory cannot become a full-disk walk. */
 const DETECT_DEPTH = 5
 
-function walkCount(
+async function walkCount(
   dir: string,
   depth: number,
   state: { files: number; newest: number | null },
-): void {
+): Promise<void> {
   if (depth > DETECT_DEPTH || state.files >= DETECT_FILE_CAP) return
   let entries: Dirent[]
   try {
-    entries = readdirSync(dir, { withFileTypes: true })
+    entries = await readdir(dir, { withFileTypes: true })
   } catch {
     return
   }
+  const files: string[] = []
   for (const entry of entries) {
-    if (state.files >= DETECT_FILE_CAP) return
+    if (state.files >= DETECT_FILE_CAP) break
     const path = join(dir, entry.name)
     if (entry.isDirectory()) {
-      walkCount(path, depth + 1, state)
+      await walkCount(path, depth + 1, state)
       continue
     }
     if (!entry.isFile()) continue
     state.files++
-    try {
-      const mtime = statSync(path).mtimeMs
-      if (state.newest === null || mtime > state.newest) state.newest = mtime
-    } catch {
-      // A file that vanished between readdir and stat contributes its count and no date.
-    }
+    files.push(path)
   }
+  // A file that vanished between readdir and stat contributes its count and no date.
+  const mtimes = await Promise.all(
+    files.map((p) =>
+      stat(p).then(
+        (s) => s.mtimeMs,
+        () => null,
+      ),
+    ),
+  )
+  for (const mtime of mtimes)
+    if (mtime !== null && (state.newest === null || mtime > state.newest)) state.newest = mtime
 }
 
 /**
  * Which of these tools are on this machine.
  *
- * Synchronous and bounded: every tool costs one `existsSync` when absent, which is the case for
- * nearly all of them, and a capped walk when present. Measured at a few milliseconds for a catalog
- * this size on a machine with three of them installed.
+ * Bounded: every tool costs one `existsSync` when absent, which is the case for nearly all of them,
+ * and a capped walk when present. The walk is async: on a busy disk a present tool's thousand stats
+ * held the daemon's thread for 2.8 s in one go (2026-10-08, 91% of that block in this walk).
  */
-export function detectAgentTools(home: string = HOME): AgentPresence[] {
+export async function detectAgentTools(home: string = HOME): Promise<AgentPresence[]> {
   const out: AgentPresence[] = []
   for (const tool of AGENT_TOOLS) {
     const roots = rootsFor(tool, home)
     if (roots.length === 0) continue
     const state = { files: 0, newest: null as number | null }
     for (const r of roots)
-      walkCount(
+      await walkCount(
         tool.detectSubdir ? join(r.root, ...tool.detectSubdir.split('/')) : r.root,
         0,
         state,
