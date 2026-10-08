@@ -16,6 +16,10 @@ Rules the benchmark set, which the code enforces:
   question against it in parallel, which is how its API is meant to be used ("speculative fan-out"), with no
   unrelated state to dilute it. Dredd asks about 40 questions of one ask (3,480 over its 87 gold asks, 2026-10-02);
   that was one call per question, each re-billing the ask.
+- Escalations go one item per message. Batching a shared state's open questions into one Free-account message was
+  measured on Dredd's gold asks on 2026-10-08 and not shipped: within noise of the same Free models one question at
+  a time, but 6-7 points under the paid per-item route on choice questions (hswarm/docs/BENCH-2026-10-08-free-batch.md;
+  re-run with scripts/rsi/decide-free-batch.py when the Free models change).
 - Arithmetic, counting, dates and generation are not decisions: route those to hswarm_ask, not here
   (Jev scored 76% on the trap-arithmetic suite where gpt-oss-120b scored 94%).
 """
@@ -25,7 +29,6 @@ import asyncio
 import json
 import re
 import time
-import uuid
 
 from . import typesafe
 
@@ -34,15 +37,8 @@ from . import typesafe
 SYSTEM = ("You answer one typed decision question about the STATE you are given. Read the state and the options "
           "carefully and think it through. Then end your reply with a line in exactly this format: 'FINAL: <key>' "
           "where <key> is exactly one of the option keys listed, and nothing else is on that line.")
-# The batched escalation's own instructions (free_batch). A separate prompt, so SYSTEM and render stay the per-item
-# benchmark's; render_batch reuses render's words for every question.
-BATCH_SYSTEM = ("You answer several typed decision questions about the one STATE you are given. Read the state, then each "
-                "numbered question and its options carefully, and answer every question on its own, as if it were the only "
-                "one asked: another question's options are never an answer to it.")
 MAX_BATCH = 5
 MAX_SHARED = 64  # questions put to one shared state in one call; past it the group splits
-MAX_FREE_BATCH = 40  # escalated questions in one Free-account message (free_batch); the largest group the gate measured
-FREE_BATCH = False  # GATE PENDING: on only once the bench shows batched-free answers within noise of per-item
 BATCH_STATE_CHARS, BATCH_TOTAL_CHARS = 60_000, 150_000  # Jev's 32k/64k-token limits at a conservative ~3 chars/token
 TYPES = {"choice": "choice", "noul": "noul", "yesno": "noul", "yes_no": "noul", "bool": "noul", "score": "score", "scale": "score"}
 
@@ -109,23 +105,6 @@ def render(item: dict) -> str:
         else:
             lines.append(f"- {k}: {d if isinstance(d, str) else json.dumps(d, ensure_ascii=False)}")
     return "\n".join(lines)
-
-
-def render_batch(items: list[dict]) -> str:
-    """Items that share one state as one message: the state once, then every question numbered q0..qN-1. Each
-    question's text is render()'s own with the state cut off the front, so it reads exactly as the per-item benchmark
-    asks it."""
-    # "STATE:\n<state>\n\n", what every item's render() starts with (rsplit: the state may itself hold "QUESTION: ")
-    head = render({**items[0], "instructions": "", "criteria": None, "type": "noul"}).rsplit("\nQUESTION: ", 1)[0] + "\n"
-    n = len(items)
-    parts = [head.rstrip("\n"), f"There are {n} questions about this STATE, q0 to q{n - 1}. Answer every one."]
-    for i, it in enumerate(items):
-        text = render(it)
-        if not text.startswith(head):
-            raise ValueError("render_batch takes items that share one state")
-        parts.append(f"## q{i}\n{text[len(head):]}")
-    parts.append(f"Reply with one JSON object that maps each question id (q0 to q{n - 1}) to the key of the option you choose for it.")
-    return "\n\n".join(parts)
 
 
 def parse_final(answer: str, keys: list[str]) -> str | None:
@@ -261,33 +240,13 @@ async def jev_answers(jev: typesafe.Jev, items: list[dict], model: str = typesaf
 
 # ---------------------------------------------------------------- the cascade
 
-async def free_batch(items: list[dict]) -> tuple[list[str | None], object]:
-    """Escalated items that share one state, asked in ONE message on an idle Free web account (free_route.consult):
-    the state once, the questions numbered, a JSON object of answers back. Returns each item's option key (None where
-    the reply named no valid key, so that item escalates on its own) and the Result, or all None and no Result when
-    no account served the message. One item per message, the six accounts took about 6 of a 400-item Dredd spike
-    (2026-10-08); batched, each message takes an ask's open questions."""
-    from . import free_route
-    from .spec import Task
-
-    qs = [f"q{i}" for i in range(len(items))]
-    schema = {"type": "object", "properties": {q: {"type": ["string", "integer", "boolean"]} for q in qs}, "required": qs}
-    task = Task(prompt=render_batch(items), id="decide", system=BATCH_SYSTEM, schema=schema, tools="none", profile="decision", timeout_s=120)
-    res, _ = await free_route.consult(f"decide-{uuid.uuid4().hex[:8]}", task)
-    if res is None or not isinstance(res.data, dict):
-        return [None] * len(items), None
-    picks = []
-    for q, it in zip(qs, items):
-        v = res.data.get(q)
-        picks.append(parse_final(str(v), [o for o, _ in options(it)]) if isinstance(v, (str, int, bool)) else None)
-    return picks, res
-
-
 async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | None = 0.7, fallback_model: str | None = None,
                  model: str = typesafe.MODEL, batch: int = 1, reasoning_effort: str | None = None, jev: typesafe.Jev | None = None) -> dict:
     """Answer typed decisions: Jev first, then the generative fallback for every answer under `escalate_below`
-    confidence (and for every item Jev could not answer). escalate_below=0 trusts Jev on everything; 1.01 sends
-    everything to the fallback. `mgr` is a JobManager, needed only when something escalates."""
+    confidence (and for every item Jev could not answer). escalate_below=0 is Jev alone: nothing escalates, and an
+    item Jev could not answer comes back unanswered with Jev's error, for the caller's own fallback. None escalates
+    only the items Jev could not answer; 1.01 sends everything to the fallback. `mgr` is a JobManager, needed only
+    when something escalates."""
     from . import config
 
     t0 = time.perf_counter()
@@ -308,7 +267,10 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
         if own:
             await jev.__aexit__(None, None, None)
     thr = -1.0 if escalate_below is None else float(escalate_below)
-    todo = [k for k, r in enumerate(jres) if r["status"] != "ok" or (r.get("conf") or 0.0) < thr]
+    # 0 is Jev alone even when Jev fails (HTTP 402 since 2026-10-06): Dredd asks its yes/no questions at 0 because the
+    # fallback's yes/no answers convened the right instruments on 19 of 39 gold dockets against Jev's 39 of 39, and
+    # its own keyword heuristic answers what Jev leaves unanswered.
+    todo = [] if escalate_below is not None and thr <= 0 else [k for k, r in enumerate(jres) if r["status"] != "ok" or (r.get("conf") or 0.0) < thr]
     fb_results: list = []
 
     async def escalate(k: int) -> None:
@@ -324,24 +286,6 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
         pred = parse_final(r.answer or "", keys) if r.status == "ok" else None
         jres[k]["fallback"] = {"answer": pred, "model": r.model, "status": r.status, **({"error": (r.error or "")[:160]} if r.status != "ok" else {})}
 
-    batched: list[int] = []  # items each Free-account batch answered
-
-    async def escalate_group(ks: list[int]) -> None:
-        # Open questions about one state go to a Free account in one message first (never unrelated states: see the
-        # module docstring); whatever it leaves unanswered, or all of them when no account is idle, escalates per item.
-        if FREE_BATCH and len(ks) > 1 and fallback == config.AUTO:
-            try:
-                picks, res = await free_batch([items[k] for k in ks])
-            except Exception:  # noqa: BLE001 - e.g. equal dict states in another key order (share sorts keys, render does not)
-                picks, res = [None] * len(ks), None
-            if res is not None:
-                fb_results.append(res)
-                batched.append(sum(p is not None for p in picks))
-            for k, pick in zip(ks, picks):
-                if pick is not None:
-                    jres[k]["fallback"] = {"answer": pick, "model": res.model, "status": "ok", "batch": len(ks)}
-        await asyncio.gather(*(escalate(k) for k in ks if "fallback" not in jres[k]))
-
     if todo:
         own_mgr = mgr is None
         if own_mgr:
@@ -349,8 +293,7 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
 
             mgr = JobManager()
         try:
-            groups = [[todo[i] for i in g[j:j + MAX_FREE_BATCH]] for g in share([items[k] for k in todo]) for j in range(0, len(g), MAX_FREE_BATCH)]
-            await asyncio.gather(*(escalate_group(g) for g in groups))
+            await asyncio.gather(*(escalate(k) for k in todo))
         finally:
             if own_mgr:
                 await mgr.aclose()
@@ -375,11 +318,13 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
             row["fallback"] = fb
             if ans is None:
                 row["error"] = "UnresolvedDecision: JEV required escalation but no stronger Swarm answer was obtained"
+        elif ans is None:
+            row["error"] = f"JevUnanswered: escalate_below={escalate_below} escalates nothing; Jev: {r.get('error', '')}"[:200]
         answers.append(row)
     fb_cost = sum((x.cost_usd or 0.0) for x in fb_results)
     return {"answers": answers + [{"id": b["id"], "answer": None, "source": "none", "error": b["error"]} for b in bad],
             "summary": {"items": len(raw_items), "by_jev": sum(a["source"].startswith("jev") for a in answers), "escalated": len(todo),
                         "unanswered": sum(a["answer"] is None for a in answers) + len(bad), "invalid": len(bad), "escalate_below": escalate_below,
-                        "fallback_model": fallback, "free_batches": len(batched), "free_batched": sum(batched), "jev_model": stats.get("model", model), "jev_calls": stats.get("calls", 0),
+                        "fallback_model": fallback, "jev_model": stats.get("model", model), "jev_calls": stats.get("calls", 0),
                         "jev_cost_usd": round(stats.get("cost_usd", 0.0), 6), "fallback_cost_usd": round(fb_cost, 6), "seconds": round(time.perf_counter() - t0, 2)},
             "_jev_stats": stats, "_fallback_results": fb_results}
