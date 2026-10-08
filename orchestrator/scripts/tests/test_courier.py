@@ -537,8 +537,11 @@ class CourierRailTest(unittest.TestCase):
             self._write_tail(DONE_WAITING, age=400)
             return real_before(session_id)
 
+        # The stub chat never moves after the type, so the confirm watch runs to its end: 2 s, not
+        # the real 150 s that made this one test 168 s of the file's 380 (2026-10-08).
         with mock.patch.object(courier, "_capture_before_state",
                                side_effect=turn_ends_before_the_send), \
+                mock.patch.object(courier, "CONFIRM_SECS", 2), \
                 mock.patch.object(courier, "_run_actuator",
                                   return_value=(0, "TYPED and verified")) as act:
             report = courier.run(5, None, act=True)
