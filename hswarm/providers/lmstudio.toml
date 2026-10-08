@@ -9,7 +9,8 @@ key_billing = "free"
 free_calls = true
 options = []
 
-# The LM Studio model key, as `lms ls` prints it once downloaded.
+# The name the caller loads the model under (`lms load <key> --identifier <api_id>`): LM Studio's own keys change
+# when it re-indexes its models, so the identifier is the only stable name.
 [models.lmstudio-qwen3-30b-a3b]
 api_id = "qwen3-30b-a3b-instruct-2507"
 ctx = 32768
