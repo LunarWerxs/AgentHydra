@@ -325,6 +325,16 @@
 .tx-inline-video {
   align-self: flex-start;
 }
+/* A muted video's speaker is the speaker alone: hovering it slides out no volume slider stuck at zero, and a click
+   unmutes. Once it has sound (lib/chat-audio.ts marks it data-unmuted) hovering the speaker shows the slider again. */
+.md-video:not([data-unmuted])::-webkit-media-controls-volume-slider,
+.tx-inline-video:not([data-unmuted])::-webkit-media-controls-volume-slider {
+  display: none;
+}
+.md-video:not([data-unmuted])::-webkit-media-controls-volume-control-container,
+.tx-inline-video:not([data-unmuted])::-webkit-media-controls-volume-control-container {
+  min-width: 0;
+}
 .md-file-chip {
   display: inline-flex;
   align-items: center;

@@ -127,7 +127,10 @@ const VIDEO_EVENTS = ['play', 'playing', 'pause', 'ended', 'emptied', 'volumecha
 /** Follows every <video> inside a chat's transcript (the events do not bubble: a capture listener on the root hears them all). Returns the stop. */
 export function watchTranscript(root: HTMLElement, chatId: string): () => void {
   const onEvent = (e: Event) => {
-    if (e.target instanceof HTMLVideoElement) videoChanged(chatId, e.target)
+    if (!(e.target instanceof HTMLVideoElement)) return
+    // Its native volume slider shows only while it has sound (transcript.css): a muted video's speaker is the speaker alone.
+    e.target.toggleAttribute('data-unmuted', !e.target.muted)
+    videoChanged(chatId, e.target)
   }
   for (const t of VIDEO_EVENTS) root.addEventListener(t, onEvent, true)
   // A video scrolled out of the window or replaced is removed without a pause event.
