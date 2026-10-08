@@ -75,9 +75,9 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
               <span class="truncate">{{ a.instance.name }}</span>
             </span>
             <span class="w-24 tabular-nums">{{ formatTokens(a.tokens) }} <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.tokens') }}</span></span>
-            <span class="w-28 tabular-nums" :title="messagesTip(a)">
+            <span class="inline-flex w-28 items-baseline gap-1 tabular-nums" :title="messagesTip(a)">
               <span :class="rateClass(a)">{{ pct(a) }}</span>
-              <span class="text-2xs text-muted-foreground"> {{ $t('freeInstances.stats.ofSent', { sent: a.sent }) }}</span>
+              <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.ofSent', { sent: a.sent }) }}</span>
             </span>
             <span class="flex flex-wrap gap-1">
               <span
@@ -103,9 +103,9 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
               <ProviderLogo :provider="freeLogo(m.provider)" class="size-3.5 shrink-0" />
               <span class="truncate">{{ m.model }}</span>
             </span>
-            <span class="w-28 tabular-nums" :title="messagesTip(m)">
+            <span class="inline-flex w-28 items-baseline gap-1 tabular-nums" :title="messagesTip(m)">
               <span :class="rateClass(m)">{{ pct(m) }}</span>
-              <span class="text-2xs text-muted-foreground"> {{ $t('freeInstances.stats.ofSent', { sent: m.sent }) }}</span>
+              <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.ofSent', { sent: m.sent }) }}</span>
             </span>
             <span class="tabular-nums">{{ formatTokens(m.tokens) }} <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.tokens') }}</span></span>
           </li>
@@ -117,15 +117,12 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
         <p v-if="daysEmpty" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noTokens') }}</p>
         <template v-else>
           <HourBars :hours="dayBars" :series="series" :format-value="formatTokens" height-class="h-20" />
-          <div class="mt-1 flex justify-between text-3xs text-muted-foreground">
-            <span>{{ dayBars[0]?.label }}</span>
-            <span class="flex gap-3">
-              <span v-for="s in series" :key="s.key" class="flex items-center gap-1">
-                <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>{{ s.label }}
-              </span>
-            </span>
-            <span>{{ dayBars[dayBars.length - 1]?.label }}</span>
-          </div>
+          <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
+            <li v-for="s in series" :key="s.key" class="flex items-center gap-1">
+              <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>
+              {{ s.label }}
+            </li>
+          </ul>
         </template>
       </div>
     </template>
