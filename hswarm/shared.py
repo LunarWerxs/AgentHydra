@@ -378,11 +378,13 @@ def _restart_due(state: dict, now: float) -> bool:
     if src is None or now - state["started"] < MIN_UP_S:
         return False
     head = livecode.head(src)
-    if not head or head["tree"] in ((mine or {}).get("tree"), state.get("refused")) or now - head["at"] < SETTLE_S:
+    if not head or head["tree"] == (mine or {}).get("tree") or now - head["at"] < SETTLE_S:
         return False
+    if head["tree"] == state.get("refused") and now - state["refused_at"] < livecode.RECHECK_S:
+        return False  # asked again only once livecode checks that tree again: a failed check may have run out of time
     if state.get("ready") != head["tree"]:
         if livecode.ready(src, head) is None:
-            state["refused"] = head["tree"]  # said once per tree: the next commit is looked at afresh
+            state["refused"], state["refused_at"] = head["tree"], now
             print(f"[hswarm] commit {head['commit'][:12]} cannot be imported, so this server keeps running "
                   f"{'commit ' + mine['commit'][:12] if mine else 'the code it loaded'}", file=sys.stderr, flush=True)
             return False

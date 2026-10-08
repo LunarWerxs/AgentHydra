@@ -41,6 +41,9 @@ BOOTSTRAP = ("import sys,runpy;sys.path.insert(0,sys.argv[1]);sys.argv[1:2]=[];"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 HEAD_FRESH_S = 10.0  # how long one read of the clone's HEAD answers again (behind() asks on every hswarm_run)
 TRIES = 5  # rename attempts: Windows refuses one while another process (a reader, a virus scan) has the file open
+RECHECK_S = 1800.0  # a failed import check is run again after this: one that ran out of time on a busy machine is no verdict
+KEEP_S = 86_400.0  # a copy written within this long is kept: a process besides this server (a hand-over helper) may run it
+LEFTOVER_S = 3600.0  # a folder without a marker this old is a leftover; a younger one may be an export landing right now
 _heads: dict[str, tuple[float, dict | None]] = {}
 
 
@@ -135,9 +138,11 @@ def export(src: Path, h: dict) -> Path:
     dest = code_root() / h["tree"][:12]
     if (dest / MARKER).is_file():
         return dest
-    # A folder with no marker is never a copy (the marker is renamed in with it): it is one prune could not finish
-    # removing (a file held open), and left there it would refuse this tree's export for good.
-    shutil.rmtree(dest, ignore_errors=True)
+    # A folder with no marker is never a copy (the marker is renamed in with it): an old one is one prune could not
+    # finish removing (a file held open), and left there it would refuse this tree's export for good. A young one may
+    # be another start's export that landed after the check above, and is left alone.
+    if dest.exists() and _age(dest) > LEFTOVER_S:
+        shutil.rmtree(dest, ignore_errors=True)
     tmp = code_root() / f".{h['tree'][:12]}.{os.getpid()}.tmp"
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True)
@@ -174,14 +179,14 @@ def _imports(dest: Path) -> bool:
 
 
 def ready(src: Path, h: dict) -> Path | None:
-    """Export commit h and check that it imports (once per tree: the answer is kept in its marker). The folder, now
-    the current copy, when it does; None when it does not, and the current copy stays what it was."""
+    """Export commit h and check that it imports (the answer is kept in its marker: a pass for good, a failure for
+    RECHECK_S). The folder, now the current copy, when it does; None when it does not, and the current copy stays."""
     dest = export(src, h)
     mark = _read(dest / MARKER) or {}
-    if "imports" not in mark:
-        mark["imports"] = _imports(dest)
+    if not mark.get("imports") and time.time() - mark.get("checked_at", 0) >= RECHECK_S:
+        mark["imports"], mark["checked_at"] = _imports(dest), time.time()
         _write(dest / MARKER, mark)
-    if not mark["imports"]:
+    if not mark.get("imports"):
         return None
     _write(code_root() / "current.json", {"dir": str(dest), "tree": mark["tree"], "commit": mark["commit"]})
     return dest
@@ -209,19 +214,19 @@ def target() -> Path | None:
 
 
 def prune(keep: int = KEEP) -> None:
-    """Remove the copies nobody runs: all but the current one, this process's own and the `keep` newest, any copy an
-    earlier prune could not finish removing, and any export a crash left half-written (one an hour old: a younger one
-    may be a start exporting right now)."""
+    """Remove the copies nobody runs: all but the current one, this process's own, the `keep` last exported and any
+    written in the last KEEP_S; and the leftovers (LEFTOVER_S old) of a prune that could not finish or a crashed export."""
     root = code_root()
     if not root.is_dir():
         return
     spare = {p.resolve() for p in (current(), PACKAGE.parent) if p}
     folders = [p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")]
-    copies = sorted((p for p in folders if (p / MARKER).is_file()), key=lambda p: _age(p / MARKER))
+    copies = sorted((p for p in folders if (p / MARKER).is_file()),
+                    key=lambda p: str((_read(p / MARKER) or {}).get("exported_at", "")), reverse=True)
     spare |= {p.resolve() for p in copies[:keep]}
-    stale = [p for p in copies[keep:] if p.resolve() not in spare]
-    stale += [p for p in folders if not (p / MARKER).is_file()]
-    stale += [p for p in root.glob(".*.tmp") if _age(p) > 3600]
+    stale = [p for p in copies[keep:] if p.resolve() not in spare and _age(p / MARKER) > KEEP_S]
+    stale += [p for p in folders if not (p / MARKER).is_file() and _age(p) > LEFTOVER_S]
+    stale += [p for p in root.glob(".*.tmp") if _age(p) > LEFTOVER_S]
     for p in stale:
         shutil.rmtree(p, ignore_errors=True)
 

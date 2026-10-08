@@ -84,16 +84,24 @@ def test_a_commit_that_cannot_be_imported_is_never_served_and_the_last_good_one_
     _commit(clone, {"__init__.py": "X = (\n"})
     assert livecode.target() == good and livecode.target() == good
     assert len(checks) == 1  # a commit is import-checked once, not at every start or watcher look
+    # Regression (2026-10-07 review): a failed check barred its commit for good, though one that ran out of time on a
+    # machine at 100% CPU says nothing about the commit; it is run again after RECHECK_S.
+    monkeypatch.setattr(livecode, "RECHECK_S", 0.0)
+    assert livecode.target() == good and len(checks) == 2
     _commit(clone, {"__init__.py": "X = 3\n"})  # the fix for it lands
     assert _x(livecode.target()) == "X = 3"
 
 
 # Regression: prune's rmtree stops at a file something still holds open and leaves the folder without its marker;
-# that folder then refused the tree's export, so the server never moved onto that commit again.
-def test_a_copy_prune_could_not_finish_removing_never_blocks_its_commit(clone):
+# that folder then refused the tree's export, so the server never moved onto that commit again. And the 2026-10-07
+# review's race: a young marker-less folder may be another start's export landing between the check and the removal.
+def test_a_copy_prune_could_not_finish_removing_blocks_its_commit_only_briefly(clone):
     left = livecode.code_root() / livecode.head(clone)["tree"][:12] / "hswarm"
     left.mkdir(parents=True)
     (left / "__init__.py").write_text("X = 'half removed'\n", encoding="utf-8")
+    assert livecode.target() is None and left.is_dir()  # young: left alone, and the last good copy (none here) serves
+    old = time.time() - 2 * livecode.LEFTOVER_S
+    os.utime(left.parent, (old, old))
     assert _x(livecode.target()) == "X = 1"
 
 
@@ -147,19 +155,24 @@ def test_ending_the_daemons_start_ends_the_server_it_started(clone, tmp_path):
             kill_tree(int(pid))
 
 
-def test_prune_never_removes_the_current_copy_the_running_one_or_an_export_in_progress(monkeypatch):
+def test_prune_keeps_every_copy_a_process_may_still_run_and_removes_the_rest(monkeypatch):
     # A server imports some modules late: a pruned folder under a live server breaks it mid-run, for every chat.
     root = livecode.code_root()
-    for age, name in enumerate(["e5", "e4", "e3", "e2", "e1"]):  # e5 newest
+    old = time.time() - 2 * livecode.KEEP_S
+    for day, name in enumerate(["e1", "e2", "e3", "e4", "e5"], start=1):  # e5 exported last
         d = root / name
         (d / "hswarm").mkdir(parents=True)
-        (d / livecode.MARKER).write_text("{}", encoding="utf-8")
-        os.utime(d / livecode.MARKER, (1_000_000 - age, 1_000_000 - age))
+        (d / livecode.MARKER).write_text(json.dumps({"exported_at": f"2026-01-0{day}T00:00:00Z"}), encoding="utf-8")
+        if name != "e3":  # e3's marker was written just now (an import re-check): a helper may still run it
+            os.utime(d / livecode.MARKER, (old, old))
     (root / "half-removed" / "hswarm").mkdir(parents=True)  # a copy an earlier prune left without its marker
+    (root / "landing" / "hswarm").mkdir(parents=True)  # marker-less but young: an export may be landing right now
     (root / ".e6.4242.tmp").mkdir()  # a start exporting right now
-    (root / ".e0.4242.tmp").mkdir()  # a start that crashed mid-export, two hours ago
-    os.utime(root / ".e0.4242.tmp", (time.time() - 7200, time.time() - 7200))
+    (root / ".e0.4242.tmp").mkdir()  # a start that crashed mid-export
+    for p in (root / "half-removed", root / ".e0.4242.tmp"):
+        os.utime(p, (old, old))
     (root / "current.json").write_text(json.dumps({"dir": str(root / "e4")}), encoding="utf-8")
     monkeypatch.setattr(livecode, "PACKAGE", root / "e1" / "hswarm")  # this server runs the oldest
     livecode.prune(keep=1)
-    assert sorted(p.name for p in root.iterdir() if p.is_dir()) == [".e6.4242.tmp", "e1", "e4", "e5"]
+    # e5 is the last exported though e3's marker is newer; e2 is the only old copy nobody may run
+    assert sorted(p.name for p in root.iterdir() if p.is_dir()) == [".e6.4242.tmp", "e1", "e3", "e4", "e5", "landing"]

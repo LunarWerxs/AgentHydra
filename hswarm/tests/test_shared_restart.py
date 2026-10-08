@@ -59,13 +59,16 @@ def test_a_server_on_a_working_tree_moves_onto_its_clones_commit_and_an_install_
     assert not shared._restart_due({"started": NOW - 3600}, NOW + 86_400)
 
 
-def test_a_commit_that_cannot_be_imported_is_never_restarted_onto_and_is_asked_about_once(server):
+def test_a_commit_that_cannot_be_imported_is_never_restarted_onto_and_is_asked_about_again_only_later(server):
     server.imports = False
     assert not shared._restart_due(server.state, NOW)
-    assert not shared._restart_due(server.state, NOW + 60) and server.readied == ["t1"]  # the same commit: not asked again
+    assert not shared._restart_due(server.state, NOW + 60) and server.readied == ["t1"]  # not at every look
+    # Regression (2026-10-07 review): a failed check barred its commit for good, though one that ran out of time on a
+    # machine at 100% CPU says nothing about the commit.
+    assert not shared._restart_due(server.state, NOW + livecode.RECHECK_S) and server.readied == ["t1", "t1"]
     server.head = {"commit": "c2" * 20, "tree": "t2", "at": NOW - 600}  # the fix for it lands
     server.imports = True
-    assert shared._restart_due(server.state, NOW + 120) and server.readied == ["t1", "t2"]
+    assert shared._restart_due(server.state, NOW + livecode.RECHECK_S + 60) and server.readied == ["t1", "t1", "t2"]
 
 
 # Contract: a restart cannot loop. A successor that still finds the disk different from what it loaded (a file written
