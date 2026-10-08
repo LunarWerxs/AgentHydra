@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The Free accounts' part of the Usage history card (owner, 2026-10-08: "total tokens ... Claude and ChatGPT ... per
 // each ... also the success rate across which models ... were used on each"): the token totals in the table's window,
-// each account with the models it was sent to, the success rate by model, and Free tokens per day.
+// the success rate by model, and Free tokens per day. A list of every account with its models was here briefly and
+// came out the same day (owner: "don't need this"); each account's tokens are the table's own column.
 import type { FreeProvider } from '@desk/shared/free-instances'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -65,35 +66,6 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
 
     <p v-if="failed" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.unavailable') }}</p>
     <template v-else>
-      <div>
-        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.perAccount') }}</h4>
-        <ul class="divide-y rounded-md border text-xs">
-          <li v-for="a in summary.accounts" :key="a.instance.id" class="flex flex-wrap items-center gap-x-3 gap-y-1 px-2.5 py-1.5">
-            <span class="flex min-w-40 items-center gap-1.5">
-              <ProviderLogo :provider="freeLogo(a.instance.provider)" class="size-3.5 shrink-0" />
-              <span class="text-muted-foreground tabular-nums">#{{ a.instance.num }}</span>
-              <span class="truncate">{{ a.instance.name }}</span>
-            </span>
-            <span class="w-24 tabular-nums">{{ formatTokens(a.tokens) }} <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.tokens') }}</span></span>
-            <span class="inline-flex w-28 items-baseline gap-1 tabular-nums" :title="messagesTip(a)">
-              <span :class="rateClass(a)">{{ pct(a) }}</span>
-              <span class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.ofSent', { sent: a.sent }) }}</span>
-            </span>
-            <span class="flex flex-wrap gap-1">
-              <span
-                v-for="m in a.models"
-                :key="m.model"
-                class="rounded-sm bg-muted px-1.5 py-0.5 text-2xs tabular-nums"
-                :title="$t('freeInstances.stats.modelTip', { model: m.model, sent: m.sent, failed: m.failed, tokens: formatTokens(m.tokens), days: FREE_STAT_DAYS })"
-              >
-                {{ m.model }} <span :class="rateClass(m)">{{ pct(m) }}</span>
-              </span>
-              <span v-if="!a.models.length" class="text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noMessages', { days: FREE_STAT_DAYS }) }}</span>
-            </span>
-          </li>
-        </ul>
-      </div>
-
       <div>
         <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.byModel', { days: FREE_STAT_DAYS }) }}</h4>
         <p v-if="!summary.models.length" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noModels') }}</p>

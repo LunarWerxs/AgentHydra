@@ -7,7 +7,7 @@ const account = (id: string, num: number, provider: FreeInstance['provider']): F
 const parts = (total: number) => ({ input: total, output: 0, total })
 const tokens = (fiveHour: number, total: number): FreeTokens => ({ fiveHour: parts(fiveHour), week: parts(total), total: parts(total) })
 
-test('Free numbers: tokens by provider in the table window, success by account and by model, older tokens by day only', () => {
+test('Free numbers: tokens by provider in the table window, success by model, older tokens by day only', () => {
   const now = new Date(2026, 9, 8, 12).getTime()
   const instances = [account('b', 2, 'chatgpt'), account('a', 1, 'claude'), account('c', 3, 'chatgpt')]
   const row = (day: string, instanceId: string, model: string, sent: number, failed: number, input: number): FreeStatRow =>
@@ -26,8 +26,6 @@ test('Free numbers: tokens by provider in the table window, success by account a
 
   expect(s.totals).toEqual({ all: { tokens: 12, sent: 10, failed: 4 }, claude: { tokens: 5, sent: 4, failed: 1 }, chatgpt: { tokens: 7, sent: 6, failed: 3 } })
   expect(summarizeFree(rows, instances, all, 'total', 3, now).totals.all.tokens).toBe(3000)
-  expect(s.accounts.map(a => [a.instance.num, a.tokens, a.sent, a.failed, a.models.map(m => m.model)])).toEqual([
-    [1, 5, 4, 1, ['claude-haiku']], [2, 7, 3, 0, ['gpt-6']], [3, 0, 3, 3, ['gpt-6', 'unknown']]])
   expect(s.models.map(m => [m.provider, m.model, m.sent, m.failed, m.tokens])).toEqual([
     ['chatgpt', 'gpt-6', 5, 2, 30], ['claude', 'claude-haiku', 4, 1, 40], ['chatgpt', 'unknown', 1, 1, 0]])
   expect(s.days).toEqual([{ key: '2026-10-06', claude: 0, chatgpt: 0 }, { key: '2026-10-07', claude: 500, chatgpt: 0 }, { key: '2026-10-08', claude: 40, chatgpt: 30 }])
