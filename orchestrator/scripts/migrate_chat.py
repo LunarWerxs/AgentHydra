@@ -2073,10 +2073,15 @@ def phase_settle(land: _Landing) -> None:
     land.stopped_bystanders = nativearchivelib.take_stopped(land.session_id)
     if land.stopped_bystanders:
         names = ", ".join(f"{s.get('kind')} {s.get('id')}" for s in land.stopped_bystanders)
+        # A superseded source row stops bystanders whether or not the source is at its limit,
+        # so `full` is None on an ordinary move (2026-10-08: AttributeError left a settled row
+        # reported as 'unknown').
+        why = (f"{land.src_instance} is at its usage limit ({full.get('sessionPct')}% 5-hour / "
+               f"{full.get('weekPct')}% weekly)" if full else
+               "the landing is verified, so the source row is superseded")
         land.settle_note += (
-            f" {land.src_instance} is at its usage limit ({full.get('sessionPct')}% 5-hour / "
-            f"{full.get('weekPct')}% weekly), so the archive went ahead and stopped what another "
-            f"chat ran under that folder: {names}.")
+            f" {why}, so the archive went ahead and stopped what another chat ran under that "
+            f"folder: {names}.")
     if land.source_app_running and land.source_row in ("settled", "flagged"):
         land.settle_note += (
             f" ⚠ PROVISIONAL: {land.match.get('instance')}'s app was RUNNING, and a running app "
