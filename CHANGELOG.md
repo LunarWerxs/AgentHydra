@@ -20,6 +20,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
 - **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5**
 - **The download is about 12 MB instead of about 200 MB**
+- **AgentHydra 2.0 does much less in the background while you are not looking at it**
 
 **Everything in 2.0.0**
 
@@ -74,6 +75,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   process, which you can restart or stop from Settings without touching AgentHydra, and which keeps your servers
   running when AgentHydra restarts. A server that already runs on its port is used as it is, never killed to make room.
 - **Every change to the new window is tested.** Its own test suite now runs with the rest on every change.
+- **AgentHydra 2.0 does much less in the background while you are not looking at it.** With its window hidden or
+  closed it stops asking for updates nobody would see, its pages refresh only what the page on screen shows, and a
+  list of local servers asked for twice in a row is scanned once. It also starts with less in memory and loads a
+  little less code when it opens.
 
 ### Fixed
 
@@ -91,6 +96,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The keepalive dot on the 5-hour counter is quieter.** It is half as bright and sits a little further in.
 - **Dev servers start on every PC.** They failed to start where another copy of Bun was found first; they now run
   on the window's own.
+- **The new window's pages no longer go blank when a rebuild of them fails.** New pages replace the old ones only
+  once they have built, so a failed build leaves the window as it was.
 
 ### Removed
 

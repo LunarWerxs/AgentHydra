@@ -56,3 +56,50 @@ which has its own animations and no pause yet.
 The launcher (`launcher/host/src/main.rs`) already sets the WebView hidden (`set_visible(false)`, plus low
 memory usage) when the window is minimized and visible again on restore, so a minimized window needed no change;
 only the unfocused-but-showing window drew frames, which the class above now stops.
+
+## 2026-10-07, health pass: startup, idle and memory on a throwaway Desk
+
+`bun e2e/perf.e2e.ts` (README) starts a throwaway Desk (a temp `HYDRA_DESK_HOME`, a free port, headless Edge
+through CDP, never the live window) and reads the bundle, startup, the page's first seconds, 60 s idle in four
+states (window visible, hidden, the AgentHydra pane open, no window) and the localhost list. Base: a clean
+worktree at 93059069. New: the same commit with the health pass's files (commits 8d22a86d to 05dfb72d). Both were
+built, then run interleaved base, new, new, base. Counts and sizes repeat; a timing on this box swings up to 3x
+between two runs of the same tree, so a timing is called better or worse only when both new runs fall outside
+both base runs.
+
+Counts and sizes (exact or nearly):
+
+| metric | before | after | what moved it |
+| --- | --- | --- | --- |
+| web startup bundle | 1,096,628 B (353,504 gzip) | 1,048,809 B (342,420 gzip) | the lightbox loads when a picture opens |
+| AgentHydra pages startup bundle | 518,574 B (145,265 gzip) | 515,897 B (144,428 gzip) | kit variants instead of class overrides |
+| page JS at load | 952 KB | 921 KB | the same |
+| server fetches to the daemon per idle minute, window visible | 112 | 90.5 | a poll that just reached AgentHydra skips its ping |
+| the same, window hidden | 112 | 18.5 | it rests 30 s while no window is visible |
+| the same, AgentHydra pane open | 155 | 107.5 | warm data only for the view on screen |
+| the same, no window | 8 | 0 | no window, no polling |
+| page requests per idle minute, AgentHydra pane | 58 | 31.5 | warm data only for the view on screen |
+| localhost list: scans spawned, cold / three at once / right after | 3 / 3 / 3 | 2 / 2 / 0 | one scan shared, reused 10 s |
+| localhost list right after another | 709 / 1,188 ms | 3 / 4 ms | the reused scan |
+
+Memory (two runs a side):
+
+| metric | before | after |
+| --- | --- | --- |
+| server working set right after start | 103.2 / 104.0 MB | 85.2 / 84.3 MB (the Agent SDK is read on first use) |
+| server private bytes right after start | 251.8 / 258.7 MB | 237.9 / 239.8 MB |
+| server working set while idle, window hidden | 115.0 / 119.3 MB | 102.3 / 99.1 MB |
+
+Timings (two runs a side; the verdict is the rule above):
+
+| metric | before | after | verdict |
+| --- | --- | --- | --- |
+| server CPU per idle minute, window hidden | 375 / 594 ms | 266 / 203 ms | better |
+| server CPU per idle minute, no window | 219 / 172 ms | 109 / 94 ms | better |
+| server CPU per idle minute, window visible | 516 / 438 ms | 734 / 500 ms | inside the noise |
+| server CPU per idle minute, AgentHydra pane | 469 / 734 ms | 500 / 359 ms | inside the noise |
+| startup to first health answer (median of 5) | 250 / 209 ms | 453 / 177 ms | inside the noise |
+| first contentful paint | 464 / 268 ms | 580 / 352 ms | inside the noise |
+| style recalcs per idle minute, window visible | 124 / 134 | 276 / 145 | inside the noise |
+
+The dev-servers service used no CPU in any idle state on either side.
