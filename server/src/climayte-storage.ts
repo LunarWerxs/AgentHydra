@@ -55,7 +55,8 @@ export function logSettled(at: CliMayteWorker['attempts'][number]): boolean {
 }
 
 /** A finished worker's prompts, handoffs, signals, hook files and sealed folder are removed this long
- *  after its last attempt ended (the plan's piece 6: they had no cleanup, 35 MB on 2026-10-03). */
+ *  after its last attempt ended or the file was last written, whichever is later (the plan's piece 6:
+ *  they had no cleanup, 35 MB on 2026-10-03). */
 const FILES_KEEP_MS = 14 * 86_400_000
 
 /** A removed task's archive folder (climayteRemove) is deleted this long after it was made. */

@@ -250,11 +250,12 @@ the change.
    `corch/prompts|handoffs|signals|hooks` of finished workers (e.g. 14 days) and for
    `corch/archive`. Measure: `du -sh ~/.agenthydra/corch/logs` and plain-vs-zst bytes (the
    python one-liner in §1c's source: sizes by extension and age). Expect 809 MB → ~250 MB.
-   **Done** (`planStorage`, `storagePass`): a settled log is packed 10 minutes after it ends, up to 128 MiB a
-   pass; a finished worker's prompts, handoffs, signals, hooks and sealed folder (`corch/sealed/<worker id>`,
-   since 2026-10-08, when sealed tasks stopped leaving a folder in `%TEMP%`) go 14 days after its last
-   attempt ended; a removed task's `corch/archive` folder goes after 30 days. Pinned by
-   `server/tests/climayte-storage.test.ts`.
+   **Done.** `packOldLogs` (`climayte.ts`) packs a settled log 10 minutes after it ends, up to 128 MiB a
+   pass. The storage pass (`planStorage`, `storagePass` in `climayte-storage.ts`) removes a finished worker's
+   prompts, handoffs, signals, hooks and sealed folder (`corch/sealed/<worker id>`, since 2026-10-08, when
+   sealed tasks stopped leaving a folder in `%TEMP%`) 14 days after its last attempt ended or the file was
+   last written, whichever is later, and a removed task's `corch/archive` folder after 30 days; a dry run
+   also lists what would be packed. Pinned by `server/tests/climayte-storage.test.ts`.
 7. **Prune old `claude-native` builds.** Files: `server/src/claude-native-launch.ts`. Keep the build
    in use and one previous; never delete one a running Claude holds. Measure:
    `du -sh ~/.agenthydra/data/claude-native` (2.5 GB → ~1.2 GB).

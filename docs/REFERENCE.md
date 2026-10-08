@@ -514,7 +514,8 @@ that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the 
 
 - `STALL main thread unresponsive for N s ... in flight: ...` comes from a worker thread while the main thread
   is stuck (from 2 s on), naming the requests in flight; `STALL over` says when it answered again.
-- `STALL one block of N s ...; it followed: ... | profile: ...` follows any single block of 2 s or more.
+- `STALL one block of N s ...; it followed: ... | profile: ...` follows a single block of 2 s or more, at most
+  one such line every 30 s.
 - A saturated line follows many short blocks that add up to 5 s in 10 s, which look like no freeze at all yet
   starve the health probe the same way.
 

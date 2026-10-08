@@ -51,9 +51,10 @@ Free accounts, then CliMayte, then HSwarm's paid API (owner, 2026-10-07: "the fr
 
 `climayte.ts` keeps whatever starts, stops or schedules work: `tick`, `finish`, `climayteRun`, `climayteSend`,
 `climayteVerdict`, the checks' lifecycle, wave start and reconcile, and the ping wiring. It re-exports, by name,
-everything below, so the routes, MCP tools and tests import from it as before. The records and the pure decisions
-are in `climayte-lib.ts`; the store, the journal and reading an attempt's log in `climayte-core.ts`; starting an
-attempt in `climayte-launch.ts`; the scheduling pass in `climayte-schedule.ts`. What never drives the tick sits
+every name it exported before the split, so the routes, MCP tools and tests import from it as before. The records
+and the pure decisions are in `climayte-lib.ts`; the store, `journal` and `peekLog` in `climayte-core.ts` (the
+journal file itself in `climayte-journal.ts`); starting an attempt in `climayte-launch.ts`; the scheduling pass in
+`climayte-schedule.ts`. What never drives the tick sits
 beside it (split 2026-10-08, when the file reached 4,428 lines against the Architect's 2,500-line gate), and none
 of these imports `climayte.ts` back:
 

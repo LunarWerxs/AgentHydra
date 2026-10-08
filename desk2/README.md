@@ -462,8 +462,8 @@ waits for it to answer, then opens Hydra Desk in its own window (`launcher\Hydra
 the WebView2 runtime that ships with Windows 11), with its own taskbar entry. Clicking it again just brings the window forward; it
 never starts a second server. No console window appears: the shortcut runs `launcher\start.vbs`, which
 runs `launcher\start.ps1` hidden. When the server already answers and the window has opened before,
-`start.vbs` runs `HydraDesk2.exe` itself and then `start.ps1 -NoWindow` for the tray, which saves PowerShell's
-startup on every open; `start.ps1` also opens the window before it looks for the tray.
+`start.vbs` runs `HydraDesk2.exe` itself and only then `start.ps1 -NoWindow` for the tray, so the window no
+longer waits for PowerShell to start; `start.ps1` also opens the window before it looks for the tray.
 
 **AgentHydra's tray icon is Desk 2's** (owner, 2026-10-06: Desk 2 becomes AgentHydra 2.0, and the old
 AgentHydra window and Hydra Desk 1 are retired). The launcher starts the tray (`..\misc\AgentHydra-Tray.exe

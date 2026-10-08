@@ -127,9 +127,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   once they have built, so a failed build leaves the window as it was.
 - **Refreshing one provider's model list in HSwarm keeps the others.** It used to replace the whole saved list,
   prices included, with that one provider's models.
-- **AgentHydra no longer freezes for seconds at a time.** Listing your chats, checking which programs run,
-  sending a message to a chat and starting CliMayte could each hold the whole app still, and a long freeze made
-  the tray restart it. That work now happens without stopping everything else, so pages and tools answer at once.
+- **AgentHydra no longer freezes for seconds at a time.** Listing your chats, sending a message to a chat and
+  starting CliMayte could each hold the whole app still, and a long freeze made the tray restart it. They now
+  happen without stopping everything else, and checking which programs run takes much less time, so pages and
+  tools answer at once.
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder.** Each one used to leave an
   empty folder there that nothing removed. They now live with CliMayte's other files and are cleared with them,
   two weeks after the task last ran.

@@ -170,7 +170,7 @@ every AgentHydra-pane tab is fetched one at a time on `requestIdleCallback` once
 stats card shows its last answer while the next one is read (its four daemon reads took 3 s cold).
 
 The daemon behind the pane was the other half. Its `STALL` lines (`daemon.log`), which since 57904add and f017a013
-carry a profile for each long block and sample from boot, found where the event loop was held: a synchronous chat
+carry a profile for a long block (at most one such line every 30 s) and sample from boot, found where the event loop was held: a synchronous chat
 list and process queries (31dd5ec8), a `spawnSync` in message delivery that froze it for 18.5 s and got it restarted
 by the watchdog, a synchronous agent-catalog walk (19d99db5), CliMayte's boot reading every finished worker
 (42c1ed70) and the HSwarm account map read on every ask (a54954be). Seconds blocked went from 40 per 15 minutes
