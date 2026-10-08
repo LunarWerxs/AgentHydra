@@ -493,8 +493,9 @@ describe("CliMayte's resume prompts", () => {
   test('AgentHydra still writes the words this reads', () => {
     const lib = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-lib.ts'), 'utf8')
     for (const prompt of [MOVED, PAUSED, INTERRUPTED, TRANSIENT]) expect(lib).toContain(`'${prompt}'`)
+    const steer = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-steer.ts'), 'utf8')
+    expect(steer).toContain("const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'")
     const climayte = readFileSync(join(import.meta.dir, '../../../../server/src/climayte.ts'), 'utf8')
-    expect(climayte).toContain("const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'")
     // Source text: each `\\n` is the backslash and n its template literal holds.
     expect(climayte).toContain('`${SENT_BACK} ${note}\\n\\nFix it, prove the fix with a command and what it printed, and report again.`')
   })
