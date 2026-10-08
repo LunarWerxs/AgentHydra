@@ -5,6 +5,45 @@ import { type CodexDesktopTarget, codexDesktopRunState } from './codex-desktop'
 const MAX_FRAME_BYTES = 8 * 1024 * 1024
 const verifiedPipes = new Map<number, string[]>()
 
+/** One request: a 4-byte little-endian length, then the JSON-RPC body. */
+function encodeFrame(method: string, params: Record<string, unknown>): Buffer {
+  const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))
+  const frame = Buffer.alloc(4 + payload.length)
+  frame.writeUInt32LE(payload.length)
+  payload.copy(frame, 4)
+  return frame
+}
+
+/** The whole frames at the front of `pending`, and what is left of it. `tooLarge`: the next frame
+ *  claims more than MAX_FRAME_BYTES, so nothing after it is read. */
+function takeFrames(pending: Buffer): { frames: Buffer[]; rest: Buffer; tooLarge: boolean } {
+  const frames: Buffer[] = []
+  let rest = pending
+  while (rest.length >= 4) {
+    const size = rest.readUInt32LE(0)
+    if (size > MAX_FRAME_BYTES) return { frames, rest, tooLarge: true }
+    if (rest.length < size + 4) break
+    frames.push(rest.subarray(4, size + 4))
+    rest = rest.subarray(size + 4)
+  }
+  return { frames, rest, tooLarge: false }
+}
+
+/** What one response frame answers: null when it is for another request id. */
+function readResponse<T>(payload: Buffer): { error?: Error; result?: T } | null {
+  try {
+    const response = JSON.parse(payload.toString('utf8'))
+    if (response.id !== 1) return null
+    if (response.jsonrpc !== '2.0') throw new Error('Invalid response')
+    if (response.error)
+      return { error: new Error(response.error.message || 'Codex app refused the request.') }
+    if (!('result' in response)) throw new Error('Missing result')
+    return { result: response.result }
+  } catch {
+    return { error: new Error('Codex app returned an invalid response.') }
+  }
+}
+
 /** The same length-prefixed JSON-RPC transport used by Codex's bundled app-tools plugin. */
 export function callCodexAppPipe<T>(
   pipe: string,
@@ -14,7 +53,7 @@ export function callCodexAppPipe<T>(
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     const socket = createConnection(pipe)
-    let pending = Buffer.alloc(0)
+    let pending: Buffer = Buffer.alloc(0)
     let settled = false
     const finish = (error?: Error, result?: T) => {
       if (settled) return
@@ -28,33 +67,17 @@ export function callCodexAppPipe<T>(
     socket.once('error', () => finish(new Error('Codex app tools connection failed.')))
     socket.once('end', () => finish(new Error('Codex app tools connection closed.')))
     socket.once('close', () => finish(new Error('Codex app tools connection closed.')))
-    socket.once('connect', () => {
-      const payload = Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))
-      const frame = Buffer.alloc(4 + payload.length)
-      frame.writeUInt32LE(payload.length)
-      payload.copy(frame, 4)
-      socket.write(frame)
-    })
+    socket.once('connect', () => socket.write(encodeFrame(method, params)))
     socket.on('data', (chunk) => {
-      pending = Buffer.concat([pending, typeof chunk === 'string' ? Buffer.from(chunk) : chunk])
-      while (pending.length >= 4) {
-        const size = pending.readUInt32LE(0)
-        if (size > MAX_FRAME_BYTES) return finish(new Error('Codex app response is too large.'))
-        if (pending.length < size + 4) return
-        const payload = pending.subarray(4, size + 4)
-        pending = pending.subarray(size + 4)
-        try {
-          const response = JSON.parse(payload.toString('utf8'))
-          if (response.id !== 1) continue
-          if (response.jsonrpc !== '2.0') throw new Error('Invalid response')
-          if (response.error)
-            return finish(new Error(response.error.message || 'Codex app refused the request.'))
-          if (!('result' in response)) throw new Error('Missing result')
-          return finish(undefined, response.result)
-        } catch {
-          return finish(new Error('Codex app returned an invalid response.'))
-        }
+      const taken = takeFrames(
+        Buffer.concat([pending, typeof chunk === 'string' ? Buffer.from(chunk) : chunk]),
+      )
+      pending = taken.rest
+      for (const frame of taken.frames) {
+        const answer = readResponse<T>(frame)
+        if (answer) return finish(answer.error, answer.result)
       }
+      if (taken.tooLarge) finish(new Error('Codex app response is too large.'))
     })
   })
 }

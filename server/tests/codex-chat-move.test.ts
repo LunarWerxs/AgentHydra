@@ -104,68 +104,76 @@ function fixture() {
     const side = home === sourceHome ? 'source' : 'target'
     const archivePath = join(sourceHome, 'archived_sessions', 'chat.jsonl')
     calls.push(`${side}:connect`)
+    type Params = Record<string, unknown> | undefined
+    const list = (params: Params) => {
+      expect(params?.archived).toBe(false)
+      if (state.secondPage && !params?.cursor) return { data: [thread], nextCursor: 'page-2' }
+      return {
+        data:
+          state.archived || (state.staleArchivePath && existsSync(archivePath))
+            ? []
+            : [{ ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) }],
+        nextCursor: null,
+      }
+    }
+    const resumeSource = (params: Params) => {
+      expect(params?.threadId).toBe(thread.id)
+      expect(params?.path).toBe(thread.path)
+      if (state.staleArchivePath) {
+        mkdirSync(join(sourceHome, 'archived_sessions'), { recursive: true })
+        throw new Error(
+          `cannot resume paginated thread ${thread.id} with stale path: requested ${thread.path}, current ${archivePath}; omit path and resume by thread id`,
+        )
+      }
+      return { thread }
+    }
+    const importTarget = (params: Params) => {
+      Object.assign(imported, params)
+      if (state.mutateDuringImport)
+        appendFileSync(
+          thread.path,
+          `${JSON.stringify({
+            timestamp: '2024-09-11T21:05:00.000Z',
+            type: 'response_item',
+            payload: { type: 'message', role: 'user', content: [] },
+          })}\n`,
+        )
+      if (state.failResume) throw new Error('Import failed')
+      return {}
+    }
+    const read = (params: Params) => {
+      if (side === 'source' && existsSync(archivePath))
+        return { thread: { ...thread, path: archivePath } }
+      if (state.failRead) throw new Error('Verification failed')
+      return { thread: { ...thread, id: params?.threadId, path: imported.path } }
+    }
+    const archive = () => {
+      if (state.missingArchiveIndex) {
+        state.missingArchiveIndex = false
+        throw new Error(`no rollout found for thread id ${thread.id}`)
+      }
+      if (state.failArchive) throw new Error('Archive failed')
+      state.archived = true
+      return {}
+    }
+    // The fake app server: one answer per method, and {} for a method it does not model.
+    const answers: Record<string, (params: Params) => unknown> = {
+      'thread/list': list,
+      'thread/resume': side === 'source' ? resumeSource : importTarget,
+      'thread/name/set': (params) => {
+        imported.name = params?.name
+        return {}
+      },
+      'thread/read': read,
+      'thread/archive': archive,
+    }
     return {
       close() {
         calls.push(`${side}:close`)
       },
       async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
         calls.push(`${side}:${method}`)
-        if (method === 'thread/list') {
-          expect(params?.archived).toBe(false)
-          if (state.secondPage && !params?.cursor)
-            return { data: [thread], nextCursor: 'page-2' } as T
-          return {
-            data:
-              state.archived || (state.staleArchivePath && existsSync(archivePath))
-                ? []
-                : [{ ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) }],
-            nextCursor: null,
-          } as T
-        }
-        if (method === 'thread/resume') {
-          if (side === 'source') {
-            expect(params?.threadId).toBe(thread.id)
-            expect(params?.path).toBe(thread.path)
-            if (state.staleArchivePath) {
-              mkdirSync(join(sourceHome, 'archived_sessions'), { recursive: true })
-              throw new Error(
-                `cannot resume paginated thread ${thread.id} with stale path: requested ${thread.path}, current ${archivePath}; omit path and resume by thread id`,
-              )
-            }
-            return { thread } as T
-          }
-          Object.assign(imported, params)
-          if (state.mutateDuringImport)
-            appendFileSync(
-              thread.path,
-              `${JSON.stringify({
-                timestamp: '2024-09-11T21:05:00.000Z',
-                type: 'response_item',
-                payload: { type: 'message', role: 'user', content: [] },
-              })}\n`,
-            )
-          if (state.failResume) throw new Error('Import failed')
-          return {} as T
-        }
-        if (method === 'thread/name/set') {
-          imported.name = params?.name
-          return {} as T
-        }
-        if (method === 'thread/read') {
-          if (side === 'source' && existsSync(archivePath))
-            return { thread: { ...thread, path: archivePath } } as T
-          if (state.failRead) throw new Error('Verification failed')
-          return { thread: { ...thread, id: params?.threadId, path: imported.path } } as T
-        }
-        if (method === 'thread/archive') {
-          if (state.missingArchiveIndex) {
-            state.missingArchiveIndex = false
-            throw new Error(`no rollout found for thread id ${thread.id}`)
-          }
-          if (state.failArchive) throw new Error('Archive failed')
-          state.archived = true
-        }
-        return {} as T
+        return (answers[method]?.(params) ?? {}) as T
       },
     }
   }
