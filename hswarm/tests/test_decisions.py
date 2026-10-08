@@ -92,6 +92,17 @@ def test_jev_down_sends_everything_to_the_fallback():
     assert all("error" in a["jev"] for a in out["answers"])
 
 
+def test_jev_down_at_escalate_below_zero_leaves_every_item_unanswered():
+    # 0 means Jev alone: Dredd asks its yes/no questions there and answers Jev's gaps with its own keywords, because the
+    # fallback's yes/no answers measured 19 of 39 dockets right against Jev's 39 of 39.
+    jev = FakeJev({}, fail={"status": "error", "error": "HTTP 402: no credit", "http": 402})
+    mgr = FakeMgr()
+    out = asyncio.run(d.decide([_item("Which team?"), {"state": "s", "question": "Urgent?"}], mgr, jev=jev, escalate_below=0))
+    assert mgr.prompts == [] and out["summary"]["escalated"] == 0 and out["summary"]["unanswered"] == 2
+    assert [(a["answer"], a["source"]) for a in out["answers"]] == [(None, "none")] * 2
+    assert all("402" in a["jev"]["error"] and "402" in a["error"] and "fallback" not in a for a in out["answers"])
+
+
 def test_yesno_and_score_answers():
     jev = FakeJev({"Urgent?": {"type": "noul", "noul": 0.97}, "How angry?": {"type": "score", "score": 1.1, "probabilities": {"0": 0.0, "1": 0.9, "2": 0.1}, "confidence": 0.9}})
     items = [{"state": "s", "question": "Urgent?"}, {"state": "s", "question": "How angry?", "type": "score", "options": ["calm", "cross", "furious"]}]

@@ -564,8 +564,9 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     TypeSafe's Jev answers every item first (~0.15 s and ~$0.00004 each, with a calibrated confidence); an answer
     under escalate_below confidence is re-asked through the published decision capability profile.
     If no valid stronger answer is obtained, the decision remains unanswered with an explicit error.
-    The desktop orchestrator retains final authority. escalate_below=0 trusts Jev on
-    everything, 1.01 sends everything to the fallback. Items with the same state always share one Jev call (the
+    The desktop orchestrator retains final authority. escalate_below=0 is Jev alone: nothing escalates, and an item
+    Jev could not answer (no key, HTTP 402) stays unanswered with Jev's error, for the caller's own fallback.
+    1.01 sends everything to the fallback. Items with the same state always share one Jev call (the
     state is read and billed once); batch also packs up to 5 unrelated items per call (more hurt accuracy).
     NOT for arithmetic, counting, dates or writing text (Jev is weak there by design): use hswarm_ask for those.
     model defaults to jev-1.13.0, the version the thresholds were measured on (typesafe.MODEL); 'jev-latest' is the
