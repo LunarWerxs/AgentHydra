@@ -6,12 +6,13 @@
 #      appended to ~/.hydra-desk-2/logs/server.log, its pids in ~/.hydra-desk-2/server.pid (stop.ps1 reads it).
 #      A server this launcher started that is still booting is waited on, never started twice.
 #   3. Wait for health up to 20 s; if it never answers, show a message box naming the log and exit 1.
-#   4. Start AgentHydra's tray icon (misc/AgentHydra-Tray.exe AgentHydra-Tray.json --background) when it is
-#      not running: the icon goes with this window, and its Open runs this launcher (openCommand).
-#   5. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
+#   4. Run launcher/HydraDesk2.exe (the native WebView2 host). It opens hidden at the place saved in
 #      ~/.hydra-desk-2/window.json, then shows; a second run only focuses the open window. On the host's
 #      first run (no %LOCALAPPDATA%\HydraDesk2\webview yet) the old Edge app window is asked to close
 #      first, so the host can copy its localStorage over.
+#   5. Start AgentHydra's tray icon (misc/AgentHydra-Tray.exe AgentHydra-Tray.json --background) when it is
+#      not running: the icon goes with this window, and its Open runs this launcher (openCommand). Then
+#      add the server's bun pid to the pid file, when this run started the server.
 #
 # Safe to run twice: a named mutex serialises launches, and a second run only focuses the window.
 # The shortcut runs this through launcher/start.vbs so no console window ever flashes.
@@ -190,13 +191,8 @@ function Start-Server {
     $wrapperPid = $wrapper.Id
   }
 
-  # Record bun itself too, so stop.ps1 can kill the right tree even after the wrapper is gone.
-  $server = $null
-  for ($i = 0; $i -lt 30 -and -not $server; $i++) {
-    $server = Get-CimInstance Win32_Process -Filter "ParentProcessId=$wrapperPid" -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -like 'bun*' } | Select-Object -First 1
-    if (-not $server) { Start-Sleep -Milliseconds 100 }
-  }
+  # The wrapper's pid at once, so a second launch waits for this server instead of starting another;
+  # bun's own is added by Save-ServerPid once the window is up, off the path to it.
   $info = [ordered]@{
     wrapperPid = $wrapperPid
     wrapperStarted = if ($wrapper) { $wrapper.StartTime.ToUniversalTime().ToString('o') } else { '' }
@@ -206,19 +202,33 @@ function Start-Server {
     deskRoot = $DeskRoot
     startedAt = (Get-Date).ToUniversalTime().ToString('o')
   }
-  if ($server) {
-    $sp = Get-Process -Id ([int]$server.ProcessId) -ErrorAction SilentlyContinue
-    if ($sp) {
-      $info.serverPid = $sp.Id
-      $info.serverStarted = $sp.StartTime.ToUniversalTime().ToString('o')
-    }
-  }
   $info | ConvertTo-Json | Set-Content -Path $PidFile -Encoding UTF8
-  Say "started server: wrapper pid $($info.wrapperPid), bun pid $($info.serverPid), log $ServerLog"
-  return $wrapper
+  Say "started server: wrapper pid $wrapperPid, log $ServerLog"
+  return @{ Wrapper = $wrapper; Info = $info }
+}
+
+# Record bun itself too, so stop.ps1 can kill the right tree even after the wrapper is gone. Each look is
+# a WMI query, so it runs after the window has started (it once ran up to 30 of them before the health wait).
+function Save-ServerPid($started) {
+  $info = $started.Info
+  $server = $null
+  for ($i = 0; $i -lt 30 -and -not $server; $i++) {
+    $server = Get-CimInstance Win32_Process -Filter "ParentProcessId=$($info.wrapperPid)" -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like 'bun*' } | Select-Object -First 1
+    if (-not $server) { Start-Sleep -Milliseconds 100 }
+  }
+  if (-not $server) { return }
+  $sp = Get-Process -Id ([int]$server.ProcessId) -ErrorAction SilentlyContinue
+  if (-not $sp) { return }
+  $info.serverPid = $sp.Id
+  $info.serverStarted = $sp.StartTime.ToUniversalTime().ToString('o')
+  $info | ConvertTo-Json | Set-Content -Path $PidFile -Encoding UTF8
+  Say "server's bun pid $($sp.Id)"
 }
 
 function Get-TrayHost {
+  # Get-Process first (~80 ms): with no tray running at all, the WMI query (~0.5 s) has nothing to read.
+  if (-not (Get-Process -Name 'AgentHydra-Tray' -ErrorAction SilentlyContinue)) { return $null }
   Get-CimInstance Win32_Process -Filter "Name='AgentHydra-Tray.exe'" -ErrorAction SilentlyContinue |
     Where-Object { ([string]$_.CommandLine).ToLowerInvariant().Contains($TrayConfig.ToLowerInvariant()) } | Select-Object -First 1
 }
@@ -246,7 +256,7 @@ function Wait-Health($wrapper) {
   while ((Get-Date) -lt $deadline) {
     if (Test-Health) { return $true }
     if ($wrapper -and $wrapper.HasExited) { return $false }  # it died; no point waiting out the clock
-    Start-Sleep -Milliseconds 250
+    Start-Sleep -Milliseconds 100
   }
   return (Test-Health)
 }
@@ -288,6 +298,7 @@ $mutex = New-Object System.Threading.Mutex($false, 'Local\HydraDesk2Launcher')
 try {
   try { [void]$mutex.WaitOne(30000) } catch [System.Threading.AbandonedMutexException] { }
 
+  $started = $null
   if (Test-Health) {
     Say "server already answers on $Url"
   } else {
@@ -297,7 +308,8 @@ try {
       Say "server started earlier (wrapper pid $($mine.wrapperPid)) is not answering yet: waiting for it"
       $wrapper = Get-Process -Id ([int]$mine.wrapperPid) -ErrorAction SilentlyContinue
     } else {
-      $wrapper = Start-Server
+      $started = Start-Server
+      $wrapper = $started.Wrapper
     }
     if (-not (Wait-Health $wrapper)) {
       $tail = ''
@@ -312,13 +324,16 @@ try {
   if (-not (Test-Path (Join-Path $DeskRoot 'web\dist\index.html'))) {
     Say 'warning: web\dist is not built; run `bun run build` in the desk folder'
   }
+  # The window first, the tray after it: the tray check is a WMI query (~0.5 s measured 2026-10-08)
+  # that every open paid before the window started, though the window never needs the tray.
+  if (-not $NoWindow) {
+    if (-not (Test-Path -LiteralPath $HostExe)) { Fail "AgentHydra's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }
+    if ($FirstRun) { Close-OldWindow }
+    Start-Process -FilePath $HostExe -ArgumentList @("--url", $Url) -WorkingDirectory $PSScriptRoot | Out-Null
+    Say "ran $HostExe on $Url$(if ($FirstRun) { ' (first run)' })"
+  }
   Start-Tray
-  if ($NoWindow) { return }
-
-  if (-not (Test-Path -LiteralPath $HostExe)) { Fail "AgentHydra's window host is missing: $HostExe`n`nBuild it in launcher\host (cargo build --release) and copy it here." }
-  if ($FirstRun) { Close-OldWindow }
-  Start-Process -FilePath $HostExe -ArgumentList @("--url", $Url) -WorkingDirectory $PSScriptRoot | Out-Null
-  Say "ran $HostExe on $Url$(if ($FirstRun) { ' (first run)' })"
+  if ($started) { Save-ServerPid $started }
 } finally {
   try { $mutex.ReleaseMutex() } catch { }
   $mutex.Dispose()
