@@ -3,7 +3,7 @@ and a routed ask walks to its next leg on it.
 
 Contract: `nth=N` fails the Nth matching call and no other; the failure is raised inside ChatClient.chat before
 the HTTP request, so the fake transport never sees it; an unavailable-shaped fault (503) fails a routed ask over
-to the next leg, while a 400-shaped one (the task's own failure) does not. Regression it catches: the hook
+to the next leg, while a 400-shaped one after the leg served a turn (the task's own failure) does not. Regression it catches: the hook
 dropped from ChatClient.chat, or a counter that fires on every call instead of the Nth.
 """
 from __future__ import annotations
@@ -104,9 +104,30 @@ def test_an_injected_unavailable_leg_fails_a_job_task_over(monkeypatch, tmp_path
     assert r.status == "ok" and r.failover == ["deepseek-flash"] and r.model == "deepseek-flash-or" and sent == ["openrouter"]
 
 
-def test_an_injected_own_failure_is_not_failed_over(monkeypatch):
+def test_an_injected_own_failure_is_not_failed_over(monkeypatch, tmp_path):
+    # A 400 is the task's own only once its leg has served a turn: on the first call it is the route refusing the
+    # request, and fails over (jobs._refused_unserved, 2026-10-07). So the leg serves a tool call, then its 2nd call 400s.
     sent: list[str] = []
     m = _routed(monkeypatch, sent)
-    faults.arm(provider="deepseek", status=400)
-    r = asyncio.run(m.ask_routed("17*23?", "deepseek-flash"))
-    assert r.status == "error" and r.failover == [] and sent == []
+    call = {"type": "function", "id": "c1", "function": {"name": "list_dir", "arguments": "{}"}}
+
+    def handler(req: httpx.Request):
+        sent.append("deepseek")
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [call]},
+                                                      "finish_reason": "tool_calls"}], "usage": {"prompt_tokens": 10, "completion_tokens": 2}})
+
+    c = m.client_for("deepseek-flash")
+    c._http = httpx.AsyncClient(base_url=c.spec["base_url"], transport=httpx.MockTransport(handler), headers={"Content-Type": "application/json"})
+
+    async def no_probe(client):
+        return None
+
+    monkeypatch.setattr(m, "_park_broke_keys", no_probe)
+    faults.arm(provider="deepseek", nth=2, status=400)
+
+    async def go():
+        job = m.submit([Task.from_dict({"prompt": "x", "cwd": str(tmp_path), "tools": "read", "model": "deepseek-flash"})])
+        return await asyncio.wait_for(m.wait(job.id, None), 10)
+
+    r = asyncio.run(go()).results["t1"]
+    assert r.status == "error" and "API 400" in r.error and r.turns == 1 and r.failover == [] and sent == ["deepseek"], r.error

@@ -17,7 +17,8 @@ Keys: `provider` (a provider name or `*`, default `*`), `model` (a resolved mode
 `nth` (calls before the Nth matching one never fail; 0 = from the first), `times` (how many calls may fail,
 default 1; -1 = no limit), `interval` (only every Kth matching call may fail), `probability` (0..1, default 1),
 `seed` (makes probability reproducible), `status` (the HTTP status to fake, default 503 - an unavailable leg;
-400 fakes the task's own failure, which must NOT fail over; 504 fakes a stalled read). So `nth=3` alone
+400 on a call after the leg served a turn fakes the task's own failure, which must NOT fail over, while 400 on a
+leg's first call is that route refusing the request, which does; 504 fakes a stalled read). So `nth=3` alone
 fails exactly the third matching call and no other. Only the api backend's calls pass through here: a cc
 worker's requests are made by Claude Code, not by this client.
 """
