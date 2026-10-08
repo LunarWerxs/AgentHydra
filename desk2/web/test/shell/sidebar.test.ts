@@ -30,6 +30,7 @@ import {
   shortcutItem,
   statusGlyph,
   SWARM_RUNNING,
+  type AccountChoice,
   type ChatGroup,
   type RowMenuEntry,
   type RowMenuItem
@@ -373,8 +374,10 @@ describe('row menu', () => {
     ...over
   })
 
-  it('is the real menu for an idle chat: Open in, Pin, Mark as unread, Rename, Fork, Move to group, Archive, Delete', () => {
+  it('is the real menu for an idle chat under a line naming it: Open in, Pin, Mark as unread, Rename, Fork, Move to group, Archive, Delete', () => {
     expect(show(rowMenu(chatRow(chat('a', { sessionId: 's1' }))))).toEqual([
+      's1',
+      '-',
       'Open in >',
       '-',
       'Pin P',
@@ -392,6 +395,8 @@ describe('row menu', () => {
 
   it('follows the state: Stop above Pin while working, Unpin, Mark as read, Unarchive', () => {
     expect(show(rowMenu(chatRow(chat('a', { sessionId: 's1', status: 'working', pinned: true, unread: true, archived: true }))))).toEqual([
+      's1',
+      '-',
       'Open in >',
       '-',
       'Stop',
@@ -414,9 +419,9 @@ describe('row menu', () => {
     expect(show(rowMenu(chatRow(chat('f', { forkedFrom: 's1' }))))).toContain('Fork F')
   })
 
-  it('an outside session has the same menu without Delete, and Archive says why', () => {
+  it('an outside session has the same menu without Delete, with Move to account, and Archive says why', () => {
     const entries = rowMenu(externalRow(ext()))
-    expect(show(entries)).toEqual(['Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Fork F', '-', 'Move to group >', '-', 'Archive A'])
+    expect(show(entries)).toEqual(['sess-1', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Fork F', '-', 'Move to group >', 'Move to account >', '-', 'Archive A'])
     const archive = entries.find((e) => e !== 'separator' && !('items' in e) && e.action === 'archive') as RowMenuItem
     expect(archive.title).toMatch(/never deleted here/)
     expect(sub(entries, 'Open in')).toEqual(['File Explorer', 'Copy resume command', 'Copy session ID'])
@@ -424,6 +429,38 @@ describe('row menu', () => {
     const codex = rowMenu(externalRow(ext({ source: 'codex', cwd: null })))
     expect(show(codex)).toContain('Fork F (off)')
     expect(sub(codex, 'Open in')).toEqual(['File Explorer (off)', 'Copy resume command (off)', 'Copy session ID'])
+  })
+
+  it('the first line is the id as the session header shows it and the account it runs on; it copies the whole id', () => {
+    const accounts: AccountChoice[] = [{ ref: 'desktop:C:/p/72', num: 72, name: 'example', running: true }]
+    const first = (entries: RowMenuEntry[]) => entries[0] as RowMenuItem
+    const outside = first(rowMenu(externalRow(ext({ id: '13e61bee-0000-4000-8000-000000000000', instance: '#72' })), [], accounts))
+    expect(outside).toMatchObject({ action: 'copyId', label: '13e61bee', value: '13e61bee-0000-4000-8000-000000000000', hint: '#72 example' })
+    // AgentHydra's list not read yet: the number alone; an instance named by its folder: that name
+    expect(first(rowMenu(externalRow(ext({ instance: '#72' })))).hint).toBe('#72')
+    expect(first(rowMenu(externalRow(ext({ instance: 'Claude-Work' })))).hint).toBe('Claude-Work')
+    expect(first(rowMenu(externalRow(ext()))).hint).toBeUndefined()
+    // a chat of our own: its session id, else its own id before it has one; its account as the window names it
+    expect(first(rowMenu(chatRow(chat('a', { sessionId: 's1' }))))).toMatchObject({ value: 's1', hint: '#1' })
+    expect(first(rowMenu(chatRow(chat('a')))).value).toBe('a')
+  })
+
+  it('Move to account lists the desktop accounts, running ones first, the current one ticked and off; only a Claude session of another app on this PC has it', () => {
+    const accounts: AccountChoice[] = [
+      { ref: 'desktop:C:/p/9', num: 9, name: 'nine', running: false },
+      { ref: 'desktop:C:/p/72', num: 72, name: 'example', running: true },
+      { ref: 'desktop:C:/p/3', num: 3, name: 'three', running: true }
+    ]
+    const entries = rowMenu(externalRow(ext({ instance: '#72' })), [], accounts)
+    expect(sub(entries, 'Move to account')).toEqual(['#3 three', '#72 example * (off)', '-', '#9 nine'])
+    const closed = (entries.find((e) => e !== 'separator' && 'items' in e && e.label === 'Move to account') as Extract<RowMenuEntry, { items: unknown }>).items.at(-1) as RowMenuItem
+    expect(closed).toMatchObject({ action: 'moveToAccount', value: 'desktop:C:/p/9', hint: 'closed' })
+    expect(sub(rowMenu(externalRow(ext())), 'Move to account')).toEqual(['Reading accounts… (off)'])
+    const has = (entries: RowMenuEntry[]) => show(entries).includes('Move to account >')
+    expect(has(rowMenu(externalRow(ext({ source: 'cli' }))))).toBe(true)
+    expect(has(rowMenu(externalRow(ext({ source: 'codex' }))))).toBe(false)
+    expect(has(rowMenu(externalRow(ext({ fromPc: 'OTHER-PC' }))))).toBe(false)
+    expect(has(rowMenu(chatRow(chat('a', { sessionId: 's1' }))))).toBe(false)
   })
 
   it('Move to group lists every group with a check on the current one, then New group and Remove from group', () => {

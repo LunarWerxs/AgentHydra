@@ -15,6 +15,9 @@ import { ahSource, appShown, deskOnPcs } from '@/components/cloud/logic'
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
+import { moveSession } from '@/components/session-header/ah'
+import { accountChoices, refreshAhInstances } from '@/components/session-header/instances'
+import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
@@ -57,6 +60,7 @@ import {
 } from './search'
 import {
   accountFace,
+  accountMenu,
   chatRow,
   entryRunning,
   externalGlyph,
@@ -77,6 +81,7 @@ import {
   parseFilter,
   resumeCommand,
   revealChat,
+  rowIdentity,
   rowPatch,
   runningSessionIds,
   deskGlyphs,
@@ -551,7 +556,58 @@ function act(row: Row, item: RowMenuItem) {
   } else if (item.action === 'reveal') attempt('Opening the folder', src.revealFolder(state.cwd))
   else if (item.action === 'copyResume' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(resumeCommand(state.sessionId)))
   else if (item.action === 'copySessionId' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(state.sessionId))
+  else if (item.action === 'copyId' && item.value) attempt('Copy', navigator.clipboard.writeText(item.value))
+  else if (item.action === 'moveToAccount' && state.movable) void moveToAccount(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
 }
+
+// Move to account: AgentHydra's migrate, as the session header's Migrate runs it (one move at a time, a move ends a
+// running turn). It takes a while (the target app imports the chat), so the list says it is moving and how it went.
+const moving = ref(false)
+const rowNote = ref<string | null>(null)
+let rowNoteTimer: ReturnType<typeof setTimeout> | null = null
+function noteRow(text: string | null, forMs = 0) {
+  if (rowNoteTimer) clearTimeout(rowNoteTimer)
+  rowNoteTimer = null
+  rowNote.value = text
+  if (text && forMs) rowNoteTimer = setTimeout(() => (rowNote.value = null), forMs)
+}
+onBeforeUnmount(() => rowNoteTimer && clearTimeout(rowNoteTimer))
+async function moveToAccount(sessionId: string, title: string, item: RowMenuItem) {
+  if (!item.value) return
+  if (moving.value) {
+    rowError.value = 'Another move is still running. Try again when it ends.'
+    return
+  }
+  moving.value = true
+  rowError.value = null
+  noteRow(`Moving “${title}” to ${item.label}…`)
+  try {
+    const x = await moveSession(sessionId, item.value)
+    if (!x.ok) {
+      noteRow(null)
+      rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
+    } else noteRow(x.sourceStillShown?.length ? `Moved to ${item.label}. An old account still lists it.` : `Moved to ${item.label}. It is in that desktop app now.`, 8000)
+  } catch (err) {
+    noteRow(null)
+    rowError.value = `Move failed: ${err instanceof Error ? err.message : String(err)}`
+  } finally {
+    moving.value = false
+    void refreshAhInstances(true)
+    if (cloud.on.value) void cloud.refresh()
+  }
+}
+
+// A session opened from a search (a click, or Enter) shows its folded header for a moment: its id and account are
+// seen without unfolding it (session-header/state.ts peekHeader). Read at the moment of the change, before anything
+// the opening sets off clears the search.
+const searching = () => (cloud.on.value ? cloud.search.value.trim() !== '' : searchOpen.value && query.value.trim() !== '')
+watch(
+  selected,
+  (now, before) => {
+    if (now.kind === 'external' && (before?.kind !== 'external' || before.id !== now.id) && searching()) peekHeader()
+  },
+  { flush: 'sync' }
+)
 /** The desk row a session is, when the desk list shows it: a chat of ours by its session, else an outside session. */
 function deskRowOf(id: string): Row | null {
   const chat = src.chats.value.find((c) => c.sessionId === id)
@@ -575,15 +631,22 @@ function cloudMenu(r: CloudSession): RowMenuEntry[] {
   if (added) return addedMenu(added)
   const row = deskRowOf(r.id)
   if (!row) {
-    return [
+    const account = r.instanceNum !== null ? { num: r.instanceNum, title: null } : null
+    const out: RowMenuEntry[] = [
+      rowIdentity(r.id, account, accountChoices.value),
+      'separator',
       { action: 'open', label: 'Open' },
       'separator',
       { action: 'pin', label: 'Pin', shortcut: 'P' },
       { action: 'copySessionId', label: 'Copy session ID' }
     ]
+    if (cloudMovable(r)) out.push('separator', accountMenu(r.instanceNum, accountChoices.value))
+    return out
   }
-  return rowMenu(stateOf(row), groupNames.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
+  return rowMenu(stateOf(row), groupNames.value, accountChoices.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
 }
+/** A Claude session on this PC only the cloud list has (a past one): AgentHydra here can move it, not one of the other PC's. */
+const cloudMovable = (r: CloudSession) => r.source === 'claude' && (!r.fromPc || r.fromPc === cloud.thisPc.value)
 function cloudAct(r: CloudSession, item: RowMenuItem) {
   const added = addedRows.value.get(r.id)
   if (added) return addedAct(added, item)
@@ -592,6 +655,8 @@ function cloudAct(r: CloudSession, item: RowMenuItem) {
   if (item.action === 'open') openCloud(r)
   else if (item.action === 'pin') attempt('The change', src.updateSessionMeta(r.id, { pinned: true }))
   else if (item.action === 'copySessionId') attempt('Copy', navigator.clipboard.writeText(r.id))
+  else if (item.action === 'copyId' && item.value) attempt('Copy', navigator.clipboard.writeText(item.value))
+  else if (item.action === 'moveToAccount' && cloudMovable(r)) void moveToAccount(r.id, r.title, item)
 }
 /** Opening an outside session reads it, as opening a chat does. */
 function openExternal(s: ExternalSession) {
@@ -833,6 +898,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
         </div>
 
+        <p v-if="rowNote" role="status" class="px-1.5 pt-3 text-[12px] leading-4 text-text-2">{{ rowNote }}</p>
         <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
           <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
@@ -871,6 +937,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </div>
         </section>
         </template>
+        <p v-if="cloud.on.value && !hydraModel && rowNote" role="status" class="px-1.5 pt-3 text-[12px] leading-4 text-text-2">{{ rowNote }}</p>
         <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
           <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">

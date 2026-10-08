@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { onMounted } from 'vue'
+import { Hash } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import {
   ContextMenuItem,
@@ -16,6 +18,7 @@ import {
   DropdownMenuSubContent,
   DropdownMenuSubTrigger
 } from '@/components/ui/dropdown-menu'
+import { refreshAhInstances } from '@/components/session-header/instances'
 import type { RowMenuEntry, RowMenuItem } from './logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT } from './menuClasses'
 
@@ -27,6 +30,12 @@ const ui =
   props.kind === 'context'
     ? { Item: ContextMenuItem, Separator: ContextMenuSeparator, Shortcut: ContextMenuShortcut, Sub: ContextMenuSub, SubTrigger: ContextMenuSubTrigger, SubContent: ContextMenuSubContent }
     : { Item: DropdownMenuItem, Separator: DropdownMenuSeparator, Shortcut: DropdownMenuShortcut, Sub: DropdownMenuSub, SubTrigger: DropdownMenuSubTrigger, SubContent: DropdownMenuSubContent }
+
+// The first line's account name and Move to account read AgentHydra's account list: an opened menu asks for it
+// (the list mounts with the menu), and the entries follow when it answers.
+onMounted(() => {
+  if (props.entries.some((e) => e !== 'separator' && ('items' in e ? e.items.some((s) => s !== 'separator' && s.action === 'moveToAccount') : e.identity))) void refreshAhInstances()
+})
 </script>
 
 <template>
@@ -34,7 +43,7 @@ const ui =
     <component :is="ui.Separator" v-if="entry === 'separator'" :class="MENU_SEPARATOR" />
     <component :is="ui.Sub" v-else-if="'items' in entry">
       <component :is="ui.SubTrigger" :class="MENU_ITEM">{{ entry.label }}</component>
-      <component :is="ui.SubContent" :side-offset="4" :class="MENU_CONTENT">
+      <component :is="ui.SubContent" :side-offset="4" :class="MENU_CONTENT" class="max-h-[60vh] overflow-y-auto">
         <template v-for="(sub, j) in entry.items" :key="j">
           <component :is="ui.Separator" v-if="sub === 'separator'" :class="MENU_SEPARATOR" />
           <component
@@ -48,10 +57,24 @@ const ui =
             @select="emit('run', sub)"
           >
             <span class="min-w-0 flex-1 truncate">{{ sub.label }}</span>
+            <span v-if="sub.hint" class="ms-3 shrink-0 text-[12px] text-text-muted">{{ sub.hint }}</span>
             <component :is="icons.check" v-if="sub.checked" class="ms-3" />
           </component>
         </template>
       </component>
+    </component>
+    <!-- The first line: the row's id and its account, muted beside it; a click copies the whole id. -->
+    <component
+      :is="ui.Item"
+      v-else-if="entry.identity"
+      :title="entry.title"
+      :aria-label="`Copy the ID ${entry.value}${entry.hint ? `, on ${entry.hint}` : ''}`"
+      :class="MENU_ITEM"
+      @select="emit('run', entry)"
+    >
+      <Hash class="size-3.5 shrink-0 text-text-muted" />
+      <span class="shrink-0 font-mono text-[12px] text-text-2">{{ entry.label }}</span>
+      <span v-if="entry.hint" class="ms-auto min-w-0 truncate ps-4 text-[12px] text-text-muted">{{ entry.hint }}</span>
     </component>
     <component
       :is="ui.Item"

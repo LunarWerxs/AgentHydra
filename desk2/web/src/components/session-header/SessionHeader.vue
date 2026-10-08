@@ -24,6 +24,7 @@ import { useCloud } from '@/components/cloud/store'
 import { useShellSource } from '@/components/shell/source'
 import { showInstanceInHydra } from '@/components/hydra/api'
 import { ah } from './ah'
+import { ahInstances, refreshAhInstances, setInstanceAccount } from './instances'
 import {
   accountName,
   ahSource,
@@ -41,13 +42,12 @@ import {
   usageDetail,
   usageSummary,
   wrapIndex,
-  type AhInstance,
   type AhSecrets,
   type AhSessionRow,
   type AhUsage,
   type FindHit
 } from './logic'
-import { displayPrefs, headerOpen } from './state'
+import { displayPrefs, headerOpen, headerPeek, holdPeek, restartPeek } from './state'
 
 // Hydra Desk 2's session header, over an outside session's transcript: what AgentHydra's Sessions tab
 // said and offered about the open session, which this replaces (Michael, 2026-10-04). One bar across the
@@ -81,7 +81,7 @@ const cloud = useCloud()
 const row = ref<AhSessionRow | null>(null)
 const usage = ref<AhUsage | null>(null)
 const secrets = ref<AhSecrets | null>(null)
-const instances = ref<AhInstance[]>([])
+const instances = computed(() => ahInstances.value ?? [])
 
 async function loadUsage(r: AhSessionRow) {
   usage.value = await ah.usage(r).catch(() => null)
@@ -94,6 +94,7 @@ async function load(id: string) {
   const r = await ah.session(id, ahSource(props.session?.source, cloudRow?.source)).catch(() => null)
   if (!r || id !== props.sessionId) return
   row.value = r
+  restartPeek()
   void loadUsage(r)
   void ah.secrets(r).then((s) => row.value === r && (secrets.value = s), () => {})
 }
@@ -105,19 +106,14 @@ watch(
     if (row.value && before && now !== before) void loadUsage(row.value)
   }
 )
-onMounted(() => {
-  ah.instances().then(
-    (list) => (instances.value = list),
-    () => {}
-  )
-})
+onMounted(() => void refreshAhInstances())
 
 // The account: Claude Desktop sessions only, resolved from the instance label (exactly one match).
 const inst = computed(() => instanceFor(instances.value, row.value))
 watch(inst, async (i) => {
   if (!i || i.account?.email) return
   const account = await ah.instanceAccount(i.dir).catch(() => null)
-  if (account) instances.value = instances.value.map((x) => (x.dir === i.dir ? { ...x, account } : x))
+  if (account) setInstanceAccount(i.dir, account)
 })
 const account = computed(() => {
   const r = row.value
@@ -276,15 +272,8 @@ async function migrateTo(t: { ref: string; name: string }) {
   }
 }
 function menuOpened(open: boolean) {
-  if (!open) return
-  // Running state moves while the header stays open; keep the account already resolved for each dir so watch(inst) does not ask again.
-  void ah.instances().then(
-    (list) => {
-      const known = new Map(instances.value.map((x) => [x.dir, x.account]))
-      instances.value = list.map((x) => (x.account?.email || !known.get(x.dir) ? x : { ...x, account: known.get(x.dir) ?? null }))
-    },
-    () => {}
-  )
+  // Running state moves while the header stays open.
+  if (open) void refreshAhInstances(true)
 }
 
 function setDisplay(key: 'humanOnly' | 'showTools' | 'showThinking' | 'compact') {
@@ -374,6 +363,8 @@ watch(findEl, (el, old) => {
   measure()
 })
 onBeforeUnmount(() => sizes?.disconnect())
+// A peek (state.ts) lies over the transcript's top for its moment rather than pushing the transcript down and back.
+const shown = computed(() => headerOpen.value || headerPeek.value)
 const inset = computed(() => (headerOpen.value ? headH.value : 0) + (findOpen.value ? findH.value : 0))
 watch(inset, (px) => emit('update:inset', px), { immediate: true })
 
@@ -402,15 +393,17 @@ const TONE = {
   <div class="pointer-events-none absolute inset-x-0 top-0 z-10">
     <div
       class="transition-transform duration-220 ease-(--ease-snap) motion-reduce:transition-none"
-      :style="{ transform: headerOpen ? 'translateY(0)' : `translateY(${-headH}px)` }"
+      :style="{ transform: shown ? 'translateY(0)' : `translateY(${-headH}px)` }"
     >
       <section
         ref="headEl"
         class="pointer-events-auto flex min-h-9 items-center gap-3 border-b border-border bg-bg-page py-1 ps-3 pe-2 transition-[opacity,visibility] duration-220 motion-reduce:transition-none"
-        :class="headerOpen ? 'visible opacity-100' : 'invisible opacity-0'"
-        :inert="!headerOpen || undefined"
+        :class="shown ? 'visible opacity-100' : 'invisible opacity-0'"
+        :inert="!shown || undefined"
         aria-label="Session details"
         data-testid="session-header"
+        @pointerenter="holdPeek(true)"
+        @pointerleave="holdPeek(false)"
       >
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <span

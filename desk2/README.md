@@ -162,6 +162,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   dot's 2.4 s blink (`.run-pulse` in `web/src/style.css`, `runPulse` and `glyphDotClass` in
   `sidebar/logic.ts`) and hold still when the system asks for reduced motion; a waiting dot pulses orange
   every 3 s.
+- **Which chat, on which account.** Every row's menu (right-click or ⋯, in either list) opens with a line
+  naming the row: its id's first 8 characters and, muted beside it, its account (`#72 example`); a click
+  copies the whole id (owner, 2026-10-08: "I need to be able to see what this thread ID is"). A Claude
+  session of another app on this PC (Claude Desktop, a CLI) also has Move to account ›: every desktop
+  account, those whose app runs first, the one it is on now ticked and off. It is the session header's
+  Migrate (AgentHydra's `POST /api/sessions/:id/migrate`, one move at a time; a line under the list says
+  where it went), never Desk's own chats or the other PC's. Opening a session from a search while the
+  session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
+  it out (`peekHeader` in `session-header/state.ts`).
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
   list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
   because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden

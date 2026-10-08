@@ -43,3 +43,8 @@ export const ah = {
   exportUrl: (row: AhSessionRow, format: 'markdown' | 'html') => `${BASE}/sessions/${sid(row)}/export${where(row)}&format=${format}`,
   fileUrl: (row: AhSessionRow) => `${BASE}/sessions/${sid(row)}/file${where(row)}`
 }
+
+/** Migrate by the session's id alone (the row menu's Move to account): AgentHydra's row first, whose title the move restates. */
+export async function moveSession(sessionId: string, instanceRef: string): ReturnType<typeof ah.migrate> {
+  return ah.migrate(await ah.session(sessionId, 'claude'), instanceRef)
+}

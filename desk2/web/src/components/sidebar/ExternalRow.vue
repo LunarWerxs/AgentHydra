@@ -15,6 +15,7 @@ import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sou
 import RowMenuList from './RowMenuList.vue'
 import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
+import { accountChoices } from '@/components/session-header/instances'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 import { cleanSidebar } from './clean'
 import { dimText } from './rowClasses'
@@ -46,7 +47,7 @@ const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: ba
 const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
 const speaker = computed(() => isMuted(props.session.id) || isAudible(props.session.id))
-const menu = computed(() => props.entries ?? rowMenu({ ...externalRow(props.session), muted: isMuted(props.session.id) }, props.groups))
+const menu = computed(() => props.entries ?? rowMenu({ ...externalRow(props.session), muted: isMuted(props.session.id) }, props.groups, accountChoices.value))
 const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))
 const menuOpen = ref(false)
 // A row nobody touched draws its content and its trigger buttons only; its context menu and dropdown menu mount on the

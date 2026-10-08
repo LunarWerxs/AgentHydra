@@ -534,8 +534,26 @@ export interface RowState {
   sessionId: string | null // null until the chat's session exists
   claudeSession: boolean // `claude --resume` can open it
   forkable: boolean
+  /** What the menu's first line names the row by and copies: its session id, else Desk's own id for a chat with no session yet. */
+  id: string
+  /** The account it runs under: AgentHydra's instance number, and the whole name when the row itself knows it (a chat's account). */
+  account: RowAccount | null
+  /** A Claude Code session of another app on this PC (Claude Desktop, a CLI): Move to account can take it to a desktop account. */
+  movable: boolean
   /** Whether the person muted this chat's sound (lib/chat-audio.ts); left out, the menu has no Mute entry (a row that cannot mute). */
   muted?: boolean
+}
+export interface RowAccount {
+  num: number | null
+  title: string | null
+}
+
+/** A desktop account Move to account offers (one of AgentHydra's instances): the ref the move names it by, its number and name. */
+export interface AccountChoice {
+  ref: string
+  num: number
+  name: string
+  running: boolean
 }
 
 export function chatRow(chat: ChatSummary): RowState {
@@ -549,12 +567,16 @@ export function chatRow(chat: ChatSummary): RowState {
     cwd: chat.cwd,
     sessionId: chat.sessionId,
     claudeSession: true,
-    forkable: Boolean(chat.sessionId ?? chat.forkedFrom)
+    forkable: Boolean(chat.sessionId ?? chat.forkedFrom),
+    id: chat.sessionId ?? chat.id,
+    account: { num: chat.account.number ?? null, title: accountTitle(chat.account) },
+    movable: false
   }
 }
 
 export function externalRow(s: ExternalSession): RowState {
   const claude = s.source === 'desktop' || s.source === 'cli'
+  const num = s.instance?.match(/^#(\d+)$/)
   return {
     outside: true,
     stoppable: false,
@@ -565,7 +587,11 @@ export function externalRow(s: ExternalSession): RowState {
     cwd: s.cwd ?? '',
     sessionId: s.id,
     claudeSession: claude,
-    forkable: claude
+    forkable: claude,
+    id: s.id,
+    account: s.instance ? (num ? { num: Number(num[1]), title: null } : { num: null, title: s.instance }) : null,
+    // A chat the chat sync brought from the other PC lives in that PC's apps: this PC's AgentHydra cannot move it.
+    movable: claude && !s.fromPc
   }
 }
 
@@ -573,12 +599,17 @@ export function externalRow(s: ExternalSession): RowState {
  * The row menu, as the real app's (three dots and right-click share it): Open in ›, Pin P, Mark as
  * unread U, Rename R, Fork F, Move to group ›, Archive A, Delete D. `shortcut` is the letter that runs
  * the item while the menu is open; `separator` draws a 1px rule; an entry with `items` is a submenu.
+ * AgentHydra 2.0 adds a first line naming the row (its id and account, a click copies the id) and, for a
+ * Claude session of another app, Move to account › (owner, 2026-10-08: "I need to be able to see what this
+ * thread ID is ... I'd love an option to, like, right-click and select... move to account").
  */
 export type RowAction =
   | 'open'
   | 'reveal'
   | 'copyResume'
   | 'copySessionId'
+  | 'copyId'
+  | 'moveToAccount'
   | 'stop'
   | 'pin'
   | 'unpin'
@@ -602,12 +633,54 @@ export interface RowMenuItem {
   disabled?: boolean
   checked?: boolean
   title?: string // the native tooltip
+  /** What the item acts on beyond its label: the id copyId copies, the account ref moveToAccount moves to. */
+  value?: string
+  /** Muted text at the item's end: the account on the first line, "closed" on an account whose app is not running. */
+  hint?: string
+  /** The menu's first line, drawn as an id rather than a command. */
+  identity?: boolean
 }
 export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (RowMenuItem | 'separator')[] }
 
 const OUTSIDE_ARCHIVE = 'Hides it in Hydra Desk. Sessions run outside are never deleted here: their files belong to the app that ran them.'
 
-export function rowMenu(row: RowState, groups: string[] = []): RowMenuEntry[] {
+/** "#72 example": the account by its number and, when known, its name (the row's own, else AgentHydra's list's). */
+function accountText(account: RowAccount | null, accounts: readonly AccountChoice[] | null): string | null {
+  if (!account) return null
+  if (account.num === null) return account.title
+  if (account.title) return account.title
+  const name = accounts?.find((a) => a.num === account.num)?.name
+  return name ? `#${account.num} ${name}` : `#${account.num}`
+}
+
+/** The menu's first line: the id as the session header shows it (its first 8 characters) and the account; a click copies the whole id. */
+export function rowIdentity(id: string, account: RowAccount | null, accounts: readonly AccountChoice[] | null = null): RowMenuItem {
+  const hint = accountText(account, accounts)
+  return { action: 'copyId', label: id.slice(0, 8), value: id, identity: true, ...(hint ? { hint } : {}), title: `${id}\nClick to copy the whole ID` }
+}
+
+/**
+ * Move to account ›: every desktop account, those whose app runs first, then by number; the one the session is on
+ * now is ticked and off. A closed account's app is not started: the chat lands in its store for when it starts.
+ * `accounts` null: AgentHydra's list is not read yet (or did not answer).
+ */
+export function accountMenu(current: number | null, accounts: readonly AccountChoice[] | null): { label: string; items: (RowMenuItem | 'separator')[] } {
+  if (!accounts?.length) return { label: 'Move to account', items: [{ action: 'moveToAccount', label: accounts ? 'No desktop accounts' : 'Reading accounts…', disabled: true }] }
+  const item = (a: AccountChoice): RowMenuItem => ({
+    action: 'moveToAccount',
+    label: `#${a.num} ${a.name}`,
+    value: a.ref,
+    checked: a.num === current,
+    disabled: a.num === current,
+    ...(a.running ? {} : { hint: 'closed', title: 'Its app is not running: the chat lands in its store, ready when it starts' })
+  })
+  const byNum = (a: AccountChoice, b: AccountChoice) => a.num - b.num
+  const running = accounts.filter((a) => a.running).sort(byNum).map(item)
+  const closed = accounts.filter((a) => !a.running).sort(byNum).map(item)
+  return { label: 'Move to account', items: running.length && closed.length ? [...running, 'separator', ...closed] : [...running, ...closed] }
+}
+
+export function rowMenu(row: RowState, groups: string[] = [], accounts: readonly AccountChoice[] | null = null): RowMenuEntry[] {
   const current = (row.group ?? folderLabel(row.cwd)).toLowerCase()
   const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === current }))
   if (moveTo.length) moveTo.push('separator')
@@ -615,6 +688,8 @@ export function rowMenu(row: RowState, groups: string[] = []): RowMenuEntry[] {
   if (row.group) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
 
   const out: RowMenuEntry[] = [
+    rowIdentity(row.id, row.account, accounts),
+    'separator',
     {
       label: 'Open in',
       items: [
@@ -631,7 +706,9 @@ export function rowMenu(row: RowState, groups: string[] = []): RowMenuEntry[] {
   if (row.muted !== undefined) out.push(row.muted ? { action: 'unmute', label: 'Unmute chat', shortcut: 'M' } : { action: 'mute', label: 'Mute chat', shortcut: 'M' })
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
-  out.push('separator', { label: 'Move to group', items: moveTo }, 'separator')
+  out.push('separator', { label: 'Move to group', items: moveTo })
+  if (row.movable) out.push(accountMenu(row.account?.num ?? null, accounts))
+  out.push('separator')
   out.push(
     row.archived
       ? { action: 'unarchive', label: 'Unarchive', shortcut: 'A' }

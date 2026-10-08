@@ -138,7 +138,7 @@ describe('the host side of a page view', () => {
 })
 
 describe('the row', () => {
-  const chat = { status: 'idle', pinned: false, archived: false, unread: false, group: null, cwd: 'C:/Users/me/proj', sessionId: 's1' } as never
+  const chat = { status: 'idle', pinned: false, archived: false, unread: false, group: null, cwd: 'C:/Users/me/proj', sessionId: 's1', account: { id: '1', label: '#1', configDir: null, number: 1 } } as never
   const labels = (muted: boolean | undefined) =>
     rowMenu({ ...chatRow(chat), muted }, [])
       .filter((e): e is RowMenuItem => typeof e === 'object' && 'action' in e)
