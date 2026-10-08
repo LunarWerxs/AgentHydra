@@ -49,8 +49,9 @@ export interface AutoUpdateHooks {
   /** Restart the daemon so the freshly-pulled code takes over. Wired by server/src/index.ts. */
   relaunch: () => void
   /** True when dispatch runs are in flight. An update relaunches the daemon; even though runs now
-   *  survive that (they're detached + reattached), we DEFER updating until the queue is idle so a
-   *  relaunch never churns a live run's stream. Wired by server/src/index.ts; default: never busy. */
+   *  survive that (they're detached + reattached), we DEFER updating while the queue is busy so a
+   *  relaunch never churns a live run's stream, for at most AUTO_UPDATE_MAX_DEFER_S. Wired by
+   *  server/src/index.ts; default: never busy. */
   hasActiveRuns: () => boolean
 }
 function defaultRelaunch(): void {
@@ -91,6 +92,15 @@ let started = false // true only after the daemon finishes booting (startAutoUpd
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
 let applying = false // an apply is in flight — never overlap checks/applies
+/** When the waiting update was first held back by busy runs; null while nothing waits on them. */
+let deferredSince: number | null = null
+
+/** The longest an available update waits for busy runs before it installs past them (owner,
+ *  2026-10-08: yes, auto-update may install after waiting an hour). With CliMayte and HSwarm busy
+ *  around the clock the queue was never idle, and the live window sat on code an hour old while
+ *  fixes waited on origin. Runs survive the relaunch (detached + reattached); a CliMayte worker the
+ *  daemon spawned itself resumes its session and redoes its current step. */
+export const AUTO_UPDATE_MAX_DEFER_S = 3600
 
 /**
  * The last background check's answer, so the UI can ask "is there an update?" without paying for a
@@ -152,7 +162,7 @@ export interface AutoUpdateRunResult {
  * working tree is never touched. On a successful apply that needs a restart, it fires the injected
  * relaunch. Exported + returns a result so the timer AND the test can drive it identically.
  */
-export async function runAutoUpdateOnce(): Promise<AutoUpdateRunResult> {
+export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRunResult> {
   if (applying) return { checked: false, applied: false, relaunched: false, reason: 'busy' }
   let status: Awaited<ReturnType<typeof checkForUpdate>>
   try {
@@ -168,8 +178,10 @@ export async function runAutoUpdateOnce(): Promise<AutoUpdateRunResult> {
       relaunched: false,
       reason: status.reason ?? 'check-error',
     }
-  if (!status.updateAvailable)
+  if (!status.updateAvailable) {
+    deferredSince = null
     return { checked: true, applied: false, relaunched: false, reason: 'up-to-date' }
+  }
   // Hard gate: canApply is false on a dirty tree / detached HEAD / no update remote — never update then.
   if (!status.canApply)
     return {
@@ -179,9 +191,17 @@ export async function runAutoUpdateOnce(): Promise<AutoUpdateRunResult> {
       reason: status.reason ?? 'cannot-apply',
     }
   // Defer while dispatch runs are in flight: applying relaunches the daemon, and even though runs
-  // survive that now, we'd rather not churn a live run's stream mid-flight. Re-checked next window.
-  if (hooks.hasActiveRuns())
-    return { checked: true, applied: false, relaunched: false, reason: 'busy-runs' }
+  // survive that now, we'd rather not churn a live run's stream mid-flight. Re-checked next window,
+  // and installed past them once the update has waited AUTO_UPDATE_MAX_DEFER_S.
+  if (hooks.hasActiveRuns()) {
+    deferredSince ??= now
+    if (now - deferredSince < AUTO_UPDATE_MAX_DEFER_S * 1000)
+      return { checked: true, applied: false, relaunched: false, reason: 'busy-runs' }
+    console.warn(
+      `agenthydra: auto-update waited ${Math.round((now - deferredSince) / 60_000)} min for busy runs; installing past them.`,
+    )
+  }
+  deferredSince = null
 
   applying = true
   try {
@@ -270,6 +290,7 @@ export function startAutoUpdate(): void {
 /** Stop the loop (daemon shutdown). Safe to call when it was never started. */
 export function stopAutoUpdate(): void {
   started = false
+  deferredSince = null
   if (timer) {
     clearTimeout(timer)
     timer = null

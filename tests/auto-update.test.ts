@@ -11,6 +11,7 @@ import {
   AUTO_UPDATE_INTERVAL_DEFAULT_S,
   AUTO_UPDATE_INTERVAL_MAX_S,
   AUTO_UPDATE_INTERVAL_MIN_S,
+  AUTO_UPDATE_MAX_DEFER_S,
   autoUpdateEnabled,
   clampAutoUpdateInterval,
   getAutoUpdateIntervalSecs,
@@ -124,7 +125,7 @@ test('never applies on a dirty tree (canApply false)', async () => {
   expect(relaunched).toBe(0)
 })
 
-test('defers (never applies) while dispatch runs are in flight', async () => {
+test('defers while dispatch runs are in flight, and installs past them after an hour of waiting', async () => {
   let applied = 0
   let relaunched = 0
   setAutoUpdateHooks({
@@ -138,11 +139,16 @@ test('defers (never applies) while dispatch runs are in flight', async () => {
     },
     hasActiveRuns: () => true, // a dispatch run is executing — do not relaunch the daemon under it
   })
-  const r = await runAutoUpdateOnce()
+  const t0 = 1_000_000
+  const r = await runAutoUpdateOnce(t0)
   expect(r.applied).toBe(false)
   expect(r.reason).toBe('busy-runs')
-  expect(applied).toBe(0)
-  expect(relaunched).toBe(0)
+  const almost = await runAutoUpdateOnce(t0 + AUTO_UPDATE_MAX_DEFER_S * 1000 - 1)
+  expect(almost.reason).toBe('busy-runs')
+  expect([applied, relaunched]).toEqual([0, 0])
+  // A fleet busy around the clock never idles (owner, 2026-10-08): an hour on, it installs anyway.
+  const due = await runAutoUpdateOnce(t0 + AUTO_UPDATE_MAX_DEFER_S * 1000)
+  expect([due.applied, applied, relaunched]).toEqual([true, 1, 1])
 })
 
 test('does not relaunch when the apply fails', async () => {
