@@ -62,7 +62,12 @@ function harness(opts: {
   shown?: boolean
 }) {
   const calls = {
-    native: [] as Array<{ profile: string; leaving: string[]; sourceAtLimit?: boolean }>,
+    native: [] as Array<{
+      profile: string
+      leaving: string[]
+      sourceAtLimit?: boolean
+      sourceSuperseded?: boolean
+    }>,
     flag: [] as string[],
     retire: [] as string[],
     ui: [] as string[],
@@ -80,9 +85,11 @@ function harness(opts: {
         profile,
         leaving: o.leavingCliSessionIds,
         ...(o.sourceAtLimit ? { sourceAtLimit: true } : {}),
+        ...(o.sourceSuperseded ? { sourceSuperseded: true } : {}),
       })
       return opts.native ?? unavailable
     },
+    wait: async () => {},
     atLimit: () => opts.atLimit === true,
     flag: async (_id, profile) => {
       calls.order.push('flag')
@@ -145,6 +152,46 @@ test('native UNAVAILABLE clicks the Archive control of the app itself; a settled
   expect(row).toEqual({ profile: SOURCE, via: 'ui', changed: true, stillShown: false })
   expect(calls.order).toEqual(['native', 'ui'])
   expect(calls.flag).toEqual([])
+})
+
+test('a move asks for its superseded source, and names the parent that archive went ahead over', async () => {
+  const withParent: NativeArchiveOutcome = {
+    kind: 'result',
+    route: 'native',
+    ok: true,
+    verified: true,
+    changed: true,
+    dispatch: 'sent',
+    attachedParent: 'parent-cli',
+    timingsMs: { total: 5 },
+  }
+  const { deps, calls } = harness({ running: true, native: withParent })
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(calls.native[0]?.sourceSuperseded).toBe(true)
+  expect(row).toMatchObject({
+    via: 'native',
+    changed: true,
+    stillShown: false,
+    attachedParent: 'parent-cli',
+  })
+})
+
+test('a busy refusal of the move source is retried, and a clear one is archived', async () => {
+  const { deps } = harness({ running: true })
+  let attempts = 0
+  deps.native = async () => (++attempts < 3 ? refused : verified)
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(attempts).toBe(3)
+  expect(row).toMatchObject({ via: 'native', changed: true, stillShown: false })
+})
+
+test('a busy refusal that never clears is reported visible after the retries', async () => {
+  const { deps, calls } = harness({ running: true, native: refused })
+  const [row] = await settleMovedSource(SID, [SOURCE], [], deps)
+  expect(calls.native).toHaveLength(16)
+  expect(row).toMatchObject({ via: 'native', stillShown: true })
+  expect(calls.flag).toEqual([])
+  expect(calls.ui).toEqual([])
 })
 
 test('a click that does not settle writes NO flag under the running app; it is queued for close', async () => {

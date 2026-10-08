@@ -28,6 +28,8 @@ export type NativeArchiveOutcome =
       session?: Record<string, unknown>
       /** What an at-limit archive stopped that another chat owned (native-program). */
       stoppedBystanders?: unknown[]
+      /** The parent a superseded source was attached to, which its archive went ahead over. */
+      attachedParent?: string
       timingsMs: { total: number }
     }
 
@@ -46,6 +48,8 @@ interface NativeArchiveRun {
   leavingCliSessionIds: string[]
   /** The move is draining this profile at its usage limit: archive over bystanders, name them. */
   sourceAtLimit: boolean
+  /** A move's superseded source row, sent only after its target landing is verified. */
+  sourceSuperseded: boolean
   lockedProfile?: string
   client?: ClaudeInspectorClient
 }
@@ -267,6 +271,9 @@ function nativeArchiveFinal(
     ...(Array.isArray(archived.stoppedBystanders) && archived.stoppedBystanders.length
       ? { stoppedBystanders: archived.stoppedBystanders }
       : {}),
+    ...(typeof archived.attachedParent === 'string'
+      ? { attachedParent: archived.attachedParent }
+      : {}),
     timingsMs: { total: Math.round(performance.now() - run.started) },
   }
 }
@@ -327,6 +334,7 @@ async function nativeArchiveAttempt(
     cliSessionId: session.cliSessionId,
     ...(run.leavingCliSessionIds.length ? { leavingCliSessionIds: run.leavingCliSessionIds } : {}),
     ...(run.sourceAtLimit ? { sourceAtLimit: true } : {}),
+    ...(run.sourceSuperseded ? { sourceSuperseded: true } : {}),
   })
   run.mutationSent = true
   const archived = await client.evaluate<unknown>(expression)
@@ -336,7 +344,12 @@ async function nativeArchiveAttempt(
 export async function tryNativeArchiveChat(
   profileDir: string,
   requestedSessionId: string,
-  options: { nativeOnly?: boolean; leavingCliSessionIds?: string[]; sourceAtLimit?: boolean } = {},
+  options: {
+    nativeOnly?: boolean
+    leavingCliSessionIds?: string[]
+    sourceAtLimit?: boolean
+    sourceSuperseded?: boolean
+  } = {},
   deps: NativeArchiveDeps = {},
 ): Promise<NativeArchiveOutcome> {
   const run: NativeArchiveRun = {
@@ -347,6 +360,7 @@ export async function tryNativeArchiveChat(
       /^[A-Za-z0-9-]{8,80}$/.test(id),
     ),
     sourceAtLimit: options.sourceAtLimit === true,
+    sourceSuperseded: options.sourceSuperseded === true,
   }
   try {
     return await nativeArchiveAttempt(run, profileDir, requestedSessionId, deps)

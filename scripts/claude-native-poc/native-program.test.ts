@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import { win32 as path } from 'node:path'
 import { runInNewContext } from 'node:vm'
-import { type NativeRequest, nativeProgram } from './native-program'
+import {
+  type NativeRequest,
+  nativeProgram,
+} from '../../server/src/core/claude-native/native-program'
 
 // The shapes the generated program hands to, and reads from, Claude's managers.
 interface FixtureSession {
@@ -468,6 +471,49 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     h.previews.htmlPreviews.set('html-preview-other', { cwd: h.other.cwd })
     expect(await h.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
     expect(h.calls).toEqual([])
+  })
+  test('a superseded move source archives over an attached parent and names it', async () => {
+    const ordinary = harness()
+    ordinary.target.spawnedFrom = { sessionId: 'parent' }
+    expect(await ordinary.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
+    expect(ordinary.calls).toEqual([])
+
+    const superseded = harness()
+    superseded.target.spawnedFrom = { sessionId: 'parent' }
+    expect(await superseded.run({ sourceSuperseded: true })).toMatchObject({
+      ok: true,
+      dispatch: 'sent',
+      attachedParent: 'parent',
+    })
+    expect(superseded.calls).toEqual([{ id: 'local_target', options: { cleanupWorktree: false } }])
+  })
+  test('a superseded move source archives over other chats previews and names them', async () => {
+    const h = harness()
+    h.other.cwd = h.target.cwd
+    h.previews.htmlPreviews.set('html-preview-other', { cwd: h.target.cwd })
+    expect(await h.run({ sourceSuperseded: true })).toMatchObject({
+      ok: true,
+      dispatch: 'sent',
+      stoppedBystanders: [{ kind: 'html-preview', id: 'html-preview-other', cwd: h.target.cwd }],
+    })
+  })
+  test('a superseded move source still refuses cascades and pending input', async () => {
+    for (const change of [
+      (h: ReturnType<typeof harness>) => {
+        h.manager.archiveCascadeClosureOf = () => [h.other]
+      },
+      (h: ReturnType<typeof harness>) => {
+        h.manager.hasPendingUserInput = () => true
+      },
+    ]) {
+      const h = harness()
+      change(h)
+      expect(await h.run({ sourceSuperseded: true })).toMatchObject({
+        ok: false,
+        dispatch: 'not-sent',
+      })
+      expect(h.calls).toEqual([])
+    }
   })
   test('shared cwd aliases, missing managers and malformed resource state fail closed', async () => {
     for (const change of [

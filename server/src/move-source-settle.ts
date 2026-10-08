@@ -21,6 +21,10 @@
 //                     visibly on BOTH accounts, reported, and the store agrees with the screen:
 //                     archiving the leftover in that app is durable, and a later move from that
 //                     account still finds the chat instead of answering "No chats to move".
+//                     2026-10-08: the one exception is a move's superseded source, sent only once
+//                     its landing is verified. That archive goes ahead over an attached parent and
+//                     over other chats' previews (each named), and a busy refusal is retried for
+//                     15 s first. Every other caller keeps the refusal.
 //   · native UNAVAILABLE (not configured, or prefer-native with no debugger) -> the guarded
 //                     fallback path: the app's own Archive control, read back. If that does not
 //                     settle it, NO flag under the running app: that flag is the reported bug
@@ -54,6 +58,8 @@ export interface SourceSettle {
   atLimit?: boolean
   /** What that at-limit archive stopped which another chat owned (native-program). */
   stoppedBystanders?: unknown[]
+  /** The parent the superseded source was attached to; its archive went ahead over it (2026-10-08). */
+  attachedParent?: string
   /** Queued to be archived once that app is closed (move-retire-on-close.ts). */
   retiresOnClose?: boolean
   reason?: string
@@ -68,8 +74,10 @@ export interface SettleDeps {
   native: (
     profile: string,
     sessionId: string,
-    opts: { leavingCliSessionIds: string[]; sourceAtLimit?: boolean },
+    opts: { leavingCliSessionIds: string[]; sourceAtLimit?: boolean; sourceSuperseded: true },
   ) => Promise<NativeArchiveOutcome>
+  /** Pause between busy retries; absent means a real wait. */
+  wait?: (ms: number) => Promise<void>
   /** The account is at its usage wall right now (usageAtWall over its cached reading). */
   atLimit?: (profile: string) => boolean
   /** archiveDesktopChat(sessionId, true, [profile]). */
@@ -124,6 +132,21 @@ export async function settleMovedSource(
     }
   }
   return out
+}
+
+const BUSY_RETRY_POLLS = 15
+const BUSY_POLL_MS = 1000
+
+function isBusyRefusal(native: NativeArchiveOutcome): boolean {
+  return (
+    native.kind === 'result' &&
+    native.dispatch === 'not-sent' &&
+    !!native.reason?.includes('session has live, pending, or transitioning work')
+  )
+}
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -190,10 +213,19 @@ async function settleOne(
   }
 
   const atLimit = deps.atLimit?.(profile) === true
-  const native = await deps.native(profile, sessionId, {
+  const nativeOpts = {
     leavingCliSessionIds: leaving,
+    sourceSuperseded: true as const,
     ...(atLimit ? { sourceAtLimit: true } : {}),
-  })
+  }
+  let native = await deps.native(profile, sessionId, nativeOpts)
+  // A busy refusal is sent before anything runs, so asking again cannot archive twice. The
+  // move's own stop-idle leaves the app briefly transitioning, which clears within seconds
+  // (2026-10-08); only after the retries run out is the row reported as visible.
+  for (let poll = 0; poll < BUSY_RETRY_POLLS && isBusyRefusal(native); poll++) {
+    await (deps.wait ?? pause)(BUSY_POLL_MS)
+    native = await deps.native(profile, sessionId, nativeOpts)
+  }
   if (native.kind === 'result') {
     const done = native.ok && native.verified
     return {
@@ -202,6 +234,7 @@ async function settleOne(
       changed: done && native.changed,
       ...(atLimit ? { atLimit } : {}),
       ...(native.stoppedBystanders?.length ? { stoppedBystanders: native.stoppedBystanders } : {}),
+      ...(native.attachedParent ? { attachedParent: native.attachedParent } : {}),
       // A record the store already called archived is an older move's leftover. An unconfirmed
       // native answer about it says nothing about THIS move, and calling it "still shown" would
       // flag every chat that ever lived on a now-unreachable account.

@@ -120,6 +120,19 @@ describe('native archive coordinator', () => {
       expect(await next.run()).toMatchObject({ kind: 'result', ok: true, verified: true })
     },
   )
+  test('only a superseded move source sends the flag, and the attached parent it archived over comes back', async () => {
+    const proof = fixture()
+    proof.state.archive = {
+      ...(proof.state.archive as Record<string, unknown>),
+      attachedParent: 'parent-cli',
+    }
+    const outcome = await proof.run('cli-original', { sourceSuperseded: true })
+    expect(proof.state.expressions[1]).toContain('"sourceSuperseded":true')
+    expect(outcome).toMatchObject({ kind: 'result', ok: true, attachedParent: 'parent-cli' })
+    const ordinary = fixture()
+    await ordinary.run()
+    expect(ordinary.state.expressions[1]).not.toContain('"sourceSuperseded"')
+  })
   test('unconfigured non-Windows paths and labels leave the existing archive path untouched', async () => {
     for (const profile of ['/home/user/.config/Claude', 'existing-label']) {
       let scans = 0
