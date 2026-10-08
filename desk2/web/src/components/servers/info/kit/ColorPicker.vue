@@ -16,7 +16,7 @@ const RING = 'ring-2 ring-text ring-offset-2 ring-offset-bg-panel'
     <Tip label="No color">
       <button
         type="button"
-        class="flex size-6 cursor-default items-center justify-center rounded-full bg-fill-5 text-text-muted shadow-[inset_0_0_0_1px_var(--border-strong)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+        class="flex size-6 cursor-default items-center justify-center rounded-full bg-fill-5 text-text-muted shadow-[inset_0_0_0_1px_var(--border-strong)] focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         :class="!modelValue && RING"
         aria-label="No color"
         :aria-pressed="!modelValue"
@@ -29,7 +29,7 @@ const RING = 'ring-2 ring-text ring-offset-2 ring-offset-bg-panel'
       v-for="c in SWATCHES"
       :key="c"
       type="button"
-      class="flex size-6 cursor-default items-center justify-center rounded-full text-white focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+      class="flex size-6 cursor-default items-center justify-center rounded-full text-white focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
       :class="modelValue.toLowerCase() === c && RING"
       :style="{ background: c }"
       :aria-label="`Color ${c}`"
@@ -40,7 +40,7 @@ const RING = 'ring-2 ring-text ring-offset-2 ring-offset-bg-panel'
     </button>
     <Tip label="Any color">
       <label
-        class="relative flex size-6 cursor-default items-center justify-center overflow-hidden rounded-full text-text-2 shadow-[inset_0_0_0_1px_var(--border-strong)] focus-within:shadow-[var(--focus-ring)]"
+        class="relative flex size-6 cursor-default items-center justify-center overflow-hidden rounded-full text-text-2 shadow-[inset_0_0_0_1px_var(--border-strong)] focus-within:shadow-(--focus-ring)"
         :class="custom() && RING"
         :style="custom() ? { background: modelValue } : undefined"
       >

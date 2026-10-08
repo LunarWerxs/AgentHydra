@@ -66,7 +66,7 @@ async function other() {
           <div role="presentation" :class="HEADER">{{ header }}</div>
           <DropdownMenuItem v-for="r in rows" :key="r.path" :class="ITEM" :title="r.path" @select="choose(r.path)">
             <span class="min-w-0 flex-1 truncate">
-              {{ r.name }}<span v-if="r.hint" class="ml-1.5 text-[var(--text-muted)]">{{ r.hint }}</span>
+              {{ r.name }}<span v-if="r.hint" class="ms-1.5 text-(--text-muted)">{{ r.hint }}</span>
             </span>
           </DropdownMenuItem>
           <div v-if="rows.length" role="separator" :class="SEPARATOR" />
@@ -76,7 +76,7 @@ async function other() {
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
-      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-[var(--danger-text)]">{{ error }}</p>
+      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-(--danger-text)">{{ error }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
 </template>

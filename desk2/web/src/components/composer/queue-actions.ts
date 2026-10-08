@@ -51,7 +51,6 @@ export function useQueueActions(listed: (id: string) => boolean) {
     }
   }
   function onEditKey(e: KeyboardEvent, item: QueueItem) {
-    if (e.isComposing) return
     if (e.key === 'Escape') {
       // Kept from a surrounding popover's own Esc: stopped here (and the popover refuses while editing).
       e.preventDefault()

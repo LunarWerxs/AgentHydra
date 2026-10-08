@@ -15,20 +15,20 @@ const visible = computed(() => props.pending > 0 || props.queued > 0)
 </script>
 
 <template>
-  <div v-if="visible" class="flex flex-col gap-1.5 text-[13px] leading-[19px]" aria-label="Hydra Desk status">
-    <div class="flex h-6 items-center gap-[5px]">
+  <div v-if="visible" class="flex flex-col gap-1.5 text-[13px] leading-4.75" aria-label="Hydra Desk status">
+    <div class="flex h-6 items-center gap-1.25">
       <button
         v-if="pending > 0"
         type="button"
-        class="flex h-6 items-center gap-1.5 rounded-[var(--radius-6)] bg-[var(--warning-bg)] px-[7px] text-[var(--warning-text)] transition-[filter] duration-[60ms] hover:brightness-125"
+        class="flex h-6 items-center gap-1.5 rounded-(--radius-6) bg-(--warning-bg) px-1.75 text-(--warning-text) transition-[filter] duration-60 hover:brightness-125"
         @click="emit('show-pending')"
       >
-        <span class="size-1.5 animate-[var(--animate-dot-pulse)] rounded-full bg-[var(--warning)]" />
+        <span class="size-1.5 animate-(--animate-dot-pulse) rounded-full bg-(--warning)" />
         {{ pending === 1 ? 'Waiting for you' : `${pending} waiting for you` }}
       </button>
       <Tip v-if="queued > 0" :label="`Sent while Claude was working; ${queued === 1 ? 'it runs' : 'they run'} when the turn ends`" side="top">
         <span
-          class="tnum flex h-6 items-center rounded-[var(--radius-6)] bg-[var(--fill-5)] px-[7px] text-[var(--text-2)] shadow-[inset_0_0_0_1px_var(--border)]"
+          class="tnum flex h-6 items-center rounded-(--radius-6) bg-(--fill-5) px-1.75 text-(--text-2) shadow-[inset_0_0_0_1px_var(--border)]"
         >
           {{ queued }} queued
         </span>

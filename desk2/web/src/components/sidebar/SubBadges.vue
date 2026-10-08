@@ -27,8 +27,8 @@ const tone = (b: SubBadge) => (!b.running ? 'text-text-muted' : b.kind === 'jobs
       :title="badgeTip(b)"
       :aria-label="label(b)"
       :aria-expanded="b.open"
-      class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-[4px] px-1 text-[11px] leading-4 tnum transition-colors duration-[var(--dur-fast)] hover:bg-fill-hover"
-      :class="[b.open ? 'bg-fill-selected' : 'bg-[var(--fill-secondary)]', tone(b)]"
+      class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-[11px] leading-4 tnum transition-colors duration-(--dur-fast) hover:bg-fill-hover"
+      :class="[b.open ? 'bg-fill-selected' : 'bg-(--fill-secondary)', tone(b)]"
       @click.stop="toggleExpanded(rowKey, b.kind)"
       @keydown.enter.stop
     >

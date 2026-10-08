@@ -109,15 +109,15 @@ provide(PANE_API, fixtureApi)
 <template>
   <div class="flex flex-col gap-6">
     <div>
-      <h3 class="mb-2 text-sm text-[var(--text-muted)]">Diff pane (click a file for its diff) · clean tree · not a repo</h3>
+      <h3 class="mb-2 text-sm text-(--text-muted)">Diff pane (click a file for its diff) · clean tree · not a repo</h3>
       <div class="flex gap-4">
-        <div class="h-[560px] w-[380px] overflow-hidden rounded border border-[var(--border)]">
+        <div class="h-140 w-95 overflow-hidden rounded border border-(--border)">
           <DiffPane :cwd="REPO" initial-path="web/src/components/panes/DiffPane.vue" />
         </div>
-        <div class="h-[200px] w-[300px] overflow-hidden rounded border border-[var(--border)]">
+        <div class="h-50 w-75 overflow-hidden rounded border border-(--border)">
           <DiffPane :cwd="CLEAN" />
         </div>
-        <div class="h-[200px] w-[300px] overflow-hidden rounded border border-[var(--border)]">
+        <div class="h-50 w-75 overflow-hidden rounded border border-(--border)">
           <DiffPane :cwd="NOT_REPO" />
         </div>
       </div>
@@ -125,19 +125,19 @@ provide(PANE_API, fixtureApi)
 
     <div class="flex gap-4">
       <div>
-        <h3 class="mb-2 text-sm text-[var(--text-muted)]">Settings dialog body (the dialog itself: #/gallery/shell/settings)</h3>
-        <div class="h-[680px] w-[920px] overflow-hidden rounded-[var(--radius-12)] border border-[var(--border)]">
+        <h3 class="mb-2 text-sm text-(--text-muted)">Settings dialog body (the dialog itself: #/gallery/shell/settings)</h3>
+        <div class="h-170 w-230 overflow-hidden rounded-(--radius-12) border border-(--border)">
           <SettingsView />
         </div>
       </div>
       <div>
-        <h3 class="mb-2 text-sm text-[var(--text-muted)]">Accounts popover (body, and the trigger the sidebar footer wraps)</h3>
-        <div class="rounded-lg border border-[var(--border)] bg-[var(--bg-popover)]">
+        <h3 class="mb-2 text-sm text-(--text-muted)">Accounts popover (body, and the trigger the sidebar footer wraps)</h3>
+        <div class="rounded-lg border border-(--border) bg-(--bg-popover)">
           <AccountsList />
         </div>
         <div class="mt-3">
           <AccountsPopover>
-            <button type="button" class="rounded px-2 py-1 text-[13px] text-[var(--text-muted)] hover:bg-[var(--fill-hover)]">Auto account</button>
+            <button type="button" class="rounded px-2 py-1 text-[13px] text-(--text-muted) hover:bg-(--fill-hover)">Auto account</button>
           </AccountsPopover>
         </div>
       </div>

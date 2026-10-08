@@ -12,13 +12,13 @@ defineProps<{ name: string; chats: ChatSummary[] }>()
   <!-- m-auto rather than justify-center: when the window is too short the column starts at the top and
        scrolls, instead of its top being cut off. -->
   <div class="flex min-h-0 flex-1 flex-col overflow-y-auto px-4">
-    <div class="m-auto flex w-full max-w-[768px] flex-col items-center py-6">
-      <h1 class="flex items-center justify-center gap-[7px] text-center text-[22px] font-normal leading-7 text-text">
+    <div class="m-auto flex w-full max-w-3xl flex-col items-center py-6">
+      <h1 class="flex items-center justify-center gap-1.75 text-center text-[22px] font-normal leading-7 text-text">
         <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (Jacob, 2026-10-06). -->
-        <img src="/favicon.svg" alt="" class="relative top-px size-[22px] shrink-0" />
+        <img src="/favicon.svg" alt="" class="relative top-px size-5.5 shrink-0" />
         <span>What’s up next{{ name ? `, ${name}` : '' }}?</span>
       </h1>
-      <StatsCard class="mt-[46px]" :chats="chats" />
+      <StatsCard class="mt-11.5" :chats="chats" />
     </div>
   </div>
 </template>

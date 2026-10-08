@@ -22,10 +22,10 @@ const time = computed(() => new Date(props.item.ts).toLocaleTimeString(undefined
       <span class="truncate text-text-2">{{ item.from }}</span>
       <span class="tnum shrink-0">{{ time }}</span>
       <span v-if="summary" class="min-w-0 flex-1 truncate">{{ summary }}</span>
-      <button v-if="body" type="button" class="ml-auto shrink-0 pl-2 hover:text-text" :aria-expanded="expanded" @click="expanded = !expanded">
+      <button v-if="body" type="button" class="ms-auto shrink-0 ps-2 hover:text-text" :aria-expanded="expanded" @click="expanded = !expanded">
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
     </div>
-    <p v-if="expanded && body" class="mt-1 whitespace-pre-wrap break-words text-text-2">{{ body }}</p>
+    <p v-if="expanded && body" class="mt-1 whitespace-pre-wrap wrap-break-word text-text-2">{{ body }}</p>
   </div>
 </template>

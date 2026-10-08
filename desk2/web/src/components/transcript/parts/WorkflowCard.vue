@@ -21,15 +21,15 @@ const dots = computed(() => workflowDots(props.item))
 <template>
   <button type="button" class="tx-workflow" :aria-label="`${item.description || 'Workflow'}: open background tasks`" @click="desk.openBackgroundTasks(item.taskId)">
     <span class="flex w-full items-center gap-2">
-      <span class="min-w-0 flex-1 truncate text-left text-[14px] leading-5 text-text-2">{{ item.description || 'Workflow' }}</span>
+      <span class="min-w-0 flex-1 truncate text-start text-[14px] leading-5 text-text-2">{{ item.description || 'Workflow' }}</span>
       <Chevron class="size-3.5 shrink-0 text-text-muted" />
     </span>
-    <span class="mt-1 flex items-center gap-2 text-[13px] leading-[18px] tabular-nums">
+    <span class="mt-1 flex items-center gap-2 text-[13px] leading-4.5 tabular-nums">
       <span class="font-medium text-text-2">Workflow</span>
       <span v-if="item.agents !== undefined" class="text-text-muted"><span class="text-text-2">{{ item.agents }}</span> {{ item.agents === 1 ? 'agent' : 'agents' }}</span>
       <span class="text-text-muted">{{ elapsed }}</span>
     </span>
-    <span class="mt-[11px] flex gap-0.5" aria-hidden="true">
+    <span class="mt-2.75 flex gap-0.5" aria-hidden="true">
       <span v-for="(d, i) in dots" :key="i" class="tx-workflow-dot" :data-state="d" />
     </span>
   </button>

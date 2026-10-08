@@ -85,10 +85,19 @@ export function deliverHostEvent(detail: unknown) {
   if (d && typeof d.id === 'string') listeners.get(d.id)?.(d)
 }
 
+const onHostEvent = (e: Event) => deliverHostEvent((e as CustomEvent).detail)
+
 function listen() {
   if (listening || typeof window === 'undefined') return
   listening = true
-  window.addEventListener(HOST_BROWSER_EVENT, (e) => deliverHostEvent((e as CustomEvent).detail))
+  window.addEventListener(HOST_BROWSER_EVENT, onHostEvent)
+}
+
+/** The window listener goes with the last view. */
+function unlisten() {
+  if (!listening || listeners.size > 0) return
+  listening = false
+  window.removeEventListener(HOST_BROWSER_EVENT, onHostEvent)
 }
 
 const post = (msg: HostBrowserIn) => (globalThis as HostWindow).ipc?.postMessage(JSON.stringify(msg))
@@ -146,6 +155,7 @@ export class HostView {
 
   close() {
     listeners.delete(this.id)
+    unlisten()
     if (this.opened) this.send({ kind: 'browser', op: 'close', id: this.id })
     this.opened = false
   }

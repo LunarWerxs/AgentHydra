@@ -156,12 +156,12 @@ watch(() => props.text, () => nextTick(fit))
       class="tx-bubble"
       :class="[fresh && 'animate-[code-user-bubble-enter_.3s_cubic-bezier(.32,.72,0,1)] origin-right', queued && 'opacity-60']"
     >
-      <p ref="body" class="whitespace-pre-wrap break-words" :class="!expanded && ['tx-bubble-clamped', long && 'tx-bubble-fade']">{{ text }}</p>
+      <p ref="body" class="whitespace-pre-wrap wrap-break-word" :class="!expanded && ['tx-bubble-clamped', long && 'tx-bubble-fade']">{{ text }}</p>
       <button v-if="long" type="button" class="tx-bubble-more" :aria-expanded="expanded" @click="expanded = !expanded">
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
     </div>
-    <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-right text-[13px] text-text-muted">
+    <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-[13px] text-text-muted">
       <span v-if="sendNowState === 'failed'" class="text-danger-text">Send now failed{{ sendNowError ? `: ${sendNowError}` : '' }}</span>
       <span v-else-if="sendNowNote">{{ sendNowNote }}</span>
       <template v-else>

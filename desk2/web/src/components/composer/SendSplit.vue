@@ -95,8 +95,8 @@ function onSend(e: MouseEvent) {
           <button
             v-if="chevron"
             type="button"
-            class="absolute bottom-0 right-full flex h-6 w-4 items-center justify-center rounded-[var(--radius-5)] bg-[var(--bg-popover)] transition-colors duration-[60ms] hover:text-[var(--text)] motion-safe:animate-in motion-safe:fade-in-0"
-            :class="open ? 'text-[var(--text)]' : 'text-[var(--text-muted)]'"
+            class="absolute bottom-0 right-full flex h-6 w-4 items-center justify-center rounded-(--radius-5) bg-(--bg-popover) transition-colors duration-60 hover:text-(--text) motion-safe:animate-in motion-safe:fade-in-0"
+            :class="open ? 'text-(--text)' : 'text-(--text-muted)'"
             aria-label="Queue options"
             aria-haspopup="dialog"
             :aria-expanded="open"
@@ -108,23 +108,23 @@ function onSend(e: MouseEvent) {
           <Tip v-if="showStop" label="Stop (Esc)" :disabled="chevron" side="top">
             <button
               type="button"
-              class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]"
+              class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
               aria-label="Stop"
               @click="emit('stop')"
             >
-              <span class="size-2.5 rounded-[2px] bg-current" />
+              <span class="size-2.5 rounded-xs bg-current" />
             </button>
           </Tip>
           <Tip v-else :label="sendTip" :disabled="chevron" side="top">
             <button
               type="button"
-              class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms]"
+              class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) transition-colors duration-60"
               :class="
                 canSend
-                  ? 'text-[var(--text-2)] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'
+                  ? 'text-(--text-2) hover:bg-(--fill-hover) hover:text-(--text)'
                   : suggested
-                    ? 'cursor-default text-[var(--send-suggested)]'
-                    : 'cursor-default text-[var(--text-muted)]'
+                    ? 'cursor-default text-(--send-suggested)'
+                    : 'cursor-default text-(--text-muted)'
               "
               :aria-disabled="!canSend"
               :aria-label="sendLabel"
@@ -144,7 +144,7 @@ function onSend(e: MouseEvent) {
           @select="menuAct(() => source.queueSettings?.({ sendMode: m.value }))"
         >
           <span class="flex-1">{{ m.label }}</span>
-          <Check v-if="sendMode === m.value" class="size-3.5 text-[var(--accent)]" :stroke-width="3" />
+          <Check v-if="sendMode === m.value" class="size-3.5 text-(--accent)" :stroke-width="3" />
         </ContextMenuItem>
         <template v-if="held">
           <ContextMenuSeparator :class="MENU_SEPARATOR" />

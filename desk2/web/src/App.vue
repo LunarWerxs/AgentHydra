@@ -2,7 +2,6 @@
 import { computed, defineAsyncComponent, defineComponent, h, onBeforeUnmount, onMounted, provide, ref } from 'vue'
 import DeskFrame from '@/components/shell/DeskFrame.vue'
 import TitleTips from '@/components/ui/tooltip/TitleTips.vue'
-import Lightbox from '@/components/transcript/parts/Lightbox.vue'
 import { SHELL_SOURCE } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import { COMPOSER_API } from '@/components/composer/api'
@@ -10,6 +9,8 @@ import { COMPOSER_API } from '@/components/composer/api'
 // The gallery and the demo window (and the fixtures they draw) load only when their route is opened, so
 // the app itself never downloads or parses them.
 const Gallery = defineAsyncComponent(() => import('@/dev/Gallery.vue'))
+// The picture viewer loads after the first paint, out of the files the window needs to draw.
+const Lightbox = defineAsyncComponent(() => import('@/components/transcript/parts/Lightbox.vue'))
 
 // Routes: `#/gallery` is the component gallery, `#/gallery/shell` the whole window on fixtures (no
 // server needed; `/new` the new-session screen, `/accounts` the account popup open, `/collapsed` the
@@ -47,7 +48,7 @@ const DemoFrame = defineAsyncComponent(async () => {
 
 <template>
   <Gallery v-if="route === 'gallery'" />
-  <div v-else class="h-screen w-screen">
+  <div v-else class="size-screen">
     <DemoFrame v-if="route === 'demo'" :key="hash" :start="hash.split('/')[3] ?? ''" />
     <DeskFrame v-else />
     <TitleTips />

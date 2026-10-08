@@ -26,7 +26,7 @@ const meta = (t: TaskItem) =>
     <StatusRow :open="open" hover-chevron class="tx-status-tasks" @toggle="ctx.toggle(id)">
       <span class="min-w-0 truncate">{{ line }}</span>
     </StatusRow>
-    <div v-if="open" class="mb-1 ml-1 mt-1.5 flex flex-col gap-0.5 border-l border-border pl-3">
+    <div v-if="open" class="mb-1 ms-1 mt-1.5 flex flex-col gap-0.5 border-s border-border ps-3">
       <button
         v-for="t in items"
         :key="t.id"
@@ -38,7 +38,7 @@ const meta = (t: TaskItem) =>
         <X v-else-if="t.status === 'failed'" class="size-3.5 shrink-0 text-danger-text" />
         <CircleStop v-else class="size-3.5 shrink-0 text-text-muted" />
         <span class="min-w-0 truncate text-text-2">{{ t.description || t.summary || t.taskId }}</span>
-        <span v-if="meta(t)" class="ml-auto shrink-0 pl-3 text-[12px] text-text-muted tabular-nums">{{ meta(t) }}</span>
+        <span v-if="meta(t)" class="ms-auto shrink-0 ps-3 text-[12px] text-text-muted tabular-nums">{{ meta(t) }}</span>
       </button>
     </div>
   </div>

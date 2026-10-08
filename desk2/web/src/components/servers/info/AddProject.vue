@@ -83,12 +83,16 @@ async function handle(res: DevWebAddResult): Promise<boolean> {
   return true
 }
 
+const browsing = ref(false)
 async function browse(): Promise<void> {
+  browsing.value = true
   try {
     const p = await pickFolder(cleanPath(path.value) || null)
     if (p) path.value = p
   } catch (err) {
     error.value = err instanceof Error ? err.message : String(err)
+  } finally {
+    browsing.value = false
   }
 }
 const add = () => act(async () => { await handle(await loadProject(cleanPath(path.value))) })
@@ -147,15 +151,15 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <span :class="ICON_TILE"><FolderPlus class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0">
             <h3 class="text-[13px] font-medium leading-5 text-text">Add a folder</h3>
-            <p class="text-[12px] leading-[18px] text-text-muted">A folder with a package.json, or a .devwebui file. A file:// link works too.</p>
+            <p class="text-[12px] leading-4.5 text-text-muted">A folder with a package.json, or a .devwebui file. A file:// link works too.</p>
           </div>
         </div>
         <Field label="Folder or .devwebui file" v-slot="{ id, describedBy }">
           <div class="flex flex-wrap items-center gap-2">
-            <div class="min-w-[200px] flex-1">
+            <div class="min-w-50 flex-1">
               <input :id="id" v-model="path" :class="INPUT_MONO" :aria-describedby="describedBy" placeholder="C:/Users/me/projects/app" @keydown.enter="path.trim() && add()" />
             </div>
-            <button type="button" :class="BTN" aria-label="Browse for a folder" @click="browse"><FolderOpen class="size-3.5" aria-hidden="true" />Browse</button>
+            <button type="button" :class="BTN" aria-label="Browse for a folder" :disabled="browsing" :aria-busy="browsing" @click="browse"><FolderOpen class="size-3.5" aria-hidden="true" />Browse</button>
             <button type="button" :class="BTN_PRIMARY" :disabled="busy || !path.trim()" @click="add">Add</button>
           </div>
         </Field>
@@ -163,8 +167,8 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <div class="flex flex-col gap-3 border-t border-border pt-3">
             <p class="text-[13px] leading-5 text-text-2">This folder has no .devwebui file yet. Review what goes into it.</p>
             <ProposalEditor v-model="scaffold.proposal" />
-            <div class="sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-2 rounded-b-[var(--radius-10)] border-t border-border bg-bg-panel/95 px-4 py-3 backdrop-blur">
-              <p v-if="error" role="alert" class="mr-auto min-w-0 text-[12px] leading-4 text-danger-text">{{ error }}</p>
+            <div class="sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-2 rounded-b-(--radius-10) border-t border-border bg-bg-panel/95 px-4 py-3 backdrop-blur">
+              <p v-if="error" role="alert" class="me-auto min-w-0 text-[12px] leading-4 text-danger-text">{{ error }}</p>
               <button type="button" :class="BTN_GHOST" @click="scaffold = null">Cancel</button>
               <button type="button" :class="BTN_PRIMARY" :disabled="busy || !scaffold.proposal.processes.length" @click="writeScaffold">Create .devwebui and add</button>
             </div>
@@ -178,7 +182,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <span :class="ICON_TILE"><GitBranch class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0">
             <h3 class="text-[13px] font-medium leading-5 text-text">Clone a repository</h3>
-            <p class="text-[12px] leading-[18px] text-text-muted">Clones it into a folder, then adds it.</p>
+            <p class="text-[12px] leading-4.5 text-text-muted">Clones it into a folder, then adds it.</p>
           </div>
         </div>
         <Field label="Repository URL" v-slot="{ id }">
@@ -186,7 +190,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         </Field>
         <Field label="Destination folder" help="Suggested from the URL until you type your own." v-slot="{ id, describedBy }">
           <div class="flex flex-wrap items-center gap-2">
-            <div class="min-w-[200px] flex-1">
+            <div class="min-w-50 flex-1">
               <input :id="id" v-model="dest" :class="INPUT_MONO" :aria-describedby="describedBy" placeholder="C:/Users/me/projects/app" @input="destTyped = true" />
             </div>
             <button type="button" :class="BTN_PRIMARY" :disabled="busy || !url.trim() || !dest.trim()" @click="clone">Clone</button>
@@ -200,7 +204,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <span :class="ICON_TILE"><ScanSearch class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0 flex-1">
             <h3 class="text-[13px] font-medium leading-5 text-text">Find projects on this PC</h3>
-            <p class="text-[12px] leading-[18px] text-text-muted">Looks for .devwebui files and project folders not added yet.</p>
+            <p class="text-[12px] leading-4.5 text-text-muted">Looks for .devwebui files and project folders not added yet.</p>
           </div>
           <button type="button" :class="BTN_GHOST" :disabled="busy" @click="toggleIgnored">{{ ignored ? 'Hide ignored' : 'Show ignored' }}</button>
         </div>
@@ -210,7 +214,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
             :key="p.id"
             type="button"
             :disabled="busy || (p.id === 'scoped' && !path.trim())"
-            class="flex min-h-14 cursor-default items-start gap-2.5 rounded-[var(--radius-6)] bg-fill-5 p-3 text-left shadow-[inset_0_0_0_1px_var(--border)] transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+            class="flex min-h-14 cursor-default items-start gap-2.5 rounded-(--radius-6) bg-fill-5 p-3 text-start shadow-[inset_0_0_0_1px_var(--border)] transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
             @click="runScan(p.id)"
           >
             <LoaderCircle v-if="scanning === p.id" class="mt-0.5 size-3.5 shrink-0 animate-spin text-accent-text motion-reduce:animate-none" aria-hidden="true" />

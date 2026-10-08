@@ -78,11 +78,15 @@ async function loadIgnored() {
     ignoredError.value = message(e)
   }
 }
+const unignoring = ref<string | null>(null)
 async function unignore(path: string) {
+  unignoring.value = path
   try {
     ignored.value = (await unignoreFolder(path)).paths
   } catch (e) {
     ignoredError.value = message(e)
+  } finally {
+    unignoring.value = null
   }
 }
 watch(
@@ -130,7 +134,7 @@ function saveExclude(e: Event) {
 
 <template>
   <div v-if="id === 'dwService'" class="flex flex-wrap items-center justify-end gap-2">
-    <span class="flex items-center gap-2 text-[13px] leading-[19px] text-text-2">
+    <span class="flex items-center gap-2 text-[13px] leading-4.75 text-text-2">
       <span class="inline-block size-2 rounded-full" :style="{ background: devLine.background }" />
       {{ devLine.text }}
     </span>
@@ -141,18 +145,18 @@ function saveExclude(e: Event) {
         <button type="button" :class="BUTTON" @click="confirmStop = true">Stop</button>
       </template>
       <template v-else>
-        <span class="text-[12px] leading-[18px] text-text-muted">Also stops the servers the service started.</span>
+        <span class="text-[12px] leading-4.5 text-text-muted">Also stops the servers the service started.</span>
         <button type="button" :class="BUTTON" @click="serviceAction('stop')">Stop and end them</button>
         <button type="button" :class="BUTTON" @click="confirmStop = false">Cancel</button>
       </template>
     </template>
   </div>
 
-  <span v-else-if="!running" class="text-[13px] leading-[19px] text-text-muted">Start the dev-servers service to change this.</span>
+  <span v-else-if="!running" class="text-[13px] leading-4.75 text-text-muted">Start the dev-servers service to change this.</span>
 
-  <span v-else-if="!s" class="text-[13px] leading-[19px] text-text-muted">Loading…</span>
+  <span v-else-if="!s" class="text-[13px] leading-4.75 text-text-muted">Loading…</span>
 
-  <div v-else-if="id === 'dwRuntime'" role="radiogroup" aria-label="Runtime" class="flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px">
+  <div v-else-if="id === 'dwRuntime'" role="radiogroup" aria-label="Runtime" class="flex h-7 shrink-0 items-center gap-px rounded-(--radius-7) bg-fill-5 p-px">
     <button
       v-for="opt in ['auto', 'node', 'bun'] as const"
       :key="opt"
@@ -160,7 +164,7 @@ function saveExclude(e: Event) {
       role="radio"
       :aria-checked="s.runtime === opt"
       :tabindex="s.runtime === opt ? 0 : -1"
-      class="flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-[13px] leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text"
+      class="flex h-6.5 cursor-default items-center rounded-(--radius-5) px-2.5 text-[13px] leading-4.75 text-text-2 transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none aria-checked:bg-(--fill-secondary) aria-checked:text-text"
       @click="saveRuntime(opt)"
     >
       {{ opt === 'auto' ? 'Auto' : opt === 'node' ? 'Node' : 'Bun' }}
@@ -172,7 +176,7 @@ function saveExclude(e: Event) {
   <PaneSwitch v-else-if="id === 'dwFreePort'" label="Free a port on start" :model-value="s.freePortOnStart" @update:model-value="(v) => props.ctx.save({ freePortOnStart: v })" />
 
   <div v-else-if="id === 'dwRestartRunning'" class="flex items-center gap-2">
-    <span v-if="restartNote" class="text-[12px] leading-[18px] text-text-muted">{{ restartNote }}</span>
+    <span v-if="restartNote" class="text-[12px] leading-4.5 text-text-muted">{{ restartNote }}</span>
     <button type="button" :class="BUTTON" :disabled="restarting" @click="restartAll">
       <LoaderCircle v-if="restarting" class="size-3.5 animate-spin" />
       Restart running
@@ -205,7 +209,7 @@ function saveExclude(e: Event) {
     :value="s.scanExclude.join('\n')"
     aria-label="Exclude folders"
     rows="4"
-    :class="[FIELD, 'w-full max-w-[400px] resize-none font-mono text-[12px]']"
+    :class="[FIELD, 'w-full max-w-100 resize-none font-mono text-[12px]']"
     @change="saveExclude"
     @keydown.enter.meta.prevent="($event.target as HTMLTextAreaElement).blur()"
   />
@@ -217,20 +221,20 @@ function saveExclude(e: Event) {
         {{ p === 'quick' ? 'Quick scan' : 'Deep scan' }}
       </button>
     </div>
-    <span v-if="scanNote" class="text-[12px] leading-[18px] text-text-muted">{{ scanNote }}</span>
+    <span v-if="scanNote" class="text-[12px] leading-4.5 text-text-muted">{{ scanNote }}</span>
   </div>
 
-  <div v-else-if="id === 'dwIgnored'" class="w-full max-w-[400px] space-y-1">
-    <div v-if="ignoredError" class="text-[12px] leading-[18px] text-danger-text">{{ ignoredError }}</div>
-    <div v-if="!ignored.length" class="text-[13px] leading-[19px] text-text-muted">No ignored folders.</div>
+  <div v-else-if="id === 'dwIgnored'" class="w-full max-w-100 space-y-1">
+    <div v-if="ignoredError" class="text-[12px] leading-4.5 text-danger-text">{{ ignoredError }}</div>
+    <div v-if="!ignored.length" class="text-[13px] leading-4.75 text-text-muted">No ignored folders.</div>
     <div v-for="p in ignored" :key="p" class="flex items-center gap-2">
       <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-text-2" :title="p">{{ p }}</span>
-      <button type="button" :class="BUTTON" @click="unignore(p)">Unignore</button>
+      <button type="button" :class="BUTTON" :disabled="unignoring === p" :aria-busy="unignoring === p" @click="unignore(p)">Unignore</button>
     </div>
   </div>
 
   <div v-else-if="id === 'dwForgetFound'" class="flex items-center gap-2">
-    <span v-if="forgetNote" class="text-[12px] leading-[18px] text-text-muted">{{ forgetNote }}</span>
+    <span v-if="forgetNote" class="text-[12px] leading-4.5 text-text-muted">{{ forgetNote }}</span>
     <button v-if="!confirmForget" type="button" :class="BUTTON" @click="((confirmForget = true), (forgetNote = ''))">Forget found</button>
     <template v-else>
       <button type="button" :class="BUTTON" @click="forget">Yes, clear the found list</button>

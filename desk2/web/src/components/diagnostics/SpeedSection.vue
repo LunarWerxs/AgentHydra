@@ -47,7 +47,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
 </script>
 
 <template>
-  <div class="text-[13px] leading-[19px]" data-testid="speed">
+  <div class="text-[13px] leading-4.75" data-testid="speed">
     <p v-if="error" class="text-danger-text">Could not load timings: {{ error }}</p>
     <p v-else-if="!data" class="text-text-muted">Loading…</p>
     <template v-else>
@@ -57,7 +57,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
         <li v-for="r in slowNow" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
           <span class="truncate text-text-2" :title="rowLabel(r)">{{ rowLabel(r) }}</span>
           <span class="tnum shrink-0 text-text-muted">{{ r.count }}× · p50 {{ ms(r.p50) }}</span>
-          <span class="tnum w-20 shrink-0 text-right text-text">{{ ms(r.totalMs) }}</span>
+          <span class="tnum w-20 shrink-0 text-end text-text">{{ ms(r.totalMs) }}</span>
         </li>
       </ol>
 
@@ -73,7 +73,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
         >
           {{ k === 'today' ? 'Today' : '7 days' }}
         </button>
-        <span class="ml-auto text-[12px] text-text-muted">bar = p50, lighter = p90</span>
+        <span class="ms-auto text-[12px] text-text-muted">bar = p50, lighter = p90</span>
       </div>
       <p v-if="!stages.length" class="mt-1 text-text-muted">No spans yet.</p>
       <ul v-else class="mt-1">
@@ -83,7 +83,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
             <span class="absolute inset-y-0 left-0 rounded bg-fill-selected" :style="{ width: barPct(s.p90, stageMax) + '%' }" />
             <span class="absolute inset-y-0 left-0 rounded bg-text-muted" :style="{ width: barPct(s.p50, stageMax) + '%' }" />
           </span>
-          <span class="tnum text-right text-text">{{ ms(s.p50) }} / {{ ms(s.p90) }} <span class="text-text-muted">max {{ ms(s.max) }}</span></span>
+          <span class="tnum text-end text-text">{{ ms(s.p50) }} / {{ ms(s.p90) }} <span class="text-text-muted">max {{ ms(s.max) }}</span></span>
         </li>
       </ul>
 
@@ -99,7 +99,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
             <button
               v-if="t.chatId && title !== null"
               type="button"
-              class="ml-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline"
+              class="ms-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline"
               @click="src.select({ kind: 'chat', id: t.chatId })"
             >
               {{ title }}

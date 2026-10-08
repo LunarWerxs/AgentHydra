@@ -85,24 +85,24 @@ async function addFolder() {
           :key="r.path"
           role="menuitemradio"
           :aria-checked="r.current"
-          :class="[ITEM, 'group/folder pr-1']"
+          :class="[ITEM, 'group/folder pe-1']"
           @select="choose(r.path)"
           @keydown.delete.prevent="remove(r.path)"
         >
           <span class="min-w-0 flex-1 truncate">
-            {{ r.name }}<span v-if="r.hint" class="ml-1.5 text-[var(--text-muted)]">{{ r.hint }}</span>
+            {{ r.name }}<span v-if="r.hint" class="ms-1.5 text-(--text-muted)">{{ r.hint }}</span>
           </span>
           <span class="flex size-5 shrink-0 items-center justify-center">
             <Check
               v-if="r.current"
-              class="size-3.5 text-[var(--accent)] group-hover/folder:hidden group-data-[highlighted]/folder:hidden"
+              class="size-3.5 text-(--accent) group-hover/folder:hidden group-data-[highlighted]/folder:hidden"
               :stroke-width="3"
             />
             <!-- Its own click: stopped before the row sees it, so the row is not chosen. -->
             <button
               type="button"
               tabindex="-1"
-              class="hidden size-5 items-center justify-center rounded-[var(--radius-5)] text-[var(--text-muted)] transition-colors duration-[60ms] hover:bg-[var(--fill-secondary-hover)] hover:text-[var(--text)] group-hover/folder:flex group-data-[highlighted]/folder:flex"
+              class="hidden size-5 items-center justify-center rounded-(--radius-5) text-(--text-muted) transition-colors duration-60 hover:bg-(--fill-secondary-hover) hover:text-(--text) group-hover/folder:flex group-data-[highlighted]/folder:flex"
               :aria-label="`Remove ${r.name} from Recent`"
               @pointerdown.stop
               @pointerup.stop
@@ -118,7 +118,7 @@ async function addFolder() {
         <Plus :class="MENU_GLYPH" />
         Add new folder…
       </DropdownMenuItem>
-      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-[var(--danger-text)]">{{ error }}</p>
+      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-(--danger-text)">{{ error }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
 </template>

@@ -51,12 +51,12 @@ const answer = computed(() => {
     <EmptyState v-else-if="!s" :icon="PlugZap" title="Nothing listening" :text="`Nothing is listening on port ${port} any more.`" />
     <template v-else>
       <section class="flex flex-col gap-2">
-        <h2 class="break-words text-[16px] font-semibold leading-6 text-text">{{ s.title ?? `Port ${s.port}` }}</h2>
+        <h2 class="wrap-break-word text-[16px] font-semibold leading-6 text-text">{{ s.title ?? `Port ${s.port}` }}</h2>
         <div class="flex min-w-0 flex-wrap items-center gap-2">
           <a :href="s.url" target="_blank" rel="noopener" :class="MONO" class="min-w-0 truncate text-accent-text hover:underline">{{ s.url }}</a>
           <span :class="CHIP">Not managed by AgentHydra</span>
         </div>
-        <p class="text-[12px] leading-[18px] text-text-muted">No project lists this server. AgentHydra did not start it and never starts or stops it.</p>
+        <p class="text-[12px] leading-4.5 text-text-muted">No project lists this server. AgentHydra did not start it and never starts or stops it.</p>
         <div class="mt-1 flex flex-wrap gap-1.5">
           <a :href="s.url" target="_blank" rel="noopener" :class="BTN_PRIMARY" aria-label="Open in browser"><ExternalLink class="size-3.5" />Open in browser</a>
           <button type="button" :class="BTN" aria-label="Copy address" @click="copy">

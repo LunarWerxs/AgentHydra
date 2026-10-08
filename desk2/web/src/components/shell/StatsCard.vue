@@ -104,7 +104,7 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
 </script>
 
 <template>
-  <section aria-label="Usage" class="w-[480px] max-w-full rounded-[var(--radius-12)] bg-fill-5 px-3 pb-3 pt-2">
+  <section aria-label="Usage" class="w-120 max-w-full rounded-(--radius-12) bg-fill-5 px-3 pb-3 pt-2">
     <div class="flex items-center">
       <div role="tablist" class="flex items-center gap-0.5">
         <button type="button" role="tab" :aria-selected="tab === 'overview'" :class="chip(tab === 'overview')" @click="tab = 'overview'">Overview</button>
@@ -120,51 +120,51 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
 
     <template v-if="tab === 'overview'">
       <div class="mt-5 grid grid-cols-3 gap-1">
-        <div v-for="t in tiles" :key="t.label" :title="t.title" class="flex h-11 min-w-0 flex-col justify-start rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 pt-[2.5px]">
+        <div v-for="t in tiles" :key="t.label" :title="t.title" class="flex h-11 min-w-0 flex-col justify-start rounded-(--radius-6) bg-(--fill-secondary) px-1 pt-[2.5px]">
           <span class="truncate text-[12px] leading-4 text-text-muted">{{ t.label }}</span>
-          <span class="tnum truncate text-[13px] leading-[19px] text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
+          <span class="tnum truncate text-[13px] leading-4.75 text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
         </div>
       </div>
-      <div v-if="sources.length" class="mt-[6px] flex flex-col gap-[2px]">
-        <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-left text-[11px] leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
+      <div v-if="sources.length" class="mt-1.5 flex flex-col gap-0.5">
+        <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-start text-[11px] leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
           <ChevronRight class="size-3 transition-transform" :class="sourcesOpen ? 'rotate-90' : ''" aria-hidden="true" />
           <span>Sources</span>
           <span class="tnum">{{ sources.length }}</span>
         </button>
-        <div v-if="sourcesOpen" id="stats-sources" class="flex flex-col gap-[2px]" role="table" aria-label="Sources">
+        <div v-if="sourcesOpen" id="stats-sources" class="flex flex-col gap-0.5" role="table" aria-label="Sources">
           <div role="row" :class="SOURCE_COLS" class="h-4 text-[11px] leading-4 text-text-muted">
             <span role="columnheader">Source</span>
-            <span role="columnheader" class="text-right">Sessions</span>
-            <span role="columnheader" class="text-right">Tokens</span>
-            <span role="columnheader" class="text-right">Cost</span>
+            <span role="columnheader" class="text-end">Sessions</span>
+            <span role="columnheader" class="text-end">Tokens</span>
+            <span role="columnheader" class="text-end">Cost</span>
           </div>
-          <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-[22px] overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] text-[12px] leading-4">
-            <span class="absolute bottom-0 left-0 h-[2px] bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
+          <div v-for="s in sources" :key="s.key" role="row" :title="s.title" :class="SOURCE_COLS" class="relative h-5.5 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) text-[12px] leading-4">
+            <span class="absolute bottom-0 left-0 h-0.5 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
             <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
-            <span role="cell" class="tnum relative text-right text-text-2">{{ s.sessions }}</span>
-            <span role="cell" class="tnum relative text-right text-text-2">{{ s.tokens }}</span>
-            <span role="cell" class="tnum relative text-right text-text-2">{{ s.cost }}</span>
+            <span role="cell" class="tnum relative text-end text-text-2">{{ s.sessions }}</span>
+            <span role="cell" class="tnum relative text-end text-text-2">{{ s.tokens }}</span>
+            <span role="cell" class="tnum relative text-end text-text-2">{{ s.cost }}</span>
           </div>
         </div>
       </div>
-      <div class="mt-[6px] grid grid-flow-col grid-rows-7 justify-between gap-y-[3px]" role="img" aria-label="Activity over the last 27 weeks">
-        <span v-for="cell in heatCells" :key="cell.day" :title="cell.title" class="size-[15px] rounded-[2px]" :style="{ background: HEAT[cell.level] }" />
+      <div class="mt-1.5 grid grid-flow-col grid-rows-7 justify-between gap-y-0.75" role="img" aria-label="Activity over the last 27 weeks">
+        <span v-for="cell in heatCells" :key="cell.day" :title="cell.title" class="size-3.75 rounded-xs" :style="{ background: HEAT[cell.level] }" />
       </div>
     </template>
 
-    <div v-else class="mt-[18px] flex min-h-[217px] flex-col gap-[5px]">
+    <div v-else class="mt-4.5 flex min-h-54.25 flex-col gap-1.25">
       <div v-for="m in modelFold.shown" :key="m.label" :class="MODEL_ROW">
         <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
         <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
         <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
       </div>
       <template v-if="modelFold.rest.length">
-        <button type="button" class="flex h-7 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-left text-[13px] leading-[19px] text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
+        <button type="button" class="flex h-7 items-center gap-1 rounded-(--radius-6) px-1.5 text-start text-[13px] leading-4.75 text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
           <ChevronRight class="size-3 shrink-0 transition-transform" :class="moreModels ? 'rotate-90' : ''" aria-hidden="true" />
           <span class="min-w-0 flex-1 truncate">+{{ modelFold.rest.length }} more</span>
           <span class="tnum">{{ percent(modelFold.restShare) }}</span>
         </button>
-        <div v-if="moreModels" id="stats-more-models" class="flex flex-col gap-[5px]">
+        <div v-if="moreModels" id="stats-more-models" class="flex flex-col gap-1.25">
           <div v-for="m in modelFold.rest" :key="m.label" :class="MODEL_ROW">
             <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
             <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>

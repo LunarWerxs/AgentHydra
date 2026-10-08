@@ -68,10 +68,16 @@ async function jump(f: DevWebSourceFrame) {
     failure.value = err instanceof Error ? err.message : String(err)
   }
 }
+const dismissing = ref<string | null>(null)
 async function dismiss(e: DevWebErrorEntry) {
-  await dismissError(e.fingerprint).catch((err) => (failure.value = String(err)))
-  await load()
-  await servers.refresh()
+  dismissing.value = e.fingerprint
+  try {
+    await dismissError(e.fingerprint).catch((err) => (failure.value = String(err)))
+    await load()
+    await servers.refresh()
+  } finally {
+    dismissing.value = null
+  }
 }
 async function clearAll() {
   confirming.value = false
@@ -122,11 +128,11 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
           <span :class="CHIP">{{ SOURCE[e.source] ?? e.source }}</span>
           <span :class="chip('danger')" class="font-medium tnum" :title="`Seen ${e.count} ${e.count === 1 ? 'time' : 'times'}`">×{{ e.count }}</span>
           <span class="flex-1" />
-          <button type="button" :class="BTN_GHOST_SM" @click="dismiss(e)">Dismiss</button>
+          <button type="button" :class="BTN_GHOST_SM" :disabled="dismissing === e.fingerprint" :aria-busy="dismissing === e.fingerprint" @click="dismiss(e)">Dismiss</button>
         </div>
 
         <div class="flex flex-col gap-2">
-          <p class="break-words text-[13px] font-medium leading-5 text-danger-text">{{ title(e) }}</p>
+          <p class="wrap-break-word text-[13px] font-medium leading-5 text-danger-text">{{ title(e) }}</p>
           <template v-if="rest(e)">
             <pre :class="[CODE, expanded.has(e.fingerprint) ? '' : 'line-clamp-6']">{{ rest(e) }}</pre>
             <button v-if="isLong(rest(e))" type="button" :class="BTN_GHOST_SM" class="self-start" @click="toggleText(e.fingerprint)">
@@ -141,20 +147,20 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
         </p>
 
         <div v-if="e.frames.length" class="flex flex-col gap-1">
-          <button type="button" :class="BTN_GHOST_SM" class="-ml-2 self-start" :aria-expanded="framesOpen(e, i)" @click="toggleFrames(e.fingerprint)">
+          <button type="button" :class="BTN_GHOST_SM" class="-ms-2 self-start" :aria-expanded="framesOpen(e, i)" @click="toggleFrames(e.fingerprint)">
             <ChevronRight
-              class="size-3.5 transition-transform duration-[var(--dur-fast)] motion-reduce:transition-none"
+              class="size-3.5 transition-transform duration-(--dur-fast) motion-reduce:transition-none"
               :class="framesOpen(e, i) ? 'rotate-90' : ''"
               aria-hidden="true"
             />
             Source · {{ e.frames.length }} {{ e.frames.length === 1 ? 'frame' : 'frames' }}
           </button>
-          <div v-if="framesOpen(e, i)" class="flex flex-col divide-y divide-border overflow-hidden rounded-[var(--radius-6)] shadow-[inset_0_0_0_1px_var(--border)]">
+          <div v-if="framesOpen(e, i)" class="flex flex-col divide-y divide-border overflow-hidden rounded-(--radius-6) shadow-[inset_0_0_0_1px_var(--border)]">
             <button
               v-for="(f, j) in e.frames"
               :key="`${f.file}${at(f)}#${j}`"
               type="button"
-              class="group flex min-h-8 min-w-0 cursor-default items-center gap-2 px-3 text-left text-[12px] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+              class="group flex min-h-8 min-w-0 cursor-default items-center gap-2 px-3 text-start text-[12px] hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               :aria-label="`Open ${f.file}:${f.line} in the editor`"
               :title="`${f.file}${at(f)}`"
               @click="jump(f)"

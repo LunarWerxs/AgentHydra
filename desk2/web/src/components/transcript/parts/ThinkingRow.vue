@@ -14,7 +14,7 @@ const ctx = useTranscript()
     </StatusRow>
     <div
       v-if="ctx.isOpen(id)"
-      class="mb-1 ml-1 mt-1.5 whitespace-pre-wrap border-l border-border pl-3 text-[14px] leading-5 text-text-muted"
+      class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap border-s border-border ps-3 text-[14px] leading-5 text-text-muted"
     >{{ text }}<span v-if="streaming" class="stream-cursor" /></div>
   </div>
 </template>

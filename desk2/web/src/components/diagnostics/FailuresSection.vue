@@ -44,7 +44,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
 </script>
 
 <template>
-  <div class="text-[13px] leading-[19px]" data-testid="failures">
+  <div class="text-[13px] leading-4.75" data-testid="failures">
     <p v-if="error" class="text-danger-text">Could not load failures: {{ error }}</p>
     <p v-else-if="!week" class="text-text-muted">Loading…</p>
     <template v-else>
@@ -73,12 +73,12 @@ const known = (id: string): boolean => knownIds.value.has(id)
             <button
               v-if="known(r.chatId)"
               type="button"
-              class="ml-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline"
+              class="ms-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline"
               @click="src.select({ kind: 'chat', id: r.chatId })"
             >
               {{ r.title || 'Open chat' }}
             </button>
-            <span v-else class="ml-auto truncate text-text-muted">{{ r.title }}</span>
+            <span v-else class="ms-auto truncate text-text-muted">{{ r.title }}</span>
           </div>
           <div class="mt-0.5 truncate font-mono text-[12px] text-text-muted" :title="r.message">{{ r.message }}</div>
         </li>

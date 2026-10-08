@@ -108,7 +108,7 @@ function run(item: RowMenuItem) {
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <span class="flex size-[14px] items-center justify-center">
+            <span class="flex size-3.5 items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>
@@ -123,7 +123,7 @@ function run(item: RowMenuItem) {
             ref="input"
             v-model="draft"
             aria-label="Rename session"
-            class="h-5 min-w-0 flex-1 rounded-[4px] bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
+            class="h-5 min-w-0 flex-1 rounded-sm bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
             @click.stop
             @keydown.enter.stop="commitRename"
             @keydown.escape.stop="renaming = false"
@@ -133,8 +133,8 @@ function run(item: RowMenuItem) {
 
           <!-- The account number, the sub-item badges (SubBadges.vue, when the sidebar shows them as counts) and the age; they
                make room for the three dots on hover, the age giving its place. -->
-          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ml-1 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
-            <span v-if="account !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
+          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ms-1 flex shrink-0 items-center gap-1 pe-1 text-[12px] leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+            <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
             <slot />
             <RowAge v-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="session.lastActivityAt" />
           </span>
@@ -147,7 +147,7 @@ function run(item: RowMenuItem) {
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
           :aria-description="`Runs in ${source}`"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
@@ -164,7 +164,7 @@ function run(item: RowMenuItem) {
               <button
                 type="button"
                 :aria-label="`More options for ${session.title}`"
-                class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+                class="absolute right-0.75 top-0.75 flex size-5 items-center justify-center rounded-(--radius-5) text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
                 @click.stop
               >
                 <component :is="shellGlyphs.rowMore" class="size-4" />
@@ -188,7 +188,7 @@ function run(item: RowMenuItem) {
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
           :aria-description="`Runs in ${source}`"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
@@ -208,7 +208,7 @@ function run(item: RowMenuItem) {
             aria-expanded="false"
             data-state="closed"
             :aria-label="`More options for ${session.title}`"
-            class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+            class="absolute right-0.75 top-0.75 flex size-5 items-center justify-center rounded-(--radius-5) text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
             @click.stop
           >
             <component :is="shellGlyphs.rowMore" class="size-4" />
@@ -217,22 +217,3 @@ function run(item: RowMenuItem) {
     </span>
   </Tip>
 </template>
-
-<style scoped>
-/* Fade mask behind the row's control: 24px, 44px while the control shows. */
-.ext-title {
-  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
-}
-.group\/row:hover .ext-title,
-.ext-title-open {
-  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
-}
-/* The speaker (AudioButton.vue) sits at the right end, and left of the three dots while those show: the title fades earlier. */
-.ext-title-audio {
-  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
-}
-.group\/row:hover .ext-title-audio,
-.ext-title-open.ext-title-audio {
-  mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 40px));
-}
-</style>

@@ -28,7 +28,7 @@ const GLYPHS = ['·', '✢', '✳', '✶', '✻']
 
 <template>
   <div class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px]" role="status" aria-live="polite">
-    <span v-if="needsYou" class="mx-[5px] size-1.5 shrink-0 animate-dot-blink rounded-full bg-warning" />
+    <span v-if="needsYou" class="mx-1.25 size-1.5 shrink-0 animate-dot-blink rounded-full bg-warning" />
     <span v-else class="tx-spinner" aria-hidden="true">
       <span class="tx-spinner-strip"><span v-for="g in GLYPHS" :key="g">{{ g }}</span></span>
     </span>

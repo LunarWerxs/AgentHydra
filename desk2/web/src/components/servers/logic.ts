@@ -351,6 +351,18 @@ export function serializeTabs(s: TabsState): string {
   return JSON.stringify({ tabs: s.tabs.map((t) => ({ kind: t.kind, target: t.target, proc: t.proc, ...(t.url ? { url: t.url } : {}), ...(t.page ? { page: t.page } : {}) })), active: Math.max(0, s.tabs.findIndex((t) => t.id === s.active)) })
 }
 
+/** One saved tab, or null when it has no kind or no target. */
+function restoreTab(item: unknown): PaneTab | null {
+  const t = (item ?? {}) as Partial<TabSpec>
+  const kind = t.kind
+  if (kind !== 'new' && kind !== 'page' && kind !== 'saved') return null
+  if (kind !== 'new' && (typeof t.target !== 'string' || t.target === '')) return null
+  const tab: PaneTab = { id: nextTabId(), kind, target: kind === 'new' ? null : (t.target as string), proc: kind === 'page' && typeof t.proc === 'string' ? t.proc : null }
+  if (kind === 'saved' && typeof t.url === 'string' && t.url) tab.url = t.url
+  if (kind === 'saved' && typeof t.page === 'string' && t.page) tab.page = t.page
+  return tab
+}
+
 /** Reads what serializeTabs wrote; anything unreadable, or a tab without its target, is dropped, and nothing left is one New tab. */
 export function restoreTabs(raw: string | null | undefined): TabsState {
   try {
@@ -359,13 +371,8 @@ export function restoreTabs(raw: string | null | undefined): TabsState {
     const tabs: PaneTab[] = []
     let active = ''
     list.forEach((item, i) => {
-      const t = (item ?? {}) as Partial<TabSpec>
-      const kind = t.kind
-      if (kind !== 'new' && kind !== 'page' && kind !== 'saved') return
-      if (kind !== 'new' && (typeof t.target !== 'string' || t.target === '')) return
-      const tab: PaneTab = { id: nextTabId(), kind, target: kind === 'new' ? null : (t.target as string), proc: kind === 'page' && typeof t.proc === 'string' ? t.proc : null }
-      if (kind === 'saved' && typeof t.url === 'string' && t.url) tab.url = t.url
-      if (kind === 'saved' && typeof t.page === 'string' && t.page) tab.page = t.page
+      const tab = restoreTab(item)
+      if (!tab) return
       tabs.push(tab)
       if (i === data.active) active = tab.id
     })
@@ -648,15 +655,40 @@ export interface FoundCompany<T> {
   count: number
 }
 
+type FoundItem = Pick<DevWebFoundRow, 'kind' | 'path' | 'name' | 'company'>
+
+/** The folder a found item is: a file's folder, else its own path. */
+function foundDir(i: Pick<DevWebFoundRow, 'kind' | 'path'>): string {
+  const own = slashed(i.path)
+  return i.kind === 'file' ? own.slice(0, Math.max(own.lastIndexOf('/'), 0)) : own
+}
+
+/** Sorts a found project's items and says where each one that shares its name with another is below the project. */
+function settleFoundProject<T extends FoundItem>(pr: FoundProject<T>): void {
+  pr.items.sort((a, b) => byName(a.name, b.name) || byName(a.path, b.path))
+  const named = new Map<string, number>()
+  for (const i of pr.items) named.set(i.name.toLowerCase(), (named.get(i.name.toLowerCase()) ?? 0) + 1)
+  for (const i of pr.items) {
+    if ((named.get(i.name.toLowerCase()) ?? 0) < 2) continue
+    const at = below(foundDir(i), pr.dir)
+    if (at) pr.where.set(i.path, at)
+  }
+}
+
+function foundCompany<T extends FoundItem>(company: DevWebCompany, projects: Map<string, FoundProject<T>>): FoundCompany<T> {
+  const list = [...projects.values()].sort((a, b) => Number(b.dir === slashed(company.dir)) - Number(a.dir === slashed(company.dir)) || byName(a.name, b.name))
+  for (const pr of list) settleFoundProject(pr)
+  return { company, projects: list, count: list.reduce((n, pr) => n + pr.items.length, 0) }
+}
+
 /**
  * The found list by company, then by the folder just below the company's (each copy or app of it; the company's own
  * folder is a project too, named for the company, and comes first), then by name; companies by name.
  */
-export function foundTree<T extends Pick<DevWebFoundRow, 'kind' | 'path' | 'name' | 'company'>>(items: readonly T[]): FoundCompany<T>[] {
+export function foundTree<T extends FoundItem>(items: readonly T[]): FoundCompany<T>[] {
   const companies = new Map<string, { company: DevWebCompany; projects: Map<string, FoundProject<T>> }>()
   for (const i of items) {
-    const own = slashed(i.path)
-    const dir = i.kind === 'file' ? own.slice(0, Math.max(own.lastIndexOf('/'), 0)) : own
+    const dir = foundDir(i)
     const cdir = slashed(i.company.dir)
     const top = below(dir, cdir)?.split('/')[0] ?? ''
     const ck = cdir.toLowerCase()
@@ -667,23 +699,7 @@ export function foundTree<T extends Pick<DevWebFoundRow, 'kind' | 'path' | 'name
     if (!pr) c.projects.set(pdir.toLowerCase(), (pr = { dir: pdir, name: top || i.company.name, items: [], where: new Map() }))
     pr.items.push(i)
   }
-  return [...companies.values()]
-    .map(({ company, projects }) => {
-      const list = [...projects.values()].sort((a, b) => Number(b.dir === slashed(company.dir)) - Number(a.dir === slashed(company.dir)) || byName(a.name, b.name))
-      for (const pr of list) {
-        pr.items.sort((a, b) => byName(a.name, b.name) || byName(a.path, b.path))
-        const named = new Map<string, number>()
-        for (const i of pr.items) named.set(i.name.toLowerCase(), (named.get(i.name.toLowerCase()) ?? 0) + 1)
-        for (const i of pr.items) {
-          if ((named.get(i.name.toLowerCase()) ?? 0) < 2) continue
-          const own = slashed(i.path)
-          const at = below(i.kind === 'file' ? own.slice(0, Math.max(own.lastIndexOf('/'), 0)) : own, pr.dir)
-          if (at) pr.where.set(i.path, at)
-        }
-      }
-      return { company, projects: list, count: list.reduce((n, pr) => n + pr.items.length, 0) }
-    })
-    .sort((a, b) => byCompany(a.company, b.company))
+  return [...companies.values()].map(({ company, projects }) => foundCompany(company, projects)).sort((a, b) => byCompany(a.company, b.company))
 }
 
 /** Other servers by the company of the folder they run from, companies by name and the ones with no folder last; by port inside. */

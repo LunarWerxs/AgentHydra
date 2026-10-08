@@ -28,13 +28,21 @@ async function load() {
   if (!gone) timer = setTimeout(load, pollDelay(views.value))
 }
 
+const acting = ref<string[]>([])
+const actingKey = (v: ConnectorView, action: ConnectorAction) => `${v.id}:${action}`
+const actingOn = (v: ConnectorView, action: ConnectorAction) => acting.value.includes(actingKey(v, action))
+
 async function act(v: ConnectorView, action: ConnectorAction) {
+  const key = actingKey(v, action)
+  acting.value = [...acting.value, key]
   try {
     const next = await runConnectorAction(v.id, action)
     views.value = views.value.map((x) => (x.id === next.id ? next : x))
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    acting.value = acting.value.filter((k) => k !== key)
   }
   // An install or start is now under way: look again soon, not in 15 s.
   if (timer) clearTimeout(timer)
@@ -77,34 +85,34 @@ onBeforeUnmount(() => {
 <template>
   <div role="group" aria-label="Connectors">
     <h3 class="text-[13px] font-semibold leading-5 text-text">Connectors</h3>
-    <p class="mt-0.5 text-[13px] leading-[19px] text-text-muted">
+    <p class="mt-0.5 text-[13px] leading-4.75 text-text-muted">
       Outside apps Desk hooks in without copying them. While one runs, every chat you start gets its tools and one paragraph of prompt.
     </p>
-    <p v-if="error" class="mt-2 text-[13px] leading-[19px] text-danger-text">{{ error }}</p>
-    <p v-if="!loaded" class="mt-4 text-[13px] leading-[19px] text-text-muted">Loading…</p>
+    <p v-if="error" class="mt-2 text-[13px] leading-4.75 text-danger-text">{{ error }}</p>
+    <p v-if="!loaded" class="mt-4 text-[13px] leading-4.75 text-text-muted">Loading…</p>
     <div v-for="v in views" :key="v.id" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5 last:border-b-0">
-      <div class="min-w-[200px] flex-1">
+      <div class="min-w-50 flex-1">
         <div class="flex items-center gap-2 text-[13px] leading-5 text-text">
           {{ v.name }}
           <span v-if="versionLabel(v)" class="font-mono text-[12px] text-text-muted">{{ versionLabel(v) }}</span>
         </div>
-        <div class="mt-0.5 text-[13px] leading-[19px] text-text-muted">{{ v.blurb }}</div>
-        <div class="mt-0.5 flex items-center gap-2 break-words text-[13px] leading-[19px] text-text-2">
+        <div class="mt-0.5 text-[13px] leading-4.75 text-text-muted">{{ v.blurb }}</div>
+        <div class="mt-0.5 flex items-center gap-2 wrap-break-word text-[13px] leading-4.75 text-text-2">
           <span class="inline-block size-2 shrink-0 rounded-full" :style="{ background: dot[stateTone(v)] }" />
           {{ stateLabel(v) }}
         </div>
-        <div v-if="note(v)" class="mt-0.5 break-words text-[12px] leading-[18px] text-text-muted">{{ note(v) }}</div>
+        <div v-if="note(v)" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ note(v) }}</div>
         <template v-if="v.id === 'devwebui'">
-          <div class="mt-0.5 flex items-center gap-2 break-words text-[13px] leading-[19px] text-text-2" role="status" aria-label="Dev servers service">
+          <div class="mt-0.5 flex items-center gap-2 wrap-break-word text-[13px] leading-4.75 text-text-2" role="status" aria-label="Dev servers service">
             <span class="inline-block size-2 shrink-0 rounded-full" :style="{ background: dot[devLine.tone] }" />
             {{ devLine.text }}
           </div>
-          <div v-if="devError" class="mt-0.5 break-words text-[12px] leading-[18px] text-danger-text">{{ devError }}</div>
+          <div v-if="devError" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-danger-text">{{ devError }}</div>
         </template>
       </div>
       <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <button v-if="rowButtons(v).install" type="button" :class="BUTTON" @click="act(v, 'install')">Install</button>
-        <button v-if="rowButtons(v).start" type="button" :class="BUTTON" @click="act(v, 'start')">Start</button>
+        <button v-if="rowButtons(v).install" type="button" :class="BUTTON" :disabled="actingOn(v, 'install')" :aria-busy="actingOn(v, 'install')" @click="act(v, 'install')">Install</button>
+        <button v-if="rowButtons(v).start" type="button" :class="BUTTON" :disabled="actingOn(v, 'start')" :aria-busy="actingOn(v, 'start')" @click="act(v, 'start')">Start</button>
         <button v-if="rowButtons(v).open" type="button" :class="BUTTON" @click="open(v)">Open</button>
         <template v-if="v.id === 'devwebui'">
           <button type="button" :class="BUTTON" :disabled="devBusy" @click="devService('restart')">Restart</button>
@@ -112,8 +120,8 @@ onBeforeUnmount(() => {
             <button type="button" :class="BUTTON" :disabled="devBusy || dev.status.value?.state === 'stopped'" @click="devService('stop')">Stop</button>
           </Tip>
         </template>
-        <a :href="v.homepage" target="_blank" rel="noopener noreferrer" class="text-[13px] leading-[19px] text-text-2 underline hover:text-text">Homepage</a>
-        <span class="text-[13px] leading-[19px] text-text-muted">Give chats its tools</span>
+        <a :href="v.homepage" target="_blank" rel="noopener noreferrer" class="text-[13px] leading-4.75 text-text-2 underline hover:text-text">Homepage</a>
+        <span class="text-[13px] leading-4.75 text-text-muted">Give chats its tools</span>
         <PaneSwitch :label="`Give chats ${v.name}'s tools`" :model-value="v.enabled" @update:model-value="(on: boolean) => act(v, on ? 'enable' : 'disable')" />
       </div>
     </div>

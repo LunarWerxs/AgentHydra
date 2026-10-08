@@ -112,11 +112,11 @@ export function ahSource(deskSource: string | undefined, cloudSource: string | u
   return undefined
 }
 
-const compact = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 })
+const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 })
 export function formatCompact(n: number): string {
   return Number.isFinite(n) ? compact.format(n) : '—'
 }
-const usd = new Intl.NumberFormat('en', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const usd = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 export function formatUsd(n: number): string {
   if (n > 0 && n < 0.01) return '<$0.01'
   return usd.format(n)

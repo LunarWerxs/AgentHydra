@@ -19,7 +19,7 @@ const tip = computed(() =>
 <template>
   <Tip :label="tip" side="top">
     <span
-      class="inline-flex size-5 items-center justify-center rounded-[var(--radius-5)] hover:bg-[var(--fill-hover)]"
+      class="inline-flex size-5 items-center justify-center rounded-(--radius-5) hover:bg-(--fill-hover)"
       :aria-label="tip"
       role="img"
     >

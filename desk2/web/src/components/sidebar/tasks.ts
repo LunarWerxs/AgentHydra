@@ -141,104 +141,146 @@ export function nestTasks(
   jobs: readonly SwarmJob[] = [],
   known: ReadonlyMap<string, KnownChat> = new Map()
 ): NestedTasks {
-  const workers = viaJobs(given, jobs, rows)
-  const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
-  /** The worker that dispatched it, on its own PC. */
-  const parentKey = (w: CliMayteWorker) => (w.originWorkerId ? (w.pc ? `${w.pc}:${w.originWorkerId}` : w.originWorkerId) : null)
-  const sessionsOf = (w: CliMayteWorker) => new Set([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])])
+  const ix = indexWorkers(viaJobs(given, jobs, rows))
+  const rl = listRows(ix, rows)
+  dropShadowed(rows, rl)
+  const shown = new Set(rl.drawn)
+  for (const list of rl.lists.values()) for (const n of list) shown.add(keyOf(n.worker))
+  const roots = findRoots(ix, shown)
+  const seen = new Set([...shown, ...roots.map(keyOf)])
+  const st: AddedRows = { known, added: new Map(), bySession: new Map() }
+  addRoots(ix, st, roots, seen)
+  const jobsByRow = placeJobs(st, rows, jobs)
+  settleAdded(st)
+  return { byRow: rl.lists, jobsByRow, added: [...st.added.values()] }
+}
+
+const keyOf = (w: CliMayteWorker) => (w.pc ? `${w.pc}:${w.id}` : w.id)
+/** The worker that dispatched it, on its own PC. */
+const parentKey = (w: CliMayteWorker) => (w.originWorkerId ? (w.pc ? `${w.pc}:${w.originWorkerId}` : w.originWorkerId) : null)
+const sessionsOf = (w: CliMayteWorker) => new Set([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])])
+const activity = (w: CliMayteWorker) => w.lastActivityAt ?? w.startedAt ?? 0
+
+/** The workers nestTasks places, indexed once. */
+interface WorkerIndex {
+  workers: CliMayteWorker[]
+  bySession: Map<string, CliMayteWorker>
+  byKey: Map<string, CliMayteWorker>
+  place: Map<CliMayteWorker, number>
+  byParent: Map<string, CliMayteWorker[]>
+  byOrigin: Map<string, CliMayteWorker[]>
+}
+
+function addTo(index: Map<string, CliMayteWorker[]>, key: string, w: CliMayteWorker): void {
+  const list = index.get(key)
+  if (list) list.push(w)
+  else index.set(key, [w])
+}
+
+function indexWorkers(workers: CliMayteWorker[]): WorkerIndex {
   const bySession = new Map<string, CliMayteWorker>()
   for (const w of workers) for (const s of sessionsOf(w)) bySession.set(s, w)
   const byKey = new Map(workers.map((w) => [keyOf(w), w]))
-
   // Workers indexed once: under the worker that dispatched them when it is listed, else under the session
   // they came from, so a row's tasks are lookups and not a filter over every worker.
   const place = new Map<CliMayteWorker, number>(workers.map((w, i) => [w, i]))
   const byParent = new Map<string, CliMayteWorker[]>()
   const byOrigin = new Map<string, CliMayteWorker[]>()
-  const addTo = (index: Map<string, CliMayteWorker[]>, key: string, w: CliMayteWorker) => {
-    const list = index.get(key)
-    if (list) list.push(w)
-    else index.set(key, [w])
-  }
   for (const w of workers) {
     const parent = parentKey(w)
     if (parent && byKey.has(parent)) addTo(byParent, parent, w)
     else if (w.originSessionId) addTo(byOrigin, w.originSessionId, w)
   }
+  return { workers, bySession, byKey, place, byParent, byOrigin }
+}
 
-  /** The tasks a row (its sessions, and the workers those sessions belong to) handed out. */
-  function kidsOf(sessions: ReadonlySet<string>, self: ReadonlySet<string>): CliMayteWorker[] {
-    const found = new Set<CliMayteWorker>()
-    for (const key of self) for (const w of byParent.get(key) ?? []) found.add(w)
-    for (const id of sessions) for (const w of byOrigin.get(id) ?? []) found.add(w)
-    return [...found]
-      .filter((w) => !self.has(keyOf(w)))
-      .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || place.get(a)! - place.get(b)!)
-  }
-  // `seen` ends it: each task is walked once, however deep or looped the data.
-  function walk(sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>): TaskNode[] {
-    const out: TaskNode[] = []
-    for (const w of kidsOf(sessions, self)) {
-      const key = keyOf(w)
-      if (seen.has(key)) continue
-      seen.add(key)
-      const below = walk(sessionsOf(w), new Set([key]), depth + 1, seen)
-      if (!w.active && !below.length) continue
-      out.push({ worker: w, depth: Math.min(depth, MAX_DEPTH) }, ...below)
-    }
-    return out
-  }
+/** The tasks a row (its sessions, and the workers those sessions belong to) handed out. */
+function kidsOf(ix: WorkerIndex, sessions: ReadonlySet<string>, self: ReadonlySet<string>): CliMayteWorker[] {
+  const found = new Set<CliMayteWorker>()
+  for (const key of self) for (const w of ix.byParent.get(key) ?? []) found.add(w)
+  for (const id of sessions) for (const w of ix.byOrigin.get(id) ?? []) found.add(w)
+  return [...found]
+    .filter((w) => !self.has(keyOf(w)))
+    .sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0) || ix.place.get(a)! - ix.place.get(b)!)
+}
 
-  const lists = new Map<string, TaskNode[]>()
+// `seen` ends it: each task is walked once, however deep or looped the data.
+function walk(ix: WorkerIndex, sessions: ReadonlySet<string>, self: ReadonlySet<string>, depth: number, seen: Set<string>): TaskNode[] {
+  const out: TaskNode[] = []
+  for (const w of kidsOf(ix, sessions, self)) {
+    const key = keyOf(w)
+    if (seen.has(key)) continue
+    seen.add(key)
+    const below = walk(ix, sessionsOf(w), new Set([key]), depth + 1, seen)
+    if (!w.active && !below.length) continue
+    out.push({ worker: w, depth: Math.min(depth, MAX_DEPTH) }, ...below)
+  }
+  return out
+}
+
+/** The drawn rows' lists and what nestTasks needs of them later. */
+interface RowLists {
+  lists: Map<string, TaskNode[]>
   /** The worker a row's own session belongs to, if any. */
-  const own = new Map<string, string>()
+  own: Map<string, string>
   /** Every worker a row stands for: drawn as that row, so never missing. */
-  const drawn = new Set<string>()
+  drawn: Set<string>
   /** Per worker, the rows whose list has it. */
-  const listedBy = new Map<string, string[]>()
-  const selves = rows.map((r) => {
-    const self = new Set(r.sessionIds.flatMap((s) => (bySession.has(s) ? [keyOf(bySession.get(s)!)] : [])))
-    // A Desk chat's worker is this PC's: its id is its key.
-    if (r.workerId && byKey.has(r.workerId)) self.add(r.workerId)
-    return self
-  })
+  listedBy: Map<string, string[]>
+}
+
+/** The workers a row stands for, by key: those its sessions belong to, and a Desk chat's own worker. */
+function selfOf(ix: WorkerIndex, r: NestRow): Set<string> {
+  const self = new Set(r.sessionIds.flatMap((s) => (ix.bySession.has(s) ? [keyOf(ix.bySession.get(s)!)] : [])))
+  // A Desk chat's worker is this PC's: its id is its key.
+  if (r.workerId && ix.byKey.has(r.workerId)) self.add(r.workerId)
+  return self
+}
+
+function listRows(ix: WorkerIndex, rows: readonly NestRow[]): RowLists {
+  const out: RowLists = { lists: new Map(), own: new Map(), drawn: new Set(), listedBy: new Map() }
+  const selves = rows.map((r) => selfOf(ix, r))
   // One row lists a worker's tasks: a worker that handed off has two sessions, so two rows can stand for
   // it; the one on its current session (else the first) lists them, the other lists nothing.
   const owner = new Map<string, string>()
   rows.forEach((r, i) => {
     for (const k of selves[i]!) {
-      const current = byKey.get(k)?.sessionId
+      const current = ix.byKey.get(k)?.sessionId
       if (!owner.has(k) || (current && r.sessionIds.includes(current))) owner.set(k, r.key)
     }
   })
-  rows.forEach((r, i) => {
-    const self = selves[i]!
-    const first = [...self][0]
-    if (first) own.set(r.key, first)
-    for (const k of self) drawn.add(k)
-    if (self.size && ![...self].some((k) => owner.get(k) === r.key)) return
-    // Its own sessions, and every session of the workers it stands for.
-    const sessions = new Set([...r.sessionIds, ...[...self].flatMap((k) => [...sessionsOf(byKey.get(k)!)])])
-    const list = walk(sessions, self, 1, new Set(self))
-    if (!list.length) return
-    lists.set(r.key, list)
-    for (const n of list) {
-      const key = keyOf(n.worker)
-      listedBy.set(key, [...(listedBy.get(key) ?? []), r.key])
-    }
-  })
+  rows.forEach((r, i) => listRow(ix, r, selves[i]!, owner, out))
+  return out
+}
 
-  // From the outermost rows in: a row whose worker a kept row lists is dropped; one that no row lists,
-  // or whose every lister was dropped, is kept. Data that loops (two managers naming each other) has no
-  // outermost row: the first row still open is kept to break it.
+function listRow(ix: WorkerIndex, r: NestRow, self: Set<string>, owner: ReadonlyMap<string, string>, out: RowLists): void {
+  const first = [...self][0]
+  if (first) out.own.set(r.key, first)
+  for (const k of self) out.drawn.add(k)
+  if (self.size && ![...self].some((k) => owner.get(k) === r.key)) return
+  // Its own sessions, and every session of the workers it stands for.
+  const sessions = new Set([...r.sessionIds, ...[...self].flatMap((k) => [...sessionsOf(ix.byKey.get(k)!)])])
+  const list = walk(ix, sessions, self, 1, new Set(self))
+  if (!list.length) return
+  out.lists.set(r.key, list)
+  for (const n of list) {
+    const key = keyOf(n.worker)
+    out.listedBy.set(key, [...(out.listedBy.get(key) ?? []), r.key])
+  }
+}
+
+// From the outermost rows in: a row whose worker a kept row lists is dropped; one that no row lists,
+// or whose every lister was dropped, is kept. Data that loops (two managers naming each other) has no
+// outermost row: the first row still open is kept to break it.
+function dropShadowed(rows: readonly NestRow[], rl: RowLists): void {
   const kept = new Set<string>()
   const dropped = new Set<string>()
   let open = rows.map((r) => r.key)
   while (open.length) {
     const still: string[] = []
     for (const key of open) {
-      const id = own.get(key)
-      const by = (id ? (listedBy.get(id) ?? []) : []).filter((k) => k !== key)
+      const id = rl.own.get(key)
+      const by = (id ? (rl.listedBy.get(id) ?? []) : []).filter((k) => k !== key)
       if (by.some((k) => kept.has(k))) dropped.add(key)
       else if (by.every((k) => dropped.has(k))) kept.add(key)
       else still.push(key)
@@ -246,57 +288,75 @@ export function nestTasks(
     if (still.length === open.length) kept.add(still.shift()!)
     open = still
   }
-  for (const key of dropped) lists.delete(key)
+  for (const key of dropped) rl.lists.delete(key)
+}
 
-  const shown = new Set(drawn)
-  for (const list of lists.values()) for (const n of list) shown.add(keyOf(n.worker))
-  // The topmost dispatcher no row lists above each running task no row lists: its list starts there.
+/** The topmost dispatcher no row lists above each running task no row lists: its list starts there. */
+function findRoots(ix: WorkerIndex, shown: ReadonlySet<string>): CliMayteWorker[] {
   const roots: CliMayteWorker[] = []
-  for (const w of workers) {
+  for (const w of ix.workers) {
     if (!w.active || shown.has(keyOf(w))) continue
-    let top = w
-    const path = new Set([keyOf(w)])
-    for (;;) {
-      const parent = parentKey(top)
-      // Its dispatcher, else the worker whose session (an earlier one too) dispatched it, on its own PC.
-      const bySess = !parent && top.originSessionId ? bySession.get(top.originSessionId) : undefined
-      const up = parent ? byKey.get(parent) : bySess?.pc === top.pc ? bySess : undefined
-      if (!up || shown.has(keyOf(up)) || path.has(keyOf(up))) break
-      path.add(keyOf(up))
-      top = up
-    }
+    const top = topOf(ix, w, shown)
     if (!roots.includes(top)) roots.push(top)
   }
-  const seen = new Set([...shown, ...roots.map(keyOf)])
-  const added = new Map<string, AddedRow>()
+  return roots
+}
+
+function topOf(ix: WorkerIndex, w: CliMayteWorker, shown: ReadonlySet<string>): CliMayteWorker {
+  let top = w
+  const path = new Set([keyOf(w)])
+  for (;;) {
+    const parent = parentKey(top)
+    // Its dispatcher, else the worker whose session (an earlier one too) dispatched it, on its own PC.
+    const bySess = !parent && top.originSessionId ? ix.bySession.get(top.originSessionId) : undefined
+    const up = parent ? ix.byKey.get(parent) : bySess?.pc === top.pc ? bySess : undefined
+    if (!up || shown.has(keyOf(up)) || path.has(keyOf(up))) return top
+    path.add(keyOf(up))
+    top = up
+  }
+}
+
+/** The rows nestTasks adds, as it adds them. */
+interface AddedRows {
+  known: ReadonlyMap<string, KnownChat>
+  added: Map<string, AddedRow>
   /** Each added row by the sessions it stands for, on its PC (`<pc>|<session>`): a job of one of them joins it. */
-  const addedBySession = new Map<string, AddedRow>()
-  const activity = (w: CliMayteWorker) => w.lastActivityAt ?? w.startedAt ?? 0
-  /** The folder a task runs in: its own, else the one the window knows one of its sessions by (another PC shares no folder for its tasks, but the chat sync may bring their sessions here with theirs). */
-  const cwdOf = (w: CliMayteWorker) => w.cwd || [...sessionsOf(w)].map((s) => known.get(s)?.cwd).find(Boolean) || null
-  const addRow = (row: Omit<AddedRow, 'nodes' | 'jobs'>, sessions: Iterable<string>): AddedRow => {
-    const made: AddedRow = { ...row, nodes: [], jobs: [] }
-    added.set(made.id, made)
-    for (const s of sessions) if (!addedBySession.has(`${row.pc ?? ''}|${s}`)) addedBySession.set(`${row.pc ?? ''}|${s}`, made)
-    return made
-  }
-  /** The added row of session `sid` on `pc`; a short id (an HSwarm job's 8-character prefix) finds the one row whose session it begins, never a guess between two. */
-  const addedOf = (pc: string | null, sid: string): AddedRow | undefined => {
-    const exact = addedBySession.get(`${pc ?? ''}|${sid}`)
-    if (exact || sid.length > 8) return exact
-    const same = new Set([...addedBySession].filter(([k]) => k.startsWith(`${pc ?? ''}|${sid}`)).map(([, row]) => row))
-    return same.size === 1 ? [...same][0] : undefined
-  }
-  /** The row of the chat with session `sid` on `pc`: titled and placed as the window knows that chat, else as `first` (its first task or job) says. */
-  const chatRow = (pc: string | null, sid: string, first: { title: string; cwd: string | null; folder: string | null; at: number }): AddedRow => {
-    const had = addedOf(pc, sid)
-    if (had) return had
-    const k = known.get(sid)
-    return addRow(
-      { id: `${ADDED}${pc ?? ''}:chat:${sid}`, title: k?.title || first.title, pc, cwd: k?.cwd || first.cwd, folder: first.folder, at: Math.max(k?.at ?? 0, first.at), sessionId: sid.length > 8 ? sid : null, worker: null, job: null },
-      [sid]
-    )
-  }
+  bySession: Map<string, AddedRow>
+}
+
+/** The folder a task runs in: its own, else the one the window knows one of its sessions by (another PC shares no folder for its tasks, but the chat sync may bring their sessions here with theirs). */
+function cwdOf(st: AddedRows, w: CliMayteWorker): string | null {
+  return w.cwd || [...sessionsOf(w)].map((s) => st.known.get(s)?.cwd).find(Boolean) || null
+}
+
+function addRow(st: AddedRows, row: Omit<AddedRow, 'nodes' | 'jobs'>, sessions: Iterable<string>): AddedRow {
+  const made: AddedRow = { ...row, nodes: [], jobs: [] }
+  st.added.set(made.id, made)
+  for (const s of sessions) if (!st.bySession.has(`${row.pc ?? ''}|${s}`)) st.bySession.set(`${row.pc ?? ''}|${s}`, made)
+  return made
+}
+
+/** The added row of session `sid` on `pc`; a short id (an HSwarm job's 8-character prefix) finds the one row whose session it begins, never a guess between two. */
+function addedOf(st: AddedRows, pc: string | null, sid: string): AddedRow | undefined {
+  const exact = st.bySession.get(`${pc ?? ''}|${sid}`)
+  if (exact || sid.length > 8) return exact
+  const same = new Set([...st.bySession].filter(([k]) => k.startsWith(`${pc ?? ''}|${sid}`)).map(([, row]) => row))
+  return same.size === 1 ? [...same][0] : undefined
+}
+
+/** The row of the chat with session `sid` on `pc`: titled and placed as the window knows that chat, else as `first` (its first task or job) says. */
+function chatRow(st: AddedRows, pc: string | null, sid: string, first: { title: string; cwd: string | null; folder: string | null; at: number }): AddedRow {
+  const had = addedOf(st, pc, sid)
+  if (had) return had
+  const k = st.known.get(sid)
+  return addRow(
+    st,
+    { id: `${ADDED}${pc ?? ''}:chat:${sid}`, title: k?.title || first.title, pc, cwd: k?.cwd || first.cwd, folder: first.folder, at: Math.max(k?.at ?? 0, first.at), sessionId: sid.length > 8 ? sid : null, worker: null, job: null },
+    [sid]
+  )
+}
+
+function addRoots(ix: WorkerIndex, st: AddedRows, roots: CliMayteWorker[], seen: Set<string>): void {
   /** The first non-empty title of the chat each origin stands for, as its PC sent it. */
   const titles = new Map<string, string>()
   for (const r of roots) if (r.originSessionId && r.originTitle && !titles.has(`${r.pc ?? ''}|${r.originSessionId}`)) titles.set(`${r.pc ?? ''}|${r.originSessionId}`, r.originTitle)
@@ -305,60 +365,72 @@ export function nestTasks(
     if (r.originSessionId) {
       // The chat that started it, titled as the window knows it, else as its PC titles it, else after its first
       // task (owner, 2026-10-05), with its tasks one step in as under a drawn row.
-      const row = chatRow(pc, r.originSessionId, { title: titles.get(`${pc ?? ''}|${r.originSessionId}`) || r.title, cwd: cwdOf(r), folder: r.folder ?? null, at: activity(r) })
+      const row = chatRow(st, pc, r.originSessionId, { title: titles.get(`${pc ?? ''}|${r.originSessionId}`) || r.title, cwd: cwdOf(st, r), folder: r.folder ?? null, at: activity(r) })
       // A row its first task left without a folder takes the first of its other tasks that has one.
-      if (!row.cwd) row.cwd = cwdOf(r)
+      if (!row.cwd) row.cwd = cwdOf(st, r)
       if (!row.folder) row.folder = r.folder ?? null
-      row.nodes.push({ worker: r, depth: 1 }, ...walk(sessionsOf(r), new Set([keyOf(r)]), 2, seen))
+      row.nodes.push({ worker: r, depth: 1 }, ...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 2, seen))
     } else {
       // A Hydra Desk chat run as a worker, or a task nothing says which chat started (its dispatcher is gone, or
       // its PC's AgentHydra is too old to say): the row is the worker itself, never a "No chat" heading.
-      const row = addRow({ id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(r), folder: r.folder ?? null, at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
-      row.nodes.push(...walk(sessionsOf(r), new Set([keyOf(r)]), 1, seen))
+      const row = addRow(st, { id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(st, r), folder: r.folder ?? null, at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
+      row.nodes.push(...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 1, seen))
     }
   }
-  // HSwarm jobs: under the one row that has the caller's session (a job's id may be the 8-character prefix the jobs
-  // list stamps: a prefix two rows share places nothing, never a guessed row), else under the added row of its
-  // caller on the job's PC (a CliMayte task of that chat, or that chat run as a worker, may have made it). A running
-  // job whose caller has none makes it, and one nothing says which chat called is a row itself; a finished one only
-  // joins a row that is there, as a finished task does.
-  const jobsByRow = new Map<string, SwarmJob[]>()
+}
+
+/** The drawn row whose session a job's caller id names: an 8-character prefix two rows share finds none. */
+function rowFinder(rows: readonly NestRow[]): (id: string | null | undefined) => string | undefined {
   const rowOfSession = new Map<string, string>()
   for (const r of rows) for (const s of r.sessionIds) if (!rowOfSession.has(s)) rowOfSession.set(s, r.key)
   const rowsByPrefix = new Map<string, Set<string>>()
   for (const [s, key] of rowOfSession) rowsByPrefix.set(s.slice(0, 8), (rowsByPrefix.get(s.slice(0, 8)) ?? new Set()).add(key))
-  const rowFor = (id: string | null | undefined): string | undefined => {
+  return (id) => {
     if (!id) return undefined
     const exact = rowOfSession.get(id)
     if (exact || id.length > 8) return exact
     const same = rowsByPrefix.get(id)
     return same?.size === 1 ? [...same][0] : undefined
   }
-  /** Where a job goes: a drawn row's key, an added row, or nowhere; `make` makes its added row when it has none. */
-  const homeOf = (j: SwarmJob, make: boolean): string | AddedRow | undefined => {
-    const row = rowFor(j.callerSessionId) ?? rowFor(j.callerHostSessionId)
-    if (row) return row
-    const pc = j.pc ?? null
-    const sid = j.callerSessionId ?? j.callerHostSessionId
-    if (sid) return addedOf(pc, sid) ?? (make ? chatRow(pc, sid, { title: j.callerTitle || j.title, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0 }) : undefined)
-    const id = `${ADDED}${pc ?? ''}:job:${j.id}`
-    return added.get(id) ?? (make ? addRow({ id, title: j.title, pc, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0, sessionId: null, worker: null, job: j }, []) : undefined)
-  }
+}
+
+/** Where a job goes: a drawn row's key, an added row, or nowhere; `make` makes its added row when it has none. */
+function homeOf(st: AddedRows, rowFor: (id: string | null | undefined) => string | undefined, j: SwarmJob, make: boolean): string | AddedRow | undefined {
+  const row = rowFor(j.callerSessionId) ?? rowFor(j.callerHostSessionId)
+  if (row) return row
+  const pc = j.pc ?? null
+  const sid = j.callerSessionId ?? j.callerHostSessionId
+  if (sid) return addedOf(st, pc, sid) ?? (make ? chatRow(st, pc, sid, { title: j.callerTitle || j.title, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0 }) : undefined)
+  const id = `${ADDED}${pc ?? ''}:job:${j.id}`
+  return st.added.get(id) ?? (make ? addRow(st, { id, title: j.title, pc, cwd: null, folder: j.folder ?? null, at: j.startedAt ?? 0, sessionId: null, worker: null, job: j }, []) : undefined)
+}
+
+// HSwarm jobs: under the one row that has the caller's session (a job's id may be the 8-character prefix the jobs
+// list stamps: a prefix two rows share places nothing, never a guessed row), else under the added row of its
+// caller on the job's PC (a CliMayte task of that chat, or that chat run as a worker, may have made it). A running
+// job whose caller has none makes it, and one nothing says which chat called is a row itself; a finished one only
+// joins a row that is there, as a finished task does.
+function placeJobs(st: AddedRows, rows: readonly NestRow[], jobs: readonly SwarmJob[]): Map<string, SwarmJob[]> {
+  const jobsByRow = new Map<string, SwarmJob[]>()
+  const rowFor = rowFinder(rows)
   const newestJobs = [...jobs].sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
   // The running ones first, so a finished job of the same chat finds the row they made.
-  for (const j of newestJobs) if (j.active) homeOf(j, true)
+  for (const j of newestJobs) if (j.active) homeOf(st, rowFor, j, true)
   for (const j of newestJobs) {
-    const home = homeOf(j, false)
+    const home = homeOf(st, rowFor, j, false)
     if (typeof home === 'string') jobsByRow.set(home, [...(jobsByRow.get(home) ?? []), j])
     else if (home && home.job !== j) home.jobs.push(j)
   }
-  for (const row of added.values()) {
+  return jobsByRow
+}
+
+function settleAdded(st: AddedRows): void {
+  for (const row of st.added.values()) {
     for (const n of row.nodes) row.at = Math.max(row.at, activity(n.worker))
     for (const j of row.jobs) row.at = Math.max(row.at, j.endedAt ?? j.startedAt ?? 0)
     // One that nothing gave a folder takes the first folder name its tasks, then its jobs, have.
     if (!row.cwd && !row.folder) row.folder = row.nodes.find((n) => n.worker.folder)?.worker.folder ?? row.jobs.find((j) => j.folder)?.folder ?? null
   }
-  return { byRow: lists, jobsByRow, added: [...added.values()] }
 }
 
 /** What an added row's dot shows: its worker's or its job's state; a chat's own is not known here, so it is idle. */

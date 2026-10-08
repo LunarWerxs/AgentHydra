@@ -20,7 +20,7 @@ import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-updat
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
 defineProps<{ sidebarOpen: boolean; width: number; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; update?: UpdateOffer | null }>()
-const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; cloud: []; tasks: []; dev: []; clean: []; restart: [] }>()
+const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; 'hydra-intent': []; cloud: []; tasks: []; dev: []; clean: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -33,8 +33,8 @@ const COLLAPSED_WIDTH = 246
 
 <template>
   <div
-    class="absolute left-0 top-0 z-[21] flex h-9 items-center gap-1 pl-3"
-    :class="[sidebarOpen ? 'pr-2' : 'pr-1', sliding ? 'transition-[width,padding] duration-[var(--dur-slow)] ease-[var(--ease-snap)] motion-reduce:transition-none' : '']"
+    class="absolute left-0 top-0 z-21 flex h-9 items-center gap-1 ps-3"
+    :class="[sidebarOpen ? 'pe-2' : 'pe-1', sliding ? 'transition-[width,padding] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none' : '']"
     :style="{ width: `${sidebarOpen ? width : COLLAPSED_WIDTH}px` }"
     data-peek-zone="keep"
   >
@@ -92,9 +92,9 @@ const COLLAPSED_WIDTH = 246
       </button>
     </Tip>
     <!-- AgentHydra and Dev servers sit at the bar's right end, after a thin divider (owner, 2026-10-07). -->
-    <span class="ml-auto h-4 w-px shrink-0 bg-border" aria-hidden="true" />
+    <span class="ms-auto h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <Tip :label="hydraOpen ? 'Back to chats' : 'AgentHydra: accounts, instances and HSwarm'">
-      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')">
+      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')" @pointerenter="emit('hydra-intent')" @focus="emit('hydra-intent')">
         <component :is="agentHydraIcon" class="size-4" />
       </button>
     </Tip>

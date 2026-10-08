@@ -35,7 +35,8 @@ describe('permissionKeyAction', () => {
     expect(permissionKeyAction(key('Escape'), no)).toBe('deny')
   })
 
-  it('never acts while the owner types, with a modifier, mid-composition or once something else took the key', () => {
+  // Mid-composition keys are stopped before any handler by the document guard (lib/ime-composition-guard.test.ts).
+  it('never acts while the owner types, with a modifier, or once something else took the key', () => {
     for (const tagName of ['INPUT', 'TEXTAREA', 'SELECT']) {
       expect(permissionKeyAction(key('1', { target: { tagName, closest: () => null } as unknown as EventTarget }), offered)).toBeNull()
       expect(permissionKeyAction(key('Escape', { target: { tagName, closest: () => null } as unknown as EventTarget }), offered)).toBeNull()
@@ -44,7 +45,6 @@ describe('permissionKeyAction', () => {
     expect(permissionKeyAction(key('1', { ctrlKey: true }), offered)).toBeNull()
     expect(permissionKeyAction(key('1', { metaKey: true }), offered)).toBeNull()
     expect(permissionKeyAction(key('1', { altKey: true }), offered)).toBeNull()
-    expect(permissionKeyAction(key('Enter', { isComposing: true }), offered)).toBeNull()
     expect(permissionKeyAction(key('Escape', { defaultPrevented: true }), offered)).toBeNull()
   })
 

@@ -53,7 +53,7 @@ async function respond(approve: boolean, mode?: PermissionMode) {
       <span class="shrink-0">{{ item.state === 'approved' ? 'Plan approved' : item.state === 'rejected' ? 'Kept planning' : 'Plan expired' }}</span>
       <span class="min-w-0 truncate text-text">{{ title }}</span>
     </button>
-    <div v-if="ctx.isOpen(openKey)" class="ml-[11px] mt-1 border-l border-border pl-4 text-[14px]">
+    <div v-if="ctx.isOpen(openKey)" class="ms-2.75 mt-1 border-s border-border ps-4 text-[14px]">
       <MarkdownBlock :text="item.plan" />
     </div>
   </div>

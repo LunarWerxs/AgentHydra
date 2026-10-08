@@ -313,13 +313,13 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="flex h-full min-h-0 w-full flex-col bg-bg-popover text-text sm:flex-row">
+  <div class="flex size-full min-h-0 flex-col bg-bg-popover text-text sm:flex-row">
     <nav
       aria-label="Settings sections"
-      class="flex shrink-0 flex-col gap-2 border-b border-border bg-bg-panel p-3 pr-12 sm:w-[160px] sm:pr-3 sm:border-b-0 sm:border-r lg:w-[185px]"
+      class="flex shrink-0 flex-col gap-2 border-b border-border bg-bg-panel p-3 pe-12 sm:w-40 sm:pe-3 sm:border-b-0 sm:border-e lg:w-46.25"
     >
       <label
-        class="flex h-8 shrink-0 items-center gap-2 rounded-[var(--radius-6)] bg-fill-5 px-2 shadow-[inset_0_0_0_1px_var(--border)] focus-within:shadow-[var(--focus-ring)]"
+        class="flex h-8 shrink-0 items-center gap-2 rounded-(--radius-6) bg-fill-5 px-2 shadow-[inset_0_0_0_1px_var(--border)] focus-within:shadow-(--focus-ring)"
       >
         <component :is="settingsIcons.search" class="size-4 shrink-0 text-text-muted" />
         <input
@@ -327,7 +327,7 @@ onBeforeUnmount(() => {
           type="search"
           placeholder="Search"
           aria-label="Search settings"
-          class="min-w-0 flex-1 bg-transparent text-[13px] leading-[19px] text-text outline-none placeholder:text-text-muted [&::-webkit-search-cancel-button]:appearance-none"
+          class="min-w-0 flex-1 bg-transparent text-[13px] leading-4.75 text-text outline-none placeholder:text-text-muted [&::-webkit-search-cancel-button]:appearance-none"
           @keydown.down.prevent="focusSection(section)"
         />
       </label>
@@ -346,7 +346,7 @@ onBeforeUnmount(() => {
             :data-section="s.id"
             :aria-current="!searching && section === s.id ? 'page' : undefined"
             :tabindex="section === s.id ? 0 : -1"
-            class="flex h-8 shrink-0 cursor-default items-center gap-2 rounded-full px-3 text-left text-[13px] leading-[19px] transition-colors duration-[var(--dur-fast)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none sm:rounded-[var(--radius-6)] sm:px-2"
+            class="flex h-8 shrink-0 cursor-default items-center gap-2 rounded-full px-3 text-start text-[13px] leading-4.75 transition-colors duration-(--dur-fast) focus-visible:shadow-(--focus-ring) focus-visible:outline-none sm:rounded-(--radius-6) sm:px-2"
             :class="!searching && section === s.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover hover:text-text'"
             @click="pick(s.id)"
           >
@@ -365,11 +365,11 @@ onBeforeUnmount(() => {
         <span v-if="saveError || ah.error.value || dw.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value || dw.error.value }}</span>
       </div>
 
-      <div v-if="!local && needsSettings" class="text-[13px] leading-[19px]" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
+      <div v-if="!local && needsSettings" class="text-[13px] leading-4.75" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
         {{ loadError ? `Could not load settings: ${loadError}` : 'Loading…' }}
       </div>
 
-      <p v-else-if="searching && !groups.length" class="text-[13px] leading-[19px] text-text-muted">No settings match</p>
+      <p v-else-if="searching && !groups.length" class="text-[13px] leading-4.75 text-text-muted">No settings match</p>
 
       <DiagnosticsView v-else-if="section === 'diagnostics' && !searching" />
 
@@ -380,17 +380,17 @@ onBeforeUnmount(() => {
           <h3 class="text-[13px] font-semibold leading-5 text-text">{{ g.heading }}</h3>
           <div>
             <div v-for="r in g.rows" :key="r.id" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5 last:border-b-0">
-              <div class="min-w-[200px] flex-1">
+              <div class="min-w-50 flex-1">
                 <div class="text-[13px] leading-5 text-text">{{ r.label }}</div>
-                <div class="mt-0.5 text-[13px] leading-[19px] text-text-muted">
+                <div class="mt-0.5 text-[13px] leading-4.75 text-text-muted">
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.description }}
                 </div>
-                <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-[19px] text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
-                <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
-                <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 break-words text-[12px] leading-[18px] text-text-muted">{{ n }}</div>
+                <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
+                <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
+                <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
-                  <div class="text-[13px] leading-[19px] text-text">{{ inst.pairingQuestion.value }}</div>
-                  <div v-for="c in inst.pairing.value?.candidates ?? []" :key="c.desktopDir" class="text-[12px] leading-[18px] text-text-muted">{{ inst.candidateLine(c) }}</div>
+                  <div class="text-[13px] leading-4.75 text-text">{{ inst.pairingQuestion.value }}</div>
+                  <div v-for="c in inst.pairing.value?.candidates ?? []" :key="c.desktopDir" class="text-[12px] leading-4.5 text-text-muted">{{ inst.candidateLine(c) }}</div>
                   <div class="mt-1.5 flex gap-2">
                     <button type="button" :class="BUTTON" @click="inst.savePairing(true)">Yes, add them</button>
                     <button type="button" :class="BUTTON" @click="inst.cancelPairing()">Cancel</button>
@@ -401,8 +401,8 @@ onBeforeUnmount(() => {
               <InstancesControl v-if="inst.owns(r.id)" :id="r.id" :label="r.label" :inst="inst" />
               <AgentHydraControl v-else-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
               <DevServersControl v-else-if="isDw(r.id)" :id="r.id" :label="r.label" :ctx="dw" />
-              <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-[19px] text-text-2">{{ version ? `v${version}` : '…' }}</span>
-              <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-[19px] text-text-2">
+              <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-4.75 text-text-2">{{ version ? `v${version}` : '…' }}</span>
+              <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-4.75 text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}
               </span>
 
@@ -457,13 +457,13 @@ onBeforeUnmount(() => {
                   <PaneSwitch label="Notifications" :model-value="local.notifications" @update:model-value="(v: boolean) => save(switchPatch('notifications', v))" />
                 </div>
 
-                <div v-else-if="r.id === 'idle'" class="flex shrink-0 items-center gap-2 text-[13px] leading-[19px] text-text-muted">
+                <div v-else-if="r.id === 'idle'" class="flex shrink-0 items-center gap-2 text-[13px] leading-4.75 text-text-muted">
                   <input
                     v-model="idleDraft"
                     type="number"
                     min="1"
                     max="1440"
-                    class="tnum h-7 w-16 rounded-[var(--radius-6)] bg-fill-5 px-2 text-right text-[13px] text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none [appearance:textfield] focus:shadow-[var(--focus-ring)] [&::-webkit-inner-spin-button]:appearance-none"
+                    class="tnum h-7 w-16 rounded-(--radius-6) bg-fill-5 px-2 text-end text-[13px] text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none [appearance:textfield] focus:shadow-(--focus-ring) [&::-webkit-inner-spin-button]:appearance-none"
                     aria-label="Idle-close minutes"
                     @input="onIdleInput"
                     @blur="commitIdle"
@@ -479,9 +479,9 @@ onBeforeUnmount(() => {
                   @update:model-value="(v: boolean) => save(switchPatch('delegate', v))"
                 />
 
-                <span v-else-if="r.id === 'workers'" class="tnum text-[13px] leading-[19px] text-text-2">{{ activeWorkers }}</span>
+                <span v-else-if="r.id === 'workers'" class="tnum text-[13px] leading-4.75 text-text-2">{{ activeWorkers }}</span>
 
-                <span v-else-if="r.id === 'bridge'" class="flex items-center gap-2 text-[13px] leading-[19px] text-text-2">
+                <span v-else-if="r.id === 'bridge'" class="flex items-center gap-2 text-[13px] leading-4.75 text-text-2">
                   <span
                     class="inline-block size-2 rounded-full"
                     :style="{ background: bridge === null ? 'var(--text-muted)' : bridge.up ? 'var(--success)' : 'var(--danger)' }"

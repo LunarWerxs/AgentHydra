@@ -10,8 +10,29 @@ interface Clock {
 }
 
 const clocks = new Map<number, Clock>()
+const hidden = () => typeof document !== 'undefined' && document.hidden
 
-/** Now, moving every `periodMs` (1 s by default) while the calling component is mounted. */
+function run(c: Clock, periodMs: number) {
+  if (c.timer || c.users === 0 || hidden()) return
+  c.now.value = Date.now()
+  c.timer = setInterval(() => (c.now.value = Date.now()), periodMs)
+}
+function halt(c: Clock) {
+  if (c.timer) clearInterval(c.timer)
+  c.timer = null
+}
+
+// A hidden window stops every clock, and showing it again ticks them at once.
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    for (const [periodMs, c] of clocks) {
+      if (document.hidden) halt(c)
+      else run(c, periodMs)
+    }
+  })
+}
+
+/** Now, moving every `periodMs` (1 s by default) while the calling component is mounted and the window is in sight. */
 export function useClock(periodMs = 1000): Readonly<Ref<number>> {
   let clock = clocks.get(periodMs)
   if (!clock) {
@@ -20,16 +41,10 @@ export function useClock(periodMs = 1000): Readonly<Ref<number>> {
   }
   const c = clock
   c.users++
-  if (!c.timer) {
-    c.now.value = Date.now()
-    c.timer = setInterval(() => (c.now.value = Date.now()), periodMs)
-  }
+  run(c, periodMs)
   onScopeDispose(() => {
     c.users--
-    if (c.users === 0 && c.timer) {
-      clearInterval(c.timer)
-      c.timer = null
-    }
+    if (c.users === 0) halt(c)
   })
   return c.now
 }

@@ -13,7 +13,7 @@ import { icons, settingsIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR } from '@/components/sidebar/menuClasses'
-import { connectorList, refreshConnectorList } from './connections-api'
+import { connectorList, watchConnectors } from './connections-api'
 import { SEARCH_BOX, SEARCH_INPUT } from './styles'
 import { NO_SESSION, useConnectionsWorkspace } from './connections-workspace'
 import { BYPASS_TIP, CONNECTIONS_LOGO_URL, CONNECTIONS_STUDIO_URL, bypassRow, chipText, enterPick, isCurrent, showConnectionsChip, starState } from './connections-logic'
@@ -79,13 +79,12 @@ function openStudio() {
   window.open(CONNECTIONS_STUDIO_URL, '_blank', 'noopener')
 }
 
-let timer: ReturnType<typeof setInterval> | null = null
+let stopWatch: (() => void) | null = null
 onMounted(() => {
-  void refreshConnectorList()
-  timer = setInterval(() => !document.hidden && void refreshConnectorList(), 30_000)
+  stopWatch = watchConnectors(() => 30_000)
   if (shown.value) void load()
 })
-onBeforeUnmount(() => timer && clearInterval(timer))
+onBeforeUnmount(() => stopWatch?.())
 // A chat's chip follows the chat; its session id arriving also lets "This chat" through.
 watch(
   () => [props.chat.id, shown.value] as const,
@@ -104,17 +103,17 @@ watch(
     <DropdownMenuTrigger as-child>
       <button
         type="button"
-        class="ml-1 flex h-5 min-w-0 max-w-[180px] shrink cursor-default items-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-[5px] text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+        class="ms-1 flex h-5 min-w-0 max-w-45 shrink cursor-default items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         :class="text.muted ? 'text-text-muted' : 'text-text-2'"
         :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
       >
         <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
         <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
         <span class="truncate">{{ text.text }}</span>
-        <span v-if="text.pinned" class="shrink-0 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1 text-[10px] leading-[14px] text-text-muted">this chat</span>
+        <span v-if="text.pinned" class="shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] leading-3.5 text-text-muted">this chat</span>
       </button>
     </DropdownMenuTrigger>
-    <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex w-64 max-h-[var(--reka-dropdown-menu-content-available-height)] flex-col']" @open-auto-focus="focusSearch" @keydown.capture="contentKey">
+    <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex w-64 flex-col']" @open-auto-focus="focusSearch" @keydown.capture="contentKey">
       <template v-if="ws && !ws.signedIn">
         <DropdownMenuItem :class="MENU_ITEM" @select="signIn">Sign in to Connections</DropdownMenuItem>
       </template>
@@ -144,8 +143,8 @@ watch(
               :title="starState(ws, c).title"
               :aria-label="starState(ws, c).title"
               :aria-pressed="starState(ws, c).on"
-              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover"
-              :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100 group-data-[highlighted]:opacity-100'"
+              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
+              :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100 group-data-highlighted:opacity-100'"
               @click.stop.prevent="toggleDefault(c)"
               @pointerup.stop
               @pointerdown.stop
@@ -154,7 +153,7 @@ watch(
             </button>
             <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
           </DropdownMenuItem>
-          <p v-if="!matches.length" class="flex h-6 items-center px-2 text-[13px] leading-[19px] text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>
+          <p v-if="!matches.length" class="flex h-6 items-center px-2 text-[13px] leading-4.75 text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>
         </div>
         <DropdownMenuItem v-if="showNone" :class="MENU_ITEM" :disabled="busy" @select="pick(null)">
           <span class="flex-1">No workspace</span>
@@ -163,7 +162,7 @@ watch(
       </template>
       <template v-if="bypass">
         <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-        <DropdownMenuItem :class="[MENU_ITEM, 'pl-5 text-[12px] text-text-2']" :title="BYPASS_TIP" @select="openStudio">
+        <DropdownMenuItem :class="[MENU_ITEM, 'ps-5 text-[12px] text-text-2']" :title="BYPASS_TIP" @select="openStudio">
           <span class="flex-1">{{ bypass.label }}</span>
           <span class="flex items-center gap-1" :class="bypass.on ? 'text-text-2' : 'text-text-muted'">
             <component :is="icons.check" v-if="bypass.on" class="size-3.5" />{{ bypass.value }}

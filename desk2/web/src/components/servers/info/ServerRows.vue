@@ -17,7 +17,7 @@ const servers = useDevServers()
 <template>
   <ul class="divide-y divide-border">
     <li v-for="x in processes" :key="x.id" class="group relative">
-      <button type="button" class="flex h-12 w-full cursor-default items-center gap-2.5 px-4 text-left transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none" :aria-label="`${x.name} details`" @click="servers.select({ kind: 'server', id: x.id })">
+      <button type="button" class="flex h-12 w-full cursor-default items-center gap-2.5 px-4 text-start transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none" :aria-label="`${x.name} details`" @click="servers.select({ kind: 'server', id: x.id })">
         <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(x.status)]" aria-hidden="true" />
         <span class="min-w-0 truncate text-[13px] text-text">{{ x.name }}</span>
         <span class="shrink-0 text-[12px] text-text-muted">{{ statusWord(x) }}</span>
@@ -27,7 +27,7 @@ const servers = useDevServers()
         <span class="size-6 shrink-0" aria-hidden="true" />
         <ChevronRight class="size-4 shrink-0 text-text-muted" aria-hidden="true" />
       </button>
-      <div class="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-[60ms] focus-within:opacity-100 group-hover:opacity-100">
+      <div class="absolute right-10 top-1/2 -translate-y-1/2 opacity-0 transition-opacity duration-60 focus-within:opacity-100 group-hover:opacity-100">
         <Tip v-if="serverActions(x.status).includes('stop')" :label="`Stop ${x.name}`">
           <button type="button" :class="ICON_BTN_SM" :aria-label="`Stop ${x.name}`" :disabled="servers.busy.value.has(x.id)" @click.stop="servers.act(x, 'stop')"><Square class="size-3.5" /></button>
         </Tip>

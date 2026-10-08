@@ -6,7 +6,7 @@
 import { watch, type WatchSource } from 'vue'
 
 const FADE_MS = 160
-const CLOSE_MS = 180
+export const CLOSE_MS = 180
 
 export function rowLeave(el: Element, done: () => void): void {
   const row = el as HTMLElement

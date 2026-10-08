@@ -362,48 +362,64 @@ export function useAgentHydraSettings(api: PaneApi) {
     }
   }
 
+  function mcpNotes(): string[] {
+    const s = settings.value
+    if (!s) return []
+    return [
+      s.mcpRegisterError ??
+        (s.mcpRegistered
+          ? `Registered at ${s.mcpUrl}`
+          : s.mcpRegisterClaudeCode
+            ? 'Not registered yet.'
+            : 'Not registered, the switch is off.'),
+      ...(s.mcpConfigPath ? [`Config: ${s.mcpConfigPath}`] : [])
+    ]
+  }
+
+  function repairNotes(): string[] {
+    const s = settings.value
+    return [
+      s && !s.mcpToolboxPresent
+        ? `Moving chats between accounts will not work: this install is missing ${s.mcpMissingComponents.join(', ')}.`
+        : `This install is missing ${s?.mcpMissingComponents.join(', ') ?? ''}.`,
+      ...(notes.repair ? [notes.repair] : [])
+    ]
+  }
+
+  function syncNotes(): string[] {
+    return [
+      ...(sync.value?.connected
+        ? [`${privacy.value ? 'Connected' : sync.value.name || sync.value.email || 'Connected'} · ${sync.value.enabled ? syncedLabel() : 'Sync is off'}`]
+        : []),
+      ...(notes.sync ? [notes.sync] : [])
+    ]
+  }
+
+  function versionNotes(): string[] {
+    if (applying.value) return [progressLabel.value ?? 'Updating…']
+    const u = update.value
+    const lines = [applyNote.value, applyError.value].filter((l): l is string => !!l)
+    if (updateState.value === 'blocked') lines.push(`An update is waiting but cannot be applied: ${u?.reason ?? 'blocked'}.`)
+    if (updateState.value === 'available') lines.push('An update is waiting. Click the number to install it; AgentHydra restarts.')
+    if (updateState.value === 'no-source') lines.push('This install is not linked to a Git remote, so there is nowhere to pull new versions from.')
+    return lines
+  }
+
   /** The muted lines under a row's description: what AgentHydra says about it right now. */
   function rowNotes(id: string): string[] {
-    const s = settings.value
     switch (id) {
       case 'ahMcp':
-        if (!s) return []
-        return [
-          s.mcpRegisterError ??
-            (s.mcpRegistered
-              ? `Registered at ${s.mcpUrl}`
-              : s.mcpRegisterClaudeCode
-                ? 'Not registered yet.'
-                : 'Not registered, the switch is off.'),
-          ...(s.mcpConfigPath ? [`Config: ${s.mcpConfigPath}`] : [])
-        ]
+        return mcpNotes()
       case 'ahRepair':
-        return [
-          s && !s.mcpToolboxPresent
-            ? `Moving chats between accounts will not work: this install is missing ${s.mcpMissingComponents.join(', ')}.`
-            : `This install is missing ${s?.mcpMissingComponents.join(', ') ?? ''}.`,
-          ...(notes.repair ? [notes.repair] : [])
-        ]
+        return repairNotes()
       case 'ahTest':
         return notes.test ? [notes.test] : []
       case 'ahSmtpPass':
-        return s?.notifySmtpPassSet ? ['A password is stored.'] : []
+        return settings.value?.notifySmtpPassSet ? ['A password is stored.'] : []
       case 'ahSync':
-        return [
-          ...(sync.value?.connected
-            ? [`${privacy.value ? 'Connected' : sync.value.name || sync.value.email || 'Connected'} · ${sync.value.enabled ? syncedLabel() : 'Sync is off'}`]
-            : []),
-          ...(notes.sync ? [notes.sync] : [])
-        ]
-      case 'ahVersion': {
-        const u = update.value
-        if (applying.value) return [progressLabel.value ?? 'Updating…']
-        const lines = [applyNote.value, applyError.value].filter((l): l is string => !!l)
-        if (updateState.value === 'blocked') lines.push(`An update is waiting but cannot be applied: ${u?.reason ?? 'blocked'}.`)
-        if (updateState.value === 'available') lines.push('An update is waiting. Click the number to install it; AgentHydra restarts.')
-        if (updateState.value === 'no-source') lines.push('This install is not linked to a Git remote, so there is nowhere to pull new versions from.')
-        return lines
-      }
+        return syncNotes()
+      case 'ahVersion':
+        return versionNotes()
       default:
         return []
     }

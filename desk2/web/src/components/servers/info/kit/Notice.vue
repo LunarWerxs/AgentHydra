@@ -18,11 +18,11 @@ const INK: Record<Tone, string> = { success: 'text-success-text', warning: 'text
 </script>
 
 <template>
-  <div :class="['flex min-w-0 gap-3 rounded-[var(--radius-10)] px-3.5 py-3', RING[tone]]" :role="tone === 'danger' || tone === 'warning' ? 'alert' : 'status'">
+  <div :class="['flex min-w-0 gap-3 rounded-(--radius-10) px-3.5 py-3', RING[tone]]" :role="tone === 'danger' || tone === 'warning' ? 'alert' : 'status'">
     <component :is="props.icon ?? ICON[tone]" class="mt-0.5 size-4 shrink-0" :class="INK[tone]" aria-hidden="true" />
     <div class="flex min-w-0 flex-1 flex-col gap-1">
       <p class="text-[13px] font-medium leading-5" :class="INK[tone]">{{ title }}</p>
-      <div v-if="$slots.default" class="min-w-0 break-words text-[13px] leading-5 text-text-2"><slot /></div>
+      <div v-if="$slots.default" class="min-w-0 wrap-break-word text-[13px] leading-5 text-text-2"><slot /></div>
       <div v-if="$slots.actions" class="mt-1.5 flex flex-wrap items-center gap-1.5"><slot name="actions" /></div>
     </div>
   </div>

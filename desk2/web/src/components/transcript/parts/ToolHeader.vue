@@ -68,7 +68,7 @@ const elapsed = computed(() => {
 <template>
   <button
     type="button"
-    class="group flex h-6 w-full min-w-0 items-center gap-1.5 rounded-6 px-1 text-left text-[13px] transition-colors duration-[60ms] hover:bg-fill-hover"
+    class="group flex h-6 w-full min-w-0 items-center gap-1.5 rounded-6 px-1 text-start text-[13px] transition-colors duration-60 hover:bg-fill-hover"
     :aria-expanded="open"
     @click="$emit('toggle')"
   >
@@ -78,10 +78,10 @@ const elapsed = computed(() => {
     <span v-if="item.status === 'running' && item.progress" class="min-w-0 max-w-[30%] shrink truncate text-[12px] text-text-muted">
       {{ item.progress }}
     </span>
-    <span class="ml-auto flex shrink-0 items-center gap-2 pl-2 text-[12px] tabular-nums">
+    <span class="ms-auto flex shrink-0 items-center gap-2 ps-2 text-[12px] tabular-nums">
       <span v-if="counts && (counts.added || counts.removed)" class="font-mono">
         <span class="text-git-add">+{{ counts.added }}</span>
-        <span v-if="counts.removed" class="ml-1 text-git-del">-{{ counts.removed }}</span>
+        <span v-if="counts.removed" class="ms-1 text-git-del">-{{ counts.removed }}</span>
       </span>
       <span v-if="exit && exit.ok === false" class="font-mono text-danger-text">{{ exit.label }}</span>
       <span class="text-text-muted">{{ elapsed }}</span>

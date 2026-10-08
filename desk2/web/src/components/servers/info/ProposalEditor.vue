@@ -71,7 +71,7 @@ function setInclude(r: Row, v: boolean): void {
 <template>
   <div class="flex flex-col gap-4">
     <div class="flex flex-col gap-2">
-      <Field label="Project name" class="max-w-[360px]">
+      <Field label="Project name" class="max-w-90">
         <template #default="{ id, describedBy, invalid }">
           <input :id="id" v-model="name" :class="INPUT" :aria-describedby="describedBy" :aria-invalid="invalid" @input="push" />
         </template>

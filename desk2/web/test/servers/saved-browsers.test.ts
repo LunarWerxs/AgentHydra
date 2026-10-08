@@ -3,11 +3,11 @@ import { BROWSER_PROFILES, OPEN_BROWSER_EVENT, type BrowserProfiles } from '@sha
 import { browserOpen, browserProfiles } from '../../src/components/servers/api'
 import { clipboardAction, fitFrame, formatAgo, isPasteKey, keyMessage, liveSocketUrl, mapPoint, mouseButton, normalizeAddress, profileRows, resolveRequest } from '../../src/components/servers/logic'
 
-const NOW = Date.parse('2026-10-06T12:00:00Z')
+const NOW = Date.parse('2020-10-06T12:00:00Z')
 const list: BrowserProfiles = {
   workspace: 'example-app',
   profiles: [
-    { name: 'shop', note: 'Store admin for the example shop', sites: [], sessionHosts: ['admin.example.com', 'admin.example.com', 'mail.example.test'], open: true, own: true, lastUsedAt: '2026-10-06T11:55:00Z' },
+    { name: 'shop', note: 'Store admin for the example shop', sites: [], sessionHosts: ['admin.example.com', 'admin.example.com', 'mail.example.test'], open: true, own: true, lastUsedAt: '2020-10-06T11:55:00Z' },
     { name: 'scratch', note: null, sites: [], sessionHosts: [], open: false, own: true, lastUsedAt: null }
   ]
 }
@@ -45,9 +45,9 @@ describe('the saved browsers list', () => {
     expect(body).toEqual({ cwd: 'C:/Users/me/Code/App', profile: 'shop', login: true })
   })
   it('formats last use', () => {
-    expect(formatAgo('2026-10-06T11:59:50Z', NOW)).toBe('just now')
-    expect(formatAgo('2026-10-06T09:00:00Z', NOW)).toBe('3 h ago')
-    expect(formatAgo('2026-10-04T12:00:00Z', NOW)).toBe('2 d ago')
+    expect(formatAgo('2020-10-06T11:59:50Z', NOW)).toBe('just now')
+    expect(formatAgo('2020-10-06T09:00:00Z', NOW)).toBe('3 h ago')
+    expect(formatAgo('2020-10-04T12:00:00Z', NOW)).toBe('2 d ago')
   })
 })
 

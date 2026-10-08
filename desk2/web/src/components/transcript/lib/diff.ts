@@ -30,54 +30,11 @@ const MAX_CELLS = 4_000_000
 export function diffLines(oldText: string, newText: string): Diff {
   const a = splitLines(oldText)
   const b = splitLines(newText)
-  let start = 0
-  while (start < a.length && start < b.length && a[start] === b[start]) start++
-  let endA = a.length
-  let endB = b.length
-  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
-    endA--
-    endB--
-  }
+  const { start, endA, endB } = commonEnds(a, b)
 
   const lines: DiffLine[] = []
   for (let i = 0; i < start; i++) lines.push({ type: 'ctx', text: a[i], oldNo: i + 1, newNo: i + 1 })
-
-  const midA = a.slice(start, endA)
-  const midB = b.slice(start, endB)
-  const n = midA.length
-  const m = midB.length
-  if (n > 0 && m > 0 && n * m <= MAX_CELLS) {
-    // lcs[i][j] = LCS length of midA[i..] and midB[j..], stored flat.
-    const w = m + 1
-    const lcs = new Uint32Array((n + 1) * w)
-    for (let i = n - 1; i >= 0; i--) {
-      for (let j = m - 1; j >= 0; j--) {
-        lcs[i * w + j] =
-          midA[i] === midB[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1])
-      }
-    }
-    let i = 0
-    let j = 0
-    while (i < n || j < m) {
-      if (i < n && j < m && midA[i] === midB[j]) {
-        lines.push({ type: 'ctx', text: midA[i], oldNo: start + i + 1, newNo: start + j + 1 })
-        i++
-        j++
-      } else if (j < m && (i >= n || lcs[i * w + j + 1] >= lcs[(i + 1) * w + j])) {
-        lines.push({ type: 'add', text: midB[j], newNo: start + j + 1 })
-        j++
-      } else {
-        lines.push({ type: 'del', text: midA[i], oldNo: start + i + 1 })
-        i++
-      }
-    }
-    // Show removals before additions inside each changed run, as Claude Code does.
-    reorderRuns(lines)
-  } else {
-    midA.forEach((t, i) => lines.push({ type: 'del', text: t, oldNo: start + i + 1 }))
-    midB.forEach((t, j) => lines.push({ type: 'add', text: t, newNo: start + j + 1 }))
-  }
-
+  for (const l of changedLines(a.slice(start, endA), b.slice(start, endB), start)) lines.push(l)
   for (let k = 0; k < a.length - endA; k++) {
     lines.push({ type: 'ctx', text: a[endA + k], oldNo: endA + k + 1, newNo: endB + k + 1 })
   }
@@ -89,6 +46,62 @@ export function diffLines(oldText: string, newText: string): Diff {
     else if (l.type === 'del') removed++
   }
   return { lines, added, removed }
+}
+
+function commonEnds(a: string[], b: string[]): { start: number; endA: number; endB: number } {
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--
+    endB--
+  }
+  return { start, endA, endB }
+}
+
+function changedLines(midA: string[], midB: string[], start: number): DiffLine[] {
+  if (midA.length === 0 || midB.length === 0 || midA.length * midB.length > MAX_CELLS) {
+    return [
+      ...midA.map((t, i): DiffLine => ({ type: 'del', text: t, oldNo: start + i + 1 })),
+      ...midB.map((t, j): DiffLine => ({ type: 'add', text: t, newNo: start + j + 1 })),
+    ]
+  }
+  const lines = lcsLines(midA, midB, start)
+  // Show removals before additions inside each changed run, as Claude Code does.
+  reorderRuns(lines)
+  return lines
+}
+
+function lcsLines(midA: string[], midB: string[], start: number): DiffLine[] {
+  const n = midA.length
+  const m = midB.length
+  // lcs[i][j] = LCS length of midA[i..] and midB[j..], stored flat.
+  const w = m + 1
+  const lcs = new Uint32Array((n + 1) * w)
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      lcs[i * w + j] =
+        midA[i] === midB[j] ? lcs[(i + 1) * w + j + 1] + 1 : Math.max(lcs[(i + 1) * w + j], lcs[i * w + j + 1])
+    }
+  }
+  const lines: DiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < n || j < m) {
+    if (i < n && j < m && midA[i] === midB[j]) {
+      lines.push({ type: 'ctx', text: midA[i], oldNo: start + i + 1, newNo: start + j + 1 })
+      i++
+      j++
+    } else if (j < m && (i >= n || lcs[i * w + j + 1] >= lcs[(i + 1) * w + j])) {
+      lines.push({ type: 'add', text: midB[j], newNo: start + j + 1 })
+      j++
+    } else {
+      lines.push({ type: 'del', text: midA[i], oldNo: start + i + 1 })
+      i++
+    }
+  }
+  return lines
 }
 
 function reorderRuns(lines: DiffLine[]) {

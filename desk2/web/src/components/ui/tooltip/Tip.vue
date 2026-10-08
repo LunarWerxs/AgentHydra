@@ -54,7 +54,7 @@ watch(off, (v) => {
           :align="align"
           :side-offset="4"
           :collision-padding="8"
-          class="tip z-50 max-w-80 whitespace-pre-line rounded-[var(--radius-6)] bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
+          class="tip z-50 max-w-80 whitespace-pre-line rounded-(--radius-6) bg-bg-popover px-2 py-1 text-[12px] leading-4 text-text shadow-(--shadow-menu-ringed)"
         >
           {{ label }}
         </TooltipContent>
@@ -62,14 +62,3 @@ watch(off, (v) => {
     </Tooltip>
   </TooltipProvider>
 </template>
-
-<style scoped>
-.tip[data-state] {
-  animation: tip-in var(--dur-fast) var(--ease-out);
-}
-@keyframes tip-in {
-  from {
-    opacity: 0;
-  }
-}
-</style>

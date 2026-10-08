@@ -25,10 +25,10 @@ const mockStore = {
 </script>
 
 <template>
-  <div class="h-96 border border-[var(--border)] rounded overflow-hidden">
-    <div class="flex h-full bg-[var(--bg-page)]">
+  <div class="h-96 border border-(--border) rounded overflow-hidden">
+    <div class="flex h-full bg-(--bg-page)">
       <!-- Shell preview would go here -->
-      <div class="flex-1 flex items-center justify-center text-[var(--text-muted)]">
+      <div class="flex-1 flex items-center justify-center text-(--text-muted)">
         <p>App.vue shell layout preview</p>
       </div>
     </div>

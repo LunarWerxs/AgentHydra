@@ -6,6 +6,7 @@ import { SHELL_SOURCE } from '@/components/shell/source'
 import { COMPOSER_API, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { PANE_API } from '@/components/panes/api'
+import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 import { PARITY_SCENES, sceneComposerApi, scenePaneApi, sceneSource, type MenuName } from './scenes'
 
 // '#/parity/<scene>?open=<plus|mode|model|effort>&hover=<css selector | text:Label>&draft=<text>'
@@ -50,7 +51,9 @@ function find(target: string): HTMLElement | null {
   return hits.at(-1) ?? null
 }
 
-const frames = (n: number) => new Promise<void>((r) => (n <= 0 ? r() : requestAnimationFrame(() => void frames(n - 1).then(r))))
+const frames = async (n: number) => {
+  for (let i = 0; i < n; i++) await waitForNextPaint()
+}
 /** Waits (bounded, ~3 s) for an element a lazily loaded pane draws. */
 async function waitFor(selector: string) {
   for (let i = 0; i < 180 && !document.querySelector(selector); i++) await frames(1)
@@ -124,7 +127,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="h-screen w-screen overflow-hidden bg-bg-page text-text">
+  <div class="size-screen overflow-hidden bg-bg-page text-text">
     <p v-if="!scene" class="p-6 text-sm">Unknown parity scene '{{ name }}'. Known: {{ Object.keys(PARITY_SCENES).join(', ') }}</p>
     <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" />
   </div>

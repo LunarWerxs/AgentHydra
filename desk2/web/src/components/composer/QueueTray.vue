@@ -36,38 +36,38 @@ const { source, error, act, editing, draft, setEditor, startEdit, onEditKey } = 
   <ul
     role="list"
     aria-label="Queued for this chat"
-    class="flex flex-col rounded-[var(--radius-12)] border border-[var(--border)] bg-[var(--bg-popover)] p-1"
+    class="flex flex-col rounded-(--radius-12) border border-(--border) bg-(--bg-popover) p-1"
     data-queue-tray
   >
     <li v-for="(r, i) in rows" :key="r.item.id" class="group/t relative">
       <div v-if="editing === r.item.id" class="flex gap-1.5 px-1 py-0.5">
-        <span class="tnum w-3 shrink-0 pt-1 text-[13px] text-[var(--text-muted)]">{{ i + 1 }}</span>
+        <span class="tnum w-3 shrink-0 pt-1 text-[13px] text-(--text-muted)">{{ i + 1 }}</span>
         <div class="min-w-0 flex-1">
           <textarea
             :ref="setEditor"
             v-model="draft"
             rows="3"
             aria-label="Edit queued message"
-            class="block w-full resize-none rounded-[var(--radius-6)] bg-[var(--bg-page)] px-1.5 py-1 text-[13px] leading-[19px] text-[var(--text)] outline-none"
+            class="block w-full resize-none rounded-(--radius-6) bg-(--bg-page) px-1.5 py-1 text-[13px] leading-4.75 text-(--text) outline-none"
             @keydown="onEditKey($event, r.item)"
           />
-          <p class="text-[12px] leading-4 text-[var(--text-muted)]">Enter saves, Shift+Enter adds a line, Esc cancels</p>
+          <p class="text-[12px] leading-4 text-(--text-muted)">Enter saves, Shift+Enter adds a line, Esc cancels</p>
         </div>
       </div>
       <ContextMenu v-else>
         <ContextMenuTrigger as-child>
           <button
             type="button"
-            class="flex h-6 w-full items-center gap-1.5 rounded-[var(--radius-6)] px-1 text-left text-[13px] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] data-[state=open]:bg-[var(--fill-hover)]"
+            class="flex h-6 w-full items-center gap-1.5 rounded-(--radius-6) px-1 text-start text-[13px] text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) data-[state=open]:bg-(--fill-hover)"
             :aria-label="`Queued ${i + 1}: ${r.text}`"
             @click="emit('open')"
           >
-            <span class="tnum w-3 shrink-0 text-[var(--text-muted)]">{{ i + 1 }}</span>
+            <span class="tnum w-3 shrink-0 text-(--text-muted)">{{ i + 1 }}</span>
             <span class="min-w-0 flex-1 truncate">{{ r.text }}</span>
             <span
               v-if="r.badge"
               class="shrink-0 text-[12px]"
-              :class="r.badge.tone === 'warn' ? 'text-[var(--warning-text)]' : 'text-[var(--text-muted)]'"
+              :class="r.badge.tone === 'warn' ? 'text-(--warning-text)' : 'text-(--text-muted)'"
             >{{ r.badge.label }}</span>
           </button>
         </ContextMenuTrigger>
@@ -106,12 +106,12 @@ const { source, error, act, editing, draft, setEditor, startEdit, onEditKey } = 
     <li v-if="more > 0">
       <button
         type="button"
-        class="flex h-6 items-center rounded-[var(--radius-6)] px-1 text-[12px] text-[var(--text-muted)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+        class="flex h-6 items-center rounded-(--radius-6) px-1 text-[12px] text-(--text-muted) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
         @click="emit('open')"
       >
         +{{ more }} more queued
       </button>
     </li>
-    <li v-if="error" role="alert" class="px-1 pt-0.5 text-[12px] text-[var(--warning-text)]">{{ error }}</li>
+    <li v-if="error" role="alert" class="px-1 pt-0.5 text-[12px] text-(--warning-text)">{{ error }}</li>
   </ul>
 </template>

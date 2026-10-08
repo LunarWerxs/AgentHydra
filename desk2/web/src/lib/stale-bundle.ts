@@ -60,23 +60,36 @@ function reloadWhenQuiet(): boolean {
   return true
 }
 
-/** Starts looking for new builds: every minute, on coming back into view, and on focus (once per window). */
-export function watchBundle(): void {
+const INPUT_TYPES = ['keydown', 'pointerdown', 'wheel', 'touchstart']
+const touched = () => {
+  lastInputAt = Date.now()
+}
+const onVisibility = () => {
+  if (document.hidden) reloadWhenQuiet()
+  else void reloadIfStale()
+}
+const onFocus = () => void reloadIfStale()
+
+/** Starts looking for new builds: every minute, on coming back into view, and on focus (once per window). Returns what stops it. */
+export function watchBundle(): () => void {
   // Tests run the store with stand-ins for window and document, or none.
-  if (watching || typeof window === 'undefined' || typeof document === 'undefined') return
-  if (typeof window.addEventListener !== 'function' || typeof document.addEventListener !== 'function') return
+  if (watching || typeof window === 'undefined' || typeof document === 'undefined') return () => {}
+  if (typeof window.addEventListener !== 'function' || typeof document.addEventListener !== 'function') return () => {}
   watching = true
-  const touched = () => {
-    lastInputAt = Date.now()
-  }
-  for (const type of ['keydown', 'pointerdown', 'wheel', 'touchstart']) window.addEventListener(type, touched, { capture: true, passive: true })
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) reloadWhenQuiet()
-    else void reloadIfStale()
-  })
-  window.addEventListener('focus', () => void reloadIfStale())
+  for (const type of INPUT_TYPES) window.addEventListener(type, touched, { capture: true, passive: true })
+  document.addEventListener('visibilitychange', onVisibility)
+  window.addEventListener('focus', onFocus)
   // A hidden window looks when it comes back into view (above), not every minute.
-  setInterval(() => {
+  const every = setInterval(() => {
     if (!document.hidden) void reloadIfStale()
   }, LOOK_EVERY_MS)
+  return () => {
+    for (const type of INPUT_TYPES) window.removeEventListener(type, touched, { capture: true })
+    document.removeEventListener('visibilitychange', onVisibility)
+    window.removeEventListener('focus', onFocus)
+    clearInterval(every)
+    if (timer) clearTimeout(timer)
+    timer = null
+    watching = false
+  }
 }

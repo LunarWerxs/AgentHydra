@@ -9,6 +9,8 @@ import type { CliMayteWorker } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { chatWorkers } from './dock'
 import { Tip } from '@/components/ui/tooltip'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from '@/components/ui/dialog'
 
 const props = defineProps<{
   originSessionId?: string | null
@@ -77,26 +79,31 @@ const glyphClass = (worker: CliMayteWorker): string => {
 }
 
 const cancelErrors = ref(new Map<string, string>())
+const cancelTarget = ref<CliMayteWorker | null>(null)
 
 const cancelWorker = async (worker: CliMayteWorker) => {
-  if (confirm(`Cancel "${worker.title}"?`)) {
-    cancelErrors.value.delete(worker.id)
-    try {
-      await desk.cancelWorker(worker.id)
-    } catch (err) {
-      cancelErrors.value.set(worker.id, `Stop failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
+  cancelErrors.value.delete(worker.id)
+  try {
+    await desk.cancelWorker(worker.id)
+  } catch (err) {
+    cancelErrors.value.set(worker.id, `Stop failed: ${err instanceof Error ? err.message : String(err)}`)
   }
+}
+
+const confirmCancel = () => {
+  const worker = cancelTarget.value
+  cancelTarget.value = null
+  if (worker) void cancelWorker(worker)
 }
 </script>
 
 <template>
-  <div class="flex flex-col h-full bg-[var(--bg-page)]">
+  <div class="flex flex-col h-full bg-(--bg-page)">
     <!-- Header -->
-    <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-(--border)">
       <div class="flex items-center gap-2">
         <h2 class="text-[13px] font-medium">CliMayte</h2>
-        <span class="rounded-[var(--radius-4)] bg-[var(--fill-secondary)] px-1 text-[11px] leading-4 text-[var(--text-2)]">
+        <span class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-[11px] leading-4 text-(--text-2)">
           {{ activeWorkers.length }}
         </span>
       </div>
@@ -114,14 +121,14 @@ const cancelWorker = async (worker: CliMayteWorker) => {
     <div class="flex-1 overflow-y-auto">
       <!-- Active workers grouped -->
       <div v-if="activeWorkers.length > 0">
-        <div v-for="group in groupedActive" :key="group.group || 'ungrouped'" class="border-b border-[var(--border)] last:border-b-0">
-          <div v-if="group.group" class="px-4 py-2 text-[12px] font-medium text-[var(--text-muted)] bg-[var(--bg-popover)] sticky top-0">
+        <div v-for="group in groupedActive" :key="group.group || 'ungrouped'" class="border-b border-(--border) last:border-b-0">
+          <div v-if="group.group" class="px-4 py-2 text-[12px] font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0">
             {{ group.group }}
           </div>
           <div
             v-for="worker in group.items"
             :key="worker.id"
-            class="px-4 py-3 border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--fill-hover)]"
+            class="px-4 py-3 border-b border-(--border) last:border-b-0 hover:bg-(--fill-hover)"
           >
             <!-- Worker header with glyph and title -->
             <div class="flex items-start gap-2 mb-2">
@@ -129,28 +136,28 @@ const cancelWorker = async (worker: CliMayteWorker) => {
               <div class="flex-1 min-w-0">
                 <div class="text-[13px] font-medium truncate">{{ worker.title }}</div>
               </div>
-              <div class="shrink-0 text-[12px] text-[var(--text-muted)]">
+              <div class="shrink-0 text-[12px] text-(--text-muted)">
                 {{ elapsedTime(worker) }}
               </div>
             </div>
 
             <!-- Account and model/effort -->
             <div class="flex items-center gap-2 mb-2 text-[12px]">
-              <span v-if="worker.account" class="text-[var(--text-muted)]">{{ worker.account }}</span>
-              <span v-if="worker.model" class="text-[var(--text-muted)]">{{ worker.model }}</span>
-              <span v-if="worker.effort" class="text-[var(--text-muted)]">{{ worker.effort }}</span>
+              <span v-if="worker.account" class="text-(--text-muted)">{{ worker.account }}</span>
+              <span v-if="worker.model" class="text-(--text-muted)">{{ worker.model }}</span>
+              <span v-if="worker.effort" class="text-(--text-muted)">{{ worker.effort }}</span>
             </div>
 
             <!-- Progress bar -->
-            <div v-if="worker.usedPct !== null" class="mb-2 h-1.5 bg-[var(--slider-track)] rounded-full overflow-hidden">
+            <div v-if="worker.usedPct !== null" class="mb-2 h-1.5 bg-(--slider-track) rounded-full overflow-hidden">
               <div
-                class="h-full bg-[var(--brand)]"
+                class="h-full bg-(--brand)"
                 :style="{ width: `${Math.min(worker.usedPct, 100)}%` }"
               />
             </div>
 
             <!-- Last activity -->
-            <div v-if="worker.lastActivity" class="text-[12px] text-[var(--text-muted)] mb-2 truncate">
+            <div v-if="worker.lastActivity" class="text-[12px] text-(--text-muted) mb-2 truncate">
               {{ worker.lastActivity }}
             </div>
 
@@ -158,19 +165,19 @@ const cancelWorker = async (worker: CliMayteWorker) => {
             <div class="flex items-center gap-1">
               <Tip :label="'Stop ' + worker.title" side="top">
                 <button
-                  @click="cancelWorker(worker)"
-                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-[var(--fill-5)] hover:bg-[var(--fill-hover)] rounded-[var(--radius-6)] text-[var(--text-muted)] transition-colors duration-[60ms] hover:text-[var(--text)]"
+                  @click="cancelTarget = worker"
+                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
                 >
-                  <Square class="w-3.5 h-3.5" />
+                  <Square class="size-3.5" />
                   <span class="hidden sm:inline">Stop</span>
                 </button>
               </Tip>
               <Tip v-if="worker.sessionId" :label="'Open ' + worker.title" side="top">
                 <button
                   @click="desk.select({ kind: 'external', id: worker.sessionId || '' })"
-                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-[var(--fill-5)] hover:bg-[var(--fill-hover)] rounded-[var(--radius-6)] text-[var(--text-muted)] transition-colors duration-[60ms] hover:text-[var(--text)]"
+                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
                 >
-                  <ArrowUpRight class="w-3.5 h-3.5" />
+                  <ArrowUpRight class="size-3.5" />
                   <span class="hidden sm:inline">Open</span>
                 </button>
               </Tip>
@@ -182,37 +189,47 @@ const cancelWorker = async (worker: CliMayteWorker) => {
 
       <!-- Recently finished -->
       <div v-if="finishedWorkers.length > 0">
-        <div class="px-4 py-2 text-[12px] font-medium text-[var(--text-muted)] bg-[var(--bg-popover)] sticky top-0 z-10">
+        <div class="px-4 py-2 text-[12px] font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0 z-10">
           Recently finished
         </div>
         <div
           v-for="worker in finishedWorkers"
           :key="worker.id"
-          class="px-4 py-2 border-b border-[var(--border)] last:border-b-0 hover:bg-[var(--fill-hover)] text-[12px]"
+          class="px-4 py-2 border-b border-(--border) last:border-b-0 hover:bg-(--fill-hover) text-[12px]"
         >
           <div class="flex items-center gap-2 mb-1">
             <span
               v-if="worker.verdict"
-              class="inline-block px-1.5 rounded-[var(--radius-4)] leading-4 text-white"
-              :class="worker.verdict === 'ok' ? 'bg-[var(--success)]' : 'bg-[var(--danger)]'"
+              class="inline-block px-1.5 rounded-(--radius-4) leading-4 text-white"
+              :class="worker.verdict === 'ok' ? 'bg-(--success)' : 'bg-(--danger)'"
             >
               {{ worker.verdict }}
             </span>
             <span class="truncate">{{ worker.title }}</span>
           </div>
-          <div v-if="worker.error" class="text-[var(--danger-text)] text-[12px] truncate">
+          <div v-if="worker.error" class="text-(--danger-text) text-[12px] truncate">
             {{ worker.error }}
           </div>
         </div>
       </div>
 
       <!-- Empty state -->
-      <div v-if="activeWorkers.length === 0 && finishedWorkers.length === 0" class="flex items-center justify-center h-full text-[var(--text-muted)]">
+      <div v-if="activeWorkers.length === 0 && finishedWorkers.length === 0" class="flex items-center justify-center h-full text-(--text-muted)">
         <div class="text-center">
           <p class="text-[13px] font-medium">No workers</p>
           <p class="text-[12px]">{{ showOnlyThisChat ? 'This chat has not dispatched any workers' : 'No active or recent workers' }}</p>
         </div>
       </div>
     </div>
+    <Dialog :open="cancelTarget !== null" @update:open="(o: boolean) => !o && (cancelTarget = null)">
+      <DialogContent :aria-describedby="undefined">
+        <DialogTitle>Stop this worker?</DialogTitle>
+        <DialogDescription>Cancel "{{ cancelTarget?.title }}"?</DialogDescription>
+        <DialogFooter>
+          <Button variant="ghost" @click="cancelTarget = null">Keep running</Button>
+          <Button @click="confirmCancel">Stop</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

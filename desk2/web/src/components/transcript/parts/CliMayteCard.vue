@@ -33,12 +33,12 @@ function dot(w: CliMayteWorker | null): string {
     <div class="px-1 pt-0.5" :class="!info.tasks.length && !workers.length && 'pb-0.5'">
       <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id)" />
     </div>
-    <div v-if="info.tasks.length || workers.length" class="space-y-1 px-3 pb-2 pl-8 text-[13px]">
+    <div v-if="info.tasks.length || workers.length" class="space-y-1 px-3 pb-2 ps-8 text-[13px]">
       <div v-for="(t, i) in info.tasks" :key="i" class="flex min-w-0 items-center gap-2">
-        <span class="w-4 shrink-0 text-right font-mono text-[11px] text-text-muted">{{ i + 1 }}</span>
+        <span class="w-4 shrink-0 text-end font-mono text-[11px] text-text-muted">{{ i + 1 }}</span>
         <span class="min-w-0 truncate text-text">{{ t.title }}</span>
         <span v-if="t.kind" class="shrink-0 rounded bg-fill-hover px-1.5 text-[11px] text-text-muted">{{ t.kind }}</span>
-        <span v-if="t.cwd" class="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-text-muted">
+        <span v-if="t.cwd" class="ms-auto flex shrink-0 items-center gap-1 text-[11px] text-text-muted">
           <FolderOpen class="size-3" />{{ shortPath(t.cwd).split('/').pop() }}
         </span>
       </div>

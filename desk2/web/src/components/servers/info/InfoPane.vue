@@ -165,7 +165,7 @@ function afterDelete() {
 
 <template>
   <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-bg-page" :aria-label="sel ? 'Server details' : 'Dev servers overview'">
-    <header class="flex h-[41px] shrink-0 items-center gap-1 border-b border-border pr-2 text-[13px]" :style="{ paddingLeft: `${padLeft}px` }">
+    <header class="flex h-10.25 shrink-0 items-center gap-1 border-b border-border pe-2 text-[13px]" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip v-if="showBack" label="Back">
         <button type="button" :class="ICON_BTN" aria-label="Back" @click="back"><ChevronLeft class="size-4" /></button>
       </Tip>
@@ -196,12 +196,12 @@ function afterDelete() {
 
     <!-- One centered column, capped so a wide window does not stretch the cards; each view fills its height (a form's Save bar sticks to the bottom). -->
     <div ref="body" class="relative min-h-0 flex-1 overflow-y-auto text-[13px] leading-5 text-text">
-      <div class="@container mx-auto flex min-h-full w-full max-w-[960px] flex-col *:flex-1">
+      <div class="@container mx-auto flex min-h-full w-full max-w-240 flex-col *:flex-1">
         <p v-if="down && (!sel || sel.kind === 'server' || sel.kind === 'project')" role="status" class="p-4 text-text-muted">
           <template v-if="state === 'starting'">Starting the dev-servers service…</template>
           <template v-else>
             The dev-servers service is not running.
-            <button type="button" class="ml-1 rounded-[var(--radius-5)] px-1 text-text-2 hover:bg-fill-hover" @click="servers.tryAgain()">Start it now</button>
+            <button type="button" class="ms-1 rounded-(--radius-5) px-1 text-text-2 hover:bg-fill-hover" @click="servers.tryAgain()">Start it now</button>
           </template>
         </p>
 

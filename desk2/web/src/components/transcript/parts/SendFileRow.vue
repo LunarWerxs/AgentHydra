@@ -49,7 +49,7 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
       preload="metadata"
     />
     <MarkdownBlock v-if="caption" :text="caption" />
-    <div v-if="files.length" class="flex flex-wrap gap-2 pl-0">
+    <div v-if="files.length" class="flex flex-wrap gap-2 ps-0">
       <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" />
     </div>
     <div v-else-if="item.status === 'running'" class="px-1 text-[14px] leading-5 text-text-muted"><span class="tx-shimmer">Sending a file</span></div>

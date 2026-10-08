@@ -281,6 +281,18 @@
   --ease-composer: cubic-bezier(0.4, 0, 0.2, 1);
   --radius-4: 4px; /* badges (Recommended, Default, counts) */
   --bg-picture: #232322; /* behind a picture while it loads, and through a transparent one */
+  --on-accent: #ffffff;
+  --on-accent-muted: #ffffffb3;
+  --bg-pure-black: #000;
+  --checker-a: #2b2b29;
+  --checker-b: #3a3a38;
+  --ring-swatch: #ffffff40;
+  --workflow-dot-idle: #444444;
+  --workflow-dot-done: #255da2;
+  --workflow-dot-ring: #303030;
+  --find-match: rgb(250 204 21 / 0.3);
+  --find-active: rgb(249 115 22 / 0.8);
+  --shadow-soft: 0 4px 20px #00000009;
 }
 
 /* Composer polish: the send glyph while the box shows a suggested next prompt (user/window.webp). */
@@ -308,4 +320,150 @@ html.motion-paused *:not([data-state])::after {
   .animate-spin {
     animation-duration: 3s;
   }
+}
+
+/* A row that moves in a reordering list (TransitionGroup) glides to its place. */
+.v-move {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+@media (prefers-reduced-motion: reduce) {
+  .v-move {
+    transition: none;
+  }
+}
+
+.tip[data-state] {
+  animation: tip-in var(--dur-fast) var(--ease-out);
+}
+@keyframes tip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* Fade mask behind a row's control: 32px for a chat, 24px for an external one, 44px while the control shows. */
+.row-title {
+  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
+}
+.ext-title {
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+}
+.group\/row:hover .row-title,
+.row-title-open,
+.group\/row:hover .ext-title,
+.ext-title-open {
+  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+/* The speaker (AudioButton.vue) sits at the right end, and left of the three dots while those show: the title fades earlier. */
+.row-title-audio,
+.ext-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
+}
+.group\/row:hover .row-title-audio,
+.row-title-open.row-title-audio,
+.group\/row:hover .ext-title-audio,
+.ext-title-open.ext-title-audio {
+  mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 40px));
+}
+
+.tx-annotate-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--bg-popover);
+  box-shadow: var(--shadow-menu-ringed);
+}
+.tx-annotate-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-2);
+  cursor: pointer;
+  transition: background-color 60ms, color 60ms;
+}
+.tx-annotate-btn:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+.tx-annotate-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.tx-annotate-on {
+  background: var(--fill-hover);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.tx-annotate-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px var(--ring-swatch);
+}
+.tx-annotate-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border);
+}
+.tx-annotate-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.tx-annotate-text:hover:not(:disabled) {
+  background: var(--fill-hover);
+  color: var(--text);
+}
+.tx-annotate-save {
+  background: var(--text);
+  color: var(--bg-page);
+}
+.tx-annotate-save:hover:not(:disabled) {
+  background: var(--text);
+  color: var(--bg-page);
+  opacity: 0.9;
+}
+.tx-annotate-save:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.tx-annotate-sheet {
+  border-radius: 6px;
+  box-shadow: var(--shadow-picture-lifted);
+}
+
+.tx-viewer-img {
+  /* The checkerboard SageThumbs draws behind a transparent picture. */
+  background-color: var(--checker-a);
+  background-image: conic-gradient(var(--checker-b) 25%, transparent 0 50%, var(--checker-b) 0 75%, transparent 0);
+  background-size: 16px 16px;
+}
+.tx-viewer-pen {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  color: var(--text-2);
+  background: var(--fill-5);
+  box-shadow: inset 0 0 0 1px var(--border);
+  cursor: pointer;
+  transition: background-color 60ms, color 60ms;
+}
+.tx-viewer-pen:hover {
+  background: var(--fill-hover);
+  color: var(--text);
 }

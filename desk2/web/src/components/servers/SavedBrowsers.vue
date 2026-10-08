@@ -315,14 +315,14 @@ defineExpose({ refresh })
         <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" :disabled="!page" @click="history('reload')"><RotateCw class="size-4" /></button></Tip>
         <input ref="addressEl" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address" :class="INPUT" />
       </form>
-      <div v-if="note" class="truncate border-b border-border px-3 py-1 text-[12px] text-[var(--text-muted)]" data-testid="browser-note" :title="note">{{ note }}</div>
-      <div class="relative min-h-0 flex-1 bg-[var(--bg-page)]">
+      <div v-if="note" class="truncate border-b border-border px-3 py-1 text-[12px] text-(--text-muted)" data-testid="browser-note" :title="note">{{ note }}</div>
+      <div class="relative min-h-0 flex-1 bg-(--bg-page)">
         <div ref="stage" class="absolute inset-0" :class="phase === 'live' || phase === 'connecting' ? '' : 'invisible'">
           <canvas
             ref="canvas"
             tabindex="0"
             class="size-full outline-none"
-            :class="focused ? 'shadow-[var(--focus-ring)]' : ''"
+            :class="focused ? 'shadow-(--focus-ring)' : ''"
             aria-label="The browser, live"
             @mousedown="onDown"
             @mousemove="onMove"
@@ -344,30 +344,30 @@ defineExpose({ refresh })
           @blur="focused = false"
         />
         <div v-if="phase === 'live' && page && !isRealPage(page.tab.url)" class="pointer-events-none absolute inset-x-0 top-3 flex justify-center" role="status" data-testid="page-blank">
-          <span class="rounded-[var(--radius-10)] bg-[var(--bg-popover)] px-3 py-1.5 text-[12px] text-[var(--text-muted)] shadow-(--shadow-menu-ringed)">This page is blank.</span>
+          <span class="rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-[12px] text-(--text-muted) shadow-(--shadow-menu-ringed)">This page is blank.</span>
         </div>
-        <div v-if="phase === 'connecting'" class="pointer-events-none absolute inset-0 flex items-center justify-center text-[var(--text-muted)]" role="status">Connecting…</div>
-        <div v-else-if="phase === 'closed'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center" role="status">
-          <div class="text-[var(--text-muted)]">{{ closedWhy || 'The browser closed.' }}</div>
+        <div v-if="phase === 'connecting'" class="pointer-events-none absolute inset-0 flex items-center justify-center text-(--text-muted)" role="status">Connecting…</div>
+        <div v-else-if="phase === 'closed'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--bg-page) px-6 text-center" role="status">
+          <div class="text-(--text-muted)">{{ closedWhy || 'The browser closed.' }}</div>
           <div v-if="!pageId" class="flex gap-1">
             <button type="button" :class="TEXT_BTN" :disabled="busy" @click="openProfile(selected, false, url)">Open</button>
             <button type="button" :class="TEXT_BTN" class="font-medium" :disabled="busy" data-testid="browser-login" @click="openProfile(selected, true)">Log in</button>
           </div>
         </div>
-        <div v-else-if="phase === 'idle'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--bg-page)] px-6 text-center">
+        <div v-else-if="phase === 'idle'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--bg-page) px-6 text-center">
           <template v-if="loginFor">
             <div role="status">Sign in in the Chrome window that opened, then close it.</div>
             <button type="button" :class="TEXT_BTN" @click="refresh"><RefreshCw class="size-3" />Refresh</button>
           </template>
           <template v-else>
             <div class="font-medium">{{ selected }}</div>
-            <div class="text-[var(--text-muted)]">This browser is not open. Log in to sign in to it here, or just open it.</div>
+            <div class="text-(--text-muted)">This browser is not open. Log in to sign in to it here, or just open it.</div>
             <div class="flex gap-1">
               <button type="button" :class="TEXT_BTN" class="font-medium" :disabled="busy" data-testid="browser-login" @click="openProfile(selected, true)">Log in</button>
               <button type="button" :class="TEXT_BTN" :disabled="busy" @click="openProfile(selected, false, url)">Open</button>
             </div>
           </template>
-          <div v-if="actionError" class="rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[var(--danger-text)]" role="alert">{{ actionError }}</div>
+          <div v-if="actionError" class="rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-(--danger-text)" role="alert">{{ actionError }}</div>
         </div>
       </div>
     </template>

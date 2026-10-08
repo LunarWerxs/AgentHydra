@@ -15,7 +15,7 @@ const source = useShellSource()
 </script>
 
 <template>
-  <div class="flex items-center gap-0.5 rounded-[var(--radius-6)] bg-[var(--bg-popover)] p-0.5 shadow-(--shadow-menu-ringed)">
+  <div class="flex items-center gap-0.5 rounded-(--radius-6) bg-(--bg-popover) p-0.5 shadow-(--shadow-menu-ringed)">
     <Tip label="Edit" side="top">
       <button type="button" :class="TOOL_ICON" aria-label="Edit" @click="emit('edit')">
         <icons.queueEdit class="size-3.5" />

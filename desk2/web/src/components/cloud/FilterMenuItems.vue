@@ -137,7 +137,7 @@ const FILTER_TIPS: Record<SidebarFilter, string> = {
   all: 'Show every chat, the archived ones in a group at the end'
 }
 
-const ITEM = `${MENU_ITEM} pr-2`
+const ITEM = `${MENU_ITEM} pe-2`
 
 // Sub-items: how each kind under a row shows, as its lines or as a count badge (sidebar/subitems.ts).
 const SUB_CHOICES: { value: SubMode; label: string }[] = [
@@ -152,7 +152,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
 
 <template>
   <!-- One click per app; Claude alone until ticked otherwise (owner, 2026-10-05: "I need the ability to toggle on and off, certain items"). -->
-  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Apps</DropdownMenuLabel>
+  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[13px] font-medium text-text-muted">Apps</DropdownMenuLabel>
   <DropdownMenuItem
     v-for="v in SOURCE_VALUES"
     :key="v"
@@ -163,11 +163,11 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     @select.prevent="set({ apps: toggle(s.apps, SOURCE_VALUES, v) })"
   >
     <span class="flex-1">{{ SOURCE_LABELS[v] }}</span>
-    <component :is="icons.check" v-if="s.apps.includes(v)" class="ml-3" />
+    <component :is="icons.check" v-if="s.apps.includes(v)" class="ms-3" />
   </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Desk list</DropdownMenuLabel>
+  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[13px] font-medium text-text-muted">Desk list</DropdownMenuLabel>
   <DropdownMenuItem
     v-for="(label, key) in FILTER_LABELS"
     :key="key"
@@ -178,7 +178,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     @select="emit('update:filter', key), (cloud.on.value = false)"
   >
     <span class="flex-1">{{ label }}</span>
-    <component :is="icons.check" v-if="!cloud.on.value && props.filter === key" class="ml-3" />
+    <component :is="icons.check" v-if="!cloud.on.value && props.filter === key" class="ms-3" />
   </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
@@ -192,7 +192,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   >
     <EyeOff />
     <span class="flex-1">Show hidden groups</span>
-    <component :is="icons.check" v-if="showHidden" class="ml-3" />
+    <component :is="icons.check" v-if="showHidden" class="ms-3" />
   </DropdownMenuItem>
   <!-- Both lists'; off until an answer names this PC, so it never ticks a placeholder name. -->
   <DropdownMenuItem
@@ -205,16 +205,16 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   >
     <component :is="icons.local" />
     <span class="flex-1">Show only local</span>
-    <component :is="icons.check" v-if="local" class="ml-3" />
+    <component :is="icons.check" v-if="local" class="ms-3" />
   </DropdownMenuItem>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Sub-items</DropdownMenuLabel>
+  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[13px] font-medium text-text-muted">Sub-items</DropdownMenuLabel>
   <DropdownMenuSub v-for="k in SUB_KINDS" :key="k.kind">
     <DropdownMenuSubTrigger :class="ITEM" :title="k.tip">
       <component :is="k.icon" />
       <span class="flex-1">{{ SUB_KIND_LABELS[k.kind] }}</span>
-      <span class="pl-3 text-[12px] text-text-muted">{{ subModes[k.kind].value === 'count' ? 'Count' : 'List' }}</span>
+      <span class="ps-3 text-[12px] text-text-muted">{{ subModes[k.kind].value === 'count' ? 'Count' : 'List' }}</span>
     </DropdownMenuSubTrigger>
     <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-52`">
       <DropdownMenuItem
@@ -226,13 +226,13 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
         @select="subModes[k.kind].value = c.value"
       >
         <span class="flex-1">{{ c.label }}</span>
-        <component :is="icons.check" v-if="subModes[k.kind].value === c.value" class="ml-3" />
+        <component :is="icons.check" v-if="subModes[k.kind].value === c.value" class="ms-3" />
       </DropdownMenuItem>
     </DropdownMenuSubContent>
   </DropdownMenuSub>
 
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[13px] font-medium text-text-muted">Cloud list</DropdownMenuLabel>
+  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[13px] font-medium text-text-muted">Cloud list</DropdownMenuLabel>
   <DropdownMenuItem :class="ITEM" title="Load the cloud list again from AgentHydra" @select.prevent="(cloud.on.value = true), cloud.refresh()">
     <RefreshCw :class="cloud.loading.value ? 'animate-spin' : ''" />
     <span class="flex-1">Refresh</span>
@@ -246,7 +246,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   >
     <Search />
     <span class="flex-1">Only this view</span>
-    <component :is="icons.check" v-if="s.onlyThisView" class="ml-3" />
+    <component :is="icons.check" v-if="s.onlyThisView" class="ms-3" />
   </DropdownMenuItem>
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
   <DropdownMenuItem
@@ -258,7 +258,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   >
     <ListTodo />
     <span class="flex-1">Select multiple sessions</span>
-    <component :is="icons.check" v-if="cloud.selectMode.value" class="ml-3" />
+    <component :is="icons.check" v-if="cloud.selectMode.value" class="ms-3" />
   </DropdownMenuItem>
   <DropdownMenuSeparator :class="MENU_SEPARATOR" />
 
@@ -267,7 +267,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
       <DropdownMenuSubTrigger :class="ITEM" :disabled="m.claudeOnly && !claude" :title="m.tip">
         <component :is="m.icon" />
         <span class="flex-1">{{ m.label }}</span>
-        <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(ticked(m.key), m.universe, (v) => m.labels[v] ?? v) }}</span>
+        <span class="max-w-28 truncate ps-3 text-[12px] text-text-muted">{{ summarize(ticked(m.key), m.universe, (v) => m.labels[v] ?? v) }}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-64`">
         <DropdownMenuItem :class="MENU_ITEM" @select.prevent="set({ [m.key]: [...m.universe] } as Partial<CloudScopes>)">All</DropdownMenuItem>
@@ -282,7 +282,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
           @select.prevent="flip(m.key, m.universe, v)"
         >
           <span class="flex-1">{{ m.labels[v] }}</span>
-          <component :is="icons.check" v-if="ticked(m.key).includes(v)" class="ml-3" />
+          <component :is="icons.check" v-if="ticked(m.key).includes(v)" class="ms-3" />
         </DropdownMenuItem>
         <p v-if="m.note" class="px-2 py-1.5 text-[12px] leading-4 text-text-muted">{{ m.note }}</p>
       </DropdownMenuSubContent>
@@ -293,7 +293,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
       <DropdownMenuSubTrigger :class="ITEM" :disabled="!claude" title="Which Claude login (account instance) the sessions ran on">
         <Boxes />
         <span class="flex-1">Instance</span>
-        <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(instanceTicked, instanceUniverse, instanceLabel) }}</span>
+        <span class="max-w-28 truncate ps-3 text-[12px] text-text-muted">{{ summarize(instanceTicked, instanceUniverse, instanceLabel) }}</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-72`">
         <DropdownMenuItem :class="MENU_ITEM" @select.prevent="set({ instance: null })">All</DropdownMenuItem>
@@ -308,7 +308,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
           @select.prevent="toggleInstance(v)"
         >
           <span class="min-w-0 flex-1 truncate">{{ instanceLabel(v) }}</span>
-          <component :is="icons.check" v-if="instanceTicked.includes(v)" class="ml-3" />
+          <component :is="icons.check" v-if="instanceTicked.includes(v)" class="ms-3" />
         </DropdownMenuItem>
       </DropdownMenuSubContent>
     </DropdownMenuSub>
@@ -318,7 +318,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     <DropdownMenuSubTrigger :class="ITEM" title="Which PC the sessions ran on, in both lists">
       <Monitor />
       <span class="flex-1">Computer</span>
-      <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ summarize(pcTicked, cloud.pcs.value, (v) => v) }}</span>
+      <span class="max-w-28 truncate ps-3 text-[12px] text-text-muted">{{ summarize(pcTicked, cloud.pcs.value, (v) => v) }}</span>
     </DropdownMenuSubTrigger>
     <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-64`">
       <DropdownMenuItem :class="MENU_ITEM" @select.prevent="setPcs(null)">Both</DropdownMenuItem>
@@ -332,7 +332,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
         @select.prevent="togglePc(pc)"
       >
         <span class="min-w-0 flex-1 truncate">{{ pc }}{{ pc === cloud.thisPc.value ? ' (this PC)' : '' }}</span>
-        <component :is="icons.check" v-if="pcTicked.includes(pc)" class="ml-3" />
+        <component :is="icons.check" v-if="pcTicked.includes(pc)" class="ms-3" />
       </DropdownMenuItem>
       <p v-if="cloud.pcs.value.length < 2" class="px-2 py-1.5 text-[12px] leading-4 text-text-muted">
         No chat from another PC in this list yet: the other PC's Desktop chats arrive through AgentHydra's chat sync.
@@ -344,7 +344,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
     <DropdownMenuSubTrigger :class="ITEM" title="How far back the cloud list reaches">
       <CalendarRange />
       <span class="flex-1">Time period</span>
-      <span class="max-w-28 truncate pl-3 text-[12px] text-text-muted">{{ PERIOD_LABELS[s.period] }}</span>
+      <span class="max-w-28 truncate ps-3 text-[12px] text-text-muted">{{ PERIOD_LABELS[s.period] }}</span>
     </DropdownMenuSubTrigger>
     <DropdownMenuSubContent :side-offset="4" :class="`${MENU_CONTENT} max-w-52`">
       <DropdownMenuItem
@@ -356,7 +356,7 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
         @select="set({ period: p })"
       >
         <span class="flex-1">{{ PERIOD_LABELS[p] }}</span>
-        <component :is="icons.check" v-if="s.period === p" class="ml-3" />
+        <component :is="icons.check" v-if="s.period === p" class="ms-3" />
       </DropdownMenuItem>
     </DropdownMenuSubContent>
   </DropdownMenuSub>
@@ -369,6 +369,6 @@ const SUB_KINDS: { kind: SubKind; icon: typeof Bot; tip: string }[] = [
   <DropdownMenuItem :class="ITEM" title="Opens AgentHydra beside the sidebar" @select="openHydra()">
     <Settings2 />
     <span class="flex-1">Session settings</span>
-    <span class="pl-3 text-[12px] text-text-muted">AgentHydra</span>
+    <span class="ps-3 text-[12px] text-text-muted">AgentHydra</span>
   </DropdownMenuItem>
 </template>

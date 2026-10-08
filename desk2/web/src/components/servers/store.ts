@@ -22,8 +22,11 @@ export interface ServerFocus {
 }
 
 const ON_KEY = 'hydra-desk.devservers.on'
+/** 2 s while a server is starting or stopping, else 5 s; the found list at most every 15 s. */
 const POLL_MS = 2000
+const IDLE_POLL_MS = 5000
 const STARTING_POLL_MS = 1000
+const FOUND_EVERY_MS = 15_000
 /**
  * Missed list reads in a row before a shown list gives way to "did not answer": on a PC at full CPU one read in 60 still
  * passed the 2 s limit (2026-10-07), and the next one answered.
@@ -102,8 +105,11 @@ function createDevServers() {
       // A list already on screen stays through a missed read or two; with none yet, the reason shows at once.
       if (!projects.value || ++misses >= MISSES_SHOWN) projectsError.value = err instanceof Error ? err.message : String(err)
     }
-    // The found list rides the same poll; a failed read keeps the last one.
+    // The found list rides the same poll, read at most every 15 s unless a view or an action asked; a failed read keeps the last one.
+    if (!foundNow && Date.now() - foundAt < FOUND_EVERY_MS) return
+    foundNow = false
     found.value = await foundList({ start: false }).catch(() => found.value)
+    foundAt = Date.now()
   }
 
   // A refresh asked for while one runs runs once more after it, so an action's refresh never reads what was already in flight.
@@ -119,11 +125,17 @@ function createDevServers() {
       answered.value++
     } while (queued)
   }
-  function refresh(): Promise<void> {
+  let foundNow = true
+  let foundAt = 0
+  function request(foundToo: boolean): Promise<void> {
+    if (foundToo) foundNow = true
     if (running) queued = true
     else running = drain().finally(() => (running = null))
     return running
   }
+  const refresh = (): Promise<void> => request(true)
+  const moving = (): boolean => (projects.value ?? []).some((p) => p.processes.some((x) => x.status === 'starting' || x.status === 'stopping'))
+  const pollMs = (): number => (status.value?.state === 'starting' ? STARTING_POLL_MS : moving() ? POLL_MS : IDLE_POLL_MS)
 
   // ---- polling: only while a view is on screen, and the window is ----
   let viewers = 0
@@ -136,9 +148,9 @@ function createDevServers() {
   function schedule(g = gen) {
     if (!viewers || document.hidden || g !== gen) return
     timer = setTimeout(async () => {
-      await refresh()
+      await request(false)
       schedule(g)
-    }, status.value?.state === 'starting' ? STARTING_POLL_MS : POLL_MS)
+    }, pollMs())
   }
   function stopTimer() {
     gen++

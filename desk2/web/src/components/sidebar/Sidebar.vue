@@ -173,7 +173,6 @@ function openCloud(r: CloudSession) {
   else src.select({ kind: 'external', id: r.id })
 }
 function onCloudSearchKey(e: KeyboardEvent) {
-  if (e.isComposing) return
   if (e.key === 'Enter') {
     const first = cloud.groups.value[0]?.rows[0]
     if (first) openCloud(first)
@@ -506,7 +505,6 @@ watch(query, (q) => {
 })
 onBeforeUnmount(runner.stop)
 function onSearchKey(e: KeyboardEvent) {
-  if (e.isComposing) return
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
     setCursor(moveCursor(cursorAt.value, e.key === 'ArrowDown' ? 1 : -1, targets.value.length))
@@ -672,7 +670,7 @@ defineExpose({
 })
 
 const NAV_ROW =
-  'group/nav flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-left text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none'
+  'group/nav flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-start text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none'
 const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text'
 </script>
 
@@ -680,30 +678,30 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
   <aside
     ref="root"
     aria-label="Sidebar"
-    class="relative flex h-full shrink-0 flex-col border-r border-border bg-bg-sidebar pt-9"
+    class="relative flex h-full shrink-0 flex-col border-e border-border bg-bg-sidebar pt-9"
     :style="{ width: `${width}px` }"
   >
     <div class="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-1 pt-2">
-      <nav class="flex shrink-0 flex-col gap-[0.5px] pr-[2px]">
+      <nav class="flex shrink-0 flex-col gap-[0.5px] pe-0.5">
         <button
           type="button"
           :class="[NAV_ROW, selected.kind === 'new' ? 'bg-fill-selected text-text' : 'text-text hover:bg-fill-hover']"
           @click="src.select({ kind: 'new' })"
         >
           <span class="flex size-6 shrink-0 items-center justify-center text-text-2">
-            <span class="flex size-[18px] items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-2)_15%,transparent)]">
+            <span class="flex size-4.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-2)_15%,transparent)]">
               <component :is="shellGlyphs.newPlus" class="size-4" />
             </span>
           </span>
           <span class="min-w-0 flex-1 truncate">New</span>
-          <kbd class="pr-1.5 font-sans text-[12px] text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
+          <kbd class="pe-1.5 font-sans text-[12px] text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
         </button>
 
       </nav>
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
-      <div class="min-h-0 flex-1 overflow-y-auto pr-[2px] pt-1 [scrollbar-width:none]">
-        <div v-if="searchOpen && !hydraModel && !devServers.on.value" class="mb-1 flex h-[26px] items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 px-0.5">
+      <div class="min-h-0 flex-1 overflow-y-auto pe-0.5 pt-1 [scrollbar-width:none]">
+        <div v-if="searchOpen && !hydraModel && !devServers.on.value" class="mb-1 flex h-6.5 items-center gap-1 rounded-(--radius-6) bg-fill-5 px-0.5">
           <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="icons.search" class="size-4" /></span>
           <input
             ref="searchInput"
@@ -714,7 +712,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             class="h-full min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-text-muted"
             @keydown="cloud.on.value ? onCloudSearchKey($event) : onSearchKey($event)"
           />
-          <button type="button" aria-label="Close search" class="flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-muted hover:bg-fill-hover hover:text-text" @click="closeSearch">
+          <button type="button" aria-label="Close search" class="flex size-5 items-center justify-center rounded-(--radius-5) text-text-muted hover:bg-fill-hover hover:text-text" @click="closeSearch">
             <component :is="icons.dismiss" class="size-3.5" />
           </button>
         </div>
@@ -740,7 +738,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <ContextMenu>
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
-            class="group/head flex h-[34px] items-center gap-0 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted"
+            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
             :class="[dropOn === groupOrderKey(group) && dragging !== dropOn && 'shadow-[inset_0_2px_0_var(--accent)]', group.hidden && 'opacity-60']"
             :draggable="draggable(group) && !filtering"
             @dragstart="onGroupDragStart($event, group)"
@@ -752,18 +750,18 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <Tip :label="group.cwd ?? ''" align="start">
               <button
                 type="button"
-                class="flex min-w-0 items-center gap-0.5 rounded-[4px] hover:text-text-2"
+                class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2"
                 :aria-expanded="!collapsed.has(group.key)"
                 @click="toggleGroup(group.key)"
               >
                 <span class="truncate">{{ group.label }}</span>
-                <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ml-0.5 size-3 shrink-0" />
+                <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
                 <component
                   :is="shellGlyphs.groupChevron"
-                  class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)] group-hover/head:opacity-100"
+                  class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
                   :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
                 />
-                <RunningBadge v-if="foldedRunning.get(group.key)" class="ml-1" :tasks="foldedRunning.get(group.key)!.tasks" :jobs="foldedRunning.get(group.key)!.jobs" :chats="foldedRunning.get(group.key)!.chats" />
+                <RunningBadge v-if="foldedRunning.get(group.key)" class="ms-1" :tasks="foldedRunning.get(group.key)!.tasks" :jobs="foldedRunning.get(group.key)!.jobs" :chats="foldedRunning.get(group.key)!.chats" />
               </button>
             </Tip>
             <span class="flex-1" />
@@ -788,7 +786,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               v-for="entry in group.entries"
               :key="`${entry.kind}:${entry.id}`"
               :data-search-cursor="cursorKey === `${entry.kind}:${entry.id}` || undefined"
-              :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-[var(--radius-6)] bg-fill-hover' : '', rowDrag.line(entry.id)]"
+              :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-(--radius-6) bg-fill-hover' : '', rowDrag.line(entry.id)]"
               :draggable="rowsDraggable(group)"
               @dragstart="rowsDraggable(group) && rowDrag.start($event, group.key, entry.id)"
               @dragover="rowsDraggable(group) && rowDrag.onOver($event, group.key, entry.id)"
@@ -828,23 +826,23 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <div v-if="groupList.length === 0" class="flex items-center gap-1 px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
           <span class="flex-1">{{ emptyText }}</span>
           <template v-if="filtering && !searchOpen">
-            <button type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
-            <button v-if="activeOnly" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
+            <button type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
+            <button v-if="activeOnly" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
           </template>
-          <button v-if="groups.hiddenOut" type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
+          <button v-if="groups.hiddenOut" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
           <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
         </div>
 
         <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
-          <button type="button" aria-label="Dismiss" class="shrink-0 rounded-[4px] px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
+          <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
             <component :is="icons.dismiss" class="size-3" />
           </button>
         </p>
 
         <!-- AgentHydra's transcript search: sessions the query was said in, minus the rows above -->
         <section v-if="searchOpen && search.phase !== 'idle'" aria-label="Everywhere">
-          <header class="flex h-[34px] items-center gap-1.5 pb-1 pl-1.5 pr-px pt-3 text-[12px] leading-4 text-text-muted">
+          <header class="flex h-8.5 items-center gap-1.5 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
             <span>Everywhere</span>
             <!-- A gray pulsing dot, not a spinner: nothing in the sidebar spins (owner, 2026-10-05). -->
             <span
@@ -875,7 +873,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </template>
         <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
-          <button type="button" aria-label="Dismiss" class="shrink-0 rounded-[4px] px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
+          <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
             <component :is="icons.dismiss" class="size-3" />
           </button>
         </p>
@@ -883,17 +881,17 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     </div>
 
     <!-- Footer: the profile pill opens the account popup above it; the gear opens Settings itself -->
-    <footer class="flex h-11 shrink-0 items-center justify-between border-t border-border pb-px pl-2 pr-[10px]">
+    <footer class="flex h-11 shrink-0 items-center justify-between border-t border-border pb-px ps-2 pe-2.5">
       <AccountsPopover v-model:open="accountsOpen" @settings="src.openSettings()">
         <button
           type="button"
           :aria-label="`Account for new chats: ${face.name}`"
-          class="flex h-7 min-w-0 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] pl-1 pr-1.5 transition-colors duration-[60ms] hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+          class="flex h-7 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-6) ps-1 pe-1.5 transition-colors duration-60 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         >
-          <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--fill-secondary)] text-[10px] font-semibold leading-none text-text">{{ face.initial }}</span>
+          <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-(--fill-secondary) text-[10px] font-semibold leading-none text-text">{{ face.initial }}</span>
           <span class="truncate text-[13px] leading-[19.5px] text-text-2">{{ face.name }}</span>
           <span v-if="face.plan" class="shrink-0 text-[12px] leading-4 text-text-muted">· {{ face.plan }}</span>
-          <component :is="icons.more" class="ml-2.5 size-3 shrink-0 text-text-muted" />
+          <component :is="icons.more" class="ms-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
       <Tip :label="ahUpdateDot ? 'Settings: an AgentHydra update is waiting' : 'Settings'" side="top">
@@ -901,7 +899,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           type="button"
           aria-label="Settings"
           :aria-description="ahUpdateDot ? 'An AgentHydra update is waiting' : undefined"
-          class="relative flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text"
+          class="relative flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text"
           @click="src.openSettings()"
         >
           <component :is="sidebarIcons.footer" class="size-4" />
@@ -918,36 +916,36 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
       :aria-valuenow="width"
       :aria-valuemin="MIN_WIDTH"
       :aria-valuemax="MAX_WIDTH"
-      class="absolute -right-1.5 top-0 z-[22] h-full w-3 cursor-col-resize touch-none"
+      class="absolute -right-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none"
       @pointerdown.prevent="onResizeDown"
       @keydown="onResizeKey"
     />
 
     <Dialog :open="deleting !== null" @update:open="(o: boolean) => !o && (deleting = null)">
-      <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
+      <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Delete session?</DialogTitle>
-        <DialogDescription class="text-[13px] leading-[19px] text-text-2">
+        <DialogDescription class="text-[13px] leading-4.75 text-text-2">
           “{{ deleting?.title }}” will be removed from Hydra Desk. This cannot be undone.
         </DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="deleting = null">Cancel</button>
-          <button type="button" class="h-7 rounded-[var(--radius-6)] bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmDelete">Delete</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="deleting = null">Cancel</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmDelete">Delete</button>
         </div>
       </DialogContent>
     </Dialog>
 
     <Dialog :open="naming !== null" @update:open="(o: boolean) => !o && (naming = null)">
-      <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
+      <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">New group</DialogTitle>
         <DialogDescription class="sr-only">Name the group to move this session to.</DialogDescription>
         <form class="flex flex-col gap-3" @submit.prevent="confirmGroup">
           <Input v-model="groupDraft" aria-label="Group name" placeholder="Group name" :maxlength="GROUP_MAX" class="h-8 text-[13px]" />
           <div class="flex justify-end gap-2">
-            <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="naming = null">Cancel</button>
+            <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="naming = null">Cancel</button>
             <button
               type="submit"
               :disabled="!groupName"
-              class="h-7 rounded-[var(--radius-6)] bg-accent px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+              class="h-7 rounded-(--radius-6) bg-accent px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
               Move
             </button>

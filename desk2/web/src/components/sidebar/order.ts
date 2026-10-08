@@ -53,7 +53,7 @@ function createOrder() {
     }
   }
   // A window closed inside the wait still keeps its order.
-  if (typeof window !== 'undefined') window.addEventListener('pagehide', () => timer && (clearTimeout(timer), persist()))
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', () => timer && (clearTimeout(timer), persist()), { once: true })
   return { order, save }
 }
 

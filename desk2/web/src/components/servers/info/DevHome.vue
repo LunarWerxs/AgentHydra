@@ -41,9 +41,9 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
     <div v-if="!projects" role="status" class="flex flex-col gap-3" aria-busy="true">
       <span class="sr-only">Reading the projects…</span>
       <div class="grid grid-cols-2 gap-2.5 @2xl:grid-cols-4">
-        <div v-for="i in 4" :key="i" class="h-[84px] animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+        <div v-for="i in 4" :key="i" class="h-21 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
       </div>
-      <div class="h-[160px] animate-pulse rounded-[var(--radius-10)] bg-fill-5 motion-reduce:animate-none" />
+      <div class="h-40 animate-pulse rounded-(--radius-10) bg-fill-5 motion-reduce:animate-none" />
     </div>
 
     <template v-else-if="!projects.length">
@@ -68,7 +68,7 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
           <h3 class="min-w-0">
             <button
               type="button"
-              class="max-w-full cursor-default truncate rounded-[var(--radius-5)] px-1 text-[14px] font-medium leading-5 text-text transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+              class="max-w-full cursor-default truncate rounded-(--radius-5) px-1 text-[14px] font-medium leading-5 text-text transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               :aria-label="`${g.project.name} details`"
               @click="servers.select({ kind: 'project', id: g.project.id })"
             >{{ g.project.name }}</button>

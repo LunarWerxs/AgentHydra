@@ -161,7 +161,6 @@ export interface KeyLike {
   ctrlKey?: boolean
   metaKey?: boolean
   altKey?: boolean
-  isComposing?: boolean
 }
 
 export type ComposerKeyAction = 'send' | 'queue' | 'interrupt' | 'recall' | 'attach' | 'accept-suggestion' | 'swallow' | 'none'
@@ -178,7 +177,6 @@ export const STOP_GUARD_MS = 500
  * no new line either): a second or repeating Enter after a send must never stop the turn it just started.
  */
 export function composerKeyAction(e: KeyLike, s: { empty: boolean; busy: boolean; suggestion?: boolean; stop?: boolean }): ComposerKeyAction {
-  if (e.isComposing) return 'none'
   if (e.key === 'Tab' && s.empty && s.suggestion && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) return 'accept-suggestion'
   if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
     if (s.stop) return 'swallow'
@@ -241,7 +239,7 @@ export function folderName(cwd: string): string {
 }
 
 export function formatCount(n: number): string {
-  return n.toLocaleString('en-US')
+  return n.toLocaleString()
 }
 
 /**

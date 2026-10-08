@@ -9,12 +9,17 @@ import { attachHydraFrame, hydraReady, setAhUpdateWaiting, setHydraSidebar, setH
 // AgentHydra. The copy has no Sessions tab: the sidebar's cloud list is the session list, and a chat the
 // copy asks to open (ah:open-session) or its session tiles (ah:show-sessions) come back to Desk. A tab
 // with a sidebar of its own hands it over (ah:sidebar) and Desk's sidebar draws it (shared/hydra-embed.ts).
-// The frame is created in the background shortly after Desk's first paint (browser idle), so opening the
+// The frame is created in the background once Desk's sidebar has loaded (browser idle), so opening the
 // pane shows AgentHydra at once, and then stays, so going back and forth keeps it where it was. There is no
 // header strip: the copy's own top bar fills the pane, and Escape (or the chrome bar's AgentHydra button)
 // closes it. Out of view the copy is told so (desk:visible) and its polls rest until it comes back.
 // The copy gets the room the chrome bar covers on the left as --desk-pad-left.
-const props = defineProps<{ open: boolean; /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number }>()
+const props = defineProps<{
+  open: boolean
+  /** Room the chrome bar covers at the pane's top left when the sidebar is hidden. */ padLeft: number
+  /** Desk's sidebar has its first lists: the frame may preload when the browser is idle. */ preload?: boolean
+  /** The AgentHydra button was pointed at or focused: start the frame now. */ intent?: boolean
+}>()
 const emit = defineEmits<{ close: []; 'open-session': [id: string]; 'show-sessions': []; 'open-settings': [section?: AhSettingsPage] }>()
 const settingsPage = (v: unknown) => (AH_SETTINGS_PAGES as readonly unknown[]).includes(v) ? (v as AhSettingsPage) : undefined
 
@@ -82,29 +87,50 @@ function onKey(e: KeyboardEvent) {
 }
 // The copy asks to close when Escape is pressed inside its own frame (keys do not cross frames).
 const onCloseAsk = () => props.open && emit('close')
+// Preload: once Desk's sidebar has its first lists, start the frame when the browser is next idle (no forced
+// timeout, so it never competes with the sidebar's reads); intent (the button pointed at or focused) starts it at once.
 let idleHandle: number | undefined
+const cancelIdle = () => {
+  if (idleHandle === undefined) return
+  if ('cancelIdleCallback' in window) window.cancelIdleCallback(idleHandle)
+  else clearTimeout(idleHandle)
+}
+const start = () => {
+  cancelIdle()
+  started.value = true
+}
+watch(
+  () => props.preload,
+  (ready) => {
+    if (!ready || started.value || idleHandle !== undefined) return
+    if ('requestIdleCallback' in window) idleHandle = window.requestIdleCallback(start)
+    else idleHandle = setTimeout(start, 0) as unknown as number
+  },
+  { immediate: true }
+)
+watch(
+  () => props.intent,
+  (on) => on && start(),
+  { immediate: true }
+)
 onMounted(() => {
   void readStatus()
   window.addEventListener('message', onMessage)
   window.addEventListener('keydown', onKey)
   window.addEventListener('hydra-desk:close-hydra', onCloseAsk)
-  // Preload: start the frame once Desk has painted and the browser is idle.
-  const start = () => {
-    started.value = true
-  }
-  if ('requestIdleCallback' in window) idleHandle = window.requestIdleCallback(start, { timeout: 4000 })
-  else idleHandle = setTimeout(start, 3000) as unknown as number
 })
 onBeforeUnmount(() => {
-  if (idleHandle !== undefined && 'cancelIdleCallback' in window) window.cancelIdleCallback(idleHandle)
+  cancelIdle()
   window.removeEventListener('message', onMessage)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener('hydra-desk:close-hydra', onCloseAsk)
   attachHydraFrame(null)
 })
 
+const checking = ref(false)
 function reload() {
-  void readStatus()
+  checking.value = true
+  void readStatus().finally(() => (checking.value = false))
   frameKey.value++
 }
 
@@ -124,7 +150,7 @@ function reload() {
       />
       <div v-else-if="started" class="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-text-2">
         <p>AgentHydra is not answering{{ daemon ? ` at ${daemon}` : '' }}.</p>
-        <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="reload">
+        <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover) disabled:opacity-60" :disabled="checking" :aria-busy="checking" @click="reload">
           Try again
         </button>
       </div>

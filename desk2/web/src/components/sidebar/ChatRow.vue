@@ -88,7 +88,7 @@ defineExpose({ startRename })
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <span class="flex size-[14px] items-center justify-center">
+            <span class="flex size-3.5 items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>
@@ -98,7 +98,7 @@ defineExpose({ startRename })
             ref="input"
             v-model="draft"
             aria-label="Rename session"
-            class="h-5 min-w-0 flex-1 rounded-[4px] bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
+            class="h-5 min-w-0 flex-1 rounded-sm bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
             @click.stop
             @keydown.enter.stop="commitRename"
             @keydown.escape.stop="renaming = false"
@@ -108,16 +108,16 @@ defineExpose({ startRename })
 
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset, CliMayte count -->
           <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (account !== null || elapsed || aged || resets || chat.climayteActive > 0 || $slots.default)" class="ml-2 flex shrink-0 items-center gap-1 pr-1 text-[12px] leading-4 group-hover/row:pr-6" :class="speaker ? [menuOpen ? 'pr-11' : 'pr-6', 'group-hover/row:pr-11'] : { 'pr-6': menuOpen }">
-            <span v-if="account !== null" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
+          <span v-if="!renaming && (account !== null || elapsed || aged || resets || chat.climayteActive > 0 || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-[12px] leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+            <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
             <RowAge v-else-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="chat.updatedAt" />
-            <span v-if="resets" class="tnum text-[var(--status-limited-text)]">resets {{ resets }}</span>
+            <span v-if="resets" class="tnum text-(--status-limited-text)">resets {{ resets }}</span>
             <span
               v-if="chat.climayteActive > 0"
-              class="tnum flex h-4 min-w-4 items-center justify-center rounded-[4px] bg-[var(--fill-secondary)] px-1 text-[11px] text-text-2"
+              class="tnum flex h-4 min-w-4 items-center justify-center rounded-sm bg-(--fill-secondary) px-1 text-[11px] text-text-2"
               :aria-label="`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`"
             >{{ chat.climayteActive }}</span>
           </span>
@@ -129,7 +129,7 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
@@ -146,7 +146,7 @@ defineExpose({ startRename })
               <button
                 type="button"
                 :aria-label="`More options for ${chat.title}`"
-                class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+                class="absolute right-0.75 top-0.75 flex size-5 items-center justify-center rounded-(--radius-5) text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
                 @click.stop
               >
                 <component :is="shellGlyphs.rowMore" class="size-4" />
@@ -169,7 +169,7 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
-          class="group/row relative flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
@@ -189,7 +189,7 @@ defineExpose({ startRename })
             aria-expanded="false"
             data-state="closed"
             :aria-label="`More options for ${chat.title}`"
-            class="absolute right-[3px] top-[3px] flex size-5 items-center justify-center rounded-[var(--radius-5)] text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
+            class="absolute right-0.75 top-0.75 flex size-5 items-center justify-center rounded-(--radius-5) text-text-2 opacity-0 hover:bg-fill-hover hover:text-text focus-visible:opacity-100 group-hover/row:opacity-100 data-[state=open]:opacity-100"
             @click.stop
           >
             <component :is="shellGlyphs.rowMore" class="size-4" />
@@ -198,22 +198,3 @@ defineExpose({ startRename })
     </span>
   </Tip>
 </template>
-
-<style scoped>
-/* Fade mask behind the row's control: 32px (the title ends a little before the counter), 44px while the control shows. */
-.row-title {
-  mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent);
-}
-.group\/row:hover .row-title,
-.row-title-open {
-  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
-}
-/* The speaker (AudioButton.vue) sits at the right end, and left of the three dots while those show: the title fades earlier. */
-.row-title-audio {
-  mask-image: linear-gradient(to right, #000 calc(100% - 44px), transparent calc(100% - 20px));
-}
-.group\/row:hover .row-title-audio,
-.row-title-open.row-title-audio {
-  mask-image: linear-gradient(to right, #000 calc(100% - 64px), transparent calc(100% - 40px));
-}
-</style>

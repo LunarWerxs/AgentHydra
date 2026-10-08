@@ -189,14 +189,18 @@ async function clip(text: string, done: string) {
 function copyId() {
   void clip(props.sessionId, 'Copied the session id')
 }
+const copyingLocation = ref(false)
 async function copyLocation(pathOnly = false) {
   const r = row.value
-  if (!r) return
+  if (!r || copyingLocation.value) return
+  copyingLocation.value = true
   try {
     const { path } = await ah.fileLocation(r)
     void clip(pathOnly ? path : fileLocationText(path, title.value), pathOnly ? 'Copied the session file location' : 'Copied the prompt, the session name and its file location')
   } catch {
     say("Couldn't copy the session file location", true)
+  } finally {
+    copyingLocation.value = false
   }
 }
 async function openFile() {
@@ -397,12 +401,12 @@ const TONE = {
        header's height, so the Find bar takes its place; the header fades out and leaves the tab order. -->
   <div class="pointer-events-none absolute inset-x-0 top-0 z-10">
     <div
-      class="transition-transform duration-[220ms] ease-[var(--ease-snap)] motion-reduce:transition-none"
+      class="transition-transform duration-220 ease-(--ease-snap) motion-reduce:transition-none"
       :style="{ transform: headerOpen ? 'translateY(0)' : `translateY(${-headH}px)` }"
     >
       <section
         ref="headEl"
-        class="pointer-events-auto flex min-h-9 items-center gap-3 border-b border-border bg-bg-page py-1 pl-3 pr-2 transition-[opacity,visibility] duration-[220ms] motion-reduce:transition-none"
+        class="pointer-events-auto flex min-h-9 items-center gap-3 border-b border-border bg-bg-page py-1 ps-3 pe-2 transition-[opacity,visibility] duration-220 motion-reduce:transition-none"
         :class="headerOpen ? 'visible opacity-100' : 'invisible opacity-0'"
         :inert="!headerOpen || undefined"
         aria-label="Session details"
@@ -411,8 +415,8 @@ const TONE = {
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <span
             v-if="row"
-            class="flex h-[22px] shrink-0 items-center rounded-[var(--radius-6)] border px-1.5 text-[12px] font-medium"
-            :class="SOURCE_TONE[row.source] ?? 'border-border bg-[var(--fill-secondary)] text-text-2'"
+            class="flex h-5.5 shrink-0 items-center rounded-(--radius-6) border px-1.5 text-[12px] font-medium"
+            :class="SOURCE_TONE[row.source] ?? 'border-border bg-(--fill-secondary) text-text-2'"
           >{{ sourceName(row) }}</span>
           <Tip label="Copy session id">
             <button type="button" :class="[CHIP, TONE.id]" class="font-mono" :aria-label="`Session ${sessionId}, copy id`" @click="copyId">
@@ -481,7 +485,7 @@ const TONE = {
             </button>
           </Tip>
           <Tip v-if="row && hasFile(row.source)" label="Copy session file location">
-            <button type="button" :class="BTN" aria-label="Copy session file location" @click="copyLocation()">
+            <button type="button" :class="BTN" aria-label="Copy session file location" :disabled="copyingLocation" :aria-busy="copyingLocation" @click="copyLocation()">
               <FileText class="size-4" />
             </button>
           </Tip>
@@ -510,7 +514,7 @@ const TONE = {
                   <DropdownMenuItem v-if="cwd" :class="MENU_ITEM" @select="openFolder">Open the folder</DropdownMenuItem>
                   <DropdownMenuSeparator v-if="cwd" :class="MENU_SEPARATOR" />
 
-                  <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[12px] font-medium text-text-muted">Display</DropdownMenuLabel>
+                  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[12px] font-medium text-text-muted">Display</DropdownMenuLabel>
                   <DropdownMenuItem role="menuitemcheckbox" :aria-checked="displayPrefs.humanOnly" :class="MENU_ITEM" @select="setDisplay('humanOnly')">
                     <span class="flex-1">Only what I typed</span>
                     <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="displayPrefs.humanOnly" /></span>
@@ -530,7 +534,7 @@ const TONE = {
 
                   <template v-if="row && hasFile(row.source)">
                     <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-                    <DropdownMenuLabel class="flex h-[23px] items-center px-2 py-0 text-[12px] font-medium text-text-muted">Session file</DropdownMenuLabel>
+                    <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[12px] font-medium text-text-muted">Session file</DropdownMenuLabel>
                     <DropdownMenuItem v-if="fileIsText(row.source)" :class="MENU_ITEM" @select="openFile">Open session file</DropdownMenuItem>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger :class="MENU_ITEM">Save copy of session file</DropdownMenuSubTrigger>
@@ -593,7 +597,7 @@ const TONE = {
         </div>
       </section>
 
-      <div v-if="findOpen" ref="findEl" class="pointer-events-auto border-b border-border bg-bg-page py-1 pl-3 pr-2" role="search">
+      <div v-if="findOpen" ref="findEl" class="pointer-events-auto border-b border-border bg-bg-page py-1 ps-3 pe-2" role="search">
         <div class="flex w-full items-center gap-1 text-[12px] leading-4">
           <Search class="size-3.5 shrink-0 text-text-muted" />
           <input
@@ -622,7 +626,7 @@ const TONE = {
       <p
         v-if="note"
         role="status"
-        class="pointer-events-auto absolute right-3 max-w-[70%] truncate rounded-[var(--radius-10)] bg-bg-popover px-2.5 py-1 text-[12px] leading-4 shadow-(--shadow-menu-ringed)"
+        class="pointer-events-auto absolute right-3 max-w-[70%] truncate rounded-(--radius-10) bg-bg-popover px-2.5 py-1 text-[12px] leading-4 shadow-(--shadow-menu-ringed)"
         :class="note.bad ? 'text-danger-text' : 'text-text-2'"
         :style="{ top: `${inset + 6}px` }"
       >
@@ -631,14 +635,14 @@ const TONE = {
     </Transition>
 
     <Dialog :open="secretsOpen" @update:open="(o: boolean) => (secretsOpen = o)">
-      <DialogContent class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[480px]">
+      <DialogContent class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-120">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Credentials found in this transcript</DialogTitle>
         <DialogDescription class="text-[12px] leading-4 text-text-muted">
           Shown redacted, and never revealed here. Only unmistakable formats are matched, so this is a prompt to go and rotate something, not a clean bill of health.
         </DialogDescription>
         <ul class="flex max-h-[50vh] flex-col gap-1 overflow-y-auto text-[12px] leading-4">
           <li v-for="(f, i) in secrets?.findings ?? []" :key="i" class="flex items-center gap-2">
-            <span class="shrink-0 rounded-[var(--radius-6)] border border-border px-1.5 text-text-2">{{ f.kind }}</span>
+            <span class="shrink-0 rounded-(--radius-6) border border-border px-1.5 text-text-2">{{ f.kind }}</span>
             <span class="min-w-0 flex-1 truncate font-mono text-text">{{ f.redacted }}</span>
             <span class="shrink-0 tnum text-text-muted">turn {{ f.turn + 1 }}</span>
           </li>

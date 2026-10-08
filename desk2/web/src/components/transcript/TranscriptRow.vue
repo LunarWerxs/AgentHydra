@@ -124,11 +124,11 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
     <CircleAlert v-if="item.level === 'error'" class="mt-0.5 size-4 shrink-0" />
     <TriangleAlert v-else-if="item.level === 'warn'" class="mt-0.5 size-4 shrink-0" />
     <Info v-else class="mt-0.5 size-4 shrink-0" />
-    <span class="whitespace-pre-wrap break-words">{{ item.text }}</span>
+    <span class="whitespace-pre-wrap wrap-break-word">{{ item.text }}</span>
     <button
       v-if="item.retry && !ctx.readOnly.value"
       type="button"
-      class="ml-1 shrink-0 rounded px-1.5 text-text underline hover:bg-fill-hover disabled:opacity-50"
+      class="ms-1 shrink-0 rounded px-1.5 text-text underline hover:bg-fill-hover disabled:opacity-50"
       :disabled="retrying"
       @click="retryDownload"
     >

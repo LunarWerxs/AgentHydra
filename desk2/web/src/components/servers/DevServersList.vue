@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } f
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { HEADER_BTN, LIST_HEADER, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { ignoreFolder, loadProject, localhostServers, scanProjects, startAllServers, stopAllServers } from './api'
-import { actionDisabled, allKey, companyGroups, filterLocal, foundTree, groupActions, isUp, listView, matchesFilter, OUTSIDE_TIP, otherGroups, otherLabel, outsideNote, serverActions, serverPort, shownServers, sortServers, startBlock, statusDot, statusWord, type ServerAction } from './logic'
+import { actionDisabled, allKey, companyGroups, filterLocal, foundTree, groupActions, isUp, listView, matchesFilter, OUTSIDE_TIP, otherGroups, otherLabel, outsideNote, serverActions, serverPort, shownServers, sortServers, startBlock, statusDot, statusWord, type FoundCompany, type ServerAction } from './logic'
 import { sameSelection, type DevSelection } from './info/selection'
 import { useOpenGroups } from './open-groups'
 import { useDevServers } from './store'
@@ -121,6 +121,20 @@ type FoundLine =
   | { kind: 'item'; key: string; item: DevWebFoundRow; where: string | null; depth: 1 | 2 }
 
 // A closed group here lists nothing but the way down to the selected folder, so a selection never leaves the list.
+/** One found company's project and item lines, once the company itself is open or holds the selection. */
+function foundProjectLines(out: FoundLine[], c: FoundCompany<DevWebFoundRow>, cOpen: boolean, sel: string | null) {
+  const several = c.projects.length > 1
+  for (const pr of c.projects) {
+    const pk = `fp:${pr.dir.toLowerCase()}`
+    const pOpen = cOpen && (!several || isOpen(pk))
+    if (!pOpen && !(!!sel && pr.items.some((i) => i.path === sel))) continue
+    if (several) out.push({ kind: 'project', key: pk, dir: pr.dir, name: pr.name, count: pr.items.length })
+    for (const i of pr.items) {
+      if (pOpen || i.path === sel) out.push({ kind: 'item', key: i.path, item: i, where: pr.where.get(i.path) ?? null, depth: several ? 2 : 1 })
+    }
+  }
+}
+
 const foundLines = computed<FoundLine[]>(() => {
   const out: FoundLine[] = []
   const sel = selectedFound.value
@@ -132,17 +146,7 @@ const foundLines = computed<FoundLine[]>(() => {
     if (!open && !cSel) continue
     out.push({ kind: 'company', key: ck, company: c.company, count: c.count })
     const cOpen = open && isOpen(ck)
-    if (!cOpen && !cSel) continue
-    const several = c.projects.length > 1
-    for (const pr of c.projects) {
-      const pk = `fp:${pr.dir.toLowerCase()}`
-      const pOpen = cOpen && (!several || isOpen(pk))
-      if (!pOpen && !holds(pr)) continue
-      if (several) out.push({ kind: 'project', key: pk, dir: pr.dir, name: pr.name, count: pr.items.length })
-      for (const i of pr.items) {
-        if (pOpen || i.path === sel) out.push({ kind: 'item', key: i.path, item: i, where: pr.where.get(i.path) ?? null, depth: several ? 2 : 1 })
-      }
-    }
+    if (cOpen || cSel) foundProjectLines(out, c, cOpen, sel)
   }
   return out
 })
@@ -195,13 +199,13 @@ const ACTION = {
 const ROW_BTN =
   'flex size-5 shrink-0 items-center justify-center rounded-[var(--radius-5)] text-text-muted hover:bg-fill-hover hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40'
 const NOTE = 'px-1.5 pt-3 text-[12px] leading-4 text-text-muted'
-const LINK = 'ml-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover'
+const LINK = 'ms-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover'
 // A group inside a part: a row-high header, and its rows, each step in by 12px.
-const SUB_HEADER = 'group/head flex h-[26px] items-center gap-1 pr-1 text-[12px] leading-4 text-text-muted'
-const HEAD_INDENT = ['pl-1.5', 'pl-[18px]', 'pl-[30px]'] as const
-const ROW_INDENT = ['', 'pl-3', 'pl-6'] as const
+const SUB_HEADER = 'group/head flex h-[26px] items-center gap-1 pe-1 text-[12px] leading-4 text-text-muted'
+const HEAD_INDENT = ['ps-1.5', 'ps-[18px]', 'ps-[30px]'] as const
+const ROW_INDENT = ['', 'ps-3', 'ps-6'] as const
 const CHEVRON = 'flex size-4 shrink-0 items-center justify-center rounded-[4px] hover:text-text-2'
-const LABEL = 'min-w-0 truncate rounded-[4px] text-left hover:text-text-2'
+const LABEL = 'min-w-0 truncate rounded-[4px] text-start hover:text-text-2'
 
 const pick = (sel: DevSelection) => servers.select(sel)
 const on = (sel: DevSelection): boolean => sameSelection(selected.value, sel)
@@ -380,7 +384,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               <button type="button" :class="LABEL" :aria-expanded="isOpen(l.key)" @click="toggle(l.key)">{{ l.company.name }}</button>
             </Tip>
             <button type="button" :class="CHEVRON" :aria-expanded="isOpen(l.key)" :aria-label="`${isOpen(l.key) ? 'Collapse' : 'Expand'} ${l.company.name}`" @click="toggle(l.key)">
-              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen(l.key) ? 'rotate-90' : ''" />
+              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen(l.key) ? 'rotate-90' : ''" />
             </button>
             <span class="flex-1" />
             <span class="tnum" :title="`${l.up} of ${l.total} running`">{{ l.up }}/{{ l.total }}</span>
@@ -392,7 +396,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             </Tip>
             <Tip :label="isOpen(l.key) ? 'Collapse' : 'Expand'">
               <button type="button" :class="CHEVRON" :aria-expanded="isOpen(l.key)" :aria-label="`${isOpen(l.key) ? 'Collapse' : 'Expand'} ${l.g.project.name}`" @click="toggle(l.key)">
-                <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen(l.key) ? 'rotate-90' : ''" />
+                <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen(l.key) ? 'rotate-90' : ''" />
               </button>
             </Tip>
             <span class="flex-1" />
@@ -438,7 +442,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
                 <span v-if="outsideNote(l.p)" class="shrink-0 text-[11px] leading-4 text-text-muted" :title="OUTSIDE_TIP">{{ outsideNote(l.p) }}</span>
                 <!-- The port steps aside for the hover buttons: with a running server's three and the star, it pushed the star
                      to the middle of the row, where a click meant for the row starred the server. -->
-                <span v-if="l.p.port" class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(l.p) }}</span>
+                <span v-if="l.p.port" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(l.p) }}</span>
                 <span class="hidden shrink-0 items-center gap-0.5 group-hover/row:flex group-focus-within/row:flex" @click.stop>
                   <Tip v-if="processAddress(l.p)" label="Open in browser">
                     <button type="button" :class="ROW_BTN" :aria-label="`Open ${l.p.name} in browser`" @click="openBrowser(l.project, l.p)"><ExternalLink class="size-3.5" /></button>
@@ -461,7 +465,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             <button type="button" :class="LABEL" :aria-expanded="isOpen('o', true)" @click="toggle('o', true)">Other servers</button>
           </Tip>
           <button type="button" :class="CHEVRON" :aria-expanded="isOpen('o', true)" :aria-label="`${isOpen('o', true) ? 'Collapse' : 'Expand'} Other servers`" @click="toggle('o', true)">
-            <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen('o', true) ? 'rotate-90' : ''" />
+            <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen('o', true) ? 'rotate-90' : ''" />
           </button>
           <span class="flex-1" />
           <span class="tnum" :title="`${others.length} running`">{{ others.length }}</span>
@@ -472,7 +476,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               <button type="button" :class="LABEL" :aria-expanded="isOpen(l.key, true)" @click="toggle(l.key, true)">{{ l.company?.name ?? 'No project folder' }}</button>
             </Tip>
             <button type="button" :class="CHEVRON" :aria-expanded="isOpen(l.key, true)" :aria-label="`${isOpen(l.key, true) ? 'Collapse' : 'Expand'} ${l.company?.name ?? 'No project folder'}`" @click="toggle(l.key, true)">
-              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen(l.key, true) ? 'rotate-90' : ''" />
+              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen(l.key, true) ? 'rotate-90' : ''" />
             </button>
             <span class="flex-1" />
             <span class="tnum">{{ l.count }}</span>
@@ -490,7 +494,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               >
                 <span class="flex size-6 shrink-0 items-center justify-center"><span class="size-1.5 rounded-full" :class="DOT.run" aria-hidden="true" /></span>
                 <span class="min-w-0 flex-1 truncate">{{ l.label.name }}<span v-if="l.label.where" class="text-text-muted">&ensp;{{ l.label.where }}</span></span>
-                <span class="shrink-0 rounded-[4px] bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">:{{ l.o.port }}</span>
+                <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">:{{ l.o.port }}</span>
               </div>
             </Tip>
           </div>
@@ -503,12 +507,12 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             <button type="button" :class="LABEL" :aria-expanded="isOpen('f')" @click="toggle('f')">Found on this PC</button>
           </Tip>
           <button type="button" :class="CHEVRON" :aria-expanded="isOpen('f')" :aria-label="`${isOpen('f') ? 'Collapse' : 'Expand'} Found on this PC`" @click="toggle('f')">
-            <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen('f') ? 'rotate-90' : ''" />
+            <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen('f') ? 'rotate-90' : ''" />
           </button>
           <span v-if="scanning" role="status" class="truncate">Scanning…</span>
           <span class="flex-1" />
           <Tip v-if="items.length > 1" label="Add every found project">
-            <button type="button" class="rounded-[4px] px-1 text-text-2 hover:bg-fill-hover" :disabled="addingAll" @click="confirm = 'add'">Add all</button>
+            <button type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" :disabled="addingAll" @click="confirm = 'add'">Add all</button>
           </Tip>
           <span class="tnum">{{ items.length }}</span>
         </header>
@@ -518,7 +522,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               <button type="button" :class="LABEL" :aria-expanded="isOpen(l.key)" @click="toggle(l.key)">{{ l.kind === 'company' ? l.company.name : l.name }}</button>
             </Tip>
             <button type="button" :class="CHEVRON" :aria-expanded="isOpen(l.key)" :aria-label="`${isOpen(l.key) ? 'Collapse' : 'Expand'} ${l.kind === 'company' ? l.company.name : l.name}`" @click="toggle(l.key)">
-              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-[var(--dur-fast)]" :class="isOpen(l.key) ? 'rotate-90' : ''" />
+              <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen(l.key) ? 'rotate-90' : ''" />
             </button>
             <span class="flex-1" />
             <span class="tnum">{{ l.count }}</span>

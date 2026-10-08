@@ -3,7 +3,9 @@ import App from './App.vue'
 import './style.css'
 import './components/servers/browser-request'
 import { pauseMotionWhenAway } from './lib/pause-motion'
+import { installImeCompositionGuard } from './lib/ime-composition-guard'
 
+installImeCompositionGuard()
 pauseMotionWhenAway()
 
 if (window.location.hash.startsWith('#/parity/')) void import('./dev/parity/ParityPage.vue').then((m) => createApp(m.default).mount('#app'))

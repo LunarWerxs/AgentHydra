@@ -133,27 +133,27 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="flex h-full w-full min-w-0 flex-col bg-[var(--bg-page)] text-[13px] leading-[19.5px] text-[var(--text)]">
-    <div class="flex h-8 shrink-0 items-center gap-1 pl-3 pr-2">
+  <div class="flex size-full min-w-0 flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)">
+    <div class="flex h-8 shrink-0 items-center gap-1 ps-3 pe-2">
       <span class="font-medium">Changes</span>
       <span
         v-if="status?.isRepo && status.branch"
-        class="ml-1 flex h-5 min-w-0 items-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-[5px] text-[12px] leading-4 text-[var(--text-2)]"
+        class="ms-1 flex h-5 min-w-0 items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-(--text-2)"
         :title="status.branch"
       >
         <component :is="icons.branch" class="size-3 shrink-0" />
         <span class="truncate">{{ status.branch }}</span>
-        <span v-if="status.ahead" class="tnum shrink-0 text-[var(--text-muted)]">↑{{ status.ahead }}</span>
-        <span v-if="status.behind" class="tnum shrink-0 text-[var(--text-muted)]">↓{{ status.behind }}</span>
+        <span v-if="status.ahead" class="tnum shrink-0 text-(--text-muted)">↑{{ status.ahead }}</span>
+        <span v-if="status.behind" class="tnum shrink-0 text-(--text-muted)">↓{{ status.behind }}</span>
       </span>
       <span class="flex-1" />
-      <span v-if="status?.isRepo && files.length" class="tnum mr-1 flex shrink-0 gap-1 text-[12px] leading-4">
-        <span class="text-[var(--git-add)]">+{{ status.added }}</span>
-        <span class="text-[var(--git-del)]">-{{ status.removed }}</span>
+      <span v-if="status?.isRepo && files.length" class="tnum me-1 flex shrink-0 gap-1 text-[12px] leading-4">
+        <span class="text-(--git-add)">+{{ status.added }}</span>
+        <span class="text-(--git-del)">-{{ status.removed }}</span>
       </span>
       <button
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+        class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         title="Refresh"
         aria-label="Refresh"
         @click="refresh"
@@ -163,7 +163,7 @@ onMounted(refresh)
       <button
         v-if="closable"
         type="button"
-        class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
+        class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         title="Close"
         aria-label="Close changes"
         @click="emit('close')"
@@ -172,35 +172,35 @@ onMounted(refresh)
       </button>
     </div>
 
-    <div v-if="error" class="mx-2 mt-1 rounded-[var(--radius-10)] bg-[var(--danger-bg)] px-3 py-2 text-[13px] text-[var(--danger-text)]">
+    <div v-if="error" class="mx-2 mt-1 rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-[13px] text-(--danger-text)">
       {{ error }}
     </div>
 
-    <div v-else-if="!status" class="flex flex-1 items-center justify-center text-[var(--text-muted)]">Loading…</div>
+    <div v-else-if="!status" class="flex flex-1 items-center justify-center text-(--text-muted)">Loading…</div>
 
     <div v-else-if="!status.isRepo" class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <FolderX class="mb-1 size-6 text-[var(--text-muted)]" />
+      <FolderX class="mb-1 size-6 text-(--text-muted)" />
       <div class="font-medium">Not a git repository</div>
-      <div class="break-all text-[var(--text-muted)]">{{ cwd }}</div>
+      <div class="break-all text-(--text-muted)">{{ cwd }}</div>
     </div>
 
     <div v-else-if="files.length === 0" class="flex flex-1 flex-col items-center justify-center gap-1 px-6 text-center">
-      <CircleCheck class="mb-1 size-6 text-[var(--text-muted)]" />
+      <CircleCheck class="mb-1 size-6 text-(--text-muted)" />
       <div class="font-medium">No changes</div>
-      <div class="text-[var(--text-muted)]">The working tree matches HEAD.</div>
+      <div class="text-(--text-muted)">The working tree matches HEAD.</div>
     </div>
 
     <template v-else>
       <div class="shrink-0 overflow-y-auto px-2 pb-1" :class="selectedPath ? 'max-h-[40%]' : 'min-h-0 flex-1'">
-        <div class="flex h-[34px] items-end pb-1 pl-1.5 text-[12px] leading-4 text-[var(--text-muted)]">
+        <div class="flex h-8.5 items-end pb-1 ps-1.5 text-[12px] leading-4 text-(--text-muted)">
           {{ files.length === 1 ? '1 file changed' : `${files.length} files changed` }}
         </div>
         <button
           v-for="{ f, letter, word, name, dir } in fileRows"
           :key="f.path"
           type="button"
-          class="flex h-[26px] w-full items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-left transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none"
-          :class="{ 'bg-[var(--fill-selected)] hover:bg-[var(--fill-selected)]': f.path === selectedPath }"
+          class="flex h-6.5 w-full items-center gap-1 rounded-(--radius-6) px-0.5 text-start transition-colors duration-60 hover:bg-(--fill-hover) focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+          :class="{ 'bg-(--fill-selected) hover:bg-(--fill-selected)': f.path === selectedPath }"
           :aria-pressed="f.path === selectedPath"
           :title="`${word}: ${f.path}`"
           @click="open(f.path)"
@@ -211,25 +211,25 @@ onMounted(refresh)
           >{{ letter }}</span>
           <span class="min-w-0 flex-1 truncate">
             <span>{{ name }}</span>
-            <span v-if="dir" class="ml-1.5 text-[12px] text-[var(--text-muted)]">{{ dir }}</span>
+            <span v-if="dir" class="ms-1.5 text-[12px] text-(--text-muted)">{{ dir }}</span>
           </span>
-          <span class="tnum flex shrink-0 gap-1 pr-1.5 text-[12px] leading-4">
-            <span v-if="f.added" class="text-[var(--git-add)]">+{{ f.added }}</span>
-            <span v-if="f.removed" class="text-[var(--git-del)]">-{{ f.removed }}</span>
+          <span class="tnum flex shrink-0 gap-1 pe-1.5 text-[12px] leading-4">
+            <span v-if="f.added" class="text-(--git-add)">+{{ f.added }}</span>
+            <span v-if="f.removed" class="text-(--git-del)">-{{ f.removed }}</span>
           </span>
         </button>
       </div>
 
-      <div v-if="selectedPath" class="min-h-0 flex-1 overflow-auto border-t border-[var(--border)]">
-        <div class="sticky top-0 z-10 flex h-8 items-center gap-1.5 bg-[var(--bg-page)] pl-3 pr-2 shadow-[inset_0_-1px_0_var(--border)]">
-          <span class="min-w-0 flex-1 truncate text-[var(--text-2)]" :title="selectedPath">{{ selectedPath }}</span>
+      <div v-if="selectedPath" class="min-h-0 flex-1 overflow-auto border-t border-(--border)">
+        <div class="sticky top-0 z-10 flex h-8 items-center gap-1.5 bg-(--bg-page) ps-3 pe-2 shadow-[inset_0_-1px_0_var(--border)]">
+          <span class="min-w-0 flex-1 truncate text-(--text-2)" :title="selectedPath">{{ selectedPath }}</span>
           <span v-if="selectedFile" class="tnum flex shrink-0 gap-1 text-[12px] leading-4">
-            <span v-if="selectedFile.added" class="text-[var(--git-add)]">+{{ selectedFile.added }}</span>
-            <span v-if="selectedFile.removed" class="text-[var(--git-del)]">-{{ selectedFile.removed }}</span>
+            <span v-if="selectedFile.added" class="text-(--git-add)">+{{ selectedFile.added }}</span>
+            <span v-if="selectedFile.removed" class="text-(--git-del)">-{{ selectedFile.removed }}</span>
           </span>
           <button
             type="button"
-            class="flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]"
+            class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-(--text-2) transition-colors duration-60 hover:bg-(--fill-hover) hover:text-(--text)"
             title="Close diff"
             aria-label="Close diff"
             @click="open(selectedPath)"
@@ -237,10 +237,10 @@ onMounted(refresh)
             <component :is="icons.dismiss" class="size-4" />
           </button>
         </div>
-        <div v-if="diffLoading && !diff" class="px-3 py-1.5 text-[var(--text-muted)]">Loading diff…</div>
-        <div v-else-if="diffError" class="px-3 py-1.5 text-[var(--danger-text)]">{{ diffError }}</div>
-        <div v-else-if="diff && diff.rows.length === 0" class="px-3 py-1.5 text-[var(--text-muted)]">No textual changes.</div>
-        <table v-else-if="diff" class="w-full border-collapse font-mono text-[13px] leading-[19px] [font-feature-settings:'calt'_0,'liga'_0]">
+        <div v-if="diffLoading && !diff" class="px-3 py-1.5 text-(--text-muted)">Loading diff…</div>
+        <div v-else-if="diffError" class="px-3 py-1.5 text-(--danger-text)">{{ diffError }}</div>
+        <div v-else-if="diff && diff.rows.length === 0" class="px-3 py-1.5 text-(--text-muted)">No textual changes.</div>
+        <table v-else-if="diff" class="w-full border-collapse font-mono text-[13px] leading-4.75 [font-feature-settings:'calt'_0,'liga'_0]">
           <tbody>
             <tr
               v-for="(row, i) in diff.rows"
@@ -248,16 +248,16 @@ onMounted(refresh)
               :class="{
                 'bg-[color-mix(in_srgb,var(--git-add)_20%,transparent)]': row.kind === 'add',
                 'bg-[color-mix(in_srgb,var(--git-del)_20%,transparent)]': row.kind === 'del',
-                'bg-[var(--fill-5)]': row.kind === 'hunk'
+                'bg-(--fill-5)': row.kind === 'hunk'
               }"
             >
               <template v-if="row.kind === 'hunk' || row.kind === 'note'">
-                <td colspan="3" class="whitespace-pre px-3 py-1.5 text-[var(--text-muted)]" :class="{ italic: row.kind === 'note' }">{{ row.text }}</td>
+                <td colspan="3" class="whitespace-pre px-3 py-1.5 text-(--text-muted)" :class="{ italic: row.kind === 'note' }">{{ row.text }}</td>
               </template>
               <template v-else>
-                <td class="w-[1%] min-w-9 select-none whitespace-nowrap pl-3 pr-1.5 text-right align-top text-[var(--text-muted)]">{{ row.oldNo ?? '' }}</td>
-                <td class="w-[1%] min-w-9 select-none whitespace-nowrap pl-1.5 pr-3 text-right align-top text-[var(--text-muted)]">{{ row.newNo ?? '' }}</td>
-                <td class="whitespace-pre pr-3"><span class="inline-block w-4 select-none" :class="row.kind === 'add' ? 'text-[var(--git-add)]' : row.kind === 'del' ? 'text-[var(--git-del)]' : 'text-[var(--text-muted)]'">{{ row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ' }}</span>{{ row.text }}</td>
+                <td class="w-[1%] min-w-9 select-none whitespace-nowrap ps-3 pe-1.5 text-end align-top text-(--text-muted)">{{ row.oldNo ?? '' }}</td>
+                <td class="w-[1%] min-w-9 select-none whitespace-nowrap ps-1.5 pe-3 text-end align-top text-(--text-muted)">{{ row.newNo ?? '' }}</td>
+                <td class="whitespace-pre pe-3"><span class="inline-block w-4 select-none" :class="row.kind === 'add' ? 'text-(--git-add)' : row.kind === 'del' ? 'text-(--git-del)' : 'text-(--text-muted)'">{{ row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' ' }}</span>{{ row.text }}</td>
               </template>
             </tr>
           </tbody>

@@ -14,9 +14,9 @@ const sections = computed(() => {
 </script>
 
 <template>
-  <div class="bg-[var(--bg-page)] text-[var(--text)] min-h-screen">
+  <div class="bg-(--bg-page) text-(--text) min-h-screen">
     <!-- Sections -->
-    <div v-for="section in sections" :key="section.name" class="border-b border-[var(--border)] p-4">
+    <div v-for="section in sections" :key="section.name" class="border-b border-(--border) p-4">
       <h2 class="text-xl font-bold mb-4">{{ section.name }}</h2>
       <component :is="section.component" />
     </div>
