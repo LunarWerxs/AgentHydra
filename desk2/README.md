@@ -490,7 +490,8 @@ which the server on 7798 serves; the launcher's window needs that build. `bun te
 `E2E_CDP_PORT` name fixed ones; two sessions running it at once no longer collide) with a
 throwaway home (removed, with its Edge profile, when the run ends) and drives headless Edge through CDP input: one fresh page per case, the FIRST gesture (tap,
 long-press, press, move-then-press, right-click, Enter, hover, focus) on a never-touched tooltip, menu, popover,
-sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account. 31
+sidebar row or toggle, judged by what the control did. It reads AgentHydra's daemon and acts on no account; the
+pane opens with a fresh window's preferences, not the ones the daemon keeps for the owner's windows, and saves none. 39
 cases in about 4 minutes; PASS/FAIL per case, aria-labels only, exit 1 on any FAIL. `GESTURE_ONLY=pane|desk` and
 `GESTURE_WHAT=<text>` pick cases, `GESTURE_TRACE=1` prints each case's pointer, focus and click events. Run it after
 any change to a tooltip, menu, popover, sidebar row or lazy overlay.

@@ -10,7 +10,9 @@
 // throwaway HYDRA_DESK_HOME; /ah/api goes on to the live AgentHydra daemon, read only: no case here acts on an account (the Open
 // and Focus row icons are only hovered or focused), it only opens menus and popovers, hides the sidebar, selects a row, flips a
 // view toggle or copies an address to the clipboard. DevWebUI's /dw status and projects are answered here with an invented
-// project (a stopped server and a running one), and a POST under /dw with {}, so the Dev servers cases touch no real server. Prints PASS/FAIL per case; exits 1 on any FAIL. Prints aria-labels only,
+// project (a stopped server and a running one), and a POST under /dw with {}, so the Dev servers cases touch no real server. The
+// pane's shared preferences (/ah/api/ui-prefs) are a fresh window's, never the owner's, and nothing a case changes is saved.
+// Prints PASS/FAIL per case; exits 1 on any FAIL. Prints aria-labels only,
 // never a control's text (a row's text is a chat title, a name cell's an account). GESTURE_ONLY=pane|desk and GESTURE_WHAT=<text>
 // pick cases; GESTURE_TRACE=1 prints each case's pointer, mouse, focus and click events (target tag, data-slot, data-state).
 
@@ -90,6 +92,10 @@ const DW_FIXTURE: Record<string, unknown> = {
     { id: 'p1-api', name: 'api', command: 'npm run api', cwd: '', port: 8787, status: 'stopped', exitCode: null, projectId: 'p1' },
   ] }],
 }
+// The pane's preferences shared across windows (hydra/src/composables/useSharedPrefs.ts) live in the daemon, so the pane opened
+// the way the owner last left it: on 2026-10-08 its Instances table showed the Free view, which has no desktop row on a throwaway
+// Desk, and all 19 pane cases found no target. Read here, they are a fresh window's (none saved); written, they go nowhere.
+const PREFS = '/ah/api/ui-prefs'
 
 const CASES: Case[] = []
 const each = (kinds: Kind[], c: Omit<Case, 'kind'>) => { for (const kind of kinds) CASES.push({ ...c, kind }) }
@@ -152,7 +158,8 @@ try {
   ws.onmessage = (e) => { const m = JSON.parse(String(e.data));
     if (m.method === 'Fetch.requestPaused') {
       const { requestId, request } = m.params
-      const body = request.method === 'GET' ? DW_FIXTURE[new URL(request.url).pathname] : {}
+      const path = new URL(request.url).pathname
+      const body = path === PREFS ? { prefs: {} } : request.method === 'GET' ? DW_FIXTURE[path] : {}
       if (body === undefined) void send('Fetch.continueRequest', { requestId })
       else void send('Fetch.fulfillRequest', { requestId, responseCode: 200, responseHeaders: [{ name: 'content-type', value: 'application/json' }], body: btoa(JSON.stringify(body)) })
       return
@@ -167,7 +174,7 @@ try {
   }
   const park = () => send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 940 })
   await send('Page.enable')
-  await send('Fetch.enable', { patterns: [{ urlPattern: `http://127.0.0.1:${PORT}/dw/*` }] })
+  await send('Fetch.enable', { patterns: [{ urlPattern: `http://127.0.0.1:${PORT}/dw/*` }, { urlPattern: `http://127.0.0.1:${PORT}${PREFS}` }] })
   await send('Emulation.setFocusEmulationEnabled', { enabled: true })
 
   /** Load the page fresh and wait until the case's target is on screen and has stopped changing: rows are replaced as data
