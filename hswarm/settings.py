@@ -187,6 +187,45 @@ def split_keys(text: str) -> list[str]:
     return list(dict.fromkeys(k for k in re.split(r"[\s,;]+", text or "") if k))
 
 
+def _legacy_keys(doc, path) -> list[str]:
+    """The keys of a legacy TOML keys field, in order and once each."""
+    raw = doc.get("keys") or ()
+    raw = [raw] if isinstance(raw, str) else raw
+    if not isinstance(raw, (list, tuple, tomlkit.items.Array)) or any(not isinstance(k, str) for k in raw):
+        raise SettingsError(f"{path} has an invalid keys field; nothing was changed")
+    return list(dict.fromkeys(k.strip() for k in raw if k.strip()))
+
+
+def _read_lists(names: list[str]) -> None:
+    """Read every affected list before writing any of them; unreadable input is never treated as empty."""
+    from . import vault
+
+    for name in names:
+        try:
+            vault._keys_in(config.SECRETS_DIR / name)
+        except FileNotFoundError:
+            pass
+
+
+def _drop_rank(doc, provider: str, target: str, fingerprint: str) -> bool:
+    """Clear a removed key's priority unless a source hswarm does not edit still holds the key; True if doc changed."""
+    elsewhere = any(k == target for source, read in config.key_sources(provider)
+                    if source not in _editable_sources(provider) for k in read())
+    if elsewhere:
+        return False
+    before = tomlkit.dumps(doc)
+    _key_rank(doc, fingerprint, None)
+    return tomlkit.dumps(doc) != before
+
+
+def _added(add: str, existed: bool, first_file: str) -> dict:
+    out = {"fingerprint": config.fingerprint(add), "added": not existed, "masked": mask(add),
+           "file": str(config.SECRETS_DIR / first_file)}
+    if existed:
+        out["note"] = "already in the pool"
+    return out
+
+
 def _edit_provider_keys(provider: str, *, add: str | None = None, remove: str | None = None, reload_config: bool = True) -> dict:
     """Keep keys in syncable lists, and retire a legacy TOML keys field without changing its settings."""
     from . import vault
@@ -197,36 +236,19 @@ def _edit_provider_keys(provider: str, *, add: str | None = None, remove: str | 
     def change():
         with _locked(path):
             doc = _read(path)
-            raw = doc.get("keys") or ()
-            raw = [raw] if isinstance(raw, str) else raw
-            if not isinstance(raw, (list, tuple, tomlkit.items.Array)) or any(not isinstance(k, str) for k in raw):
-                raise SettingsError(f"{path} has an invalid keys field; nothing was changed")
-            legacy = list(dict.fromkeys(k.strip() for k in raw if k.strip()))
-            # Read every affected list before writing any of them; unreadable input is never treated as empty.
-            held = {}
+            legacy = _legacy_keys(doc, path)
             retired = [name + suffix for name in names if not name.endswith((".dead", ".unfunded"))
                        for suffix in (".dead", ".unfunded")]
-            for name in names + (retired if add else []):
-                try:
-                    held[name] = vault._keys_in(config.SECRETS_DIR / name)
-                except FileNotFoundError:
-                    held[name] = []
+            _read_lists(names + (retired if add else []))
             target = _find(provider, remove) if remove else None
             existed = add in config.all_keys(provider) if add else False
-            into = [k for k in legacy if k != target]
-            if add:
-                into.append(add)
+            into = [k for k in legacy if k != target] + ([add] if add else [])
             drop = {vault.key_id(target)} if target else set()
             changed_doc = "keys" in doc
             if changed_doc:
                 del doc["keys"]
-            if target:
-                elsewhere = any(k == target for source, read in config.key_sources(provider)
-                                if source not in _editable_sources(provider) for k in read())
-                if not elsewhere:
-                    before = tomlkit.dumps(doc)
-                    _key_rank(doc, remove, None)
-                    changed_doc = changed_doc or tomlkit.dumps(doc) != before
+            if target and _drop_rank(doc, provider, target, remove):
+                changed_doc = True
             for name in names:
                 vault._rewrite(config.SECRETS_DIR / name, drop, into if name == names[0] else [])
             if add:
@@ -237,13 +259,7 @@ def _edit_provider_keys(provider: str, *, add: str | None = None, remove: str | 
                 atomic_write(path, tomlkit.dumps(doc), private=True)
         if reload_config:
             config.reload()
-        if add:
-            out = {"fingerprint": config.fingerprint(add), "added": not existed, "masked": mask(add),
-                   "file": str(config.SECRETS_DIR / names[0])}
-            if existed:
-                out["note"] = "already in the pool"
-            return out
-        return {"fingerprint": remove, "removed": True}
+        return _added(add, existed, names[0]) if add else {"fingerprint": remove, "removed": True}
 
     return vault.mutate_local(change, allow_removals=bool(remove))
 

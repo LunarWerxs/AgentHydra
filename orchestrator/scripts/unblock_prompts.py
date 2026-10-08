@@ -313,6 +313,50 @@ def _press_streak(row: dict, ok: bool, detail: str) -> int:
         return 0
 
 
+def _permission_card_args(row: dict) -> list[str]:
+    """Re-check the permission card as it stands now; the args that aim the press at it."""
+    prompt = row.get("permissionPrompt")
+    if not prompt:
+        return []
+    # The transcript and destination settings can change between plan and press.
+    current = _pending_record(Path(prompt["transcript"]))
+    metas = list(stamplib.iter_metas(Path(row["instanceDir"]) / "claude-code-sessions"))
+    caller_path = Path(prompt["callerMeta"])
+    targets = _permission_targets(metas, caller_path, require_bypass=False)
+    verdict = approvallib.classify_pending(current or {}, _permission_targets(metas, caller_path))[0]
+    caller = next((meta for path, meta in metas if path == caller_path), {})
+    if (not prompt.get("complete") or not current
+            or current["tool_inputs"] != prompt["toolCalls"]
+            or any(targets.get(t["sessionId"]) != t for t in prompt["targets"])
+            or not caller or caller.get("isArchived") or holdlib.why_blocked(row["sessionId"])
+            or verdict == approvallib.DENY
+            or (verdict != approvallib.APPROVE and not row.get("permissionChangeApproved"))):
+        raise ValueError("permission card changed or its target is not a verified bypass restoration; rescan")
+    return ["-OnceOnly", "-PermissionTargetsJson", json.dumps(prompt["targets"])]
+
+
+def _run_actuator(row: dict, select: bool):
+    args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
+            "-Title", str(row["title"]),
+            "-Instance", str(row.get("instanceDir") or row["instance"])]
+    if row.get("verify"):
+        args += ["-VerifyText", str(row["verify"])]  # rail 2b: its own words, or no press
+    args += _permission_card_args(row)
+    if select:
+        args.append("-Select")
+    return clilib.run_text(args, timeout=180)
+
+
+def _press_outcome(code: int, detail: str) -> str:
+    if code == 0:
+        return "approved one permission prompt"
+    if code == 3:
+        return "no prompt showing (it may have cleared)"
+    if code == 4:
+        return f"could not reach that chat's pane - {detail}"
+    return "did NOT clear"
+
+
 def press(row: dict, always_select: bool = False) -> dict:
     """Press this chat's pending permission prompt through the actuator.
 
@@ -324,33 +368,6 @@ def press(row: dict, always_select: bool = False) -> dict:
     person gave died as "could not reach that chat's pane"."""
     if not ACTUATOR.exists():
         return {**row, "ok": False, "outcome": f"actuator missing at {ACTUATOR}"}
-
-    def run(select: bool):
-        args = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ACTUATOR),
-                "-Title", str(row["title"]),
-                "-Instance", str(row.get("instanceDir") or row["instance"])]
-        if row.get("verify"):
-            args += ["-VerifyText", str(row["verify"])]  # rail 2b: its own words, or no press
-        prompt = row.get("permissionPrompt")
-        if prompt:
-            # The transcript and destination settings can change between plan and press.
-            current = _pending_record(Path(prompt["transcript"]))
-            metas = list(stamplib.iter_metas(Path(row["instanceDir"]) / "claude-code-sessions"))
-            caller_path = Path(prompt["callerMeta"])
-            targets = _permission_targets(metas, caller_path, require_bypass=False)
-            verdict = approvallib.classify_pending(current or {}, _permission_targets(metas, caller_path))[0]
-            caller = next((meta for path, meta in metas if path == caller_path), {})
-            if (not prompt.get("complete") or not current
-                    or current["tool_inputs"] != prompt["toolCalls"]
-                    or any(targets.get(t["sessionId"]) != t for t in prompt["targets"])
-                    or not caller or caller.get("isArchived") or holdlib.why_blocked(row["sessionId"])
-                    or verdict == approvallib.DENY
-                    or (verdict != approvallib.APPROVE and not row.get("permissionChangeApproved"))):
-                raise ValueError("permission card changed or its target is not a verified bypass restoration; rescan")
-            args += ["-OnceOnly", "-PermissionTargetsJson", json.dumps(prompt["targets"])]
-        if select:
-            args.append("-Select")
-        return clilib.run_text(args, timeout=180)
 
     try:
         # ONE DRIVER PER WINDOW (windowlib.instance_lock): a sidebar click here while the
@@ -364,9 +381,9 @@ def press(row: dict, always_select: bool = False) -> dict:
             # prompt is right there. Only a chat that has waited a long time earns a row
             # selection, because that flips the owner's view of that window (every 5 minutes,
             # for every long-running command, was the first cut's behaviour).
-            r = run(select=False)
+            r = _run_actuator(row, select=False)
             if r.returncode == 4 and (always_select or _row_quiet_secs(row) >= SELECT_AFTER_SECS):
-                r = run(select=True)
+                r = _run_actuator(row, select=True)
     except Exception as err:  # a stuck chat is not worth crashing the lane over
         return {**row, "ok": False, "outcome": f"actuator error: {str(err)[:120]}"}
     said = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
@@ -379,10 +396,7 @@ def press(row: dict, always_select: bool = False) -> dict:
     # whole session after the wrong thing: the actuator's own last line says WHICH window it
     # drove and which rows it could see, and that line was being dropped into a `detail` field
     # nobody printed. A bare refusal is not diagnosable; this one is.
-    outcome = ("approved one permission prompt" if ok
-               else "no prompt showing (it may have cleared)" if r.returncode == 3
-               else f"could not reach that chat's pane - {detail}" if r.returncode == 4
-               else "did NOT clear")
+    outcome = _press_outcome(r.returncode, detail)
     if streak >= SURFACE_AFTER_FAILURES:
         outcome += (f" [{streak} presses in a row have failed for this chat - filed as an "
                     "incident; it will keep failing until someone looks]")

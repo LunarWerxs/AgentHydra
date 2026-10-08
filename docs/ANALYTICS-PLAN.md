@@ -200,7 +200,7 @@ task line).
 | `ts` | Call time (epoch ms). Day and hour buckets derive from it in the query, using the asker's time zone. |
 | `pc` | Machine id (hostname hash, same scheme as HSwarm's `machine`) |
 | `account` | `acct-<sha256(account uuid)[:8]>`, the id HSwarm already uses (`routes/hswarm.ts` `hswarmAccountId`). `NULL` when unknown. The UI maps it to a label through the existing `/api/hswarm-accounts` logic, moved into the toolkit. |
-| `instance` | `desktop:<dir>`, `cli:<id>`, `codex:<id>` or `default` (`~/.claude`) |
+| `instance` | `desktop:<dir>`, `cli:<id>`, `codex:<id>` or `default` (`~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) |
 | `session` | CLI/desktop session id; for HSwarm, the caller session |
 | `agent` | `main` or `subagent` (+ subagent type when known) |
 | `source` | `cli`, `desktop`, `climayte`, `hswarm`, `codex`, `opencode`, `dsh`, `hermes`. `climayte` is a CLI call inside a CliMayte attempt. `hswarm` is a worker call. |
@@ -303,7 +303,7 @@ usageQuery({
 
 | Source | Reader | Attribution |
 |---|---|---|
-| Claude transcripts: `~/.claude`, every desktop instance dir, **every CLI instance config dir** | Incremental tail by byte offset per file (`ingest_cursor`), parsed by `accumulateUsageLine` only. Subagent files included. | `instance` from the config dir. `account` from the dir's current login (the existing login history maps dir + time → account uuid). `source=climayte` when the session id belongs to a CliMayte attempt (`workers.json`); `desktop` for desktop dirs; `cli` otherwise. |
+| Claude transcripts: the default config dir (`~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)), every desktop instance dir, **every CLI instance config dir** | Incremental tail by byte offset per file (`ingest_cursor`), parsed by `accumulateUsageLine` only. Subagent files included. | `instance` from the config dir. `account` from the dir's current login (the existing login history maps dir + time → account uuid). `source=climayte` when the session id belongs to a CliMayte attempt (`workers.json`); `desktop` for desktop dirs; `cli` otherwise. |
 | Codex, OpenCode, DSH, Hermes | `usage-foreign.ts` readers | `codex:<id>` instances. OpenCode's own cost goes to `billed_usd`. |
 | HSwarm | Tail of `ledger.jsonl` | `source=hswarm`. `account` from a new `caller_account` field on ledger lines (HSwarm already computes it for `utilizations`). Caller session and instance are kept. |
 
