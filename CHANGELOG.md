@@ -30,6 +30,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
 - **HSwarm's Claude Code workers keep their turns when a key runs out of credit**
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone**
+- **HSwarm's nightly upkeep finishes again instead of stopping at its two-hour limit**
 
 **Everything in 2.0.0**
 
@@ -144,6 +145,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone.** With the escalation threshold
   at 0, a question Jev could not answer, for example because it was out of credit, still went to a paid model. It
   now comes back unanswered with Jev's error, so your own fallback can answer it.
+- **HSwarm's nightly upkeep finishes again.** While indexing finished jobs it reopened a day's compressed history
+  once for every job in it. With a few weeks of history it hit its two-hour limit every night, before it packed old
+  jobs, recorded the day or rewrote its page. It now reads each day once, and a night with nothing new reads
+  nothing. `hswarm doctor` also says when the upkeep has fallen behind.
+- **Running from source, the live checkout installs and builds the new window too.** `scripts/live-checkout.ps1
+  -Apply` pointed the AgentHydra shortcut at the live checkout's new window but never installed or built it there,
+  so the shortcut could open nothing.
 
 ### Removed
 
