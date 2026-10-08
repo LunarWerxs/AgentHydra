@@ -2,7 +2,8 @@
 // from PERF_DESK (default this folder, so an old checkout is measured the same way) and writes PERF_OUT (default
 // tmp/perf.json). Never the live window: the server runs hidden on a free port with a temp HYDRA_DESK_HOME (a throwaway: no
 // Login sync, no Free runtime), headless Edge on a temp profile, and both are removed when the run ends, together with a
-// dev-servers service started under that temp home. /ah/api goes on to the live AgentHydra daemon, read only.
+// dev-servers service started under that temp home. /ah/api goes on to the live AgentHydra daemon, read only, except the
+// pane's shared preferences (/ah/api/ui-prefs), which are answered here as a fresh window's and never written.
 //
 // What it records (counts and bytes repeat run to run; milliseconds are judged only against their own spread):
 //   bundle   bytes and gzip bytes of web/dist and hydra/dist, and of what each index.html loads before first paint
@@ -220,9 +221,14 @@ async function openPage(browser: Cdp, url: string) {
       } catch {}
     }
     if (m.method === 'Network.loadingFinished') net.bytes += m.params.encodedDataLength ?? 0
+    // The pane's preferences shared across windows (hydra/src/composables/useSharedPrefs.ts) are kept by the live daemon: a
+    // fresh window's here, so what the pane shows (and costs) never depends on how the owner last left it, and nothing is saved.
+    if (m.method === 'Fetch.requestPaused') void browser.send('Fetch.fulfillRequest', { requestId: m.params.requestId, responseCode: 200,
+      responseHeaders: [{ name: 'content-type', value: 'application/json' }], body: btoa(JSON.stringify({ prefs: {} })) }, sessionId)
   })
   const send = (method: string, params: object = {}) => browser.send(method, params, sessionId)
   const ev = async (expression: string) => (await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true })).result?.value
+  await send('Fetch.enable', { patterns: [{ urlPattern: '*/ah/api/ui-prefs' }] })
   await send('Network.enable')
   await send('Page.enable')
   await send('Performance.enable')

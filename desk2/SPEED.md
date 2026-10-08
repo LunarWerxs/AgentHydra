@@ -108,6 +108,11 @@ run outside every base run):
 
 The dev-servers service used no CPU in any idle state on either side.
 
+The AgentHydra pane rows above show the pane the way the owner's window last left it: the pane's shared preferences
+come from the live daemon, and by 2026-10-08 that was the Free view, an empty table on a throwaway Desk (both sides
+alike). The meter now answers those preferences as a fresh window's, so the pane shows All (61 rows on this PC), and
+a later pane row is not comparable with these.
+
 **What restyles while idle.** A second probe on the same two trees injects counters into every frame before the
 page's own scripts (mutations by element shape and attribute, never text; timers; animation frames; WebSocket
 message types) and reads 20 s idle with the window visible, then with the AgentHydra pane open. The rise has one
