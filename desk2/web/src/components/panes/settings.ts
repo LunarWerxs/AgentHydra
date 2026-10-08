@@ -30,6 +30,7 @@ export type SettingsRowId =
   | 'permission'
   | 'notifications'
   | 'idle'
+  | 'workingMark'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -126,6 +127,13 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Behaviour',
     label: 'Close idle chats after',
     description: "An idle chat's process stops; your next message resumes it."
+  },
+  {
+    id: 'workingMark',
+    section: 'general',
+    group: 'Appearance',
+    label: 'Working animation',
+    description: 'The orange mark beside a chat at work, in your chats and in Claude Desktop chats shown here. Remembered in this window.'
   },
   {
     id: 'ahTooltips',

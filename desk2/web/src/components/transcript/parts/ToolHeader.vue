@@ -23,7 +23,10 @@ import { useTranscript } from '../context'
 import StatusIcon from './StatusIcon.vue'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
-const props = defineProps<{ item: ToolItem; open: boolean }>()
+// step: a row of a tool run's box (ToolGroup): 32 high, 12px in, muted 14px, its chevron always shown, as
+// Claude Desktop draws a step. Like StatusRow it is a data-expander: the transcript keeps it still while what it
+// opens slides (TranscriptView's holdRow).
+const props = defineProps<{ item: ToolItem; open: boolean; step?: boolean }>()
 defineEmits<{ toggle: [] }>()
 
 const ctx = useTranscript()
@@ -68,12 +71,14 @@ const elapsed = computed(() => {
 <template>
   <button
     type="button"
-    class="group flex h-6 w-full min-w-0 items-center gap-1.5 rounded-6 px-1 text-start text-[13px] transition-colors duration-60 hover:bg-fill-hover"
+    class="group flex w-full min-w-0 items-center gap-1.5 text-start transition-colors duration-60 hover:bg-fill-hover"
+    :class="step ? 'h-8 px-3 text-[14px]' : 'h-6 rounded-6 px-1 text-[13px]'"
     :aria-expanded="open"
+    data-expander
     @click="$emit('toggle')"
   >
     <component :is="icon" class="size-4 shrink-0 text-text-muted" />
-    <span class="shrink-0 text-text-2">{{ label }}</span>
+    <span class="shrink-0" :class="step ? 'text-text-muted' : 'text-text-2'">{{ label }}</span>
     <span class="min-w-0 truncate font-mono text-[12px] text-text-muted">{{ arg }}</span>
     <span v-if="item.status === 'running' && item.progress" class="min-w-0 max-w-[30%] shrink truncate text-[12px] text-text-muted">
       {{ item.progress }}
@@ -87,8 +92,8 @@ const elapsed = computed(() => {
       <span class="text-text-muted">{{ elapsed }}</span>
       <StatusIcon :status="item.status" />
       <ChevronRight
-        class="size-3 text-text-muted opacity-0 transition group-hover:opacity-100"
-        :class="open && 'rotate-90 opacity-100'"
+        class="size-3 text-text-muted transition motion-reduce:transition-none"
+        :class="[open && 'rotate-90', open || step ? 'opacity-100' : 'opacity-0 group-hover:opacity-100']"
       />
     </span>
   </button>

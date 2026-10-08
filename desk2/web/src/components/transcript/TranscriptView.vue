@@ -17,6 +17,7 @@ import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
+import { COLLAPSE_MS } from './lib/motion'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { MENU_CONTENT, MENU_ITEM } from '@/components/sidebar/menuClasses'
 import TranscriptRow from './TranscriptRow.vue'
@@ -168,6 +169,7 @@ const distanceOf = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clie
 function scrollToBottom() {
   const el = scroller.value
   if (!el) return
+  setSlack(0)
   el.scrollTop = el.scrollHeight
   scrollTop.value = el.scrollTop
   lastTop = el.scrollTop
@@ -178,7 +180,7 @@ function scrollToBottom() {
  *  the same frame as a streamed line) lets go here instead of being overwritten. */
 function follow() {
   const el = scroller.value
-  if (!el || !pinned.value) return
+  if (!el || !pinned.value || held) return
   if (el.scrollTop < lastTop - 1 && distanceOf(el) > 1) return onScroll()
   scrollToBottom()
 }
@@ -192,10 +194,77 @@ function onScroll() {
   // move down to within 24px of the bottom takes hold again.
   const up = top < lastTop - 1
   if (up && distance > 1) pinned.value = false
-  else if (!up && distance <= 24) pinned.value = true
+  else if (!up && distance <= 24 && !held) pinned.value = true
   lastTop = top
   scrollTop.value = top
   fromBottom.value = distance
+  trimSlack()
+}
+
+// A click on what opens or closes a row (StatusRow and ToolHeader, marked data-expander) keeps the clicked line
+// where it is on screen while the content under it slides (owner, 2026-10-08: "have it expand down ... move the
+// content below it down instead of moving the link I clicked, up"). For that long the bottom is not followed and a
+// row above re-measuring does not move the view on its own: each frame, and after each measure, the view moves by
+// however far the line drifted. What opens past the bottom goes on below the fold, so a pinned view lets go then.
+// A brand-new item arriving while pinned and nothing held is followed as before.
+let held: { el: HTMLElement; top: number; until: number } | null = null
+let heldFrame = 0
+function holdRow(e: MouseEvent) {
+  const el = (e.target as Element | null)?.closest<HTMLElement>('[data-expander]')
+  if (!el || !scroller.value?.contains(el)) return
+  dropHold()
+  held = { el, top: el.getBoundingClientRect().top, until: performance.now() + COLLAPSE_MS + 100 }
+  const tick = () => {
+    if (!held) return
+    keepHeld()
+    if (performance.now() < held.until) heldFrame = requestAnimationFrame(tick)
+    else releaseRow()
+  }
+  heldFrame = requestAnimationFrame(tick)
+}
+/** Lets go of a held line without deciding anything (a jump to the bottom or another chat takes over). */
+function dropHold() {
+  held = null
+  cancelAnimationFrame(heldFrame)
+  heldFrame = 0
+}
+function keepHeld() {
+  const el = scroller.value
+  if (!held || !el || !held.el.isConnected) return
+  const drift = held.el.getBoundingClientRect().top - held.top
+  if (Math.abs(drift) < 0.5) return
+  const want = el.scrollTop + drift
+  // Closing near the bottom leaves too little below to scroll to: room is added under the list (see setSlack).
+  const room = el.scrollHeight - el.clientHeight
+  if (want > room) setSlack(slack + want - room)
+  el.scrollTop = want
+  scrollTop.value = lastTop = el.scrollTop
+  fromBottom.value = distanceOf(el)
+}
+function releaseRow() {
+  keepHeld()
+  dropHold()
+  const el = scroller.value
+  if (!el) return
+  if (pinned.value && (slack > 0 || distanceOf(el) > 1)) pinned.value = false
+  fromBottom.value = distanceOf(el)
+}
+onBeforeUnmount(dropHold)
+
+// Room under the list that keeps a closed row's line still when there is no longer enough below it to scroll that
+// far. It is only ever as tall as the view needs where it stands: scrolling up, or the list growing, takes it back,
+// and going to the bottom drops it. Set on the element itself, so the next read of scrollHeight already counts it.
+const slackEl = ref<HTMLElement | null>(null)
+let slack = 0
+function setSlack(px: number) {
+  slack = Math.max(0, px)
+  if (slackEl.value) slackEl.value.style.height = slack ? `${slack}px` : ''
+}
+function trimSlack() {
+  const el = scroller.value
+  if (!el || !slack) return
+  const need = el.scrollTop + el.clientHeight - (el.scrollHeight - slack)
+  if (need < slack) setSlack(need)
 }
 
 function onWheel(e: WheelEvent) {
@@ -203,6 +272,7 @@ function onWheel(e: WheelEvent) {
 }
 
 function jumpToLatest() {
+  dropHold()
   pinned.value = true
   scrollToBottom()
   // Rows near the bottom get measured after this render; follow them down.
@@ -252,8 +322,8 @@ onMounted(() => {
       heights.set(id, h)
       layout.value.h[idx] = h
       changed = true
-      // A row above the viewport changed size: keep what Jacob is reading where it is.
-      if (!pinned.value && idx < firstOnScreen) anchorDelta += h - old
+      // A row above the viewport changed size: keep what Jacob is reading where it is (a held row does that itself).
+      if (!pinned.value && !held && idx < firstOnScreen) anchorDelta += h - old
     }
     if (!changed) return
     version.value++
@@ -262,6 +332,8 @@ onMounted(() => {
       lastTop = el.scrollTop
       scrollTop.value = el.scrollTop
     }
+    // Measured after layout and before paint: the held line is put back before it is ever drawn out of place.
+    keepHeld()
   })
   viewObserver = new ResizeObserver(() => {
     if (!scroller.value) return
@@ -290,6 +362,7 @@ watch(
   [offsets, showWorking, () => props.items[props.items.length - 1]],
   () => {
     if (pinned.value) return void nextTick(follow)
+    trimSlack()
     if (scroller.value) fromBottom.value = distanceOf(scroller.value)
   },
   { flush: 'post' },
@@ -419,6 +492,7 @@ watch(
 watch(
   () => props.chatId,
   () => {
+    dropHold()
     heights.clear()
     version.value++
     pinned.value = true
@@ -439,6 +513,7 @@ watch(
       data-transcript-scroller
       @scroll.passive="onScroll"
       @wheel.passive="onWheel"
+      @click.capture="holdRow"
       @contextmenu.capture="onContextCapture"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
@@ -454,6 +529,7 @@ watch(
         <div :style="{ height: `${padBottom}px` }" />
         <WorkingFooter v-if="showWorking && chat" :chat="chat" class="mt-4" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
+        <div ref="slackEl" aria-hidden="true" />
       </div>
     </div>
     </ContextMenuTrigger>

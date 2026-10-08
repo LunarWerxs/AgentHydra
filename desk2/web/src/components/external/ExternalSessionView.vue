@@ -7,6 +7,7 @@ import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/
 import { useDesk } from '@/stores/desk'
 import { outsideTasks } from '@/components/tasks/api'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
+import WorkingMark from '@/components/transcript/parts/WorkingMark.vue'
 import Composer from '@/components/composer/Composer.vue'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
@@ -82,6 +83,9 @@ const where = computed(() => {
   return `${sourceLabel(s.source)}${s.instance ? ` ${s.instance}` : ''}`
 })
 const dotClass = computed(() => glyphDotClass(glyph.value ?? { shape: 'ring', tone: 'muted', motion: 'none' }))
+// Working there, the window's orange working mark stands in for the blinking dot (owner, 2026-10-08: "a fun ...
+// orange animation"); waiting on you keeps the amber dot, and anything else its own dot.
+const working = computed(() => session.value?.status === 'working')
 // Said before the first message: in place or as a copy, and on which account (the title bar's menu changes it).
 const continueNote = computed(() => {
   const s = session.value
@@ -220,38 +224,42 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="desktopChat && session">
-      <div class="shrink-0 px-8 pt-1.5">
-        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 pb-1 text-[12px] leading-4 text-(--text-muted)" role="status">
+      <!-- A little room above and more below (owner, 2026-10-08: "it's too close" to the composer). -->
+      <div class="shrink-0 px-8 pb-4 pt-3">
+        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[12px] leading-4 text-(--text-muted)" role="status">
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
+            <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
+            <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
           <span class="min-w-0 flex-1 truncate">
             {{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}<span v-if="session.activity"> · {{ session.activity }}</span>
           </span>
         </p>
-        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pb-2 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
+        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
         </ul>
       </div>
       <Composer :key="desktopChat.id" :chat="desktopChat" :into="{ send: sendInto, why: INTO_WHY }" />
     </template>
 
-    <div v-else-if="session && usable" class="shrink-0 px-8 pb-3 pt-1.5">
+    <div v-else-if="session && usable" class="shrink-0 px-8 py-3">
       <p class="mx-auto flex h-10 w-full max-w-3xl items-center gap-1.25 px-2 text-(--text-muted)" role="status">
         <span class="flex size-6 shrink-0 items-center justify-center">
-          <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
+          <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
+          <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
         <span class="min-w-0 flex-1 truncate">{{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}</span>
       </p>
     </div>
 
-    <div v-else-if="session" class="shrink-0 px-8 pb-3 pt-1.5">
+    <div v-else-if="session" class="shrink-0 px-8 py-3">
       <div
         class="mx-auto flex h-10 w-full max-w-3xl items-center gap-1.25 rounded-(--radius-10) bg-(--fill-5) p-2"
         role="status"
       >
         <span class="flex size-6 shrink-0 items-center justify-center">
-          <span role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
+          <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
+          <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
         <span class="min-w-0 flex-1 truncate text-(--text-2)">
           <span>{{ isWorking ? 'Running in' : 'Read-only from' }} {{ where }}</span>

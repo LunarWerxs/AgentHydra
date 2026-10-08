@@ -5,6 +5,7 @@ import { icons } from '@/lib/icons'
 
 const Chevron = icons.statusChevron
 // hoverChevron: the chevron shows only on hover or when open (the real settled-tasks line has none at rest).
+// data-expander: a click on it keeps it where it is while what it opens slides (TranscriptView's holdRow).
 defineProps<{ open: boolean; running?: boolean; hoverChevron?: boolean }>()
 defineEmits<{ toggle: [] }>()
 </script>
@@ -15,6 +16,7 @@ defineEmits<{ toggle: [] }>()
     class="tx-status group/status"
     :data-state="running ? 'running' : 'done'"
     :aria-expanded="open"
+    data-expander
     @click="$emit('toggle')"
   >
     <slot />

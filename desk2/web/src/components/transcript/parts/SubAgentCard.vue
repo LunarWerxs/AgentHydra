@@ -6,6 +6,7 @@ import ToolHeader from './ToolHeader.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 import ToolGroup from './ToolGroup.vue'
 import BrowserCard from './BrowserCard.vue'
+import Collapse from './Collapse.vue'
 import { groupRows } from '../lib/groups'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
@@ -35,21 +36,23 @@ const latest = computed(() => {
     <div v-if="!open && (steps || latest)" class="-mt-0.5 px-3 pb-1.5 ps-7.5 text-[13px] text-text-muted">
       {{ steps }} tool call{{ steps === 1 ? '' : 's' }}<template v-if="running && latest"> · {{ latest }}</template>
     </div>
-    <div v-if="open" class="space-y-1 border-t border-border px-3 py-2">
-      <p v-if="prompt" class="line-clamp-3 whitespace-pre-wrap text-[13px] leading-5 text-text-muted">{{ prompt }}</p>
-      <div v-if="kids.length" class="flex flex-col gap-2 border-s border-border ps-3">
-        <template v-for="r in kidRows" :key="r.id">
-          <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" />
-          <BrowserCard v-else-if="r.kind === 'browser'" :item="r.items[r.items.length - 1]" :run="r.items" />
-          <!-- A nested row is drawn by the TranscriptRow that holds this card, so the two do not import each other. -->
-          <slot v-else-if="r.kind === 'item'" name="row" :item="r.item" />
-        </template>
+    <Collapse :open="open">
+      <div class="space-y-1 border-t border-border px-3 py-2">
+        <p v-if="prompt" class="line-clamp-3 whitespace-pre-wrap text-[13px] leading-5 text-text-muted">{{ prompt }}</p>
+        <div v-if="kids.length" class="flex flex-col gap-2 border-s border-border ps-3">
+          <template v-for="r in kidRows" :key="r.id">
+            <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" />
+            <BrowserCard v-else-if="r.kind === 'browser'" :item="r.items[r.items.length - 1]" :run="r.items" />
+            <!-- A nested row is drawn by the TranscriptRow that holds this card, so the two do not import each other. -->
+            <slot v-else-if="r.kind === 'item'" name="row" :item="r.item" />
+          </template>
+        </div>
+        <p v-else-if="running" class="text-[13px] text-text-muted">Starting…</p>
+        <div v-if="item.result" class="pt-1 text-[13px]">
+          <MarkdownBlock v-if="!item.result.isError" :text="item.result.text" />
+          <p v-else class="whitespace-pre-wrap text-[13px] text-danger-text">{{ item.result.text }}</p>
+        </div>
       </div>
-      <p v-else-if="running" class="text-[13px] text-text-muted">Starting…</p>
-      <div v-if="item.result" class="pt-1 text-[13px]">
-        <MarkdownBlock v-if="!item.result.isError" :text="item.result.text" />
-        <p v-else class="whitespace-pre-wrap text-[13px] text-danger-text">{{ item.result.text }}</p>
-      </div>
-    </div>
+    </Collapse>
   </div>
 </template>

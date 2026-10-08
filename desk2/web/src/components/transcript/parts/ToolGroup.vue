@@ -1,7 +1,9 @@
 <script setup lang="ts">
 // A run of tool calls folded into one status row, as the real app draws it: "Ran 3 commands, read
 // screen-half.png" in muted 14px, targets in primary text, a 12px chevron. Open, it lists each call
-// (a CliMayte call with its task and worker card).
+// (a CliMayte call with its task and worker card) as the rows of one rounded box split by hairlines, as Claude
+// Desktop draws a run's steps (owner, 2026-10-08: "contained in a rounded-edged table"); a step opens inside
+// the box, under its row.
 import { computed } from 'vue'
 import { useTranscript } from '../context'
 import { toolSummary, type TaskItem, type ToolItem } from '../lib/groups'
@@ -10,6 +12,7 @@ import CliMayteCard from './CliMayteCard.vue'
 import StatusRow from './StatusRow.vue'
 import ToolRow from './ToolRow.vue'
 import TaskGroup from './TaskGroup.vue'
+import Collapse from './Collapse.vue'
 
 const props = defineProps<{ id: string; items: ToolItem[]; tasks?: TaskItem[] }>()
 const ctx = useTranscript()
@@ -29,12 +32,14 @@ const sum = computed(() => toolSummary(props.items, ctx.cwd.value, props.tasks))
         </span>
       </template>
     </StatusRow>
-    <div v-if="open" class="mb-1 mt-1.5 flex flex-col gap-0.5 border-s border-border ps-3 ms-1">
-      <template v-for="t in items" :key="t.id">
-        <CliMayteCard v-if="toolFamily(t.name) === 'climayte'" :item="t" />
-        <ToolRow v-else :item="t" />
-      </template>
-      <TaskGroup v-if="tasks?.length" :id="`${id}:tasks`" :items="tasks" />
-    </div>
+    <Collapse :open="open">
+      <div class="tx-steps mb-1 mt-1.5">
+        <template v-for="t in items" :key="t.id">
+          <CliMayteCard v-if="toolFamily(t.name) === 'climayte'" :item="t" step />
+          <ToolRow v-else :item="t" step />
+        </template>
+        <TaskGroup v-if="tasks?.length" :id="`${id}:tasks`" :items="tasks" step />
+      </div>
+    </Collapse>
   </div>
 </template>

@@ -7,9 +7,11 @@ import { parseCliMayte, shortPath } from '../lib/tools'
 import { useTranscript } from '../context'
 import ToolHeader from './ToolHeader.vue'
 import OutputBlock from './OutputBlock.vue'
+import Collapse from './Collapse.vue'
 
 type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
-const props = defineProps<{ item: ToolItem }>()
+// step: a row of a tool run's box (ToolGroup), so no card of its own; alone, its brand-ringed card.
+const props = defineProps<{ item: ToolItem; step?: boolean }>()
 
 const ctx = useTranscript()
 const desk = useDesk()
@@ -29,8 +31,9 @@ function dot(w: CliMayteWorker | null): string {
 </script>
 
 <template>
-  <div class="tx-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]">
-    <div class="px-1 pt-0.5" :class="!info.tasks.length && !workers.length && 'pb-0.5'">
+  <div :class="!step && 'tx-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]'">
+    <ToolHeader v-if="step" :item="item" :open="open" step @toggle="ctx.toggle(item.id)" />
+    <div v-else class="px-1 pt-0.5" :class="!info.tasks.length && !workers.length && 'pb-0.5'">
       <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id)" />
     </div>
     <div v-if="info.tasks.length || workers.length" class="space-y-1 px-3 pb-2 ps-8 text-[13px]">
@@ -55,16 +58,18 @@ function dot(w: CliMayteWorker | null): string {
         </span>
       </div>
     </div>
-    <div v-if="open" class="border-t border-brand/20">
-      <OutputBlock :id="`${item.id}:in`" :text="inputJson" :max-lines="16" />
-      <OutputBlock
-        v-if="item.result"
-        :id="item.id"
-        :text="item.result.text"
-        :error="item.result.isError"
-        :server-truncated="item.result.truncated"
-        class="border-t border-brand/20"
-      />
-    </div>
+    <Collapse :open="open">
+      <div class="border-t border-brand/20">
+        <OutputBlock :id="`${item.id}:in`" :text="inputJson" :max-lines="16" />
+        <OutputBlock
+          v-if="item.result"
+          :id="item.id"
+          :text="item.result.text"
+          :error="item.result.isError"
+          :server-truncated="item.result.truncated"
+          class="border-t border-brand/20"
+        />
+      </div>
+    </Collapse>
   </div>
 </template>

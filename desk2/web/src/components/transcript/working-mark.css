@@ -1,0 +1,154 @@
+/* The working mark (parts/WorkingMark.vue): four looks in Claude's orange (#d97757, --brand-hover), each slow and
+   drawn with transform and opacity only, so a long turn costs the compositor and nothing else. Every look sits
+   in the 16x20 cell the Claude Code spinner had. */
+.wm {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  overflow: hidden;
+  color: var(--brand-hover);
+}
+.wm-box {
+  position: relative;
+  display: block;
+  width: 12px;
+  height: 12px;
+}
+.wm-dot {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+}
+.wm-still {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+
+/* Square: three dots on the corners of a square, the fourth empty. The dot behind the gap steps into it, then
+   the next, so the gap travels backwards round the square while the dots climb forwards. One loop is twelve
+   steps (each dot moves on every third); every dot runs the same path, started a whole number of steps apart. */
+.wm[data-variant='square'] .wm-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: wm-square 3.6s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.wm[data-variant='square'] .wm-dot:nth-child(1) {
+  animation-delay: -1.8s;
+}
+.wm[data-variant='square'] .wm-dot:nth-child(2) {
+  animation-delay: -0.6s;
+}
+.wm[data-variant='square'] .wm-dot:nth-child(3) {
+  animation-delay: -3s;
+}
+@keyframes wm-square {
+  0% {
+    transform: translate(0, 0);
+  }
+  4.5%,
+  25% {
+    transform: translate(8px, 0);
+  }
+  29.5%,
+  50% {
+    transform: translate(8px, 8px);
+  }
+  54.5%,
+  75% {
+    transform: translate(0, 8px);
+  }
+  79.5%,
+  100% {
+    transform: translate(0, 0);
+  }
+}
+
+/* Orbit: three dots going round a small circle on an ease that speeds up and slows down, a beat apart, so they
+   bunch on the climb and spread on the way down. Each dot rides an arm the size of the box that turns. */
+.wm[data-variant='orbit'] .wm-dot {
+  inset: 0;
+  animation: spin 2.4s cubic-bezier(0.6, 0.1, 0.4, 0.9) infinite;
+}
+.wm[data-variant='orbit'] .wm-dot::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 3px;
+  height: 3px;
+  margin-left: -1.5px;
+  border-radius: 9999px;
+  background: currentColor;
+}
+.wm[data-variant='orbit'] .wm-dot:nth-child(1) {
+  animation-delay: -0.3s;
+}
+.wm[data-variant='orbit'] .wm-dot:nth-child(2) {
+  animation-delay: -0.15s;
+  opacity: 0.75;
+}
+.wm[data-variant='orbit'] .wm-dot:nth-child(3) {
+  opacity: 0.5;
+}
+
+/* Spark: the Claude Code spinner (a strip of glyphs stepped through by codeSpinnerSpin, style.css). The
+   keyframes step 2em at a time: 2em of the strip's 10px is one 20px glyph cell. */
+.wm[data-variant='spark'] {
+  align-items: flex-start;
+}
+.wm-strip {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  font-size: 10px;
+  text-align: center;
+  animation: codeSpinnerSpin 1.2s steps(1, end) infinite;
+}
+.wm-strip > span {
+  height: 20px;
+  line-height: 20px;
+  font-size: 14px;
+}
+
+/* Breathe: one dot that slowly swells and fades back. */
+.wm[data-variant='breathe'] .wm-dot {
+  inset: 2px;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: wm-breathe 2.8s ease-in-out infinite;
+}
+@keyframes wm-breathe {
+  0%,
+  100% {
+    transform: scale(0.5);
+    opacity: 0.4;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+/* Asked for less motion: every look is a still orange dot. */
+@media (prefers-reduced-motion: reduce) {
+  .wm-box,
+  .wm-strip {
+    display: none;
+  }
+  .wm-still {
+    display: block;
+  }
+  .wm[data-variant='spark'] {
+    align-items: center;
+  }
+}

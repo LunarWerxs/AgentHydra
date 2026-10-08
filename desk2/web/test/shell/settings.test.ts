@@ -9,6 +9,7 @@ describe('settings search', () => {
     expect(settingsGroups('general', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['New chats', ['model', 'effort', 'permission']],
       ['Behaviour', ['notifications', 'idle']],
+      ['Appearance', ['workingMark']],
       ['AgentHydra pages', ['ahTooltips', 'ahPrivacy']]
     ])
   })

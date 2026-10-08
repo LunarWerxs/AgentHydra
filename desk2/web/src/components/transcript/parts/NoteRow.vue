@@ -9,6 +9,7 @@ import type { TranscriptItem } from '@shared/protocol'
 import { useTranscript } from '../context'
 import { noteBody, noteSummary } from '../lib/note'
 import StatusRow from './StatusRow.vue'
+import Collapse from './Collapse.vue'
 
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'note' }> }>()
 
@@ -29,6 +30,8 @@ const when = computed(() => new Date(props.item.ts).toLocaleString(undefined, { 
       <Bot class="size-4 shrink-0" />
       <span class="min-w-0 truncate">{{ item.from }}</span>
     </div>
-    <div v-if="open && body" class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap wrap-break-word border-s border-border ps-3 text-[13px] leading-5">{{ body }}</div>
+    <Collapse :open="open && !!body">
+      <div class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap wrap-break-word border-s border-border ps-3 text-[13px] leading-5">{{ body }}</div>
+    </Collapse>
   </div>
 </template>

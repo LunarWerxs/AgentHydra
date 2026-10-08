@@ -473,6 +473,28 @@ button.tx-file-card:hover {
   background: var(--fill-hover);
 }
 
+/* A tool run's steps, open: one box, as Claude Desktop draws them (r10, a 1px border, a hairline between rows and
+   none after the last). The box clips its rows' hover fill to its corners. */
+.tx-steps {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.tx-steps > * + * {
+  border-top: 1px solid var(--border);
+}
+
+/* What a row opens (parts/Collapse.vue): a flow root keeps its children's margins inside, so the height it slides
+   to is the height it keeps. */
+.tx-collapse {
+  display: flow-root;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tx-status-chevron {
+    transition: none;
+  }
+}
+
 /* Text nested in a sub-agent card is a size down. */
 .tx-nested .md {
   font-size: 13px;
@@ -522,29 +544,6 @@ button.tx-file-card:hover {
   animation: cds-shimmer-text-shine 2s infinite;
 }
 
-/* The Claude Code spinner: a strip of glyphs stepped through by codeSpinnerSpin. */
-.tx-spinner {
-  display: inline-block;
-  flex-shrink: 0;
-  width: 16px;
-  height: 20px;
-  overflow: hidden;
-  font-size: 10px;
-  color: var(--brand);
-  text-align: center;
-}
-.tx-spinner-strip {
-  display: flex;
-  flex-direction: column;
-  animation: codeSpinnerSpin 1.2s steps(1, end) infinite;
-}
-/* The keyframes step 2em at a time: 2em of the strip's 10px is one 20px glyph cell. */
-.tx-spinner-strip > span {
-  height: 20px;
-  line-height: 20px;
-  font-size: 14px;
-}
-
 /* Status row, measured: 24 high, margin -4px 0 (applied as the row gap), padding 2px 4px, r6, gap 6, 14px muted. */
 .tx-status {
   display: inline-flex;
@@ -572,7 +571,10 @@ button.tx-file-card:hover {
   margin-inline-start: -5px;
   flex-shrink: 0;
   color: var(--text-muted);
-  transition: transform var(--dur-fast) cubic-bezier(0.32, 0.72, 0, 1);
+  /* rotate-90 sets `rotate`, not `transform`: the turn is timed with the content opening under it (Collapse.vue). */
+  transition:
+    rotate 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    opacity var(--dur-fast);
 }
 .tx-target {
   color: var(--text);

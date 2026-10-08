@@ -21,6 +21,8 @@ import { useInstanceSettings } from './instances'
 import InstancesControl from './InstancesControl.vue'
 import { useDevServerSettings } from './devservers'
 import DevServersControl from './DevServersControl.vue'
+import WorkingMark from '@/components/transcript/parts/WorkingMark.vue'
+import { WORKING_MARKS, workingMark, type WorkingMarkVariant } from '@/components/transcript/lib/working-mark'
 
 // The body of the Settings dialog, laid out like the real Settings (docs/reference/real/user/
 // real-settings-claude-code.webp) without its account, billing and connector pages: a darker nav with
@@ -44,8 +46,10 @@ const holds = (c: SettingsCondition) =>
 const groups = computed(() => settingsGroups(section.value, query.value, holds))
 const isAh = (id: string) => id.startsWith('ah')
 const isDw = (id: string) => id.startsWith('dw')
-// Every Desk row but About's needs the saved settings.
-const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id) && !isDw(r.id))))
+// Every Desk row but About's needs the saved settings; the working animation is this window's own.
+const needsSettings = computed(() =>
+  groups.value.some((g) => g.rows.some((r) => r.section !== 'about' && !isAh(r.id) && !isDw(r.id) && r.id !== 'workingMark'))
+)
 
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
@@ -177,6 +181,14 @@ function onSegmentKey(e: KeyboardEvent, current: number, count: number, pick: (i
   group[next]?.focus()
 }
 const effortIndex = computed(() => Math.max(0, efforts.findIndex((x) => x.value === (local.value?.defaultEffort ?? null))))
+
+// The working animation: every option drawn live side by side, so they can be compared before one is picked
+// (owner, 2026-10-08: "Let's get a few options").
+const markIndex = computed(() => Math.max(0, WORKING_MARKS.findIndex((m) => m.id === workingMark.value)))
+const pickMark = (id: WorkingMarkVariant) => (workingMark.value = id)
+const onMarkKey = (e: KeyboardEvent) => onSegmentKey(e, markIndex.value, WORKING_MARKS.length, (i) => pickMark(WORKING_MARKS[i]!.id))
+const MARK_TILE =
+  'flex w-16 cursor-default flex-col items-center gap-1 rounded-8 pb-1.5 pt-2 text-[12px] leading-4 text-text-2 shadow-[inset_0_0_0_1px_var(--border)] transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text aria-checked:shadow-[inset_0_0_0_1px_var(--brand-hover)]'
 
 // Nav: one tab stop on the current row, arrows move between rows (and choose them).
 const navEl = ref<HTMLElement | null>(null)
@@ -405,6 +417,28 @@ onBeforeUnmount(() => {
               <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-4.75 text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}
               </span>
+
+              <div
+                v-else-if="r.id === 'workingMark'"
+                role="radiogroup"
+                aria-label="Working animation"
+                class="flex shrink-0 gap-1.5"
+                @keydown="onMarkKey"
+              >
+                <button
+                  v-for="(m, i) in WORKING_MARKS"
+                  :key="m.id"
+                  type="button"
+                  role="radio"
+                  :aria-checked="i === markIndex"
+                  :tabindex="i === markIndex ? 0 : -1"
+                  :class="MARK_TILE"
+                  @click="pickMark(m.id)"
+                >
+                  <WorkingMark :variant="m.id" />
+                  {{ m.label }}
+                </button>
+              </div>
 
               <template v-else-if="local">
                 <Select v-if="r.id === 'model'" :model-value="modelValue" @update:model-value="(v) => save({ defaultModel: v === NONE ? null : String(v) })">
