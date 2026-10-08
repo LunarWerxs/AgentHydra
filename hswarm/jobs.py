@@ -45,8 +45,9 @@ CC_KEY_WAIT_S = 90.0  # a cc task waits this long for a resting key (a 429's Ret
 # A leg is UNAVAILABLE when the provider could not serve the call at all - not when the work failed.
 # Only these move a routed task to its next leg: no eligible endpoint (an OpenRouter host pin, or an
 # account's privacy policy excluding the host), out of credit, every key disabled, the host erroring
-# after the client's own retries, or the connection never forming. A worker's FAILED, a turn budget, a
-# timeout or a 400 (our request) is the task's own result and is never retried on another provider.
+# after the client's own retries, the connection never forming, or a route refusing the request before it
+# served anything (_REFUSED_UNSERVED). A worker's FAILED, a turn budget, a timeout or a 400 after the leg
+# served a turn is the task's own result and is never retried on another provider.
 # `API 503` is this client's rendering of a status; `API Error: 503` is Claude Code's, from a cc worker.
 _UNAVAILABLE = re.compile(
     # 401/403 added 2026-09-28 on the same reasoning as 429 below: the client rests a refused key and rotates to the
@@ -102,6 +103,26 @@ def too_large(res: Result) -> bool:
     return res.status == "error" and bool(_TOO_LARGE.search(res.error or ""))
 
 
+# A 400 or 422 a leg answered before it served anything (no turn booked, nothing billed, no file touched) is that
+# route refusing this request's shape, and the next route may take it at no second cost. 2026-10-07 from 23:43Z:
+# OpenAI's Chat Completions refused function tools beside reasoning_effort on gpt-6-luna ("Function tools with
+# reasoning_effort are not supported"), and every schema task routed there ended on that 400 with the routes behind
+# it untried (jobs 20261007-234357-c3d4 to -235302-494e). After a served turn the same status stays the task's
+# own: a re-run there could repeat its spend and edits. A request every route refuses ends in schema_dead, not reruns.
+_REFUSED_STATUS = re.compile(r"API (?:Error:? )?(?:400|422)\b", re.I)
+
+
+def _refused_unserved(res: Result) -> bool:
+    return (res.status == "error" and bool(_REFUSED_STATUS.search(res.error or "")) and not res.turns
+            and res.cost_usd == 0 and not res.files_changed)
+
+
+def _refused_request(error: str | None) -> bool:
+    """A leg's recorded error is a 400/422 refusal that is no host or account state _UNAVAILABLE names (those can
+    clear, so a dead rerun may still find them serving)."""
+    return bool(_REFUSED_STATUS.search(error or "")) and not _UNAVAILABLE.search(error or "")
+
+
 # A leg that could not produce the structure the task's schema asks for (worker.SCHEMA_REJECTS rejected submit_result
 # calls, or one invalid tool-free answer) fails over to the next route, never lands as ok (2026-09-25, the Gemini route
 # answered 140-row translations with `{"rows": []}`). Only while it changed no file: a replay must not redo edits.
@@ -113,7 +134,7 @@ _NO_USABLE_ANSWER = re.compile(r"^(?:InvalidStructuredAnswer:|empty answer\b)")
 def leg_unavailable(res: Result) -> bool:
     if res.status == "error" and _NO_USABLE_ANSWER.search(res.error or ""):
         return not res.files_changed
-    return res.status == "error" and (bool(_UNAVAILABLE.search(res.error or "")) or too_large(res))
+    return res.status == "error" and (bool(_UNAVAILABLE.search(res.error or "")) or too_large(res) or _refused_unserved(res))
 
 
 def _taint_failover(res: Result, dead: list[dict]) -> None:
@@ -323,16 +344,17 @@ def needs_other_route(res: Result) -> bool:
 
 
 def schema_dead(res: Result) -> bool:
-    """Every leg ended InvalidStructuredAnswer: the schema or the prompt is what no model could meet, not the route,
-    so a dead rerun only pays for the same ladder again after its 150-600 s rests. One leg that died of anything else
-    (keys out, a host down) keeps the rerun, and so does a result that does not say how its earlier legs ended."""
+    """Every leg ended InvalidStructuredAnswer or refused the request with a 400/422 (_refused_request): the schema,
+    the prompt or the request is what no model could meet, not the route, so a dead rerun only pays for the same
+    ladder again after its 150-600 s rests. One leg that died of anything else (keys out, a host down) keeps the
+    rerun, and so does a result that does not say how its earlier legs ended."""
     sel = res.selection or {}
     if sel.get("attempts"):
         # pinned_error: the pinned route's last word, before the task went on by its profile (_run_legs)
         legs = [a.get("error") for a in sel["attempts"]] + ([sel["pinned_error"]] if "pinned_error" in sel else [])
     else:
         legs = [] if res.failover else [res.error]
-    return bool(legs) and all((e or "").startswith("InvalidStructuredAnswer:") for e in legs)
+    return bool(legs) and all((e or "").startswith("InvalidStructuredAnswer:") or _refused_request(e) for e in legs)
 
 
 def batch_refusal(tasks: list[Task]) -> str | None:

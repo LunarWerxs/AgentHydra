@@ -4,7 +4,8 @@ A strictly pinned OpenRouter leg (one host, no fallbacks) is only as available a
 OpenRouter key's account can be unable to reach a host at all (a privacy policy excluding it answered
 404 on two of three real keys, 2026-09-17). Failover is what keeps either from failing every task routed
 there. It must never fire on the task's OWN failure - a worker's FAILED, a turn budget, a timeout, or a
-400 (our request) - because re-running that on another provider doubles the spend for the same answer.
+400 after the leg served a turn - because re-running that on another provider doubles the spend for the same
+answer. A 400 before the leg served anything spent nothing: that route refused the request, and the next may not.
 """
 from __future__ import annotations
 
@@ -59,6 +60,13 @@ def _err(msg: str) -> Result:
     # landed, with the legs behind it never tried (found by hswarm history, 2026-10-02)
     'nvidia API 400: {"status":400,"title":"Bad Request","detail":"Function id \'1586112a-925c-48af-8631-7c815dbd749c\': '
     'DEGRADED function cannot be invoked"}',
+    # a route refusing the request's shape before it served anything (nothing billed, no turn): from 23:43Z on
+    # 2026-10-07 every schema task auto routed to gpt-6-luna-high on OpenAI ended on this with its other legs untried
+    'openai API 400: {"error":{"message":"Function tools with reasoning_effort are not supported for gpt-6-luna in '
+    '/v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to \'none\'.",'
+    '"type":"invalid_request_error","param":"reasoning_effort","code":null}}',
+    # the same refusal as a 422, Mistral's status for a request field it will not take (magistral 0/24, 2026-09-20)
+    'mistral API 422: {"detail":[{"type":"extra_forbidden","loc":["body","user"],"msg":"Extra inputs are not permitted"}]}',
 ])
 def test_these_mean_the_leg_could_not_serve(msg):
     assert leg_unavailable(_err(msg))
@@ -68,13 +76,21 @@ def test_these_mean_the_leg_could_not_serve(msg):
     "FAILED: the premise is wrong, four functions are uncalled",
     "turn budget exhausted without a final answer",
     "task exceeded 600s",
-    'deepseek API 400: {"error":{"message":"Invalid tool_choice"}}',
     "openrouter API 4040: not a real status",
     "the worker could not find endpoint handlers for the 404 page",
-    "claude exit 1: API Error: 400 invalid tool schema",
 ])
 def test_these_are_the_tasks_own_failure(msg):
     assert not leg_unavailable(_err(msg))
+
+
+@pytest.mark.parametrize("msg", [
+    'deepseek API 400: {"error":{"message":"Invalid tool_choice"}}',
+    "claude exit 1: API Error: 400 invalid tool schema",
+])
+def test_a_400_after_the_leg_served_a_turn_is_the_tasks_own_failure(msg):
+    # The leg answered and billed a turn first: a re-run elsewhere would pay for that work again. Before any served
+    # turn the same status is the route refusing the request, and fails over (test_these_mean_the_leg_could_not_serve).
+    assert not leg_unavailable(Result(id="t", status="error", error=msg, turns=2, cost_usd=0.004))
 
 
 def test_an_ok_result_is_never_unavailable():
@@ -282,10 +298,12 @@ def test_a_one_shot_ask_fails_over_the_same_way(monkeypatch, tmp_path):
     seen.clear()
     r = asyncio.run(m.ask_routed("17*23?", "deepseek-flash-hf", route=False))
     assert seen == ["deepseek-flash-hf"] and r.status == "error" and r.failover == []
-    # the task's own failure is not retried
+    # the caller's own mistake is not retried: every leg of a typed-only model refuses a chat the same way (a one-shot
+    # ask's 400 is no such thing: it comes before anything was served, so the next leg gets it)
     async def own_fail(client, prompt, model=None, **kw):
         seen.append(model)
-        return Result(id="ask", model=model, status="error", error="deepseek API 400: bad schema")
+        return Result(id="ask", model=model, status="error", error="ValueError: rank:jev answers typed questions only "
+                      "(pick one, yes/no, rate on a scale); ask it through hswarm_decide, and give a task a chat model")
     seen.clear()
     monkeypatch.setattr(agent, "ask", own_fail)
     r = asyncio.run(m.ask_routed("x", "deepseek-flash"))

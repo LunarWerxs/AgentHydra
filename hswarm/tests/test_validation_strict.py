@@ -53,17 +53,23 @@ def test_a_strict_satisfiable_schema_is_still_accepted(tmp_path):
     assert _task(tmp_path, schema=schema).schema == schema
 
 
-def test_a_task_no_leg_could_structure_is_not_rerun_dead(monkeypatch, tmp_path):
-    """Every leg ended InvalidStructuredAnswer: resting and walking the same ladder again buys the same refusals. The
-    rerun stays for a route that could not serve (test_failover's rests-and-runs-again test)."""
+@pytest.mark.parametrize("error, turns, cost", [
+    ("InvalidStructuredAnswer: rank:glm-5-3 submitted 3 results that break the schema", 1, 0.01),
+    # refused before anything was served, so it fails over (jobs._refused_unserved); with no leg left, it is the request
+    ('openai API 400: {"error":{"message":"Function tools with reasoning_effort are not supported for gpt-6-luna",'
+     '"type":"invalid_request_error","param":"reasoning_effort"}}', 0, 0.0),
+])
+def test_a_task_no_leg_could_structure_is_not_rerun_dead(monkeypatch, tmp_path, error, turns, cost):
+    """Every leg ended InvalidStructuredAnswer, or refused the request with a 400: resting and walking the same ladder
+    again buys the same refusals. The rerun stays for a route that could not serve (test_failover's rests-and-runs-again
+    test)."""
     import hswarm.agent as agent
 
     calls = []
 
     async def leg(client, task, warm=None, is_pilot=False, user_tag=None, slow_turn_s=None, resume_messages=None, **kw):
         calls.append(task.model)
-        return Result(id=task.id, backend="api", model=task.model, status="error", cost_usd=0.01, turns=1,
-                      error=f"InvalidStructuredAnswer: {task.model} submitted 3 results that break the schema"), []
+        return Result(id=task.id, backend="api", model=task.model, status="error", cost_usd=cost, turns=turns, error=error), []
 
     monkeypatch.setattr(agent, "run_api_task", leg)
     monkeypatch.setattr(dispatch, "plan_for", lambda task, explain=False: {
@@ -83,7 +89,7 @@ def test_a_task_no_leg_could_structure_is_not_rerun_dead(monkeypatch, tmp_path):
         return await asyncio.wait_for(m.wait(job.id, None), 5)
 
     res = asyncio.run(go()).results["t"]
-    assert res.status == "error" and res.error.startswith("InvalidStructuredAnswer:")
+    assert res.status == "error" and res.error == error
     assert len(calls) == 1 and "dead_reruns" not in (res.selection or {}), calls
 
 
