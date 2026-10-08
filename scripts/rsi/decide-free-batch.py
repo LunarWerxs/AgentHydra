@@ -109,6 +109,9 @@ class Bench:
         self.free = asyncio.Semaphore(FREE_AT_ONCE)
         self.paid = asyncio.Semaphore(PAID_AT_ONCE)
         self.held: set[int] = set()  # the named accounts a model arm's message is on now, one message each
+        # One waiting item per named account: items queue here, so MODEL_WAIT_S is how long the accounts stayed
+        # busy, not how long an item sat behind the others (2026-10-08: every item waited at once and 331 timed out).
+        self.slots: dict[tuple[int, ...], asyncio.Semaphore] = {}
 
     def write(self, rows: list[dict], unit: tuple) -> None:
         rows.append({"unit": list(unit), "ts": time.time()})
@@ -216,21 +219,23 @@ class Bench:
         it = D.normalize(raw)
         keys = [o for o, _ in D.options(it)]
         res, one, tries, num = None, {}, 0, None
-        while res is None and tries < TRIES:
-            tries += 1
-            try:
-                num = await self.take(nums)
-            except TimeoutError as busy:  # the accounts stayed busy: this item goes unserved, the run goes on
-                one = {"error": f"busy: {busy}"}
-                break
-            try:
-                # item-free's Task, so the model is the only difference
-                task = Task(prompt=D.render(it), id="ask", system=D.SYSTEM, schema=None, tools="none", profile="decision", timeout_s=120)
-                res, one = await self.ask_model(task, num, MODEL_ARMS[arm])
-            except free_route._ERRORS:
-                res, one = None, {}
-            finally:
-                self.held.discard(num)
+        slot = self.slots.setdefault(tuple(sorted(nums)), asyncio.Semaphore(len(nums)))
+        async with slot:
+            while res is None and tries < TRIES:
+                tries += 1
+                try:
+                    num = await self.take(nums)
+                except TimeoutError as busy:  # the accounts stayed busy: this item goes unserved, the run goes on
+                    one = {"error": f"busy: {busy}"}
+                    break
+                try:
+                    # item-free's Task, so the model is the only difference
+                    task = Task(prompt=D.render(it), id="ask", system=D.SYSTEM, schema=None, tools="none", profile="decision", timeout_s=120)
+                    res, one = await self.ask_model(task, num, MODEL_ARMS[arm])
+                except free_route._ERRORS:
+                    res, one = None, {}
+                finally:
+                    self.held.discard(num)
         pred = D.parse_final(res.answer or "", keys) if res else None
         g = a["gold"].get(it["id"])
         self.write([{"arm": arm, "ask": a["ask"], "id": it["id"], "type": it["type"], "pred": pred, "gold": g,
