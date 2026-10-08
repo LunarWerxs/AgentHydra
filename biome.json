@@ -13,7 +13,7 @@
       "!tmp",
       "!hswarm/ui",
       "!desk2",
-      "!**/tray-host-native/target",
+      "!**/target",
       "!**/*.gen.ts",
       "!**/*.css",
       "!**/*.mjs",
