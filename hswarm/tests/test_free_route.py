@@ -143,6 +143,7 @@ def test_the_ledger_line_of_a_free_task_has_provider_free_and_no_cost(fake, monk
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
     assert api.calls == 0 and job.results["t0"].answer == "free answer"
     assert row["provider"] == "free" and row["cost_usd"] == 0
+    assert float(row["seconds"]) == 1.0  # the account's own time on it, from free_results
 
 
 def test_hswarm_ask_on_auto_is_answered_by_a_free_account(fake, monkeypatch):

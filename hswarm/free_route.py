@@ -103,8 +103,11 @@ def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Resul
     if not text:
         _say(job_id, "the free account's reply was empty; the task runs on its API route")
         return None
+    # `seconds` is the account's own time on it (free_results), so the ledger shows how busy the Free accounts are.
+    on_account = float(one.get("seconds") or 0.0)
     res = Result(id=task.id, backend=task.backend, model="free:" + str(one.get("model") or "unknown"), status="ok",
-                 answer=text, cost_usd=0.0, started=started, finished=now_iso())
+                 answer=text, cost_usd=0.0, started=started, finished=now_iso(), seconds=on_account,
+                 api_seconds=on_account)
     if task.schema:
         data = payload_in_text(text, task.schema)  # strips a code fence; the same schema check as the API route
         if data is None:
