@@ -54,7 +54,7 @@ afterAll(() => {
 
 const task = (title: string) => ({
   prompt: `do ${title}`,
-  cwd: process.cwd(),
+  cwd: import.meta.dir,
   title,
   size: 'whole',
 })
