@@ -187,6 +187,10 @@ jobs:
             bin: agenthydra
     runs-on: ${{ matrix.os }}
     steps:
+      # The bundle comes from the build job; the smoke script comes from the repo. With no checkout
+      # scripts/smoke-release.ts is missing and every native leg fails, as v2.0.0's tag build did.
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: release-${{ matrix.target }}

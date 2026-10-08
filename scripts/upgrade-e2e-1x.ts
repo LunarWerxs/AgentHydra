@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 /**
- * End to end, headless: a real AgentHydra 1.13.0 Windows install applies its own update to 2.0.0.
+ * End to end, headless: a real AgentHydra 1.13.0 Windows install applies its own update to this
+ * checkout's version (package.json).
  *
  *   bun scripts/upgrade-e2e-1x.ts [--scenario 1|2|both] [--rebuild] [--reuse-package] [--keep]
  *
- * Run it before a release that 1.x installs will update to (2.0.0 is the one that moves them off the
+ * Run it before a release that 1.x installs will update to (every 2.x moves them off the
  * compiled 1.x layout). Windows only: it needs git, csc.exe and openssl (Git for Windows has one).
  * ROOT is %TEMP%/ah-upgrade-e2e unless AH_UPGRADE_E2E_ROOT says otherwise; heavy steps go through
  * ~/.claude/tools/fairjob.cmd when that exists.
@@ -13,7 +14,7 @@
  * registry change). Everything it builds, serves or installs lives under ROOT.
  *
  *  - 1.13.0 is BUILT from its tag (git worktree, cached in ROOT/build-1.13), never downloaded.
- *  - 2.0.0 is packaged from the checkout (scripts/package-release.ts) into ROOT/rel-2.0.
+ *  - The new version is packaged from the checkout (scripts/package-release.ts) into ROOT/rel-2.0.
  *  - 1.13 asks api.github.com for releases/latest. A CONNECT proxy (HTTPS_PROXY on the 1.13 process)
  *    tunnels that one host to a local HTTPS server with a self-signed certificate
  *    (NODE_TLS_REJECT_UNAUTHORIZED=0 on the 1.13 process); its asset URLs point back at the same fake.
@@ -50,6 +51,7 @@ const ROOT = (process.env.AH_UPGRADE_E2E_ROOT ?? join(tmpdir(), 'ah-upgrade-e2e'
   '/',
 )
 const REPO = findRepoRoot(import.meta.dir).replaceAll('\\', '/')
+const NEW_VERSION: string = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version
 const LOG = join(ROOT, 'upgrade-e2e.log')
 const OLD_TAG = 'v1.13.0'
 const OLD_NAME = 'AgentHydra-1.13.0-windows-x64'
@@ -240,7 +242,7 @@ function build113(): void {
   }
 }
 
-// ---- 2. package 2.0.0 ------------------------------------------------------------------------
+// ---- 2. package the new version ------------------------------------------------------------------------
 let ZIP2 = ''
 let BUN_PIN = ''
 function package2(): void {
@@ -314,8 +316,8 @@ async function startFakes(ports: { api: number; rel: number; bun: number; proxy:
   const apiBase = `https://api.github.com`
   const assetNames = readdirSync(REL2).filter((n) => /\.(zip|exe)$/.test(n))
   const releaseJson = () => ({
-    tag_name: 'v2.0.0',
-    name: 'AgentHydra 2.0.0',
+    tag_name: `v${NEW_VERSION}`,
+    name: `AgentHydra ${NEW_VERSION}`,
     draft: false,
     prerelease: false,
     assets: [...assetNames, 'SHA256SUMS.txt'].map((name) => ({
@@ -340,15 +342,18 @@ async function startFakes(ports: { api: number; rel: number; bun: number; proxy:
     },
   })
   servers.push({ stop: () => api.stop(true) })
-  // the plain-http release host the 2.0 launcher is redirected to: /v2.0.0/<file>
+  // the plain-http release host the 2.0 launcher is redirected to: /v<version>/<file>
   const rel = Bun.serve({
     port: ports.rel,
     hostname: '127.0.0.1',
     fetch(req) {
       const u = new URL(req.url)
       log(`[release] ${req.method} ${u.pathname}`)
-      const m = /^\/v2\.0\.0\/([^/]+)$/.exec(u.pathname)
-      return m ? serveFile(join(REL2, m[1]!)) : new Response('not found', { status: 404 })
+      const prefix = `/v${NEW_VERSION}/`
+      const file = u.pathname.startsWith(prefix) ? u.pathname.slice(prefix.length) : ''
+      return file && !file.includes('/')
+        ? serveFile(join(REL2, file))
+        : new Response('not found', { status: 404 })
     },
   })
   servers.push({ stop: () => rel.stop(true) })
@@ -475,7 +480,7 @@ namespace AhE2E {
         Directory.CreateDirectory(logs);
         Environment.SetEnvironmentVariable("AGENTHYDRA_RUN_LOG_DIR", logs);
         map = File.ReadAllLines(Path.Combine(dir, "ah-redirect.txt"));
-      } catch (Exception) { } // floor-ok: the shim must never crash the launcher; with no map it asks real GitHub, which has no 2.0.0, and the run fails
+      } catch (Exception) { } // floor-ok: the shim must never crash the launcher; with no map it asks real GitHub, which has no such release, and the run fails
     }
     public WebRequest Create(Uri uri) {
       string url = uri.AbsoluteUri;
@@ -574,7 +579,7 @@ async function awaitRelease(port: number, t0: number, delayMs: number) {
   let last: Health = null
   while (Date.now() < limit) {
     last = await health(port)
-    if (last?.version === '2.0.0') {
+    if (last?.version === NEW_VERSION) {
       t2 = (Date.now() - t0) / 1000
       break
     }
@@ -607,8 +612,8 @@ function checkInstalled(): void {
   ]
   const missing = files.filter((f) => !existsSync(join(INSTALL, f)))
   check(
-    exeV.stdout.trim() === '2.0.0' && missing.length === 0 && stamp === pin && pin === BUN_PIN,
-    '(c) install holds the 2.0.0 launcher, app/, runtime/bun.exe + bun.version, desk2/',
+    exeV.stdout.trim() === NEW_VERSION && missing.length === 0 && stamp === pin && pin === BUN_PIN,
+    `(c) install holds the ${NEW_VERSION} launcher, app/, runtime/bun.exe + bun.version, desk2/`,
     `--version=${exeV.stdout.trim()} missing=[${missing}] bun.version=${stamp} pin=${pin}`,
   )
 }
@@ -799,7 +804,7 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
     }
     check(
       chk.updateAvailable && chk.canApply,
-      'before: 1.13 sees v2.0.0 through the fake api.github.com',
+      `before: 1.13 sees v${NEW_VERSION} through the fake api.github.com`,
       JSON.stringify(chk).slice(0, 200),
     )
     if (!chk.canApply) throw new Error('1.13 cannot apply')
@@ -807,15 +812,15 @@ async function scenario(label: string, ports: Ports, delayMs: number): Promise<v
     // ---- apply ----
     const { t0, tApply } = await applyUpdate(base)
 
-    // ---- wait for 2.0.0 on the same port ----
+    // ---- wait for the new version on the same port ----
     const { t2, seen113Until, last } = await awaitRelease(ports.daemon, t0, delayMs)
     const dark = t2 !== null ? t2 - seen113Until : 0
     log(
-      `1.13 was last seen at ${seen113Until.toFixed(1)}s; 2.0.0 first healthy at ${t2?.toFixed(1) ?? 'never'}s after the apply started (apply returned at ${tApply.toFixed(1)}s)`,
+      `1.13 was last seen at ${seen113Until.toFixed(1)}s; ${NEW_VERSION} first healthy at ${t2?.toFixed(1) ?? 'never'}s after the apply started (apply returned at ${tApply.toFixed(1)}s)`,
     )
     check(
       t2 !== null && last?.distribution === 'release' && last?.service === 'agenthydra',
-      '(b) same port answers /api/health with version 2.0.0, distribution release',
+      `(b) same port answers /api/health with version ${NEW_VERSION}, distribution release`,
       JSON.stringify({ v: last?.version, d: last?.distribution, port: ports.daemon }),
     )
     if (t2 !== null)

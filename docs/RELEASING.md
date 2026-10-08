@@ -4,8 +4,9 @@
 
 - **The 1.x line is closed** (owner, 2026-10-06: "why do we keep releasing updates to GitHub on the
   1.x path of Agent Hydra? ... when Agent Hydra became the new Hydra Desk UI, it was Agent Hydra
-  2.0"). The next release is 2.0.0, and it ships Desk 2 (`desk2/`) as AgentHydra's window
-  ([AGENTHYDRA-2-CUTOVER.md](AGENTHYDRA-2-CUTOVER.md)). A tag below 2.0.0 is refused by the pre-push
+  2.0"). Every release ships Desk 2 (`desk2/`) as AgentHydra's window
+  ([AGENTHYDRA-2-CUTOVER.md](AGENTHYDRA-2-CUTOVER.md)); the first one published is 2.0.1 (2.0.0's
+  tag build stopped before publishing, step 6 below). A tag below 2.0.0 is refused by the pre-push
   hook and by `release.yml`, and a tag build whose Windows zip has no `desk2/` does not publish.
 - **The release page reads like SageThumbs'** (owner, same day: "We always need to do it like Sage
   does. You have a TL;DR, bullet points ... then you have the details in, like, a read more").
@@ -198,6 +199,12 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
 
    **If a tag does end up on a red commit,** do not move a published tag. Fix the failure, bump to
    the next patch version, and release that immutable version instead.
+
+   The same goes for a tag whose Release run fails before it publishes: a dispatch on the tag runs
+   the workflow file as it was at that tag, so the fix needs a new version. v2.0.0 is one: its smoke
+   job had no checkout of the repo, so `scripts/smoke-release.ts` was missing on every native leg,
+   and 2.0.1 shipped instead. Prove a workflow change with a dispatch on `main` first
+   (`gh workflow run release.yml --ref main`): it builds and smokes and publishes nothing.
 7. **Once the Release run is green, tell the site.** The download buttons on
    `agenthydra.github.io` link the versioned release FILES, and its static HTML (what crawlers,
    AI answer engines and no-JS visitors read) only moves when its sync workflow runs. It runs
@@ -289,13 +296,13 @@ So the 1.x updater successfully installs 2.0. The 2.0 updater adds `runtime/*.ol
 
 A 2.x update whose launcher pins a new bun runs the new launcher with `--ensure-bun` (hidden, several minutes allowed) before it relaunches, so the successor starts in seconds; if that fails it is logged and the relaunch goes ahead anyway. A 1.x install cannot do that: its old updater relaunches straight into the 2.0 launcher, which downloads the release zip and bun first, so the old daemon's 60 s ack deadline can pass and it stays up on the port. The 2.0 daemon that finally starts waits for the port, and if its own predecessor (the pointer owner it was relaunched from, answering /api/health on that port) still holds it, ends that process by pid and binds the same port; any other holder is left alone.
 
-**Run the 1.x upgrade before 2.0.0 ships:** `bun scripts/upgrade-e2e-1x.ts` (Windows; needs git, csc.exe
+**Run the 1.x upgrade before a 2.x release becomes the latest** (a pre-release is never offered to 1.x): `bun scripts/upgrade-e2e-1x.ts` (Windows; needs git, csc.exe
 and openssl, which Git for Windows has). It builds 1.13.0 from its tag, packages this checkout, and
 serves a fake GitHub release locally without changing any system setting: a CONNECT proxy for
 api.github.com on the 1.13 process, and a .NET config shim beside the launcher for its two download
 hosts. It runs two scenarios: a plain first run, where the ack arrives and 1.13 exits itself (about 75 s
 on 2026-10-06), and one with Bun held back 90 s, where the ack deadline passes and the 2.0 daemon takes
-over (about 167 s). It exits 0 only when both end with 2.0.0 healthy on the same port, the full layout on
+over (about 167 s). It exits 0 only when both end with the checkout's version healthy on the same port, the full layout on
 disk, no 1.13 process left and Desk 2 answering. Its first run found the checksum-list bug above.
 
 ## A tentative release

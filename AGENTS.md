@@ -76,8 +76,8 @@ the current compiler compatibility note are in the native-control runbook.
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)
 
 - **AgentHydra is 2.0: never release 1.x.** The window that was Hydra Desk 2 (`desk2/`) is
-  AgentHydra 2.0, and the next release is 2.0.0, shipping it. Nothing is released before it ships
-  Desk 2. The pre-push hook and `release.yml` refuse a tag below 2.0.0, and a tag build whose Windows
+  AgentHydra 2.0, first published as 2.0.1 (2.0.0's tag build stopped before publishing). Every
+  release ships Desk 2. The pre-push hook and `release.yml` refuse a tag below 2.0.0, and a tag build whose Windows
   zip has no `desk2/` does not publish. 1.11.0 to 1.13.0 went out on the closed line from another PC,
   with Desk 2's entries in their notes though their downloads had no Desk 2. See
   [docs/RELEASING.md](docs/RELEASING.md).

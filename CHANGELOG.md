@@ -7,17 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-**TL;DR**
-
-- **HSwarm's decisions keep working when every TypeSafe key is refused: Cloudflare's free Clef stands in**
-
-**Everything in Unreleased**
-
-- **Cloudflare's Clef stands in for Jev.** When no TypeSafe key works, HSwarm asks Clef on Workers AI
-  instead, free up to Cloudflare's daily allowance. Clef's answers are held to its own confidence scale,
-  and its cost is booked under Cloudflare.
-
-## [2.0.0] - 2026-10-08
+## [2.0.1] - 2026-10-08
 
 **TL;DR**
 
@@ -42,12 +32,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **CliMayte's sealed tasks no longer leave a folder behind in your temp folder**
 - **HSwarm's Claude Code workers keep their turns when a key runs out of credit**
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone**
+- **HSwarm's decisions keep working when every TypeSafe key is refused: Cloudflare's free Clef stands in**
 - **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call**
 - **HSwarm's nightly upkeep finishes again instead of stopping at its two-hour limit**
 - **The old window is gone: the new window is AgentHydra's only one**
 - **A Codex chat moved to another account shows up in that account's Codex app**
 
-**Everything in 2.0.0**
+**Everything in 2.0.1**
 
 ### Added
 
@@ -163,6 +154,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **HSwarm's decide no longer pays a fallback model when you asked for Jev alone.** With the escalation threshold
   at 0, a question Jev could not answer, for example because it was out of credit, still went to a paid model. It
   now comes back unanswered with Jev's error, so your own fallback can answer it.
+- **Cloudflare's Clef stands in for Jev.** When no TypeSafe key works, HSwarm asks Clef on Workers AI
+  instead, free up to Cloudflare's daily allowance. Clef's answers are held to its own confidence scale,
+  and its cost is booked under Cloudflare.
 - **A Jev key that runs out of credit shows as disabled and is no longer asked first on every call.** `hswarm keys`
   used to list such a key as ready, so nothing showed that Jev was down. Now it is marked out of credit, every
   later call skips it, and it gets one try a day so a topped-up key comes back by itself.
@@ -179,6 +173,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The old AgentHydra window, and its portable window setting.** The new window is the only one now, and
   the download no longer carries a copy of the old one.
 - **The separate DevWebUI copy.** Its own background program, tray and settings are gone; its projects carry over.
+
+## [2.0.0] - 2026-10-08
+
+- **Tagged, never published.** Its release build stopped before publishing, so nothing was
+  downloaded from it. Everything meant for it ships in 2.0.1.
 
 ## [1.13.0] - 2026-10-06
 
