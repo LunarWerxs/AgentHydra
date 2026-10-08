@@ -26,8 +26,8 @@ import time
 from pathlib import Path
 from urllib.parse import quote, unquote
 
-from . import __version__, config
-from .procgate import CREATE_NO_WINDOW, PROCESS_QUERY_LIMITED_INFORMATION, pid_alive
+from . import __version__, config, livecode
+from .procgate import PROCESS_QUERY_LIMITED_INFORMATION, pid_alive
 
 HOST = "127.0.0.1"  # loopback only: the server runs workers with file and shell tools, it must never face a network
 LOCAL_HOSTS = ("127.0.0.1", "localhost", "[::1]")
@@ -36,13 +36,14 @@ REPLACE_TRIES = 5  # os.replace attempts: Windows refuses it while another proce
 LOCK_STALE_S = 60.0  # a lock older than this belongs to a caller that died mid-start
 IDLE_SESSION_S = 86_400.0  # a chat idle overnight keeps its session; the SDK default (30 min) would drop it
 LOG_ROTATE_BYTES = 20 * 1024 * 1024  # the server log reached 113 MB in 6.4 days (about 17 MiB a day, 2026-10-02)
-# The shared server restarts itself onto the code on disk (_watch). pid 43908 ran 2026-09-30 code for 48 h while five
-# fixes sat on disk: 2,063 tasks for $319.04, 1,015 of them served by a model the owner had barred ($117.30), 32 killed
-# by a cap already raised. A restart is not free: the successor re-runs every task that was in flight (adopt_orphans
-# keeps only finished answers) and every chat's MCP session reconnects. So it waits for sources that are committed and
-# quiet, for a moment with no running job (that moment may never come, so not for long), and never twice in half an hour.
+# The shared server restarts itself onto the clone's newest commit (_watch). pid 43908 ran 2026-09-30 code for 48 h
+# while five fixes sat on disk: 2,063 tasks for $319.04, 1,015 of them served by a model the owner had barred ($117.30),
+# 32 killed by a cap already raised. It runs a committed copy (livecode.py), never the working tree, so a restart only
+# waits on what is committed. A restart is not free: the successor re-runs every task that was in flight (adopt_orphans
+# keeps only finished answers) and every chat's MCP session reconnects. So it waits for a commit that is quiet and
+# imports, for a moment with no running job (that moment may never come, so not for long), and never twice in half an hour.
 WATCH_EVERY_S = 60.0
-SETTLE_S = 300.0  # the newest source file is at least this old: several sessions edit this repo, and a save is not a fix
+SETTLE_S = 300.0  # the clone's last hswarm commit is at least this old: a commit can be followed by its own fix-up
 MIN_UP_S = 1800.0  # no self-restart in a server's first half hour, so a restart can never loop, whatever the disk does
 BUSY_HOLD_S = 900.0  # how long a restart that is otherwise due waits for a moment with no running job
 
@@ -84,24 +85,34 @@ def _iso(ns: int) -> str:
 
 
 def code_stamp() -> dict:
-    """The code this process runs: its version and when the newest source file it loaded was written."""
-    return {"version": __version__, "code_at": _iso(max(LOADED.values())) if LOADED else None}
+    """The code this process runs: its version, when the newest source file it loaded was written, and the commit when
+    it runs a committed copy (livecode.py)."""
+    mine = livecode.running()
+    return {"version": __version__, "code_at": _iso(max(LOADED.values())) if LOADED else None,
+            **({"commit": mine["commit"][:12]} if mine else {})}
 
 
 def behind() -> str | None:
-    """A sentence when a hswarm source file changed on disk after this process loaded, else None: a fix that landed
-    since is not running here, and a result from this process is from the older code."""
+    """A sentence when hswarm changed after this process loaded, else None: a fix that landed since is not running
+    here, and a result from this process is from the older code. A committed copy is behind the clone's newer commits;
+    a process run from the clone is behind any source file changed on disk."""
+    mine = livecode.running()
+    if mine:
+        head = livecode.head(Path(mine["source"]))
+        if not head or head["tree"] == mine["tree"]:
+            return None
+        return (f"this hswarm server (pid {os.getpid()}) runs hswarm as commit {mine['commit'][:12]} has it, and "
+                f"{mine['source']} has committed hswarm changes since (commit {head['commit'][:12]}): a fix in them is "
+                f"not running here; it moves onto them by itself once they are {SETTLE_S / 60:.0f} min old (the next "
+                f"server on port {SERVING_PORT} carries its running jobs on)")
     now = _sources()
     changed = sorted(n for n in LOADED.keys() | now.keys() if LOADED.get(n) != now.get(n))
     if not changed:
         return None
     names = ", ".join(changed[:6]) + (f" and {len(changed) - 6} more" if len(changed) > 6 else "")
-    how = (f"the shared server restarts itself to load them once they are committed and {SETTLE_S / 60:.0f} min old (the next "
-           f"server on port {SERVING_PORT} carries its running jobs on)"
-           if SERVING_PORT else "restart this hswarm MCP server to load them")
     return (f"this hswarm process (pid {os.getpid()}, {__version__}, code from {code_stamp()['code_at']}) runs the code it "
             f"loaded, and {len(changed)} source file(s) changed on disk since ({names}): a fix in them is not running "
-            f"here; {how}")
+            "here; restart this hswarm process to load them")
 
 
 def process_started(pid: int) -> int | None:
@@ -228,11 +239,17 @@ def serve(port: int = PORT) -> None:
     # Only this server has no folder of the caller's own; a stdio server's chats never need the sentence.
     mcp._lowlevel_server.instructions = (mcp._lowlevel_server.instructions or "") + SHARED_NOTE
 
+    # `package` is the folder this server serves: the clone a committed copy came from, which is the folder the
+    # AgentHydra daemon checks before it adopts a server (hswarm.ts runsFrom); `code_dir` is where its code runs.
+    mine = livecode.running()
+    where = {"package": mine["source"] if mine else str(PACKAGE.parent), "code_dir": str(PACKAGE.parent),
+             **({"tree": mine["tree"]} if mine else {})}
+
     @mcp.custom_route("/health", methods=["GET"])
     async def health(request):
         if not local_host(request.headers.get("host", ""), port):  # a rebound page must not learn hswarm runs here
             return JSONResponse({"error": "answers only on 127.0.0.1 / localhost"}, status_code=403)
-        return JSONResponse({"hswarm": True, "pid": os.getpid(), "port": port, "package": str(PACKAGE.parent), "up_s": round(time.time() - started), **code_stamp()})
+        return JSONResponse({"hswarm": True, "pid": os.getpid(), "port": port, **where, "up_s": round(time.time() - started), **code_stamp()})
 
     from . import console
 
@@ -242,6 +259,8 @@ def serve(port: int = PORT) -> None:
     for name in ("httpx", "httpcore"):  # one INFO entry per provider call: 318k of them were 90% of the 113 MB log
         logging.getLogger(name).setLevel(logging.WARNING)
     threading.Thread(target=_watch, args=(port, started), name="hswarm-code-watch", daemon=True).start()
+    if mine:
+        threading.Thread(target=livecode.prune, name="hswarm-code-prune", daemon=True).start()
     from . import vault
 
     threading.Thread(target=vault.autosync_loop, name="hswarm-vault-sync", daemon=True).start()  # idle until `hswarm vault init|join|adopt`
@@ -295,10 +314,10 @@ def _take(lock: Path) -> bool:
     return True
 
 
-def _detached(argv: list[str], out) -> int:
+def _detached(argv: list[str], out, package: Path = PACKAGE.parent) -> int:
     """Start argv detached from the caller, with no window, output to `out`. Returns its pid."""
-    env = dict(os.environ)  # cwd is HSWARM_HOME, so a clone's package must be put on the path for `-m hswarm`
-    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(PACKAGE.parent), env.get("PYTHONPATH", "")) if p)
+    env = dict(os.environ)  # cwd is HSWARM_HOME, so the package's folder must be put on the path for `-m hswarm`
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(package), env.get("PYTHONPATH", "")) if p)
     kw: dict = {"env": env, "cwd": str(config.HOME), "stdin": subprocess.DEVNULL, "stdout": out, "stderr": subprocess.STDOUT, "close_fds": True}
     if os.name != "nt":
         return subprocess.Popen(argv, start_new_session=True, **kw).pid
@@ -310,11 +329,14 @@ def _detached(argv: list[str], out) -> int:
 
 
 def _spawn(port: int) -> int:
-    """Start `python -m hswarm mcp --http` detached from the caller, with no window, output to the log. Returns its pid."""
+    """Start `python -m hswarm mcp --http` detached from the caller, with no window, output to the log. Returns its pid.
+    It runs the clone's committed hswarm (livecode.target): this caller may be a chat's connect in a working tree that
+    another session is half-way through editing, or a restart helper running the copy being replaced."""
     exe = Path(sys.executable)
     if os.name == "nt" and exe.with_name("pythonw.exe").exists():
         exe = exe.with_name("pythonw.exe")
-    argv = [str(exe), *config.launcher()[1:], "mcp", "--http", "--port", str(port)]
+    package = livecode.target() or PACKAGE.parent
+    argv = [str(exe), "-c", config._BOOTSTRAP, str(package), "mcp", "--http", "--port", str(port)]
     log = log_path(port)
     log.parent.mkdir(parents=True, exist_ok=True)
     try:  # one earlier log is kept
@@ -323,7 +345,7 @@ def _spawn(port: int) -> int:
     except OSError:  # no log yet, or Windows refusing the rename while a busy or deaf server still holds it open: append
         pass
     with open(log, "ab") as out:
-        return _detached(argv, out)
+        return _detached(argv, out, package)
 
 
 def _wait(port: int, wait_s: float) -> dict | None:
@@ -335,34 +357,6 @@ def _wait(port: int, wait_s: float) -> dict | None:
         time.sleep(0.2)
 
 
-def _committed() -> bool:
-    """False while a clone holds uncommitted *.py changes under the package: someone is mid-edit, and a restart would
-    load half a change into the one server every chat uses. A package install (no .git beside it) has no such state."""
-    root = PACKAGE.parent
-    if not (root / ".git").exists():
-        return True
-    try:  # --no-optional-locks: a status that refreshes the index would take index.lock under another session's commit
-        r = subprocess.run(["git", "--no-optional-locks", "status", "--porcelain", "--", PACKAGE.name], cwd=str(root),
-                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30, creationflags=CREATE_NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0 and not any(line.rstrip('"').endswith(".py") for line in r.stdout.splitlines())
-
-
-def _importable() -> bool:
-    """True when a fresh process can import the server from the code on disk. A tree that cannot be imported would
-    take the port down for every chat and come back only when someone fixed it."""
-    # every module the successor loads before it binds the port: `hswarm mcp --http` goes through cli (clihelp,
-    # commands, install), fleetstats, then serve()'s mcp_server, verdict and console (settings, ledger)
-    start_path = "import hswarm.cli, hswarm.fleetstats, hswarm.mcp_server, hswarm.verdict, hswarm.console"
-    try:
-        r = subprocess.run([sys.executable, "-c", start_path], cwd=str(PACKAGE.parent), capture_output=True,
-                           timeout=120, creationflags=CREATE_NO_WINDOW)
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return r.returncode == 0
-
-
 def _running_jobs() -> int:
     from . import mcp_server
 
@@ -371,20 +365,23 @@ def _running_jobs() -> int:
 
 
 def _restart_due(state: dict, now: float) -> bool:
-    """One look by the shared server's watcher: True when it should hand over to a successor now. `state` is the
-    watcher's memory between looks: when the server started, the disk state it refused, the one it found ready."""
-    disk = _sources()
-    if disk == LOADED or disk == state.get("refused") or now - state["started"] < MIN_UP_S:
+    """One look by the shared server's watcher: True when it should hand over to a successor now. Only a server that
+    runs a committed copy follows the clone: one started by hand in the clone runs what it was started on. `state` is
+    the watcher's memory between looks: when the server started, the tree it refused, the one it found ready."""
+    mine = livecode.running()
+    if not mine or now - state["started"] < MIN_UP_S:
         return False
-    if now - max(disk.values(), default=0) / 1e9 < SETTLE_S or not _committed():
+    src = Path(mine["source"])
+    head = livecode.head(src)
+    if not head or head["tree"] in (mine["tree"], state.get("refused")) or now - head["at"] < SETTLE_S:
         return False
-    if state.get("ready") != disk:
-        if not _importable():
-            state["refused"] = disk  # asked once per disk state: the next change to the sources is looked at afresh
-            print("[hswarm] the code on disk cannot be imported, so this server keeps running the code it loaded "
-                  f"({code_stamp()['code_at']})", file=sys.stderr, flush=True)
+    if state.get("ready") != head["tree"]:
+        if livecode.ready(src, head) is None:
+            state["refused"] = head["tree"]  # said once per tree: the next commit is looked at afresh
+            print(f"[hswarm] commit {head['commit'][:12]} cannot be imported, so this server keeps running commit "
+                  f"{mine['commit'][:12]}", file=sys.stderr, flush=True)
             return False
-        state["ready"], state["ready_at"] = disk, now
+        state["ready"], state["ready_at"] = head["tree"], now
     return not _running_jobs() or now - state["ready_at"] >= BUSY_HOLD_S
 
 
@@ -440,8 +437,8 @@ def _watch(port: int, started: float) -> None:
             if _restart_due(state, time.time()):
                 supervised = bool(os.environ.get("HSWARM_SUPERVISED"))
                 if supervised or _hand_over(port):
-                    print(f"[hswarm] pid {os.getpid()} (code from {code_stamp()['code_at']}) ends to load the code on disk; "
-                          f"the next server on port {port} carries its running jobs on", file=sys.stderr, flush=True)
+                    print(f"[hswarm] pid {os.getpid()} (commit {code_stamp().get('commit')}) ends to load the clone's newest "
+                          f"commit; the next server on port {port} carries its running jobs on", file=sys.stderr, flush=True)
                     os._exit(0)
         except Exception as e:  # noqa: BLE001 - a watcher that died would leave this server on old code for good
             print(f"[hswarm] code watch: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
@@ -452,12 +449,19 @@ def _answer(h: dict, port: int, state: str) -> dict:
         return {"ok": False, "error": f"port {port} answers but it is not hswarm; pick another with --port"}
     out = {"ok": True, "state": state, "pid": h.get("pid"), "url": f"http://{HOST}:{port}/mcp",
            "version": h.get("version"), "code_at": h.get("code_at")}
+    if h.get("tree"):  # a committed copy follows the clone it names (package), not this caller's checkout or worktree
+        head = livecode.head(Path(h["package"])) if h.get("package") else None
+        if head and head["tree"] != h["tree"]:
+            out["behind"] = (f"the running server runs hswarm as commit {h.get('commit')} has it, and {h['package']} has "
+                             f"committed hswarm changes since (commit {head['commit'][:12]}): it moves onto them by itself once "
+                             f"they are {SETTLE_S / 60:.0f} min old, and the next server on this port carries its running jobs on")
+        return out
     mine = code_stamp()  # this caller just loaded the code on disk
     if (h.get("version"), h.get("code_at")) != (mine["version"], mine["code_at"]):
         out["behind"] = (f"the running server runs {h.get('version') or 'code from before code stamps'} (code from "
                          f"{h.get('code_at') or '?'}), the code on disk is {mine['version']} (code from {mine['code_at']}): "
-                         "a server on older code restarts itself once the sources are committed and unchanged for "
-                         f"{SETTLE_S / 60:.0f} min, and the next server on this port carries its running jobs on")
+                         "a server started from a working tree runs what it loaded until it is restarted (the AgentHydra "
+                         "daemon's server follows the clone's commits by itself)")
     return out
 
 
