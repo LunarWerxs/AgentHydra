@@ -78,25 +78,26 @@ const actText = (a: OrchestratorAct): string =>
     <template v-else>
       <div class="mt-2 flex flex-wrap items-baseline gap-x-3">
         <span class="text-text-2">{{ rows.length }} to act on · {{ quiet }} · last {{ plan.days }} days</span>
-        <button
-          v-if="plan.creaitor"
-          type="button"
-          class="ms-auto cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
-          :disabled="asking"
-          @click="load(true)"
-        >
-          {{ asking ? 'Asking the CreAitor…' : 'Ask the CreAitor' }}
-        </button>
-        <button
-          type="button"
-          class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
-          :class="{ 'ms-auto': !plan.creaitor }"
-          :disabled="arming"
-          :title="armed ? 'Stop acting; it goes back to only planning' : 'Continue Desk chats a limit or an error stopped, until Desk stops'"
-          @click="setArmed(!armed)"
-        >
-          {{ armed ? 'Disarm' : 'Arm' }}
-        </button>
+        <span class="ms-auto flex gap-x-3">
+          <button
+            v-if="plan.creaitor"
+            type="button"
+            class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
+            :disabled="asking"
+            @click="load(true)"
+          >
+            {{ asking ? 'Asking the CreAitor…' : 'Ask the CreAitor' }}
+          </button>
+          <button
+            type="button"
+            class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
+            :disabled="arming"
+            :title="armed ? 'Stop acting; it goes back to only planning' : 'Continue Desk chats a limit or an error stopped, until Desk stops'"
+            @click="setArmed(!armed)"
+          >
+            {{ armed ? 'Disarm' : 'Arm' }}
+          </button>
+        </span>
       </div>
       <p v-if="!rows.length" class="mt-2 text-text-muted">Nothing waits on the orchestrator.</p>
       <ul v-else class="mt-2">

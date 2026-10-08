@@ -121,8 +121,9 @@ export function classify(chat: Subject, items: readonly TranscriptItem[] | null,
     return { ...row, move: 'watch', reason: `the orchestrator continued it ${Math.max(1, Math.round((now - sent.ts) / 60_000))} min ago` }
   if (chat.status === 'limited') {
     if (chat.accountAuto) return { ...row, move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
-    const at = chat.limitResetsAt ? ` at ${new Date(chat.limitResetsAt).toISOString()}` : ''
-    return { ...row, move: 'resume-after-limit', reason: `its account hit the usage limit; resume when it resets${at}` }
+    const left = chat.limitResetsAt === null ? null : Math.ceil((chat.limitResetsAt - now) / 60_000)
+    const when = left === null ? 'resume when it resets' : left > 0 ? `it resets in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}` : 'it has reset since'
+    return { ...row, move: 'resume-after-limit', reason: `its account hit the usage limit; ${when}` }
   }
   if (chat.status === 'error') return { ...row, move: 'retry-error', reason: short(chat.lastError || 'the last turn failed', 200) }
   const asking = waitingQuestion(all)
