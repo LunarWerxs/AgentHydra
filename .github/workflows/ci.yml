@@ -279,9 +279,6 @@ jobs:
     timeout-minutes: 60
     name: desk2 · typecheck · test · build (windows-latest)
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: desk2
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
@@ -297,26 +294,36 @@ jobs:
           restore-keys: bun-desk2-${{ runner.os }}-
 
       - name: Install dependencies (desk2)
+        working-directory: desk2
         run: bun install --frozen-lockfile
 
       - name: Typecheck (desk2)
+        working-directory: desk2
         run: bun run typecheck
 
       # The runner's TEMP is the 8.3 short form (C:\Users\RUNNER~1\...) while git, RepoYeti and the folder
       # picker answer the long form, so the suite's temp-folder paths never matched what came back (ten
       # failures on this job's first run, 2026-10-06). A PC's TEMP is the long form; runner.temp is too.
-      - name: Test (desk2 server + web)
+      - name: Test (desk2)
+        working-directory: desk2
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: bun test ./server/test ./web/test
+        run: bun run test
 
-      - name: Test (desk2 hydra)
-        working-directory: desk2/hydra
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
-        run: bun test ./src
+      - name: Setup Python (desk2 free-instances harness)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ClaudFree and its test tools (desk2)
+        working-directory: desk2
+        run: pip install "server/src/free-instances/harness[browser,dev]"
+
+      - name: Test (desk2 free-instances harness)
+        working-directory: desk2
+        run: bun run test:py
 
       - name: Build (desk2)
+        working-directory: desk2
         run: bun run build

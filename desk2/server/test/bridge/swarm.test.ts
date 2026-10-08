@@ -49,7 +49,7 @@ test('a Desktop chat that has only a chat id is placed by its session id and nam
 })
 
 test("another PC's jobs keep that PC's name, resolve a chat known here and leave a stale PC out", () => {
-  const remote = (id: string, o: Record<string, unknown> = {}) => ({ id, label: id, state: 'running', tasks: 2, counts: { cancelled: 1 }, created: '2026-10-05T10:00:00.000Z', finished: null, callerSessionId: null, callerChatId: null, ...o })
+  const remote = (id: string, o: Record<string, unknown> = {}) => ({ id, label: id, state: 'running', tasks: 2, counts: { cancelled: 1 }, created: new Date(Date.now() - 60_000).toISOString(), finished: null, callerSessionId: null, callerChatId: null, ...o })
   const answer = {
     enabled: true,
     pcs: [
@@ -75,8 +75,8 @@ test('the bridge resolves a job\'s chat through /api/chats, reading the chat lis
     const real = f.state
     f.state.chats = { rows: [{ instance: 'default', chatId: CHAT, sessionId: SESSION, title: 'Example chat', archived: false, lastActivityAt: null, cwd: null, live: false }] }
     const origFetch = globalThis.fetch
-    const fetchStub = (async (input: any, init?: any) => {
-      const url = String(input?.url ?? input)
+    const fetchStub = (async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = input instanceof Request ? input.url : String(input)
       if (url.includes('/api/hswarm/api/jobs')) return new Response(JSON.stringify(body('running')), { headers: { 'content-type': 'application/json' } })
       if (url.includes('/api/chats')) hits.push('chats')
       return origFetch(input, init)

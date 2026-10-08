@@ -58,7 +58,7 @@ function makeStore(opts: { projPath?: string; registry?: unknown } = {}): { root
     join(root, 'registry.json'),
     opts.registry ?? {
       profiles: {
-        [`${WS_PROJ}/alpha`]: { sessionHosts: ['github.com', 'example.com'], note: 'the example.com admin login', noteAt: '2026-10-01T10:00:00.000Z' },
+        [`${WS_PROJ}/alpha`]: { sessionHosts: ['github.com', 'example.com'], note: 'the example.com admin login', noteAt: '2020-01-01T10:00:00.000Z' },
         [`${WS_PROJ}/beta`]: { sessionHosts: [] },
         [`${WS_OTHER}/gamma`]: { note: 'other project' },
       },
@@ -66,8 +66,8 @@ function makeStore(opts: { projPath?: string; registry?: unknown } = {}): { root
   )
   write(join(base, 'browser-profile-logins.json'), {
     [`${WS_PROJ}/alpha`]: {
-      'example.com': { state: 'reached', title: 'Admin', at: '2026-10-02T09:00:00.000Z' },
-      'github.com': { state: 'signin-wall', title: 'Sign in', at: '2026-10-03T09:00:00.000Z' },
+      'example.com': { state: 'reached', title: 'Admin', at: '2020-01-02T09:00:00.000Z' },
+      'github.com': { state: 'signin-wall', title: 'Sign in', at: '2020-01-03T09:00:00.000Z' },
     },
   })
   return { root, base }
@@ -169,8 +169,8 @@ describe('profiles listed', () => {
       note: 'the example.com admin login',
       sessionHosts: ['github.com', 'example.com'],
       sites: [
-        { host: 'github.com', state: 'signin-wall', at: '2026-10-03T09:00:00.000Z' },
-        { host: 'example.com', state: 'reached', at: '2026-10-02T09:00:00.000Z' },
+        { host: 'github.com', state: 'signin-wall', at: '2020-01-03T09:00:00.000Z' },
+        { host: 'example.com', state: 'reached', at: '2020-01-02T09:00:00.000Z' },
       ],
     })
     expect(Number.isNaN(Date.parse(alpha?.lastUsedAt as string))).toBe(false)

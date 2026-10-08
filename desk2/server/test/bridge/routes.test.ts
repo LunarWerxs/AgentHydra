@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { CliMayteWorker, ServerEvent } from '@shared/protocol'
+import type { AccountInfo, CliMayteWorker, ExternalSession, SearchHit, ServerEvent } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../src/index'
 import { createBridge } from '../../src/bridge'
 import { RECENT_FINISHED } from '../../src/bridge/climayte'
@@ -52,7 +52,7 @@ test('the REST rows answer from AgentHydra', async () => {
 
   expect(await call(desk, '/api/bridge/status')).toEqual({ status: 200, body: { up: true, url: f.url } })
   const accounts = await call(desk, '/api/accounts')
-  expect(accounts.body.map((a: any) => a.id)).toEqual(['default', 'cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
+  expect(accounts.body.map((a: AccountInfo) => a.id)).toEqual(['default', 'cli-1', 'cli-2', 'cli-3', 'cli-4', 'cli-5'])
   expect((await call(desk, '/api/accounts/pick')).body).toHaveProperty('id')
   expect(Array.isArray((await call(desk, '/api/external/sessions')).body)).toBe(true)
 
@@ -99,7 +99,7 @@ test("the other PCs' CliMayte workers join the list under their PC's name, and n
   f.state.remote = remoteAnswer(RECENT_FINISHED + 3)
   // A PC gone quiet (off or asleep): its last snapshot still says its tasks run.
   const quiet = remoteAnswer().pcs[0]
-  f.state.remote.pcs.push({ ...quiet, pc: '00000000-0000-4000-8000-0000000000bb', name: 'QUIET-PC', stale: true, workers: quiet.workers.map((w: any) => ({ ...w, id: `${w.id}-quiet` })) })
+  f.state.remote.pcs.push({ ...quiet, pc: '00000000-0000-4000-8000-0000000000bb', name: 'QUIET-PC', stale: true, workers: quiet.workers.map((w: { id: string }) => ({ ...w, id: `${w.id}-quiet` })) })
   const desk = await boot(f.url)
   const local = ['w-00000001', 'w-00000002', 'w-00000003', 'w-00000004']
   const ids = (list: CliMayteWorker[]) => list.map((w) => w.id).sort()
@@ -190,7 +190,7 @@ test('AgentHydra down: lists stay answerable, writes say 503', async () => {
   const url = deadUrl()
   const desk = await boot(url)
   expect((await call(desk, '/api/bridge/status')).body).toEqual({ up: false, url })
-  expect((await call(desk, '/api/accounts')).body.map((a: any) => a.id)).toEqual(['default'])
+  expect((await call(desk, '/api/accounts')).body.map((a: AccountInfo) => a.id)).toEqual(['default'])
   expect((await call(desk, '/api/accounts/pick')).body.id).toBe('default')
   expect((await call(desk, '/api/external/sessions')).body).toEqual([])
   expect((await call(desk, '/api/climayte/workers')).body).toEqual([])
@@ -207,7 +207,7 @@ test('GET /api/search answers from AgentHydra search, bounded, its failures as 5
 
   const found = await call(desk, '/api/search?q=websocket%20test')
   expect(found.status).toBe(200)
-  expect(found.body.map((h: any) => h.title)).toEqual(['Session 1', 'Session 3', '00000000'])
+  expect(found.body.map((h: SearchHit) => h.title)).toEqual(['Session 1', 'Session 3', '00000000'])
   expect(f.gets).toContain('/api/sessions/search?q=websocket%20test&limit=25')
   expect(f.gets).toContain('/api/sessions/00000000-0000-4000-8000-000000000002?source=claude')
 
@@ -232,7 +232,7 @@ test('GET /api/external/sessions/:id answers one session however old, mapped as 
 
   // the list holds only what is live or was just written; this session is neither
   const list = (await call(desk, '/api/external/sessions')).body
-  expect(list.map((s: any) => s.id)).not.toContain(old)
+  expect(list.map((s: ExternalSession) => s.id)).not.toContain(old)
   const one = await call(desk, `/api/external/sessions/${old}`)
   expect(one.status).toBe(200)
   expect(one.body).toMatchObject({ id: old, title: 'Session 4', cwd: 'C:\\Users\\me\\Desktop\\Project\\alpha', source: 'cli', instance: 'Claude-4', pinned: false, archived: false, group: null })
