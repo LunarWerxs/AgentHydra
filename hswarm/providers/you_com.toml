@@ -1,0 +1,15 @@
+base_url = "https://ydc-index.io"
+transport = "service"
+about = "You.com web search through its REST API."
+website = "https://you.com"
+key_url = "https://you.com/platform/api-keys"
+docs = "https://you.com/docs/api-reference/search/v1-search"
+auth_header = "X-API-Key"
+auth_prefix = ""
+capabilities = ["search"]
+
+[operations.search]
+method = "POST"
+path = "/v1/search"
+capability = "search"
+response = "json"
