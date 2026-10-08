@@ -250,8 +250,7 @@ STAND_IN_SCALE = 0.415 / 0.7
 async def stand_in_answers(items: list[dict], jres: list[dict], jev, stand_in: typesafe.Jev | None = None) -> dict | None:
     """Re-ask on STAND_IN the items Jev could not answer for want of a working key; each answer replaces Jev's error in
     `jres`, marked with the model. The stand-in's call stats, or None when it asked nothing (no such item, or no
-    Cloudflare token and account id: CLOUDFLARE_API_TOKEN / secrets/cloudflare_api_keys, CLOUDFLARE_ACCOUNT_ID /
-    secrets/cloudflare_account_id)."""
+    Cloudflare route: typesafe.clef_routes, the REST API with a token and account or a clef-proxy Worker)."""
     down = [k for k, r in enumerate(jres) if r["status"] != "ok" and (not jev.usable or r.get("http") in typesafe.KEY_DEAD)]
     if not down:
         return None

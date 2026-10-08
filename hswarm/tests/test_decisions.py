@@ -298,12 +298,14 @@ def test_a_clef_model_goes_to_workers_ai_and_its_envelope_is_unwrapped(monkeypat
     assert typesafe.is_typed_model("clef") and typesafe.is_typed_model("clef-flash")
 
 
-def test_a_clef_key_line_carries_its_account_so_a_synced_pc_needs_nothing_else():
-    """The vault syncs key lists only: on the other PC there is no CLOUDFLARE_ACCOUNT_ID and no account file, and a
-    line written `<account id>:<token>` must still reach that account with the bare token as the bearer."""
+def test_a_clef_key_line_carries_its_route_so_a_synced_pc_needs_nothing_else():
+    """The vault syncs key lists only: on the other PC there is no CLOUDFLARE_ACCOUNT_ID and no account file. A line
+    `<account id>:<token>` must still reach that account's REST URL, and a line `<worker host>:<secret>` its
+    clef-proxy Worker, each with the bare credential as the bearer."""
     account, other = "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"
     config.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-    (config.SECRETS_DIR / "cloudflare_api_keys").write_text(f"{account}:cf-token-a\n{other}:cf-token-b\n", encoding="utf-8")
+    (config.SECRETS_DIR / "cloudflare_api_keys").write_text(
+        f"{account}:cf-token-a\n{other}:cf-token-b\nclef.example.workers.dev:proxy-secret\n", encoding="utf-8")
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -313,8 +315,11 @@ def test_a_clef_key_line_carries_its_account_so_a_synced_pc_needs_nothing_else()
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             jev = typesafe.Jev.for_model("clef", http=http)
-            return jev.keys, await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model="clef")
+            res = [await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model="clef") for _ in range(2)]
+            return jev.keys, res
 
     keys, res = asyncio.run(go())
-    assert res["status"] == "ok" and keys == ["cf-token-a"]  # the other account's token would 401 on this URL
-    assert seen == [(f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/clef", "Bearer cf-token-a")]
+    assert all(r["status"] == "ok" for r in res)
+    assert keys == ["cf-token-a", "proxy-secret"]  # the other account's token would 401 on this account's URL
+    assert sorted(seen) == [("https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/cloudflare/clef", "Bearer cf-token-a"),
+                            ("https://clef.example.workers.dev/clef", "Bearer proxy-secret")]

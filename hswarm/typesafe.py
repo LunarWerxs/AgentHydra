@@ -20,7 +20,8 @@ It also reaches Cloudflare's Clef decision models (blog.cloudflare.com/clef-deci
 `clef-flash` on Workers AI take TypeSafe's request and answer in TypeSafe's shape, inside Workers AI's
 {"result": ..., "success": ...} envelope; up to 64 questions a call, 64k context. They need a Cloudflare token with
 Workers AI access (CLOUDFLARE_API_TOKEN, or ~/.hswarm/secrets/cloudflare_api_keys) and the account: CLOUDFLARE_ACCOUNT_ID,
-or a key line written `<account id>:<token>`.
+or a key line written `<account id>:<token>`. An account with no API token to keep runs hswarm/cloudflare/clef-proxy.js
+instead, a Worker that reaches Clef through its AI binding, and lists it as `<worker host>:<secret>`.
 """
 from __future__ import annotations
 
@@ -55,9 +56,13 @@ _NEXT_SLOT: dict[str, float] = {}  # url -> earliest monotonic time the next req
 # $ per million input tokens, output free (developers.cloudflare.com/workers-ai/models/clef and /clef-flash, 2026-10-02).
 CLEF_PRICES = {"clef": 0.24, "clef-flash": 0.09}
 CLEF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{model}"
-CLEF_LINE = re.compile(r"^([0-9a-f]{32}):(\S+)$")  # `<account id>:<token>` in cloudflare_api_keys
+# A cloudflare_api_keys line: `<account id>:<token>` for the REST API, or `<worker host>:<secret>` for a Worker running
+# hswarm/cloudflare/clef-proxy.js (an account with no API token to keep reaches Workers AI through a Worker's binding).
+CLEF_LINE = re.compile(r"^([0-9a-f]{32}|[a-z0-9-]+(?:\.[a-z0-9-]+)+):(\S+)$")
+CLEF_PROXY_URL = "https://{host}/{model}"
 NO_KEY = {"typesafe": f"no usable TypeSafe key (TYPESAFE_API_KEY or {config.SECRETS_DIR / 'typesafe_api_keys'})",
-          "cloudflare": f"no usable Cloudflare token (CLOUDFLARE_API_TOKEN or {config.SECRETS_DIR / 'cloudflare_api_keys'}, plus CLOUDFLARE_ACCOUNT_ID)"}
+          "cloudflare": f"no usable Cloudflare route (CLOUDFLARE_API_TOKEN plus CLOUDFLARE_ACCOUNT_ID, or an `<account id>:<token>` or "
+                        f"`<worker host>:<secret>` line in {config.SECRETS_DIR / 'cloudflare_api_keys'})"}
 
 
 def is_typed_model(model: str) -> bool:
@@ -71,18 +76,11 @@ def load_keys() -> list[str]:
 
 
 def _clef_lines() -> list[tuple[str, str]]:
-    """(account, token) for each line of ~/.hswarm/secrets/cloudflare_api_keys, the account "" on a bare token. The vault
-    syncs key lists and nothing else, so a line written `<account id>:<token>` is what carries the account to the
-    other PCs: one setup reaches every machine."""
+    """(route, token) for each line of ~/.hswarm/secrets/cloudflare_api_keys: the route is an account id, a Worker host,
+    or "" on a bare token. The vault syncs key lists and nothing else, so the route written into the line is what
+    carries it to the other PCs: one setup reaches every machine."""
     lines = config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")
     return [(m.group(1), m.group(2)) if (m := CLEF_LINE.match(line)) else ("", line) for line in lines]
-
-
-def clef_keys(account: str = "") -> list[str]:
-    """Cloudflare tokens with Workers AI access: CLOUDFLARE_API_TOKEN (comma-separated for several), then
-    ~/.hswarm/secrets/cloudflare_api_keys, minus any line written for a different account than `account`."""
-    env = config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN"))
-    return list(dict.fromkeys(env + [t for a, t in _clef_lines() if not (a and account and a != account)]))
 
 
 def clef_account() -> str:
@@ -91,7 +89,23 @@ def clef_account() -> str:
     CreAitor) still reaches the stand-in."""
     return (os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
             or next(iter(config._read_key_lines(config.SECRETS_DIR / "cloudflare_account_id")), "")
-            or next((a for a, _ in _clef_lines() if a), ""))
+            or next((r for r, _ in _clef_lines() if r and "." not in r), ""))
+
+
+def clef_routes(model: str) -> dict[str, str]:
+    """Each usable Clef credential -> the URL that serves `model` with it: the REST API for CLOUDFLARE_API_TOKEN
+    (comma-separated for several) and for the file's tokens of `clef_account()` (a line for another account would
+    401 there), the Worker for a `<worker host>:<secret>` line. No account means no REST credential."""
+    account, routes = clef_account(), {}
+    rest = CLEF_URL.format(account=account, model=model)
+    for token in config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN")) if account else []:
+        routes.setdefault(token, rest)
+    for route, token in _clef_lines():
+        if "." in route:
+            routes.setdefault(token, CLEF_PROXY_URL.format(host=route, model=model))
+        elif account and route in ("", account):
+            routes.setdefault(token, rest)
+    return routes
 
 
 class Jev:
@@ -106,8 +120,9 @@ class Jev:
     # 30 s: an answer takes 0.15-2 s, so a longer wait is a hung connection, and a timeout is retried like a 5xx.
     def __init__(self, keys: list[str] | None = None, concurrency: int = 16, timeout: float = 30.0, http: httpx.AsyncClient | None = None,
                  *, url: str = URL, usd_per_input_token: float = USD_PER_INPUT_TOKEN, keyless: bool = False, min_interval: float = 0.0,
-                 provider: str = "typesafe"):
+                 provider: str = "typesafe", urls: dict[str, str] | None = None):
         self.url, self.keyless, self.min_interval, self.provider = url, keyless, min_interval, provider
+        self._urls = urls or {}  # key -> its own endpoint, when keys reach different ones (Clef's REST API and its Worker)
         self.usd_per_input_token = usd_per_input_token
         self._pool, self.disabled = None, 0
         self.keys = [] if keyless else list(keys if keys is not None else self._live_pool_keys())
@@ -121,13 +136,13 @@ class Jev:
     @classmethod
     def for_model(cls, model: str, concurrency: int = 16, **kw) -> "Jev":
         """The client that serves `model`: TypeSafe for jev-*, the keyless Featherless demo for featherless-ai/*,
-        Workers AI for clef and clef-flash (no account id means no usable key)."""
+        Workers AI for clef and clef-flash, through the REST API or a clef-proxy Worker (clef_routes)."""
         if model.startswith(SIMPLE_JEV_PREFIX):
             return cls(concurrency=min(concurrency, 2), url=SIMPLE_JEV_DEMO_URL, usd_per_input_token=0.0, keyless=True,
                        min_interval=SIMPLE_JEV_DEMO_INTERVAL, **kw)
         if model in CLEF_PRICES:
-            account = clef_account()
-            return cls(keys=clef_keys(account) if account else [], concurrency=concurrency, url=CLEF_URL.format(account=account, model=model),
+            routes = clef_routes(model)
+            return cls(keys=list(routes), urls=routes, concurrency=concurrency, url=CLEF_URL.format(account=clef_account(), model=model),
                        usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
         return cls(concurrency=concurrency, **kw)
 
@@ -200,18 +215,18 @@ class Jev:
         body = {"state": state, "model": model, "questions": questions}
         # Serialised once so the egress receipt hashes the exact bytes that leave (egress.py).
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        sink = f"{self.provider}:{urlsplit(self.url).hostname}"
         for attempt in range(attempts):
             key = self._key()
             if key is None:
                 return last
+            url = self._urls.get(key, self.url)
             async with self.sem:
                 await self._pace()
                 t0 = time.perf_counter()
-                egress.record(sink, payload, provider=self.provider, model=model)  # fail-closed raises here, unsent
+                egress.record(f"{self.provider}:{urlsplit(url).hostname}", payload, provider=self.provider, model=model)  # fail-closed raises here, unsent
                 try:
                     headers = {"Content-Type": "application/json", **({} if self.keyless else {"Authorization": f"Bearer {key}"})}
-                    resp = await self._http.post(self.url, content=payload, headers=headers)
+                    resp = await self._http.post(url, content=payload, headers=headers)
                 except httpx.HTTPError as e:
                     resp, last = None, {"status": "error", "error": f"{type(e).__name__}: {e}"[:200], "http": None}
                 secs = time.perf_counter() - t0

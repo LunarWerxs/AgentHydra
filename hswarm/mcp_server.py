@@ -574,7 +574,7 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     model defaults to jev-1.13.0, the version the thresholds were measured on (typesafe.MODEL); 'jev-latest' is the
     moving alias. model 'featherless-ai/<Model>-classifier' sends the typed leg to Featherless's keyless Simple Jev demo instead:
     for re-tests only, it measured no better than Jev and worse calibrated (docs/BENCH-2026-09-24-simple-jev.md).
-    model 'clef' or 'clef-flash' sends it to Cloudflare's Workers AI (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID): re-tests
+    model 'clef' or 'clef-flash' sends it to Cloudflare's Workers AI (a token and account, or a clef-proxy Worker: typesafe.clef_routes): re-tests
     only, no detectable difference from Jev, and its confidence scale differs, so escalate_below 0.7 is not Jev's 0.7
     there (~0.42 matches it on choices; docs/BENCH-2026-10-02-clef.md); never batch it.
     Returns answers [{id, answer, source, jev: {answer, confidence, probabilities}, fallback?}] plus a cost summary.
