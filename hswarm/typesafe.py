@@ -19,7 +19,8 @@ caller; every client of that host shares one pacer so several bench arms stay un
 It also reaches Cloudflare's Clef decision models (blog.cloudflare.com/clef-decision-models, 2026-10-01): `clef` and
 `clef-flash` on Workers AI take TypeSafe's request and answer in TypeSafe's shape, inside Workers AI's
 {"result": ..., "success": ...} envelope; up to 64 questions a call, 64k context. They need a Cloudflare token with
-Workers AI access (CLOUDFLARE_API_TOKEN, or ~/.hswarm/secrets/cloudflare_api_keys) and CLOUDFLARE_ACCOUNT_ID.
+Workers AI access (CLOUDFLARE_API_TOKEN, or ~/.hswarm/secrets/cloudflare_api_keys) and the account: CLOUDFLARE_ACCOUNT_ID,
+or a key line written `<account id>:<token>`.
 """
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ import asyncio
 import json
 import os
 import random
+import re
 import time
 from urllib.parse import urlsplit
 
@@ -53,6 +55,7 @@ _NEXT_SLOT: dict[str, float] = {}  # url -> earliest monotonic time the next req
 # $ per million input tokens, output free (developers.cloudflare.com/workers-ai/models/clef and /clef-flash, 2026-10-02).
 CLEF_PRICES = {"clef": 0.24, "clef-flash": 0.09}
 CLEF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/cloudflare/{model}"
+CLEF_LINE = re.compile(r"^([0-9a-f]{32}):(\S+)$")  # `<account id>:<token>` in cloudflare_api_keys
 NO_KEY = {"typesafe": f"no usable TypeSafe key (TYPESAFE_API_KEY or {config.SECRETS_DIR / 'typesafe_api_keys'})",
           "cloudflare": f"no usable Cloudflare token (CLOUDFLARE_API_TOKEN or {config.SECRETS_DIR / 'cloudflare_api_keys'}, plus CLOUDFLARE_ACCOUNT_ID)"}
 
@@ -67,17 +70,28 @@ def load_keys() -> list[str]:
     return config.load_api_keys("typesafe")
 
 
-def clef_keys() -> list[str]:
+def _clef_lines() -> list[tuple[str, str]]:
+    """(account, token) for each line of ~/.hswarm/secrets/cloudflare_api_keys, the account "" on a bare token. The vault
+    syncs key lists and nothing else, so a line written `<account id>:<token>` is what carries the account to the
+    other PCs: one setup reaches every machine."""
+    lines = config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")
+    return [(m.group(1), m.group(2)) if (m := CLEF_LINE.match(line)) else ("", line) for line in lines]
+
+
+def clef_keys(account: str = "") -> list[str]:
     """Cloudflare tokens with Workers AI access: CLOUDFLARE_API_TOKEN (comma-separated for several), then
-    ~/.hswarm/secrets/cloudflare_api_keys."""
+    ~/.hswarm/secrets/cloudflare_api_keys, minus any line written for a different account than `account`."""
     env = config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN"))
-    return list(dict.fromkeys(env + config._read_key_lines(config.SECRETS_DIR / "cloudflare_api_keys")))
+    return list(dict.fromkeys(env + [t for a, t in _clef_lines() if not (a and account and a != account)]))
 
 
 def clef_account() -> str:
-    """The Cloudflare account Workers AI bills: CLOUDFLARE_ACCOUNT_ID, then ~/.hswarm/secrets/cloudflare_account_id, so a
-    caller started without the variable (a Dredd bridge, the CreAitor) still reaches the stand-in."""
-    return os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip() or next(iter(config._read_key_lines(config.SECRETS_DIR / "cloudflare_account_id")), "")
+    """The Cloudflare account Workers AI bills: CLOUDFLARE_ACCOUNT_ID, then ~/.hswarm/secrets/cloudflare_account_id, then
+    the account on the first `<account id>:<token>` line, so a caller started without the variable (a Dredd bridge, the
+    CreAitor) still reaches the stand-in."""
+    return (os.environ.get("CLOUDFLARE_ACCOUNT_ID", "").strip()
+            or next(iter(config._read_key_lines(config.SECRETS_DIR / "cloudflare_account_id")), "")
+            or next((a for a, _ in _clef_lines() if a), ""))
 
 
 class Jev:
@@ -113,7 +127,7 @@ class Jev:
                        min_interval=SIMPLE_JEV_DEMO_INTERVAL, **kw)
         if model in CLEF_PRICES:
             account = clef_account()
-            return cls(keys=clef_keys() if account else [], concurrency=concurrency, url=CLEF_URL.format(account=account, model=model),
+            return cls(keys=clef_keys(account) if account else [], concurrency=concurrency, url=CLEF_URL.format(account=account, model=model),
                        usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
         return cls(concurrency=concurrency, **kw)
 
