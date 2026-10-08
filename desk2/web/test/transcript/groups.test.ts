@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
-import { groupRows, rowGap, toolSummary, type ToolItem } from '../../src/components/transcript/lib/groups'
+import { groupRows, rowGap, toolSummary, type RunItem, type ThinkingItem, type ToolItem } from '../../src/components/transcript/lib/groups'
 
 const tool = (id: string, name: string, input: Record<string, unknown> = {}, status: ToolItem['status'] = 'done'): ToolItem => ({
   id,
@@ -13,8 +13,9 @@ const tool = (id: string, name: string, input: Record<string, unknown> = {}, sta
 })
 const user = (id: string): TranscriptItem => ({ id, ts: 1, kind: 'user', text: 'hi' })
 const text = (id: string, streaming = false): TranscriptItem => ({ id, ts: 1, kind: 'assistant_text', text: 'ok', streaming })
+const think = (id: string, streaming = false): ThinkingItem => ({ id, ts: 1, kind: 'thinking', text: 'Checking the remote.', streaming })
 
-const phrase = (items: ToolItem[], cwd?: string) =>
+const phrase = (items: RunItem[], cwd?: string) =>
   toolSummary(items, cwd)
     .phrases.map((p) => [p.text, p.target, p.after].filter(Boolean).join(' '))
     .join(', ')
@@ -110,5 +111,38 @@ describe('toolSummary', () => {
     expect(s.removed).toBe(1)
     expect(s.failed).toBe(1)
     expect(s.running).toBe(false)
+  })
+})
+
+describe('thinking in a tool run', () => {
+  // Owner, 2026-10-08: seven status rows between two paragraphs ("Ran a command", "Thought process", "Ran 2 commands", ...).
+  test('a tool call and thinking block with nothing between them are one run: the seven rows read as one sentence', () => {
+    const items = [tool('a', 'Bash'), think('k1'), tool('b', 'Bash'), tool('c', 'Bash'), think('k2'), tool('d', 'Bash'), tool('e', 'Bash'), think('k3'), tool('f', 'Bash')]
+    const rows = groupRows([user('u'), ...items, text('t')])
+    expect(rows.map((r) => r.id)).toEqual(['u', 'tools:a', 't'])
+    expect(rows[1].kind === 'tools' && phrase(rows[1].items)).toBe('Ran 6 commands, thought 3 times')
+  })
+
+  test('a thinking block alone before prose stays its own row, never a run of thinking only', () => {
+    const rows = groupRows([user('u'), think('k'), text('t')])
+    expect(rows.map((r) => r.id)).toEqual(['u', 'k', 't'])
+    expect(rows[1].kind).toBe('item')
+  })
+
+  test('a run that opens with a thinking block keeps the id of that block, and its steps run in order', () => {
+    const rows = groupRows([think('k'), tool('a', 'Bash')])
+    expect(rows.map((r) => r.id)).toEqual(['tools:k'])
+    expect(rows[0].kind === 'tools' && rows[0].items.map((i) => i.id)).toEqual(['k', 'a'])
+  })
+
+  test('with thinking not folded, every block is its own row and breaks the run, as before', () => {
+    const items = [tool('a', 'Bash'), think('k1'), tool('b', 'Bash'), tool('c', 'Bash'), think('k2'), tool('d', 'Bash'), tool('e', 'Bash'), think('k3'), tool('f', 'Bash')]
+    expect(groupRows(items, false).map((r) => r.id)).toEqual(['tools:a', 'k1', 'tools:b', 'k2', 'tools:d', 'k3', 'tools:f'])
+  })
+
+  test('a run with a streaming thinking block is running and says "thinking" in its clause', () => {
+    expect(phrase([tool('a', 'Bash'), think('k', true)])).toBe('Ran a command, thinking')
+    expect(toolSummary([tool('a', 'Bash'), think('k', true)]).running).toBe(true)
+    expect(toolSummary([tool('a', 'Bash'), think('k')]).running).toBe(false)
   })
 })

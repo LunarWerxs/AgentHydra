@@ -6,6 +6,12 @@ import { toolDiff } from './diff'
 
 export type ToolItem = Extract<TranscriptItem, { kind: 'tool_use' }>
 export type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
+export type ThinkingItem = Extract<TranscriptItem, { kind: 'thinking' }>
+/** One step of a tool run: a tool call, or a thinking block that folds into the run around it. */
+export type RunItem = ToolItem | ThinkingItem
+
+const isTool = (it: RunItem): it is ToolItem => it.kind === 'tool_use'
+const isThinking = (it: RunItem): it is ThinkingItem => it.kind === 'thinking'
 
 /** The user message that started a turn: what Retry under its finished reply sends again. */
 export interface TurnPrompt {
@@ -20,8 +26,8 @@ const prompts = new WeakMap<TranscriptItem, TurnPrompt>()
 
 export type DisplayRow =
   | { id: string; kind: 'item'; item: TranscriptItem; endOfTurn: boolean; prompt?: TurnPrompt | null }
-  /** A tool run; `tasks` are background tasks that settled inside it ("finished 2 background tasks"). */
-  | { id: string; kind: 'tools'; items: ToolItem[]; tasks?: TaskItem[] }
+  /** A tool run, its steps in order (tool calls and the thinking blocks folded in); `tasks` are background tasks that settled inside it ("finished 2 background tasks"). */
+  | { id: string; kind: 'tools'; items: RunItem[]; tasks?: TaskItem[] }
   /** A run of the AI's browser calls: one Browser card showing the latest (its own card, never folded into a tool run). */
   | { id: string; kind: 'browser'; items: ToolItem[] }
   /** Settled background tasks in a row: "18 background commands completed". */
@@ -63,7 +69,8 @@ function taskPlace(it: TaskItem, lastTurn: boolean): 'card' | 'hidden' | 'settle
 }
 
 /**
- * Consecutive tool calls become one 'tools' row (id `tools:<first id>`, stable while the run grows).
+ * Consecutive tool calls become one 'tools' row (id `tools:<first id>`, stable while the run grows); the thinking blocks
+ * between them join it as its steps, and a lone thinking block keeps its own row.
  * Background tasks are placed by taskPlace. The last turn starts at the latest of the last user message
  * and the last settle time (ts + durationMs) of a task: each settle woke the session with a
  * <task-notification>, which starts a new turn. A settled workflow with a settle time is in the last
@@ -126,17 +133,27 @@ function isHandoffContinuation(it: TranscriptItem, last: DisplayRow | undefined)
   return it.kind === 'system' && it.text.startsWith(CONTINUED_LINE) && last?.kind === 'item' && last.item.id.startsWith('moved:')
 }
 
-function placeRow(out: DisplayRow[], it: TranscriptItem, i: number, bounds: { lastUser: number; turnStart: number }, prompt: TurnPrompt | null): void {
+// A tool call joins the run before it. A thinking block right before it (its own row until now) opens the run,
+// so the run's first step is that block; with thinking not folded, the block stays its own row and breaks the run.
+function joinRun(out: DisplayRow[], it: ToolItem, foldThinking: boolean): void {
+  const last = out[out.length - 1]
+  if (last?.kind === 'tools') last.items.push(it)
+  else if (foldThinking && last?.kind === 'item' && last.item.kind === 'thinking') out.splice(out.length - 1, 1, { id: `tools:${last.id}`, kind: 'tools', items: [last.item, it] })
+  else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
+}
+
+function placeRow(out: DisplayRow[], it: TranscriptItem, i: number, bounds: { lastUser: number; turnStart: number }, prompt: TurnPrompt | null, foldThinking: boolean): void {
   const last = out[out.length - 1]
   if (it.kind === 'tool_use' && toolFamily(it.name, it.input) === 'browser') placeBrowser(out, it)
-  else if (folds(it)) {
-    if (last?.kind === 'tools') last.items.push(it)
-    else out.push({ id: `tools:${it.id}`, kind: 'tools', items: [it] })
-  } else if (it.kind === 'task') placeTask(out, it, i, bounds)
+  else if (folds(it)) joinRun(out, it, foldThinking)
+  // A thinking block alone stays a row of its own: only one that follows a tool run joins it.
+  else if (it.kind === 'thinking' && foldThinking && last?.kind === 'tools') last.items.push(it)
+  else if (it.kind === 'task') placeTask(out, it, i, bounds)
   else out.push(it.kind === 'assistant_text' ? { id: it.id, kind: 'item', item: it, endOfTurn: false, prompt } : { id: it.id, kind: 'item', item: it, endOfTurn: false })
 }
 
-export function groupRows(items: TranscriptItem[]): DisplayRow[] {
+/** Rows of a transcript. `foldThinking` (default) lets each thinking block join the tool run around it; off, every block is its own row. */
+export function groupRows(items: TranscriptItem[], foldThinking = true): DisplayRow[] {
   const out: DisplayRow[] = []
   const bounds = turnBounds(items)
   let prompt: TurnPrompt | null = null
@@ -146,7 +163,7 @@ export function groupRows(items: TranscriptItem[]): DisplayRow[] {
     // A reply to a note has no prompt of the person's to send again.
     if (it.kind === 'note') prompt = null
     if (isHandoffContinuation(it, out[out.length - 1])) continue
-    placeRow(out, it, i, bounds, prompt)
+    placeRow(out, it, i, bounds, prompt, foldThinking)
   }
   let seenText = false
   for (let i = out.length - 1; i >= 0; i--) {
@@ -195,9 +212,10 @@ const base = (p: string) => p.split('/').pop() || p
 const clip = (s: string, n = 48) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
 const str = (v: unknown) => (typeof v === 'string' ? v : '')
 
-type Cat = 'bash' | 'read' | 'edit' | 'write' | 'search' | 'fetch' | 'websearch' | 'todo' | 'tool'
+type Cat = 'bash' | 'read' | 'edit' | 'write' | 'search' | 'fetch' | 'websearch' | 'todo' | 'tool' | 'thinking'
 
-function category(it: ToolItem): Cat {
+function category(it: RunItem): Cat {
+  if (isThinking(it)) return 'thinking'
   if (it.name === 'WebFetch') return 'fetch'
   if (it.name === 'WebSearch') return 'websearch'
   const f = toolFamily(it.name)
@@ -216,8 +234,8 @@ function host(url: string): string {
 
 type Verb = (past: string, now: string) => string
 
-function groupByCategory(items: ToolItem[]): Map<Cat, ToolItem[]> {
-  const byCat = new Map<Cat, ToolItem[]>()
+function groupByCategory(items: RunItem[]): Map<Cat, RunItem[]> {
+  const byCat = new Map<Cat, RunItem[]>()
   for (const it of items) {
     const c = category(it)
     if (!byCat.has(c)) byCat.set(c, [])
@@ -248,7 +266,13 @@ function otherPhrase(v: Verb, list: ToolItem[], items: ToolItem[]): Phrase {
   return { text: `${v('used', 'using')} ${n(list.length, 'a tool', 'tools')}` }
 }
 
-function phraseFor(c: Cat, list: ToolItem[], items: ToolItem[], cwd?: string | null): Phrase {
+/** "thought" for one thinking block, "thought 3 times"; "thinking" while one of them streams. */
+function thinkingPhrase(list: ThinkingItem[]): Phrase {
+  if (list.some((i) => i.streaming)) return { text: 'thinking' }
+  return { text: list.length === 1 ? 'thought' : `thought ${list.length} times` }
+}
+
+function phraseFor(c: Exclude<Cat, 'thinking'>, list: ToolItem[], items: ToolItem[], cwd?: string | null): Phrase {
   const v = verbFor(list)
   const k = list.length
   switch (c) {
@@ -279,12 +303,18 @@ function finishedTasksPhrase(tasks: TaskItem[]): Phrase {
   return p
 }
 
-/** The status row's sentence for a run of tool calls, in first-seen order; present tense while a call runs. */
-export function toolSummary(items: ToolItem[], cwd?: string | null, tasks: TaskItem[] = []): ToolSummary {
+/** The status row's sentence for a run of steps, in first-seen order; present tense while a call runs or a thinking block streams. */
+export function toolSummary(items: RunItem[], cwd?: string | null, tasks: TaskItem[] = []): ToolSummary {
+  const calls = items.filter(isTool)
   const phrases: Phrase[] = []
   for (const [c, list] of groupByCategory(items)) {
-    const p = phraseFor(c, list, items, cwd)
-    const bad = list.filter((i) => i.status === 'error').length
+    if (c === 'thinking') {
+      phrases.push(thinkingPhrase(list.filter(isThinking)))
+      continue
+    }
+    const run = list.filter(isTool)
+    const p = phraseFor(c, run, calls, cwd)
+    const bad = run.filter((i) => i.status === 'error').length
     phrases.push(bad ? { ...p, after: `(${bad} failed)` } : p)
   }
   if (tasks.length) phrases.push(finishedTasksPhrase(tasks))
@@ -292,7 +322,7 @@ export function toolSummary(items: ToolItem[], cwd?: string | null, tasks: TaskI
 
   let added = 0
   let removed = 0
-  for (const it of items) {
+  for (const it of calls) {
     const f = toolFamily(it.name)
     if (f !== 'edit' && f !== 'write') continue
     const d = toolDiff(it.name, it.input)
@@ -303,8 +333,8 @@ export function toolSummary(items: ToolItem[], cwd?: string | null, tasks: TaskI
   }
   return {
     phrases,
-    running: items.some((i) => i.status === 'running'),
-    failed: items.filter((i) => i.status === 'error').length,
+    running: items.some((i) => (isTool(i) ? i.status === 'running' : !!i.streaming)),
+    failed: calls.filter((i) => i.status === 'error').length,
     added,
     removed,
   }

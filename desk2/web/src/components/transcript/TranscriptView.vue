@@ -41,6 +41,8 @@ const props = defineProps<{
   find?: { query: string; active: { itemId: string; nth: number } | null } | null
   /** Tighter gaps between rows (the session header's Compact layout). */
   compact?: boolean
+  /** Thinking blocks fold into the tool runs around them (the default); off, each one keeps its own row. */
+  foldThinking?: boolean
   /** How much of the top something lying over the transcript covers (Hydra Desk 2's session header): the first row starts below it. */
   insetTop?: number
   /** The history is not loaded yet; with `loadError`, the last try at it failed and another is coming. */
@@ -86,7 +88,7 @@ const chat = computed<ChatSummary | null>(() =>
 )
 const rows = computed(() => buildRows(props.items))
 // What is laid out: tool runs folded into status rows, end-of-turn replies marked.
-const display = computed(() => groupRows(rows.value.top))
+const display = computed(() => groupRows(rows.value.top, props.foldThinking !== false))
 
 provideTranscript(
   {
