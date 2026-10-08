@@ -8,7 +8,7 @@
 // README "What Desk 2 adds", the orchestrator.
 
 import type { Hono } from 'hono'
-import type { ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import type { OrchestratorAct, OrchestratorArm, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
 import type { ServerContext } from '../context'
 import { DIAGNOSTICS_API } from '../engine/diagnostics'
@@ -79,8 +79,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   }
 
   /** Each open chat's row (with `outside`, each outside session's too), the most recently active first, and each
-   *  one's Claude session. `blind` when Desk's own chats could not be read. */
-  async function read(days: number, outside: boolean): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean }> {
+   *  one's Claude session. `blind` when Desk's own chats could not be read; `unread`, the chats whose transcript
+   *  could not be (each is classified as if it were empty, which is fine to show and never enough to act on). */
+  async function read(
+    days: number,
+    outside: boolean
+  ): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean; unread: Set<string> }> {
     const now = Date.now()
     const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
     const subjects = [
@@ -91,11 +95,14 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
       .slice(0, MAX_CHATS)
     const rows: OrchestratorRow[] = []
+    const unread = new Set<string>()
     for (const { s, items } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
-      rows.push(classify(s, busy ? null : await get<TranscriptItem[]>(items), now))
+      const got = busy ? null : await get<TranscriptItem[]>(items)
+      if (!busy && got === null) unread.add(s.id)
+      rows.push(classify(s, got, now))
     }
-    return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null }
+    return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null, unread }
   }
 
   /** The plan as the page shows it: a chat the orchestrator gave up on reads as left to a person. Only the shown
@@ -115,12 +122,19 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return error ? { ...base, did: 'continued', error } : { ...base, did: 'continued' }
   }
 
-  /** One look at Desk's chats while armed; never two at once. */
+  /** One look at Desk's chats while armed; never two at once. Without a read of the chats or of the send queue it
+   *  does nothing, and a disarm part-way through stops it before the next send. */
   function tick(): Promise<void> {
     ticking ??= (async () => {
-      const { rows, blind } = await read(DEFAULT_DAYS, false)
-      if (!armed || blind) return
-      for (const a of decide(rows, tries)) acts.unshift(await carry(a))
+      const { rows, blind, unread } = await read(DEFAULT_DAYS, false)
+      const queue = await get<QueueState>('/api/queue')
+      if (!armed || blind || !queue) return
+      const waiting = queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : []))
+      for (const a of decide(rows, tries, new Set([...unread, ...waiting]))) {
+        if (!armed) break
+        tries.set(a.row.id, a.count)
+        acts.unshift(await carry(a))
+      }
       acts.splice(ACTS_KEPT)
     })()
       .catch((err: unknown) => console.error('[orchestrator] tick failed:', err))
