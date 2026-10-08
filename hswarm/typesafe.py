@@ -43,8 +43,9 @@ USD_PER_INPUT_TOKEN = 0.042 / 1_000_000
 RETRYABLE = {429, 500, 502, 503, 504, 529}
 KEY_DEAD = {401, 402, 403}  # a bad, unpaid or unpermitted key does not heal inside a run
 # A key in the shared disabled slot for credit gets one try this often (KeyPool.probation): TypeSafe has no balance
-# endpoint that could see a top-up, and a failed try costs one refused request, not a charge.
-JEV_RECHECK_S = 3600.0
+# endpoint that could see a top-up. The pool's own 24-hour no-credit window (client.NO_CREDIT_RECHECK_S, owner
+# 2026-09-23): spent keys are not topped up, so a dead key should not be retried every few hours.
+JEV_RECHECK_S = 24 * 3600.0
 SIMPLE_JEV_PREFIX = "featherless-ai/"
 SIMPLE_JEV_DEMO_URL = "https://simple-jev-demo-api.featherless.ai/v1/systemone"
 SIMPLE_JEV_DEMO_INTERVAL = 0.5  # the demo's 2 requests/second
