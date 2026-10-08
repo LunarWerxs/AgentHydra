@@ -228,7 +228,7 @@ async function branch() {
     role="toolbar"
     aria-label="Message actions"
     class="tx-actions"
-    :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle' || undoState === 'failed') && 'tx-actions-pinned']"
+    :class="[align === 'end' ? 'justify-end' : 'justify-start', (pinned || moreOpen || moveState !== 'idle' || undoState === 'failed' || forkState !== 'idle') && 'tx-actions-pinned']"
   >
     <time v-if="align === 'end'" class="tx-actions-time">{{ time }}</time>
     <button type="button" class="tx-action" :aria-label="copied ? 'Copied' : 'Copy'" :title="copied ? 'Copied' : 'Copy'" @click="copy">
@@ -249,7 +249,7 @@ async function branch() {
       <DialogContent :show-close-button="false" class="gap-3 rounded-[var(--radius-12)] p-4 shadow-(--shadow-popover) ring-0 sm:max-w-[360px]">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
         <DialogDescription class="text-[13px] leading-[19px] text-text-2">
-          This takes your message from {{ undoTime }} and everything after it out of this chat: {{ undoTakes?.yours }} of your messages and {{ undoTakes?.replies }} replies. Fork instead keeps this chat as it is and opens a new chat from just before that message.
+          This takes your message from {{ undoTime }} and everything after it out of this chat: {{ undoTakes?.yours }} of your messages and {{ undoTakes?.replies }} {{ undoTakes?.replies === 1 ? 'reply' : 'replies' }}. Fork instead keeps this chat as it is and opens a new chat from just before that message.
         </DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
           <button type="button" class="h-7 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-3 text-[13px] text-text hover:bg-[var(--fill-secondary-hover)]" @click="askUndo = false">Cancel</button>
@@ -258,8 +258,9 @@ async function branch() {
         </div>
       </DialogContent>
     </Dialog>
+    <!-- A reply's row has no Fork button, but its dialog's Fork instead shows its progress or failure here -->
     <button
-      v-if="canFork"
+      v-if="canFork || forkState !== 'idle'"
       type="button"
       class="tx-action"
       :aria-label="forkLabel"
