@@ -18,6 +18,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Chats in the sidebar show their account number and when they were last active**
 - **Free accounts get a Tokens column and keep their readings current in the background**
 - **HSwarm's tables look like the Instances tables, and popups close when you look away**
+- **HSwarm can use Jina, Pinecone and StepFun**
+- **HSwarm keeps each key under its provider's rate limit and moves past keys that are out of credit**
+- **HSwarm offers Claude Haiku 5.5 and more Together models for tool work**
 - **CliMayte tries Claude Haiku 5.5 first and never uses Haiku 4.5**
 - **The download is about 12 MB instead of about 200 MB**
 - **AgentHydra 2.0 does much less in the background while you are not looking at it**
@@ -47,6 +50,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Free table has a Tokens column, like the CLI and desktop tables.** Neither claude.ai nor ChatGPT reports
   tokens, so AgentHydra estimates them from the text each message sent and got back. The header switches between
   the current 5-hour window, the week and all time.
+- **HSwarm can use Jina, Pinecone and StepFun.** Jina reads and searches the web and makes embeddings, Pinecone
+  stores and searches vectors, and StepFun's chat models can be named directly. A StepFun key issued in China works
+  once its China address is set in your own provider settings.
 
 ### Changed
 
@@ -69,6 +75,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Updates carry the new window.** An update installs, updates and repairs the new window along with the app, and starts the window again afterwards. An install that is missing the window, such
   as one updated by an older version or the single `.exe` download, puts it back by itself when it starts.
 - **HSwarm's key and model tables look like the Instances tables.** They use the same rows, controls and cards.
+- **HSwarm keeps each key under its provider's rate limit.** Where a provider publishes a limit per key, a request
+  waits for a key with room instead of piling onto one, and searches run side by side spread over your keys
+  instead of all starting on the first. A key the provider turns away as invalid, out of credit or rate-limited is
+  set aside, and the same request goes to another key.
+- **HSwarm offers Claude Haiku 5.5 and more Together models for tool work.** Haiku 5.5 is now ranked on independent
+  scores at each effort level, and the Together models whose documentation says they can call tools are offered for
+  tool work, so more low-cost models can take a task.
 - **The Free table no longer spins its 5-hour and week cells every time you open it.** AgentHydra now keeps the
   Free accounts' readings current in the background, one account at a time, and the table only shows what changed.
 - **Dev servers are part of AgentHydra now, not a separate program.** They run in AgentHydra's own small background
@@ -98,6 +111,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   on the window's own.
 - **The new window's pages no longer go blank when a rebuild of them fails.** New pages replace the old ones only
   once they have built, so a failed build leaves the window as it was.
+- **Refreshing one provider's model list in HSwarm keeps the others.** It used to replace the whole saved list,
+  prices included, with that one provider's models.
 
 ### Removed
 

@@ -39,8 +39,12 @@ hswarm service coze list_chat_messages --param conversation_id=example --param c
 ```
 
 These are complete REST responses. Set `stream` to false for Coze agent calls. WebSockets, realtime
-streams and automatic polling are outside this adapter. POSTs are sent once; an ambiguous network
-failure is reported without retrying a potentially charged generation.
+streams and automatic polling are outside this adapter. A request goes to a second key only when the
+provider refused the first before doing anything: a 401, a 402, a 403 or 429 saying the account has no
+balance left, or a rate-limit 429. That key is marked in the shared pool (dead, out of credit, or resting
+for its `retry-after`) and the same request goes to another key, up to 8. A call that names
+`--key-fingerprint`, or sends a file part as a stream that cannot be read twice, never moves. An
+ambiguous network failure is reported without retrying a potentially charged generation.
 
 | Provider | Supported operations |
 | --- | --- |

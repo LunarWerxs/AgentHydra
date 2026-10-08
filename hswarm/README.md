@@ -111,8 +111,8 @@ python -m hswarm vault list [openrouter]  |  status  |  sync [--dry-run] [--allo
 
 ### Provider services
 
-Speech, image, video, search and observability providers use service operations with their provider's request
-schema. List operations offline, or pass a JSON file and save binary output when needed:
+Speech, image, video, search, embedding, vector-store and observability providers use service operations with their
+provider's request schema. List operations offline, or pass a JSON file and save binary output when needed:
 
 ```bash
 python -m hswarm service tavily
@@ -121,11 +121,15 @@ python -m hswarm service elevenlabs synthesize --path voice_id=example --input s
 ```
 
 The service CLI reports the selected key's fingerprint so an asynchronous operation can be polled with the same
-key. It never automatically retries a POST. Chat endpoints accept explicit live model IDs using provider prefixes
-such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:` and `inworld:`; these models become candidates
-for automatic routing only after evaluation.
+key. A request goes to a second key only when the provider refused the first before doing anything (a 401, a 402, a
+403 or 429 saying the balance is gone, or a rate-limit 429): that key is marked in the pool and the same request tries
+another, up to 8 keys. A call that names its key, or sends a file as a stream, never moves, and a network failure is
+never retried. Where a provider file sets `[limits]`, a request waits unsent for a key with headroom
+([docs/SERVICE-PROVIDERS.md](docs/SERVICE-PROVIDERS.md)). Chat endpoints accept explicit live model IDs using provider
+prefixes such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:`, `stepfun:` and `inworld:`; these
+models become candidates for automatic routing only after evaluation.
 
-Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius has none yet: no per-token price was on its pricing pages.
+Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius has none yet: no per-token price was on its pricing pages. StepFun has none either: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
 
 ### Configuration Directory
 
@@ -224,10 +228,9 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
 - **AUTO may pick Claude Sonnet and Haiku 5.5; only Haiku 4.5 and older stay barred.** Those are rejected on every leg
   (evaluated, sibling and backup) with the reason `family`; naming a model (`model=`) is the explicit override
   (`selection.AUTO_BARRED_FAMILIES`). Haiku 5.5 (2026-10-07) is an ordinary candidate, ranked by its evidence like any
-  other: Anthropic's own launch scores until Artificial Analysis publishes it, so it clears only the floors those
-  scores cover. Today that is the tool-free `routine` profile, on its one scored route (`claude-haiku-5-5`); its
-  effort variants have no scores of their own. Tool work reaches Haiku 5.5 first through CliMayte, whose scorecard
-  tries it on every kind of task before Sonnet.
+  other. Artificial Analysis scored it in full the same day, so its index point is AA's rather than Anthropic's launch
+  scores, and its low, medium, high and xhigh effort levels have points of their own. It is a Claude Code (`cc`) leg
+  for tool work as well as a tool-free one, and CliMayte's scorecard also tries it first on every kind of task.
 - **A `cc` leg whose key cannot start a worker is listed unavailable and refused.** A headless Claude Code worker's first
   turn is tens of thousands of input tokens (`config.CC_FIRST_TURN_TOKENS`, 40,000). `input_limit.py` records each key's
   input-tokens-per-minute limit per model (Anthropic's header on native calls, or the 429 a cc worker dies of) for 3 days
@@ -260,6 +263,10 @@ in the background at most once a day, never blocking a call. `hswarm_models` tak
 The standing instruction, also in `data/agent-instructions.md`: when the watch reports benchmarked-but-unrouted or
 unbenchmarked models, the agent working on HSwarm registers the route with its sourced price, or sources the model's
 published scores into the index, before other HSwarm work. Never a guessed score or price.
+
+`hswarm index add <slug>...` adds a model's point from Artificial Analysis. `hswarm index refresh` re-reads every point,
+and a point whose `source` is not AA (a vendor's launch scores, held until AA publishes the model) becomes AA's once AA
+scores the model in full; the command names each point it upgraded, and keeps a point AA does not yet score in full.
 
 **How a dead best route steps down.** When the best route is dead (no live key, an open breaker, or a leg that fails for a
 reason another leg cannot fix), dispatch walks the profile's remaining candidates in order, with the rescue legs of the
