@@ -69,6 +69,7 @@ export default function plugin(app: Hono, _ctx: ServerContext): void {
       .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
       .slice(0, MAX_CHATS)
     const rows: OrchestratorRow[] = []
+    const session = new Map(subjects.map(({ s }) => [s.id, s.session]))
     for (const { s, items } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
       rows.push(classify(s, busy ? null : await get<TranscriptItem[]>(items), now))
@@ -82,7 +83,7 @@ export default function plugin(app: Hono, _ctx: ServerContext): void {
     return slowJson(
       (async () => {
         for (let i = 0; i < asking.length; i += ASK_WIDTH)
-          await Promise.all(asking.slice(i, i + ASK_WIDTH).map(async (r) => (r.creaitor = await askCreaitor(tool, r.question ?? '', r.options ?? [], r.cwd))))
+          await Promise.all(asking.slice(i, i + ASK_WIDTH).map(async (r) => (r.creaitor = await askCreaitor(tool, r.question ?? '', r.options ?? [], r.cwd, session.get(r.id) ?? null))))
         return plan
       })()
     )

@@ -16,6 +16,8 @@ const ASKS_BACK = /\b(want me to|shall I|should I|do you want me to|would you li
 /** What the planner reads of a chat, whichever app runs it. */
 export interface Subject {
   id: string
+  /** Its Claude session id, when known: a CreAitor ask carries it so the answer can be graded against the owner's reply there. */
+  session: string | null
   title: string
   cwd: string
   account: string
@@ -31,7 +33,7 @@ export interface Subject {
 
 export function fromChat(c: ChatSummary): Subject {
   return {
-    id: c.id, title: c.title, cwd: c.cwd, account: c.account.label, source: 'desk', status: c.status, updatedAt: c.updatedAt,
+    id: c.id, session: c.sessionId, title: c.title, cwd: c.cwd, account: c.account.label, source: 'desk', status: c.status, updatedAt: c.updatedAt,
     activity: c.activity, queuedCount: c.queuedCount, accountAuto: c.accountAuto, limitResetsAt: c.limitResetsAt, lastError: c.lastError
   }
 }
@@ -39,7 +41,7 @@ export function fromChat(c: ChatSummary): Subject {
 /** An outside session reports only working, needs you, idle or stale; stale reads as closed. */
 export function fromExternal(s: ExternalSession): Subject {
   return {
-    id: s.id, title: s.title, cwd: s.cwd ?? '', account: s.instance ?? '', source: s.source, status: s.status === 'stale' ? 'closed' : s.status,
+    id: s.id, session: s.id, title: s.title, cwd: s.cwd ?? '', account: s.instance ?? '', source: s.source, status: s.status === 'stale' ? 'closed' : s.status,
     updatedAt: s.lastActivityAt ?? 0, activity: s.activity, queuedCount: 0, accountAuto: false, limitResetsAt: null, lastError: null
   }
 }

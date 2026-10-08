@@ -37,7 +37,7 @@ const said = (text: string, ago = 3_600_000): TranscriptItem => ({ id: `a${ago}`
 const wrote = (ago: number): TranscriptItem => ({ id: `u${ago}`, ts: NOW - ago, kind: 'user', text: 'go' })
 
 const CHATS: [ChatSummary, TranscriptItem[]][] = [
-  [chat('card', { status: 'needs_you' }), [{ id: 'q', ts: NOW - 3_600_000, kind: 'question', state: 'pending', questions: [{ question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'S3' }, { label: 'Disk' }] }] }]],
+  [chat('card', { status: 'needs_you', sessionId: 'sess-card' }), [{ id: 'q', ts: NOW - 3_600_000, kind: 'question', state: 'pending', questions: [{ question: 'Which store?', header: 'Store', multiSelect: false, options: [{ label: 'S3' }, { label: 'Disk' }] }] }]],
   [chat('need'), [said('Done the rest.\n\n🔴 NEED: Ship the release now? A) Ship it ★ B) Wait a day')]],
   [chat('asks'), [said('All green. Want me to deploy it to the box too?')]],
   [chat('person'), [said('🔴 NEED: Pick one? A) x B) y', 3_000_000), wrote(120_000)]],
@@ -133,16 +133,18 @@ test('?ask=1 hands each waiting question and its choices to the CreAitor and sho
   temps.push(dir)
   const tool = join(dir, 'creaitor.js')
   // Answers with the last --option it was given, so the row shows the choices arrived.
-  writeFileSync(tool, `const a = process.argv.slice(2); const o = a.filter((x, i) => a[i - 1] === '--option'); console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: a[1], confidence: 0.9, basis: ['r1'], need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
+  writeFileSync(tool, `const a = process.argv.slice(2); const o = a.filter((x, i) => a[i - 1] === '--option'); console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: a[1], confidence: 0.9, basis: ['--session', '--via'].filter((f) => a.includes(f)).map((f) => a[a.indexOf(f) + 1]), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
   process.env.HYDRA_DESK_CREAITOR = tool
   process.env.HYDRA_DESK_PYTHON = process.execPath
   const { app, sent } = desk()
   const plan = (await (await app.request('/api/diagnostics/orchestrator?ask=1')).json()) as OrchestratorPlan
   const by = Object.fromEntries(plan.rows.map((r) => [r.id, r.creaitor]))
-  expect(by.card).toMatchObject({ verdict: 'decide', option: 'Disk', answer: 'Which store?', basis: ['r1'] })
+  // basis echoes --session and --via: an ask carries its chat's session, so the shadow log can be graded against
+  // the owner's own reply there (claude-memory bench.py --shadow)
+  expect(by.card).toMatchObject({ verdict: 'decide', option: 'Disk', answer: 'Which store?', basis: ['sess-card', 'orchestrator'] })
   expect(by.need).toMatchObject({ verdict: 'decide', option: 'Wait a day' })
   expect(by.asks).toMatchObject({ verdict: 'escalate', needLine: '🔴 NEED: x' })
-  expect(by['o-ask']).toMatchObject({ verdict: 'decide', option: 'West', answer: 'Which region?' })
+  expect(by['o-ask']).toMatchObject({ verdict: 'decide', option: 'West', answer: 'Which region?', basis: ['o-ask', 'orchestrator'] })
   expect(by['o-need']).toMatchObject({ verdict: 'decide', option: 'Hold' })
   expect(by.finished).toBeUndefined()
   expect(sent).toEqual([])

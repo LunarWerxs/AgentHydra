@@ -18,9 +18,11 @@ export function creaitorTool(): string | null {
   return existsSync(p) ? p : null
 }
 
-/** One question, its choices, the chat's folder (its name is the repo the CreAitor weighs). Never throws. */
-export function askCreaitor(tool: string, question: string, options: readonly string[], cwd: string): Promise<CreaitorAnswer | { error: string }> {
+/** One question, its choices, the chat's folder (its name is the repo the CreAitor weighs) and its Claude session,
+ *  which the CreAitor logs so its answer is later graded against the owner's own reply there. Never throws. */
+export function askCreaitor(tool: string, question: string, options: readonly string[], cwd: string, session: string | null): Promise<CreaitorAnswer | { error: string }> {
   const args = [tool, 'ask', question, '--repo', basename(cwd.replace(/[\\/]+$/, '')), '--timeout', String(ASK_TIMEOUT_S), '--json']
+  if (session) args.push('--session', session, '--via', 'orchestrator')
   for (const o of options) args.push('--option', o)
   return new Promise((resolve) => {
     execFile(
