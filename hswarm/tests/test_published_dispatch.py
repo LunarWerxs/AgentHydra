@@ -209,6 +209,29 @@ def test_a_leg_marked_crawling_gets_a_short_try_and_the_healthy_legs_share_the_b
     assert res.status == "ok" and res.answer == "answers" and res.failover == ["crawls"]
 
 
+def test_a_schema_ask_never_routes_to_a_model_without_tool_calling(monkeypatch):
+    """2026-10-07: every `hswarm ask --profile decision --schema` failed on OpenAI's GPT-6 routes, whose provider file
+    says tools = false (Chat Completions takes function tools only at reasoning_effort "none"), with a 400 that does
+    not fail over. A schema reply is a submit_result function call, so those routes are no candidates for it. Every
+    leg here answers 503, so the ask walks the whole real plan."""
+    from hswarm import config
+
+    monkeypatch.setattr(dispatch, "_memo_wake", lambda: (lambda provider: 0.0))  # every provider has a ready key
+    tried = []
+
+    async def fake_ask(client, prompt, model=None, **kw):
+        tried.append(model)
+        return Result(id="ask", backend="api", model=model, status="error", error="API Error: 503 no endpoints", cost_usd=0.0)
+
+    monkeypatch.setattr(agent, "ask", fake_ask)
+    no_tools = lambda m: config.MODELS[m].get("tools") is False  # noqa: E731
+    asyncio.run(dispatch.ask_selected(_Mgr(), "q", profile="decision", timeout_s=5.0))
+    assert any(no_tools(m) for m in tried), "premise: a plain decision ask can use such a route"
+    tried.clear()
+    asyncio.run(dispatch.ask_selected(_Mgr(), "q", profile="decision", schema={"type": "object"}, timeout_s=5.0))
+    assert tried and not [m for m in tried if no_tools(m)]
+
+
 def test_no_candidates_is_explicit_failure(monkeypatch, tmp_path):
     t, job, seen = _setup(monkeypatch, tmp_path, [("rank:deepseek-v4-pro", "ok")])
     monkeypatch.setattr(selection, "plan", lambda *a, **k: _plan([]))

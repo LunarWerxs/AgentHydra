@@ -156,7 +156,7 @@ def _files_chars(task):
 
 
 def _task_kw(task):
-    return dict(tools=task.tools, backend=task.backend, reasoning_effort=task.reasoning_effort, thinking=task.thinking,
+    return dict(tools=task.tools, schema=bool(task.schema), backend=task.backend, reasoning_effort=task.reasoning_effort, thinking=task.thinking,
                 purpose=getattr(task, "purpose", "production"), zdr=bool(getattr(task, "zdr", False)),
                 min_scores=task.min_scores, exclude_models=task.exclude_models, vision=task.role == "vision",
                 min_context=(len(task.prompt) + len(task.system or "") + _files_chars(task)) // 3 + task.max_tokens)
@@ -772,7 +772,7 @@ async def ask_selected(mgr, prompt, *, profile="general", route=True, **kw):
     max_cost = float(kw.pop("max_cost_usd", .25))
     timeout = float(kw.pop("timeout_s", 120))
     purpose = kw.pop("purpose", "production")
-    plan = _plan(profile, tools="none", purpose=purpose,
+    plan = _plan(profile, tools="none", schema=bool(kw.get("schema")), purpose=purpose,
                  reasoning_effort=kw.get("reasoning_effort"), thinking=kw.get("thinking"),
                  min_scores=min_scores, exclude_models=exclude, vision=bool(kw.get("images")),
                  min_context=(len(prompt)+len(kw.get("system") or ""))//3 + kw.get("max_tokens", 16000))

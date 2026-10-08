@@ -98,7 +98,7 @@ def profile_for(role=None, tools="none"):
 
 
 def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile="general", tools="none", backend="api", vision=False,
-                 strict=False, purpose="production"):
+                 strict=False, purpose="production", schema=False):
     from . import config
 
     have, extra = {c["model"] for c in candidates}, []
@@ -108,7 +108,8 @@ def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile
     barred = lambda entry: purpose != "evaluation" and bool(config.PROVIDERS[entry["provider"]].get("evaluation_only"))  # noqa: E731
 
     def unfit(entry) -> bool:  # what the task needs that the model's file does not say it can do
-        return ((not config.is_tool_free(tools) and not entry.get("tools")) or (vision and not entry.get("vision"))
+        return ((not config.is_tool_free(tools) and not entry.get("tools")) or (schema and entry.get("tools") is False)
+                or (vision and not entry.get("vision"))
                 or (min_context and entry.get("ctx", 0) < min_context)
                 or (backend == "cc" and not config.PROVIDERS[entry["provider"]].get("anthropic_url")))
 
@@ -147,7 +148,8 @@ def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile
 
 
 def plan(profile="general", *, tools="none", backend="api", usable=None, reasoning_effort=None,
-         thinking=None, min_scores=None, exclude_models=(), min_context=0, vision=False, purpose="production", zdr=False):
+         thinking=None, min_scores=None, exclude_models=(), min_context=0, vision=False, purpose="production", zdr=False,
+         schema=False):
     from . import config, zdr as zdr_mod
     from .spec import BACKENDS
 
@@ -205,6 +207,11 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
             why = ("thinking", "cannot run with thinking off")
         elif not config.is_tool_free(tools) and not entry.get("tools"):
             why = ("tools", "no tool calling")
+        elif schema and entry.get("tools") is False:
+            # A schema reply is a submit_result function call, even on a tool-free ask. OpenAI's GPT-6 routes refuse
+            # function tools beside reasoning_effort with a 400 that does not fail over: every decision ask with a
+            # schema failed on them (2026-10-07).
+            why = ("tools", "a schema reply is a function call, and it has no tool calling")
         elif vision and not entry.get("vision"):
             why = ("vision", "cannot read images")
         elif min_context and entry.get("ctx", 0) < min_context:
@@ -230,7 +237,7 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
     candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -(c["score"] or 0), c["model"]))
     last = _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
                         tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),
-                        purpose=purpose)
+                        purpose=purpose, schema=schema)
     if zdr:  # a backup route is picked by provider health, so the clearance is repeated here
         last = [c for c in last if zdr_mod.cleared(c["model"])]
     candidates += last
