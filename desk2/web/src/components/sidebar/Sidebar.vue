@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/compone
 import { Input } from '@/components/ui/input'
 import { Tip } from '@/components/ui/tooltip'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
+import HeadlessAudioButton from '@/components/sidebar/HeadlessAudioButton.vue'
 import { useShellSource } from '@/components/shell/source'
 const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 const DevServersList = lazyPanel(() => import('@/components/servers/DevServersList.vue'))
@@ -986,6 +987,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <component :is="icons.more" class="ms-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
+      <HeadlessAudioButton />
       <Tip :label="ahUpdateDot ? 'Settings: an AgentHydra update is waiting' : 'Settings'" side="top">
         <button
           type="button"
@@ -1047,5 +1049,3 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     </Dialog>
   </aside>
 </template>
-import HeadlessAudioButton from '@/components/sidebar/HeadlessAudioButton.vue'
-      <HeadlessAudioButton />
