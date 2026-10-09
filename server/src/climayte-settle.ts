@@ -33,7 +33,7 @@ import {
   ORG_DISABLED_WALL,
   wallUntil,
 } from './climayte-lib'
-import { ceilingFields, credStamp, SIGNED_OUT_MS, trySaveWalls } from './climayte-stops'
+import { ceilingFields, credStamp, trySaveWalls } from './climayte-stops'
 import { holdManagerForWave } from './climayte-wave-ops'
 import { resolveClaudeExe } from './config'
 import { getCliInstance } from './core/cli-instances'
@@ -101,7 +101,7 @@ function wallAtLimit(
   trySaveWalls()
 }
 
-/** Wall an account whose login no longer works, until its recheck (recheckSignedOut). */
+/** Wall an account whose login no longer works until its credential file changes (recheckSignedOut). */
 function wallSignedOut(
   at: CliMayteWorker['attempts'][number],
   v: ReturnType<typeof classifyAttempt>,
@@ -110,7 +110,7 @@ function wallSignedOut(
   const dir = getCliInstance(at.account.id)?.configDir
   const org = isOrgDisabled(v.notice)
   walls[at.account.id] = {
-    until: now + (org ? ORG_WALL_MS : SIGNED_OUT_MS),
+    until: org ? now + ORG_WALL_MS : now,
     reason: org ? ORG_DISABLED_WALL : 'signed out',
     cred: dir ? credStamp(dir) : null,
   }

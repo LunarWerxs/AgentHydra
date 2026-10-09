@@ -155,8 +155,8 @@ import {
   noteReading,
   readLog,
   recheckOrgWall,
-  SIGNED_OUT_MS,
   saveLive,
+  signedOutRecheckDue,
   stopAtCeilingOrOverage,
   stopWindDown,
   trySaveWalls,
@@ -269,19 +269,22 @@ function checkAuth(a: CliMayteAccount): void {
     })
 }
 
-/** A signed-out wall is never lifted by the clock alone. When it runs out, or the account's
- *  credential file changes (a new sign-in), the CLI's own `auth status` decides: about a quarter
- *  of a second, no quota. A dead login stays walled, so it never costs another worker a failed
- *  attempt (before this, an expired account took one attempt from some worker every 30 minutes);
- *  a login that works again rejoins the pool at once. */
-function recheckSignedOut(accounts: CliMayteAccount[], now: number): void {
+/** A signed-out wall is lifted only by a new sign-in: when the account's credential file changes,
+ *  the CLI's own `auth status` decides (about a quarter of a second, no quota). The clock never asks
+ *  again, so a dead login costs no other worker a failed attempt (it was rechecked every 30 minutes,
+ *  and each lift sent waiting work at it). */
+function recheckSignedOut(accounts: CliMayteAccount[]): void {
   for (const a of accounts) {
     const wall = walls[a.id]
     if (recheckOrgWall(a, wall)) continue
     if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
     const cred = credStamp(a.configDir)
-    if (wall.until > now && (wall.cred === undefined || wall.cred === cred)) continue
-    wall.until = now + SIGNED_OUT_MS
+    if (wall.cred === undefined) {
+      wall.cred = cred
+      trySaveWalls()
+      continue
+    }
+    if (!signedOutRecheckDue(wall, cred)) continue
     wall.cred = cred
     authChecks.add(a.id)
     checkAuth(a)
@@ -522,7 +525,7 @@ async function tick(): Promise<void> {
     killLateStarts()
     saveLive()
     pollChecks()
-    recheckSignedOut(accounts, now)
+    recheckSignedOut(accounts)
     const state = tickState(accounts, now)
     const due = [...workers.values()].filter(
       (w) =>

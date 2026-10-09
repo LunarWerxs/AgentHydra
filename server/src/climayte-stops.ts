@@ -98,7 +98,11 @@ export function climayteLimitWalls(): Map<string, { until: number; weekly: boole
   return out
 }
 
-export const SIGNED_OUT_MS = 30 * 60_000
+/** A signed-out login is rechecked only when its credential file has changed since the wall (a new
+ *  sign-in); the clock alone never asks the CLI again. */
+export function signedOutRecheckDue(wall: { cred?: number | null }, cred: number | null): boolean {
+  return wall.cred !== undefined && wall.cred !== cred
+}
 
 export const credStamp = (configDir: string): number | null => {
   try {
@@ -144,7 +148,7 @@ export function recheckOrgWall(
  *  (2026-09-30): the CLI instance list said `loggedIn: true` for two accounts whose login was dead,
  *  because it only checks that the file exists. CliMayte's signed-out wall is the verified answer: set
  *  when an attempt failed to authenticate, and lifted only when `claude auth status` says the login
- *  works (recheckSignedOut, every 30 minutes and whenever the credential file changes). A file
+ *  works after the credential file changes (recheckSignedOut). A file
  *  rewritten since the wall (a new sign-in not yet rechecked) is given the benefit of the doubt.
  *  Costs one map lookup and one stat, so the listing stays as fast as it was. */
 export function climayteSignedOutReason(id: string, configDir: string): string | null {
@@ -154,7 +158,7 @@ export function climayteSignedOutReason(id: string, configDir: string): string |
   if (wall!.cred !== undefined && wall!.cred !== credStamp(configDir)) return null
   if (wall!.reason === ORG_DISABLED_WALL)
     return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so CliMayte does not use it. Sign it in with a different login to use it again.'
-  return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since (checked again every 30 minutes, and as soon as the account signs in again). Sign in again: Quick add, or Log in.'
+  return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since. It is used again once it signs in again. Sign in again: Quick add, or Log in.'
 }
 
 /** A pid file a runner wrote within RUNNER_CLAIM_GIVE_UP_MS vouches for that runner; an older one may

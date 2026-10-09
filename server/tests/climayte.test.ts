@@ -734,7 +734,7 @@ describe('pickAccount', () => {
         false,
         placement(active),
       )
-    expect(pick(accounts, [])?.id).toBe('a88')
+    expect(pick(accounts, [])?.id).toBe('a94')
     expect(pick(accounts, [['a88', 1]])?.id).toBe('a94')
     // Once a reading is in, it takes work like any other account.
     expect(pick([acct('a88', 88, 5, 5), acct('a94', 94, 60, 20)], [['a88', 1]])?.id).toBe('a88')
@@ -751,6 +751,11 @@ describe('pickAccount', () => {
     // seconds (readingPending, climayte-placement.test.ts), rather than pass it over.
     const refreshing = [{ ...acct('a88', 88, 5, 5), refreshing: true }, acct('a94', 94, 60, 20)]
     expect(pick(refreshing, [])?.id).toBe('a88')
+    const unreadRefreshing = [
+      { ...acct('a88', 88, null, null), refreshing: true },
+      acct('a94', 94, 60, 20),
+    ]
+    expect(pick(unreadRefreshing, [])?.id).toBe('a94')
   })
 
   test("an idle account beats one busy with another group's worker, even at lower usage (note 8)", () => {

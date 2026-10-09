@@ -233,13 +233,9 @@ function describeLimitLine(
   return `hit its limit${on}; walled until ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
 }
 
-/** `signed out`; the time it will be rechecked and the CLI's words, when it gave them. */
-function describeSignedOutLine(
-  e: CliMayteJournalEntry,
-  on: string,
-  at: (iso: string | undefined) => string,
-): string {
-  return `signed out${on}; rechecked at ${at(e.until)}${e.notice ? `: ${e.notice}` : ''}`
+/** `signed out`: it takes no work until it signs in again, and the CLI's words when it gave them. */
+function describeSignedOutLine(e: CliMayteJournalEntry, on: string): string {
+  return `signed out${on}; not used until it signs in again${e.notice ? `: ${e.notice}` : ''}`
 }
 
 /** `asked to hand off`: how far into its limit it was, or on request. */
@@ -324,7 +320,7 @@ const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
   launched: (e, p) => describeLaunchLine(e, p.on, p.pick, p.runs),
   moved: (e) => describeMovedLine(e),
   limit: (e, p) => describeLimitLine(e, p.on, p.at),
-  'signed-out': (e, p) => describeSignedOutLine(e, p.on, p.at),
+  'signed-out': (e, p) => describeSignedOutLine(e, p.on),
   'handoff-requested': (e, p) => describeHandoffRequestedLine(e, p.on),
   'handoff-written': (e, p) => describeShortLine(e, p.on, 'handoff-written'),
   'handoff-resumed': (_e, p) => `resumed from its handoff${p.on} ${p.pick}${p.runs}`,

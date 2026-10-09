@@ -378,12 +378,12 @@ flags are honoured; neither is silently ignored.
   - `quota`: wall the account until `parseResetTime(notice)` (from `usage.ts`, ISO → epoch) or
     now + 60 min when unparsable; status `queued` with the handoff flag (next attempt resumes the
     session on a DIFFERENT account with `HANDOFF_PROMPT`).
-  - `auth`: wall the account for 30 min with reason `signed out`; requeue as a handoff (the
-    session may have written nothing yet; that is fine, see below). "Your organization has disabled
-    Claude subscription access" walls it as `organization disabled Claude Code` instead
-    (`ORG_DISABLED_WALL`), lifted only by a new login: `claude auth status` passes such a login, so
-    the 30-minute recheck lifted the old wall every time and every waiting task hit the account at
-    once (run 1: #91, 11 failed runs, 4 in one second).
+  - `auth`: wall the account with reason `signed out` until its credential file changes (a new
+    sign-in); requeue as a handoff (the session may have written nothing yet; that is fine, see
+    below). "Your organization has disabled Claude subscription access" walls it as
+    `organization disabled Claude Code` instead (`ORG_DISABLED_WALL`), lifted only by a new login:
+    `claude auth status` passes such a login, so a clock recheck lifted the old wall every time and
+    every waiting task hit the account at once (run 1: #91, 11 failed runs, 4 in one second).
   - `auth` or `quota` before the attempt wrote anything (its account's transcript is missing or
     older than the attempt): that account does not become the session's home; `accountId` goes
     back to the account holding the newest transcript (`keepHome`, field note 30).
@@ -487,9 +487,9 @@ The login a listing reports is honest (field note 3): `loggedIn` only proves a c
 exists, so climayte.ts registers `setCliLoginVeto(climayteSignedOutReason)` (from `climayte-stops.ts`) with `core/cli-instances.ts`.
 An account CliMayte walls `signed out` (its last attempt failed `auth`, and its credential file has not
 changed since) lists `loggedIn: false` with a `loginNote` saying why, in `list_cli_instances` and
-the CLI tab alike, without running `claude auth status` per row. The wall is rechecked in the
-background with `cliAuthStatus` every 30 min, and lifts at once when the credential file changes (a
-fresh sign-in). An `organization disabled Claude Code` wall lists the same way with its own note,
+the CLI tab alike, without running `claude auth status` per row. The wall is not rechecked on a
+clock: it lifts when the credential file changes (a fresh sign-in), and only then is `cliAuthStatus`
+run again. An `organization disabled Claude Code` wall lists the same way with its own note,
 and only a changed credential file lifts it.
 
 ### The owner's CLAUDE.md and skills (`server/src/climayte-owner-sync.ts`)

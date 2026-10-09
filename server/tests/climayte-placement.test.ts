@@ -26,6 +26,7 @@ import {
   waitsForHome,
   waitsForRoom,
 } from '../src/climayte-placement'
+import { signedOutRecheckDue } from '../src/climayte-stops'
 
 describe('projectedPct', () => {
   test('counts what running tasks still owe, once, and scales by the plan', () => {
@@ -260,6 +261,20 @@ describe('which account a task starts on', () => {
     // A usage wall that ran out frees the account, as before.
     const limit = { dead: { reason: 'usage limit', until: now - 60_000 } }
     expect(pickAccount(worker(), [dead, busy], limit, new Map(), 2, now)?.id).toBe('dead')
+  })
+
+  test('a signed-out login is rechecked only when its credential file changes, never by the clock', () => {
+    expect(signedOutRecheckDue({ cred: 5 }, 5)).toBe(false)
+    expect(signedOutRecheckDue({ cred: 5 }, 6)).toBe(true)
+    expect(signedOutRecheckDue({ cred: 5 }, null)).toBe(true)
+    expect(signedOutRecheckDue({ cred: undefined }, 6)).toBe(false)
+  })
+
+  test('an account with no usage reading ranks below every account with one', () => {
+    const known = acct('known', 2, 60, 60)
+    const unread = acct('unread', 1, null as any, null as any)
+    expect(pickAccount(worker(), [unread, known], {}, new Map(), 2, now)?.id).toBe('known')
+    expect(pickAccount(worker(), [unread], {}, new Map(), 2, now)?.id).toBe('unread')
   })
 
   test('among tasks of one dispatch, the largest expected cost is placed first', () => {

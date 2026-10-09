@@ -938,7 +938,7 @@ export const isOrgDisabled = (notice: string | null): boolean =>
 export const isLoginWall = (reason: string | undefined): boolean =>
   reason === 'signed out' || reason === ORG_DISABLED_WALL
 /** The account takes no work now: a usage wall until it ends, a login wall until its recheck lifts
- *  it (climayte.ts recheckSignedOut; a lapsed `until` only means that recheck is due). 2026-10-03
+ *  it (climayte.ts recheckSignedOut, on a new credential file only). 2026-10-03
  *  00:53Z: #135's wall lapsed while no tick ran, and a handoff placed before the tick's recheck sent
  *  a worker to the dead login. */
 export const isWalledNow = (
@@ -1694,12 +1694,16 @@ export function rankAccounts(
     0,
   ]
   const byNum = (a: CliMayteAccount): number => a.num ?? Number.MAX_SAFE_INTEGER
+  const unread = (a: CliMayteAccount): number =>
+    a.sessionPct === null && a.weekPct === null ? 1 : 0
   const scored = eligible.map((a) => {
     const [base, tie] = placement ? placedRank(a, placement, now, worker.chat === true) : flat(a)
     const score = base + rankPenalty(a, nudgedFrom, failedId, now)
-    return { a, score, tie }
+    return { a, score, tie, unread: unread(a) }
   })
-  scored.sort((x, y) => x.score - y.score || x.tie - y.tie || byNum(x.a) - byNum(y.a))
+  scored.sort(
+    (x, y) => x.unread - y.unread || x.score - y.score || x.tie - y.tie || byNum(x.a) - byNum(y.a),
+  )
   return scored.map((s) => s.a)
 }
 
