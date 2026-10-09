@@ -51,7 +51,7 @@ export function moveLine(self: DeskSelf): string {
 
 /** What a chat in `cwd` gets beyond Claude Code's own prompt and tools, in-process or as a CliMayte worker: the one place that decides it. */
 export function chatAddOns(cwd: string, delegate: boolean, self?: DeskSelf): { append: string; mcpServers: Record<string, McpServerConfig> } {
-  const { mcpServers, prompts } = connectorsForChat(cwd)
+  const { mcpServers, prompts } = connectorsForChat(cwd, self?.id)
   const move = self ? ` ${moveLine(self)}` : ''
   return { append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''), mcpServers }
 }

@@ -1,15 +1,5 @@
 // The call surface of AgentHydra's own browser tools: the names, the caller, and the answer of one call.
-// Read-only: none of these tools launches a Chrome or drives a page's input.
-
-export const READ_TOOLS = [
-  'browser_profiles',
-  'browser_status',
-  'browser_profile_find',
-  'browser_targets',
-  'browser_frames',
-] as const
-
-export type ReadToolName = (typeof READ_TOOLS)[number]
+// Read-only: none of these tools launches a Chrome or drives a page's input. The tool list itself lives in registry.ts.
 
 export interface ToolParams {
   browser_profiles: Record<string, never>
@@ -17,6 +7,15 @@ export interface ToolParams {
   browser_profile_find: { for: string }
   browser_targets: { attachPort?: number; profile?: string }
   browser_frames: { attachPort?: number; profile?: string }
+}
+
+export type ToolName = keyof ToolParams
+
+/** What the service answers for GET /api/tools: the part a client needs to list a tool to a model. */
+export interface ToolInfo {
+  name: string
+  description: string
+  inputSchema: Record<string, unknown>
 }
 
 export interface ToolCaller {
@@ -29,7 +28,3 @@ export interface ToolCaller {
 }
 
 export type CallResult = { ok: true; text: string } | { ok: false; status: number; error: string }
-
-export function isReadTool(name: string): name is ReadToolName {
-  return (READ_TOOLS as readonly string[]).includes(name)
-}

@@ -425,6 +425,16 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
   if (ownerClaudeDir)
     servers['climayte-worker'] = { type: 'http', url: `${base}/api/corch/ask/${w.id}` }
 
+  // A worker that is not a chat gets Desk's browser tools for its folder (desk2 serves /mcp/browser); the owner's own
+  // `browser` server of that name wins, as desk2's connector servers do.
+  if (ownerClaudeDir && !w.chat && !('browser' in servers)) {
+    const deskPort = Number(process.env.HYDRA_DESK_PORT) || 7798
+    servers.browser = {
+      type: 'http',
+      url: `http://127.0.0.1:${deskPort}/mcp/browser?worker=${encodeURIComponent(w.id)}&cwd=${encodeURIComponent(w.cwd)}`,
+    }
+  }
+
   // For managers, add the manager endpoint (piece 4). The URL uses the manager's own worker ID.
   // The daemon listens on 127.0.0.1; the id is not a secret (piece 4, docs/CLIMAYTE.md).
   if (w.kind === 'manage') {

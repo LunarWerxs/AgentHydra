@@ -9,7 +9,8 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { REAL_HOME } from '../../real-home'
-import { callTool } from './tools'
+import { isThrowawayHome } from '../../devservers/service'
+import { callTool, toolInfos } from './tools'
 import type { CallResult, ToolCaller } from './contract'
 
 export const STAMP = 'browser-agent-1'
@@ -111,6 +112,7 @@ export function startService(home: string, onStop: () => void = () => {}): Runni
         return json({ ok: true, pid: process.pid, stamp: STAMP, running: true })
       }
       if (!authorized(req, token)) return json({ ok: false, error: 'unauthorized' }, 401)
+      if (req.method === 'GET' && url.pathname === '/api/tools') return json({ tools: toolInfos() })
       if (req.method === 'POST' && url.pathname === '/api/call') {
         const body = (await req.json().catch(() => ({}))) as CallBody
         if (typeof body.name !== 'string') return json({ ok: false, status: 400, error: 'name is required' } satisfies CallResult, 400)
@@ -153,7 +155,17 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     log(home, 'another browser-agent holds the lock; exiting')
     return
   }
-  startService(home, () => process.exit(0))
+  const deskPid = Number(argValue(argv, '--desk-pid'))
+  const running = startService(home, () => process.exit(0))
+  // A throwaway home (a test's) stops with the Desk that started it; the real home outlives Desk restarts.
+  if (Number.isInteger(deskPid) && deskPid > 0 && isThrowawayHome(home)) {
+    const watch = setInterval(() => {
+      if (!pidAlive(deskPid)) {
+        clearInterval(watch)
+        running.stop()
+      }
+    }, 30_000)
+  }
 }
 
 if (import.meta.main) await main()

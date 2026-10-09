@@ -3,7 +3,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { detachedCommand } from '../../host/launch'
-import type { CallResult, ToolCaller } from './contract'
+import type { CallResult, ToolCaller, ToolInfo } from './contract'
 import { readServiceFile, STAMP, serviceFilePath, type ServiceFile } from './service'
 
 export const SERVICE_ENTRY = join(import.meta.dir, 'service.ts')
@@ -19,12 +19,13 @@ export interface BrowserAgentClient {
   probe(): Promise<ServiceFile | null>
   ensure(): Promise<ServiceFile>
   call(name: string, params: Record<string, unknown>, caller?: ToolCaller): Promise<CallResult>
+  tools(): Promise<ToolInfo[]>
   stop(): Promise<void>
 }
 
 function launchService(home: string): void {
   const store = process.env.HYDRA_DESK_BROWSER_STORE
-  const argv = [process.execPath, SERVICE_ENTRY, '--home', home, ...(store ? ['--store', store] : [])]
+  const argv = [process.execPath, SERVICE_ENTRY, '--home', home, '--desk-pid', String(process.pid), ...(store ? ['--store', store] : [])]
   const plan = detachedCommand(process.platform, argv)
   const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
   child.unref()
@@ -70,6 +71,15 @@ export function createBrowserAgentClient(deps: AgentClientDeps): BrowserAgentCli
     return (await res.json()) as CallResult
   }
 
+  async function tools(): Promise<ToolInfo[]> {
+    const file = await ensure()
+    const res = await doFetch(`http://127.0.0.1:${file.port}/api/tools`, {
+      headers: { authorization: `Bearer ${file.token}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    return ((await res.json()) as { tools: ToolInfo[] }).tools
+  }
+
   async function stop(): Promise<void> {
     const file = readServiceFile(deps.home)
     if (!file) return
@@ -84,5 +94,5 @@ export function createBrowserAgentClient(deps: AgentClientDeps): BrowserAgentCli
     }
   }
 
-  return { probe, ensure, call, stop }
+  return { probe, ensure, call, tools, stop }
 }

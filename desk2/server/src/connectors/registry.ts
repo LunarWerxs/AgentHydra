@@ -241,7 +241,7 @@ export function createRegistry(opts: RegistryOptions): ConnectorRegistry {
 let active: { registry: ConnectorRegistry; defs: ConnectorDef[] } | null = null
 
 /** What a chat in `cwd` gets from the connectors that are running and enabled now: empty until the plugin has started. */
-export function connectorsForChat(cwd: string): { mcpServers: Record<string, McpServerConfig>; prompts: string[] } {
+export function connectorsForChat(cwd: string, chatId?: string): { mcpServers: Record<string, McpServerConfig>; prompts: string[] } {
   const out: { mcpServers: Record<string, McpServerConfig>; prompts: string[] } = { mcpServers: {}, prompts: [] }
   if (!active) return out
   const statuses = new Map(active.registry.list().map((v) => [v.id, v]))
@@ -249,7 +249,7 @@ export function connectorsForChat(cwd: string): { mcpServers: Record<string, Mcp
     const status = statuses.get(def.info.id)
     if (!status?.givesChats || !def.chat) continue
     try {
-      const got = def.chat(cwd, status)
+      const got = def.chat(cwd, status, chatId)
       if (!got) continue
       Object.assign(out.mcpServers, got.mcpServers)
       if (got.prompt?.trim()) out.prompts.push(got.prompt.trim())

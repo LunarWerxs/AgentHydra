@@ -1,4 +1,5 @@
-// POST /mcp/devservers?cwd=<chat folder> and POST /mcp/redesign: the chats' devservers and redesign MCP servers, served
+// POST /mcp/devservers?cwd=<chat folder>, /mcp/redesign and /mcp/browser?chat=&worker=&cwd=: the chats' devservers,
+// redesign and browser MCP servers, served
 // from Desk's process over Streamable HTTP (connectors/mcp-http.ts) instead of a bun child per chat. connectors/defs/
 // devwebui.ts and redesign.ts hand a chat these URLs. localOnly (index.ts) runs first; mcp-http refuses browser pages.
 
@@ -9,6 +10,9 @@ import { type McpHandler, serveMcpHttp } from '../connectors/mcp-http'
 import { runningRedesignUrl } from '../connectors/defs/redesign'
 import { createRedesignMcp } from '../connectors/redesign-mcp'
 import { createDevServersMcp } from '../devservers/mcp'
+import { createBrowserAgentClient } from '../browser/agent/client'
+import { createBrowserMcp } from '../browser/agent/mcp'
+import type { ToolCaller } from '../browser/agent/contract'
 
 /** The address of Desk itself, which the devservers tools call at /dw/api. */
 const deskUrl = () => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
@@ -18,6 +22,16 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const dev = new Map<string, McpHandler>()
   const redesign = new Map<string, McpHandler>()
   const outDir = join(ctx.home, 'design-options')
+  const browserClient = createBrowserAgentClient({ home: ctx.home })
+
+  app.all('/mcp/browser', (c) => {
+    const caller: ToolCaller = {
+      chat: c.req.query('chat')?.trim() || undefined,
+      worker: c.req.query('worker')?.trim() || undefined,
+      cwd: c.req.query('cwd')?.trim() || undefined,
+    }
+    return serveMcpHttp(c.req.raw, createBrowserMcp({ client: browserClient, caller }))
+  })
 
   app.all('/mcp/devservers', (c) => {
     const cwd = c.req.query('cwd')?.trim() || ''

@@ -6,8 +6,8 @@
 
 export const CONNECTORS = '/api/connectors'
 
-export type ConnectorId = 'repoyeti' | 'redesign' | 'devwebui' | 'connections'
-export const CONNECTOR_IDS: readonly ConnectorId[] = ['repoyeti', 'redesign', 'devwebui', 'connections']
+export type ConnectorId = 'repoyeti' | 'redesign' | 'devwebui' | 'connections' | 'browser'
+export const CONNECTOR_IDS: readonly ConnectorId[] = ['repoyeti', 'redesign', 'devwebui', 'connections', 'browser']
 
 /**
  * running: it answers. installed: on this machine, not answering. absent: not on this machine.

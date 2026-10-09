@@ -33,8 +33,8 @@ export interface ConnectorDef {
   install?(progress: (line: string) => void): Promise<void>
   /** Start it hidden when it is installed and not answering (never a visible console window). */
   start?(): Promise<void>
-  /** What a chat in `cwd` gets while this connector is enabled; synchronous, from the cached status. */
-  chat?(cwd: string, status: ConnectorStatus): ConnectorChat | null
+  /** What a chat in `cwd` gets while this connector is enabled; synchronous, from the cached status. `chatId` is the chat's id, when it has one. */
+  chat?(cwd: string, status: ConnectorStatus, chatId?: string): ConnectorChat | null
 }
 
 /** What the registry hands each connector file. */
