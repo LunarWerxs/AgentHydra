@@ -17,10 +17,33 @@ const items = ref<TranscriptItem[]>([
   { id: 'a1', ts: t0 + 1, kind: 'assistant_text', text: '', streaming: true },
 ])
 let next = 0
+// A remount as DeskFrame does it: the key changes, so the transcript is made again with another chat and maybe no items yet.
+const view = ref({ key: 0, chatId: 'stream-bench', loading: false })
+const reply = chunks.join('')
+/** Rows of varied height: a short question, a reply of 200 to 3,200 characters (prose and a code fence), and every third turn a tool run. */
+function sample(n: number, base: number): TranscriptItem[] {
+  const out: TranscriptItem[] = []
+  for (let i = 0; i < n; i++) {
+    const ts = base + i * 4
+    out.push({ id: `${base}-u${i}`, ts, kind: 'user', text: `Question ${i}: ${'why does it freeze? '.repeat(1 + ((i * 7) % 9))}` })
+    if (i % 3 === 1) out.push({ id: `${base}-t${i}`, ts: ts + 1, kind: 'tool_use', name: 'Bash', input: { command: `npm test -- run ${i}` }, status: 'done', startedAt: ts + 1, endedAt: ts + 2 })
+    out.push({ id: `${base}-a${i}`, ts: ts + 3, kind: 'assistant_text', text: reply.slice(0, 200 + ((i * 437) % 3000)) })
+  }
+  return out
+}
 
 ;(window as unknown as { __streamBench: unknown }).__streamBench = {
   ready: true,
   total: chunks.length,
+  sample,
+  mount(chatId: string, list: TranscriptItem[], loading = false) {
+    view.value = { key: view.value.key + 1, chatId, loading }
+    items.value = list
+  },
+  arrive(list: TranscriptItem[]) {
+    items.value = list
+    view.value = { ...view.value, loading: false }
+  },
   async push() {
     if (next >= chunks.length) return false
     const cur = items.value[1] as TranscriptItem & { kind: 'assistant_text' }
@@ -46,6 +69,6 @@ let next = 0
 
 <template>
   <div style="height: 100vh; width: 100vw; display: flex; flex-direction: column">
-    <TranscriptView chat-id="stream-bench" :items="items" :chat="chat" read-only />
+    <TranscriptView :key="view.key" :chat-id="view.chatId" :items="items" :loading="view.loading" :chat="chat" read-only />
   </div>
 </template>

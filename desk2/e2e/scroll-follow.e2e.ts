@@ -171,6 +171,45 @@ try {
   await sleep(300)
   b = await state()
   check(b.distance < 2, `at the bottom it follows the reply (distance ${Math.round(b.distance)})`)
+
+  // 9. A chat mounts with rows of varied height (replies of 200 to 3,200 characters, tool runs): it ends at its newest message.
+  const SAMPLE = `window.__streamBench.sample(40, 1000)`
+  await load()
+  await ev(`window.__streamBench.mount('chat-a', ${SAMPLE})`)
+  await sleep(1000)
+  a = await state()
+  check(a.distance <= 2, `a chat mounted with varied rows ends at its bottom after 1 s (distance ${Math.round(a.distance)})`)
+  await sleep(2000)
+  a = await state()
+  check(a.distance <= 2, `a chat mounted with varied rows ends at its bottom after 3 s (distance ${Math.round(a.distance)})`)
+
+  // 10. A chat mounts with no items (loading), and they arrive later: it ends at the bottom once they are in.
+  for (const late of [800, 2000]) {
+    await load()
+    await ev(`window.__streamBench.mount('chat-b', [], true)`)
+    await sleep(late)
+    await ev(`window.__streamBench.arrive(${SAMPLE})`)
+    await sleep(1000)
+    a = await state()
+    check(a.distance <= 2, `items arriving ${late} ms after the mount: at the bottom 1 s after they land (distance ${Math.round(a.distance)})`)
+    await sleep(2000)
+    a = await state()
+    check(a.distance <= 2, `items arriving ${late} ms after the mount: at the bottom 3 s after they land (distance ${Math.round(a.distance)})`)
+  }
+
+  // 11. Scrolled up in one chat, then another chat mounts (a new key, as DeskFrame does): it starts at its bottom.
+  await load()
+  await ev(`window.__streamBench.mount('chat-a', ${SAMPLE})`)
+  await sleep(800)
+  await wheel(-600)
+  await sleep(300)
+  await ev(`window.__streamBench.mount('chat-c', window.__streamBench.sample(30, 5000))`)
+  await sleep(1000)
+  a = await state()
+  check(a.distance <= 2, `switching chat lands at the new chat's bottom after 1 s (distance ${Math.round(a.distance)})`)
+  await sleep(2000)
+  a = await state()
+  check(a.distance <= 2, `switching chat lands at the new chat's bottom after 3 s (distance ${Math.round(a.distance)})`)
 } finally {
   // The Edge launched here may hand its window to another process: close the browser over CDP, then the launcher.
   try {

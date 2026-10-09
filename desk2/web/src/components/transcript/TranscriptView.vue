@@ -179,8 +179,10 @@ const distanceOf = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clie
 // after it, unless the person's own wheel, key or pointer comes first, a move up is the list settling, never a
 // let-go. Rows that mount at the bottom with estimated heights make the list shorter for a frame, and the browser's
 // clamp to it read as a scroll up: the jump button let go of the bottom 141px short of it (scroll-follow e2e case 5,
-// 2026-10-08; the clamp came 10ms after the click). Following a reply does not arm it: a drag or Page Up while it
-// streams still lets go.
+// 2026-10-08; the clamp came 10ms after the click). The same holds for a mount and the first arrival of items, and each
+// row measured for the first time while the settle still runs re-arms it, so a chat that opens with estimated rows is
+// followed until they are measured (scroll-follow e2e case 11, 2026-10-09). Following a reply does not arm it: a drag or
+// Page Up while it streams still lets go.
 const SETTLE_MS = 500
 let settleUntil = 0
 const settling = () => performance.now() < settleUntil
@@ -342,6 +344,7 @@ onMounted(() => {
       if (idx === undefined) continue
       const old = o[idx + 1] - o[idx]
       if (Math.abs(h - old) < 0.5 && heights.has(id)) continue
+      if (!heights.has(id) && settling()) settle()
       heights.set(id, h)
       layout.value.h[idx] = h
       changed = true
@@ -369,6 +372,7 @@ onMounted(() => {
   }
   // The rows mounted before the observer existed.
   scroller.value?.querySelectorAll<HTMLElement>('[data-id]').forEach((el) => rowObserver!.observe(el, { box: 'border-box' }))
+  settle()
   scrollToBottom()
   window.addEventListener(CHAT_SENT_EVENT, onSent)
   // A key (Page Up, the arrows) scrolls whatever has focus; a press on the scrollbar arrives as the scroller's own.
@@ -531,6 +535,17 @@ watch(
     scrollTop.value = lastTop = el.scrollTop
   },
   { flush: 'post' },
+)
+
+// A chat whose items arrive after it mounted (a load) starts at its bottom, as on mount.
+watch(
+  () => props.items.length > 0,
+  (has, had) => {
+    if (!has || had) return
+    settle()
+    pinned.value = true
+    nextTick(follow)
+  },
 )
 
 // A different chat starts at its bottom.
