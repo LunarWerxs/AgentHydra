@@ -17,6 +17,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **New's project grid: shorter tiles without details, six rows and Show all**
 - **Sidebar group headings show their project's icon**
 - **Sidebar: groups in A-Z order, + on every group, Search and Filter beside New**
+- **A chat started from another chat's chip sits under that chat in the sidebar**
 - **Background work reaches the Free accounts, and their answers count tokens**
 - **Open brings the account's Claude window to the front**
 - **The Free accounts' list keeps a backup, so a power cut cannot wipe it**
@@ -44,6 +45,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Sidebar group headings show their project's icon** when the group is one of your Project Hydra projects.
 - **Sidebar: groups in A-Z order, + on every group, Search and Filter beside New.** Every folder group has its
   own + for a new chat there, and the New button is a quieter colour.
+- **A chat started from another chat's chip sits under that chat in the sidebar,** indented, as Claude
+  Desktop shows it. A chat whose parent is not shown stays an ordinary row.
 - **Background work reaches the Free accounts, and their answers count tokens.** Asks made by CliMayte workers,
   most of the background work, never went to an idle Free account; now they do. A Free answer also records an
   estimate of its tokens instead of zero.
