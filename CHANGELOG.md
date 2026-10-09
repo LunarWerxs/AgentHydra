@@ -47,6 +47,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   no longer there. Nothing is typed into the window, the message shows as from AgentHydra rather than from you, and a
   chat you stopped yourself stays stopped.
 - **A worker transcript is read in slices, so opening a worker chat no longer holds the server.** The first read of a worker transcript parsed the whole file in one run, which held every request for seconds at startup and on the first chat open. It now parses in slices and lets other requests run between them.
+- **Stop on a CliMayte worker's chat is never silent, and a stopped worker stays stopped.** A Stop the server refuses or cannot finish now shows as Stop failed and the chat goes back to its real state. A message another worker or ping sends to a stopped worker waits in its queue until you send your next message.
 - **Your message shows the moment you press Send.** It is drawn in its chat at once, before the server answers, and a new chat appears in the sidebar as soon as you send its first message. A send that fails stays on screen as Not sent, with Retry and the text kept.
 - **Restart to update takes seconds and shows What's new afterwards.** A click on the update row could sit for two minutes with nothing on screen, and What's new never appeared. The row now says Restarting… the moment you click, the old server stops within seconds, and What's new opens once the new one is up.
 

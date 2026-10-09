@@ -6,7 +6,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createClient } from '../../../src/bridge/client'
+import { BridgeError, createClient } from '../../../src/bridge/client'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { ChatManager } from '../../../src/engine/chat-manager'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
@@ -51,6 +51,30 @@ test('a new chat starts a worker, a follow-up goes to that worker, and its statu
   expect(m.get(chat.id)).toMatchObject({ status: 'idle', unread: true, account: { id: 'cli-3' } })
   const moved = m.listItems(chat.id).find((i) => i.kind === 'system' && /moved this chat/.test(i.text))
   expect(moved && 'text' in moved && moved.text).toMatch(/from #61.* to #62/)
+})
+
+test('Stop on a worker chat reports a refused cancel instead of swallowing it, and a cancel that goes through stops the worker', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-stop-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'reply with the word pong', model: 'haiku' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+
+  b.bridge.cancelWorker = async () => {
+    throw new BridgeError('http', 'worker w1 is not active, so there is nothing to cancel', 409)
+  }
+  await expect(m.interrupt(chat.id)).rejects.toThrow('nothing to cancel')
+  expect(m.get(chat.id).status).toBe('working')
+
+  b.bridge.cancelWorker = async (id) => {
+    b.state.cancelled.push(id)
+  }
+  await m.interrupt(chat.id)
+  expect(b.state.cancelled).toEqual(['w1'])
 })
 
 function newManager(home: string, b: ReturnType<typeof fakeBridge>) {
