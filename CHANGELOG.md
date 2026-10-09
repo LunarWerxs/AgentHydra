@@ -10,6 +10,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 **TL;DR**
 
 - **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
+- **The babysitter can wake a Desktop chat a usage limit stopped**
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
 - **A new chat no longer pulls you back into it after you moved on**
 - **Chats with long transcripts stop stalling the server on every poll**
@@ -29,6 +30,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **The babysitter can wake a Desktop chat a usage limit stopped.** Its continue now goes in through the Claude app's own
+  chat-to-chat messaging, which starts the chat again by itself, instead of waiting for a running chat that was
+  no longer there. Nothing is typed into the window, the message shows as from AgentHydra rather than from you, and a
+  chat you stopped yourself stays stopped.
 - **Your message shows the moment you press Send.** It is drawn in its chat at once, before the server answers, and a new chat appears in the sidebar as soon as you send its first message. A send that fails stays on screen as Not sent, with Retry and the text kept.
 - **Restart to update takes seconds and shows What's new afterwards.** A click on the update row could sit for two minutes with nothing on screen, and What's new never appeared. The row now says Restarting… the moment you click, the old server stops within seconds, and What's new opens once the new one is up.
 
