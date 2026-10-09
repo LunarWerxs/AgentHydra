@@ -11,8 +11,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
+- **A new chat no longer pulls you back into it after you moved on**
 
 **Everything in Unreleased**
+
+- **A new chat no longer pulls you back into it after you moved on.** Sending the first message of a new chat
+  and opening another chat before it answered used to switch you back to the new one a few seconds later. It
+  now opens only if you are still on the screen you sent it from; otherwise it just appears in the sidebar.
+  Forks work the same way.
 
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call.** Work a Codex sub-agent did
   was left out, and so were the rollouts Codex packs into monthly zips. Codex is now counted call by call, so a

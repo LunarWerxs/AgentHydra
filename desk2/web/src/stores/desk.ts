@@ -42,7 +42,7 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
 import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
-import { chatViewOf } from '@/components/shell/logic'
+import { chatViewOf, sameView, type View } from '@/components/shell/logic'
 import { loadDraft, saveDraft } from '@/components/composer/logic'
 import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from '@/components/composer/draft-images'
 import { putBackDraft } from '@/components/composer/change-project'
@@ -646,6 +646,7 @@ async function importOutside(s: ExternalSession, fork = false, at?: string): Pro
 async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
   const s = findExternal(sessionId)
   if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+  const from = viewNow()
   const chat = await importOutside(s)
   // The import holds the session's history: in the cache before the send, the chat opens on the whole
   // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
@@ -669,7 +670,7 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
     noteNotSent(chat.id, err instanceof Error ? err.message : String(err), message)
     throw err
   } finally {
-    landChat(chat)
+    landChat(chat, from)
   }
 }
 
@@ -716,13 +717,18 @@ async function landHistory(id: string): Promise<void> {
   } catch {} // floor-ok: left unloaded, DeskFrame loads it when the chat opens
 }
 
-// A chat the window just made is listed and opened at once: the server's chat.upsert may come after
-// the POST answers, and until then the chat view would fall back to the new-session screen. A summary
-// the socket already delivered is newer, so it is kept.
-function landChat(chat: ChatSummary) {
+// A chat the window just made is listed at once: the server's chat.upsert may come after the POST
+// answers, and until then the chat view would fall back to the new-session screen. A summary the socket
+// already delivered is newer, so it is kept. It opens only while the person is still on the view they
+// made it from (`from`, read when they sent or forked): owner, 2026-10-09, a new chat's send that
+// answered seconds later pulled him back out of the chat he had moved on to.
+function landChat(chat: ChatSummary, from: View) {
   if (!store.chats.some((c) => c.id === chat.id)) store.chats.push(chat)
-  store.selected = { kind: 'chat', id: chat.id }
+  if (sameView(store.selected, from)) store.selected = { kind: 'chat', id: chat.id }
 }
+
+/** The view on screen now, copied: what landChat compares with when the chat it waits for lands. */
+const viewNow = (): View => ({ ...store.selected })
 
 // Public API
 
@@ -770,14 +776,15 @@ export function useDesk() {
       store.selected = { kind: 'settings' }
     },
 
-    /** Creates the chat (its first message goes with it), lists it and opens it. */
+    /** Creates the chat (its first message goes with it), lists it and opens it if the person is still where they sent it from. */
     async createChat(req: CreateChatRequest): Promise<ChatSummary> {
+      const from = viewNow()
       const chat = await fetchJson<ChatSummary>('/chats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req)
       })
-      landChat(chat)
+      landChat(chat, from)
       return chat
     },
 
@@ -877,8 +884,9 @@ export function useDesk() {
 
     /** Fork: a new chat continuing from a copy of the chat's session, listed and opened. */
     async forkChat(chatId: string): Promise<ChatSummary> {
+      const from = viewNow()
       const chat = await fetchJson<ChatSummary>(`/chats/${chatId}/fork`, { method: 'POST' })
-      landChat(chat)
+      landChat(chat, from)
       return chat
     },
 
@@ -886,8 +894,9 @@ export function useDesk() {
     async forkExternal(sessionId: string): Promise<ChatSummary> {
       const s = findExternal(sessionId)
       if (!s) throw new Error('This session is no longer listed.')
+      const from = viewNow()
       const chat = await importOutside(s, true)
-      landChat(chat)
+      landChat(chat, from)
       return chat
     },
 
@@ -899,6 +908,7 @@ export function useDesk() {
       // An outside session's transcript names it by its session id, its stand-in chat by the external id.
       const outside = store.chats.some((c) => c.id === chatId) ? undefined : findExternal(isExternalChatId(chatId) ? sessionOfChatId(chatId) : chatId)
       if (!outside && isExternalChatId(chatId)) throw new Error('This session is no longer listed.')
+      const from = viewNow()
       const chat = outside
         ? await importOutside(outside, true, itemId)
         : await fetchJson<ChatSummary>(`/chats/${chatId}/fork`, {
@@ -909,7 +919,7 @@ export function useDesk() {
       // In the box before the chat opens: its composer loads the draft when it changes to this chat.
       saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
       saveDraftImages(chat.id, message.images ?? [])
-      landChat(chat)
+      landChat(chat, from)
       return chat
     },
 

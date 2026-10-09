@@ -200,4 +200,88 @@ describe('useDesk store', () => {
     desk.select({ kind: 'chat', id: 'chat-1' })
     expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-1' })
   })
+
+  // Owner, 2026-10-09: a new chat's POST answered seconds after he had moved on to another chat, and the
+  // window pulled him back into the new one. It opens only while he is still where he sent it from.
+  describe('a chat the window makes', () => {
+    const summary = (id: string): ChatSummary => ({
+      id,
+      sessionId: null,
+      title: 'Example chat',
+      cwd: 'C:/Users/me/project',
+      account: { id: 'default', label: 'Default', configDir: null },
+      accountAuto: false,
+      model: null,
+      effort: null,
+      permissionMode: 'default',
+      delegateToCliMayte: false,
+      status: 'closed',
+      activity: null,
+      turnStartedAt: null,
+      lastError: null,
+      limitResetsAt: null,
+      unread: false,
+      pinned: false,
+      archived: false,
+      group: null,
+      forkedFrom: null,
+      createdAt: 1,
+      updatedAt: 1,
+      costUsd: 0,
+      contextPct: null,
+      pendingCount: 0,
+      queuedCount: 0,
+      climayteActive: 0
+    })
+    /** The next fetch answers only when the test says so, with this chat. */
+    function answerLater(): (chat: ChatSummary) => void {
+      let answer: ((chat: ChatSummary) => void) | null = null
+      mockFetch.mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (answer = (chat) => resolve(new Response(JSON.stringify(chat), { status: 200 }))))
+      )
+      return (chat) => answer!(chat)
+    }
+    const req = { cwd: 'C:/Users/me/project', prompt: 'Example first message' }
+
+    it('stays on the chat the person moved to before the new chat answered', async () => {
+      const desk = useDesk()
+      desk.select({ kind: 'new', cwd: req.cwd })
+      const answer = answerLater()
+      const made = desk.createChat(req)
+      desk.select({ kind: 'chat', id: 'chat-1' })
+      answer(summary('chat-late'))
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-1' })
+      expect(desk.chats.value.some((c) => c.id === 'chat-late')).toBe(true)
+    })
+
+    it('opens the new chat when the person is still on the new-session screen', async () => {
+      const desk = useDesk()
+      desk.select({ kind: 'new', cwd: req.cwd })
+      const answer = answerLater()
+      const made = desk.createChat(req)
+      answer(summary('chat-stayed'))
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-stayed' })
+    })
+
+    it('opens a fork only while the person is still on the chat they forked', async () => {
+      const desk = useDesk()
+      desk.select({ kind: 'chat', id: 'chat-1' })
+      let answer = answerLater()
+      let made = desk.forkChat('chat-1')
+      answer(summary('fork-stayed'))
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'fork-stayed' })
+
+      desk.select({ kind: 'chat', id: 'chat-1' })
+      answer = answerLater()
+      made = desk.forkChat('chat-1')
+      desk.select({ kind: 'new' })
+      answer(summary('fork-left'))
+      await made
+      expect(desk.selected.value).toEqual({ kind: 'new' })
+      expect(desk.chats.value.some((c) => c.id === 'fork-left')).toBe(true)
+    })
+  })
 })
