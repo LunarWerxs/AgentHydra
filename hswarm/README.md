@@ -177,7 +177,7 @@ A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `rou
 ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
 leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a free account's limit), the others for the account's usual model. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
 failed, slow or unparseable reply keeps the API route. `selection.route` shows it (`via: free`), the ledger line says
-provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default 6), `route_via_free_profiles`.
+provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 `hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
 one Free message was measured on Dredd's gold asks and not shipped (2026-10-08,

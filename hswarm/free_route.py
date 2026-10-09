@@ -184,7 +184,8 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     # tasks that read one snapshot at once would all take its one idle account, so those are subtracted here.
     now = time.monotonic()
     _SENT[:] = [t for t in _SENT if now - t < UNSEEN_S]
-    if not isinstance(status, dict) or _idle(status) - len(_SENT) <= 0 or _ACTIVE >= config.ROUTE_VIA_FREE_MAX:
+    capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
+    if not isinstance(status, dict) or _idle(status) - len(_SENT) <= 0 or capped:
         return None, None
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below

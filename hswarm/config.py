@@ -281,10 +281,12 @@ ROUTE_VIA_CLIMAYTE_MAX = 4
 ROUTE_VIA_CLIMAYTE_START_S = 90.0
 # `route_via_free` in settings.toml: a TOOL-FREE task of an ordinary profile is first sent to the owner's signed-in Free
 # claude.ai and chatgpt.com accounts through AgentHydra (free_route.py), at no cost, before any paid API leg. On by default.
-# `route_via_free_max`: tasks on free accounts at once across the server process. `route_via_free_profiles`: the profiles
-# that may go (never critical by default); an unlisted profile takes its API route without asking.
+# `route_via_free_max`: the most tasks on free accounts at once across the server process; unset, as many as are idle.
+# A fixed 6 (from when there were 6 accounts) held one server to 6 of 11 accounts while thousands of eligible tasks a
+# day took their API route (owner, 2026-10-08: "we're sending a very low stream to them"). `route_via_free_profiles`:
+# the profiles that may go (never critical by default); an unlisted profile takes its API route without asking.
 ROUTE_VIA_FREE = True
-ROUTE_VIA_FREE_MAX = 6
+ROUTE_VIA_FREE_MAX: int | None = None
 _ROUTE_VIA_FREE_PROFILES_DEFAULT = ("routine", "general", "research", "decision")
 ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
 
@@ -530,7 +532,7 @@ def _reset() -> None:
     # `routing = false` from a PREVIOUS read standing (it did until 2026-09-17).
     PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD = _PRICE_ROUTING_DEFAULT, _LOAD_BIAS_DEFAULT, None
     ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, 4, 90.0
-    ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, 6, _ROUTE_VIA_FREE_PROFILES_DEFAULT
+    ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, None, _ROUTE_VIA_FREE_PROFILES_DEFAULT
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

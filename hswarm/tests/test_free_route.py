@@ -200,12 +200,15 @@ def test_no_idle_account_falls_back_without_calling_free_chat(fake):
 
 
 def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
-    # Its own three tasks hold three accounts, which free_status already shows busy: the three idle ones are still
-    # free to take work (comparing in-flight tasks with idle accounts stopped every process at half of them).
-    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 3 + [ACCOUNTS[0]] * 3)
-    monkeypatch.setattr(free_route, "_ACTIVE", 3)
+    # Its own tasks hold accounts, which free_status already shows busy: the idle ones are still free to take work
+    # (comparing in-flight tasks with idle accounts stopped every process at half of them; a fixed cap of 6 held one
+    # server to 6 of 11 accounts, 2026-10-08). Only a `route_via_free_max` someone set holds it back.
+    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}] * 10 + [ACCOUNTS[0]])
+    monkeypatch.setattr(free_route, "_ACTIVE", 10)
     res, _ = _consult(_task())
     assert res is not None and len(f.chats) == 1
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_MAX", 10)
+    assert _consult(_task(id="t1")) == (None, None) and len(f.chats) == 1
 
 
 def test_tasks_reading_one_snapshot_take_its_one_idle_account_once(fake):
