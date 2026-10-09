@@ -153,7 +153,8 @@ export function firstCwdFrom(path: string, offset: number): string | null {
   return null
 }
 
-const MEMO_MAX = 8
+/** Source bytes of the lines parsed so far, by every reader (a test counts what a read did by the difference). */
+export const sessionJsonlWork = { parsedBytes: 0 }
 
 /** One session file as last read: the records of its complete lines, and where the next read starts. */
 interface Memo {
@@ -162,34 +163,15 @@ interface Memo {
   mtimeMs: number
   /** Where the first unconsumed byte is: just after the last complete line read. */
   offset: number
-  recs: { rec: unknown; bytes: number }[]
+  recs: { rec: unknown; bytes: number; uses?: string[]; mid?: string }[]
   /** Bytes the kept records took in the file. */
   bytes: number
   items: TranscriptItem[]
   /** The file's last FINGERPRINT bytes before `offset`: a file rewritten in place no longer has them there. */
   tail: Buffer
 }
-const memo = new Map<string, Memo>()
+type Settled = Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>
 const FINGERPRINT = 64
-
-/**
- * Files pushed out of `memo`: their stat and the items they answered, without the records. A CliMayte chat
- * reads every session it has had at each poll (one had 94, ten chats 136 files): with only MEMO_MAX remembered,
- * each poll re-parsed them all, 0.6 to 1.6 s on the server's one thread, and every click waited behind it. An
- * unchanged one costs a stat; a changed one is read again from its tail.
- */
-const settled = new Map<string, Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>>()
-const SETTLED_MAX = 1024
-/** Source bytes of the settled items, oldest dropped past it. */
-const SETTLED_MAX_BYTES = 64 * 1024 * 1024
-let settledBytes = 0
-
-function unsettle(path: string): void {
-  const kept = settled.get(path)
-  if (!kept) return
-  settled.delete(path)
-  settledBytes -= kept.bytes
-}
 
 const unchanged = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: { ino: number; size: number; mtimeMs: number }) =>
   m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino
@@ -211,79 +193,197 @@ function readFrom(path: string, from: number, size: number): Buffer {
   }
 }
 
-/**
- * A session file's items. An open chat is polled every few seconds and a running one grows all the time,
- * so the file is read once and then only from where the last read stopped: the new complete lines are
- * parsed and added to the records kept (the newest TAIL_BYTES of them), and the items are made from
- * those. A file that shrank, was replaced or was rewritten in place starts over; one that did not change
- * costs a stat.
- */
-export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
-  const st = statSync(path)
-  let m = memo.get(path)
-  if (m && unchanged(m, st)) return m.items
-  const kept = settled.get(path)
-  if (kept && unchanged(kept, st)) {
-    settled.delete(path)
-    settled.set(path, kept)
-    return kept.items
-  }
-  if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
-  let from = 0
-  let buf: Buffer | null = null
-  if (m) {
-    // The bytes just before where the last read stopped are read again and must still be the same: a file
-    // rewritten in place to the same size or more is read from the start, not continued.
-    const back = m.tail.length
-    const read = readFrom(path, m.offset - back, st.size)
-    if (read.length >= back && read.subarray(0, back).equals(m.tail)) {
-      buf = read.subarray(back)
-      from = m.offset
-    } else m = undefined
-  }
-  if (!buf) {
-    from = Math.max(0, st.size - TAIL_BYTES)
-    buf = readFrom(path, from, st.size)
-  }
-  const prevTail = m?.tail ?? Buffer.alloc(0)
-  let start = 0
-  if (!m && from > 0) {
-    // The read starts mid-file: its first line may be cut, so it is left out.
-    const nl = buf.indexOf(10)
-    start = nl < 0 ? buf.length : nl + 1
-    from += start
-  }
-  const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
-  // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
-  // not valid UTF-8 (decoded, such a byte would count as three).
-  for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
-    const bytes = nl + 1 - start
-    fresh.offset += bytes
-    const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
-    if (!recs.length) continue
-    fresh.recs.push({ rec: recs[0], bytes })
-    fresh.bytes += bytes
-  }
-  // The last line may still be being written: it counts when it already parses, but is read again next time.
-  const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
-  // buf[0, start) is what the file holds just before the new offset; a short one goes on from the old tail.
-  const seg = buf.subarray(Math.max(0, start - FINGERPRINT), start)
-  const joined = seg.length >= FINGERPRINT ? seg : Buffer.concat([prevTail, seg])
-  fresh.tail = Buffer.from(joined.subarray(Math.max(0, joined.length - FINGERPRINT)))
-  while (fresh.bytes > TAIL_BYTES && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
-  fresh.size = st.size
-  fresh.mtimeMs = st.mtimeMs
-  fresh.ino = st.ino
-  fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
-  memo.delete(path)
-  memo.set(path, fresh)
-  unsettle(path)
-  if (memo.size > MEMO_MAX) {
-    const [old, out] = memo.entries().next().value!
-    memo.delete(old)
-    settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
-    settledBytes += out.bytes
-    while (settled.size > SETTLED_MAX || settledBytes > SETTLED_MAX_BYTES) unsettle(settled.keys().next().value!)
-  }
-  return fresh.items
+export interface JsonlReaderOptions {
+  /** How much of a file's end a first read takes. */
+  tailBytes: number
+  /** Source bytes of records kept per file between reads. Below `tailBytes` the reader is windowed (see createJsonlReader). */
+  keepBytes: number
+  /** A windowed reader may keep this much to hold the launch of a tool or task still running. */
+  pinBytes?: number
+  /** Files kept incremental, and the source bytes of their kept records. */
+  maxFiles: number
+  maxBytes: number
+  /** Files pushed out of that: their stat and answer only, so an unchanged one costs a stat. */
+  settledFiles: number
+  settledBytes: number
 }
+
+/** The ids of the tool_use blocks a record holds and the API message it belongs to: what a window must not cut apart. */
+function marks(rec: unknown): { uses?: string[]; mid?: string } {
+  const msg = (rec as { type?: unknown; message?: { id?: unknown; content?: unknown } } | null)?.message
+  if (!msg || (rec as { type?: unknown }).type !== 'assistant') return {}
+  const out: { uses?: string[]; mid?: string } = {}
+  if (typeof msg.id === 'string') out.mid = msg.id
+  if (Array.isArray(msg.content)) {
+    for (const b of msg.content as { type?: unknown; id?: unknown }[]) {
+      if (b?.type === 'tool_use' && typeof b.id === 'string') (out.uses ??= []).push(b.id)
+    }
+  }
+  return out
+}
+
+/**
+ * Drops the oldest records past `keep` bytes, and returns the bytes dropped. A cut falls where an API message
+ * begins (its blocks are separate records and number their items by arrival), and not past the launch of a tool
+ * or task the items show still running, since a result whose tool is gone is skipped by the normalizer and the
+ * item would stay running; that holds only while the window is within `cap`, so a tool that never answers cannot
+ * keep a file's whole history in memory.
+ */
+function trimWindow(m: Memo, items: TranscriptItem[], keep: number, cap: number): number {
+  const open = new Set<string>()
+  for (const it of items) {
+    if (it.kind === 'tool_use' && it.status === 'running') open.add(it.id)
+    else if (it.kind === 'task' && it.status === 'running' && it.toolUseId) open.add(it.toolUseId)
+  }
+  let pin = open.size ? m.recs.findIndex((r) => r.uses?.some((id) => open.has(id))) : -1
+  if (pin < 0) pin = m.recs.length
+  let dropped = 0
+  while (m.recs.length > 1 && m.bytes > keep) {
+    let j = 1
+    while (j < m.recs.length && m.recs[j]!.mid !== undefined && m.recs[j]!.mid === m.recs[j - 1]!.mid) j++
+    if (j >= m.recs.length) break
+    if (j > pin && m.bytes <= cap) break
+    for (const r of m.recs.splice(0, j)) {
+      m.bytes -= r.bytes
+      dropped += r.bytes
+    }
+    pin -= j
+  }
+  return dropped
+}
+
+/**
+ * A session file's items, read for as long as the file is polled. An open chat is polled every few seconds and a
+ * running one grows all the time, so the file is read once and then only from where the last read stopped: the new
+ * complete lines are parsed and added to the records kept, and the items are made from those. A file that shrank,
+ * was replaced or was rewritten in place starts over; one that did not change costs a stat.
+ *
+ * With `keepBytes` below `tailBytes` the reader is WINDOWED: the first read still takes the whole tail and answers
+ * every item in it, once; afterwards only the newest `keepBytes` of records stay in memory, and what a later read
+ * answers is the items of that window. That is for a caller that only adds what is new or changed to a store that
+ * already holds the rest (the CliMayte chats' workers); an item that fell out of the window is simply not answered
+ * again. A window never starts inside an API message, and keeps back to the launch of a tool or task still running
+ * (up to `pinBytes`; a tool that long without an answer loses it, and its result is then skipped).
+ */
+export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: string | null) => TranscriptItem[] {
+  const memo = new Map<string, Memo>()
+  let memoBytes = 0
+  const settled = new Map<string, Settled>()
+  let settledBytes = 0
+  const windowed = o.keepBytes < o.tailBytes
+  const pinCap = o.pinBytes ?? o.keepBytes
+
+  function unsettle(path: string): void {
+    const kept = settled.get(path)
+    if (!kept) return
+    settled.delete(path)
+    settledBytes -= kept.bytes
+  }
+
+  return (path, cwd) => {
+    const st = statSync(path)
+    let m = memo.get(path)
+    if (m && unchanged(m, st)) return m.items
+    const kept = settled.get(path)
+    if (kept && unchanged(kept, st)) {
+      settled.delete(path)
+      settled.set(path, kept)
+      return kept.items
+    }
+    const counted = m?.bytes ?? 0
+    if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
+    let from = 0
+    let buf: Buffer | null = null
+    if (m) {
+      // The bytes just before where the last read stopped are read again and must still be the same: a file
+      // rewritten in place to the same size or more is read from the start, not continued.
+      const back = m.tail.length
+      const read = readFrom(path, m.offset - back, st.size)
+      if (read.length >= back && read.subarray(0, back).equals(m.tail)) {
+        buf = read.subarray(back)
+        from = m.offset
+      } else m = undefined
+    }
+    if (!buf) {
+      from = Math.max(0, st.size - o.tailBytes)
+      buf = readFrom(path, from, st.size)
+    }
+    const prevTail = m?.tail ?? Buffer.alloc(0)
+    let start = 0
+    if (!m && from > 0) {
+      // The read starts mid-file: its first line may be cut, so it is left out.
+      const nl = buf.indexOf(10)
+      start = nl < 0 ? buf.length : nl + 1
+      from += start
+    }
+    const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
+    // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
+    // not valid UTF-8 (decoded, such a byte would count as three).
+    for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
+      const bytes = nl + 1 - start
+      fresh.offset += bytes
+      sessionJsonlWork.parsedBytes += bytes
+      const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
+      if (!recs.length) continue
+      fresh.recs.push({ rec: recs[0], bytes, ...(windowed ? marks(recs[0]) : {}) })
+      fresh.bytes += bytes
+    }
+    // The last line may still be being written: it counts when it already parses, but is read again next time.
+    const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
+    // buf[0, start) is what the file holds just before the new offset; a short one goes on from the old tail.
+    const seg = buf.subarray(Math.max(0, start - FINGERPRINT), start)
+    const joined = seg.length >= FINGERPRINT ? seg : Buffer.concat([prevTail, seg])
+    fresh.tail = Buffer.from(joined.subarray(Math.max(0, joined.length - FINGERPRINT)))
+    fresh.size = st.size
+    fresh.mtimeMs = st.mtimeMs
+    fresh.ino = st.ino
+    if (!windowed) while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
+    const answer = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
+    fresh.items = answer
+    if (windowed) {
+      const dropped = trimWindow(fresh, answer, o.keepBytes, pinCap)
+      // A first read dropped most of the tail: what is kept answers for the window alone, not the whole tail again.
+      if (dropped > o.keepBytes) fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
+    }
+    memo.delete(path)
+    memo.set(path, fresh)
+    memoBytes += fresh.bytes - counted
+    unsettle(path)
+    while (memo.size > 1 && (memo.size > o.maxFiles || memoBytes > o.maxBytes)) {
+      const [old, out] = memo.entries().next().value!
+      memo.delete(old)
+      memoBytes -= out.bytes
+      settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
+      settledBytes += out.bytes
+      while (settled.size > o.settledFiles || settledBytes > o.settledBytes) unsettle(settled.keys().next().value!)
+    }
+    return answer
+  }
+}
+
+const SETTLED = { settledFiles: 1024, settledBytes: 64 * 1024 * 1024 }
+
+/**
+ * The outside-session views' reader: the whole tail, kept in full, 8 files incremental. A CliMayte chat reads every
+ * session it has had at each poll (one had 94, ten chats 136 files): with only 8 remembered, each poll re-parsed
+ * them all, 0.6 to 1.6 s on the server's one thread, so those that settled keep their stat and answer.
+ */
+const readSession = createJsonlReader({ tailBytes: TAIL_BYTES, keepBytes: TAIL_BYTES, maxFiles: 8, maxBytes: Infinity, ...SETTLED })
+
+export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
+  return readSession(path, cwd)
+}
+
+/**
+ * The CliMayte workers' reader: a running worker grows its file between two polls and every running worker is
+ * polled, so with 8 files remembered each poll of 10 to 30 workers parsed an 8 MiB tail apiece in one stretch,
+ * while keeping 8 MiB of parsed records for each would take gigabytes of heap. The window is 1 MiB of records.
+ */
+export const workerJsonlItems = createJsonlReader({
+  tailBytes: TAIL_BYTES,
+  keepBytes: 1024 * 1024,
+  pinBytes: 4 * 1024 * 1024,
+  maxFiles: 128,
+  maxBytes: 64 * 1024 * 1024,
+  ...SETTLED,
+})

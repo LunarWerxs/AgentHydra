@@ -14,7 +14,7 @@
 import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
-import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED } from './climayte'
+import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers } from './climayte'
 import {
   BridgeError,
   createClient,
@@ -28,7 +28,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { claudeProjectRoots, findSessionJsonl, sessionJsonlItems } from './session-jsonl'
+import { claudeProjectRoots, findSessionJsonl, sessionJsonlItems, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
@@ -279,9 +279,10 @@ export function createBridge(opts: BridgeOptions = {}) {
       const list = mapWorkers(raw)
       if (list.some((w) => w.active)) workerTokens.apply(list, raw, await instanceDirs())
       // This PC's alone: the engine matches chats to these and counts them, and their ids may repeat the other PCs'.
-      lastWorkers = { at: now(), workers: list }
+      const stable = reuseWorkers(lastWorkers?.workers, list)
+      lastWorkers = { at: now(), workers: stable }
       const others = await remote
-      return others.length ? [...list, ...others].sort(byRecency) : list
+      return others.length ? [...stable, ...others].sort(byRecency) : stable
     } catch (err) {
       if (unreachable(err)) {
         lastWorkers = { at: now(), workers: [] }
@@ -481,9 +482,9 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** A file's items, or null when the file is gone (the stat of the read says so; no separate existence check). */
-  function readItems(file: string, cwd?: string | null): TranscriptItem[] | null {
+  function readItems(file: string, cwd?: string | null, read = sessionJsonlItems): TranscriptItem[] | null {
     try {
-      return sessionJsonlItems(file, cwd)
+      return read(file, cwd)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw err
@@ -501,6 +502,19 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** Each worker's list as last answered, with the part each session was read as: while none changed, the same list goes back. The newest few. */
   const workerReads = new Map<string, { cwd: string | null; parts: Map<string, WorkerPart>; items: TranscriptItem[] }>()
   const WORKER_READS_KEPT = 16
+  /** Searches that found no file, by what was searched: when, and how long to leave it before searching again (doubling, to SESSION_MISS_MAX_MS). */
+  const notFound = new Map<string, { at: number; wait: number }>()
+  const SESSION_MISS_MS = 5_000
+  const SESSION_MISS_MAX_MS = 60_000
+  /** Whether a search for `key` found nothing recently enough to skip it: looking in every project folder of an account costs a stat each. */
+  const searchedLately = (key: string): boolean => {
+    const miss = notFound.get(key)
+    return miss !== undefined && now() - miss.at < miss.wait
+  }
+  const rememberMiss = (key: string): void => {
+    notFound.set(key, { at: now(), wait: Math.min(SESSION_MISS_MAX_MS, (notFound.get(key)?.wait ?? SESSION_MISS_MS / 2) * 2) })
+    if (notFound.size > 2048) notFound.delete(notFound.keys().next().value as string)
+  }
 
   function statOf(file: string): Pick<WorkerPart, 'ino' | 'size' | 'mtimeMs'> | null {
     try {
@@ -527,7 +541,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   function readPart(file: string, cwd: string | null): WorkerPart | null {
     const st = statOf(file)
     if (!st) return null
-    const items = readItems(file, cwd)
+    const items = readItems(file, cwd, workerJsonlItems)
     return items && { file, ...st, items }
   }
 
@@ -555,21 +569,29 @@ export function createBridge(opts: BridgeOptions = {}) {
     for (const sid of new Set(sessionIds)) {
       let known = o.rescan ? null : foundAt.get(sid)
       if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
-        const own = findSessionJsonl(sid, [ownRoot], cwd)
+        const ownKey = `${ownRoot}|${sid}`
+        const own = !o.rescan && searchedLately(ownKey) ? null : findSessionJsonl(sid, [ownRoot], cwd)
         if (own) {
+          notFound.delete(ownKey)
           rememberFile(sid, own)
           known = own
-        }
+        } else if (!o.rescan) rememberMiss(ownKey)
       }
       let part = known ? (unchangedPart(sid, known, cwd) ?? readPart(known, cwd)) : null
       if (!part) {
+        // A session with no file yet: every project folder of every account is looked in, so not on every poll.
+        if (!o.rescan && searchedLately(sid)) continue
         roots ??= await projectRoots()
         const file = findSessionJsonl(sid, roots, cwd)
         if (file) {
           rememberFile(sid, file)
           part = readPart(file, cwd)
         }
-        if (!part) continue
+        if (!part) {
+          rememberMiss(sid)
+          continue
+        }
+        notFound.delete(sid)
       }
       parts.set(sid, part)
     }

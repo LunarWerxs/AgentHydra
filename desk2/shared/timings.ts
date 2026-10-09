@@ -60,6 +60,8 @@ export interface TimingSpan {
   cwd?: string
   cold?: ColdKind
   ok?: boolean
+  /** A `loop_stall` line: the process's CPU ms over the same interval (user + system, all threads). */
+  cpu?: number
   /** A `turn` line: ms per stage inside it (hooks and tools summed). */
   stages?: Record<string, number>
   /** A `sync_poll` line: how many polls the minute held, and the slowest. A `chat_open` line: `n` is the items served. */

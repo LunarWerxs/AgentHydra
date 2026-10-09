@@ -160,10 +160,16 @@ const signature = (item: TranscriptItem): string => String(Bun.hash(JSON.stringi
 
 /** A short hash of what matching workers to chats reads from the worker list (workersOfChat, activeness). */
 function workersKey(workers: readonly CliMayteWorker[]): string {
+  const hit = workerKeys.get(workers)
+  if (hit !== undefined) return hit
   let text = ''
   for (const w of workers) text += `${w.id},${w.pc ?? ''},${w.active ? 1 : 0},${w.sessionId ?? ''},${w.originSessionId ?? ''},${w.originWorkerId ?? ''},${w.sessions?.join('+') ?? ''};`
-  return String(Bun.hash(text))
+  const key = String(Bun.hash(text))
+  workerKeys.set(workers, key)
+  return key
 }
+/** The bridge answers the very same array while the worker list did not change, so its key is worked out once. */
+const workerKeys = new WeakMap<readonly CliMayteWorker[], string>()
 
 /** The first line of the prompt, at most 60 chars (SPEC "Titles"). */
 export function titleFrom(prompt: string): string {
@@ -292,6 +298,8 @@ export class ChatManager {
   private liveModels: ModelChoice[] | null = null
   private readonly newChats: 'climayte' | 'sdk'
   private syncing: Promise<void> | null = null
+  /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
+  private closing = false
   private readonly titleGen: TitleGenerator | null
 
   /** The projects folder of a config folder (null: the default one), under the given home so every read and seed agree on it. */
@@ -1320,6 +1328,9 @@ export class ChatManager {
     for (const e of entries) {
       const w = byId.get(e.chat.workerId as string)
       if (w && this.chats.get(e.chat.id) === e) await this.applyWorker(e, w)
+      // One worker's read at a time: a click's request and the timers run between two workers, not after the whole pass.
+      await new Promise((done) => setImmediate(done))
+      if (this.closing) return
     }
     this.timings.poll(this.now() - from)
   }
@@ -1537,6 +1548,8 @@ export class ChatManager {
    * "Chat hosts"); `chats` ends them too. In-process runtimes close (chats go 'closed'). The list is written now.
    */
   async closeAll(o: { chats?: boolean } = {}): Promise<void> {
+    this.closing = true
+    await this.syncing?.catch(() => {})
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     releaseHosts(this.store.home)
     this.store.saveChats(this.stored())

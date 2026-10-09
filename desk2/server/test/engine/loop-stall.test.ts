@@ -29,4 +29,24 @@ describe('event-loop stall probe', () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test('a busy stall shows its CPU time, a sleeping one does not', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-stall-'))
+    try {
+      const timings = new Timings(home)
+      const stop = watchLoopStalls(timings)
+      await pause(60)
+      hold(400)
+      await pause(120)
+      Bun.sleepSync(400)
+      await pause(120)
+      stop()
+      const stalls = timings.read().filter((s) => s.stage === 'loop_stall' && s.ms >= 300)
+      const cpu = stalls.map((s) => s.cpu ?? 0)
+      expect(cpu.length).toBeGreaterThanOrEqual(2)
+      expect(Math.max(...cpu)).toBeGreaterThan(Math.min(...cpu) + 20)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 20_000)
 })

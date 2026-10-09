@@ -17,8 +17,20 @@ export const tokenTotal = (t: AhTokens | undefined): number | null =>
   t ? t.input + t.output + t.cacheRead + t.cacheWrite : null
 
 /** The first non-empty line of a worker's task, at most 300 characters. */
-export const firstLine = (s: string | null | undefined): string | null =>
-  (s ?? '').split('\n').map((l) => l.trim()).find(Boolean)?.slice(0, 300) ?? null
+export function firstLine(s: string | null | undefined): string | null {
+  // Walks the lines instead of splitting the whole task: a worker's prompt can run to many KB and this is
+  // mapped for every worker on every poll.
+  const text = s ?? ''
+  for (let from = 0; from <= text.length; ) {
+    const nl = text.indexOf('\n', from)
+    const end = nl < 0 ? text.length : nl
+    const line = text.slice(from, end).trim()
+    if (line) return line.slice(0, 300)
+    if (nl < 0) break
+    from = nl + 1
+  }
+  return null
+}
 
 /** '#68' from AgentHydra's '#68 name' (the name is often the login's email, kept out of the label). */
 export function workerAccountLabel(w: Pick<AhWorker, 'account'>): string | null {
@@ -87,6 +99,29 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, manag
     error: w.error ?? null,
     eta: w.eta ? { minutes: w.eta.minutes, at: w.eta.at, tookS: w.eta.tookS ?? null } : null,
   }
+}
+
+const sameValue = (a: unknown, b: unknown): boolean => {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i]))
+  const ka = Object.keys(a)
+  return ka.length === Object.keys(b).length && ka.every((k) => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
+}
+
+/**
+ * The list a poll mapped, with each worker that is unchanged since `prev` replaced by the very object of `prev`,
+ * and `prev` itself when nothing at all changed. Every poll maps the whole list afresh; the same objects let what
+ * is derived from the list (the chats' matching) be kept for as long as the list is the same.
+ */
+export function reuseWorkers(prev: readonly CliMayteWorker[] | undefined, next: CliMayteWorker[]): CliMayteWorker[] {
+  if (!prev?.length) return next
+  const before = new Map(prev.map((w) => [w.id, w]))
+  const out = next.map((w) => {
+    const old = before.get(w.id)
+    return old && sameValue(old, w) ? old : w
+  })
+  return out.length === prev.length && out.every((w, i) => w === prev[i]) ? (prev as CliMayteWorker[]) : out
 }
 
 /** Active workers first (newest first), then finished ones by when they last changed. */
@@ -224,27 +259,57 @@ export interface ChatWorkerRef {
  * ids may equal this PC's (the chat's matched `workerIds` among them).
  */
 export function workersOfChat(all: readonly CliMayteWorker[], chat: ChatWorkerRef): CliMayteWorker[] {
-  const workers = all.filter((w) => !w.pc)
-  const byId = new Map(workers.map((w) => [w.id, w]))
+  const { workers, byId, byOriginSession, byOriginWorker } = workerIndexOf(all)
   const own = chat.workerId ? byId.get(chat.workerId) : undefined
   const sessions = new Set<string>()
   for (const s of [chat.sessionId, own?.sessionId, ...(own?.sessions ?? [])]) if (s) sessions.add(s)
   const known = new Set(chat.workerIds ?? [])
-  const memo = new Map<string, boolean>()
-  const belongs = (w: CliMayteWorker, path: Set<string>): boolean => {
-    if (w.id === chat.workerId) return false
-    const hit = memo.get(w.id)
-    if (hit !== undefined) return hit
-    if (path.has(w.id)) return false
-    path.add(w.id)
-    let yes = known.has(w.id) || (w.originSessionId !== null && sessions.has(w.originSessionId))
-    if (!yes && w.originWorkerId) {
-      const parent = byId.get(w.originWorkerId)
-      yes = w.originWorkerId === chat.workerId || (parent ? belongs(parent, path) : known.has(w.originWorkerId))
-    }
-    path.delete(w.id)
-    memo.set(w.id, yes)
-    return yes
+  // Walks out from what ties a worker to the chat instead of testing every worker: its origin session, a worker
+  // matched before, the chat's own worker as origin, then whatever those dispatched.
+  const mine = new Set<string>()
+  const queue: string[] = []
+  const take = (id: string): void => {
+    if (id === chat.workerId || mine.has(id)) return
+    mine.add(id)
+    queue.push(id)
   }
-  return workers.filter((w) => belongs(w, new Set()))
+  for (const s of sessions) for (const id of byOriginSession.get(s) ?? []) take(id)
+  for (const id of known) {
+    if (byId.has(id)) take(id)
+    // A worker matched before that the list dropped still brings the workers it dispatched.
+    else for (const child of byOriginWorker.get(id) ?? []) take(child)
+  }
+  if (chat.workerId) for (const child of byOriginWorker.get(chat.workerId) ?? []) take(child)
+  for (let i = 0; i < queue.length; i++) for (const child of byOriginWorker.get(queue[i]!) ?? []) take(child)
+  return mine.size ? workers.filter((w) => mine.has(w.id)) : []
+}
+
+interface WorkerIndex {
+  workers: CliMayteWorker[]
+  byId: Map<string, CliMayteWorker>
+  byOriginSession: Map<string, string[]>
+  byOriginWorker: Map<string, string[]>
+}
+
+const indexes = new WeakMap<readonly CliMayteWorker[], WorkerIndex>()
+
+/** This PC's workers of one list, by id and by what they were dispatched from: built once per list however many chats ask. */
+function workerIndexOf(all: readonly CliMayteWorker[]): WorkerIndex {
+  const hit = indexes.get(all)
+  if (hit) return hit
+  const workers = all.filter((w) => !w.pc)
+  const byOriginSession = new Map<string, string[]>()
+  const byOriginWorker = new Map<string, string[]>()
+  const push = (m: Map<string, string[]>, key: string, id: string): void => {
+    const list = m.get(key)
+    if (list) list.push(id)
+    else m.set(key, [id])
+  }
+  for (const w of workers) {
+    if (w.originSessionId !== null) push(byOriginSession, w.originSessionId, w.id)
+    if (w.originWorkerId) push(byOriginWorker, w.originWorkerId, w.id)
+  }
+  const index = { workers, byId: new Map(workers.map((w) => [w.id, w])), byOriginSession, byOriginWorker }
+  indexes.set(all, index)
+  return index
 }

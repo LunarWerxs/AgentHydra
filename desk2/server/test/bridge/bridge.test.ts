@@ -445,3 +445,30 @@ describe('a chat with more session data than the settled cache holds', () => {
     expect(await b.workerItems(ids, CWD)).toBe(first)
   }, 120_000)
 })
+
+describe('a session whose file is not there yet', () => {
+  const CWD = 'C:/Users/me/Desktop/Project/Example'
+  test('is not searched for in every folder on each poll, and is found once the pause passes or a rescan asks', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-miss-'))
+    temps.push(home)
+    const root = join(home, 'projects')
+    const folder = join(root, encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const id = sid(300)
+    let t = NOW
+    const b = createBridge({ url: 'http://127.0.0.1:9', now: () => t, home, projectRoots: () => [root] })
+    expect(await b.workerItems([id], CWD)).toEqual([])
+    const row = JSON.stringify({ type: 'user', uuid: 'u1', timestamp: new Date(NOW).toISOString(), message: { role: 'user', content: 'hello there' } })
+    writeFileSync(join(folder, `${id}.jsonl`), `${row}\n`)
+    // Looked for a moment ago: not again yet.
+    t += 1_000
+    expect(await b.workerItems([id], CWD)).toEqual([])
+    // A rescan, or the pause passing, looks again.
+    expect((await b.workerItems([id], CWD, { rescan: true })).length).toBe(1)
+    const other = sid(301)
+    expect(await b.workerItems([other], CWD)).toEqual([])
+    writeFileSync(join(folder, `${other}.jsonl`), `${row.replace('u1', 'u2')}\n`)
+    t += 6_000
+    expect((await b.workerItems([other], CWD)).length).toBe(1)
+  })
+})

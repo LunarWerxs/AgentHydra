@@ -22,8 +22,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The live browser pane keeps streaming when its Chrome window is covered**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
 - **Hovering a control shows one tip after a second, not two**
+- **Sending and clicking no longer stall behind the server's background reading of running workers**
 
 **Everything in Unreleased**
+
+- **Sending and clicking no longer stall behind the server's background reading of running workers.** The server
+  re-read and re-matched every worker's transcript and chat link on each poll, so a click's request could wait
+  seconds. It now reads only the new lines of a worker's file, matches chats to workers from an index, stops
+  searching every folder for a session that has no file yet, and lets other work run between two workers' reads.
+  The timings log also records the CPU each stall used, so a stall from the PC being busy shows apart from the server's own work.
 
 - **Stop stops at once.** Stop, Esc and the sidebar's Stop turn the chat to stopped in the same frame, and Send and the message box come back at once. A Stop the server cannot finish is reported, and a CLI that never answers its interrupt is closed after about a second and a half, so the next message still goes through.
 
