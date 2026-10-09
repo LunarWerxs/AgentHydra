@@ -11,7 +11,6 @@ defineProps<{ row: InstanceRowModel }>()
 </script>
 
 <template>
-<template>
   <span class="inline-flex items-center gap-1.5">
     <IconTooltip
       v-if="row.tokens"
