@@ -126,6 +126,14 @@ def test_a_tool_free_task_is_answered_by_a_free_account(fake):
     assert f.chats[0]["tasks"][0]["name"] == "hswarm j1 t0" and "say hi" in f.chats[0]["tasks"][0]["prompt"]
 
 
+def test_a_climayte_workers_ask_is_answered_by_a_free_account(fake, monkeypatch):
+    # The worker guard is the CliMayte route's own; on this route it kept every ask a worker made on paid APIs (2026-10-09).
+    f = fake()
+    monkeypatch.setenv("AGENTHYDRA_CLIMAYTE_WORKER", "w-1")
+    res, _ = _consult(_task())
+    assert res is not None and res.model == "free:gpt-5-6-mini" and len(f.chats) == 1
+
+
 def test_only_narrow_profiles_ask_for_haiku(fake):
     f = fake()
     for profile in ("routine", "general", "research", "decision"):
@@ -144,6 +152,8 @@ def test_the_ledger_line_of_a_free_task_has_provider_free_and_no_cost(fake, monk
     assert api.calls == 0 and job.results["t0"].answer == "free answer"
     assert row["provider"] == "free" and row["cost_usd"] == 0
     assert float(row["seconds"]) == 1.0  # the account's own time on it, from free_results
+    # Estimated at 4 characters a token: "free answer" is 11 characters (every Free answer was ledgered as 0, 2026-10-09).
+    assert row["out"] == 3 and row["in_miss"] > 0
 
 
 def test_hswarm_ask_on_auto_is_answered_by_a_free_account(fake, monkeypatch):

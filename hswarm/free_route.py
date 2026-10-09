@@ -11,13 +11,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import time
 import urllib.error
 import urllib.request
 
-from . import config, shared
-from .climayte_route import WORKER_ENV, base_url
+from . import config
+from .climayte_route import base_url
 from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.free")
@@ -38,9 +37,10 @@ SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, 
 
 
 def eligible(task: Task) -> bool:
-    """A tool-free, text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat."""
-    if os.environ.get(WORKER_ENV) or (shared.REQUEST.get() or {}).get("climayte_worker"):
-        return False
+    """A tool-free, text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat.
+    A CliMayte worker's own asks qualify: the worker guard is climayte_route's (a worker must not start another worker),
+    and copied here it kept every tool-free ask a worker made off the Free accounts (5,400 in 48 h, 5 of them on Free,
+    2026-10-09; owner: "why you're running nothing on there")."""
     if not config.ROUTE_VIA_FREE or not base_url():
         return False
     if task.tools != "none" or getattr(task, "images", None) or task.zdr:
@@ -104,6 +104,10 @@ def _idle(status: dict) -> int:
                and not a.get("paced"))
 
 
+def _tokens(text: str) -> int:
+    return -(-len(text) // 4)
+
+
 def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Result | None:
     from .worker import payload_in_text
 
@@ -116,6 +120,9 @@ def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Resul
     res = Result(id=task.id, backend=task.backend, model="free:" + str(one.get("model") or "unknown"), status="ok",
                  answer=text, cost_usd=0.0, started=started, finished=now_iso(), seconds=on_account,
                  api_seconds=on_account)
+    # A web chat reports no token counts, so the ledger gets an estimate (4 characters a token, as Desk's Free tab
+    # counts them); without one every Free answer was ledgered as 0 tokens (2026-10-09).
+    res.usage = {"in_hit": 0, "in_miss": _tokens(shape(task)), "out": _tokens(text), "reasoning": 0}
     if task.schema:
         data = payload_in_text(text, task.schema)  # strips a code fence; the same schema check as the API route
         if data is None:
