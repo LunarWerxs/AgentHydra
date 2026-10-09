@@ -34,7 +34,7 @@ export interface Link {
 const stringParam = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 
-function attachPortParam(value: unknown): number | undefined {
+export function attachPortParam(value: unknown): number | undefined {
   if (value === undefined || value === null || value === '') return undefined
   const n = Number(value)
   if (!Number.isInteger(n) || n <= 0 || n > 65535) throw new ToolInputError('attachPort must be a port number')
@@ -51,7 +51,7 @@ function profileSlug(name: string): string {
   )
 }
 
-async function profileFolder(name: string, cwd: string | undefined): Promise<string> {
+export async function profileFolder(name: string, cwd: string | undefined): Promise<string> {
   const slug = profileSlug(name)
   const root = storeRoot()
   if (!cwd) return ensureDir(join(root, slug))
@@ -121,6 +121,13 @@ async function drive(port: number, targetId: string, url: string, waitMs: number
 
 export function adopt(browser: Browser, caller: ToolCaller, targetId: string): void {
   pages.set(`${browser.key}|${callerKey(caller)}`, targetId)
+}
+
+export function forgetPage(browserKey: string, caller: ToolCaller): string | null {
+  const key = `${browserKey}|${callerKey(caller)}`
+  const targetId = pages.get(key) ?? null
+  pages.delete(key)
+  return targetId
 }
 
 export function connect(url: string, onEvent?: (method: string, params: unknown) => void): Promise<Link> {

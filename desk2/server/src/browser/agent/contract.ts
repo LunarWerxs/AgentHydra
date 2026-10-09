@@ -78,6 +78,8 @@ export interface ToolParams {
   browser_wait_idle: { idleMs?: number; timeoutMs?: number; attachPort?: number; profile?: string }
   browser_wait_tab: { match?: string; timeoutMs?: number; attachPort?: number; profile?: string }
   browser_tab_errors: { match?: string; timeoutMs?: number; attachPort?: number; profile?: string }
+  browser_tab: { match?: string; attachPort?: number; profile?: string }
+  browser_close: { attachPort?: number; profile?: string }
 }
 
 export type ToolName = keyof ToolParams

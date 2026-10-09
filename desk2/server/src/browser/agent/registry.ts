@@ -19,6 +19,7 @@ import { INPUT_TOOLS } from './input'
 import { navigate } from './navigate'
 import { PAGE_TOOLS } from './page-tools'
 import { READ_TOOLS } from './reads'
+import { TAB_TOOLS } from './tabs'
 
 export { ToolInputError }
 
@@ -148,6 +149,7 @@ export const TOOL_DEFS: ToolDef[] = [
   ...EXEC_TOOLS,
   ...INPUT_TOOLS,
   ...PAGE_TOOLS,
+  ...TAB_TOOLS,
   {
     name: 'browser_profiles',
     description:
