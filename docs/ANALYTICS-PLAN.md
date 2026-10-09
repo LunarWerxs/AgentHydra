@@ -382,6 +382,14 @@ repo root.
    - Files: `server/src/kit/ingest-foreign.ts` (reuses `usage-foreign.ts`).
    - Done: per-provider totals match P1 `byProvider` for codex/opencode/dsh within 1 %.
    - Proof: `bun test server/tests/kit-ingest-foreign.test.ts`.
+   - Revised 2026-10-09, after measuring the store against the files on disk (matching P1 had only
+     proved the two readers shared their blind spots). Codex sub-agent rollouts were skipped, the
+     rollouts Codex packs into `archived_sessions/_packed/*.zip` were never read (together ~240B
+     tokens of history), and copies of one thread counted again. OpenCode was read from its session
+     table as one call per session. Now Codex counts one record per API response
+     (`token_usage_record`, keyed by response id) where a rollout writes them, the running total
+     only before that; OpenCode counts one record per `step-finish` part. The rule per source is in
+     REFERENCE.md, "The analytics kit routes".
 
 7. **Query API, route and MCP tool.**
    - Files: `server/src/kit/query.ts`, `server/src/routes/kit.ts`, `server/src/mcp-session-tools.ts`

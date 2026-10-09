@@ -318,7 +318,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   HSwarm, Codex, OpenCode, DeepSeek) and the activity grid, for All, 30 days or 7 days. Desk's server
   gathers it in one route, `GET /api/stats/home?range=`, from AgentHydra's spend and activity reports,
   CliMayte's totals and HSwarm's stats; a part that does not answer shows a dash saying why, never a 0,
-  and with AgentHydra away the card shows Desk's own chats and says so. Reopened after a minute, it shows
+  and with AgentHydra away the card shows Desk's own chats and says so. Claude, OpenCode and Codex (since
+  September 2026, when Codex began recording each call) are counted call by call, so a Codex chat moved to
+  another account counts once; another PC's usage is included once that
+  PC runs AgentHydra 2.x and syncs (`docs/REFERENCE.md`, "Usage across PCs"). Reopened after a minute, it shows
   its last figures at once while it reads new ones, for up to 15 minutes after the last answer; past that
   it waits for the read, so an AgentHydra that went down shows as down. Each square of the activity grid
   says its day and its number on hover (owner, 2026-10-05), and the Sources list folds up: folded at

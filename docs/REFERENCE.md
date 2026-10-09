@@ -643,6 +643,24 @@ up per hour. Its routes live in `server/src/routes/kit.ts`; the MCP tool `usage_
 query. The temporary comparison route that set the kit beside the old producers is gone with those
 producers.
 
+What "one record per call" means for each source, finest first (`server/src/kit/ingest-claude.ts`,
+`ingest-foreign.ts`, `ingest-hswarm.ts`):
+
+| Source | One record is | Kept once by |
+|---|---|---|
+| Claude CLI, desktop, CliMayte | an assistant message with usage | its message id |
+| Codex, since 2026-09 | an API response (`token_usage_record`) | its response id, so a chat moved to another account, a page of a long thread (`history_mode: paginated`) and the live and archived copies all count it once, under the first file read |
+| Codex, older rollouts | a turn: the growth of the running total (`token_count`) since the last one | the rollout and the turn's number; a session's other rollouts keep only the largest. A sub-agent's turns count as agent `subagent`, minus the parent history it copied at the spawn |
+| OpenCode | a step (`step-finish` part), at the part's own time, with OpenCode's own cost | its part id |
+| DSH | an assistant message that reported usage | the session and the message's place in it |
+| Hermes | a (session, model) total, placed at the session's newest use | the session and model; Hermes keeps no per-call clock |
+| HSwarm | a ledger line: one attempt of one task | the job, task and attempt |
+
+Codex rollouts packed into `archived_sessions/_packed/*.zip` are read in place, 512 MB a sweep, so a
+first read of a large history takes several sweeps (`coverage` shows how far it got). A version bump of
+an ingest (`FOREIGN_INGEST_VERSION`) reads its files again; when a bump changes the ids, a one-time
+step first drops that source's own rows (raw, hourly and session ledger), never another PC's.
+
 | Route | What it does |
 |---|---|
 | `GET /api/kit/usage` | Usage from the store. Pick ONE window: `last` (`5h`, `24h`, `7d`, `30d`, `all`), `from` / `to` (epoch ms), or `kind` (`5h` or `week`) with `windowAccount` (else the first `account`), which cuts that account's current quota window from its latest quota snapshot, else rolling. Filters take a value or a comma list: `account`, `instance`, `pc`, `source`, `model`, `provider`, `session`, `ref`, `agent`, `agent_id`, `ok` (`true` / `false`). `groupBy` is a comma list of `day`, `hour`, `account`, `instance`, `pc`, `source`, `model`, `provider`, `session`, `ref`, `agent_id`. `agent_id` is the sub-agent's file id (the `<agent>` of `subagents/<agent>.jsonl`, with its folders for workflow files; null for main and non-Claude calls). Like `session` and `ref`, and like `ok`, it exists on raw calls only (35 days), so a query using it reads raw rows, leaves out hours older than the raw cut with a note, and fills in for older Claude rows through a one-time re-read of the recent sub-agent files after the schema 5 upgrade `measures` is a comma list of `tokens`, `list_usd`, `billed_usd`, `unbilled_usd`, `cost_usd`, `weighted`, `calls`, `ok`, `failed`, `seconds` (all by default) plus the opt-in token kinds `input`, `output`, `cache_read`, `cache_write`, `cache_write_5m`, `cache_write_1h`. `tz` is the IANA zone the `day` buckets are cut in. A bad value is a `400` with `{ "error": … }` |
@@ -667,6 +685,10 @@ by hour range: importing the same shard twice changes nothing and a shard that s
 it no longer holds. Sync is off, with the reason in `notes`, when `HSWARM_SYNC_REPO` is unset, is not
 a git checkout, or is this (public) repo: a shard carries project paths and session ids, so name a
 private repo.
+
+A PC counts only once it runs an AgentHydra with this sync (2.x) and has written its `kit/` shard. The
+HSwarm shards at the tree root (`<machine>.jsonl`) are HSwarm's own ledger and carry no other usage, so
+a PC that has only those adds nothing to the Analytics tab or the home screen's stats.
 
 The request takes no body (any is ignored). The pass is forced, ignoring the 15-minute spacing; a call
 that arrives while a pass runs joins it. It answers `200` with
