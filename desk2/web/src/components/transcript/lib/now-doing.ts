@@ -10,6 +10,8 @@ import { parseMcpName, shortPath } from './tools'
 export interface NowDoing {
   /** The line's words; null before anything is known (the caller says "Working"). */
   text: string | null
+  /** The item the words name (the call, the thinking or the reply being written): the line's ">" opens it. */
+  step: string | null
   /** When the person last wrote (epoch ms), or null when the transcript has no message of theirs. */
   since: number | null
 }
@@ -82,7 +84,7 @@ export function nowDoing(items: readonly TranscriptItem[], cwd?: string | null):
   for (let k = items.length - 1; k >= 0; k--) {
     const it = items[k]
     if (it.parentToolUseId) continue
-    if (it.kind === 'user' && !it.queued) return { text: line(newest, tool, cwd), since: it.ts }
+    if (it.kind === 'user' && !it.queued) return { ...line(newest, tool, cwd), since: it.ts }
     // A program's note begins a turn of its own: the steps before it are an earlier turn's.
     if (it.kind === 'note') found = true
     if (found || (it.kind !== 'assistant_text' && it.kind !== 'thinking' && it.kind !== 'tool_use')) continue
@@ -92,16 +94,17 @@ export function nowDoing(items: readonly TranscriptItem[], cwd?: string | null):
       found = true
     }
   }
-  return { text: line(newest, tool, cwd), since: null }
+  return { ...line(newest, tool, cwd), since: null }
 }
 
 // Writing or thinking as it streams says so; otherwise the turn's newest call names it, even between calls, so the line
 // holds still while the next one is being worked out. A turn with no call yet is thinking.
-function line(newest: TranscriptItem | null, tool: Tool | null, cwd?: string | null): string | null {
-  if (!newest) return null
-  if (newest.kind === 'assistant_text' && newest.streaming) return 'Writing'
-  if (newest.kind === 'thinking' && newest.streaming) return 'Thinking'
-  return tool ? stepLine(tool, cwd) : 'Thinking'
+function line(newest: TranscriptItem | null, tool: Tool | null, cwd?: string | null): Omit<NowDoing, 'since'> {
+  if (!newest) return { text: null, step: null }
+  if (newest.kind === 'assistant_text' && newest.streaming) return { text: 'Writing', step: newest.id }
+  if (newest.kind === 'thinking' && newest.streaming) return { text: 'Thinking', step: newest.id }
+  if (tool) return { text: stepLine(tool, cwd), step: tool.id }
+  return { text: 'Thinking', step: newest.kind === 'thinking' ? newest.id : null }
 }
 
 /** A running time the way Claude Desktop shows it: "33s", "1m 33s", "1h 28m 23s". */

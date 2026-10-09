@@ -18,7 +18,7 @@ const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
 </script>
 
 <template>
-  <div>
+  <div :data-step="id">
     <button
       v-if="step"
       type="button"

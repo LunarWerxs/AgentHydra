@@ -8,6 +8,7 @@ import { useDesk } from '@/stores/desk'
 import { outsideTasks } from '@/components/tasks/api'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import WorkingMark from '@/components/transcript/parts/WorkingMark.vue'
+import RevealStep from '@/components/transcript/parts/RevealStep.vue'
 import { nowDoing, runningFor } from '@/components/transcript/lib/now-doing'
 import { useClock } from '@/lib/clock'
 import Composer from '@/components/composer/Composer.vue'
@@ -99,6 +100,13 @@ const liveText = computed(() => {
   if (!s) return ''
   return s.status === 'needs_you' ? 'Waiting for you' : doing.value.text || s.activity || 'Working'
 })
+// Its ">" opens the step the words name, when the transcript shows it (Show tools or Show thinking off hide some).
+const transcriptView = ref<InstanceType<typeof TranscriptView> | null>(null)
+const liveStep = computed(() => {
+  const id = isWorking.value && session.value?.status !== 'needs_you' && doing.value.text ? doing.value.step : null
+  return id && shown.value.some((i) => i.id === id) ? id : null
+})
+const revealLive = () => liveStep.value && transcriptView.value?.revealStep(liveStep.value)
 const liveFor = computed(() => (isWorking.value && doing.value.since ? runningFor(clock.value - doing.value.since) : ''))
 const liveWhere = computed(() => (session.value ? `${session.value.status === 'needs_you' ? 'Waiting for you' : 'Working'} in ${whereLabel(session.value)}` : ''))
 // Said before the first message: in place or as a copy, and on which account (the title bar's menu changes it).
@@ -221,6 +229,7 @@ onUnmounted(() => {
       </div>
       <TranscriptView
         v-else
+        ref="transcriptView"
         :chat-id="sessionId"
         :items="shown"
         :read-only="!standIn"
@@ -247,6 +256,7 @@ onUnmounted(() => {
             <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
           <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
+          <RevealStep v-if="liveStep" @click="revealLive" />
           <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
           <span class="sr-only">{{ liveWhere }}</span>
         </p>
@@ -265,6 +275,7 @@ onUnmounted(() => {
         </span>
         <template v-if="isWorking">
           <span class="min-w-0 truncate text-[14px] leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'" :title="liveWhere">{{ liveText }}</span>
+          <RevealStep v-if="liveStep" @click="revealLive" />
           <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
           <span class="sr-only">{{ liveWhere }}</span>
         </template>
@@ -285,6 +296,7 @@ onUnmounted(() => {
           <span>{{ isWorking ? 'Running in' : 'Read-only from' }} {{ where }}</span>
           <span v-if="isWorking" class="text-(--text-muted)"> · {{ liveText }}</span>
         </span>
+        <RevealStep v-if="liveStep" @click="revealLive" />
         <span v-if="liveFor" class="shrink-0 tabular-nums text-[13px] text-(--text-muted)" aria-hidden="true">{{ liveFor }}</span>
         <span v-if="error" class="max-w-[40%] shrink truncate text-(--danger-text)" :title="error">{{ error }}</span>
       </div>

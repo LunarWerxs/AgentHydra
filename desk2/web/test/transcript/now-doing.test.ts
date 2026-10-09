@@ -28,10 +28,11 @@ describe('nowDoing', () => {
       // A message queued for after the turn is not the one the clock counts from.
       user('q', 700, { queued: true }),
     ]
-    expect(nowDoing(items)).toEqual({ text: 'Reading how lastCwd and session files are derived', since: 500 })
+    // The line names the call it read the words from: the line's ">" opens that step.
+    expect(nowDoing(items)).toEqual({ text: 'Reading how lastCwd and session files are derived', step: 'g', since: 500 })
     // A finished reply between calls keeps the line on the newest call; a reply streaming now says so.
     expect(nowDoing([...items, text('t')]).text).toBe('Reading how lastCwd and session files are derived')
-    expect(nowDoing([...items, text('t', true)]).text).toBe('Writing')
+    expect(nowDoing([...items, text('t', true)])).toEqual({ text: 'Writing', step: 't', since: 500 })
     // A call with no description says what kind of step it is.
     expect(nowDoing([user('u', 1), tool('e', 'Edit', { file_path: 'C:/Users/me/p/src/a.ts' })], 'C:/Users/me/p').text).toBe('Editing src/a.ts')
   })
@@ -39,8 +40,8 @@ describe('nowDoing', () => {
   test("a program's note starts a turn: the earlier turn's call is not the line, and the clock stays on the person's message", () => {
     const note: TranscriptItem = { id: 'n', ts: 900, kind: 'note', from: 'AgentHydra', text: 'Ping' }
     const items: TranscriptItem[] = [user('u1', 100), tool('b', 'Bash', { command: 'bun test' }), note]
-    expect(nowDoing(items)).toEqual({ text: null, since: 100 })
-    expect(nowDoing([])).toEqual({ text: null, since: null })
+    expect(nowDoing(items)).toEqual({ text: null, step: null, since: 100 })
+    expect(nowDoing([])).toEqual({ text: null, step: null, since: null })
   })
 })
 

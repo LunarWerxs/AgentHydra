@@ -31,7 +31,7 @@ function dot(w: CliMayteWorker | null): string {
 </script>
 
 <template>
-  <div :class="!step && 'tx-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]'">
+  <div :data-step="item.id" :class="!step && 'tx-card shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]'">
     <ToolHeader v-if="step" :item="item" :open="open" step @toggle="ctx.toggle(item.id)" />
     <div v-else class="px-1 pt-0.5" :class="!info.tasks.length && !workers.length && 'pb-0.5'">
       <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id)" />

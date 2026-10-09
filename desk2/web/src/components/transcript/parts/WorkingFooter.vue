@@ -3,15 +3,17 @@
 // five-minute slot picked; its "spark" is the real Claude Code spinner) and shimmering text, plus Hydra Desk's
 // elapsed time and queued count. Stop lives in the composer, as in the real app. Needs-you shows the amber dot
 // instead. The text is the turn's step in its own words and the time counts from the person's last message, as
-// Claude Desktop's working line does (lib/now-doing.ts; owner, 2026-10-08).
+// Claude Desktop's working line does (lib/now-doing.ts; owner, 2026-10-08); its ">" opens the step it names.
 import { computed } from 'vue'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { nowDoing, runningFor } from '../lib/now-doing'
 import { useClock } from '@/lib/clock'
 import { waitingLine } from '@/components/sidebar/logic'
 import WorkingMark from './WorkingMark.vue'
+import RevealStep from './RevealStep.vue'
 
 const props = defineProps<{ chat: ChatSummary; items?: readonly TranscriptItem[] }>()
+const emit = defineEmits<{ reveal: [id: string] }>()
 
 const clock = useClock()
 const needsYou = computed(() => props.chat.status === 'needs_you')
@@ -26,6 +28,8 @@ const text = computed(() => {
 const why = computed(() => (props.chat.status === 'starting' && props.chat.waiting ? `${props.chat.waiting.reason}` : text.value))
 const since = computed(() => doing.value.since ?? props.chat.turnStartedAt)
 const elapsed = computed(() => (since.value ? runningFor(clock.value - since.value) : ''))
+// Only while the words are the step's own (not "Starting…" or the server's activity line).
+const step = computed(() => (!needsYou.value && props.chat.status !== 'starting' && doing.value.text ? doing.value.step : null))
 </script>
 
 <template>
@@ -33,6 +37,7 @@ const elapsed = computed(() => (since.value ? runningFor(clock.value - since.val
     <span v-if="needsYou" class="mx-1.25 size-1.5 shrink-0 animate-dot-blink rounded-full bg-warning" />
     <WorkingMark v-else />
     <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'" :title="why">{{ text }}</span>
+    <RevealStep v-if="step" @click="step && emit('reveal', step)" />
     <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>
     <span v-if="chat.queuedCount" class="shrink-0 text-[13px] text-text-muted">· {{ chat.queuedCount }} queued</span>
   </div>

@@ -33,7 +33,7 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
 </script>
 
 <template>
-  <div>
+  <div :data-step="item.id">
     <ToolHeader :item="item" :open="open" :step="step" @toggle="ctx.toggle(item.id, openByDefault)" />
     <Collapse :open="open">
       <div class="bg-bg-panel" :class="step ? 'border-t border-border' : 'mb-1.5 ms-6.5 mt-0.5 overflow-hidden rounded-8 border border-border'">

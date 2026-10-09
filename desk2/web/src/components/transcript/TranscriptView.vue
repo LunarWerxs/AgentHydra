@@ -97,7 +97,7 @@ const showWorking = computed(() => !!chat.value && ['working', 'starting', 'need
 // stood further apart than any other).
 const display = computed(() => groupRows(rows.value.top, !props.unfoldThinking, !!props.running || showWorking.value))
 
-provideTranscript(
+const tctx = provideTranscript(
   {
     chatId: toRef(props, 'chatId'),
     readOnly: computed(() => !!props.readOnly),
@@ -462,6 +462,24 @@ watch(activeKey, () => {
     }),
   )
 })
+/** The working line's ">" (owner, 2026-10-08, after Claude Desktop's): the step the line names opens, with the run it
+ *  is folded into, and comes into view, as Find brings a match. Also asked from outside (ExternalSessionView's line). */
+function revealStep(id: string) {
+  const el = scroller.value
+  const idx = display.value.findIndex((r) => r.id === id || (r.kind !== 'item' && r.items.some((i) => i.id === id)))
+  if (!el || idx < 0) return
+  const row = display.value[idx]
+  if (row.kind !== 'item') tctx.show(row.id)
+  tctx.show(id)
+  dropHold()
+  pinned.value = false
+  el.scrollTop = Math.max(0, offsets.value[idx] - el.clientHeight / 3)
+  scrollTop.value = lastTop = el.scrollTop
+  // Once the row is drawn and has slid open: the step itself in the middle (a long run's newest call sits far down in it).
+  const step = `[data-step="${CSS.escape(id)}"]`
+  nextTick(() => setTimeout(() => (el.querySelector(step) ?? el.querySelector(`[data-id="${CSS.escape(row.id)}"]`))?.scrollIntoView({ block: 'center' }), COLLAPSE_MS + 20))
+}
+defineExpose({ revealStep })
 // Without a query there is nothing to mark, so the rows scrolling or measuring do not ask the DOM anything.
 // Each source is a primitive or a stable ref, so a scroll that keeps the same rendered range does not repaint.
 watch(
@@ -556,7 +574,7 @@ watch(
           <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :prompt="r.prompt" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
         </div>
         <div :style="{ height: `${padBottom}px` }" />
-        <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" class="mt-4" />
+        <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" class="mt-4" @reveal="revealStep" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
       </div>

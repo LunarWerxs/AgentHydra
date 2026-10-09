@@ -20,16 +20,19 @@ export interface TranscriptCtx {
   background?: Ref<{ count: number; resultId: string | null }>
   isOpen(key: string, fallback?: boolean): boolean
   toggle(key: string, fallback?: boolean): void
+  /** Opens it whatever it was (the working line's ">" opening the step it names). */
+  show(key: string): void
 }
 
 const KEY: InjectionKey<TranscriptCtx> = Symbol('transcript')
 
-export function provideTranscript(ctx: Omit<TranscriptCtx, 'isOpen' | 'toggle'>, initiallyOpen: string[] = []) {
+export function provideTranscript(ctx: Omit<TranscriptCtx, 'isOpen' | 'toggle' | 'show'>, initiallyOpen: string[] = []) {
   const open = reactive(new Map<string, boolean>(initiallyOpen.map((k) => [k, true])))
   const full: TranscriptCtx = {
     ...ctx,
     isOpen: (key, fallback = false) => open.get(key) ?? fallback,
     toggle: (key, fallback = false) => open.set(key, !(open.get(key) ?? fallback)),
+    show: (key) => open.set(key, true),
   }
   provide(KEY, full)
   return full
@@ -47,5 +50,6 @@ export function useTranscript(): TranscriptCtx {
     children: computed(() => new Map()),
     isOpen: (key, fallback = false) => open.get(key) ?? fallback,
     toggle: (key, fallback = false) => open.set(key, !(open.get(key) ?? fallback)),
+    show: (key) => open.set(key, true),
   }
 }
