@@ -27,7 +27,7 @@ export function readPortFile(dir: string): PortFile | null {
   }
 }
 
-async function getJson(port: number, path: string, timeoutMs = 1500): Promise<unknown> {
+async function getJson(port: number, path: string, timeoutMs = 10_000): Promise<unknown> {
   const res = await fetch(`http://${HOST}:${port}${path}`, { signal: AbortSignal.timeout(timeoutMs) })
   if (!res.ok) throw new Error(`${path}: ${res.status}`)
   return res.json()
@@ -61,7 +61,7 @@ export async function pageTabs(port: number): Promise<BrowserTab[]> {
 
 /** A new page in the Chrome (never navigates an existing one); null when it did not answer with a page. */
 export async function newPage(port: number, url: string): Promise<BrowserTab | null> {
-  const res = await fetch(`http://${HOST}:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT', signal: AbortSignal.timeout(4000) })
+  const res = await fetch(`http://${HOST}:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT', signal: AbortSignal.timeout(15_000) })
   if (!res.ok) return null
   const t = (await res.json()) as Target
   return t?.type === 'page' ? { id: String(t.id), url: String(t.url ?? url), title: String(t.title ?? '') } : null
@@ -70,11 +70,12 @@ export async function newPage(port: number, url: string): Promise<BrowserTab | n
 /** Closes one page of the Chrome (the Chrome itself closes only when this was its last page); false when no such page. */
 export async function closePage(port: number, id: string): Promise<boolean> {
   if (!(await pageTabs(port)).some((t) => t.id === id)) return false
-  const res = await fetch(`http://${HOST}:${port}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(4000) })
+  const res = await fetch(`http://${HOST}:${port}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(15_000) })
   if (!res.ok) return false
-  const until = Date.now() + 2_000
+  const until = Date.now() + 8_000
   while (Date.now() < until) {
-    if (!(await pageTabs(port)).some((t) => t.id === id)) return true
+    const left = await pageTabs(port).catch(() => null)
+    if (left && !left.some((t) => t.id === id)) return true
     await Bun.sleep(100)
   }
   return false

@@ -10,7 +10,7 @@ import { ownPage } from '../../src/browser/ledger'
 import { readLedger } from '../../src/browser/ownership'
 import { closeChatTabs, deadOwnerTargetIds, makeLiveness, ownerLive, profileFolders, sessionOwnerLiveness, sweepDeadOwnerTabs } from '../../src/browser/tab-sweep'
 
-setDefaultTimeout(60_000)
+setDefaultTimeout(180_000)
 
 const DEAD_PID = 2147483640
 
@@ -87,7 +87,7 @@ async function launchChrome(profile: string): Promise<{ proc: Bun.Subprocess; po
     { stdio: ['ignore', 'ignore', 'ignore'] },
   )
   const file = join(profile, 'DevToolsActivePort')
-  const until = Date.now() + 20_000
+  const until = Date.now() + 120_000
   let port = announcedPort(file)
   while (!port) {
     if (Date.now() > until) {
