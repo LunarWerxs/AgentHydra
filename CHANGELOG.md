@@ -13,6 +13,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Live chats that continue an archived one stay in the session lists.** A chat moved to another account, or
   continued from a chat that was archived later, was left out of every unarchived list, the cloud list included,
   though it was live.
+- **An account that needs identity verification no longer fails CliMayte tasks.** When Anthropic asks an account to
+  verify its identity, CliMayte moves its task to another account and stops using it, and the instance list says
+  "Needs identity verification". Verify it on claude.ai and sign in again to use it again.
 
 ## [2.0.4] - 2026-10-09
 

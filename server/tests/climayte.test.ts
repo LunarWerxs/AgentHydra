@@ -182,10 +182,12 @@ describe('classifyAttempt', () => {
     expect(r).toMatchObject({ outcome: 'done', result: 'all good' })
   })
 
-  test('an organization that disabled subscription access is auth', () => {
+  test.each([
     // Real notice, 237 occurrences, `error:"oauth_org_not_allowed"`.
-    const text =
-      'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access'
+    'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access',
+    // Real notice (2026-10-09, `api_error_status: 400`): it failed three tasks as errors.
+    'API Error: 400 Identity verification is required to continue.',
+  ])('a login the API refuses is auth: %s', (text) => {
     const synthetic = {
       type: 'assistant',
       message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },

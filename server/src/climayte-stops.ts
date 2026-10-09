@@ -42,6 +42,7 @@ import {
   ceilingNotice,
   type classifyAttempt,
   contextTokens,
+  IDENTITY_WALL,
   isLoginWall,
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
@@ -158,6 +159,8 @@ export function climayteSignedOutReason(id: string, configDir: string): string |
   if (wall!.cred !== undefined && wall!.cred !== credStamp(configDir)) return null
   if (wall!.reason === ORG_DISABLED_WALL)
     return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so CliMayte does not use it. Sign it in with a different login to use it again.'
+  if (wall!.reason === IDENTITY_WALL)
+    return 'Needs identity verification: Anthropic answers every request with "Identity verification is required to continue", so CliMayte does not use it. Verify the account on claude.ai, then sign in again (Quick add, or Log in) to use it again.'
   return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since. It is used again once it signs in again. Sign in again: Quick add, or Log in.'
 }
 

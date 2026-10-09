@@ -922,9 +922,18 @@ export const ENV_SCRUB =
 
 // "disabled claude subscription access": the account's organization turned off subscription access
 // for Claude Code (`error:"oauth_org_not_allowed"`). It is the account's problem, not the task's,
-// so the task moves on and the account is walled like a signed-out one.
+// so the task moves on and the account is walled like a signed-out one. "identity verification is
+// required": the same for an account Anthropic asks to verify (IDENTITY_WALL).
 const AUTH_RE =
-  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access/i
+  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access|identity verification is required/i
+
+/** The wall reason for an account Anthropic asks to verify its identity ("API Error: 400 Identity
+ *  verification is required to continue"). 2026-10-09: #191 answered every request so and took three
+ *  tasks in a row, each failed in its first turn with 0 tokens. A login wall like 'signed out': a new
+ *  sign-in, once the owner has verified the account, lets `auth status` lift it. */
+export const IDENTITY_WALL = 'identity verification required'
+export const isIdentityCheck = (notice: string | null): boolean =>
+  !!notice && /identity verification is required/i.test(notice)
 
 /** The wall reason for an account whose organization turned Claude Code off. `claude auth status`
  *  still says such a login works, so the 30-minute signed-out recheck lifted its wall every time,
@@ -936,7 +945,7 @@ export const isOrgDisabled = (notice: string | null): boolean =>
   !!notice && ORG_DISABLED_RE.test(notice)
 /** A wall about the login, not the usage: its `until` is a recheck time, never when it frees up. */
 export const isLoginWall = (reason: string | undefined): boolean =>
-  reason === 'signed out' || reason === ORG_DISABLED_WALL
+  reason === 'signed out' || reason === ORG_DISABLED_WALL || reason === IDENTITY_WALL
 /** The account takes no work now: a usage wall until it ends, a login wall until its recheck lifts
  *  it (climayte.ts recheckSignedOut, on a new credential file only). 2026-10-03
  *  00:53Z: #135's wall lapsed while no tick ran, and a handoff placed before the tick's recheck sent

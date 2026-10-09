@@ -106,6 +106,7 @@ import {
   classifyAttempt,
   climaytePriority,
   contextTokens,
+  IDENTITY_WALL,
 } from './climayte-lib'
 import {
   type CliMayteOrigin,
@@ -277,7 +278,8 @@ function recheckSignedOut(accounts: CliMayteAccount[]): void {
   for (const a of accounts) {
     const wall = walls[a.id]
     if (recheckOrgWall(a, wall)) continue
-    if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
+    if ((wall?.reason !== 'signed out' && wall?.reason !== IDENTITY_WALL) || authChecks.has(a.id))
+      continue
     const cred = credStamp(a.configDir)
     if (wall.cred === undefined) {
       wall.cred = cred
