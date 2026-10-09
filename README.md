@@ -2,7 +2,7 @@
 
 <img alt="AgentHydra. Every local AI coding session, in one tab: many heads, one dashboard" src=".github/og-image.png" width="820" />
 
-### Every local AI session, plus your isolated Claude and Codex instances
+### Every AI coding chat on your PC, and every Claude and Codex account, in one window
 
 [**Website**](https://agenthydra.lunarwerx.com) &nbsp;·&nbsp; [Download](https://github.com/LunarWerxs/AgentHydra/releases) &nbsp;·&nbsp; [Reference](docs/REFERENCE.md) &nbsp;·&nbsp; [Changelog](CHANGELOG.md)
 
@@ -19,25 +19,41 @@
 AgentHydra is one local window over every AI coding session on your PC and every Claude and Codex
 account you use. No cloud service, no sign-up.
 
+![AgentHydra's window: the sidebar lists every chat grouped by project, and the open chat shows its to-dos and a permission prompt](.github/screenshots/window.png)
+
+<sub>Screenshots use demo data.</sub>
+
 ## TL;DR
 
-- **Every session in one list:** Claude Code, Codex and OpenCode, searchable, live while they run
-- **Reply, fan out, or move a chat to another account**, always in a window you can see
+- **Every chat in one sidebar:** AgentHydra's own Claude Code chats, Claude Desktop's and the CLI's, grouped by project, live while they run
+- **New starts from your projects:** a grid with each one's git state and open chats, the busiest first
+- **Dev servers built in:** start, stop and watch your projects' local servers, and open them beside the chat
 - **CliMayte:** hand a task's pieces to your other Claude CLI accounts, and a worker moves on when one runs out
 - **Where the time and money went:** cost by day, model, project and account, and what is wasting it
 - **Every Claude and Codex account in one table:** plan, 5-hour and weekly quota, open, quit, create
 - **For agents too:** the whole thing over MCP, including "which account am I, and how much is left"
-- **AgentHydra 2.0:** one native window (it was Hydra Desk 2), every chat in its sidebar and all of the above beside them
 
 <details>
 <summary><b>Read more: what each part does</b></summary>
 
-### Every session, in one list
+### Every chat, in one window
 
-- Claude Code, Codex and OpenCode conversations on your machine, newest first. Filter by provider or
-  recency; Claude sessions also by project or Desktop instance. Open one to read it and follow it live.
-- Type straight back into a Claude session, or send one message to several. Codex and OpenCode are
-  read-only.
+- The sidebar holds AgentHydra's own Claude Code chats (composer, permission prompts, to-dos, diffs,
+  Create PR) beside your Claude Desktop chats and CLI sessions, grouped by project. Filter by app, or
+  keep only what is running or waiting on you. With Login sync, your other PC's chats are there too.
+- Codex and OpenCode conversations are listed and readable too; replying is Claude-only.
+- **New** opens a grid of your projects, from Project Hydra, the folders you add and wherever your
+  chats ran, each with its git state and how many chats are open in it. A chat started in a parent
+  folder counts for the project it actually worked in, and is filed into that project's group.
+
+![The New screen: a grid of projects, two of them with a count of open chats](.github/screenshots/new.png)
+
+### Dev servers, built in
+
+- The Dev servers page lists your projects' local servers: start, stop, restart, logs, errors, CPU
+  and memory, alerts. A browser pane beside the chat opens any of them.
+- A folder needs no setup: it reads Claude Code's `.claude/launch.json`, or `package.json`'s dev
+  scripts. (This was DevWebUI; it is part of AgentHydra now.)
 - **ChatGPT handoff** packs the task and repository into a Markdown file (common secret files left
   out), copies a prompt and opens ChatGPT. You review and send it yourself.
 - Open a raw Claude or Codex `.jsonl` in your editor, download it under its title, or copy it.
@@ -63,15 +79,13 @@ The old run queue stays as a read-only record. Starting a new headless run is re
   view, and its transcript is a normal session.
 - **Quick add:** type an email, sign in in the window it opens, and the account is ready.
 - **Two PCs:** with Login sync, each PC sees the other's CliMayte tasks and never crowds the same
-  account. Desktop and Hydra Desk chats can be shared too, view only.
+  account. Desktop and AgentHydra chats can be shared too, view only.
 - Over MCP: `climayte_run`, `climayte_status`, `climayte_send`, `climayte_cancel`, `cli_limit_reset`.
   Details: [docs/CLIMAYTE.md](docs/CLIMAYTE.md).
 
 ### Where the time and the money went
 
 ![The analytics view: tiles for tokens used, cost at API rates, HSwarm savings and the busiest model above a cost-by-day bar chart, cost by model, project and account, and sessions and tokens by tool across Claude, Codex, OpenCode and Hermes](.github/screenshots/analytics.png)
-
-<sub>Screenshots use demo data.</sub>
 
 - Cost by day, model, project and account (at list prices: what the same work would cost on the
   API). When in the week you work, how many sessions ran at once, which tools were used.
@@ -191,8 +205,8 @@ run, and every `CCMANAGERUI_*` variable still works. Update shortcuts and MCP co
 
 </details>
 
-Made by [LunarWerx Studios](https://lunarwerx.com). Also see [RepoYeti](https://repoyeti.com),
-[DevWebUI](https://devwebui.lunarwerx.com) and [SageThumbs](https://sagethumbs.lunarwerx.com).
+Made by [LunarWerx Studios](https://lunarwerx.com). Also see [RepoYeti](https://repoyeti.com) and
+[SageThumbs](https://sagethumbs.lunarwerx.com).
 [Reference](docs/REFERENCE.md) covers configuration, the MCP tools, auto-update and the checks.
 
 ## License

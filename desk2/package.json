@@ -13,6 +13,7 @@
     "typecheck": "bun run --cwd server typecheck && bun run --cwd web typecheck && bun run --cwd hydra typecheck",
     "test": "bun test ./server/test ./web/test && bun test ./hydra/src",
     "test:py": "python -m pytest -o pythonpath=server/src/free-instances/harness server/test/free-instances -q",
+    "screenshots": "bun scripts/window-shots.ts",
     "e2e:engine": "bun e2e/engine.e2e.ts",
     "e2e:hosts": "bun e2e/hosts.e2e.ts",
     "e2e:gestures": "bun e2e/gestures.e2e.ts",

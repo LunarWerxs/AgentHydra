@@ -9,6 +9,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
+- **The working mark picks its own look for five minutes, and runs at about half speed**
+- **Background tasks slides in and out, opens narrower and drags to any width**
+- **Thinking folds into the tool runs around it in outside chats too**
+- **Clicking one app while all are shown shows just that one**
+- **New puts projects with open chats first, with a count, and files chats into the project they work in**
 - **Right-click a project to open its folder; choose which folders New shows**
 - **New shows your projects, each with its git sync state**
 - **A linked CLI login stays signed in while its desktop app is closed**
@@ -18,6 +23,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **The working mark picks its own look for five minutes, and runs at about half speed.** The Working animation
+  picker is gone from Settings -> General -> Appearance: every mark in the window shows the same randomly chosen
+  look, swapping for another (never the same twice in a row) every five minutes, and each animation is slowed to
+  about half its former speed.
+- **Background tasks slides in and out, opens narrower and drags to any width.** The panel slides in from the
+  right and back out instead of appearing at once, opens at 360px instead of 440px, and its left edge drags it
+  wider or narrower; the width is remembered. Narrow, its agent table leaves out the model and each agent's
+  estimate. What a task was told is no longer a paragraph in its card: hover its name to read it.
+- **Thinking folds into the tool runs around it in outside chats too.** A Claude Desktop or terminal session
+  open in AgentHydra showed each thinking block as its own row between the commands, so one stretch of work
+  could be a dozen rows; it is one row again, as in AgentHydra's own chats.
+- **Clicking one app while all are shown shows just that one.** In the sidebar's Apps filter, with every app
+  ticked, clicking one now leaves only it ticked. The accounts menu also drops its hint line.
+- **New puts projects with open chats first, with a count, and files chats into the project they work in.** A
+  project's tile shows how many of its chats are not archived, Claude Desktop's included, and those projects come
+  first; the rest follow by when you last used them. Project tiles no longer run into each other. A chat started in a
+  folder that holds several projects counts for the one it worked in, and is moved once into that project's group in
+  the sidebar; a chat you put in a group yourself is never moved.
 - **Right-click a project to open its folder; choose which folders New shows.** A project tile's right-click menu
   opens its file location, starts a new chat there, copies its path or hides it from the grid. The folder button
   by the filter adds a single project folder, or a folder whose subfolders each become a tile, and Manage folders
