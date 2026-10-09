@@ -172,7 +172,7 @@ export function isUsageLimitText(text: string): boolean {
 
 /** The account's login is broken (AgentHydra climayte-lib.ts AUTH_RE): no turn on it can work until it is signed in again. */
 const SIGN_IN_TEXT =
-  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access|invalid authentication credentials|\b40[13]\b[^\n]{0,40}(unauthori[sz]ed|forbidden|authenticat)|oauth authentication is currently not allowed|(organization|org)[^\n]{0,40}(disabled|not allowed|mismatch)/i
+  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access|invalid authentication credentials|\b40[13]\b[^\n]{0,40}(unauthori[sz]ed|forbidden|authenticat)|oauth authentication is currently not allowed|identity verification is required|(organization|org)[^\n]{0,40}(disabled|not allowed|mismatch)/i
 
 /** True for a turn refused because the account cannot sign in: the chat moves to another account, as on a usage limit. */
 export function isSignInFailureText(text: string): boolean {

@@ -7,6 +7,7 @@ import { maskEmails } from '../../src/engine/diagnostics'
 test('the classifier names the cause of each real failure', () => {
   const cases: [string, ReturnType<typeof classifyFailure>, Parameters<typeof classifyFailure>[1]?][] = [
     ['Failed to authenticate: OAuth session expired', 'auth_expired'],
+    ['API Error: 400 Identity verification is required to continue.', 'auth_expired'],
     ['Your organization has disabled Claude subscription access for Claude Code', 'org_disabled'],
     ['[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null', 'interrupted'],
     ['Claude usage limit reached. Your limit will reset at 3pm', 'usage_limit'],
