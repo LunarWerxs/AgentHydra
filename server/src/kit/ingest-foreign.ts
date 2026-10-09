@@ -4,14 +4,19 @@
 // a second sweep reads only what is new. Nothing here is wired into the daemon's boot.
 //
 // GRANULARITY, per provider, is whatever the provider's own record allows:
-//  * Codex: one event per counted turn (a delta of the running total), id `codex:<rollout>:<n>`. The
-//    ordinal, not a byte offset, is the id, so two rollouts that replay the same session counter (the
-//    live and archived copies of one file, or a copy packed into `archived_sessions/_packed/*.zip`)
-//    upsert onto each other instead of adding. A SUBAGENT rollout keeps a counter of its own (measured
-//    2026-10-09: a parent that ended at 89.9M had four subagents that spent 134M between them, none of it
-//    in the parent's counter), so its turns count, as agent `subagent`. Only the parent history it copied
-//    at the spawn is skipped: the lines before `subagent_history_start_ordinal`, or, in a rollout from
-//    before Codex wrote that field, the lines stamped with the spawn's own timestamp.
+//  * Codex: one event per model call. Since 2026-09 a rollout writes a `token_usage_record` per API
+//    response, id `codex:r:<response id>`: every copy of a rollout (a chat moved to another account keeps
+//    its thread under a new file name, a page of a long thread, the live and archived copies) repeats the
+//    same ids, so a call counts once, owned by the first file read. Measured 2026-10-09 over a week: 4,260
+//    main calls / 546M tokens by record, where the running total said 7,165 / 1.10B (copies, and pages
+//    whose first total carries the whole base thread) and still missed ~2% of calls.
+//    An older rollout has only the running total: one event per counted turn (its growth since the last
+//    one), id `codex:c:<rollout>:<n>`, so the live and archived copies of one file, or a copy packed into
+//    `archived_sessions/_packed/*.zip`, upsert onto each other; reconcileCodex keeps the largest of a
+//    session's other rollouts. A SUBAGENT rollout keeps a counter of its own (a parent that ended at 89.9M
+//    had four subagents that spent 134M between them), so its turns count, as agent `subagent`. Only the
+//    parent history it copied at the spawn is skipped: the lines before `subagent_history_start_ordinal`,
+//    or, in a rollout from before Codex wrote that field, the lines stamped with the spawn's own timestamp.
 //  * DSH: one event per assistant message that reported usage, id `dsh:<session>:<row>`.
 //  * OpenCode: one event per model call, id `opencode:<tool>:<part>`: each `step-finish` part carries its
 //    own step's tokens and cost, placed at the part's own time. (The session row's totals, which the first
@@ -38,12 +43,13 @@ import {
   weighTurnCounts,
 } from '../usage-foreign'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
-import { type KitStore, type UsageEventInput, yieldLoop } from './store'
+import { eventSlices, type KitStore, type UsageEventInput, yieldLoop } from './store'
 import { type ZipEntry, zipEntries, zipEntryStream } from './zip-entries'
 
 /** Bump to make every cursor read its file again (a parser fix that changes what is extracted).
- *  2: subagent rollouts count (their skip states are read again) and OpenCode is read per call. */
-export const FOREIGN_INGEST_VERSION = 2
+ *  2: subagent rollouts count (their skip states are read again) and OpenCode is read per call.
+ *  3: Codex is read per call where a rollout records them (dropCodexRows clears the old rows first). */
+export const FOREIGN_INGEST_VERSION = 3
 
 /** Packed-rollout bytes (uncompressed) one sweep reads at most: ~10 GB of history is taken over many
  *  sweeps instead of holding one for minutes. Each entry finishes once started; its cursor marks it read. */
@@ -116,6 +122,7 @@ export async function ingestForeign(
   }
   const touched = new Set<string>()
   let packedBudget = PACKED_BYTES_PER_SWEEP
+  if (sources.codex.length) await dropCodexRows(store)
   for (const r of sources.codex) {
     for (const path of codexRollouts(r.root)) {
       const src = fileRollout(path)
@@ -267,6 +274,9 @@ function dbStamp(path: string): { size: number; mtime: number } | null {
 interface CodexPending extends Counts {
   n: number
   ts: number
+  /** A recorded call's own id; a counted turn's is `codex:c:<rollout>:<n>`. */
+  id?: string
+  reasoning?: number
 }
 
 /** Where a subagent rollout's own history starts. The lines before it are the parent's, copied at the
@@ -283,6 +293,8 @@ interface CodexFileState {
   copy?: CopiedPrefix
   /** Lines read so far, the header included: the next line's index. */
   line?: number
+  /** Set once the rollout wrote a per-call record: from then on the records are its calls. */
+  records?: boolean
   /** The rollout's own key (see rolloutKey): the id and `ref` of every event it wrote. */
   ref?: string
   /** Everything counted so far, all kinds: how one rollout of a session is ranked against another. */
@@ -396,7 +408,7 @@ function codexEvent(
 ): UsageEventInput {
   const c: Counts = t
   return {
-    id: `codex:${st.ref}:${t.n}`,
+    id: t.id ?? `codex:c:${st.ref}:${t.n}`,
     ts: t.ts,
     pc,
     instance,
@@ -411,7 +423,10 @@ function codexEvent(
     output: t.output,
     cache_read: t.cacheRead,
     cache_write_5m: t.cacheWrite,
-    list_usd: listUsd(model, c, t.ts),
+    // A subset of output, kept as its own column, never added to it.
+    reasoning: t.reasoning ?? 0,
+    // A record is ONE request, so its prompt picks a tiered model's rates; a turn may be several.
+    list_usd: listUsd(model, c, t.ts, t.id ? c.input + c.cacheRead + c.cacheWrite : 0),
     price_ver: PRICE_VER(),
     weighted: weighTurnCounts(model, c),
   }
@@ -450,6 +465,7 @@ interface CodexRun {
   session: string
   copy?: CopiedPrefix
   line: number
+  records: boolean
   total: number
   n: number
   pending: CodexPending[]
@@ -457,8 +473,40 @@ interface CodexRun {
   events: UsageEventInput[]
 }
 
-/** Only these lines move the counter or name the model: the rest, most of a rollout's bytes, are never parsed. */
-const COUNTED = /"(token_count|turn_context)"/
+/** Only these lines move the counter, record a call or name the model: the rest, most of a rollout's bytes,
+ *  are never parsed. */
+const COUNTED = /"(token_count|turn_context|token_usage_record)"/
+
+/** One API response's own usage, from a `token_usage_record` line; null for any other line. */
+interface CodexRecord extends Counts {
+  id: string
+  ts: number | null
+  reasoning: number
+}
+
+function codexRecord(ev: unknown): CodexRecord | null {
+  const e = ev as {
+    type?: unknown
+    timestamp?: unknown
+    payload?: { response_id?: unknown; usage?: Record<string, unknown> }
+  } | null
+  if (e?.type !== 'token_usage_record') return null
+  const u = e.payload?.usage
+  const id = e.payload?.response_id
+  if (!u || typeof id !== 'string' || !id) return null
+  // Like token_count, input_tokens includes the cached part.
+  const cacheRead = count(u.cached_input_tokens)
+  const ts = typeof e.timestamp === 'string' ? Date.parse(e.timestamp) : Number.NaN
+  return {
+    id,
+    ts: Number.isFinite(ts) ? ts : null,
+    input: Math.max(0, count(u.input_tokens) - cacheRead),
+    cacheRead,
+    cacheWrite: count(u.cache_write_input_tokens),
+    output: count(u.output_tokens),
+    reasoning: count(u.reasoning_output_tokens),
+  }
+}
 
 function parseLine(text: string): unknown {
   const t = text.trim()
@@ -506,6 +554,8 @@ function codexLine(
   copied: boolean,
 ): void {
   const turn = reader.push(ev)
+  const record = codexRecord(ev)
+  if (record) run.records = true
   if (copied) return
   const model = reader.state().model
   const shell: CodexFileState = {
@@ -516,15 +566,20 @@ function codexLine(
     reader: reader.state(),
     pending: run.pending,
   }
-  if (turn) {
-    run.total += turn.input + turn.cacheRead + turn.cacheWrite + turn.output
+  // Once the rollout records its calls, the running total only keeps its place: it misses calls, and in a
+  // page or a copy its first value carries spend made in another file.
+  const counted = record ?? (run.records ? null : turn)
+  if (counted) {
+    if (!record)
+      run.total += counted.input + counted.cacheRead + counted.cacheWrite + counted.output
     const t: CodexPending = {
-      n: run.n++,
-      ts: turn.ts ?? run.lastTs,
-      input: turn.input,
-      cacheRead: turn.cacheRead,
-      cacheWrite: turn.cacheWrite,
-      output: turn.output,
+      n: record ? run.n : run.n++,
+      ts: counted.ts ?? run.lastTs,
+      input: counted.input,
+      cacheRead: counted.cacheRead,
+      cacheWrite: counted.cacheWrite,
+      output: counted.output,
+      ...(record ? { id: `codex:r:${record.id}`, reasoning: record.reasoning } : {}),
     }
     run.lastTs = t.ts
     shell.n = run.n
@@ -561,6 +616,7 @@ async function ingestCodexRollout(
     session: state?.session ?? '',
     copy: state?.copy,
     line: state?.line ?? 0,
+    records: state?.records ?? false,
     total: state?.total ?? 0,
     n: state?.n ?? 0,
     pending: state?.pending ?? [],
@@ -578,17 +634,25 @@ async function ingestCodexRollout(
     codexLine(run, reader, ev, ref, instance, pc, isCopied(run.copy, index, ev))
   }
 
-  const { session, copy, line, total, n, pending, events } = run
+  const { session, copy, line, records, total, n, pending, events } = run
   if (!session) {
     // Empty or header-less file: nothing to attribute yet, look again when it grows.
     store.setCursor({ path: key, ...st0, offset: 0, version: FOREIGN_INGEST_VERSION })
     return 0
   }
-  await flush(store, events)
+  // A call another file already holds stays with it: a copy never moves a call to its own session or account.
+  const holder = store.db.prepare('select ref from usage_event where id = ?')
+  const mine = events.filter((e) => {
+    if (!e.id.startsWith('codex:r:')) return true
+    const held = holder.get(e.id) as { ref: string | null } | null
+    return !held || held.ref === ref
+  })
+  await flush(store, mine)
   const next: CodexFileState = {
     session,
     copy,
     line,
+    records,
     ref,
     total,
     n,
@@ -596,13 +660,55 @@ async function ingestCodexRollout(
     pending,
   }
   store.setMeta(stateKey(key), JSON.stringify(next))
-  // A subagent's counter is its own: it never competes with its session's main rollouts (reconcileCodex).
-  if (!copy) store.setMeta(totalKey(session, ref), String(total))
+  // A subagent's counter is its own, and recorded calls are counted once by id: neither competes with the
+  // session's other rollouts (reconcileCodex).
+  if (!copy && !records) store.setMeta(totalKey(session, ref), String(total))
+  else store.db.query('delete from meta where key = ?').run(totalKey(session, ref))
   store.setMeta(pathKey(ref), key)
   if (instance) store.setMeta(`codex_inst:${ref}`, instance)
   touched.add(session)
   store.setCursor({ path: key, ...st0, offset: end, version: FOREIGN_INGEST_VERSION })
-  return events.length
+  return mine.length
+}
+
+/** Set once dropCodexRows has run: the rows it dropped are read again under the current ids. */
+const CODEX_PER_CALL = 'codex_per_call'
+
+/**
+ * Once: drop every Codex row this PC wrote (raw, rollups, session ledger) with the Codex cursors and read
+ * state, so every rollout, packed ones included, is read again per call. The new ids (`codex:r:`, `codex:c:`)
+ * share nothing with the old `codex:<rollout>:<n>`, whose settled claims would otherwise turn the re-read
+ * away. Another PC's imported rows stay. A restart half way starts it over: the mark is written last.
+ */
+async function dropCodexRows(store: KitStore): Promise<void> {
+  if (store.getMeta(CODEX_PER_CALL)) return
+  const db = store.db
+  const span = db.query('select min(ts) as lo, max(ts) as hi from usage_event').get() as {
+    lo: number | null
+    hi: number | null
+  }
+  if (span.lo !== null && span.hi !== null) {
+    const drop = db.prepare(
+      "delete from usage_event where source = 'codex' and ts >= $a and ts < $b",
+    )
+    for (const _ of eventSlices(db, span.lo, span.hi + 1, (a, b) => {
+      drop.run({ $a: a, $b: b })
+    }))
+      await yieldLoop()
+  }
+  db.transaction(() => {
+    for (const table of ['usage_hour', 'usage_session', 'usage_session_settled'])
+      db.query(
+        `delete from ${table} where source = 'codex' and pc not in (select pc from imported_pc)`,
+      ).run()
+    db.query(
+      `delete from meta where key like 'codex_total:%' or key like 'codex_pruned:%'
+         or key like 'codex_path:%' or key like 'codex_inst:%'
+         or (key like 'ingest_state:%' and key like '%rollout-%')`,
+    ).run()
+    db.query("delete from ingest_cursor where path like '%rollout-%'").run()
+    store.setMeta(CODEX_PER_CALL, '1')
+  })()
 }
 
 /** A session can have several non-subagent rollouts whose counters replay or restart. Like

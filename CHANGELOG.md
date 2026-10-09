@@ -15,8 +15,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 **Everything in Unreleased**
 
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call.** Work a Codex sub-agent did
-  was left out, and so were the rollouts Codex packs into monthly zips. OpenCode was booked as one call per
-  session at its last write; it now counts each model call at its own time. Old totals are replaced, not added to.
+  was left out, and so were the rollouts Codex packs into monthly zips. Codex is now counted call by call, so a
+  chat moved to another account or split into pages counts once. OpenCode was booked as one call per session at
+  its last write; it now counts each model call at its own time. Old totals are replaced, not added to.
 
 - **A frontier model judges each running chat and each stopped one.** The orchestrator asks the model set in
   Settings > General > Watching chats (Opus by default, the newest one) what each chat needs next: nothing, a

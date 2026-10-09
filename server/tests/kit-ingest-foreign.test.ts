@@ -47,6 +47,23 @@ const tokens = (at: number, input: number, cached: number, output: number) => ({
   },
 })
 
+/** One API response's own usage, the per-call line Codex writes since 2026-09 (input includes the cached part). */
+const record = (at: number, responseId: string, input: number, cached: number, output: number) => ({
+  timestamp: iso(at),
+  type: 'token_usage_record',
+  payload: {
+    response_id: responseId,
+    usage: {
+      input_tokens: input,
+      cached_input_tokens: cached,
+      cache_write_input_tokens: 0,
+      output_tokens: output,
+      reasoning_output_tokens: 0,
+      total_tokens: input + output,
+    },
+  },
+})
+
 // ---- fixtures ----
 const codexRoot = join(root, 'codex', 'sessions')
 const codexArchive = join(root, 'codex', 'archived_sessions')
@@ -438,6 +455,120 @@ describe('foreign ingest into the kit store', () => {
     expect(again.files).toBe(0)
     expect(totals(s3).codex).toMatchObject(want)
     s3.close()
+  })
+
+  test('a rollout that records its calls counts each once, whatever its pages and copies say', async () => {
+    const home = join(root, 'codex4')
+    const day = join(home, 'a', 'sessions', '2026', '10')
+    const other = join(home, 'b', 'sessions', '2026', '10')
+    mkdirSync(day, { recursive: true })
+    mkdirSync(other, { recursive: true })
+    const uuid = (n: number) => `00000000-0000-4000-8000-0000000000${String(n).padStart(2, '0')}`
+    const name = (...ids: string[]) => `rollout-2026-10-02T03-04-05-${ids.join('_')}.jsonl`
+    const original = jl([
+      meta('thread-a'),
+      ctx('gpt-5'),
+      record(NOW - 3000, 'resp-1', 1000, 800, 50),
+      tokens(NOW - 2990, 1000, 800, 50),
+      record(NOW - 2000, 'resp-2', 600, 500, 30),
+      tokens(NOW - 1990, 1600, 1300, 80),
+    ])
+    writeFileSync(join(day, name(uuid(1))), original)
+    // A later page of the same thread: its first running total carries the whole base before its own call.
+    writeFileSync(
+      join(day, name(uuid(1), uuid(2))),
+      jl([
+        meta('thread-a', { history_mode: 'paginated', history_base: { thread_id: 'thread-a' } }),
+        ctx('gpt-5'),
+        record(NOW - 1000, 'resp-3', 2000, 1500, 40),
+        tokens(NOW - 990, 3600, 2800, 120),
+      ]),
+    )
+    // The thread moved to another account: the same records under a new file name.
+    writeFileSync(join(other, name(uuid(3))), original)
+    const s4 = new KitStore(':memory:')
+    await ingestForeign(s4, {
+      codex: [
+        { root: join(home, 'a', 'sessions'), instance: 'codex:a' },
+        { root: join(home, 'b', 'sessions'), instance: 'codex:b' },
+      ],
+      opencode: [],
+      hermes: [],
+      dsh: [],
+    })
+    expect(totals(s4).codex).toMatchObject({
+      calls: 3,
+      input: 200 + 100 + 500,
+      output: 50 + 30 + 40,
+      cache_read: 800 + 500 + 1500,
+    })
+    expect(
+      s4.db.query("select distinct instance from usage_event where source = 'codex'").all(),
+    ).toEqual([{ instance: 'codex:a' }])
+    s4.close()
+  })
+
+  test('a store holding Codex rows under the old ids ends with the re-read ones, once', async () => {
+    const dir = join(root, 'codex5', 'sessions', '2026', '08')
+    mkdirSync(dir, { recursive: true })
+    const id = '00000000-0000-4000-8000-000000000050'
+    const path = join(dir, `rollout-2026-08-01T00-00-00-${id}.jsonl`)
+    const OLD = NOW - 40 * 86_400_000
+    writeFileSync(
+      path,
+      jl([meta('sess-old'), ctx('gpt-5'), tokens(OLD, 100, 0, 10), tokens(NOW - 2000, 150, 0, 15)]),
+    )
+    const src: ForeignSources = {
+      codex: [{ root: join(root, 'codex5', 'sessions'), instance: 'codex:default' }],
+      opencode: [],
+      hermes: [],
+      dsh: [],
+    }
+    // What version 2 left: its first turn settled into the rollups (and claimed), its second still raw,
+    // its read state and cursor, and another PC's imported hour.
+    const st = new KitStore(':memory:')
+    const old = (n: number, ts: number, input: number) => ({
+      id: `codex:${id}:${n}`,
+      ts,
+      session: 'sess-old',
+      ref: id,
+      agent: 'main',
+      source: 'codex',
+      model: 'gpt-5',
+      provider: 'openai',
+      input,
+      output: 1,
+    })
+    await st.upsertEventsAsync([old(0, OLD, 999), old(1, NOW - 2000, 777)])
+    st.setMeta(`codex_total:sess-old:${id}`, '1778')
+    st.setCursor({ path, size: 1, mtime: 1, offset: 1, version: 2 })
+    st.db.query("insert into imported_pc (pc, sig, rows, at) values ('other-pc', 'x', 1, 0)").run()
+    st.db
+      .query(
+        `insert into usage_hour (hour, day, pc, source, model, calls, input)
+         values (?, '2026-01-01', 'other-pc', 'codex', 'gpt-5', 1, 5000)`,
+      )
+      .run(OLD - (OLD % 3_600_000))
+    const sums = () =>
+      st.db
+        .query(
+          `select (select sum(input) from usage_hour where source = 'codex' and pc <> 'other-pc') as here,
+             (select sum(calls) from usage_hour where source = 'codex' and pc <> 'other-pc') as calls,
+             (select sum(input) from usage_hour where pc = 'other-pc') as imported,
+             (select sum(input) from usage_session where source = 'codex') as ledger`,
+        )
+        .get()
+
+    await ingestForeign(st, src)
+    st.runMaintenance(NOW)
+    expect(sums()).toEqual({ here: 150, calls: 2, imported: 5000, ledger: 150 })
+
+    // The next turn adds itself only: the old rows are not dropped a second time.
+    appendFileSync(path, jl([tokens(NOW - 1000, 200, 0, 20)]))
+    await ingestForeign(st, src)
+    st.runMaintenance(NOW)
+    expect(sums()).toEqual({ here: 200, calls: 3, imported: 5000, ledger: 200 })
+    st.close()
   })
 
   test('a store holding the per-session OpenCode totals ends with the per-call ones, once', async () => {
