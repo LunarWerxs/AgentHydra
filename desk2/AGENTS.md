@@ -64,6 +64,17 @@ between server/ and web/.
   refuses (`scripts/sfc-errors.ts`, since 2026-10-08: two `:class` bindings on one element built green, while the dev
   server answered the file with a 500 and every dev-server probe saw a blank page). Run `vite build` by hand only with `--outDir` pointing
   somewhere else.
+- The window draws its own title bar (README, "Its own window"): the host (`launcher/host`) takes Windows' caption
+  off after the page's `ready` and lays its snap-layouts caption sink over the rect `WindowControls` reports
+  (`placeButtons`). Anything added to the top row is a control (`no-drag`) or drag area; AgentHydra's pages are a
+  frame, where `app-region` does not reach, so their top bar asks Desk to move the window (`ah:window`,
+  `hydra/src/lib/desk-embed.ts`). `launcher/HydraDesk2.exe` is committed: after changing `launcher/host`, run its
+  tests, build it in release and copy `target/release/HydraDesk2.exe` there. Two sessions that each rebuild it
+  conflict on the binary (2026-10-08): take the other's commit, rebuild from the merged source, land that.
+- The parity page (`web` dev server, `#/parity/<scene>`) freezes `Date.now`, and Vue drops a click stamped no later
+  than its listener was attached; inside the transcript (whose capture listener stamps the click first) a probe's
+  click then does nothing (2026-10-08, the working line's ">"). Move the clock before clicking:
+  `Date.now = () => frozen + n++`.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp

@@ -10,6 +10,10 @@ right, and AgentHydra's accounts, CliMayte and HSwarm pages inside it.
 - **Dev servers run once for everyone:** AgentHydra runs each project's dev servers in its own small background
   process, reuses one that already runs (whoever started it) instead of starting a second, and gives every chat tools for it
 - **Servers and a small browser beside the chat**
+- **Its own title bar:** drag the window from any empty part of the top row, AgentHydra's pages included, and
+  Maximize offers Windows 11's snap layouts
+- **A working line like Claude Desktop's:** what the turn is doing now, the time since your last message, and a
+  ">" that opens that step
 - **A Dev servers button in the title bar:** the sidebar lists the projects and their servers by company, folded to what runs; a click opens its details on the Dev servers page, which slides in like AgentHydra's, and the list scans for, adds and edits projects
 - **Git through RepoYeti:** commit, push, pull, branch and Create PR, and one Changes tab
 - **Connectors** for RepoYeti, ReDesign and Connections, without copying them in, and the built-in Dev servers
@@ -183,6 +187,18 @@ sidebar on the left stays put, and only the pane on the right changes.
   steps in one rounded box split by hairlines, as Claude Desktop does; whatever a row opens slides open and
   shut (`transcript/parts/Collapse.vue`), and the row clicked stays where it is while the content under it
   moves down (TranscriptView's `holdRow`). Reduced motion turns all of it off.
+- **A working line that says what the turn is doing** (owner, 2026-10-08, beside Claude Desktop's "Reading how
+  lastCwd and session files are derived 1m 33s"). Under a working chat (`transcript/parts/WorkingFooter.vue`) and
+  over an outside session's composer (`external/ExternalSessionView.vue`), the line is the turn's newest step in
+  the words its call gave (a command's or a sub-agent's description), else what the step is ("Reading notes.txt",
+  "Searching for X", the to-do in progress), and "Writing" or "Thinking" while one streams; a sub-agent's own
+  steps stay inside it (`transcript/lib/now-doing.ts`). Beside it, the time since the person's last message (not a
+  program's note, a queued message or a sub-agent's prompt), read as Claude Desktop reads it: 33s, 1m 33s,
+  1h 28m 23s. Its ">" (`transcript/parts/RevealStep.vue`) opens the step the words name: the run it is folded
+  into opens, then the step itself (a command, a call or a thinking block), and it comes to the middle of the
+  view, as Find brings a match (TranscriptView's `revealStep`, which ExternalSessionView calls through a ref; the
+  rows carry `data-step`). It shows only while the words are the step's own, and on an outside session only when
+  the transcript shows that step (Display can hide tools or thinking).
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
   list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
   because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden
@@ -419,8 +435,22 @@ sidebar on the left stays put, and only the pane on the right changes.
   the position that I last left it"). The window is created hidden at the place saved in
   `~/.hydra-desk-2/window.json` (the rectangle it had on screen, so a snapped window comes back on the
   same spot, and maximized if it was), shown once, and never moved after; a saved place whose title bar
-  is no longer on a connected monitor falls back to a default on the main one. Its title bar is drawn in the page's background colour, so
-  it no longer shows black above it. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
+  is no longer on a connected monitor falls back to a default on the main one. **The page draws the title
+  bar** (owner, 2026-10-08: "move these icons, here", the empty strip left of Windows' minimize button): once
+  the page says it is ready, the host takes Windows' caption off (WebView2's non-client regions; a runtime too
+  old for them keeps the caption and the page changes nothing), and the page's top row is the title bar. Its
+  empty parts drag the window and a double-click maximizes or restores (`title-drag` in `web/src/style.css`,
+  `app-region`); `shell/WindowControls.vue` draws minimize, maximize and close at its right end, with the pane
+  buttons beside them, and a 4px strip along the top edge resizes (Windows keeps the other edges). The page
+  tells the host where those three buttons are (`placeButtons`, `web/src/lib/host-window.ts`), and the host lays
+  a see-through window over them that answers Windows as its caption buttons would, so hovering Maximize shows
+  Windows 11's snap layouts (Windows Terminal draws its caption the same way; the host's manifest says Windows 8
+  or later, which a layered child window needs). Hover and press go back to the page to draw; a click is
+  minimize, maximize or close. AgentHydra's pages are a frame, where `app-region` does not reach, so their top
+  bar asks Desk instead: a press on any part of it that is not a control moves the window, a second press
+  maximizes or restores (`ah:window`, `hydra/src/lib/desk-embed.ts`; owner, 2026-10-08: "drag handles that exist
+  in places that aren't covered by buttons"), and that bar is in the page's background colour, so it no longer
+  changes colour at the edges of the centred page. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
   the first run the launcher asks the old Edge app window to close and the host copies the page's saved
   settings (the sidebar order and filters among them) from the old window profile.
 - **Desk's chats, brought over.** `POST /api/chats/import-desk` (body `{}` for every chat, or
