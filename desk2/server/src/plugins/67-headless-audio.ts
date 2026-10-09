@@ -3,7 +3,7 @@
 // Only the Desk's own page may read or change it (browser/guard.ts).
 
 import type { Context, Hono } from 'hono'
-import { HEADLESS_AUDIO, HEADLESS_AUDIO_MUTE, type HeadlessAudioMuteIn, type HeadlessAudioState } from '@shared/headless-audio'
+import { HEADLESS_AUDIO, HEADLESS_AUDIO_MUTE, type HeadlessAudioState } from '@shared/headless-audio'
 import { compileHelper, livePages, spawnHelper } from '../browser/headless-audio-host'
 import { HeadlessAudio, chatResolver } from '../browser/headless-audio-runtime'
 import { readPortFile } from '../browser/cdp'
@@ -43,7 +43,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.post(HEADLESS_AUDIO_MUTE, async (c: Context) => {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return c.json({ error: why }, 403)
-    const body = (await c.req.json().catch(() => null)) as Partial<HeadlessAudioMuteIn & { chat: string }> | null
+    const body = (await c.req.json().catch(() => null)) as { chat?: string; muted?: boolean; unattributed?: boolean } | null
     if (typeof body?.muted !== 'boolean') return c.json({ error: 'muted required' }, 400)
     if (body.unattributed === true) return c.json(await runtime.setUnattributed(body.muted))
     if (typeof body.chat !== 'string' || body.chat === '') return c.json({ error: 'chat or unattributed required' }, 400)
