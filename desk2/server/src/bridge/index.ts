@@ -567,6 +567,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     const ownRoot = ownDir ? join(ownDir, 'projects') : null
     const parts = new Map<string, WorkerPart>()
     for (const sid of new Set(sessionIds)) {
+      // One session's parse at a time: the requests and timers run between two sessions, not after all of them.
+      await new Promise((done) => setImmediate(done))
       let known = o.rescan ? null : foundAt.get(sid)
       if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
         const ownKey = `${ownRoot}|${sid}`

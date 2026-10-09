@@ -155,6 +155,9 @@ export const CLIMAYTE_ACCOUNT: AccountRef = { id: 'climayte', label: 'CliMayte',
 /** A turn runs or is about to: ChatRuntime.send queues a message behind it (the same test). */
 const busy = (c: ChatSummary): boolean => c.status === 'working' || c.status === 'needs_you' || (c.status === 'starting' && c.turnStartedAt !== null)
 
+/** The items JSON kept across chats (characters, about bytes): the least recently answered goes first. */
+const ITEMS_BODY_BYTES = 64 * 1024 * 1024
+
 /** What an item is remembered as in Entry.emitted: a 64-bit hash of its JSON, not the JSON itself. */
 const signature = (item: TranscriptItem): string => String(Bun.hash(JSON.stringify(item)))
 
@@ -298,6 +301,9 @@ export class ChatManager {
   private liveModels: ModelChoice[] | null = null
   private readonly newChats: 'climayte' | 'sdk'
   private syncing: Promise<void> | null = null
+  /** The JSON of each chat's items as last answered, while its file and media stand as they were (see itemsBody). */
+  private readonly itemsBodies = new Map<string, { stamp: string; body: string; count: number }>()
+  private itemsBodyBytes = 0
   /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
   private closing = false
   private readonly titleGen: TitleGenerator | null
@@ -350,6 +356,40 @@ export class ChatManager {
 
   get(id: string): ChatSummary {
     return { ...this.entry(id).chat }
+  }
+
+  /**
+   * The chat's items as the JSON text the window gets, reused while nothing it is made from has changed: the chat's
+   * file and media folder (its stamp) and no running turn or in-memory stand-ins. Bounded by its size in bytes.
+   */
+  itemsBody(id: string): { body: string; count: number } {
+    const e = this.entry(id)
+    const reusable = (): boolean => e.runtime?.running !== true && !e.sent?.length
+    const hit = this.itemsBodies.get(id)
+    if (hit && reusable() && hit.stamp === this.store.itemsStamp(id)) {
+      this.itemsBodies.delete(id)
+      this.itemsBodies.set(id, hit)
+      return hit
+    }
+    const items = this.listItems(id)
+    const body = JSON.stringify(items)
+    this.dropItemsBody(id)
+    if (reusable()) {
+      const stamp = this.store.itemsStamp(id)
+      if (stamp) {
+        this.itemsBodies.set(id, { stamp, body, count: items.length })
+        this.itemsBodyBytes += body.length
+        while (this.itemsBodyBytes > ITEMS_BODY_BYTES && this.itemsBodies.size > 1) this.dropItemsBody(this.itemsBodies.keys().next().value as string)
+      }
+    }
+    return { body, count: items.length }
+  }
+
+  private dropItemsBody(id: string): void {
+    const hit = this.itemsBodies.get(id)
+    if (!hit) return
+    this.itemsBodies.delete(id)
+    this.itemsBodyBytes -= hit.body.length
   }
 
   listItems(id: string): TranscriptItem[] {
@@ -975,6 +1015,7 @@ export class ChatManager {
     // Its worker goes too while it still runs; a finished one stays in CliMayte's list.
     if (e.chat.workerId && e.workerLive !== false) await this.bridge.cancelWorker(e.chat.workerId).catch(() => {})
     this.store.deleteChat(id)
+    this.dropItemsBody(id)
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.removed', chatId: id })
   }

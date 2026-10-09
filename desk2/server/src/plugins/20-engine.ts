@@ -133,9 +133,8 @@ async function transcript(c: Context, manager: ChatManager): Promise<Response> {
   const id = c.req.param('id') ?? ''
   try {
     await manager.syncWorkers(id)
-    const items = manager.listItems(id)
-    if (c.req.query('format') === 'jsonl') return c.body(jsonlStream(items), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
-    return c.json(items)
+    if (c.req.query('format') === 'jsonl') return c.body(jsonlStream(manager.listItems(id)), 200, { 'content-type': 'application/x-ndjson; charset=utf-8' })
+    return c.body(manager.itemsBody(id).body, 200, { 'content-type': 'application/json; charset=utf-8' })
   } catch (err) {
     if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
     throw err
@@ -285,16 +284,20 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     answer(c, async () => manager.importDesk(process.env.HYDRA_DESK_IMPORT_FROM || join(homedir(), '.hydra-desk'), parseImportDesk(await body(c)).ids)),
   )
   app.get('/api/chats/:id', (c) => answer(c, () => manager.get(c.req.param('id'))))
-  app.get('/api/chats/:id/items', (c) =>
-    answer(c, async () => {
+  app.get('/api/chats/:id/items', (c) => {
+    try {
       // The Desk file answers at once; the worker's live JSONL is read behind it and its new items come over /ws.
-      void manager.syncWorkers(c.req.param('id'))
+      const id = c.req.param('id')
+      void manager.syncWorkers(id)
       const from = Date.now()
-      const items = manager.listItems(c.req.param('id'))
-      manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length })
-      return items
-    }),
-  )
+      const { body, count } = manager.itemsBody(id)
+      manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: id, n: count })
+      return c.body(body, 200, { 'content-type': 'application/json; charset=utf-8' })
+    } catch (err) {
+      if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
+      throw err
+    }
+  })
   // The warm start (SPEC "Speed (timings)"): the window asks when the owner begins typing in a closed chat.
   app.post('/api/chats/:id/warm', (c) => answer(c, () => manager.warm(c.req.param('id'))))
   // Retry under "Could not get Claude Code": the download starts again.

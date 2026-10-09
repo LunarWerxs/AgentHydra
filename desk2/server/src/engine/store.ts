@@ -115,6 +115,14 @@ export class ChatStore {
     appendFileSync(file, prefix + JSON.stringify(item) + '\n')
   }
 
+  /** Changes whenever the chat's item file or the media folder changes; '' when the chat has no file. */
+  itemsStamp(chatId: string): string {
+    const st = statSync(this.itemsFile(chatId), { throwIfNoEntry: false })
+    if (!st) return ''
+    const media = statSync(join(this.home, 'media'), { throwIfNoEntry: false })
+    return `${st.ino}:${st.size}:${st.mtimeMs}:${media?.mtimeMs ?? 0}`
+  }
+
   /** The chat's items in first-seen order, the last line per id winning; unparsable lines skipped. */
   loadItems(chatId: string): TranscriptItem[] {
     const file = this.itemsFile(chatId)
