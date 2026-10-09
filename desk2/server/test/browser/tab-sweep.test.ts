@@ -24,7 +24,11 @@ beforeAll(() => {
 })
 
 afterAll(() => {
-  rmSync(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+  try {
+    rmSync(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
+  } catch {
+    // A leftover temp folder must not fail the suite.
+  }
 })
 
 describe('owner liveness', () => {
