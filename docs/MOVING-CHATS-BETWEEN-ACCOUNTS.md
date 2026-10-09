@@ -203,6 +203,12 @@ tray icon and the fair share first), then reading two working chats' pids out of
   chat's current state: `unsettled` is that duplicate, `not-landed` means the ledger and the
   machine disagree. `--finish <id>` completes it through the mover's own phases, `--reverse <id>`
   undoes it. Run it after any cancel.
+- **A SOURCE ROW THAT STILL SHOWS IS A HALF-MOVE, NOT OK** (2026-10-09). A move whose old copy
+  is still visible on the account it left reports that chat as `LANDED but not finished`, counts
+  it in `unfinished`, and exits 2 for a lone move; before, a batch printed it as OK and the owner
+  found the duplicate himself. The common cause was the source app holding the row `isStopping`
+  with nothing running, for up to ten minutes; a move's source row in that state is now archived
+  (see the native-control runbook).
 - By hand, the same thing is `courier --yes --only <id> --only <id>` for the replies (several
   ids, one run, no icon needed) and `migrate_batch ... --terminate-live --resume "..."`.
 

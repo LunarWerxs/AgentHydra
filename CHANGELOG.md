@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Moving chats no longer leaves a copy behind on the old account, or calls that move done.** The old account's
+  app could hold a moved chat as "stopping" for minutes with nothing running, and the move gave up on hiding it there
+  while still reporting it as finished. A move now hides that copy, and a chat whose old copy still shows is reported
+  as not finished.
 - **A chat that runs out of usage no longer moves to an account that is almost full.** When a chat hit its limit,
   AgentHydra moved it to any other account under 100%, so it could push an account from 99% to its limit. It now
   moves only to an account under 85% on both its 5-hour and weekly windows, as CliMayte does, and waits for a reset
