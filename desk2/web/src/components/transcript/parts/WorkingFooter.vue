@@ -1,9 +1,9 @@
 <script setup lang="ts">
-// The Working row under a running turn: the window's working mark (WorkingMark.vue, the one Settings
-// picks; its "spark" is the real Claude Code spinner) and shimmering text, plus Hydra Desk's elapsed time
-// and queued count. Stop lives in the composer, as in the real app. Needs-you shows the amber dot instead.
-// The text is the turn's step in its own words and the time counts from the person's last message, as Claude
-// Desktop's working line does (lib/now-doing.ts; owner, 2026-10-08).
+// The Working row under a running turn: the window's working mark (WorkingMark.vue, the look the current
+// five-minute slot picked; its "spark" is the real Claude Code spinner) and shimmering text, plus Hydra Desk's
+// elapsed time and queued count. Stop lives in the composer, as in the real app. Needs-you shows the amber dot
+// instead. The text is the turn's step in its own words and the time counts from the person's last message, as
+// Claude Desktop's working line does (lib/now-doing.ts; owner, 2026-10-08).
 import { computed } from 'vue'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { nowDoing, runningFor } from '../lib/now-doing'

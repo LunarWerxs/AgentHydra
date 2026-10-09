@@ -1,7 +1,9 @@
 /* The working mark (parts/WorkingMark.vue): seven looks in Claude's orange (#d97757, --brand-hover), each drawn with
    transform and opacity only, so a long turn costs the compositor and nothing else. Every look glides: something is
    always moving on an ease that starts and ends soft, never a jump then a rest (owner, 2026-10-08: "it needs to be
-   much more fluid-feeling"). Every look sits in the 16x20 cell the Claude Code spinner had. */
+   much more fluid-feeling"), and every duration is twice what it first was (owner, 2026-10-08: "also, slow them
+   down, they are a little bit, aggressive. Roughly, maybe half?"). Every look sits in the 16x20 cell the Claude
+   Code spinner had. */
 .wm {
   position: relative;
   display: inline-flex;
@@ -35,23 +37,23 @@
 
 /* Square: three dots on the corners of a square, the fourth empty. The dot behind the gap glides into it, then the
    next, so the gap travels backwards round the square while the dots climb forwards. One loop is twelve glides of
-   200ms back to back (each dot moves on every third), so exactly one dot is always on its way. Every dot runs the
+   400ms back to back (each dot moves on every third), so exactly one dot is always on its way. Every dot runs the
    same path, started a whole number of glides apart. */
 .wm[data-variant='square'] .wm-dot {
   width: 4px;
   height: 4px;
   border-radius: 9999px;
   background: currentColor;
-  animation: wm-square 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  animation: wm-square 4.8s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(1) {
-  animation-delay: -1.2s;
+  animation-delay: -2.4s;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(2) {
-  animation-delay: -0.4s;
+  animation-delay: -0.8s;
 }
 .wm[data-variant='square'] .wm-dot:nth-child(3) {
-  animation-delay: -2s;
+  animation-delay: -4s;
 }
 @keyframes wm-square {
   0% {
@@ -79,7 +81,7 @@
    of the box that turns; the ease only leans, so the turn never stalls. */
 .wm[data-variant='orbit'] .wm-dot {
   inset: 0;
-  animation: spin 1.6s cubic-bezier(0.45, 0.15, 0.55, 0.85) infinite;
+  animation: spin 3.2s cubic-bezier(0.45, 0.15, 0.55, 0.85) infinite;
 }
 .wm[data-variant='orbit'] .wm-dot::before {
   content: '';
@@ -93,10 +95,10 @@
   background: currentColor;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(1) {
-  animation-delay: -0.24s;
+  animation-delay: -0.48s;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(2) {
-  animation-delay: -0.12s;
+  animation-delay: -0.24s;
   opacity: 0.65;
 }
 .wm[data-variant='orbit'] .wm-dot:nth-child(3) {
@@ -110,15 +112,15 @@
   height: 3px;
   border-radius: 9999px;
   background: currentColor;
-  animation: wm-wave 1.2s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation: wm-wave 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 .wm[data-variant='wave'] .wm-dot:nth-child(2) {
   left: 4.5px;
-  animation-delay: -1.05s;
+  animation-delay: -2.1s;
 }
 .wm[data-variant='wave'] .wm-dot:nth-child(3) {
   left: 9px;
-  animation-delay: -0.9s;
+  animation-delay: -1.8s;
 }
 @keyframes wm-wave {
   0%,
@@ -138,10 +140,10 @@
   inset: 0;
   border: 1.25px solid currentColor;
   border-radius: 9999px;
-  animation: wm-ripple 2s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
+  animation: wm-ripple 4s cubic-bezier(0.2, 0.6, 0.35, 1) infinite;
 }
 .wm[data-variant='ripple'] .wm-dot:nth-child(2) {
-  animation-delay: -1s;
+  animation-delay: -2s;
 }
 .wm[data-variant='ripple'] .wm-dot:nth-child(3) {
   inset: 4px;
@@ -165,7 +167,7 @@
   inset: 2px;
   border-radius: 9999px;
   background: currentColor;
-  animation: wm-breathe 2.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation: wm-breathe 4.8s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 @keyframes wm-breathe {
   0%,
@@ -184,7 +186,7 @@
   inset: 2.5px;
   border-radius: 2px;
   background: currentColor;
-  animation: wm-tumble 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  animation: wm-tumble 3.2s cubic-bezier(0.65, 0, 0.35, 1) infinite;
 }
 @keyframes wm-tumble {
   0% {
@@ -216,7 +218,7 @@
   font-size: 14px;
   line-height: 20px;
   text-align: center;
-  animation: wm-spark 3s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+  animation: wm-spark 6s cubic-bezier(0.45, 0, 0.55, 1) infinite;
 }
 @keyframes wm-spark {
   0% {

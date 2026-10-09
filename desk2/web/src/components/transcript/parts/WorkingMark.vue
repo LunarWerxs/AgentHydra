@@ -1,7 +1,8 @@
 <script setup lang="ts">
-// The orange mark of a chat at work, in one of seven looks (lib/working-mark.ts; the window's choice unless a
-// variant is given, as Settings does to show them side by side). Every look fits a 16x20 cell, the cell the
-// Claude Code spinner had, so the text after it stands where it always did. working-mark.css draws them.
+// The orange mark of a chat at work, in one of seven looks (lib/working-mark.ts picks the window's one for the
+// current five-minute slot; a `variant` shows a chosen look, as a gallery of them side by side would). Every look
+// fits a 16x20 cell, the cell the Claude Code spinner had, so the text after it stands where it always did.
+// working-mark.css draws them.
 import { computed } from 'vue'
 import { workingMark, type WorkingMarkVariant } from '../lib/working-mark'
 import '../working-mark.css'

@@ -176,9 +176,10 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
   the blinking dot, in the Working row under a turn and on the line over a Claude Desktop chat's composer,
   which has more room around it now (owner, 2026-10-08: "replace the blinking dot with a fun, like, orange
-  animation ... Let's get a few options"). Settings -> General -> Appearance -> Working animation offers four,
-  drawn live: Square (the default, three dots stepping round a square), Orbit, Spark (Claude Code's glyphs)
-  and Breathe (`transcript/parts/WorkingMark.vue`, remembered in the browser). A tool run opened shows its
+  animation ... Let's get a few options"). There are seven looks (`transcript/parts/WorkingMark.vue`); no setting
+  picks one: the window shows one for five minutes, every mark the same, then another, never the same twice in a row
+  (`transcript/lib/working-mark.ts`; owner, 2026-10-08: "instead of an option for animation, just occasionally have
+  it, randomly one"), each at half the speed it first had. A tool run opened shows its
   steps in one rounded box split by hairlines, as Claude Desktop does; whatever a row opens slides open and
   shut (`transcript/parts/Collapse.vue`), and the row clicked stays where it is while the content under it
   moves down (TranscriptView's `holdRow`). Reduced motion turns all of it off.

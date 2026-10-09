@@ -9,9 +9,10 @@ describe('settings search', () => {
     expect(settingsGroups('general', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['New chats', ['model', 'effort', 'permission']],
       ['Behaviour', ['notifications', 'idle']],
-      ['Appearance', ['workingMark']],
       ['AgentHydra pages', ['ahTooltips', 'ahPrivacy']]
     ])
+    // The working animation is no longer a setting: the window picks a look itself (lib/working-mark.ts).
+    expect(matchRows('working animation')).toEqual([])
   })
 
   it('leaves a row off its page while the switch it depends on is off, but a search finds it', () => {
