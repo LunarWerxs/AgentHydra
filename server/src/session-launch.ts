@@ -158,7 +158,7 @@ export function buildTerminalLaunchPlan(
   return { argv: [], command: sh }
 }
 
-/**
+/*
  * Is `cwd` trusted for the CLI config at `configDir` (null = the ambient ~/.claude.json), and
  * if it is trusted under a DIFFERENT spelling of the same path, mirror it onto the spelling
  * that is missing so the launch does not stop on a dialog.
@@ -1190,7 +1190,7 @@ export async function coldImportSessionToDesktop(opts: {
   }
 }
 
-/**
+/*
  * The desktop metadata FILE for a session id, searched across every instance's store. This is
  * the roll-proof visibility test: a desktop chat that continues rolls onto a NEW cliSessionId
  * while its metadata file keeps the ORIGINAL id in its name — so any lookup keyed by
@@ -1641,7 +1641,7 @@ export async function reassertChatTitle(
   return restores
 }
 
-/**
+/*
  * Stamp `bypassPermissions` onto every IMPORT-SHAPE chat in one profile's store whose file
  * says otherwise. Import shape means the file is named after the CLI id
  * (`local_<cliSessionId>.json`) — the one shape only OUR imports and seeds produce; a chat
@@ -1727,7 +1727,7 @@ export function restoreMigratedSettings(
   return restored
 }
 
-/**
+/*
  * The metadata file for one chat inside one instance's store, or null - matching BOTH of the
  * shapes a chat can have on disk.
  *

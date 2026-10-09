@@ -658,7 +658,7 @@ export interface RunCost {
  *  large majority of a real store, so including it buries live work; 'only' makes old work findable. */
 export type ArchivedScope = 'hide' | 'include' | 'only'
 
-/**
+/*
  * How a session list treats work AgentHydra queued.
  *
  * 'all' is the default and stays the default: this narrows a list on request, and is never applied
@@ -762,7 +762,7 @@ export interface SessionSearchResult {
   }
 }
 
-/**
+/*
  * A whole body-search answer, hits plus how complete they are.
  *
  * The completeness is not a nicety. The search runs under a wall-clock budget and returns whatever

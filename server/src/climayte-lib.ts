@@ -120,7 +120,7 @@ export interface CliMayteAttempt {
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
   model?: string
-  /** Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
+  /* Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
    *  `pid` is the runner's, filled from `pidFile` once it has claimed the spec; the CLI's own is the
    *  attempt's `pid`, filled once the CLI has started. Absent on attempts spawned by the daemon
    *  directly (before 2026-09-30). `killOnStart`: a stop came before the runner wrote its pid but

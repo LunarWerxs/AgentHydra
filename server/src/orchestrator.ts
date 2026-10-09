@@ -479,7 +479,7 @@ function snapshot(op: OrchestratorOperation): OrchestratorOperation {
   return { ...op, args: [...op.args] }
 }
 
-/**
+/*
  * Start a run as an operation - or, with an idempotency key that names one already RUNNING or
  * that SUCCEEDED, return that one and start nothing.
  *
@@ -841,7 +841,7 @@ function tail(raw: string, alreadyDropped = 0): string {
   return dropped > 0 ? `…[truncated ${dropped} chars]\n${kept}` : kept
 }
 
-/** One spawn, captured, with a deadline. Exposed for tests through `deps`; the real thing is
+/* One spawn, captured, with a deadline. Exposed for tests through `deps`; the real thing is
  *  Bun.spawn with windowsHide (python is a console program - see scripts/checks/spawn-console-window.mjs). */
 /** What a spawn adapter can hand back while the child runs. `onProcess` receives a kill switch
  *  the moment the child exists, so a caller (the durable-operation registry) can cancel it. */

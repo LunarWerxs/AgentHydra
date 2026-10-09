@@ -424,7 +424,7 @@ function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
   return rememberScan(tf, key, meta)
 }
 
-/**
+/*
  * Null when the transcript is gone by the time we read it, which is a NORMAL race rather than a
  * fault. `pruneUsageProbeTranscripts()` deletes the `/usage` probe's own transcripts on a timer, so
  * this daemon routinely removes files its own scanner is mid-way through enumerating; a user
@@ -880,7 +880,7 @@ function doneMarkMap(): Map<string, boolean> {
   return map
 }
 
-/**
+/*
  * Drop the rows that are somebody else's subagent.
  *
  * A subagent is an implementation detail of the turn that spawned it, not a conversation the user
@@ -906,7 +906,7 @@ function doneMarkMap(): Map<string, boolean> {
  * the one outcome this function may never produce. A chain that does not end at a real top-level
  * session is not ownership, so the row is kept and the user sees it.
  */
-/**
+/*
  * One conversation, one row, however many transcripts a compaction split it into.
  *
  * Claude Code does not keep writing to a session it has compacted: it opens a new file with a new

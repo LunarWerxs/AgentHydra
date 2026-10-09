@@ -161,7 +161,7 @@ function fakeResult(mode: string): CMDesktopInstall | null {
 let cached: { value: CMDesktopInstall; at: number } | null = null
 const CACHE_TTL_MS = 5 * 60 * 1000
 
-/**
+/*
  * Detects how Claude Desktop is installed. win32-only problem: `manageable` is false there
  * when no classic (Squirrel) binary resolves; mac/linux always report manageable (their
  * launch paths don't depend on install format). Cached for 5 minutes. Never throws.

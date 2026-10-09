@@ -233,7 +233,7 @@ const sameEntry = (a: unknown, b: McpHttpEntry): boolean =>
   (a as Record<string, unknown>).type === b.type &&
   (a as Record<string, unknown>).url === b.url
 
-/**
+/*
  * WE ARE NOT THE ONLY WRITER OF THIS FILE, AND THE OTHER ONE IS CLAUDE CODE.
  *
  * Claude Code rewrites ~/.claude.json with the same whole-file read-modify-write-and-rename shape
@@ -286,7 +286,7 @@ export function resetMcpRegisterMemory(): void {
 const writeFailure = (configPath: string, e: unknown): string =>
   `could not write ${configPath}: ${e instanceof Error ? e.message : e}`
 
-/**
+/*
  * Bring the registration in line with the setting. Called at boot (once the bound port is known)
  * and again whenever the setting is flipped in Settings.
  *

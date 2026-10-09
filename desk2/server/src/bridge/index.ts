@@ -119,7 +119,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
-  /** The CLI instances, read once per INSTANCES_FRESH_MS however many callers ask (a poll tick asks three ways). */
+  /* The CLI instances, read once per INSTANCES_FRESH_MS however many callers ask (a poll tick asks three ways). */
   /** The CLI instances' config folders from the last read, for the synchronous sessionRoots(). */
   let knownCliDirs: string[] = []
   function cliInstances(): Promise<AhCliInstance[]> {
