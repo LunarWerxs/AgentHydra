@@ -24,7 +24,7 @@ beforeAll(() => {
 })
 
 afterAll(() => {
-  rmSync(base, { recursive: true, force: true })
+  rmSync(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 })
 })
 
 describe('owner liveness', () => {
@@ -74,16 +74,6 @@ function announcedPort(file: string): number {
   } catch {
     return 0
   }
-}
-
-async function pageIdsOnceClosed(port: number, closed: string): Promise<string[]> {
-  const until = Date.now() + 10_000
-  let ids = (await pageTabs(port)).map((t) => t.id)
-  while (ids.includes(closed) && Date.now() < until) {
-    await Bun.sleep(100)
-    ids = (await pageTabs(port)).map((t) => t.id)
-  }
-  return ids
 }
 
 async function launchChrome(profile: string): Promise<{ proc: Bun.Subprocess; port: number }> {
@@ -136,7 +126,7 @@ describe('real headless Chrome', () => {
 
   test('closing a deleted chat closes only its own page and drops its row', async () => {
     expect(await closeChatTabs(['deleted-chat-session'], root)).toBe(1)
-    const ids = await pageIdsOnceClosed(port, deletedId)
+    const ids = (await pageTabs(port)).map((t) => t.id)
     expect(ids).not.toContain(deletedId)
     expect(ids).toContain(liveId)
     expect(ids).toContain(deadId)
@@ -146,7 +136,7 @@ describe('real headless Chrome', () => {
   test('the sweep closes only the dead owner\'s page and drops only its row', async () => {
     const liveness = makeLiveness(new Set(['live-chat-session']), [claudeRoot])
     expect(await sweepDeadOwnerTabs(liveness, root)).toBe(1)
-    const ids = await pageIdsOnceClosed(port, deadId)
+    const ids = (await pageTabs(port)).map((t) => t.id)
     expect(ids).not.toContain(deadId)
     expect(ids).toContain(liveId)
     expect([...readLedger(profile).keys()]).toEqual([liveId])
@@ -186,7 +176,7 @@ describe('a bare profile folder directly under the store root', () => {
   test('the sweep closes the dead owner\'s page in a bare profile and drops only its row', async () => {
     const liveness = makeLiveness(new Set(['live-bare-session']), [claudeRoot])
     expect(await sweepDeadOwnerTabs(liveness, root)).toBe(1)
-    const ids = await pageIdsOnceClosed(port, deadId)
+    const ids = (await pageTabs(port)).map((t) => t.id)
     expect(ids).not.toContain(deadId)
     expect(ids).toContain(liveId)
     expect([...readLedger(profile).keys()]).toEqual([liveId])

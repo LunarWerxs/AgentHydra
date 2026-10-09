@@ -71,7 +71,13 @@ export async function newPage(port: number, url: string): Promise<BrowserTab | n
 export async function closePage(port: number, id: string): Promise<boolean> {
   if (!(await pageTabs(port)).some((t) => t.id === id)) return false
   const res = await fetch(`http://${HOST}:${port}/json/close/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(4000) })
-  return res.ok
+  if (!res.ok) return false
+  const until = Date.now() + 2_000
+  while (Date.now() < until) {
+    if (!(await pageTabs(port)).some((t) => t.id === id)) return true
+    await Bun.sleep(100)
+  }
+  return false
 }
 
 /** The installed Chrome: HYDRA_DESK_CHROME when set (and then only that), else the standard install paths. */
