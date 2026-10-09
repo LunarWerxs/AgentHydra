@@ -89,4 +89,7 @@ between server/ and web/.
 - Never restart or stop the live server. Do not curl `/api/server/restart` or `/api/server/shutdown`, and do not run
   `launcher/restart.ps1` or `launcher/stop.ps1` against it. The server refuses those asks from anything but the window
   (409, logged with the caller in `~/.hydra-desk-2/logs/restart.log`). The owner restarts it from the window's
-  Menu > Restart to update. Test a restart on your own copy on a spare port with its own home folder.
+  Menu > Restart to update. Test a restart on your own copy on a spare port with its own home folder. The one
+  exception is the owner asking a chat in his own words to restart it (2026-10-09: "can you do it please"): run
+  `launcher/restart.ps1` hidden (`Start-Process -WindowStyle Hidden`), its output appended to
+  `~/.hydra-desk-2/logs/restart-run.log`, without `-Chats`, and check `/api/server/update` reads `stale: false`.

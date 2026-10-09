@@ -303,7 +303,14 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **One card for the Instances tab** (owner, 2026-10-06; one table since 2026-10-07). Desktop, CLI and Free rows sit in the same
   lighter, rounded card (`InstanceCard.vue`): the header bar is its top, the rows inside it. The kind
   toggles in its header (Desktop, CLI, Free, each with its count; a kind with no rows still shows) choose
-  which row segments show, and the + menu has one item per provider, Free's as `free:` ids.
+  which row segments show, and the + menu offers only the kind on screen (owner, 2026-10-09: "The desktop tab
+  should create desktop, CLI should create CLI, and free should create free"): one item per provider on
+  Desktop, `cli:claude` (the CLI's add-account row) on CLI, `free:` ids on Free, and every kind under its own
+  heading on All. The header's search (`InstanceSearch.vue`, Ctrl+F) narrows every kind's rows to those whose
+  number, name, account or plan hold every typed word: each row component states that text as its filter
+  facts' `search`, and `useInstanceFilter`'s `visible()` applies it before the filter. It is not stored and
+  hides rather than dims. The CLI Tokens column counts this PC's transcripts only, so its header says
+  "this PC", and a row shows "N on other PC" from the other PC's live CliMayte workers (`remoteWorkers`).
 - **The copy's own changes.** Its desktop Instances table keeps its column widths and row order while
   the stats load (fixed columns, placeholders the size of what replaces them; Memory and Tokens re-sort
   on a header click or Refresh, not on every poll), and an HSwarm job opens its summary right under its
@@ -424,6 +431,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   dot and Menu has Restart to update: it runs `launcher/restart.ps1` for you, the chats keep running and the
   window reconnects. A button that needs newer server code than the running one says so instead of a bare
   "no route" (2026-10-05: Send now, Fork and the servers pane each looked broken until a restart).
+  The sidebar's "Click to restart and update" row runs the waiting update, then the restart. The window
+  does not reload onto a rebuilt bundle while that click or its restart runs (`stale-bundle.ts`: the
+  update's rebuild used to reload the page and drop the restart step, 2026-10-09). The restart request
+  waits 20 s for a busy server, and a restart that no new server's hello ends within 60 s turns into an
+  error the row can be clicked past (`server-update.ts`).
 - **Small things that stay put.** Closing the tip over a new chat's composer ends the tips for good
   (owner, 2026-10-05: "Those all need to remember if I close them and stay closed"). Over an outside
   session, the line about continuing it says what happens: it continues as a copy on the account CliMayte

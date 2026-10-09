@@ -1359,6 +1359,11 @@ same logins signed in; a refresh on one reaches the other within a pass.
   the dialog's copy button, for the other PC's Join.
 - Left out on a PC (`excluded`): the dialog's per-login switch, a Log out there, a move away. Neither
   uploaded nor landed there.
+- A pass that makes an instance this PC did not have (a CLI login or a desktop profile from the other
+  PC) says so once, at the end of the pass, over the OS notification channel when notifications are on
+  (`server/src/login-sync-arrivals.ts`; owner, 2026-10-09: "if his finds a new account, add a
+  notification that says ... what was added"): one notification listing each arrival by kind, number
+  and plan, e.g. "Claude CLI account #7 (Max 20×)", never by email. Desktop arrivals carry no plan.
 - Routes: `GET /api/cli-instances/sync` (status, no secrets), `POST .../sync/setup {url, token}`,
   `.../sync/join {code}`, `.../sync/run`, `.../sync/enabled {enabled}`, `.../sync/exclude {id,
   excluded}`, `.../sync/pairing` (the copy button's code), `.../sync/disconnect`. No MCP tools.

@@ -9,6 +9,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **TL;DR**
 
+- **The Instances page has a search box**
+- **Each Instances tab's + creates its own kind**
+- **Click to restart and update really restarts**
+- **Login sync tells you when it brings in a new account**
+- **The CLI Tokens column says it counts this PC, and shows work running from your other PC**
 - **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
 - **The babysitter can wake a Desktop chat a usage limit stopped**
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
@@ -30,6 +35,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **The Instances page has a search box.** The magnifier at the top right (or Ctrl+F) opens a box that narrows every
+  table as you type, by instance number, name, account or plan: "#171" finds #171 and "20x" finds the Max 20× accounts.
+  Esc or the X clears it.
+- **Each Instances tab's + creates its own kind.** On the CLI tab the + adds a CLI account instead of a desktop
+  instance, Desktop offers only the apps, Free only Free accounts, and All lists every kind under its own heading.
+- **Click to restart and update really restarts.** The click's update step rebuilt the window, which then reloaded
+  itself and dropped the click before its restart, so the server was never restarted. The window now waits for the
+  restart, a busy server gets 20 seconds to answer instead of 4, and a restart that never happens says so and can be
+  clicked again instead of showing Restarting… for good.
+- **Login sync tells you when it brings in a new account.** When a sync from your other PC adds an instance this PC did
+  not have, one notification per sync lists them, e.g. "Claude CLI account #7 (Max 20×)". It names instances by number,
+  never by email.
+- **The CLI Tokens column says it counts this PC.** The header reads Tokens (this PC), and a row shows "3 on other PC"
+  when your other PC has CliMayte workers on that account, so an account busy there no longer looks unused here.
 - **The babysitter can wake a Desktop chat a usage limit stopped.** Its continue now goes in through the Claude app's own
   chat-to-chat messaging, which starts the chat again by itself, instead of waiting for a running chat that was
   no longer there. Nothing is typed into the window, the message shows as from AgentHydra rather than from you, and a
