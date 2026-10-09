@@ -34,12 +34,15 @@ export interface ChatStoreOptions {
   debounceMs?: number
   /** Wait before a scheduled write that failed is tried again, ms. */
   retryMs?: number
+  /** The timer's rename of chats.json; a test holds it here. */
+  renameAsync?: typeof renameOverAsync
 }
 
 export class ChatStore {
   readonly home: string
   private readonly debounceMs: number
   private readonly retryMs: number
+  private readonly renameAsync: typeof renameOverAsync
   private timer: ReturnType<typeof setTimeout> | null = null
   private pendingChats: ChatSummary[] | null = null
   /** Item files whose tail was checked for a torn last line this process. */
@@ -62,6 +65,7 @@ export class ChatStore {
     this.home = home
     this.debounceMs = opts.debounceMs ?? 250
     this.retryMs = opts.retryMs ?? 3000
+    this.renameAsync = opts.renameAsync ?? renameOverAsync
     mkdirSync(join(home, 'chats'), { recursive: true })
   }
 
@@ -138,13 +142,22 @@ export class ChatStore {
       if (text === this.lastSaved && (await stat(this.chatsFile).then(() => true, () => false))) return
       await writeFlushedAsync(tmp, text)
       if (generation !== this.generation) return void (await rm(tmp, { force: true }))
-      await renameOverAsync(tmp, this.chatsFile)
+      await this.renameAsync(tmp, this.chatsFile)
+      if (generation !== this.generation) return this.restoreLastSaved()
       this.lastSaved = text
     } catch (err) {
       await rm(tmp, { force: true }).catch(() => undefined)
       if (!this.pendingChats && generation === this.generation) this.pendingChats = chats
       throw err
     }
+  }
+
+  /** A timer rename that landed after a forced save put the older list back on disk: rewrite the newest one, synchronously. */
+  private restoreLastSaved(): void {
+    if (this.lastSaved === null) return
+    const tmp = `${this.chatsFile}.${process.pid}.tmp`
+    writeFlushed(tmp, this.lastSaved)
+    renameOver(tmp, this.chatsFile)
   }
 
   /** Waits for the timer's writes so far (tests). */
