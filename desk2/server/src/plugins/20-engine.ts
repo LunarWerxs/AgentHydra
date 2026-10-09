@@ -45,6 +45,7 @@ import { RecentFolders } from '../folders/recent'
 import { findHydra, readHydra, type HydraLocation, type HydraRead } from '../projects/hydra'
 import { localFolderPath, withPath, withoutPath } from '../projects/choices'
 import { ProjectList } from '../projects/projects'
+import { serveProjectIcon } from '../projects/icon-cache'
 
 /** How often chats started in a folder that holds projects are placed and filed while New is closed. */
 const PROJECTS_SWEEP_MS = 2 * 60_000
@@ -454,7 +455,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   }
   app.get('/api/projects/icon', (c) => {
     const file = projects.iconFile(c.req.query('key') ?? '')
-    return file ? new Response(Bun.file(file)) : c.notFound()
+    return file ? serveProjectIcon(c.req.raw, file, ctx.home, c.req.query('v') !== undefined) : c.notFound()
   })
   app.get('/api/mcp-servers', (c) => answer(c, () => mcpServersRoute(c, deps)))
   app.get('/api/chats/:id/mcp', (c) => answer(c, () => manager.mcpStatus(c.req.param('id'))))

@@ -24,6 +24,7 @@ import { runGit } from '../git/git'
 import { type PlacedBy, SpotIndex } from './attribute'
 import { checkoutOf, folderKey, isDir, subfolders } from './choices'
 import type { HydraLocation, HydraProject, HydraRead } from './hydra'
+import { iconVersion } from './icon-cache'
 import { writeFlushed } from '../write-flushed'
 
 export interface GitFacts {
@@ -630,11 +631,12 @@ export class ProjectList {
 }
 
 function hydraRow(p: HydraProject): Row {
+  const version = p.iconFile ? iconVersion(p.iconFile) : null
   return {
     path: p.path,
     name: p.name,
     group: p.group,
-    icon: p.iconFile ? `/api/projects/icon?key=${encodeURIComponent(p.key)}` : null,
+    icon: version ? `/api/projects/icon?key=${encodeURIComponent(p.key)}&v=${encodeURIComponent(version)}` : null,
     hydraKey: p.key,
     sources: new Set(['projecthydra']),
     lastChatAt: null,
