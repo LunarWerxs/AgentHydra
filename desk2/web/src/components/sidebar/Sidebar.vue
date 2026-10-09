@@ -747,8 +747,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     :style="{ width: `${width}px` }"
   >
     <!-- The shade along its right edge, just inside the line, as Claude Desktop's sidebar has (owner, 2026-10-08: "kind
-         of a inner shadow. That has a little bit of a spread"). Over the rows, under every menu, never in the way of a click. -->
-    <span class="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-linear-to-l from-black/30 to-transparent" aria-hidden="true" />
+         of a inner shadow. That has a little bit of a spread"; then "a little too dark", so 20% black, not 30). Over the
+         rows, under every menu, never in the way of a click. -->
+    <span class="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-linear-to-l from-black/20 to-transparent" aria-hidden="true" />
     <div class="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-1 pt-2">
       <nav class="flex shrink-0 flex-col gap-[0.5px] pe-0.5">
         <button
