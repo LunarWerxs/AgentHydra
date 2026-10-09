@@ -13,6 +13,8 @@ import { createDevServersMcp } from '../devservers/mcp'
 import { createBrowserAgentClient } from '../browser/agent/client'
 import { createBrowserMcp } from '../browser/agent/mcp'
 import type { ToolCaller } from '../browser/agent/contract'
+import { callerSession } from '../browser/agent/caller-session'
+import { type Bridge, bridge } from '../bridge'
 
 /** The address of Desk itself, which the devservers tools call at /dw/api. */
 const deskUrl = () => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
@@ -24,12 +26,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const outDir = join(ctx.home, 'design-options')
   const browserClient = createBrowserAgentClient({ home: ctx.home })
 
-  app.all('/mcp/browser', (c) => {
-    const caller: ToolCaller = {
-      chat: c.req.query('chat')?.trim() || undefined,
-      worker: c.req.query('worker')?.trim() || undefined,
-      cwd: c.req.query('cwd')?.trim() || undefined,
-    }
+  app.all('/mcp/browser', async (c) => {
+    const chat = c.req.query('chat')?.trim() || undefined
+    const worker = c.req.query('worker')?.trim() || undefined
+    const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
+    const session = await callerSession(
+      { chat, worker },
+      {
+        chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
+        workers: () => b.workers({ all: true }).catch(() => []),
+      },
+    )
+    const caller: ToolCaller = { chat, worker, cwd: c.req.query('cwd')?.trim() || undefined, session }
     return serveMcpHttp(c.req.raw, createBrowserMcp({ client: browserClient, caller }))
   })
 

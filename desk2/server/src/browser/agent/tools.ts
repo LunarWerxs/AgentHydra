@@ -2,6 +2,7 @@
 
 import { TOOL_DEFS, ToolInputError } from './registry'
 import type { CallResult, ToolCaller, ToolInfo } from './contract'
+import { etsyRefusal, etsyWebsiteHostIn } from './etsy'
 
 export function toolInfos(): ToolInfo[] {
   return TOOL_DEFS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }))
@@ -10,6 +11,8 @@ export function toolInfos(): ToolInfo[] {
 export async function callTool(name: string, params: Record<string, unknown> = {}, caller: ToolCaller = {}): Promise<CallResult> {
   const def = TOOL_DEFS.find((d) => d.name === name)
   if (!def) return { ok: false, status: 404, error: `no browser tool named ${name}` }
+  const etsy = etsyWebsiteHostIn(params)
+  if (etsy) return { ok: false, status: 403, error: etsyRefusal(etsy) }
   try {
     return { ok: true, text: await def.run(params, caller) }
   } catch (err) {

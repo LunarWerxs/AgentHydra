@@ -25,6 +25,8 @@ export interface ToolCaller {
   worker?: string
   /** The folder the chat works in; picks the saved-browser workspace. */
   cwd?: string
+  /** The caller's current Claude Code session id: the one that owns the pages it drives in the tab ledger. */
+  session?: string
 }
 
 export type CallResult = { ok: true; text: string } | { ok: false; status: number; error: string }
