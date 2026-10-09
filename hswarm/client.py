@@ -228,11 +228,23 @@ STALL_RETRIES = 1
 _body = request_body  # older name, kept for the tests
 
 
-def _read_timeout_s(reasoning_effort: str | None) -> float:
+OUTPUT_TOKENS_PER_S = 40.0
+
+
+def _read_timeout_s(reasoning_effort: str | None, max_tokens: int | None = None, rest_budget_s: float | None = None) -> float:
     """The read timeout for one POST: READ_TIMEOUT_S, scaled up for a deliberately slower
     reasoning_effort (Task.EFFORTS; unset - or a provider that does not carry the field - reads as
-    "low", the same default Task._normalised gives the api backend)."""
-    return READ_TIMEOUT_S * REASONING_EFFORT_READ_SCALE.get(reasoning_effort or "low", 1.0)
+    "low", the same default Task._normalised gives the api backend), and never shorter than the time a
+    conservative output rate needs to write max_tokens: a non-streaming reply sends nothing until it is
+    whole, so a long answer must not read as stalled. The output-rate allowance is capped by the task's
+    remaining budget when one is given."""
+    base = READ_TIMEOUT_S * REASONING_EFFORT_READ_SCALE.get(reasoning_effort or "low", 1.0)
+    if not max_tokens or max_tokens <= 0:
+        return base
+    allowance = max_tokens / OUTPUT_TOKENS_PER_S
+    if rest_budget_s is not None:
+        allowance = min(allowance, rest_budget_s)
+    return max(base, allowance)
 
 
 DEAD_REST_BASE_S = 600.0        # first strike: ten minutes
@@ -1332,7 +1344,8 @@ class ChatClient:
         resamples = 0  # bounded re-rolls when the MODEL's output was refused (see _MODEL_OUTPUT_400)
         stalls = 0  # bounded retries of a read that never came back (see STALL_RETRIES)
         too_small: set[str] = set()  # keys whose account refused this request as over its limit (_ACCOUNT_LIMIT_413)
-        read_s = _read_timeout_s(body.get("reasoning_effort") or (body.get("output_config") or {}).get("effort"))
+        read_s = _read_timeout_s(body.get("reasoning_effort") or (body.get("output_config") or {}).get("effort"),
+                                 body.get("max_tokens") or body.get("max_completion_tokens"), rest_budget_s)
         req_timeout = httpx.Timeout(read_s, connect=30.0, pool=None)
         # Serialised once, here, so the egress receipt hashes the exact bytes that go on the wire.
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
