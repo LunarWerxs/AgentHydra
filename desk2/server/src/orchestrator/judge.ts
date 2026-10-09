@@ -50,6 +50,8 @@ export interface JudgeRequest {
   prompt: string
   /** The `orchestratorModel` setting: an alias or a full id. */
   model: string
+  /** The Claude config folder of the account the call signs in with; null is Desk's default ~/.claude login. */
+  configDir: string | null
   signal: AbortSignal
 }
 
@@ -170,12 +172,12 @@ export function parseJudgment(text: string): ParseResult {
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err)).slice(0, 200)
 
 /** One judgment: asks the model within JUDGE_TIMEOUT_MS (or `timeoutMs`), then reads its answer. Never throws. */
-export async function judgeChat(brief: JudgeBrief, model: string, ask: AskModel, timeoutMs = JUDGE_TIMEOUT_MS): Promise<JudgeResult> {
+export async function judgeChat(brief: JudgeBrief, model: string, ask: AskModel, timeoutMs = JUDGE_TIMEOUT_MS, configDir: string | null = null): Promise<JudgeResult> {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), timeoutMs)
   const timedOut = new Promise<never>((_, reject) => abort.signal.addEventListener('abort', () => reject(new Error(`no answer within ${Math.round(timeoutMs / 1000)} s`)), { once: true }))
   try {
-    const call = await Promise.race([ask({ brief, system: JUDGE_INSTRUCTIONS, prompt: promptOf(brief), model, signal: abort.signal }), timedOut])
+    const call = await Promise.race([ask({ brief, system: JUDGE_INSTRUCTIONS, prompt: promptOf(brief), model, configDir, signal: abort.signal }), timedOut])
     const parsed = parseJudgment(call.text)
     return parsed.ok ? { ok: true, judgment: parsed.judgment, resolved: call.resolved } : { ok: false, error: parsed.error, resolved: call.resolved }
   } catch (err) {
@@ -191,11 +193,15 @@ export function sdkAskModel(cwd: string, binary: () => string | null = () => nul
   return async (req) => {
     const abort = new AbortController()
     req.signal.addEventListener('abort', () => abort.abort(), { once: true })
+    // The account's own login, as a chat's engine runs (chat-runtime.ts): the default ~/.claude one's token expires.
+    const env: Record<string, string | undefined> = { ...process.env }
+    if (req.configDir) env.CLAUDE_CONFIG_DIR = req.configDir
+    else delete env.CLAUDE_CONFIG_DIR
     const options: Options = {
       model: req.model,
       systemPrompt: req.system,
       cwd,
-      env: pinHaikuModel({ ...process.env }),
+      env: pinHaikuModel(env),
       tools: [],
       allowedTools: [],
       canUseTool: async () => ({ behavior: 'deny', message: 'The orchestrator judge uses no tools.' }),

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Hono } from 'hono'
-import type { ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, ExternalSession, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorPlan } from '@shared/orchestrator'
 import type { ServerContext } from '../../src/context'
 import { createServer, type DeskServer } from '../../src/index'
@@ -96,21 +96,27 @@ type Answer = { verdict: 'fine' | 'nudge' | 'continue' | 'leave'; message?: stri
 function judge(answers: Record<string, Answer> = {}, fallback: Answer = { verdict: 'fine', why: 'it is moving' }) {
   const asked: string[] = []
   const models: string[] = []
-  const ask = async (req: { brief: { id: string }; model: string }): Promise<{ text: string; resolved: string | null }> => {
+  /** Each call's chat and the account folder it signed in with; a folder in `refused` has its login refused. */
+  const signedIn: [string, string | null][] = []
+  const refused = new Set<string>()
+  const ask = async (req: { brief: { id: string }; model: string; configDir: string | null }): Promise<{ text: string; resolved: string | null }> => {
     asked.push(req.brief.id)
     models.push(req.model)
+    signedIn.push([req.brief.id, req.configDir])
+    if (req.configDir && refused.has(req.configDir)) throw new Error('Claude Code returned an error result: Failed to authenticate: OAuth session expired and could not be refreshed')
     const a = answers[req.brief.id] ?? fallback
     if (a === 'error') throw new Error('model down')
     return { text: JSON.stringify({ verdict: a.verdict, message: a.message ?? '', why: a.why ?? 'the reason' }), resolved: 'claude-opus-5-5' }
   }
-  return { asked, models, ask }
+  return { asked, models, signedIn, refused, ask }
 }
 
 /** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
  *  each message handed to the send queue and not yet delivered (a test delivers them by emptying it). `onQueue` runs
  *  while the queue takes a message. */
-function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS, model = judge()): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
+function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS, model = judge(), accounts?: AccountInfo[]): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
+  if (accounts) app.get('/api/accounts', (c) => c.json(accounts))
   const sent: string[] = []
   const queued: { chatId: string; text: string }[] = []
   app.use('*', async (c, next) => {
@@ -303,7 +309,7 @@ test('the judge is asked about at most three chats at once', async () => {
     return { text: JSON.stringify({ verdict: 'fine', message: '', why: 'moving' }), resolved: null }
   }
   const errors = [0, 1, 2, 3, 4].map((i): [ChatSummary, TranscriptItem[]] => [chat(`e${i}`, { status: 'error', lastError: 'boom' }), []])
-  const { app } = desk(undefined, errors, { asked: [], models: [], ask: slow })
+  const { app } = desk(undefined, errors, { asked: [], models: [], signedIn: [], refused: new Set(), ask: slow })
   await arm(app, true)
   expect(asked.filter((id) => id.startsWith('e'))).toHaveLength(5)
   expect(most).toBe(3)
@@ -354,6 +360,22 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect(plan.counts).toEqual({ 'answer-question': 3, 'answer-need': 3, 'retry-error': 2, 'resume-after-limit': 1, watch: 4, leave: 4, done: 2 })
   expect([plan.mode, plan.acts]).toEqual(['shadow', []])
   expect(sent).toEqual([])
+})
+
+test("the judge signs in with the least used managed account nobody is using, and a second when that one's login is refused", async () => {
+  // Desk's default ~/.claude login's token expires: every judgment failed on it (2026-10-09).
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const account = (id: string, configDir: string | null, pct: number, inUse = false): AccountInfo => ({
+    id, label: id, configDir, email: null, plan: 'Pro', signedIn: true, fiveHourPct: pct, weeklyPct: pct, fiveHourResetsAt: null, weeklyResetsAt: null, inUse
+  })
+  const dir = (id: string): string => `C:/Users/me/.claude-instances/${id}`
+  const accounts = [account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)]
+  const model = judge({ error: { verdict: 'continue', message: 'Pick up where you stopped.' } })
+  model.refused.add(dir('a'))
+  const { app, queued } = desk(undefined, CHATS, model, accounts)
+  await arm(app, true)
+  expect(model.signedIn.filter(([id]) => id === 'error').map(([, d]) => d)).toEqual([dir('a'), dir('b')])
+  expect(queued.map((q) => q.chatId)).toEqual(['error'])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {

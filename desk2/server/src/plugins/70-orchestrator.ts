@@ -13,14 +13,16 @@
 // README "What Desk 2 adds", the orchestrator.
 
 import type { Hono } from 'hono'
-import type { ChatSummary, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
 import type { ServerContext } from '../context'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { DIAGNOSTICS_API } from '../engine/diagnostics'
 import { afterGivingUp, decide } from '../orchestrator/act'
 import { askCreaitor, creaitorTool } from '../orchestrator/creaitor'
-import { askOf, judgeChat, recentText, sdkAskModel, type AskModel, type JudgeBrief } from '../orchestrator/judge'
+import { DEFAULT_ACCOUNT } from '../bridge/accounts'
+import { pickHealthy } from '../engine/chat-manager'
+import { askOf, JUDGE_TIMEOUT_MS, judgeChat, recentText, sdkAskModel, type AskModel, type JudgeBrief, type JudgeResult } from '../orchestrator/judge'
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank } from '../orchestrator/plan'
 import { notOwnPage } from '../own-page'
@@ -43,6 +45,8 @@ const ACTS_KEPT = 50
 const HOUR_MS = 3_600_000
 /** Judgments kept for the page. */
 const JUDGED_KEPT_MS = 24 * HOUR_MS
+/** A judge error that is the account's login being refused, worth one try on another account. */
+const LOGIN_REFUSED = /authenticat|oauth|log ?in|sign(?:ed)? ?in|credential/i
 
 /** A JSON reply whose body is still being worked out, kept open with a space every KEEPALIVE_MS. */
 function slowJson(work: Promise<unknown>): Response {
@@ -205,11 +209,29 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return error ?? (c.kind === 'error' ? await post(`/api/queue/chats/${id}/resume`) : null)
   }
 
+  /** One judgment, signed in with the healthiest signed-in account AgentHydra lists that nobody is using
+   *  (chat-manager's pickHealthy), and a second one when the first's login is refused: the default ~/.claude login's
+   *  token expires (every judgment failed "OAuth session expired" on it, 2026-10-09). With no account listed, the
+   *  default login is what there is, and its refusal shows on the row. */
+  async function judgeOnAnAccount(c: Candidate, model: string): Promise<JudgeResult> {
+    const accounts = ((await get<AccountInfo[]>('/api/accounts')) ?? []).filter((a) => !a.inUse && a.id !== DEFAULT_ACCOUNT.id)
+    const tried: string[] = []
+    let result: JudgeResult | null = null
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const account = pickHealthy(accounts, tried)
+      if (!account && tried.length) break
+      if (account) tried.push(account.id)
+      result = await judgeChat(briefOf(c, Date.now()), model, askModel(), JUDGE_TIMEOUT_MS, account?.configDir ?? null)
+      if (result.ok || !account || !LOGIN_REFUSED.test(result.error)) break
+    }
+    return result!
+  }
+
   /** Asks the judge about one chat and carries out its verdict within the hard limits. A failed call sends nothing and
    *  shows its error on the row; there is no fallback text. */
   async function judgeOne(c: Candidate): Promise<void> {
     const model = ctx.settings().orchestratorModel
-    const result = await judgeChat(briefOf(c, Date.now()), model, askModel())
+    const result = await judgeOnAnAccount(c, model)
     const at = Date.now()
     if (result.resolved) resolved = { setting: model, model: result.resolved }
     if (!result.ok) {
