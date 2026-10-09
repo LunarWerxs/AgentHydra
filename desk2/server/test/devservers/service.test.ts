@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { type DevServers, DevServerError } from '../../src/devservers/contract'
-import { readServiceFile, resumeFilePath, serviceAlreadyRunning, serviceFilePath, serviceLockPath, startService, takeServiceLock, type RunningService } from '../../src/devservers/service'
+import { isThrowawayHome, readServiceFile, resumeFilePath, serviceAlreadyRunning, serviceFilePath, serviceLockPath, startService, takeServiceLock, type RunningService } from '../../src/devservers/service'
 import type { ProcInfo } from '../../src/localhost/ports'
 
 const temps: string[] = []
@@ -290,4 +290,11 @@ test('a live service is told apart from a file a dead one left behind', async ()
   expect(await serviceAlreadyRunning(b.home)).toBe(false)
   rmSync(serviceFilePath(b.home))
   expect(await serviceAlreadyRunning(b.home)).toBe(false)
+})
+
+test('a home under the temp folder is throwaway; the real Desk home is not', () => {
+  expect(isThrowawayHome(join(tmpdir(), 'desk2-header-fit-home-abc'))).toBe(true)
+  expect(isThrowawayHome(join(tmpdir(), 'x') + '/')).toBe(true)
+  expect(isThrowawayHome(join(process.env.USERPROFILE ?? '/home/u', '.hydra-desk-2'))).toBe(false)
+  expect(isThrowawayHome(tmpdir() + '-sibling')).toBe(false)
 })

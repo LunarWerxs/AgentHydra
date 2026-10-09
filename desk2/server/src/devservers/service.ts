@@ -12,8 +12,8 @@
 
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { uptime } from 'node:os'
-import { join } from 'node:path'
+import { tmpdir, uptime } from 'node:os'
+import { join, resolve } from 'node:path'
 import { type Context, Hono } from 'hono'
 import { type DevWebAlertRuleInput, type DevWebProcessSpec, type DevWebScanPreset, type DevWebSettings, projectForCwd } from '@shared/devwebui'
 import { Localhost, type LocalhostDeps } from '../localhost/servers'
@@ -475,6 +475,23 @@ async function main(): Promise<void> {
   const service = await startService({ home, devServers: dev, localhost: { deskPort, deskPid } })
   console.log(`[devservers] service ${process.pid} listening on 127.0.0.1:${service.file.port}`)
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK'] as const) process.on(sig, () => void service.shutdown(false))
+  // A throwaway home (a test's Desk under the temp folder) dies with its Desk: nothing will ever start that Desk again,
+  // so its service would idle forever (six were found 2026-10-09). The real home outlives Desk restarts and is left alone.
+  if (deskPid && isThrowawayHome(home)) {
+    const watch = setInterval(() => {
+      if (!pidAlive(deskPid)) {
+        clearInterval(watch)
+        console.log(`[devservers] desk ${deskPid} of throwaway home is gone; stopping`)
+        void service.shutdown(false)
+      }
+    }, 30_000)
+  }
+}
+
+/** True for a home under the OS temp folder, where only tests put a Desk. */
+export const isThrowawayHome = (home: string): boolean => {
+  const norm = (p: string) => resolve(p).replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '') + '/'
+  return norm(home).startsWith(norm(tmpdir()))
 }
 
 if (import.meta.main) await main()
