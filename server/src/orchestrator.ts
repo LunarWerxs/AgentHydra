@@ -297,6 +297,34 @@ async function waitForLockToClear(
   return !liveRun(script)
 }
 
+/** The scripts a restart can stop half-way through a move: the chat imported onto its new account
+ *  and still unarchived on the old one, which nothing repairs until `migrate_reconcile --finish`. */
+const MOVE_SCRIPTS = ['migrate_batch', 'migrate_chat'] as const
+
+/**
+ * Why a restart must wait, or null. `force` is a person's word to restart anyway.
+ *
+ * ⛔ A RESTART CUT A DRAIN HALF-WAY (2026-10-08). A peer session restarted the daemon 23 minutes
+ * into a 9-chat migrate_batch; its python child died with the daemon, two chats were left landed
+ * and still unarchived on the source, and seven were never tried. Only a hand-run migrate_reconcile
+ * found them. Other toolbox runs are not held to this: a restart past them loses no half-done move.
+ */
+export function moveRestartRefusal(force: boolean, now = Date.now()): string | null {
+  if (force) return null
+  const moves = MOVE_SCRIPTS.flatMap((script) => {
+    const run = liveRun(script)
+    return run
+      ? [`${script} (started ${Math.max(0, Math.round((now - run.started) / 60_000))} min ago)`]
+      : []
+  })
+  if (moves.length === 0) return null
+  return (
+    `${moves.join(' and ')} is moving chats through this daemon, and a restart can stop a move ` +
+    'half-way (the chat on its new account and still unarchived on the old one). Wait for it to ' +
+    'finish, or pass force:true and then run migrate_reconcile --finish.'
+  )
+}
+
 /** Is any toolbox script running through this daemon right now? The compiled updater asks
  *  before it replaces orchestrator/ (audit AH-08). Reaps stale entries first - an immortal lock
  *  must not block an update forever either. */
@@ -423,9 +451,11 @@ export function operationMissReason(now = Date.now()): OperationMiss {
         new Date(REGISTRY_STARTED_AT).toISOString() +
         ', less than an hour ago, and operation records live only in the daemon process that ' +
         'ran them. If your run began before that time, it was a DIFFERENT process: the record ' +
-        'did not survive the restart, and the run itself may well have finished (a detached ' +
-        "child outlives the daemon). Do NOT re-fire the act - read the toolbox's own ledger " +
-        'for what it did, and verify the effect directly.'
+        'did not survive the restart, and the run itself may have finished or died with the ' +
+        "daemon that ran it. Do NOT re-fire the act - read the toolbox's own ledger for what it " +
+        'did, and verify the effect directly. For a move (migrate_batch, migrate_chat), run ' +
+        'migrate_reconcile: it lists chats left half-moved, and migrate_reconcile --finish <id> ' +
+        'settles each.'
       : 'no such operation - this daemon has been up over an hour, so the id was either never ' +
         'minted here or its record has passed the one-hour retention.',
   }

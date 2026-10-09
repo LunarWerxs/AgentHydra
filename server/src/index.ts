@@ -136,7 +136,7 @@ import {
   setNotificationSettings,
 } from './notify-settings'
 import { openUi } from './open-ui'
-import { orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
+import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -543,6 +543,9 @@ app.post('/api/daemon/restart', async (c) => {
       },
       409,
     )
+  // A chat move running through the toolbox is work a restart can leave half-done (orchestrator.ts).
+  const moving = moveRestartRefusal(body.force === true)
+  if (moving) return c.json({ ok: false, error: moving, activeRuns: active }, 409)
   // Awaited: the answer is only true once the successor has reported in, which on a healthy box
   // takes about a second and on a failed spawn takes the handoff's whole deadline.
   const ok = await relaunchDaemon()

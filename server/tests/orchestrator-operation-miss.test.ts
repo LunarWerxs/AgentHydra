@@ -35,7 +35,10 @@ test('it forbids the dangerous move by name rather than leaving it open', () => 
   const miss = operationMissReason()
   expect(miss.error).toContain('Do NOT re-fire')
   expect(miss.error.toLowerCase()).toContain('ledger')
-  expect(miss.error).toContain('may well have finished')
+  // Finished OR died with the daemon (2026-10-08: a migrate_batch did not outlive one), so a move
+  // gets the tool that finds and settles what it left half-done.
+  expect(miss.error).toContain('may have finished or died')
+  expect(miss.error).toContain('migrate_reconcile --finish')
 })
 
 test('once the daemon is older than the retention window, a miss is an unknown id again', () => {

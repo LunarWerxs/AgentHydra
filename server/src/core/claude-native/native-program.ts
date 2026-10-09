@@ -520,6 +520,27 @@ function nativeManagerIsBusy(manager: any, sessionId: string): boolean {
   )
 }
 
+/** Which of the busy flags above are set, by name, so a refusal says what held it (2026-10-08: a
+ *  move leftover with no engine was refused as busy, and nothing said which flag was set). */
+function nativeBusyFlags(manager: any, before: any, session: any): string[] {
+  const id = session.sessionId
+  const flags: Record<string, unknown> = {
+    isRunning: before.isRunning,
+    isStopping: before.isStopping,
+    starting: before.starting,
+    losableWork: before.losableWork,
+    pendingInput: before.pendingInput,
+    pendingPermission: before.pendingPermission,
+    pendingDialog: before.pendingDialog,
+    startResumeInFlight: session.startResumeInFlight,
+    parked: manager.parked?.has?.(id),
+    moveInFlight: manager.movesInFlight?.has?.(id),
+    deleting: manager.deletingSessionIds?.has?.(id),
+    sideSessionStarting: (manager.sideSessionStartsInFlight?.get?.(id) ?? 0) > 0,
+  }
+  return Object.keys(flags).filter((name) => !!flags[name])
+}
+
 function nativeArchivePreconditions(
   found: any,
   session: any,
@@ -536,7 +557,9 @@ function nativeArchivePreconditions(
     nativeSessionIsBusy(before, session) ||
     nativeManagerIsBusy(found.manager, session.sessionId)
   ) {
-    nativeRefuse('session has live, pending, or transitioning work')
+    nativeRefuse(
+      `session has live, pending, or transitioning work (${nativeBusyFlags(found.manager, before, session).join(', ')})`,
+    )
   }
   if (before.cascade.length) nativeRefuse('archive would cascade to other sessions')
 }
@@ -1032,6 +1055,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeRequireArchiveRequest,
     nativeSessionIsBusy,
     nativeManagerIsBusy,
+    nativeBusyFlags,
     nativeArchivePreconditions,
     nativeArchiveFlags,
     nativeBystanderChanges,
