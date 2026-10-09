@@ -59,6 +59,8 @@ const HOUR_MS = 3_600_000
 const JUDGED_KEPT_MS = 24 * HOUR_MS
 /** A judge error that is the account's login being refused, worth one try on another account. */
 const LOGIN_REFUSED = /authenticat|oauth|log ?in|sign(?:ed)? ?in|credential/i
+/** Accounts one judgment tries, moving on only when a login is refused. */
+const JUDGE_ACCOUNT_TRIES = 3
 
 /** A JSON reply whose body is still being worked out, kept open with a space every KEEPALIVE_MS. */
 function slowJson(work: Promise<unknown>): Response {
@@ -226,16 +228,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return error ?? (c.kind === 'error' ? await post(`/api/queue/chats/${id}/resume`) : null)
   }
 
-  /** One judgment, signed in with the healthiest signed-in account AgentHydra lists that nobody is using
-   *  (chat-manager's pickHealthy), and a second one when the first's login is refused: the default ~/.claude login's
-   *  token expires (every judgment failed "OAuth session expired" on it, 2026-10-09). With no account listed, the
-   *  default login is what there is, and its refusal shows on the row. */
+  /** One judgment, signed in with any signed-in account AgentHydra lists that has room, whichever account the judged
+   *  chats run on (owner, 2026-10-09: "just use ... anything that's available"): one nobody is using first, the least
+   *  used first (chat-manager's pickHealthy), then a busy one, and the next when a login is refused. The default
+   *  ~/.claude login comes last: its token expires (every judgment failed "OAuth session expired" on it, 2026-10-09).
+   *  With no account listed, the default login is what there is, and its refusal shows on the row. */
   async function judgeOnAnAccount(c: Candidate, model: string): Promise<JudgeResult> {
-    const accounts = ((await get<AccountInfo[]>('/api/accounts')) ?? []).filter((a) => !a.inUse && a.id !== DEFAULT_ACCOUNT.id)
+    const accounts = (await get<AccountInfo[]>('/api/accounts')) ?? []
+    const idle = accounts.filter((a) => !a.inUse && a.id !== DEFAULT_ACCOUNT.id)
     const tried: string[] = []
     let result: JudgeResult | null = null
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const account = pickHealthy(accounts, tried)
+    for (let attempt = 0; attempt < JUDGE_ACCOUNT_TRIES; attempt++) {
+      const account = pickHealthy(idle, tried) ?? pickHealthy(accounts, tried)
       if (!account && tried.length) break
       if (account) tried.push(account.id)
       const now = Date.now()

@@ -362,20 +362,26 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect(sent).toEqual([])
 })
 
-test("the judge signs in with the least used managed account nobody is using, and a second when that one's login is refused", async () => {
-  // Desk's default ~/.claude login's token expires: every judgment failed on it (2026-10-09).
+test("the judge signs in with the least used account that has room, one nobody is using first, and the next when a login is refused", async () => {
+  // Desk's default ~/.claude login's token expires: every judgment failed on it (2026-10-09). Any account with room
+  // will do, busy or not (owner, 2026-10-09): with every managed account busy, the default login stays last.
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
   const account = (id: string, configDir: string | null, pct: number, inUse = false): AccountInfo => ({
     id, label: id, configDir, email: null, plan: 'Pro', signedIn: true, fiveHourPct: pct, weeklyPct: pct, fiveHourResetsAt: null, weeklyResetsAt: null, inUse
   })
   const dir = (id: string): string => `C:/Users/me/.claude-instances/${id}`
-  const accounts = [account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)]
-  const model = judge({ error: { verdict: 'continue', message: 'Pick up where you stopped.' } })
-  model.refused.add(dir('a'))
-  const { app, queued } = desk(undefined, CHATS, model, accounts)
-  await arm(app, true)
-  expect(model.signedIn.filter(([id]) => id === 'error').map(([, d]) => d)).toEqual([dir('a'), dir('b')])
-  expect(queued.map((q) => q.chatId)).toEqual(['error'])
+  const cases: [AccountInfo[], string[], string[]][] = [
+    [[account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)], [dir('a')], [dir('a'), dir('b')]],
+    [[account('default', null, 0), account('x', dir('x'), 30, true), account('y', dir('y'), 10, true), account('full', dir('full'), 100, true)], [dir('y')], [dir('y'), dir('x')]]
+  ]
+  for (const [accounts, refused, signedIn] of cases) {
+    const model = judge({ error: { verdict: 'continue', message: 'Pick up where you stopped.' } })
+    for (const d of refused) model.refused.add(d)
+    const { app, queued } = desk(undefined, CHATS, model, accounts)
+    await arm(app, true)
+    expect(model.signedIn.filter(([id]) => id === 'error').map(([, d]) => d)).toEqual(signedIn)
+    expect(queued.map((q) => q.chatId)).toEqual(['error'])
+  }
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {

@@ -23,6 +23,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Settings > General > Watching chats (Opus by default, the newest one) what each chat needs next: nothing, a
   check-in note, a continue, or a person. Its limits stay in code, and a failed call sends nothing. It reads the
   newest slice of a chat first (about 1% of it) and asks for a bigger one (3%, then 5%) only when it cannot tell.
+  It signs in with any of your accounts that has room, an idle one first, so it keeps working whichever account
+  the chats it watches run on.
 
 ## [2.0.3] - 2026-10-09
 
