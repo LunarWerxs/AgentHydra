@@ -153,3 +153,19 @@ test('a CliMayte chat moved to another account in the same session: the tasks of
   expect(taskOf(s.m.listItems(chat.id), 't1')?.status).toBe('stopped')
   expect(s.m.get(chat.id).backgroundActive ?? 0).toBe(0)
 })
+
+test('a CliMayte chat continued in a fresh session: the old session\'s notice of a task that ended with it is not appended again', async () => {
+  const s = setup()
+  const { chat, row } = await workerChat(s)
+  Object.assign(row, { accountId: 'cli-168', account: '#168 b', sessions: ['worker-session-1'], sessionId: 'worker-session-2' })
+  s.b.state.workerItems['worker-session-2'] = []
+  await s.m.syncWorkers(chat.id)
+  expect(taskOf(s.m.listItems(chat.id), 't1')).toMatchObject({ status: 'stopped', summary: TASK_SESSION_ENDED })
+  const before = s.m.store.loadItems(chat.id).filter((i) => i.kind === 'task' && i.taskId === 't1').length
+
+  // The old session's file still answers, now with its notice (a stale, older copy of the task).
+  s.b.state.workerItems['worker-session-1'] = [{ ...task('t1', 'Land the almanac note', 3), status: 'completed', durationMs: 2000 }]
+  await s.m.syncWorkers(chat.id)
+  expect(taskOf(s.m.listItems(chat.id), 't1')).toMatchObject({ status: 'stopped', summary: TASK_SESSION_ENDED })
+  expect(s.m.store.loadItems(chat.id).filter((i) => i.kind === 'task' && i.taskId === 't1').length).toBe(before)
+})

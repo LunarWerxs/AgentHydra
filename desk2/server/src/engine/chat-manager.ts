@@ -1494,8 +1494,8 @@ export class ChatManager {
     for (const item of unchanged ? [] : items) {
       const sig = signature(item)
       if (emitted.get(item.id) === sig) continue
-      // The ended session's JSONL still says 'running': the settled item stays.
-      if (item.kind === 'task' && item.status === 'running' && e.ended?.has(item.id)) continue
+      // The ended session's JSONL still says 'running' or answers its old notice: the settled item stays.
+      if (item.kind === 'task' && e.ended?.has(item.id)) continue
       if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
       emitted.set(item.id, sig)
       if (item.kind === 'user' && e.sent?.length) {
