@@ -6,13 +6,18 @@
 // GRANULARITY, per provider, is whatever the provider's own record allows:
 //  * Codex: one event per counted turn (a delta of the running total), id `codex:<rollout>:<n>`. The
 //    ordinal, not a byte offset, is the id, so two rollouts that replay the same session counter (the
-//    live and archived copies of one file) upsert onto each other instead of adding. Subagent
-//    rollouts are skipped for the same reason analytics.ts takes the largest rollout: they replay the
-//    session-wide counter.
+//    live and archived copies of one file, or a copy packed into `archived_sessions/_packed/*.zip`)
+//    upsert onto each other instead of adding. A SUBAGENT rollout keeps a counter of its own (measured
+//    2026-10-09: a parent that ended at 89.9M had four subagents that spent 134M between them, none of it
+//    in the parent's counter), so its turns count, as agent `subagent`. Only the parent history it copied
+//    at the spawn is skipped: the lines before `subagent_history_start_ordinal`, or, in a rollout from
+//    before Codex wrote that field, the lines stamped with the spawn's own timestamp.
 //  * DSH: one event per assistant message that reported usage, id `dsh:<session>:<row>`.
-//  * OpenCode: one event per SESSION. Its session row is already totalled and carries no per-call
-//    clock, so the session's own last-write time places it, exactly as analytics.ts does.
-//  * Hermes: one event per (session, model), placed at the session's newest use, for the same reason.
+//  * OpenCode: one event per model call, id `opencode:<tool>:<part>`: each `step-finish` part carries its
+//    own step's tokens and cost, placed at the part's own time. (The session row's totals, which the first
+//    version took as ONE call at the session's last write, made 3,443 calls in a week read as 6.)
+//  * Hermes: one event per (session, model), placed at the session's newest use: below the per-model
+//    aggregate it keeps no per-call clock.
 // `billed_usd` is only ever OpenCode's own cost. Everything else is list-priced through pricing.ts.
 import { Database } from 'bun:sqlite'
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs'
@@ -30,14 +35,19 @@ import {
   CodexUsageReader,
   emptyModelSpend,
   openCodeModelName,
-  openCodeSpend,
   weighTurnCounts,
 } from '../usage-foreign'
 import { hswarmLedgerPath, ingestHswarm } from './ingest-hswarm'
 import { type KitStore, type UsageEventInput, yieldLoop } from './store'
+import { type ZipEntry, zipEntries, zipEntryStream } from './zip-entries'
 
-/** Bump to make every cursor read its file again (a parser fix that changes what is extracted). */
-export const FOREIGN_INGEST_VERSION = 1
+/** Bump to make every cursor read its file again (a parser fix that changes what is extracted).
+ *  2: subagent rollouts count (their skip states are read again) and OpenCode is read per call. */
+export const FOREIGN_INGEST_VERSION = 2
+
+/** Packed-rollout bytes (uncompressed) one sweep reads at most: ~10 GB of history is taken over many
+ *  sweeps instead of holding one for minutes. Each entry finishes once started; its cursor marks it read. */
+const PACKED_BYTES_PER_SWEEP = 512 * 1024 * 1024
 
 export interface ForeignSources {
   /** Rollout roots (`sessions/`, `archived_sessions/`) with the instance that owns them, if any. */
@@ -105,9 +115,19 @@ export async function ingestForeign(
     opts.onFile?.(source, path, n)
   }
   const touched = new Set<string>()
-  for (const r of sources.codex)
-    for (const path of codexRollouts(r.root))
-      done('codex', path, await ingestCodexFile(store, path, r.instance, opts, touched))
+  let packedBudget = PACKED_BYTES_PER_SWEEP
+  for (const r of sources.codex) {
+    for (const path of codexRollouts(r.root)) {
+      const src = fileRollout(path)
+      if (src) done('codex', path, await ingestCodexRollout(store, src, r.instance, opts, touched))
+    }
+    for (const src of packedRollouts(r.root)) {
+      if (packedBudget <= 0) break // the rest waits for the next sweep
+      const n = await ingestCodexRollout(store, src, r.instance, opts, touched)
+      if (n !== null) packedBudget -= src.stat.size
+      done('codex', src.key, n)
+    }
+  }
   await reconcileCodex(store, touched, opts)
   for (const o of sources.opencode) done('opencode', o.dbPath, await ingestOpenCode(store, o, opts))
   for (const h of sources.hermes) done('hermes', h.dbPath, await ingestHermes(store, h, opts))
@@ -249,9 +269,20 @@ interface CodexPending extends Counts {
   ts: number
 }
 
+/** Where a subagent rollout's own history starts. The lines before it are the parent's, copied at the
+ *  spawn: they move the running total and count nothing. `until` is Codex's own ordinal (a line index,
+ *  the header being 0); a rollout written before Codex had it stamps every copied line with `spawnTs`. */
+interface CopiedPrefix {
+  until: number | null
+  spawnTs: string | null
+}
+
 interface CodexFileState {
-  skip?: boolean
   session: string
+  /** Set on a subagent rollout. */
+  copy?: CopiedPrefix
+  /** Lines read so far, the header included: the next line's index. */
+  line?: number
   /** The rollout's own key (see rolloutKey): the id and `ref` of every event it wrote. */
   ref?: string
   /** Everything counted so far, all kinds: how one rollout of a session is ranked against another. */
@@ -265,26 +296,84 @@ interface CodexFileState {
   pending: CodexPending[]
 }
 
-function codexRollouts(root: string): string[] {
+const ROLLOUT_NAME = /(^|[\\/])rollout-[^\\/]*\.jsonl$/
+
+/** Files under `root` whose relative path matches `name`; [] when the root is missing or unreadable. */
+function filesUnder(root: string, name: RegExp): string[] {
   if (!existsSync(root)) return []
   try {
     return (readdirSync(root, { recursive: true }) as string[])
-      .filter((rel) => /(^|[\\/])rollout-[^\\/]*\.jsonl$/.test(rel))
+      .filter((rel) => name.test(rel))
       .map((rel) => join(root, rel))
   } catch {
     return []
   }
 }
 
+const codexRollouts = (root: string): string[] => filesUnder(root, ROLLOUT_NAME)
+
+type Lines = AsyncGenerator<{ text: string; end: number }>
+
+/** One rollout to read: a file, or an entry of a packed zip, keyed `<zip>!<entry>`. */
+interface RolloutSource {
+  key: string
+  stat: { size: number; mtime: number }
+  lines: (offset: number) => Lines
+}
+
+function fileRollout(path: string): RolloutSource | null {
+  const st = stat(path)
+  return st && { key: path, stat: st, lines: (offset) => linesFrom(path, offset) }
+}
+
+/** An entry is immutable while its zip is: its size is the uncompressed size, its mtime the zip's. */
+function packedRollout(zip: string, e: ZipEntry, zipMtime: number): RolloutSource {
+  return {
+    key: `${zip}!${e.name}`,
+    stat: { size: e.size, mtime: zipMtime },
+    lines: (offset) => packedLines(zip, e, offset),
+  }
+}
+
+async function* packedLines(zip: string, e: ZipEntry, offset: number): Lines {
+  const bytes = zipEntryStream(zip, e)
+  if (!bytes) return
+  for await (const line of splitLines(bytes, 0)) if (line.end > offset) yield line
+}
+
+/** Rollouts packed into zips under `root` (Codex homes keep them in archived_sessions/_packed). */
+function packedRollouts(root: string): RolloutSource[] {
+  const out: RolloutSource[] = []
+  for (const zip of filesUnder(root, /\.zip$/i)) {
+    const st = stat(zip)
+    if (!st) continue
+    for (const e of zipEntries(zip))
+      if (ROLLOUT_NAME.test(e.name)) out.push(packedRollout(zip, e, st.mtime))
+  }
+  return out
+}
+
+/** The rollout a saved key names (reconcileCodex reads a pruned winner again by it). */
+function rolloutByKey(key: string): RolloutSource | null {
+  const packed = /^(.*\.zip)!(.+)$/i.exec(key)
+  if (!packed) return fileRollout(key)
+  const [, zip = '', name] = packed
+  const st = stat(zip)
+  const e = st && zipEntries(zip).find((x) => x.name === name)
+  return st && e ? packedRollout(zip, e, st.mtime) : null
+}
+
 /** Complete lines from `offset`, each with the byte offset just past it. A trailing line without its
  *  newline is a write in progress and is left for the next sweep. */
-async function* linesFrom(
-  path: string,
-  offset: number,
-): AsyncGenerator<{ text: string; end: number }> {
+function linesFrom(path: string, offset: number): Lines {
+  return splitLines(createReadStream(path, { start: offset }), offset)
+}
+
+/** A byte stream that starts at `offset`, cut into complete lines. */
+async function* splitLines(chunks: AsyncIterable<Buffer>, offset: number): Lines {
   let carry: Buffer = Buffer.alloc(0)
   let pos = offset
-  for await (const chunk of createReadStream(path, { start: offset })) {
+  for await (const chunk of chunks) {
     carry = carry.length ? Buffer.concat([carry, chunk as Buffer]) : (chunk as Buffer)
     let nl = carry.indexOf(0x0a)
     let from = 0
@@ -312,7 +401,8 @@ function codexEvent(
     pc,
     instance,
     session: st.session,
-    agent: 'main',
+    agent: st.copy ? 'subagent' : 'main',
+    agent_id: st.copy ? (st.ref ?? null) : null,
     ref: st.ref,
     source: 'codex',
     model,
@@ -358,6 +448,8 @@ function codexResume(
 /** One rollout's read so far: what CodexFileState saves, plus the events still to write. */
 interface CodexRun {
   session: string
+  copy?: CopiedPrefix
+  line: number
   total: number
   n: number
   pending: CodexPending[]
@@ -365,7 +457,45 @@ interface CodexRun {
   events: UsageEventInput[]
 }
 
-/** One parsed line: the turn it closes becomes an event, and turns that waited for a model get theirs. */
+/** Only these lines move the counter or name the model: the rest, most of a rollout's bytes, are never parsed. */
+const COUNTED = /"(token_count|turn_context)"/
+
+function parseLine(text: string): unknown {
+  const t = text.trim()
+  if (!t) return null
+  try {
+    return JSON.parse(t)
+  } catch {
+    return null
+  }
+}
+
+function copiedPrefix(header: unknown): CopiedPrefix {
+  const h = header as { timestamp?: unknown; payload?: Record<string, unknown> } | null
+  const until = h?.payload?.subagent_history_start_ordinal
+  return {
+    until: typeof until === 'number' ? until : null,
+    spawnTs: typeof h?.timestamp === 'string' ? h.timestamp : null,
+  }
+}
+
+/** Whether the line at index `line` belongs to a subagent's copy of its parent's history. */
+function isCopied(copy: CopiedPrefix | undefined, line: number, ev: unknown): boolean {
+  if (!copy) return false
+  if (copy.until !== null) return line < copy.until
+  return copy.spawnTs !== null && (ev as { timestamp?: unknown }).timestamp === copy.spawnTs
+}
+
+/** The rollout's first parsed line names its session (the rollout key is the fallback) and says whether
+ *  it is a subagent's. */
+function readIdentity(run: CodexRun, ev: unknown, ref: string): void {
+  const ident = codexRolloutIdentity(ev, ref)
+  run.session = ident.sessionId
+  if (ident.isSubagent) run.copy = copiedPrefix(ev)
+}
+
+/** One parsed line: the turn it closes becomes an event, and turns that waited for a model get theirs.
+ *  A line of a subagent's copied prefix only moves the running total. */
 function codexLine(
   run: CodexRun,
   reader: CodexUsageReader,
@@ -373,11 +503,14 @@ function codexLine(
   ref: string,
   instance: string | null,
   pc: string | null,
+  copied: boolean,
 ): void {
   const turn = reader.push(ev)
+  if (copied) return
   const model = reader.state().model
   const shell: CodexFileState = {
     session: run.session,
+    copy: run.copy,
     ref,
     n: run.n,
     reader: reader.state(),
@@ -408,30 +541,26 @@ function codexLine(
   }
 }
 
-/** Returns events written, or null when the file was unchanged. */
-async function ingestCodexFile(
+/** Returns events written, or null when the rollout was unchanged. */
+async function ingestCodexRollout(
   store: KitStore,
-  path: string,
+  src: RolloutSource,
   instance: string | null,
   opts: ForeignIngestOptions,
   touched: Set<string>,
 ): Promise<number | null> {
-  const st0 = stat(path)
-  if (!st0) return null
-  const cur = store.getCursor(path)
+  const { key, stat: st0 } = src
+  const cur = store.getCursor(key)
   if (cursorUnchanged(cur, st0.size, st0.mtime)) return null
 
-  const { offset, state } = codexResume(store, path, cur, st0.size)
-  if (state?.skip) {
-    store.setCursor({ path, ...st0, offset: st0.size, version: FOREIGN_INGEST_VERSION })
-    return 0
-  }
-
+  const { offset, state } = codexResume(store, key, cur, st0.size)
   const pc = opts.pc ?? null
   const reader = new CodexUsageReader(state?.reader)
-  const ref = rolloutKey(path)
+  const ref = rolloutKey(key)
   const run: CodexRun = {
     session: state?.session ?? '',
+    copy: state?.copy,
+    line: state?.line ?? 0,
     total: state?.total ?? 0,
     n: state?.n ?? 0,
     pending: state?.pending ?? [],
@@ -439,53 +568,40 @@ async function ingestCodexFile(
     events: [],
   }
   let end = offset
-  let first = offset === 0
 
-  for await (const line of linesFrom(path, offset)) {
-    end = line.end
-    const text = line.text.trim()
-    if (!text) continue
-    let ev: unknown
-    try {
-      ev = JSON.parse(text)
-    } catch {
-      continue
-    }
-    if (first) {
-      first = false
-      // The rollout key is the file name's uuid, else the name: what the identity falls back on.
-      const ident = codexRolloutIdentity(ev, ref)
-      run.session = ident.sessionId
-      if (ident.isSubagent) {
-        const skipState: CodexFileState = {
-          skip: true,
-          session: run.session,
-          n: 0,
-          reader: reader.state(),
-          pending: [],
-        }
-        store.setMeta(stateKey(path), JSON.stringify(skipState))
-        store.setCursor({ path, ...st0, offset: st0.size, version: FOREIGN_INGEST_VERSION })
-        return 0
-      }
-    }
-    codexLine(run, reader, ev, ref, instance, pc)
+  for await (const l of src.lines(offset)) {
+    end = l.end
+    const index = run.line++
+    const ev = !run.session || COUNTED.test(l.text) ? parseLine(l.text) : null
+    if (ev === null) continue
+    if (!run.session) readIdentity(run, ev, ref)
+    codexLine(run, reader, ev, ref, instance, pc, isCopied(run.copy, index, ev))
   }
 
-  const { session, total, n, pending, events } = run
+  const { session, copy, line, total, n, pending, events } = run
   if (!session) {
     // Empty or header-less file: nothing to attribute yet, look again when it grows.
-    store.setCursor({ path, ...st0, offset: 0, version: FOREIGN_INGEST_VERSION })
+    store.setCursor({ path: key, ...st0, offset: 0, version: FOREIGN_INGEST_VERSION })
     return 0
   }
   await flush(store, events)
-  const next: CodexFileState = { session, ref, total, n, reader: reader.state(), pending }
-  store.setMeta(stateKey(path), JSON.stringify(next))
-  store.setMeta(totalKey(session, ref), String(total))
-  store.setMeta(pathKey(ref), path)
+  const next: CodexFileState = {
+    session,
+    copy,
+    line,
+    ref,
+    total,
+    n,
+    reader: reader.state(),
+    pending,
+  }
+  store.setMeta(stateKey(key), JSON.stringify(next))
+  // A subagent's counter is its own: it never competes with its session's main rollouts (reconcileCodex).
+  if (!copy) store.setMeta(totalKey(session, ref), String(total))
+  store.setMeta(pathKey(ref), key)
   if (instance) store.setMeta(`codex_inst:${ref}`, instance)
   touched.add(session)
-  store.setCursor({ path, ...st0, offset: end, version: FOREIGN_INGEST_VERSION })
+  store.setCursor({ path: key, ...st0, offset: end, version: FOREIGN_INGEST_VERSION })
   return events.length
 }
 
@@ -535,7 +651,8 @@ async function reconcileCodex(
       db.query('delete from meta where key = ?').run(stateKey(path))
       const again = new Set<string>()
       const inst = (store.getMeta(`codex_inst:${winner.ref}`) ?? null) || null
-      await ingestCodexFile(store, path, inst, opts, again)
+      const src = rolloutByKey(path)
+      if (src) await ingestCodexRollout(store, src, inst, opts, again)
     }
   }
   if (oldest !== Infinity) await store.rollupAsync(oldest)
@@ -602,27 +719,109 @@ async function ingestDshSession(
 
 // ---- OpenCode ----
 
-interface OpenCodeRow {
+/** One model call: a `step-finish` part, which carries that step's own tokens and cost. */
+interface OpenCodeStep {
+  rid: number
   id: string
-  directory: string | null
+  session_id: string
+  ts: number
   model: string | null
-  tokens_input: number | null
-  tokens_output: number | null
-  tokens_reasoning: number | null
-  tokens_cache_read: number | null
-  tokens_cache_write: number | null
+  provider: string | null
+  input: number | null
+  output: number | null
+  reasoning: number | null
+  cache_read: number | null
+  cache_write: number | null
   cost: number | null
-  time_updated: number | null
 }
 
-function providerOfOpenCode(raw: string | null): string {
+// Parts are read past the last rowid taken: a step-finish part is written once, when its step ends, and
+// the rowid search never touches the older parts' blobs (the store holds GBs of them).
+const OPENCODE_STEPS = `select p.rowid as rid, p.id, p.session_id, p.time_created as ts,
+    json_extract(m.data, '$.modelID') as model, json_extract(m.data, '$.providerID') as provider,
+    json_extract(p.data, '$.tokens.input') as input, json_extract(p.data, '$.tokens.output') as output,
+    json_extract(p.data, '$.tokens.reasoning') as reasoning,
+    json_extract(p.data, '$.tokens.cache.read') as cache_read,
+    json_extract(p.data, '$.tokens.cache.write') as cache_write, json_extract(p.data, '$.cost') as cost
+  from part p left join message m on m.id = p.message_id
+  where p.rowid > ? and json_extract(p.data, '$.type') = 'step-finish'
+  order by p.rowid`
+
+/** Set once the per-session events are gone: the per-call read replaces them, never adds to them. */
+const OPENCODE_PER_CALL = 'opencode_per_call'
+
+/**
+ * Once: drop what the per-session ingest wrote (each session's whole total as one call at its last write),
+ * raw rows, rollups and session ledger alike, with its cumulative bases. Another PC's imported rows stay.
+ * The cursors still carry the old version, so the per-call read that follows starts from the first part.
+ */
+function dropOpenCodeSessionTotals(store: KitStore): void {
+  if (store.getMeta(OPENCODE_PER_CALL)) return
+  const db = store.db
+  db.transaction(() => {
+    db.query(
+      "delete from meta where key like 'cum:opencode:%' or key like 'cumbase:opencode:%'",
+    ).run()
+    db.query("delete from usage_event where source = 'opencode'").run()
+    for (const table of ['usage_hour', 'usage_session', 'usage_session_settled'])
+      db.query(
+        `delete from ${table} where source = 'opencode' and pc not in (select pc from imported_pc)`,
+      ).run()
+    store.setMeta(OPENCODE_PER_CALL, '1')
+  })()
+}
+
+/** The steps past rowid `since`, or null when the store cannot be read (or predates the part table). */
+function readOpenCodeSteps(dbPath: string, since: number): OpenCodeStep[] | null {
+  let db: Database
   try {
-    const m = JSON.parse(raw ?? '') as { providerID?: unknown }
-    if (typeof m.providerID === 'string' && m.providerID) return m.providerID
+    db = new Database(dbPath, { readonly: true })
   } catch {
-    // not a JSON blob: the name carries no provider
+    return null
   }
-  return 'opencode'
+  try {
+    return db.query<OpenCodeStep, [number]>(OPENCODE_STEPS).all(since)
+  } catch {
+    return null
+  } finally {
+    db.close()
+  }
+}
+
+const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+function openCodeEvent(s: OpenCodeStep, tool: string, pc: string | null): UsageEventInput | null {
+  const c: Counts = {
+    input: count(s.input),
+    cacheRead: count(s.cache_read),
+    cacheWrite: count(s.cache_write),
+    output: count(s.output),
+  }
+  if (c.input + c.cacheRead + c.cacheWrite + c.output === 0) return null // nothing was spent
+  const model = openCodeModelName(
+    s.model && s.provider ? JSON.stringify({ id: s.model, providerID: s.provider }) : s.model,
+  )
+  return {
+    id: `opencode:${tool}:${s.id}`,
+    ts: s.ts,
+    pc,
+    session: s.session_id,
+    agent: 'main',
+    source: 'opencode',
+    model,
+    provider: s.provider || 'opencode',
+    input: c.input,
+    output: c.output,
+    cache_read: c.cacheRead,
+    cache_write_5m: c.cacheWrite,
+    // A subset of output, kept as its own column, never added to it.
+    reasoning: count(s.reasoning),
+    list_usd: listUsd(model, c, s.ts, c.input + c.cacheRead + c.cacheWrite),
+    // OpenCode's own price of the step, against whatever provider it routed to.
+    billed_usd: typeof s.cost === 'number' && Number.isFinite(s.cost) ? s.cost : null,
+    price_ver: PRICE_VER(),
+    weighted: weighTurnCounts(model, c),
+  }
 }
 
 async function ingestOpenCode(
@@ -632,67 +831,20 @@ async function ingestOpenCode(
 ): Promise<number | null> {
   const stamp = dbStamp(o.dbPath)
   if (!stamp) return null
+  dropOpenCodeSessionTotals(store)
   const cur = store.getCursor(o.dbPath)
   if (cursorUnchanged(cur, stamp.size, stamp.mtime)) return null
   const since = cur && cur.version === FOREIGN_INGEST_VERSION ? cur.offset : 0
-
-  let db: Database
-  try {
-    db = new Database(o.dbPath, { readonly: true })
-  } catch {
-    return null
-  }
-  let rows: OpenCodeRow[]
-  try {
-    rows = db
-      .query<OpenCodeRow, [number]>(
-        `select id, directory, model, tokens_input, tokens_output, tokens_reasoning,
-                tokens_cache_read, tokens_cache_write, cost, time_updated
-         from session where time_updated > ?`,
-      )
-      .all(since)
-  } catch {
-    return null // an older store without these columns
-  } finally {
-    db.close()
-  }
-
+  const steps = readOpenCodeSteps(o.dbPath, since)
+  if (!steps) return null
   const events: UsageEventInput[] = []
   let newest = since
-  for (const row of rows) {
-    if (typeof row.time_updated !== 'number') continue
-    newest = Math.max(newest, row.time_updated)
-    const spend = openCodeSpend(row)
-    const model = openCodeModelName(row.model)
-    const m = spend.byModel[model]
-    if (!m) continue // no tokens: nothing was spent
-    const c: Counts = {
-      input: m.input,
-      cacheRead: m.cacheRead,
-      cacheWrite: m.cacheCreation5m,
-      output: m.output,
-    }
-    events.push({
-      id: `opencode:${o.tool}:${row.id}`,
-      ts: row.time_updated,
-      pc: opts.pc ?? null,
-      session: row.id,
-      agent: 'main',
-      source: 'opencode',
-      model,
-      provider: providerOfOpenCode(row.model),
-      input: c.input,
-      output: c.output,
-      cache_read: c.cacheRead,
-      cache_write_5m: c.cacheWrite,
-      reasoning: spend.reasoning,
-      list_usd: listUsd(model, c, row.time_updated),
-      billed_usd: spend.costUsd,
-      price_ver: PRICE_VER(),
-      weighted: m.weighted,
-    })
+  for (const s of steps) {
+    newest = Math.max(newest, s.rid)
+    const ev = openCodeEvent(s, o.tool, opts.pc ?? null)
+    if (ev) events.push(ev)
   }
-  await flushCumulative(store, events)
+  await flush(store, events)
   store.setCursor({ path: o.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
   return events.length
 }
