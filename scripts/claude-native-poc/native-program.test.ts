@@ -368,6 +368,29 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     expect(await busy.run()).toMatchObject({ ok: false, dispatch: 'not-sent' })
     expect(busy.calls).toEqual([])
   })
+  // 2026-10-09: 2.31226.0 moved localLineageIds to manager.transcriptIdClaims, and every native
+  // action (archive, ultracode, pause) refused with "native method unavailable: localLineageIds".
+  test('2.31226.0 keeps lineage ids on transcriptIdClaims: archive and ultracode still work', async () => {
+    const moved = (h: ReturnType<typeof harness>) => {
+      const lineage = h.manager.localLineageIds
+      delete h.manager.localLineageIds
+      h.manager.transcriptIdClaims = { localLineageIds: lineage }
+    }
+    const h = harness()
+    moved(h)
+    expect(await h.run()).toMatchObject({ ok: true, dispatch: 'sent', changedFields: [] })
+    const u = harness()
+    moved(u)
+    u.manager.applyFlagSettings = async () => {}
+    expect(await u.run({ action: 'ultracode', effort: 'max' })).toMatchObject({ verified: true })
+    const gone = harness()
+    delete gone.manager.localLineageIds
+    expect(await gone.run()).toMatchObject({
+      ok: false,
+      dispatch: 'not-sent',
+      reason: 'NATIVE_REFUSAL: native method unavailable: localLineageIds',
+    })
+  })
   test('shared cwd is allowed when native server and HTML preview registries are empty', async () => {
     const h = harness()
     h.other.cwd = h.target.cwd

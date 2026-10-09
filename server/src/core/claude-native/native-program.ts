@@ -174,12 +174,12 @@ function nativeFindManager(env: any, pin: any): any {
     'archiveCascadeClosureOf',
     'losableWorkKind',
     'archiveSession',
-    'localLineageIds',
   ]
   for (const name of methods) {
     if (typeof manager[name] !== 'function') nativeRefuse(`native method unavailable: ${name}`)
   }
   nativePendingInput(manager)
+  nativeLineageIds(manager)
   return { manager, filename, loaded, hash, exportName: pin.managerExport }
 }
 
@@ -240,12 +240,26 @@ function nativePendingInput(manager: any): (session: any) => boolean {
   nativeRefuse('native method unavailable: hasPendingUserInput')
 }
 
+/**
+ * A chat's earlier CLI ids. Older builds keep the lookup on the manager; 2.31226.0 moved it to
+ * `manager.transcriptIdClaims`, and asking the manager for it refused every archive with
+ * "native method unavailable: localLineageIds" (2026-10-09: 15 moved chats left visible).
+ */
+function nativeLineageIds(manager: any): (session: any) => string[] {
+  if (typeof manager.localLineageIds === 'function')
+    return (session) => manager.localLineageIds(session)
+  const claims = manager.transcriptIdClaims
+  if (typeof claims?.localLineageIds === 'function')
+    return (session) => claims.localLineageIds(session)
+  nativeRefuse('native method unavailable: localLineageIds')
+}
+
 function nativeSnapshot(manager: any, session: any): any {
   return JSON.parse(
     JSON.stringify({
       sessionId: session.sessionId,
       cliSessionId: session.cliSessionId ?? null,
-      lineageIds: manager.localLineageIds(session),
+      lineageIds: nativeLineageIds(manager)(session),
       title: session.title ?? null,
       isArchived: session.isArchived === true,
       isRunning: session.isRunning === true,
@@ -1040,6 +1054,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeCheckIdentity,
     nativeStartingIds,
     nativePendingInput,
+    nativeLineageIds,
     nativeSnapshot,
     nativeSelect,
     nativeIdentity,
