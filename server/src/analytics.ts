@@ -683,7 +683,7 @@ async function* streamSessionLines(
   }
 }
 
-/**
+/*
  * Codex rollouts: the same totals, from a completely different log.
  *
  * Separate from the Claude walk above rather than bolted into it, because almost nothing is shared.

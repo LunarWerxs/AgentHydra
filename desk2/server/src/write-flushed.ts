@@ -1,5 +1,7 @@
 // A write that has reached the disk before the rename that publishes it.
 import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:fs'
+import { open, rename } from 'node:fs/promises'
+import { timedSync } from './engine/sync-block'
 
 /**
  * writeFileSync, then a flush to the disk. A temp file renamed over the real one without the flush can have its rename
@@ -8,13 +10,15 @@ import { closeSync, fsyncSync, openSync, renameSync, writeFileSync } from 'node:
  * writes its temp with this.
  */
 export function writeFlushed(path: string, data: string | Uint8Array, options?: { mode?: number }): void {
-  const fd = openSync(path, 'w', options?.mode)
-  try {
-    writeFileSync(fd, data)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
+  timedSync('writeFlushed', () => {
+    const fd = openSync(path, 'w', options?.mode)
+    try {
+      writeFileSync(fd, data)
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
+  })
 }
 
 /** A temp file written some other way (a copy), flushed to the disk before its rename. */
@@ -36,6 +40,10 @@ const RENAME_WINDOW_MS = 2000
  * then throws the last error.
  */
 export function renameOver(from: string, to: string): void {
+  timedSync('renameOver', () => renameWhenFree(from, to))
+}
+
+function renameWhenFree(from: string, to: string): void {
   const deadline = Date.now() + RENAME_WINDOW_MS
   for (;;) {
     try {
@@ -45,6 +53,32 @@ export function renameOver(from: string, to: string): void {
       const code = (err as NodeJS.ErrnoException).code
       if (!code || !RENAME_LOCKED.has(code) || Date.now() >= deadline) throw err
       Bun.sleepSync(20)
+    }
+  }
+}
+
+/** writeFlushed on the file thread pool: the server's thread runs on while the disk takes the write and the flush. */
+export async function writeFlushedAsync(path: string, data: string | Uint8Array, options?: { mode?: number }): Promise<void> {
+  const fh = await open(path, 'w', options?.mode)
+  try {
+    await fh.writeFile(data)
+    await fh.sync()
+  } finally {
+    await fh.close()
+  }
+}
+
+/** renameOver that waits a locked target out on a timer, not by holding the server's thread. */
+export async function renameOverAsync(from: string, to: string): Promise<void> {
+  const deadline = Date.now() + RENAME_WINDOW_MS
+  for (;;) {
+    try {
+      await rename(from, to)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (!code || !RENAME_LOCKED.has(code) || Date.now() >= deadline) throw err
+      await new Promise((r) => setTimeout(r, 20))
     }
   }
 }

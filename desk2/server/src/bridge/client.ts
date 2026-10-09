@@ -514,7 +514,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** CliMayte's totals; `since` (epoch ms) scopes them to the tasks since then, else every task on record. */
     corchTotals: (since?: number) =>
       get<AhCorchTotals>(`/api/corch/totals${since === undefined ? '' : `?since=${enc(new Date(since).toISOString())}`}`, STATS_TIMEOUT_MS),
-    /** HSwarm's own stats over the last `days` days; its proxy errors while HSwarm is down. */
+    /* HSwarm's own stats over the last `days` days; its proxy errors while HSwarm is down. */
     /** HSwarm's job list (verbose: each summary with `created`, `finished` and its caller key), newest first. */
     hswarmJobs: (limit: number) => get<AhHswarmJobs>(`/api/hswarm/api/jobs?limit=${limit}`, STATS_TIMEOUT_MS),
     hswarmStats: (days: number) => get<AhHswarmStats>(`/api/hswarm/api/stats?days=${days}`, STATS_TIMEOUT_MS),

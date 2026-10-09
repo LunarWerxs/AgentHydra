@@ -20,6 +20,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings2,
   Square,
   Terminal,
@@ -43,6 +44,7 @@ import FreeInstanceRows from '@/components/FreeInstanceRows.vue'
 import InstanceCard from '@/components/InstanceCard.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
+import InstanceSearch from '@/components/InstanceSearch.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
@@ -104,7 +106,7 @@ import {
   labelDisagreesWithAccount,
   shortDisplayName,
 } from '@/lib/instance-appearance'
-import type { InstanceFacts } from '@/lib/instance-filter'
+import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import {
   type InstanceColumnKey,
   type InstanceRowModel,
@@ -202,6 +204,8 @@ const {
   kindShown,
   setKindView,
   showKind,
+  searchQuery,
+  searching,
 } = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
@@ -214,6 +218,14 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   // refresh, which would make signed-in rows flicker out of a filtered table. loginUuid is read
   // straight off config.json with every list.
   signedIn: inst.loginUuid != null,
+  search: searchText(
+    inst.num,
+    inst.name,
+    inst.account?.name,
+    inst.account?.email,
+    inst.account?.planLabel,
+    'desktop',
+  ),
 })
 
 const tokenWindow = useDesktopTokenWindow()
@@ -781,6 +793,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
 const emptyState = computed(() =>
   shownRows.value > 0 || claudeSkeleton.value
     ? null
+    : allHiddenByFilter.value && searching.value
+      ? {
+          icon: Search,
+          title: t('instances.searchNoMatch', { query: searchQuery.value.trim() }),
+          hint: t('instances.searchNoMatchHint'),
+        }
     : allHiddenByFilter.value
       ? {
           icon: Funnel,
@@ -802,28 +820,34 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
-/** The header's + menu (InstanceSectionHeader): what the chosen kind can create. The Free view offers
- *  only Free accounts, Desktop and CLI only the providers switched on, and All both under their own
- *  headings (owner, 2026-10-08: the Free view's menu listed "New Claude instance" and a bare "Claude",
- *  two Claudes nobody could tell apart). Free's ids carry a prefix because its 'claude' would
+/** The header's + menu (InstanceSectionHeader): what the chosen kind can create. Each view offers
+ *  only its own kind: Desktop the apps switched on, CLI a CLI account, Free the Free accounts, and
+ *  All every kind under its own heading (owner, 2026-10-08: the Free view's menu listed "New Claude
+ *  instance" and a bare "Claude", two Claudes nobody could tell apart; 2026-10-09: the CLI view's
+ *  plus made a desktop instance). CLI and Free ids carry a prefix because their 'claude' would
  *  otherwise be Claude's id. */
 const FREE_CREATE_PREFIX = 'free:'
+const CLI_CREATE_ID = 'cli:claude'
 const createOptions = computed(() => {
   const desktop = createProviders.value.map((provider) => ({
     id: provider,
     provider,
     label: t(CREATE_LABEL[provider]),
   }))
+  const cli = showCliInstances.value
+    ? [{ id: CLI_CREATE_ID, provider: 'claude' as const, label: t('instances.createCli') }]
+    : []
   const free = FREE_PROVIDERS.map((p) => ({
     id: `${FREE_CREATE_PREFIX}${p}`,
     provider: freeLogo(p),
     label: t(p === 'claude' ? 'instances.createFreeClaude' : 'instances.createFreeChatgpt'),
   }))
+  if (kindView.value === 'desktop') return desktop
+  if (kindView.value === 'cli') return cli
   if (kindView.value === 'free') return free
-  if (kindView.value !== 'all' && desktop.length) return desktop
-  if (!desktop.length) return free
   return [
     ...desktop.map((o) => ({ ...o, section: t('instances.createSectionApps') })),
+    ...cli.map((o) => ({ ...o, section: t('instances.createSectionCli') })),
     ...free.map((o) => ({ ...o, section: t('instances.createSectionFree') })),
   ]
 })
@@ -838,6 +862,12 @@ async function onCreateFor(id: string) {
     showKind('free')
     await nextTick()
     freeRows.value?.openCreate(id.slice(FREE_CREATE_PREFIX.length))
+    return
+  }
+  if (id === CLI_CREATE_ID) {
+    showKind('cli')
+    await nextTick()
+    cliRows.value?.openCreate()
     return
   }
   const provider = id as Provider
@@ -1494,6 +1524,7 @@ onUnmounted(() => {
                screen, and only the QUOTA facet stands down with them (see
                composables/useInstanceFilter.ts). A dimmed or short table must always have the
                control that explains it visible in the same toolbar. -->
+          <InstanceSearch />
           <InstanceFilterMenu :present-plans="presentPlans" />
           <template v-if="cliShown">
             <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">

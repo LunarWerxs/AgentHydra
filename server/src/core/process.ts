@@ -35,7 +35,7 @@ export interface ProcTableRow {
   command: string
 }
 
-/**
+/*
  * Linux: the process table read straight from /proc, so it needs no `ps`.
  *
  * Both Unix listers below used to shell out to `ps`, and a Linux box without procps (a minimal

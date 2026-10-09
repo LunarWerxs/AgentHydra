@@ -436,7 +436,7 @@ export function instanceSessionMap(): Map<string, string> {
   return map
 }
 
-/**
+/*
  * The dispatch `instance_ref` ('desktop:<user-data-dir>') for the desktop instance a session
  * belongs to, or null when it belongs to none (a plain CLI transcript, or an instance dir that has
  * since been deleted).

@@ -51,7 +51,7 @@ import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { type CodexInstance, type CodexMovePlan, moveCodexChat, planCodexChatMove } from '@/lib/api'
 import { shortDisplayName } from '@/lib/instance-appearance'
-import type { InstanceFacts } from '@/lib/instance-filter'
+import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import { moveTargets } from '@/lib/move-chats'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
@@ -201,6 +201,14 @@ const filterFacts = (instance: CodexInstance): InstanceFacts => ({
   open: desktopEnabled.value ? instance.isDesktopRunning : null,
   plan: instance.account?.planLabel ?? null,
   signedIn: instance.loggedIn,
+  search: searchText(
+    instance.num,
+    instance.name,
+    instance.account?.name,
+    instance.account?.email,
+    instance.account?.planLabel,
+    'codex',
+  ),
 })
 
 // The sort compares time left, which is the reset instant minus one shared "now", so a frozen "now" gives

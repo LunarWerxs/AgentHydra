@@ -154,8 +154,8 @@ interface FileSearchOutcome {
 }
 
 /** Exported for the unit test: this is where the deadline is actually noticed, and the flag it
- *  raises is what stops an empty result from being read as "the text is not on this machine". */
-/** A foreign store is not JSONL, and streaming it line by line found NOTHING — every line failed
+ *  raises is what stops an empty result from being read as "the text is not on this machine".
+ *  A foreign store is not JSONL, and streaming it line by line found NOTHING — every line failed
  *  JSON.parse and was skipped, so a Cursor or Zed conversation containing the query reported a
  *  confident zero. Those rows were already in this sweep (only OpenCode is excluded above), so the
  *  miss was silent: the session was listed, searched, and declared clean. Ask its adapter instead,
@@ -519,7 +519,7 @@ function sortByActivity(results: SessionSearchResult[]): SessionSearchResult[] {
   return results.sort((a, b) => activityOf(b) - activityOf(a))
 }
 
-/**
+/*
  * Streams every transcript's BODY content looking for `query`, newest files first. Constant
  * memory per file (streamLines), a small worker pool for cross-file concurrency, a per-file
  * early-exit once a file is clearly a match, and an overall wall-clock budget so a huge

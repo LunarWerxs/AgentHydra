@@ -619,10 +619,11 @@ card is never swept into the archive lane.
 
 ### Touching the app: the route hierarchy (owner rule: no clicking around the screen)
 
-1. **⛔ There is NO native delivery route** (corrected 2026-09-01, the hard way): the
+1. **⛔ `/migrate` is NOT a delivery route** (corrected 2026-09-01, the hard way): the
    daemon's /migrate delivers no prompt - its own comment says so, and treating it as
    delivery KILLED and reimported every target chat dormant (message lost, zombie twin,
-   "Claude has crashed"). `/migrate` is for MIGRATIONS only.
+   "Claude has crashed"). `/migrate` is for MIGRATIONS only. Delivery's native route is the native send
+   (2026-10-09, below and docs/CLAUDE-DESKTOP-NATIVE-CONTROL.md), used for a `peer_only` caller.
 2. **The COMPOSER actuator is the one delivery channel** (accessibility-API control
    invocation: no cursor, no coordinates, no focus steal; the verify snippet proves the
    right chat before a character is typed). The composer send also BOOTS a dormant or
@@ -710,7 +711,7 @@ program needs:
 | `GET /api/claude-native/settings`, `PUT /api/claude-native/settings` | per-profile port, routing mode and `launchDebugger`; automatic startup applies on the next AgentHydra Open |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
-| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat. This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
+| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat; a `peer_only` caller (Desk's bridge, so the babysitter) goes first through the native send, the app's own peer delivery, which also starts a stopped chat (`route: "native"`). This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
 | `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
 
 The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;

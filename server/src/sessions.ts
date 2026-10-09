@@ -424,7 +424,7 @@ function parseSharedStoreMeta(tf: TranscriptFile, key: string): ScannedMeta {
   return rememberScan(tf, key, meta)
 }
 
-/**
+/*
  * Null when the transcript is gone by the time we read it, which is a NORMAL race rather than a
  * fault. `pruneUsageProbeTranscripts()` deletes the `/usage` probe's own transcripts on a timer, so
  * this daemon routinely removes files its own scanner is mid-way through enumerating; a user
@@ -880,7 +880,7 @@ function doneMarkMap(): Map<string, boolean> {
   return map
 }
 
-/**
+/*
  * Drop the rows that are somebody else's subagent.
  *
  * A subagent is an implementation detail of the turn that spawned it, not a conversation the user
@@ -906,7 +906,7 @@ function doneMarkMap(): Map<string, boolean> {
  * the one outcome this function may never produce. A chain that does not end at a real top-level
  * session is not ownership, so the row is kept and the user sees it.
  */
-/**
+/*
  * One conversation, one row, however many transcripts a compaction split it into.
  *
  * Claude Code does not keep writing to a session it has compacted: it opens a new file with a new
@@ -1142,7 +1142,13 @@ function transcriptMatchesInstance(
   return instance === 'other' ? false : known.instance === instance
 }
 
-/** Whether `f` (or a transcript it absorbed) is marked archived. */
+/**
+ * Whether `f` is marked archived, by the same Desktop record its row shows (deskMetaFor): its own id's, else
+ * the first transcript it absorbed that has one. Any absorbed record counting hid live chats from every
+ * `archived: 'hide'` list while their rows said unarchived: a chat continued from an archived one carries
+ * that one's record among its ids (2026-10-09, six live chats on one account; the sidebar showed their ids
+ * for titles and the cloud list left them out).
+ */
 function transcriptArchivedFlag(
   f: TranscriptFile,
   idsOf: (f: TranscriptFile) => string[],
@@ -1150,7 +1156,12 @@ function transcriptArchivedFlag(
 ): boolean {
   // Another PC's chat is archived when that PC archived it, whatever a copy here says.
   if (f.remote) return chatsFromElsewhere().get(f.session_id)?.archived ?? false
-  return f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)
+  if (f.archived) return true
+  for (const id of idsOf(f)) {
+    const meta = mmap.get(id)
+    if (meta) return meta.archived
+  }
+  return false
 }
 
 /** Whether `f` (or a transcript it absorbed) has a queue row. */

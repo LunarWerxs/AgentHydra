@@ -2,6 +2,7 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
+import { remoteActiveCounts } from '../climayte-remote'
 import { cliAccountUuid } from '../core/account-tokens'
 import {
   associateCliInstance,
@@ -542,6 +543,9 @@ app.get('/api/cli-instances', async (c) => {
   // workers included): the CLI table's per-account count (owner, 2026-09-30).
   const live = climayteLiveReadings()
   const limits = climayteLimitWalls()
+  // The other PC's live CliMayte workers per account (keyed by the CLI instance id, as newestLive is):
+  // their tokens are not in this PC's Tokens figure.
+  const remote = remoteActiveCounts()
   // The keepalive's last nudge per account (session-keepalive.ts), for the row's note.
   const nudges = fileNudgeStore.read()
   const cleared = usageClearedAt()
@@ -573,6 +577,7 @@ app.get('/api/cli-instances', async (c) => {
       lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,
       // The account signed in here now, not this folder: a re-login shows the new account's.
       tokens: uuid ? (windows.get(uuid) ?? null) : null,
+      remoteWorkers: remote.get(i.id) ?? 0,
       lastUsageCheck,
     })),
   )

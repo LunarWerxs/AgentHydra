@@ -3,6 +3,7 @@ import {
   checkServerUpdate,
   offerOf,
   refusalText,
+  RESTART_LOST,
   restartServer,
   restartState,
   serverHello,
@@ -64,6 +65,28 @@ describe('Restart to update', () => {
     }) as unknown as typeof fetch
     await restartServer()
     expect(restartState.value).toEqual({ restarting: true })
+    serverHello()
+  })
+
+  test('a restart no hello ends says it did not happen, and takes a click again', async () => {
+    globalThis.fetch = (async (): Promise<Response> => {
+      throw new DOMException('timed out', 'TimeoutError')
+    }) as unknown as typeof fetch
+    serverUpdate.value = { stale: true, restartable: true }
+    await restartServer(5)
+    expect(updateOffer.value?.restarting).toBe(true)
+    await Bun.sleep(20)
+    expect(restartState.value).toEqual({ error: RESTART_LOST })
+    expect(updateOffer.value).toEqual({ restartable: true, restarting: false, error: RESTART_LOST })
+  })
+
+  test('a hello in time ends the restart, and the watch says nothing later', async () => {
+    answer(202, { ok: true })
+    await restartServer(5)
+    answer(200, { stale: false, restartable: true })
+    serverHello()
+    await Bun.sleep(20)
+    expect(restartState.value).toBeNull()
   })
 
   test('a route the running server lacks reads as an old server, not a bare 404', () => {

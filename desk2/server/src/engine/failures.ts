@@ -59,6 +59,11 @@ export class FailureLedger {
     return this.log.file
   }
 
+  /** Waits until the recorded lines are on disk (tests). */
+  settled(): Promise<void> {
+    return this.log.settled()
+  }
+
   /** Appends one failure; returns its id (for a later `recovered`). */
   record(i: FailureInput): string {
     const id = randomUUID()

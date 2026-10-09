@@ -9,7 +9,8 @@
 // config folder AgentHydra lists. The encoded cwd is the folder with every character that is not a
 // letter or digit turned into '-'.
 
-import { existsSync, openSync, readdirSync, readSync, closeSync, statSync } from 'node:fs'
+import { existsSync, openSync, readdirSync, readSync, closeSync, statSync, type Stats } from 'node:fs'
+import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
@@ -71,6 +72,26 @@ export function findSessionJsonl(sessionId: string, roots: string[], cwd?: strin
         continue
       }
       for (const p of projects) consider(join(root, p, file))
+    }
+  }
+  if (!hits.length) return null
+  return hits.reduce((a, b) => (b.mtime > a.mtime ? b : a)).path
+}
+
+/** findSessionJsonl on the file thread pool: the same folders in the same order, the newest copy. */
+export async function findSessionJsonlAsync(sessionId: string, roots: string[], cwd?: string | null): Promise<string | null> {
+  if (!SESSION_ID.test(sessionId)) return null
+  const file = `${sessionId}.jsonl`
+  const consider = async (path: string) => {
+    const st = await stat(path).catch(() => null)
+    return st?.isFile() ? { path, mtime: st.mtimeMs } : null
+  }
+  const found = (list: ({ path: string; mtime: number } | null)[]) => list.filter((h): h is { path: string; mtime: number } => h !== null)
+  let hits = cwd ? found(await Promise.all(roots.map((root) => consider(join(root, encodeProjectDir(cwd), file))))) : []
+  if (!hits.length) {
+    for (const root of roots) {
+      const projects = await readdir(root).catch(() => [] as string[])
+      hits.push(...found(await Promise.all(projects.map((p) => consider(join(root, p, file))))))
     }
   }
   if (!hits.length) return null
@@ -175,6 +196,28 @@ const FINGERPRINT = 64
 
 const unchanged = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: { ino: number; size: number; mtimeMs: number }) =>
   m.size === st.size && m.mtimeMs === st.mtimeMs && m.ino === st.ino
+
+/** A file call the reader's steps ask for: the sync read runs it in place, readAsync on the file thread pool. */
+type Io = { op: 'stat'; path: string } | { op: 'read'; path: string; from: number; to: number }
+
+const runSync = (io: Io): Stats | Buffer => (io.op === 'stat' ? statSync(io.path) : readFrom(io.path, io.from, io.to))
+
+async function runAsync(io: Io): Promise<Stats | Buffer> {
+  if (io.op === 'stat') return stat(io.path)
+  const buf = Buffer.alloc(io.to - io.from)
+  const fh = await open(io.path, 'r')
+  try {
+    let read = 0
+    while (read < buf.length) {
+      const { bytesRead } = await fh.read(buf, read, buf.length - read, io.from + read)
+      if (bytesRead <= 0) break
+      read += bytesRead
+    }
+    return buf.subarray(0, read)
+  } finally {
+    await fh.close()
+  }
+}
 
 /** Reads [from, size) of a file. */
 function readFrom(path: string, from: number, size: number): Buffer {
@@ -290,8 +333,8 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     settledBytes -= kept.bytes
   }
 
-  function* step(path: string, cwd?: string | null): Generator<void, TranscriptItem[]> {
-    const st = statSync(path)
+  function* step(path: string, cwd?: string | null): Generator<Io | undefined, TranscriptItem[], Stats | Buffer | undefined> {
+    const st = (yield { op: 'stat', path }) as Stats
     let m = memo.get(path)
     if (m && unchanged(m, st)) return m.items
     const kept = settled.get(path)
@@ -308,7 +351,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       // The bytes just before where the last read stopped are read again and must still be the same: a file
       // rewritten in place to the same size or more is read from the start, not continued.
       const back = m.tail.length
-      const read = readFrom(path, m.offset - back, st.size)
+      const read = (yield { op: 'read', path, from: m.offset - back, to: st.size }) as Buffer
       if (read.length >= back && read.subarray(0, back).equals(m.tail)) {
         buf = read.subarray(back)
         from = m.offset
@@ -316,7 +359,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     }
     if (!buf) {
       from = Math.max(0, st.size - o.tailBytes)
-      buf = readFrom(path, from, st.size)
+      buf = (yield { op: 'read', path, from, to: st.size }) as Buffer
     }
     const prevTail = m?.tail ?? Buffer.alloc(0)
     let start = 0
@@ -376,7 +419,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
   const drive = (path: string, cwd?: string | null): TranscriptItem[] => {
     const g = step(path, cwd)
     let r = g.next()
-    while (!r.done) r = g.next()
+    while (!r.done) r = g.next(r.value ? runSync(r.value) : undefined)
     return r.value
   }
 
@@ -386,8 +429,12 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       const g = step(path, cwd)
       let r = g.next()
       while (!r.done) {
-        await new Promise((done) => setImmediate(done))
-        r = g.next()
+        const io = r.value
+        if (io) r = g.next(await runAsync(io))
+        else {
+          await new Promise((done) => setImmediate(done))
+          r = g.next()
+        }
       }
       return r.value
     })()

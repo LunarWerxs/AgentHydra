@@ -94,7 +94,7 @@ export function endingFromTailText(text: string, wholeFile: boolean): SessionEnd
   return ending
 }
 
-/**
+/*
  * Read a transcript's tail and classify how it currently ends.
  *
  * Adaptive window: start at {@link TAIL_WINDOW_START}, and while nothing classifiable is found

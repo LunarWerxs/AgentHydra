@@ -2,7 +2,7 @@
   "name": "hydra-desk",
   "//": "Hydra Desk 2: Michael's copy of ../desk (2026-10-04), plus hydra/, its own copy of AgentHydra's window (served at /ah/).",
   "private": true,
-  "version": "2.0.3",
+  "version": "2.0.4",
   "workspaces": ["server", "web", "hydra"],
   "scripts": {
     "dev": "bun run --parallel dev:server dev:web",

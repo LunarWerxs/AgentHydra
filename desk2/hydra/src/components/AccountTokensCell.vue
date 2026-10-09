@@ -11,21 +11,32 @@ defineProps<{ row: InstanceRowModel }>()
 </script>
 
 <template>
-  <IconTooltip
-    v-if="row.tokens"
-    :label="$t('cliInstances.tokensLabel', { total: row.tokens.total.toLocaleString() })"
-    :description="
-      row.tokensNote?.breakdown ??
-      $t('cliInstances.tokensBreakdown', {
-        output: formatTokens(row.tokens.output),
-        input: formatTokens(row.tokens.input),
-        cacheRead: formatTokens(row.tokens.cacheRead),
-        cacheWrite: formatTokens(row.tokens.cacheWrite),
-      })
-    "
-    :detail="row.tokensNote?.source ?? $t('cliInstances.tokensSource')"
-  >
-    <span class="font-medium tabular-nums">{{ formatTokens(row.tokens.total) }}</span>
-  </IconTooltip>
-  <span v-else class="text-xs text-muted-foreground">—</span>
+  <span class="inline-flex items-center gap-1.5">
+    <IconTooltip
+      v-if="row.tokens"
+      :label="$t('cliInstances.tokensLabel', { total: row.tokens.total.toLocaleString() })"
+      :description="
+        row.tokensNote?.breakdown ??
+        $t('cliInstances.tokensBreakdown', {
+          output: formatTokens(row.tokens.output),
+          input: formatTokens(row.tokens.input),
+          cacheRead: formatTokens(row.tokens.cacheRead),
+          cacheWrite: formatTokens(row.tokens.cacheWrite),
+        })
+      "
+      :detail="row.tokensNote?.source ?? $t('cliInstances.tokensSource')"
+    >
+      <span class="font-medium tabular-nums">{{ formatTokens(row.tokens.total) }}</span>
+    </IconTooltip>
+    <span v-else class="text-xs text-muted-foreground">—</span>
+    <IconTooltip
+      v-if="row.remoteWorkers"
+      :label="$t('cliInstances.remoteWorkersLabel', { n: row.remoteWorkers })"
+      :description="$t('cliInstances.remoteWorkersHint')"
+    >
+      <span class="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground tabular-nums">
+        {{ $t('cliInstances.remoteWorkersLabel', { n: row.remoteWorkers }) }}
+      </span>
+    </IconTooltip>
+  </span>
 </template>

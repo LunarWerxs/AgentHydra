@@ -47,6 +47,7 @@ import { formatTokens } from '@/lib/climayte-status'
 import { timeAgo } from '@/lib/format'
 import { type FreeVerdict, freeApi, freeCheckVerdict, freeLogo, freeUsageSnapshot, openFreeThread } from '@/lib/free-instances'
 import { shortDisplayName } from '@/lib/instance-appearance'
+import { searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
@@ -117,7 +118,11 @@ const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (i: FreeInstance) => i.id,
-  facts: (i: FreeInstance) => ({ usage: usageFor(i), signedIn: i.loggedIn }),
+  facts: (i: FreeInstance) => ({
+    usage: usageFor(i),
+    signedIn: i.loggedIn,
+    search: searchText(i.num, i.name, i.email, i.provider, 'free'),
+  }),
   persisted: { key: desktopSortKey, direction: desktopSortDirection },
   columns: [
     { key: 'status', accessor: (i: FreeInstance) => i.loggedIn },

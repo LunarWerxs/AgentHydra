@@ -153,9 +153,13 @@ describe('a request left pending by a process that died', () => {
     ])
     // written back once: the next read finds them settled without appending again
     const file = join(home, 'chats', `${chatId}.jsonl`)
-    const written = readFileSync(file, 'utf8').trim().split('\n').length
+    const count = () => readFileSync(file, 'utf8').trim().split('\n').length
+    // the write-back is queued off the server's thread
+    for (let i = 0; i < 200 && count() < 6; i++) await new Promise((r) => setTimeout(r, 5))
+    const written = count()
     expect(written).toBe(6)
     await call(t.desk, 'GET', `/api/chats/${chatId}/items`)
+    await new Promise((r) => setTimeout(r, 50))
     expect(readFileSync(file, 'utf8').trim().split('\n').length).toBe(written)
 
     const answer = await call(t.desk, 'POST', `/api/chats/${chatId}/permission/p1`, { decision: 'allow' })

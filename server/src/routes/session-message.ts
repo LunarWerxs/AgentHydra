@@ -76,6 +76,53 @@ app.post('/api/sessions/:id/message', async (c) => {
     }
   }
 
+  // ROUTE 0 - THE APP'S OWN PEER DELIVERY, for a caller that never types (peer_only; 2026-10-09).
+  // The pipe below reaches only a live engine, and a note written into an IDLE engine's queue waits
+  // there without starting a turn (climayte-ping.ts): overnight every babysitter continue ended as
+  // "no peer pipe" or "wrote but no transcript growth" (44 of them). The native send makes the call
+  // one chat's SendMessage makes to reach another, and the app starts the engine itself when none
+  // runs. It goes in as a message from another session, never as the person, and the app keeps its
+  // own refusals (archived, stopped until a person sends; claude-native-send.ts). Where native control
+  // is not set up, or nothing reached the app, the pipe is tried as before.
+  let nativeWhy = ''
+  if (body.peer_only === true) {
+    const { tryNativeSend } = await import('../claude-native-send')
+    const fromName =
+      typeof body.from === 'string' && body.from.trim()
+        ? body.from.trim().slice(0, 80)
+        : 'AgentHydra'
+    const native = await tryNativeSend(inst.dir, sessionId, text, fromName)
+    if (native.ok)
+      return c.json({
+        ok: true,
+        route: 'native',
+        // delivered means in the chat's hands, as the pipe's queued note is (route 1): Desk's bridge
+        // takes anything else as a failed delivery.
+        delivered: true,
+        confirmed: native.delivery === 'delivered',
+        queued: native.delivery === 'queued',
+        typed: false,
+        detail:
+          native.delivery === 'queued'
+            ? "sent through the app's own peer delivery; the chat runs it when it is free"
+            : native.delivery === 'delivered'
+              ? "sent through the app's own peer delivery; the chat started a turn on it"
+              : "sent through the app's own peer delivery; the app had not confirmed a turn start within 35s",
+      })
+    if (!native.unavailable)
+      // The send was made and the app did not take it: never also try another route.
+      return c.json(
+        {
+          ok: false,
+          route: 'native',
+          delivered: false,
+          error: `the app did not take the message: ${native.reason ?? 'no reason given'}`,
+        },
+        422,
+      )
+    nativeWhy = native.reason ?? 'no reason given'
+  }
+
   // ROUTE 1 - THE OFFICIAL CHANNEL (peer messaging): if the session is LIVE, inject the text
   // into its own message pipe exactly as one session's SendMessage reaches another. It lands
   // in the native input queue (no UI, no composer click, no verify snippet needed - the token
@@ -125,7 +172,7 @@ app.post('/api/sessions/:id/message', async (c) => {
           ok: false,
           route: 'peer',
           delivered: false,
-          error: 'peer_only: no peer pipe for this session, and its turn is in flight',
+          error: `peer_only: no peer pipe for this session, and the native send did not reach the app (${nativeWhy})`,
           detail:
             'the composer is the only route left and it types - refusing to interrupt a live turn. Retry when the chat is idle.',
         },

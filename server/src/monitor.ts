@@ -478,7 +478,7 @@ async function tick(deps: MonitorDeps): Promise<void> {
   }
 }
 
-/** Fire OUR scheduled resumes the moment they're due — independent of the global scheduler switch,
+/* Fire OUR scheduled resumes the moment they're due — independent of the global scheduler switch,
  *  since auto-resume is its own opt-in and shouldn't require the main scheduler to be on. */
 /**
  * Where a due resume is delivered. Two answers, and NEITHER is a console (owner ruling,
@@ -513,7 +513,7 @@ export interface LandingUsageRow {
   ageMins?: number | null
 }
 
-/**
+/*
  * THE OVERFLOW RULE (owner directive, 2026-08-30, second ruling same day): closed signed-in
  * instances become eligible landing targets when every RUNNING signed-in candidate has
  * PROVABLY exceeded LANDING_OVERFLOW_PCT on either the 5-hour or the weekly window - proof

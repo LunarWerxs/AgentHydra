@@ -80,6 +80,7 @@ describe('ChatStore chats.json', () => {
     store.saveChats([chat('a')])
     store.saveChats([chat('a'), chat('b')])
     await Bun.sleep(30)
+    await store.settled()
     expect(new ChatStore(h).loadChats().map((c) => c.id)).toEqual(['a', 'b'])
   })
 
@@ -116,10 +117,11 @@ describe('ChatStore items', () => {
     ])
   })
 
-  test('a torn last line is skipped, and the next append starts on its own line', () => {
+  test('a torn last line is skipped, and the next append starts on its own line', async () => {
     const h = home()
     const store = new ChatStore(h)
     store.appendItem('c2', text('a', 'ok'))
+    await store.settledItems()
     appendFileSync(join(h, 'chats', 'c2.jsonl'), '{"kind":"assistant_text","id":"b","te') // crash mid-write
     const again = new ChatStore(h)
     expect(again.loadItems('c2').map((i) => i.id)).toEqual(['a'])

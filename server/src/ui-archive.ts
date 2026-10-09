@@ -155,7 +155,7 @@ function diskArchivedOf(profileDir: string, sessionId: string): boolean | null {
   }
 }
 
-/** How many chats in this profile's store carry `title` on disk, ANY archive state. More than
+/* How many chats in this profile's store carry `title` on disk, ANY archive state. More than
  *  one means a rendered row with that title is ambiguous and must not be clicked. */
 /** How many chats carry `title` in ONE org/user leaf directory, split out of
  *  {@link diskTitleCountOf}'s walk so that function's complexity reflects only the walk. An

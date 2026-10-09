@@ -20,6 +20,16 @@ export const DEFAULT_ACCOUNT_INFO: AccountInfo = {
   inUse: false,
 }
 
+/** The fleet's line (owner, 2026-08-31): every account stays at or under 85% on both windows. Nothing Desk places
+ *  itself (a move, a title, a judgment) goes onto an account at or past it. */
+export const ROOM_PCT = 85
+
+/** Signed in, and read under ROOM_PCT on both windows. An unread window is not room: the default login is never
+ *  read, and before this a full account moved chats onto one at 99% (the line was 100, unread counted as 0). */
+export function hasRoom(a: AccountInfo): boolean {
+  return a.signedIn && a.fiveHourPct !== null && a.weeklyPct !== null && a.fiveHourPct < ROOM_PCT && a.weeklyPct < ROOM_PCT
+}
+
 const RUNNING_WORKER = new Set(['running', 'checking'])
 
 /** AgentHydra writes plans as 'Max 20×'; the protocol spells them 'Max 20x'. */

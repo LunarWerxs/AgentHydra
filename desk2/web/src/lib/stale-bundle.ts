@@ -6,6 +6,14 @@
 // the window back to the chat it showed). It looks on every hello (a restarted server), every minute and
 // whenever it comes back into view, so a new build of the window alone (`bun run build`) reaches it with
 // no server restart.
+//
+// Never while the update row's click runs or its restart is under way (owner, 2026-10-09: "Click to
+// restart and update ... doesn't work, hangs, takes forever"): the click's update step rebuilds this
+// window's files, and the reload that followed 30 s later threw away the click before its restart step,
+// so the server was never restarted and the row came back as it was. The new server's hello reloads it.
+
+import { updateClicking } from './desk-update-row'
+import { restartState } from './server-update'
 
 const RELOADED_FOR = 'hydra-desk:reloaded-for'
 /** Input this recent holds a reload back. */
@@ -22,10 +30,16 @@ export function isStale(mine: string | null, served: string | null): boolean {
   return !!mine && !!served && mine !== served
 }
 
-/** A stale window reloads when it is out of sight, or when no one has touched it for `quietMs`. */
-export function mayReload(hidden: boolean, lastInputAt: number, now: number, quietMs = QUIET_MS): boolean {
-  return hidden || now - lastInputAt >= quietMs
+/** A stale window reloads when it is out of sight, or when no one has touched it for `quietMs`, and never
+ *  while an update it was asked for is running (`updating`). */
+export function mayReload(hidden: boolean, lastInputAt: number, now: number, quietMs = QUIET_MS, updating = false): boolean {
+  return !updating && (hidden || now - lastInputAt >= quietMs)
 }
+
+/** The update row's click is running, or the restart it asked for has not said hello yet. */
+const updating = () => updateClicking.value || (!!restartState.value && 'restarting' in restartState.value)
+/** How soon a reload held back by an update looks again. */
+const UPDATE_RECHECK_MS = 2_000
 
 /** The newer entry this window waits to reload onto. */
 let pending: string | null = null
@@ -51,8 +65,8 @@ function reloadWhenQuiet(): boolean {
   if (timer) clearTimeout(timer)
   timer = null
   const now = Date.now()
-  if (!mayReload(document.hidden, lastInputAt, now)) {
-    timer = setTimeout(reloadWhenQuiet, QUIET_MS - (now - lastInputAt))
+  if (!mayReload(document.hidden, lastInputAt, now, QUIET_MS, updating())) {
+    timer = setTimeout(reloadWhenQuiet, updating() ? UPDATE_RECHECK_MS : QUIET_MS - (now - lastInputAt))
     return false
   }
   sessionStorage.setItem(RELOADED_FOR, pending)

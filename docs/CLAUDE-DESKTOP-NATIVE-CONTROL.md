@@ -10,7 +10,8 @@ values the code looks for. What replaced the pins is structural, in
 [Managed launch](#managed-launch-and-ashley-production-proof).
 
 Scope: moving, archiving and migrating **Code** chats between desktop instances.
-Message delivery is outside this work.
+Message delivery has one native action of its own, the native send
+([Sending a message into a chat](#sending-a-message-into-a-chat-native-send)).
 
 ## Operating instructions for agents
 
@@ -434,6 +435,30 @@ writing anything, every refusal matching the app's own state: one was mid-turn (
 background_task`), and two had been left `isStopping` with no engine by an earlier move between
 accounts (`chat-busy`). The native archive refuses `isStopping` too, so going around that flag
 would land the copy and then fail to archive the old chat.
+
+## Sending a message into a chat (native send)
+
+`nativeProgram({ action: 'send', pid, profileDir, cliSessionId, text, fromName })` sends `text`
+into the chat holding that CLI session the way one of the app's chats messages another: the
+manager's own `sendPeerMessage`, the `<cross-session-message from=... name=...>` envelope the
+app's SendMessage tool builds, and a peer origin (`{ kind: 'peer', from: 'agenthydra', name }`).
+The app's `sendMessage` treats only an origin-less or `human` message as the person's, so a peer
+message never counts as the person, and the app keeps its own refusals. The program also refuses
+before sending a chat that is archived or `stoppedUntilPersonSends`. When the chat has no engine,
+the app's delivery retries once "through the cold-start path" and starts one itself, so nothing is
+typed into the window. The answer is the app's receipt: `delivered` (a turn started), `queued`
+(it runs when the chat is free) or, past a 35 s wait inside the program (the inspector's call
+limit is 60 s, and Desk's bridge gives the whole route 50 s), `sent`. The route answers
+`delivered: true` for all three, the way the pipe's queued note does, with `confirmed` and `queued`
+saying which.
+
+`server/src/claude-native-send.ts` (`tryNativeSend`) runs it. `POST /api/sessions/:id/message`
+uses it first for a `peer_only` caller, the ones that must never type (Desk's bridge, so the
+babysitter and the orchestrator): before, the only routes were the peer pipe, which exists only
+while an engine is live and whose note waits unread in an idle engine's queue, and the composer,
+which types. On 2026-10-09 the babysitter's 44 overnight continues for seven chats a usage limit
+stopped all ended that way (`no peer pipe`, or `wrote-but-no-transcript-growth`). A send that
+reached the app is never retried another way; a refusal before dispatch falls back to the pipe.
 
 ## Remaining migration work
 

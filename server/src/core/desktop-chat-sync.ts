@@ -428,8 +428,8 @@ async function retireLanded(
 
 /** One chat pass: send what this PC started that the store lacks, take the chats an earlier version
  *  put into ~/.claude back out, then take what the other PCs started into the viewer. Does all it can,
- *  then throws the first problem. */
-/** Returns whether anything moved (the state file changed): the sync loop polls less often when not. */
+ *  then throws the first problem.
+ *  Returns whether anything moved (the state file changed): the sync loop polls less often when not. */
 export async function syncChats(io: ChatIo, now = Date.now()): Promise<boolean> {
   const rows = await readRows(io)
   const loaded = readState(io.statePath)

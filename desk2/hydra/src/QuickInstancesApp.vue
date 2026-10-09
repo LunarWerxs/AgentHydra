@@ -125,7 +125,7 @@ const sortedClaude = computed(() =>
       (a.label ?? a.name).localeCompare(b.label ?? b.name),
   ),
 )
-/**
+/*
  * EVERY CLI login gets its own row here, the linked ones too, the same rule the full manager's CLI
  * table follows (components/CliInstanceRows.vue). The owner, 2026-10-03: a CLI login linked to
  * a desktop row must still show in the CLI list ("I need to see it over there"). The desktop row

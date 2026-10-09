@@ -344,6 +344,37 @@ describe('useDesk store', () => {
       expect(desk.itemsByChat.value.get('chat-made')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example first message' })])
     })
 
+    it('a chat.upsert that lands before the POST answers takes the placeholder row: one row, one bubble', async () => {
+      const desk = useDesk()
+      await desk.init()
+      desk.select({ kind: 'new', cwd: 'C:/Users/me/early' })
+      const answer = answerLater()
+      const made = desk.createChat({ cwd: 'C:/Users/me/early', prompt: 'Example early' })
+      const placeholder = (desk.selected.value as { id: string }).id
+      const row = desk.chats.value.find((c) => c.id === placeholder)!
+      const chat = { ...row, id: 'chat-early', sessionId: 'session-early', createdAt: Date.now() + 1 }
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat })
+      expect(desk.chats.value.filter((c) => c.id === 'chat-early' || c.id === placeholder)).toEqual([expect.objectContaining({ id: 'chat-early' })])
+      expect(desk.selected.value).toEqual({ kind: 'chat', id: 'chat-early' })
+      answer(chat)
+      await made
+      expect(desk.chats.value.filter((c) => c.id === 'chat-early')).toHaveLength(1)
+      expect(desk.chats.value.some((c) => c.id === placeholder)).toBe(false)
+      expect(desk.itemsByChat.value.get('chat-early')).toEqual([expect.objectContaining({ kind: 'user', text: 'Example early' })])
+    })
+
+    it('a history snapshot that already holds the sent message takes its bubble: one bubble', async () => {
+      const desk = useDesk()
+      await desk.init()
+      await desk.send('chat-hist', { text: 'Example hist' })
+      const answer = answerLater()
+      const loading = desk.loadItems('chat-hist')
+      answer([{ id: 'srv-hist', ts: Date.now() + 500, kind: 'user', text: 'Example hist' }])
+      await loading
+      const items = desk.itemsByChat.value.get('chat-hist') ?? []
+      expect(items.filter((i) => i.kind === 'user' && i.text === 'Example hist')).toEqual([expect.objectContaining({ id: 'srv-hist' })])
+    })
+
     it('the server echo takes the oldest bubble when its text differs from the one sent', async () => {
       const desk = useDesk()
       await desk.init()

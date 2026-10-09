@@ -366,7 +366,7 @@ async function killTree(pid: number): Promise<void> {
   killProcessTree(pid)
 }
 
-/**
+/*
  * True if the detached runner for `id` is still alive — identified by its UNIQUE spec-file name in a
  * live process's command line, NOT by a stored PID. This is what makes reattach PID-reuse-safe: after
  * a long daemon downtime the stored childPid may have been recycled by an unrelated process, so
@@ -1194,7 +1194,7 @@ export function cancelItem(id: string): boolean {
   return true
 }
 
-/**
+/*
  * Recover dispatch runs that were in flight when the previous daemon exited (Quit / auto-update /
  * crash). For each `running` queue_item: rebuild its run_events from the on-disk log (the log is the
  * source of truth), then resume tailing. tailRun then either sees the terminal marker (the run

@@ -404,7 +404,9 @@ Errors answer `{ error: string }` with a 4xx/5xx status, the real reason in the 
 `/ws`: on connect the server sends `hello`, then every `ServerEvent` as it happens. While at least one
 window is connected the bridge polls AgentHydra every 3 s and broadcasts `external.update`,
 `climayte.update` and (every 30 s) `accounts.update`. AgentHydra down = empty lists plus a `bridge.status { up: false }` event (the window shows a banner
-"AgentHydra is not running"), never a crash.
+"AgentHydra is not running"), never a crash. Down means out of reach for a minute (`DOWN_GRACE_MS`): a relaunch or
+a stalled read is not down, and a list read that fails is answered with its last answer for two minutes
+(`KEEP_LAST_MS`), so the sidebar never empties and refills over a blip (owner, 2026-10-09).
 
 ## The bridge (server/src/bridge)
 
@@ -467,7 +469,9 @@ picks the account and moves the worker when that account hits its limit or its l
   cannot start as a worker. Instead, when a turn fails on its account (expired/revoked login, 401/403 auth,
   org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `ChatManager.carryToAnotherAccount`
   asks `listAccounts()` (AgentHydra's word: `signedIn`, usage percentages, never a token) for the least used
-  signed-in account not yet tried (`pickHealthy`), copies the session there (`seedSession`), restarts the
+  signed-in account not yet tried whose 5-hour and weekly readings are both under the fleet's 85% line
+  (`pickHealthy`, `hasRoom`; an unread window, the default login's always, is not room; the orchestrator's judge
+  and the babysitter's "room now" use the same line), copies the session there (`seedSession`), restarts the
   runtime and resends the unanswered message once, with the muted line 'Moved from #126 (signed out) to #61.'.
   At most 4 accounts per message, then one clear error. Any other error (tool failure, bad request) never moves.
   - **A move mid-turn continues the work** (`ChatRuntime.carrySends`): a turn cut before it replied sends its
@@ -893,6 +897,7 @@ Every stage (`TIMING_STAGES`):
 | `worker_turn` | sent -> the worker no longer at work; `stages` = the four worker stages | server, poll |
 | `account_move` | sent -> CliMayte moved the worker to another account, `name` = `#126>#61` | server, poll |
 | `sync_poll` | one read of the workers' status and transcripts; one line per minute (mean `ms`, `n` polls, `max`) | server |
+| `loop_stall` | the server's one thread ran nothing for over 200 ms (`ms`; `cpu`, the CPU it spent meanwhile). From the first stall of 2 s on, JSC's sampling profiler runs, and every later stall of 2 s or more is also written to `<home>/logs/loop-stalls.jsonl` with the functions that ran in it (`self`, `total`: name and file, by samples) (`engine/loop-stall.ts`) | server |
 | `title` | the generated title's request -> answer, `ok` = a title came | server |
 
 `GET /api/diagnostics/timings` (`TimingsResponse`, over the last 7 days): `today` and `week` (per stage: count, p50,

@@ -120,7 +120,7 @@ export interface CliMayteAttempt {
   requested?: { model: string | null; effort: string | null }
   /** The model the CLI reported in its system/init event: what really ran. */
   model?: string
-  /** Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
+  /* Run under a runner outside the daemon (climayte-runner.ts), so a daemon restart leaves it running.
    *  `pid` is the runner's, filled from `pidFile` once it has claimed the spec; the CLI's own is the
    *  attempt's `pid`, filled once the CLI has started. Absent on attempts spawned by the daemon
    *  directly (before 2026-09-30). `killOnStart`: a stop came before the runner wrote its pid but
@@ -922,7 +922,8 @@ export const ENV_SCRUB =
 
 // "disabled claude subscription access": the account's organization turned off subscription access
 // for Claude Code (`error:"oauth_org_not_allowed"`). It is the account's problem, not the task's,
-// so the task moves on and the account is walled like a signed-out one.
+// so the task moves on and the account is walled like a signed-out one. "identity verification is
+// required": the same for an account Anthropic asks to verify (IDENTITY_WALL).
 const AUTH_RE =
   /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access|identity verification is required/i
 

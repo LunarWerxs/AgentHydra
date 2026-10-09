@@ -1145,22 +1145,6 @@ function extraStoreRecords(): {
   return { openCodeFiles, hermesFiles, dshFiles }
 }
 
-/** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
- *  settle. Source + id is the identity; newest wins, matching findTranscript's tie-break.
- *  The newest-wins rule is permanent and kept the same across both lookup paths. */
-/**
- * One row per session, keeping the newest file as its face — and REMEMBERING the rest.
- *
- * The dedupe is what makes the session list a list of conversations rather than of files, and it
- * has to stay. What it must not do is destroy the fact that the others existed: Codex writes a
- * rollout per execution thread, so a conversation is routinely hundreds of files. What those extra
- * files are NOT is extra spend: Codex's token counter is session-wide and every thread replays the
- * whole counter into its own file, so a total that adds them multiplies it (measured: 11.9B tokens
- * reported as 637B). Subagent rollouts are therefore not carried here at all. `siblingPaths` exists
- * for the genuine case — the same rollout appearing in both the live and archived roots while a move
- * settles — and server/src/analytics.ts takes the LARGEST of them rather than the sum, so even that
- * cannot double count.
- */
 /** One session can spawn thousands of subagents; capped so a runaway fan-out cannot put an
  *  unbounded array on an index row. */
 const MAX_CHILD_PATHS = 4000
@@ -1174,6 +1158,22 @@ function rememberChild(map: Map<string, string[]>, sessionId: string, path: stri
   if (list.length < MAX_CHILD_PATHS) list.push(path)
 }
 
+/** A moved JSONL can briefly appear in both active and archived roots while filesystem caches
+ *  settle. Source + id is the identity; newest wins, matching findTranscript's tie-break.
+ *  The newest-wins rule is permanent and kept the same across both lookup paths.
+ *
+ * One row per session, keeping the newest file as its face — and REMEMBERING the rest.
+ *
+ * The dedupe is what makes the session list a list of conversations rather than of files, and it
+ * has to stay. What it must not do is destroy the fact that the others existed: Codex writes a
+ * rollout per execution thread, so a conversation is routinely hundreds of files. What those extra
+ * files are NOT is extra spend: Codex's token counter is session-wide and every thread replays the
+ * whole counter into its own file, so a total that adds them multiplies it (measured: 11.9B tokens
+ * reported as 637B). Subagent rollouts are therefore not carried here at all. `siblingPaths` exists
+ * for the genuine case — the same rollout appearing in both the live and archived roots while a move
+ * settles — and server/src/analytics.ts takes the LARGEST of them rather than the sum, so even that
+ * cannot double count.
+ */
 function finishIndex(
   files: TranscriptFile[],
   /** Claude subagent transcripts, by the session that spawned them. Their spend is the parent's. */
@@ -1859,7 +1859,7 @@ export interface TailFilter {
   thinking?: boolean
 }
 
-/**
+/*
  * THE hide-"thinking" filter. Turns one raw transcript JSONL event into zero or more
  * displayable TailEvents. Reused for both disk-tail reading and the live stream-json path,
  * so the rule lives in exactly one place (per the rebuild plan).

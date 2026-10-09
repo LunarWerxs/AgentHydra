@@ -55,9 +55,9 @@ function boot(): { m: ChatManager; store: ChatStore } {
   temps.push(home)
   const seed = new ChatStore(home, { debounceMs: 1 })
   seed.saveChats([chat('c1')])
-  seed.flush()
   seed.appendItem('c1', text('a-1', 'one'))
   seed.appendItem('c1', text('a-2', 'two'))
+  seed.flush()
   const bridge = fakeBridge({}).bridge
   const m = new ChatManager({
     home,

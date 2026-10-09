@@ -189,7 +189,7 @@ function endOfRegex(text, start) {
   return -1
 }
 
-/** Blank out `//` line and block comments, so a spawn call merely NAMED IN PROSE is not read as a
+/* Blank out `//` line and block comments, so a spawn call merely NAMED IN PROSE is not read as a
  *  real one. This scan is textual and these files document their own win32 spawn story in detail:
  *  server/src/detached-spawn.mjs's header explains which shell `spawn("powershell")` resolves to,
  *  and that sentence alone was a finding until this existed. A comment cannot allocate a console

@@ -711,6 +711,7 @@ test('GET /api/diagnostics/failures answers the ledger rows with counts, filtere
   const base = { chatId: 'c1', title: 't', cwd: home, kind: 'sdk' as const, accountId: 'acct-1', accountNumber: 126, model: null, sessionId: null }
   ledger.record({ ...base, message: 'Failed to authenticate: OAuth session expired' })
   ledger.record({ ...base, message: 'fetch failed' })
+  await ledger.settled()
   const all = await call(desk, 'GET', '/api/diagnostics/failures')
   expect(all.status).toBe(200)
   expect(all.body).toMatchObject({ total: 2, byCause: { auth_expired: 1, network: 1 }, byAccount: { '#126': 2 } })

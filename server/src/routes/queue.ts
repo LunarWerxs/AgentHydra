@@ -98,7 +98,7 @@ function listAccounts(): Account[] {
     }))
 }
 
-/** Accounts, the dispatch queue, its live SSE stream, and the scheduler. See index.ts for the
+/* Accounts, the dispatch queue, its live SSE stream, and the scheduler. See index.ts for the
  *  app-wide middleware these routes run behind. */
 /**
  * Cost of ONE queued run.

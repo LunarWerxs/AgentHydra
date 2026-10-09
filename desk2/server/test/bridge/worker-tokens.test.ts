@@ -50,40 +50,40 @@ describe('worker tokens from the transcript', () => {
       assistant('m2', { input_tokens: 1, output_tokens: 2 }),
   )
 
-  test('sums each assistant message once, at its largest figure', () => {
+  test('sums each assistant message once, at its largest figure', async () => {
     const wt = createWorkerTokens()
     const list = [mapped()]
-    wt.apply(list, [raw()], dirs)
+    await wt.apply(list, [raw()], dirs)
     expect(list[0].tokens).toBe(37 + 3)
   })
 
-  test('reads only what was appended, and only when updatedAt moved', () => {
+  test('reads only what was appended, and only when updatedAt moved', async () => {
     const wt = createWorkerTokens()
     const a = [mapped()]
-    wt.apply(a, [raw()], dirs)
+    await wt.apply(a, [raw()], dirs)
     appendFileSync(file, assistant('m3', { input_tokens: 1000 }))
     const same = [mapped()]
-    wt.apply(same, [raw()], dirs)
+    await wt.apply(same, [raw()], dirs)
     expect(same[0].tokens).toBe(40)
     const moved = [mapped()]
-    wt.apply(moved, [raw({ updatedAt: 11 })], dirs)
+    await wt.apply(moved, [raw({ updatedAt: 11 })], dirs)
     expect(moved[0].tokens).toBe(1040)
   })
 
-  test('keeps the settled figure when it is larger, and when no transcript is found', () => {
+  test('keeps the settled figure when it is larger, and when no transcript is found', async () => {
     const wt = createWorkerTokens()
     const big = [mapped({ tokens: 5000 })]
-    wt.apply(big, [raw({ updatedAt: 12 })], dirs)
+    await wt.apply(big, [raw({ updatedAt: 12 })], dirs)
     expect(big[0].tokens).toBe(5000)
     const lost = [mapped({ tokens: null })]
-    wt.apply(lost, [raw({ sessionId: 'nowhere', updatedAt: 13 })], dirs)
+    await wt.apply(lost, [raw({ sessionId: 'nowhere', updatedAt: 13 })], dirs)
     expect(lost[0].tokens).toBeNull()
   })
 
-  test('leaves settled workers alone', () => {
+  test('leaves settled workers alone', async () => {
     const wt = createWorkerTokens()
     const done = [mapped({ active: false, tokens: 42 })]
-    wt.apply(done, [raw({ status: 'done' })], dirs)
+    await wt.apply(done, [raw({ status: 'done' })], dirs)
     expect(done[0].tokens).toBe(42)
   })
 })

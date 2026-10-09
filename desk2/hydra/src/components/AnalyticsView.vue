@@ -202,7 +202,7 @@ const unpricedBuckets = computed(() =>
 const unpricedTokenRows = computed(() => unpricedBuckets.value.slice(0, TOP))
 const unpricedMore = computed(() => unpricedBuckets.value.slice(TOP))
 
-/**
+/*
  * A COST chart contains only things that have a cost.
  *
  * Models with no published price used to be drawn at $0, which does not mean "we could not price

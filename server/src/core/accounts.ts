@@ -544,7 +544,7 @@ export async function resolveInstanceToken(
   return (await resolveInstanceTokens(instanceDir))[0] ?? null
 }
 
-/**
+/*
  * Read the OAuth access token a CLI login stored in its `CLAUDE_CONFIG_DIR`.
  *
  * The CLI side of the world is much simpler than the desktop side: `claude` writes

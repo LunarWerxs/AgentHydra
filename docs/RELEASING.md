@@ -181,6 +181,9 @@ from the dirty tree. Both hooks have suites under `.githooks/tests/`.
    git push origin main
    gh run watch          # or: gh run list --limit 2
    ```
+   Push nothing else to `main` until that run has STARTED: a newer push cancels a run still
+   queued behind another one, and the tag in step 6 needs a green run on the bump commit itself
+   (2.0.4, 2026-10-09: the bump's run queued behind a test fix's, and the next landing waited for it).
 6. **Tag only once `main` is green:**
    ```sh
    git tag -a vX.Y.Z -m "vX.Y.Z"
