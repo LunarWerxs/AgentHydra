@@ -29,6 +29,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Free tab's + menu offers only Free accounts; a slow check no longer looks like a dead login**
 - **A Free ChatGPT chat can ask for GPT-6 or Luna Thinking mini**
 - **Updates install on a PC that is never idle**
+- **An update no longer stops part-way on a program that is running**
 
 **Everything in Unreleased**
 
@@ -100,6 +101,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Updates install on a PC that is never idle.** Auto-update waited for every run and CliMayte worker to
   finish, which never happened on a busy PC. It now waits at most an hour, then installs, and the work that was
   running carries on after the restart.
+- **An update no longer stops part-way on a program that is running.** On Windows a program file that is open
+  cannot be replaced, so an update that changed one, such as a running CliMayte worker, stopped half done. The
+  update now moves the running copy aside, installs the new one, and clears the old copy on the next update.
 
 ## [2.0.1] - 2026-10-08
 

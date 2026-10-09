@@ -15,9 +15,9 @@
  * runtime-agnostic (Bun + Node): node:child_process spawn runs in both. Part of the
  * shared kit, keep it app-agnostic.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync } from "node:fs";
 import { spawn } from "node:child_process";
-import { join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const CHECK_TIMEOUT_MS = 30_000;
 const APPLY_TIMEOUT_MS = 120_000;
@@ -421,6 +421,100 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     throw new Error(buildRollbackMessage(msg, reset, restored, stashName, changedDuring.length));
   }
 
+  // Windows keeps a running program's image locked against overwrite, but lets it be renamed, and the
+  // process keeps running from the renamed copy. So a fast-forward that changes a running program file
+  // (AgentHydra's window host is one) fails partway with "unable to unlink old" and leaves a half-updated
+  // checkout. Before advancing on Windows, each such file is moved aside to `<file>.replaced-<stamp>` and
+  // put back at HEAD, so the checkout overwrites an unlocked copy instead of the running file.
+  const PROGRAM_FILE = /\.(exe|dll|node)$/i;
+  const REPLACED_COPY = ".replaced-";
+
+  // The moved-aside copies must never make the checkout dirty, or every later apply refuses it. Git's
+  // local exclude file covers them without touching the app's own .gitignore.
+  async function excludeReplacedCopies() {
+    const commonDir = await gitText(["rev-parse", "--git-common-dir"]);
+    if (!commonDir) return false;
+    const infoDir = resolve(appRoot, commonDir, "info");
+    const excludeFile = join(infoDir, "exclude");
+    const pattern = `*${REPLACED_COPY}*`;
+    const current = existsSync(excludeFile) ? readFileSync(excludeFile, "utf8") : "";
+    if (current.split(/\r?\n/).includes(pattern)) return true;
+    mkdirSync(infoDir, { recursive: true });
+    appendFileSync(excludeFile, `${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+    return true;
+  }
+
+  // A copy moved aside while its program was still running cannot be deleted by the apply that made it.
+  // Try to delete every such leftover now; one that is still running is retried by a later apply.
+  async function removeLeftoverCopies() {
+    const listed = await git(["ls-files", "-z"]);
+    if (!listed.ok) return;
+    for (const path of listed.stdout.split("\0")) {
+      if (!PROGRAM_FILE.test(path)) continue;
+      const full = join(appRoot, path);
+      const dir = dirname(full);
+      const prefix = `${basename(full)}${REPLACED_COPY}`;
+      let entries = [];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.startsWith(prefix)) continue;
+        try {
+          unlinkSync(join(dir, entry));
+        } catch {
+          /* still running: a later apply retries */
+        }
+      }
+    }
+  }
+
+  // Windows only, run before the advance. `target` is the commit the fast-forward lands on. A move that
+  // fails is recorded and the advance runs as it does today; a checkout that fails after a move is put
+  // back before the failure is thrown, so the path is never left missing.
+  async function moveAsideRunningPrograms(target, output) {
+    await removeLeftoverCopies();
+    const diffArgs = ["git", "diff", "--name-only", "-z", "--no-renames", "--diff-filter=MD", "HEAD", target];
+    const diff = await runCommand(diffArgs, CHECK_TIMEOUT_MS);
+    if (!diff.ok) {
+      output.push(commandSummary(diffArgs, diff));
+      return;
+    }
+    const programs = diff.stdout.split("\0").filter((path) => PROGRAM_FILE.test(path) && existsSync(join(appRoot, path)));
+    if (!programs.length) return;
+    if (!(await excludeReplacedCopies().catch(() => false))) {
+      output.push("could not exclude the moved-aside program copies from git; running programs were not moved aside");
+      return;
+    }
+    // UTC, digits only: YYYYMMDDHHmmss.
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    for (const path of programs) {
+      const full = join(appRoot, path);
+      const copy = `${full}${REPLACED_COPY}${stamp}`;
+      try {
+        renameSync(full, copy);
+      } catch (err) {
+        output.push(`could not move ${path} aside: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      output.push(`moved ${path} aside to ${basename(copy)}`);
+      const checkoutArgs = ["git", "checkout", "HEAD", "--", path];
+      const checkout = await runCommand(checkoutArgs, CHECK_TIMEOUT_MS);
+      output.push(commandSummary(checkoutArgs, checkout));
+      if (!checkout.ok) {
+        const failure = stepFailureMessage(checkoutArgs, checkout);
+        try {
+          renameSync(copy, full);
+        } catch {
+          throw new Error(`${failure}; ${path} could not be moved back and is at ${basename(copy)}`);
+        }
+        throw new Error(failure);
+      }
+    }
+  }
+
   // Every failure carries the transcript. `output` used to reach a caller only on SUCCESS: each
   // failure path threw a bare Error and the array died with the frame, so a user reporting a failed
   // update could paste one line and never the build output that explained it (RepoYeti issue #24).
@@ -461,6 +555,12 @@ export function createUpdater({ appRoot, serviceName, appLabel, updateRepoEnvVar
     // counterpart follows the remote's HEAD; an update remote given by URL is pulled from that URL).
     const branch = before.remoteBranch || upstream.remoteBranch || before.branch;
     if (!remote.remoteArg || !branch) throw new Error("No update remote/branch is configured.");
+
+    // Windows: a running program file cannot be overwritten by the advance, so move the ones it changes aside first.
+    // The target is the commit check already fetched: FETCH_HEAD, or the cooldown's aged commit.
+    if (process.platform === "win32") {
+      await moveAsideRunningPrograms(before.latestRemoteCommit ? before.remoteCommit : "FETCH_HEAD", output);
+    }
 
     // Under a cooldown the target is an aged commit, not the tip a pull would take; the check just
     // fetched it, so fast-forward to exactly that commit instead.

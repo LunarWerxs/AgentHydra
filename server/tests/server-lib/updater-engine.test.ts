@@ -11,7 +11,8 @@
 // and in what order" is checkable after the fact. All git operations are local (file:// clones of
 // tmpdir repos) — no network — so the suite is hermetic and deterministic.
 import { afterEach, test, expect } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { $ } from "bun";
@@ -445,3 +446,47 @@ test("cooldownDays adopts the newest aged commit and holds back a younger tip", 
   expect(after.updateAvailable).toBe(false);
   expect(after.reason).toContain("7-day update cooldown");
 }, REAL_GIT_TEST_MS); // real git+install+build - see the note on the tests above.
+
+// Windows locks a running program's image against overwrite, so a fast-forward that replaces it
+// fails with "unable to unlink old" partway through the checkout. It can still rename that file,
+// and the process keeps running from the renamed copy, so the engine moves it aside before advancing.
+test.skipIf(process.platform !== "win32")(
+  "an update that replaces a running program file applies: the old copy is moved aside and the tree stays clean",
+  async () => {
+    const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+    const remote = await remoteRepo();
+    mkdirSync(join(remote, "bin"));
+    copyFileSync(join(system32, "PING.EXE"), join(remote, "bin", "tool.exe"));
+    await $`git -C ${remote} -c user.name=S -c user.email=s@s.io add -A`.quiet();
+    await $`git -C ${remote} -c user.name=S -c user.email=s@s.io commit -q -m tool`.quiet();
+    const local = await cloneRepo(remote);
+
+    // Holds the clone's bin/tool.exe image open for the rest of the test.
+    const running = spawn(join(local, "bin", "tool.exe"), ["-n", "60", "127.0.0.1"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    const exited = new Promise((resolve) => running.once("exit", resolve));
+    try {
+      // The update replaces the running program with a different one, plus the usual version bump.
+      copyFileSync(join(system32, "WHERE.EXE"), join(remote, "bin", "tool.exe"));
+      await advanceRemote(remote, "0.2.0");
+
+      const scratch = scratchDir("ue-scratch-");
+      const log = join(scratch, "steps.log");
+      const updater = updaterFor(local, loggingCmd(log, "install"), loggingCmd(log, "build"));
+
+      const result = await updater.applyUpdate();
+      expect(result.ok).toBe(true);
+      const head = (await $`git -C ${local} rev-parse HEAD`.text()).trim();
+      const remoteHead = (await $`git -C ${remote} rev-parse HEAD`.text()).trim();
+      expect(head).toBe(remoteHead);
+      expect(readFileSync(join(local, "bin", "tool.exe")).equals(readFileSync(join(system32, "WHERE.EXE")))).toBe(true);
+      expect((await $`git -C ${local} status --porcelain`.text()).trim()).toBe("");
+    } finally {
+      running.kill();
+      await exited;
+    }
+  },
+  REAL_GIT_TEST_MS,
+);
