@@ -60,10 +60,14 @@ describe('whatsNewSince', () => {
     expect(whatsNewSince(marker, '2.0.4', sections(['Chats load faster', 'New thing']), NOW)).toBeNull()
   })
 
-  test('with a version-only marker shows the newer releases and skips Unreleased', () => {
+  test('with a version-only marker shows the newer releases and every Unreleased entry', () => {
     const marker = markerFor('2.0.3', null, NOW)
-    const result = whatsNewSince(marker, '2.0.4', sections(['Anything']), NOW)
-    expect(result?.groups.map((g) => g.version)).toEqual(['2.0.4'])
+    const result = whatsNewSince(marker, '2.0.4', sections(['Anything', 'Else']), NOW)
+    expect(result?.groups.map((g) => [g.version, g.entries.map((e) => e.headline)])).toEqual([
+      [null, ['Anything', 'Else']],
+      ['2.0.4', ['Row restarts onto an update']],
+    ])
+    expect(result?.count).toBe(3)
   })
 })
 

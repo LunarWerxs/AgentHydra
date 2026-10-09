@@ -59,8 +59,7 @@ export function whatsNewSince(marker: WhatsNewMarker, version: string, sections:
   const groups: WhatsNewGroup[] = []
   for (const section of sections) {
     if (section.version === null) {
-      if (!marker.headlines) continue
-      const seen = marker.headlines
+      const seen = marker.headlines ?? []
       const entries = section.entries.filter((e) => !seen.includes(e.headline))
       if (entries.length) groups.push({ version: null, date: section.date, entries })
     } else if (isNewerVersion(section.version, marker.version) && section.entries.length) {
