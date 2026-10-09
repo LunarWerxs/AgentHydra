@@ -232,7 +232,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
         if (srv.upgrade(req, { data: undefined })) return undefined
         return new Response('expected a websocket upgrade', { status: 426 })
       }
-      return app.fetch(req)
+      return app.fetch(req, { server: srv })
     },
     websocket: {
       // Bun pings each socket and closes one that answers nothing for this long, so a half-open

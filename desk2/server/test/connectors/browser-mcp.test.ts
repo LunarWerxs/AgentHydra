@@ -3,7 +3,7 @@ import type { BrowserAgentClient } from '../../src/browser/agent/client'
 import type { CallResult, ToolCaller, ToolInfo } from '../../src/browser/agent/contract'
 import { createBrowserMcp } from '../../src/browser/agent/mcp'
 import { TOOL_DEFS } from '../../src/browser/agent/registry'
-import { cachedLookup, sessionForRequest } from '../../src/plugins/68-mcp'
+import { browserCallerFor, cachedLookup, sessionForRequest } from '../../src/plugins/68-mcp'
 
 const TOOLS: ToolInfo[] = [{ name: 'browser_status', description: 'Where the browser is.', inputSchema: { type: 'object', properties: {} } }]
 
@@ -129,5 +129,61 @@ describe('the caller session is looked up only for a tool call', () => {
     expect(await sessionForRequest(rpc('tools/call'), { worker: 'w-1' }, deps)).toBe('s-1')
     expect(await sessionForRequest(rpc('tools/call'), { worker: 'w-1' }, deps)).toBe('s-1')
     expect(seen.calls).toBe(1)
+  })
+})
+
+describe('a query-less tool call identifies its Claude session by the peer socket', () => {
+  const call = { jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: 'browser_status', arguments: {} } }
+  const deps = (peer: () => Promise<{ sessionId: string; cwd: string } | null>, workerSessions: { id: string; sessionId: string | null }[] = []) => ({
+    chatSessions: () => [],
+    workers: async () => workerSessions,
+    peer,
+  })
+
+  test('the peer session and folder become the caller, and a worker session names the worker', async () => {
+    const seen: unknown[] = []
+    const client = fakeClient((_name, _params, caller) => {
+      seen.push(caller)
+      return { ok: true, text: 'answer' }
+    })
+    const peer = async () => ({ sessionId: 'peer-session', cwd: 'C:/Users/me/peer' })
+    const { caller, unidentified } = await browserCallerFor(call, {}, deps(peer))
+    await createBrowserMcp({ client, caller, unidentified }).handle(call)
+    expect(seen).toEqual([{ session: 'peer-session', cwd: 'C:/Users/me/peer' }])
+
+    const worker = await browserCallerFor(call, {}, deps(peer, [{ id: 'w-9', sessionId: 'peer-session' }]))
+    expect(worker.caller).toEqual({ session: 'peer-session', cwd: 'C:/Users/me/peer', worker: 'w-9' })
+  })
+
+  test('a call with a chat, worker or folder in its query never runs the peer lookup', async () => {
+    let lookups = 0
+    const peer = async () => {
+      lookups++
+      return { sessionId: 'peer-session', cwd: 'C:/Users/me/peer' }
+    }
+    await browserCallerFor(call, { chat: 'chat-1' }, deps(peer))
+    await browserCallerFor(call, { worker: 'w-1' }, deps(peer))
+    await browserCallerFor(call, { cwd: 'C:/Users/me/query' }, deps(peer))
+    await browserCallerFor({ jsonrpc: '2.0', id: 1, method: 'tools/list' }, {}, deps(peer))
+    expect(lookups).toBe(0)
+  })
+
+  test('an unresolvable peer answers a tool call that needs a folder with the clear error, and attachPort still runs', async () => {
+    const ran: unknown[] = []
+    const client = fakeClient((_name, _params, caller) => {
+      ran.push(caller)
+      return { ok: true, text: 'attached' }
+    })
+    const { caller, unidentified } = await browserCallerFor(call, {}, deps(async () => null))
+    expect(unidentified).toContain('could not tell which Claude chat is calling')
+    const mcp = createBrowserMcp({ client, caller, unidentified })
+    expect(await mcp.handle(call)).toEqual({
+      jsonrpc: '2.0',
+      id: 9,
+      result: { content: [{ type: 'text', text: unidentified }], isError: true },
+    })
+    const attached = { ...call, params: { name: 'browser_status', arguments: { attachPort: 9222 } } }
+    expect(await mcp.handle(attached)).toEqual({ jsonrpc: '2.0', id: 9, result: { content: [{ type: 'text', text: 'attached' }] } })
+    expect(ran).toEqual([{}])
   })
 })

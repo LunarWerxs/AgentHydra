@@ -8,9 +8,11 @@ import type { ToolCaller } from './contract'
 export interface BrowserMcpDeps {
   client: BrowserAgentClient
   caller: ToolCaller
+  /** Set when the caller could not be identified: a call that has no attachPort then answers this error. */
+  unidentified?: string
 }
 
-export function createBrowserMcp({ client, caller }: BrowserMcpDeps): McpHandler {
+export function createBrowserMcp({ client, caller, unidentified }: BrowserMcpDeps): McpHandler {
   const handle = async (msg: RpcMessage): Promise<unknown | null> => {
     if (msg.id === undefined || msg.id === null) return null
     const reply = (result: unknown) => ({ jsonrpc: '2.0', id: msg.id, result })
@@ -30,6 +32,7 @@ export function createBrowserMcp({ client, caller }: BrowserMcpDeps): McpHandler
         case 'tools/call': {
           const name = typeof msg.params?.name === 'string' ? msg.params.name : ''
           const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
+          if (unidentified && args.attachPort === undefined) return reply({ content: [{ type: 'text', text: unidentified }], isError: true })
           const res = await client.call(name, args, caller)
           if (res.ok)
             return reply({

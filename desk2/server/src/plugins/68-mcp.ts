@@ -14,6 +14,7 @@ import { createBrowserAgentClient } from '../browser/agent/client'
 import { createBrowserMcp } from '../browser/agent/mcp'
 import type { ToolCaller } from '../browser/agent/contract'
 import { type CallerIds, type CallerSessionDeps, callerSession } from '../browser/agent/caller-session'
+import { createPeerSessionLookup, type PeerSession, resolvePeerSession } from '../browser/peer-session'
 import { type Bridge, bridge } from '../bridge'
 
 /** The address of Desk itself, which the devservers tools call at /dw/api. */
@@ -40,6 +41,34 @@ export async function sessionForRequest(body: unknown, ids: CallerIds, deps: Cal
   return isToolCall(body) ? callerSession(ids, deps) : undefined
 }
 
+const UNIDENTIFIED =
+  'The browser tools could not tell which Claude chat is calling, so they cannot pick its folder. Retry from the chat itself.'
+
+export interface BrowserCallerDeps extends CallerSessionDeps {
+  peer: () => Promise<PeerSession | null>
+}
+
+/**
+ * The caller of one /mcp/browser request. A request with none of chat, worker or cwd is a Claude Code session
+ * connecting over plain http, so its tools/call identifies the caller by the peer socket, and only then.
+ */
+export async function browserCallerFor(
+  body: unknown,
+  ids: CallerIds & { cwd?: string },
+  deps: BrowserCallerDeps,
+): Promise<{ caller: ToolCaller; unidentified?: string }> {
+  const { chat, worker, cwd } = ids
+  if (chat || worker || cwd || !isToolCall(body)) {
+    return { caller: { chat, worker, cwd, session: await sessionForRequest(body, { chat, worker }, deps) } }
+  }
+  const peer = await deps.peer()
+  if (!peer) return { caller: {}, unidentified: UNIDENTIFIED }
+  const owner = (await deps.workers()).find((w) => w.sessionId === peer.sessionId)
+  return { caller: { cwd: peer.cwd, session: peer.sessionId, worker: owner?.id } }
+}
+
+type BunServerLike = { port?: number; requestIP(req: Request): { port: number } | null }
+
 export default function plugin(app: Hono, ctx: ServerContext): void {
   // One handler per chat folder (the tools' default cwd) and one per ReDesign address: each is a few closures.
   const dev = new Map<string, McpHandler>()
@@ -50,21 +79,21 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
     return b.workers({ all: true }).catch(() => [])
   })
+  const peerSession = createPeerSessionLookup(resolvePeerSession)
 
   app.all('/mcp/browser', async (c) => {
     const chat = c.req.query('chat')?.trim() || undefined
     const worker = c.req.query('worker')?.trim() || undefined
+    const cwd = c.req.query('cwd')?.trim() || undefined
     const body = c.req.method === 'POST' ? await c.req.raw.clone().json().catch(() => undefined) : undefined
-    const session = await sessionForRequest(
-      body,
-      { chat, worker },
-      {
-        chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
-        workers: cachedWorkers,
-      },
-    )
-    const caller: ToolCaller = { chat, worker, cwd: c.req.query('cwd')?.trim() || undefined, session }
-    return serveMcpHttp(c.req.raw, createBrowserMcp({ client: browserClient, caller }))
+    const { server } = (c.env ?? {}) as { server?: BunServerLike }
+    const remote = server?.requestIP(c.req.raw) ?? null
+    const { caller, unidentified } = await browserCallerFor(body, { chat, worker, cwd }, {
+      chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],
+      workers: cachedWorkers,
+      peer: () => (remote && server?.port ? peerSession(remote.port, server.port) : Promise.resolve(null)),
+    })
+    return serveMcpHttp(c.req.raw, createBrowserMcp({ client: browserClient, caller, unidentified }))
   })
 
   app.all('/mcp/devservers', (c) => {
