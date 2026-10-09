@@ -84,6 +84,9 @@ export const statusWord = (p: Pick<DevWebProcess, 'status' | 'exitCode'>): strin
 /** A server that is up or coming up is stopped by its button; one that is not is started by it. */
 export const isUp = (s: DevWebProcessStatus): boolean => s === 'running' || s === 'starting' || s === 'waiting'
 
+/** A local page (file://): a plain browser's frame cannot show one, so the tab says where it opens. */
+export const isLocalPage = (url: string): boolean => /^file:/i.test(url.trim())
+
 /** A server opened on a New tab (its row, or its Start): the address the tab goes to at once, null when it has none
  *  until it answers, and whether it is started first. DevWebUI's port is the server's own, so it is known before it runs. */
 export function openPlan(p: Pick<DevWebProcess, 'status' | 'port' | 'url'>): { show: string | null; start: boolean } {

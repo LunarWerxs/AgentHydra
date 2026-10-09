@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ArrowLeft, ArrowRight, ExternalLink, Play, RotateCw } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import type { DevWebProcess } from '@shared/devwebui'
-import { addressOrSearch, isUp, proxyAddress, statusWord } from './logic'
+import { addressOrSearch, isLocalPage, isUp, proxyAddress, statusWord } from './logic'
 import { coveredByPage, hasHostBrowser, type HostBrowserOut, type HostRect, HostView, hostRect } from './native-browser'
 import { registerView, viewAudio } from '@/lib/chat-audio'
 import { audioKey } from './background-policy'
@@ -34,6 +34,7 @@ const frameSrc = computed(() => {
 const live = ref<string | null>(null)
 const shown = computed(() => (native && live.value) || current.value)
 const wanted = computed(() => !!frameSrc.value && (!props.proc || props.proc.status === 'running'))
+const localPage = computed(() => isLocalPage(frameSrc.value ?? ''))
 const addressEl = ref<HTMLInputElement | null>(null)
 const slot = ref<HTMLElement | null>(null)
 
@@ -163,6 +164,7 @@ if (view) {
       <!-- In AgentHydra's window the host's view covers this box; it stays empty here. -->
       <div v-if="view" ref="slot" class="size-full" data-testid="page-host-slot" />
       <!-- A server's page loads once it runs: a frame opened while it starts would sit on a refused-connection page. -->
+      <div v-else-if="wanted && localPage" class="flex size-full items-center justify-center px-6 text-center text-(--text-muted)" role="status">A local page opens in AgentHydra's window or in the system browser (the button above).</div>
       <iframe v-else-if="wanted && frameSrc" :key="`${frameSrc}#${reloads}`" :src="frameSrc" :title="proc ? `${proc.name} preview` : 'Preview'" class="size-full border-0" referrerpolicy="no-referrer" />
       <div v-if="proc && proc.status !== 'running'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--bg-page) px-6 text-center" role="status">
         <div class="text-(--text-muted)">{{ proc.name }} is {{ statusWord(proc) }}{{ isUp(proc.status) ? ', opens when it answers' : '' }}.</div>

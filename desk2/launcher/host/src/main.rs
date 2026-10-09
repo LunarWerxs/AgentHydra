@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 // AgentHydra 2.0, once called Hydra Desk 2 (owner, 2026-10-06). The tray's hidden window has this title
@@ -947,6 +948,72 @@ fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
         && origin_of(&u) != desk_origin.to_ascii_lowercase()
 }
 
+/// A local page on this PC (file:///C:/...). Only the Desk opens one; a web page reaches one only as a link from a local page.
+fn is_local_page(url: &str) -> bool {
+    url.to_ascii_lowercase().starts_with("file:///")
+}
+
+/// Where a local page is remembered: lower case, with %XX escapes undone (WebView2 may escape a space in a path).
+fn local_key(url: &str) -> String {
+    let b = url.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = b
+            .get(i + 1..i + 3)
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match (b[i], hex) {
+            (b'%', Some(v)) => {
+                out.push(v);
+                i += 3;
+            }
+            (c, _) => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_ascii_lowercase()
+}
+
+/// The address the Desk may open in a page view: a local page, or what page_url_allowed allows.
+fn desk_page_allowed(url: &str, desk_origin: &str) -> bool {
+    is_local_page(url) || page_url_allowed(url, desk_origin)
+}
+
+/// What a page view has shown. A web page may reach a local page only when this view already showed it (its own
+/// history, back and forward) or is on a local page itself (a link between local pages); it never brings in a new one.
+#[derive(Default)]
+struct PageState {
+    on_file: bool,
+    files: std::collections::HashSet<String>,
+}
+
+impl PageState {
+    fn opened(&mut self, url: &str) {
+        if is_local_page(url) {
+            self.files.insert(local_key(url));
+        }
+    }
+
+    fn shown(&mut self, url: &str) {
+        self.on_file = is_local_page(url);
+        self.opened(url);
+    }
+
+    fn allows(&self, url: &str, desk_origin: &str) -> bool {
+        if is_local_page(url) {
+            return self.on_file || self.files.contains(&local_key(url));
+        }
+        page_url_allowed(url, desk_origin)
+    }
+}
+
+fn lock_state(state: &Mutex<PageState>) -> MutexGuard<'_, PageState> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// What a page tab's view tells the window's page (HostBrowserOut in native-browser.ts).
 #[derive(Debug, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -1147,11 +1214,17 @@ struct PageView {
     view: Option<wry::WebView>,
     holder: isize,
     shown: bool,
+    state: Arc<Mutex<PageState>>,
 }
 
 impl PageView {
     fn view(&self) -> &wry::WebView {
         self.view.as_ref().expect("a page view lives until dropped")
+    }
+
+    fn open(&mut self, url: &str) {
+        lock_state(&self.state).opened(url);
+        let _ = self.view().load_url(url);
     }
 
     fn place(&mut self, rect: Option<Rect>) {
@@ -1208,13 +1281,16 @@ fn build_page(
     let (nav_origin, win_origin) = (desk_origin.to_string(), desk_origin.to_string());
     let (load_proxy, title_proxy, win_proxy) = (proxy.clone(), proxy.clone(), proxy.clone());
     let (load_id, title_id, win_id) = (id.to_string(), id.to_string(), id.to_string());
+    let state = Arc::new(Mutex::new(PageState::default()));
+    lock_state(&state).opened(url);
+    let (nav_state, win_state, load_state) = (state.clone(), state.clone(), state.clone());
     let built = WebViewBuilder::new_with_web_context(ctx)
         .with_url(url)
         .with_visible(false)
         .with_focused(false)
         .with_devtools(true)
         .with_navigation_handler(move |u| {
-            if page_url_allowed(&u, &nav_origin) {
+            if lock_state(&nav_state).allows(&u, &nav_origin) {
                 return true;
             }
             if u.to_ascii_lowercase().starts_with("mailto:") {
@@ -1224,7 +1300,7 @@ fn build_page(
         })
         // Called off the UI thread on Windows: the view is reached through the event loop.
         .with_new_window_req_handler(move |u, _| {
-            if page_url_allowed(&u, &win_origin) {
+            if lock_state(&win_state).allows(&u, &win_origin) {
                 let _ = win_proxy.send_event(Ev::OpenHere(win_id.clone(), u));
             } else if u.to_ascii_lowercase().starts_with("mailto:") {
                 win::open_external(&u);
@@ -1233,6 +1309,9 @@ fn build_page(
         })
         .with_on_page_load_handler(move |ev, u| {
             let loading = matches!(ev, PageLoadEvent::Started);
+            if loading {
+                lock_state(&load_state).shown(&u);
+            }
             let _ =
                 load_proxy.send_event(Ev::Page(load_id.clone(), PageOut::Url { url: u, loading }));
         })
@@ -1251,6 +1330,7 @@ fn build_page(
                 view: Some(view),
                 holder,
                 shown: false,
+                state,
             })
         }
         Err(_) => {
@@ -1270,11 +1350,11 @@ fn browser_cmd(
 ) {
     match cmd {
         BrowserCmd::Open { id, url, rect } => {
-            if !page_url_allowed(&url, desk_origin) {
+            if !desk_page_allowed(&url, desk_origin) {
                 return;
             }
             if let Some(p) = pages.get_mut(&id) {
-                let _ = p.view().load_url(&url);
+                p.open(&url);
                 p.place(rect);
                 return;
             }
@@ -1938,6 +2018,56 @@ mod tests {
         assert!(!page_url_allowed("javascript:alert(1)", desk));
         assert!(!page_url_allowed("ms-settings:privacy", desk));
         assert!(!page_url_allowed("mailto:owner@example.com", desk));
+    }
+
+    #[test]
+    fn the_desk_may_open_a_local_page_but_a_web_page_may_not_bring_one_in() {
+        let desk = "http://127.0.0.1:7798";
+        let page = "file:///C:/Users/me/Project/tmp/review/main.card-share.html";
+        assert!(desk_page_allowed(page, desk));
+        assert!(desk_page_allowed("file:///C:/Windows/win.ini", desk));
+        assert!(!desk_page_allowed("file://server/share/main.html", desk));
+        assert!(!desk_page_allowed("http://127.0.0.1:7798/ah/", desk));
+        assert!(!desk_page_allowed("javascript:alert(1)", desk));
+        let mut web = PageState::default();
+        web.shown("https://example.com/");
+        assert!(!web.allows(page, desk));
+        assert!(!web.allows("file:///C:/Windows/win.ini", desk));
+        assert!(!web.allows("http://127.0.0.1:7798/ah/", desk));
+        assert!(!web.allows("javascript:alert(1)", desk));
+        assert!(!web.allows("ms-settings:privacy", desk));
+        assert!(!web.allows("mailto:owner@example.com", desk));
+        assert!(web.allows("https://example.com/next", desk));
+        assert!(web.allows("about:blank", desk));
+    }
+
+    #[test]
+    fn a_local_page_links_to_local_pages_and_back_returns_only_to_one_the_tab_showed() {
+        let desk = "http://127.0.0.1:7798";
+        let main = "file:///C:/Users/me/Project/tmp/review/main.html";
+        let other = "file:///C:/Users/me/Project/tmp/review/other.html";
+        let mut tab = PageState::default();
+        tab.opened(main);
+        tab.shown(main);
+        assert!(tab.allows(other, desk));
+        tab.shown(other);
+        tab.shown("https://example.com/");
+        assert!(tab.allows(main, desk));
+        assert!(tab.allows(other, desk));
+        assert!(!tab.allows("file:///C:/Users/me/Project/tmp/review/never-shown.html", desk));
+        assert!(!tab.allows("file:///C:/Windows/win.ini", desk));
+    }
+
+    #[test]
+    fn a_local_page_address_matches_however_webview2_escapes_it() {
+        assert_eq!(
+            local_key("file:///C:/Users/me/A%20Folder/Main.html"),
+            "file:///c:/users/me/a folder/main.html"
+        );
+        assert_eq!(
+            local_key("file:///C:/Users/me/A Folder/Main.html"),
+            local_key("file:///C:/Users/me/A%20Folder/Main.html")
+        );
     }
 
     #[test]
