@@ -92,14 +92,22 @@ function commitRename() {
   const title = externalRename(draft.value, props.session.title)
   if (title !== undefined) emit('rename', title)
 }
+let renameAfterClose = false
 function run(item: RowMenuItem) {
   if (item.action === 'mute' || item.action === 'unmute') return toggleMuted(props.session.id)
   if (item.action === 'rename') {
-    // After the menu has closed and given focus back, or the input loses it at once.
-    setTimeout(startRename, 0)
+    renameAfterClose = true
     return
   }
   emit('action', item)
+}
+// The menu hands focus back to its trigger as it closes, which would blur the input at once: a rename stops that and starts
+// on the next task, once the menu has finished closing (the "..." menu sits in the row and leaves with it as renaming starts).
+function onMenuClosed(e: Event) {
+  if (!renameAfterClose) return
+  renameAfterClose = false
+  e.preventDefault()
+  setTimeout(startRename, 0)
 }
 </script>
 
@@ -171,13 +179,13 @@ function run(item: RowMenuItem) {
                 <component :is="shellGlyphs.rowMore" class="size-4" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" :side-offset="4" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+            <DropdownMenuContent align="start" :side-offset="4" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
               <RowMenuList :entries="menu" kind="dropdown" @run="run" />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
       </ContextMenuTrigger>
-    <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+    <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
       <RowMenuList :entries="menu" kind="context" @run="run" />
     </ContextMenuContent>
       </ContextMenu>

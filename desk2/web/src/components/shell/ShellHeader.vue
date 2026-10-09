@@ -106,11 +106,20 @@ function commitRename() {
   const t = draft.value.trim()
   if (t && props.chat && t !== props.chat.title) emit('rename', t)
 }
+let renameAfterClose = false
 function run(item: RowMenuItem) {
   if (item.action === 'mute' || item.action === 'unmute') {
     if (props.chat) toggleMuted(props.chat.id)
-  } else if (item.action === 'rename') setTimeout(startRename, 0)
+  } else if (item.action === 'rename') renameAfterClose = true
   else emit('action', item)
+}
+// The menu hands focus back to its trigger as it closes, which would blur the input at once: a rename stops that and starts
+// on the next task, once the menu has finished closing (the "..." menu sits in the row and leaves with it as renaming starts).
+function onMenuClosed(e: Event) {
+  if (!renameAfterClose) return
+  renameAfterClose = false
+  e.preventDefault()
+  setTimeout(startRename, 0)
 }
 
 const connectionsShown = computed(() => showConnectionsChip(connectorList.value))
@@ -171,7 +180,7 @@ const PANE_BTN =
             <component :is="shellGlyphs.more" class="size-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+        <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
           <RowMenuList :entries="menu" kind="dropdown" @run="run" />
           <template v-if="accounts.length">
             <DropdownMenuSeparator :class="MENU_SEPARATOR" />
