@@ -51,7 +51,7 @@ function pidAlive(pid: number): boolean {
  *  falls back to the pid alone, which is exactly what every record used to get. */
 function sessionAlive(
   reg: { pid: number; messagingSocketPath?: unknown },
-  pipes: () => Set<string> | null,
+  pipes: (fresh?: boolean) => Set<string> | null,
 ): boolean {
   if (!pidAlive(reg.pid)) return false
   const sock = reg.messagingSocketPath
@@ -69,25 +69,41 @@ const PIPE_ROOT = '\\\\.\\pipe\\'
  *  and every scan knocked on every engine's pipe, CliMayte's pool every few seconds. A listing that
  *  cannot be read is unknown, which falls back to the pid's verdict: never "gone", the verdict
  *  something acts on. */
-function socketPresent(sock: string, pipes: () => Set<string> | null): boolean {
+function socketPresent(sock: string, pipes: (fresh?: boolean) => Set<string> | null): boolean {
   const path = sock.replace(/\//g, '\\')
   if (!path.toLowerCase().startsWith(PIPE_ROOT)) return existsSync(sock)
+  const name = path.slice(PIPE_ROOT.length).toLowerCase()
   const names = pipes()
-  return names === null || names.has(path.slice(PIPE_ROOT.length).toLowerCase())
+  if (names === null || names.has(name)) return true
+  // Missing from a shared listing that may predate the session: one fresh read decides.
+  const fresh = pipes(true)
+  return fresh === null || fresh.has(name)
 }
 
-/** The pipe listing for ONE scan, read on first use: one directory read answers every record. */
-function pipeListing(): () => Set<string> | null {
-  let names: Set<string> | null | undefined
-  return () => {
-    if (names === undefined) {
-      try {
-        names = new Set(readdirSync(PIPE_ROOT).map((n) => n.toLowerCase()))
-      } catch {
-        names = null
-      }
-    }
-    return names
+/** How long one pipe listing answers every scan. The CliMayte tick scans every second while a worker
+ *  runs, and the listing holds every pipe on the PC (thousands with Chrome and ~50 Claude engines up):
+ *  the stall profiler had this readdirSync on top of the daemon's ~0.8 core, 15-25% of its samples
+ *  (2026-10-09). A pipe that is missing gets a fresh read, at most every PIPES_RETAKE_MS. */
+const PIPES_TTL_MS = 1_000
+const PIPES_RETAKE_MS = 200
+let pipesCache: { at: number; names: Set<string> | null } | null = null
+
+function readPipes(): Set<string> | null {
+  try {
+    return new Set(readdirSync(PIPE_ROOT).map((n) => n.toLowerCase()))
+  } catch {
+    return null
+  }
+}
+
+/** The pipe listing for ONE scan, read on first use from a listing shared for up to PIPES_TTL_MS;
+ *  `fresh` retakes it unless it is under PIPES_RETAKE_MS old. */
+function pipeListing(): (fresh?: boolean) => Set<string> | null {
+  return (fresh = false) => {
+    const age = pipesCache ? Date.now() - pipesCache.at : Number.POSITIVE_INFINITY
+    if (age > (fresh ? PIPES_RETAKE_MS : PIPES_TTL_MS))
+      pipesCache = { at: Date.now(), names: readPipes() }
+    return (pipesCache as { names: Set<string> | null }).names
   }
 }
 
