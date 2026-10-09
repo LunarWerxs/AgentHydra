@@ -60,7 +60,7 @@ async function onPage<T>(browser: Browser, targetId: string, work: (send: Send) 
   }
 }
 
-function screenshotSettings(params: Params) {
+export function screenshotSettings(params: Params) {
   const asked = params.detail == null ? '' : String(params.detail).trim().toLowerCase()
   const level = asked || 'normal'
   const row = SCREENSHOT_DETAIL[level]

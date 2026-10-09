@@ -68,7 +68,7 @@ describe('the browser tools as MCP', () => {
 })
 
 describe('the tool registry', () => {
-  test('lists the twenty-nine browser tools, each with a description and an object schema', () => {
+  test('lists the thirty browser tools, each with a description and an object schema', () => {
     expect(TOOL_DEFS.map((d) => d.name).sort()).toEqual([
       'browser_click',
       'browser_close',
@@ -77,6 +77,7 @@ describe('the tool registry', () => {
       'browser_get_text',
       'browser_handoff',
       'browser_hover',
+      'browser_live',
       'browser_navigate',
       'browser_press_key',
       'browser_profile_adopt',

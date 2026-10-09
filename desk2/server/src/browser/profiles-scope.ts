@@ -26,6 +26,7 @@ import {
   sitesOf,
   storeRoot,
 } from './store'
+import { browserLiveRoot, readLiveTags } from './live/tags'
 import { normalizePath } from './workspace'
 
 export class SavedBrowserError extends Error {}
@@ -284,6 +285,42 @@ function scoreProfile(hosts: string[], word: string, name: string, sessionHosts:
   }
 }
 
+const LIVE_SELF_WORDS = new Set(['my', 'mine', 'me', 'own'])
+const LIVE_BROWSER_WORDS = new Set(['the', 'a', 'browser', 'window', 'everyday', 'personal', 'usual', 'normal', 'regular', 'main'])
+const LIVE_KINDS = new Set(['chrome', 'edge', 'brave'])
+
+function taggedRows(reg: Json, query: string, word: string, resolvedHosts: string[]): Json[] {
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
+  const askWords = query.toLowerCase().split(/[^a-z']+/).filter(Boolean)
+  const selfAsk =
+    askWords.some((w) => LIVE_SELF_WORDS.has(w)) &&
+    askWords.every((w) => LIVE_SELF_WORDS.has(w) || LIVE_BROWSER_WORDS.has(w) || LIVE_KINDS.has(w))
+  const askedKind = askWords.find((w) => LIVE_KINDS.has(w))
+  return readLiveTags()
+    .tags.map((t) => {
+      const key = `external:${t.browser}:${t.profileDir}`
+      const sessionHosts = refreshProfileHosts(reg, key, join(browserLiveRoot(t.browser, t.userDataDir), t.profileDir))
+      const words = [norm(t.tag), norm(t.profileName ?? ''), norm(t.note ?? '')].filter(Boolean)
+      const nameHit =
+        (selfAsk && (!askedKind || t.browser.toLowerCase() === askedKind)) ||
+        (word.length >= 3 && words.some((w) => w.includes(word) || (w.length >= 3 && word.includes(w))))
+      const hostHit = resolvedHosts.filter((w) => sessionHosts.some((h) => hostMatches(h, w)))
+      const loginsUnreadable = registryEntry(reg, key).hostsReadable === false
+      return {
+        tag: t.tag,
+        browser: t.browser,
+        profile: t.profileName || t.profileDir,
+        profileDir: t.profileDir,
+        ...(t.note ? { note: t.note } : {}),
+        points: hostHit.length * 10 + (nameHit ? 5 : 0) + (loginsUnreadable ? 1 : 0),
+        matchedHosts: hostHit,
+        use: `browser_live { window: '${t.tag}', ... } drives this window of the person's own browser; it is never a managed profile`,
+      }
+    })
+    .filter((r) => r.points > 0)
+    .sort((a, b) => b.points - a.points)
+}
+
 export async function findPayload(cwd: string, query: string): Promise<Json> {
   const g = await gather(cwd)
   const resolvedHosts = wantedHosts(query)
@@ -341,6 +378,7 @@ export async function findPayload(cwd: string, query: string): Promise<Json> {
       .filter((r) => r.points > 0)
       .sort((a, b) => b.points - a.points)
     const best = managed.find((r) => r.matchedHosts.length > 0) ?? null
+    const tagged = taggedRows(reg, query, word, resolvedHosts)
     return {
       query,
       workspace: g.slug,
@@ -355,10 +393,13 @@ export async function findPayload(cwd: string, query: string): Promise<Json> {
         : null,
       managed,
       ...(elsewhere.length ? { otherWorkspaces: elsewhere } : {}),
+      ...(tagged.length ? { taggedBrowsers: tagged } : {}),
       external,
       note: best
         ? `drive profile:'${best.profile}'. A recorded session is a dated observation, not a promise: if the site asks for a login anyway, the person must sign in again.`
-        : 'no saved browser in this workspace holds this session by its cookie hosts',
+        : tagged.length
+          ? `the person's own tagged browser may hold it: browser_live { window: '${tagged[0].tag}' } drives that window (Windows only; it asks the person's own open browser, not a managed profile).`
+          : 'no saved browser in this workspace holds this session by its cookie hosts',
     }
   })
 }

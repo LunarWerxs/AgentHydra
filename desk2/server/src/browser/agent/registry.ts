@@ -13,6 +13,7 @@ import {
 import { adoptProfile } from '../profiles-adopt'
 import type { Listing } from '../store'
 import { listProfiles } from '../store'
+import { LIVE_TOOLS } from '../live/tools'
 import type { ToolCaller, ToolName, ToolReply } from './contract'
 import { ToolInputError } from './errors'
 import { EXEC_TOOLS } from './exec'
@@ -155,6 +156,7 @@ export const TOOL_DEFS: ToolDef[] = [
   ...TAB_TOOLS,
   ...HANDOFF_TOOLS,
   ...SCRIPT_TOOLS,
+  ...LIVE_TOOLS,
   {
     name: 'browser_profiles',
     description:
