@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { HydraRead } from '../../src/projects/hydra'
-import { ProjectList, parseStatus, type GitFacts } from '../../src/projects/projects'
+import { type ChatRef, type GitFacts, type OutsideChat, ProjectList, parseStatus } from '../../src/projects/projects'
 
 let base: string
 beforeEach(() => {
@@ -143,5 +143,53 @@ describe('ProjectList', () => {
     expect(res.projects.map((p) => [p.name, p.group, p.git?.behind])).toEqual([['App', 'Work', 2]])
     expect(res.hydra.found).toBe(true)
     expect(res.pending).toBe(true)
+  })
+
+  test('a chat started in a folder of projects counts for the one it worked in, those with open chats come first, and each is filed into that group once', async () => {
+    const projects = resolve(base, 'projects')
+    const alpha = resolve(projects, 'alphaville')
+    const beta = resolve(projects, 'betamax')
+    for (const dir of [alpha, beta, resolve(base, 't')]) mkdirSync(dir, { recursive: true })
+    // s1 started in the folder of projects and worked in betamax; its transcript says so.
+    const s1 = resolve(base, 't', 's1.jsonl')
+    const touched = [...[0, 1, 2, 3].map((i) => join(beta, 'src', `f${i}.ts`)), join(alpha, 'README.md')]
+    writeFileSync(s1, touched.map((p) => JSON.stringify({ cwd: projects, message: { content: [{ type: 'tool_use', input: { file_path: p } }] } })).join('\n'))
+    const outside = (id: string, title: string, at: number, over: Partial<OutsideChat> = {}): OutsideChat => ({ id, cwd: projects, title, source: 'desktop', lastActivityAt: at, archived: false, group: null, fromPc: null, ...over })
+    const filed: [ChatRef, string][] = []
+    const list = new ProjectList({
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      readHydra: async () => ({
+        problem: null,
+        projects: [
+          { key: 'a', path: alpha, name: 'Alphaville', group: null, iconFile: null },
+          { key: 'b', path: beta, name: 'Betamax Studio', group: null, iconFile: null },
+        ],
+      }),
+      recent: () => [],
+      chats: () => [{ id: 'd1', sessionId: null, cwd: alpha, title: 'Old work', updatedAt: 5_000, archived: true, group: null }],
+      outside: async () => [
+        outside('s1', 'Untitled', 9_000),
+        // Placed by its title (no transcript), but already in a group the user chose: counted, never filed.
+        outside('s3', 'Fix the Alphaville login', 8_000, { group: 'Mine' }),
+        // Nothing places it: it stays its folder's.
+        outside('s2', 'Archived notes', 7_000, { archived: true }),
+      ],
+      transcript: (sessionId) => (sessionId === 's1' ? s1 : null),
+      file: (chat, group) => filed.push([chat, group]),
+      git: async () => null,
+      tempDir: resolve(base, 'scratch'),
+    })
+
+    const res = await list.list({ wait: true })
+    expect(res.projects.map((p) => [p.name, p.openChats])).toEqual([
+      ['Betamax Studio', 1],
+      ['Alphaville', 1],
+      ['projects', 0],
+    ])
+    expect(filed).toEqual([[{ kind: 'outside', id: 's1' }, 'Betamax Studio']])
+
+    // Taken out of the group by hand (its group is null again): it is not filed a second time.
+    await list.list({ wait: true })
+    expect(filed.length).toBe(1)
   })
 })

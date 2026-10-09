@@ -836,10 +836,13 @@ export interface ProjectEntry {
   git: ProjectGit | null
   lastCommitAt: string | null
   lastChatAt: string | null
+  /** Its chats not archived: this app's and the ones run elsewhere on this PC. A chat started in a folder that holds
+   * projects counts for the one it worked in. */
+  openChats: number
 }
 
 export interface ProjectsResponse {
-  /** Newest of lastChatAt and lastCommitAt first. */
+  /** The ones with open chats first, then newest of lastChatAt and lastCommitAt first. */
   projects: ProjectEntry[]
   /** `found` false: Project Hydra is not installed here. `problem`: it is, but could not be read. */
   hydra: { found: boolean; root: string | null; placed: number; problem: string | null }

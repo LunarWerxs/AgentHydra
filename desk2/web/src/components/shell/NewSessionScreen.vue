@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { Folder, FolderPlus, LayoutList } from '@lucide/vue'
+import { Folder, FolderPlus, LayoutList, MessagesSquare } from '@lucide/vue'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -104,9 +104,15 @@ function pinLeaving(el: Element): void {
 // The details of a tile: in its flow when the toggle is on (the tile is its old, taller self), otherwise a layer under
 // the tile that shows on hover or keyboard focus and takes no room, so the grid never moves (owner, 2026-10-08: "only
 // display that on hover. So it fits more vertically").
-const TILE = 'group/tile relative flex min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 p-3 text-start hover:bg-fill-hover'
+// w-full: a button is only as wide as its content, so a long name ran into the next tile (owner, 2026-10-08: "they run
+// into each other").
+const TILE = 'group/tile relative flex w-full min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 p-3 text-start hover:bg-fill-hover'
 const DETAILS_HOVER = 'pointer-events-none absolute inset-x-0 top-full z-20 mt-1 hidden min-w-0 flex-col gap-2 rounded-(--radius-8) bg-(--bg-popover) p-2 group-hover/tile:flex group-focus-visible/tile:flex'
 const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2'
+// The project's open chats, at the end of its name (owner, 2026-10-08: "a little badge on them, with how many active
+// chats or, I guess, unarchived chats exist for each"); those projects come first.
+const OPEN_CHATS = 'ms-auto flex shrink-0 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] font-semibold leading-4 tabular-nums text-text-2'
+const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 </script>
 
 <template>
@@ -166,12 +172,15 @@ const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radi
             <ContextMenu>
               <ContextMenuTrigger as-child>
                 <button type="button" :title="p.path" :class="[TILE, showProjectDetails ? 'flex-col' : 'items-center']" @click="open(p)">
-                  <span class="flex min-w-0 items-center gap-2">
+                  <span class="flex w-full min-w-0 items-center gap-2">
                     <img v-if="p.icon" :src="p.icon" alt="" class="size-7 shrink-0 rounded-(--radius-6)" />
                     <span v-else class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted">
                       <Folder class="size-4" aria-hidden="true" />
                     </span>
                     <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
+                    <span v-if="p.openChats" :class="OPEN_CHATS" :title="openChatsLabel(p.openChats)" :aria-label="openChatsLabel(p.openChats)">
+                      <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
+                    </span>
                   </span>
                   <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
                     <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>

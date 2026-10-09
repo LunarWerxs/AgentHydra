@@ -13,6 +13,7 @@ import type { Context, Hono } from 'hono'
 import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { bridge } from '../bridge'
+import { findSessionJsonl } from '../bridge/session-jsonl'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { listMcpServers } from '../engine/mcp-servers'
@@ -44,6 +45,8 @@ import { findHydra, readHydra, type HydraLocation, type HydraRead } from '../pro
 import { localFolderPath, withPath, withoutPath } from '../projects/choices'
 import { ProjectList } from '../projects/projects'
 
+/** How often chats started in a folder that holds projects are placed and filed while New is closed. */
+const PROJECTS_SWEEP_MS = 2 * 60_000
 /** How often climayteActive is re-read from the bridge poller's last worker list. */
 const CLIMAYTE_REFRESH_MS = 3000
 /** How often while no window is on screen. */
@@ -402,11 +405,18 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
   const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
   const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
+  const sessions = (deps.bridge as ManagerBridge | undefined) ?? bridge()
   const projects = new ProjectList({
     findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
     readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
     recent,
-    chats: () => manager.list({ archived: true }).map((c) => ({ cwd: c.cwd, updatedAt: c.updatedAt })),
+    chats: () =>
+      manager
+        .list({ archived: true })
+        .map((c) => ({ id: c.id, sessionId: c.sessionId, cwd: c.cwd, title: c.title, updatedAt: c.updatedAt, archived: c.archived, group: c.group })),
+    outside: () => sessions.externalSessions(),
+    transcript: (sessionId, cwd) => findSessionJsonl(sessionId, sessions.sessionRoots(), cwd),
+    file: (chat, group) => (chat.kind === 'desk' ? manager.patch(chat.id, { group }) : manager.patchSessionMeta(chat.id, { group })),
     choices: () => ({
       folders: ctx.settings().projectFolders,
       roots: ctx.settings().projectRoots,
@@ -415,6 +425,11 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
     cacheFile: join(ctx.home, 'projects.json'),
   })
   app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1' })))
+  // Chats are filed into their project's group with New closed too (owner, 2026-10-08: "I wouldn't mind if Agent
+  // Hydra automatically applies the right folders").
+  const sweep = setInterval(() => void projects.sweep().catch(() => {}), PROJECTS_SWEEP_MS)
+  ;(sweep as { unref?: () => void }).unref?.()
+  ctx.onStop(() => clearInterval(sweep))
   const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
   for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
     const field = choiceFields[kind]

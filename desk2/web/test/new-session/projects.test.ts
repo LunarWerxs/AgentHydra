@@ -4,7 +4,7 @@ import { filterProjects, syncLabel } from '../../src/components/shell/projects'
 
 const git = (over: Partial<ProjectGit>): ProjectGit => ({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0, fetchedAt: null, ...over })
 
-const project = (name: string, path: string): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null })
+const project = (name: string, path: string): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null, openChats: 0 })
 
 describe('syncLabel', () => {
   it('says a clean, level checkout is up to date, and nothing for a folder that is no repo', () => {

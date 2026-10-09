@@ -99,7 +99,7 @@ function account(id: string, name: string, plan: string, over: Partial<AccountIn
 export function demoAccounts(): AccountInfo[] {
   const now = Date.now()
   return [
-    account('68', 'eek', 'Max 20x'),
+    account('68', 'Sam', 'Max 20x'),
     account('35', 'sue', 'Max 5x', { fiveHourPct: 71, weeklyPct: 58, fiveHourResetsAt: now + 47 * MIN, inUse: true }),
     account('12', 'kai', 'Pro', { fiveHourPct: 93, weeklyPct: 88, fiveHourResetsAt: now + 2 * 60 * MIN + 14 * MIN }),
     account('7', 'old', 'Pro', { signedIn: false, fiveHourPct: null, weeklyPct: null, fiveHourResetsAt: null, weeklyResetsAt: null })
@@ -277,7 +277,7 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
 
 function demoProjects(): ProjectsResponse {
   const git = (over: Partial<ProjectGit>): ProjectGit => ({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0, fetchedAt: null, ...over })
-  const row = (path: string, name: string, group: string | null, sources: ProjectsResponse['projects'][number]['sources'], g: ProjectGit) => ({
+  const row = (path: string, name: string, group: string | null, sources: ProjectsResponse['projects'][number]['sources'], g: ProjectGit, openChats = 0) => ({
     path,
     name,
     group,
@@ -285,10 +285,18 @@ function demoProjects(): ProjectsResponse {
     sources,
     git: g,
     lastCommitAt: null,
-    lastChatAt: null
+    lastChatAt: null,
+    openChats
   })
   return {
-    projects: [row(C, 'connections', 'Work', ['projecthydra', 'chats'], git({ behind: 2 })), row(N, 'nexuscode-2d', null, ['chats'], git({ dirty: 3 })), row(P, 'audio-lab', null, ['recent'], git({ ahead: 1 }))],
+    projects: [
+      row(C, 'connections', 'Work', ['projecthydra', 'chats'], git({ behind: 2 }), 3),
+      row(N, 'nexuscode-2d', null, ['chats'], git({ dirty: 3 }), 1),
+      row(P, 'audio-lab', null, ['recent'], git({ ahead: 1 })),
+      row('C:/Users/me/Desktop/Project/billing-api', 'billing-api', 'Work', ['projecthydra'], git({})),
+      row('C:/Users/me/Desktop/Project/docs-site', 'docs-site', 'Work', ['projecthydra'], git({ behind: 5 })),
+      row('C:/Users/me/Desktop/shader-lab', 'shader-lab', null, ['recent'], git({}))
+    ],
     hydra: { found: true, root: null, placed: 1, problem: null },
     choices: { folders: [], roots: [], hidden: [] },
     pending: false
