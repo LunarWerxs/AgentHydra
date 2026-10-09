@@ -33,19 +33,41 @@ export function secretRefusal(headers: Headers, remote: string | null): string |
   return null
 }
 
-/** The page is https and on one of the allowed hosts or one of their subdomains; a lookalike host is refused. */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1'])
+
+/** A hosts entry as a host name: 'example.com', '*.example.com', or a URL whose host is taken. */
+function patternHost(pattern: string): string {
+  const p = pattern.trim().toLowerCase()
+  if (!p.includes('://')) return p.replace(/\/.*$/, '').replace(/\.$/, '')
+  return parseUrl(p)?.hostname ?? ''
+}
+
+/** Connections' rule (hostMatchesSecretDomain): 'example.com' is that host only, '*.example.com' it and its subdomains. */
+function hostMatches(host: string, pattern: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '')
+  const p = patternHost(pattern)
+  if (!h || !p) return false
+  if (p.startsWith('*.')) {
+    const base = p.slice(2)
+    return base !== '' && (h === base || h.endsWith(`.${base}`))
+  }
+  return h === p
+}
+
+/**
+ * The page is https (or http on this machine) and on one of the allowed hosts, by the same rule Connections checks
+ * before it leases the value; a lookalike host is refused.
+ */
 export function hostCheck(
   url: string,
   hosts: string[],
 ): { ok: true; host: string } | { ok: false; error: 'not_https' | 'host_not_allowed'; detail: string } {
   const parsed = parseUrl(url)
-  if (!parsed || parsed.protocol !== 'https:') return { ok: false, error: 'not_https', detail: `the page at ${url} is not https` }
-  const host = parsed.hostname
-  const allowed = hosts.some((h) => {
-    const domain = h.trim().toLowerCase().replace(/^\.+/, '')
-    return domain !== '' && (host === domain || host.endsWith(`.${domain}`))
-  })
-  if (!allowed) return { ok: false, error: 'host_not_allowed', detail: `the page at ${url} is not on an allowed host` }
+  const host = parsed?.hostname.toLowerCase() ?? ''
+  if (!parsed || (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && LOOPBACK_HOSTS.has(host))))
+    return { ok: false, error: 'not_https', detail: `the page at ${url} is not https` }
+  if (!hosts.some((h) => hostMatches(host, h)))
+    return { ok: false, error: 'host_not_allowed', detail: `the page at ${url} is not on an allowed host` }
   return { ok: true, host }
 }
 

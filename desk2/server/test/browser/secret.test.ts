@@ -136,14 +136,23 @@ describe('the request guard', () => {
 })
 
 describe('the host check', () => {
-  test('allows the host and its subdomains on https', () => {
+  test('a plain host allows only itself; a *. host allows it and its subdomains, as Connections checks', () => {
     expect(hostCheck('https://example.test:8443/login', ['example.test'])).toEqual({ ok: true, host: 'example.test' })
-    expect(hostCheck('https://sub.example.test/', ['example.test'])).toEqual({ ok: true, host: 'sub.example.test' })
+    expect(hostCheck('https://sub.example.test/', ['example.test'])).toMatchObject({ ok: false, error: 'host_not_allowed' })
+    expect(hostCheck('https://sub.example.test/', ['*.example.test'])).toEqual({ ok: true, host: 'sub.example.test' })
+    expect(hostCheck('https://example.test/', ['*.example.test'])).toEqual({ ok: true, host: 'example.test' })
+    expect(hostCheck('https://example.test/', ['https://example.test/login'])).toEqual({ ok: true, host: 'example.test' })
+  })
+
+  test('http is allowed only on this machine', () => {
+    expect(hostCheck('http://localhost:5173/login', ['localhost'])).toEqual({ ok: true, host: 'localhost' })
+    expect(hostCheck('http://127.0.0.1:5173/', ['127.0.0.1'])).toEqual({ ok: true, host: '127.0.0.1' })
   })
 
   test('refuses a lookalike host, a non-https page, and a host not listed', () => {
     expect(hostCheck('https://example.test.evil.test/', ['example.test']).ok).toBe(false)
-    expect(hostCheck('https://evil-example.test/', ['example.test']).ok).toBe(false)
+    expect(hostCheck('https://example.test.evil.test/', ['*.example.test']).ok).toBe(false)
+    expect(hostCheck('https://evil-example.test/', ['*.example.test']).ok).toBe(false)
     expect(hostCheck('http://example.test/', ['example.test'])).toMatchObject({ ok: false, error: 'not_https' })
     expect(hostCheck('https://other.test/', ['example.test'])).toMatchObject({ ok: false, error: 'host_not_allowed' })
   })
@@ -169,7 +178,8 @@ describe('runSecret', () => {
   })
 
   test('types nothing on a non-https page', async () => {
-    const reply = await typeSecret({ hosts: ['127.0.0.1'] })
+    await go(`http://example.test:${(httpServer as { port: number }).port}/`)
+    const reply = await typeSecret()
     expect(reply).toMatchObject({ ok: false, error: 'not_https' })
     expect(JSON.stringify(reply)).not.toContain(SECRET)
     expect(await fieldValue('#name')).toBe('old value')
@@ -191,9 +201,10 @@ describe('runSecret', () => {
     expect(await fieldValue('#name')).toBe(SECRET)
   })
 
-  test('types on a subdomain of an allowed host', async () => {
+  test('types on a subdomain only when the host is given as *.', async () => {
     await go(`https://sub.example.test:${httpsPort}/`)
-    expect(await typeSecret()).toMatchObject({ ok: true, host: 'sub.example.test' })
+    expect(await typeSecret()).toMatchObject({ ok: false, error: 'host_not_allowed' })
+    expect(await typeSecret({ hosts: ['*.example.test'] })).toMatchObject({ ok: true, host: 'sub.example.test' })
   })
 
   test('refuses a lookalike host before typing anything', async () => {
