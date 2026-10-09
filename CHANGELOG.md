@@ -24,9 +24,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Hovering a control shows one tip after a second, not two**
 - **Opening a chat lands on its newest message**
 - **The folder pill above the message box shows the project's logo**
+- **Restart to update takes seconds and shows What's new afterwards**
 - **Sending and clicking no longer stall behind the server's background reading of running workers**
 
 **Everything in Unreleased**
+
+- **Restart to update takes seconds and shows What's new afterwards.** A click on the update row could sit for two minutes with nothing on screen, and What's new never appeared. The row now says Restarting… the moment you click, the old server stops within seconds, and What's new opens once the new one is up.
 
 - **Opening a chat lands on its newest message.** Switching to a chat could leave it a screen or more above the latest message while its rows settled. A chat now opens at the bottom and stays there until you scroll up yourself.
 
