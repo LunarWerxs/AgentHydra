@@ -71,7 +71,7 @@ describe('a chat started from the New session screen lands', () => {
     desk.select({ kind: 'new' })
     nextCreated = summary('land-new')
     const created = await desk.createChat({ cwd: 'C:/work/land', prompt: 'hello' })
-    expect(created.id).toBe('land-new')
+    expect(created?.id).toBe('land-new')
     expect(desk.selected.value).toEqual({ kind: 'chat', id: 'land-new' })
     expect(ids('land-')).toEqual(['land-old', 'land-new'])
     // ...as the first row of its folder group.
