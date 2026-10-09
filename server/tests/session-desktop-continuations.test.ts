@@ -11,7 +11,8 @@
 // has retired (`priorCliSessionIds`). Pinned here: those links fold the retired transcripts into
 // the surviving row, the survivor keeps its account, a retired id whose successor is gone stays on
 // screen, and — the migration case — a claim made only by an ARCHIVED tombstone still counts,
-// because after a move the tombstone is the only record that remembers the lineage.
+// because after a move the tombstone is the only record that remembers the lineage, while its
+// archive flag stays the tombstone's: the live survivor is still in the unarchived list.
 import { afterAll, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -117,10 +118,23 @@ meta('acct', `local_${ORPHAN}.json`, {
   isArchived: false,
 })
 
+// A chat archived on its own record, to show the unarchived list still leaves an archived chat out.
+const SHELVED = 'dddddddd-0000-4000-8000-000000000001'
+transcript(SHELVED, 'u-shelved', 'done with this', 1_770_000_600)
+meta('acct', `local_${SHELVED}.json`, { cliSessionId: SHELVED, isArchived: true })
+
 interface Row {
   id: string
   instance: string | null
   archived: boolean
+}
+let unarchived: string[] | null = null
+/** The ids listSessions() gives through the default `archived: 'hide'` scope, in a cold process, once. */
+function listUnarchived(): string[] {
+  unarchived ??= child<string[]>(`const { listSessions } = await import(${SESSIONS});
+    const rows = await listSessions({ limit: 50, sinceMs: null, archived: 'hide' });
+    console.log(JSON.stringify(rows.map((r) => r.session_id)));`)
+  return unarchived
 }
 let listed: Row[] | null = null
 /** listSessions() in a cold process, once for the whole file — every test reads the same list. */
@@ -161,6 +175,18 @@ test(
     const survivor = rows.find((r) => r.id === MOVED_NEW)
     expect(survivor?.instance).toBe('aaa-target')
     expect(survivor?.archived).toBe(false)
+  },
+  SPAWNS_A_CHILD_BUN,
+)
+
+test(
+  'the unarchived list keeps a moved chat its row calls unarchived, and still leaves an archived one out',
+  () => {
+    // The filter used to count the tombstone among the survivor's absorbed ids as the survivor's own
+    // archive flag: a live chat left every unarchived list while its row said unarchived (2026-10-09).
+    const ids = listUnarchived()
+    expect(ids).toContain(MOVED_NEW)
+    expect(ids).not.toContain(SHELVED)
   },
   SPAWNS_A_CHILD_BUN,
 )

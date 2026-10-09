@@ -1142,7 +1142,13 @@ function transcriptMatchesInstance(
   return instance === 'other' ? false : known.instance === instance
 }
 
-/** Whether `f` (or a transcript it absorbed) is marked archived. */
+/**
+ * Whether `f` is marked archived, by the same Desktop record its row shows (deskMetaFor): its own id's, else
+ * the first transcript it absorbed that has one. Any absorbed record counting hid live chats from every
+ * `archived: 'hide'` list while their rows said unarchived: a chat continued from an archived one carries
+ * that one's record among its ids (2026-10-09, six live chats on one account; the sidebar showed their ids
+ * for titles and the cloud list left them out).
+ */
 function transcriptArchivedFlag(
   f: TranscriptFile,
   idsOf: (f: TranscriptFile) => string[],
@@ -1150,7 +1156,12 @@ function transcriptArchivedFlag(
 ): boolean {
   // Another PC's chat is archived when that PC archived it, whatever a copy here says.
   if (f.remote) return chatsFromElsewhere().get(f.session_id)?.archived ?? false
-  return f.archived || idsOf(f).some((id) => !!mmap.get(id)?.archived)
+  if (f.archived) return true
+  for (const id of idsOf(f)) {
+    const meta = mmap.get(id)
+    if (meta) return meta.archived
+  }
+  return false
 }
 
 /** Whether `f` (or a transcript it absorbed) has a queue row. */
