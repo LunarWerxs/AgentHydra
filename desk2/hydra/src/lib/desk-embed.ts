@@ -36,6 +36,25 @@ export function openSettingsInDesk(section?: AhSettingsPage): void {
   tellDesk({ type: 'ah:open-settings', section })
 }
 
+/** Marks the top bar (App.vue's header): in Desk the page's top row is the window's title bar. */
+export const TITLE_BAR_ATTR = 'data-title-bar'
+// What a press on the title bar does not drag from: anything that takes a click of its own.
+const CLICKABLE = 'button, a, input, textarea, select, [role="button"], [role="tab"], [role="link"], [contenteditable]'
+
+/** A press on the top row's empty parts moves the window and a double press maximizes or restores it, as Windows'
+ *  caption does (owner, 2026-10-08: "drag handles that exist in places that aren't covered by buttons"). Desk's own
+ *  top row drags through WebView2's drag regions, which do not reach into this frame, so Desk is asked (it ignores the
+ *  ask while Windows draws the caption). The row is the bar and, beside the centred column, the page around it; never
+ *  a pop-up over it (its backdrop is neither), nor a button, tab or link in it. */
+function onTitleBarDown(e: MouseEvent): void {
+  const bar = document.querySelector(`[${TITLE_BAR_ATTR}]`)
+  const t = e.target
+  if (!bar || e.button !== 0 || !(t instanceof Element) || t.closest(CLICKABLE)) return
+  if (!(bar.contains(t) || (t.contains(bar) && e.clientY < bar.getBoundingClientRect().bottom))) return
+  e.preventDefault()
+  tellDesk({ type: 'ah:window', action: e.detail === 2 ? 'maximize' : 'drag' })
+}
+
 /** Desk draws the "a newer AgentHydra is waiting" dot on its Settings gear; this window has no gear. */
 export function showUpdateDotInDesk(on: boolean): void {
   tellDesk({ type: 'ah:update-dot', on })
@@ -188,6 +207,7 @@ function setDeskHidden(next: boolean): void {
 
 if (EMBEDDED) {
   watchDeskVisibility()
+  document.addEventListener('mousedown', onTitleBarDown)
   // The tab on screen's sidebar, sent whenever it changes (the tab, or what its build reads). It is not
   // held back while the pane is out of view: a tree that changes then (a Desk ask switched the tab) would
   // leave Desk drawing the old one for a moment when the pane slides back in.

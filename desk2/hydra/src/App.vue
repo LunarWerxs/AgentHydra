@@ -44,6 +44,7 @@ import {
   resendSidebar,
   setDeskView,
   showUpdateDotInDesk,
+  TITLE_BAR_ATTR,
 } from '@/lib/desk-embed'
 import { refreshForView } from '@/lib/warm-data'
 import { startWarmData } from '@/lib/warm-kinds'
@@ -363,9 +364,13 @@ onUnmounted(stopAvailabilityPolling)
   >
     <!-- top bar (borderless: the content columns carry their own separators). Shares the
          push-panel padding shift with the main content, or an open drawer would cover the
-         right-side buttons instead of nudging them over. -->
+         right-side buttons instead of nudging them over. In Desk it is the window's title bar: the page's colour, as
+         Desk's own title row is (owner, 2026-10-08: its colour changed at the column's edges), and its empty parts
+         drag the window (lib/desk-embed.ts). -->
     <header
-      class="flex shrink-0 items-center gap-3 bg-sidebar ps-(--header-ps) pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
+      v-bind="{ [TITLE_BAR_ATTR]: '' }"
+      class="flex shrink-0 items-center gap-3 ps-(--header-ps) pe-(--header-pe) py-2 transition-padding duration-300 ease-in-out"
+      :class="EMBEDDED ? 'bg-background' : 'bg-sidebar'"
     >
       <!-- view tabs (no logo or title: Desk's pane already says where you are, owner 2026-10-05) -->
       <nav class="flex items-start gap-1" :aria-label="$t('app.navLabel')">

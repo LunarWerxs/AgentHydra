@@ -22,8 +22,14 @@ export const ownFrame = ref(false)
 /** The window is maximized (Restore shows in place of Maximize, and the top edge does not resize). */
 export const maximized = ref(false)
 
+export type CaptionButton = 'minimize' | 'maximize' | 'close'
+/** The window button under the pointer and the one held down, as the host says: over the buttons the pointer is the
+ *  host's (its caption sink, which lets Windows 11 show snap layouts over Maximize), so the page's own hover never fires. */
+export const captionHover = ref<CaptionButton | null>(null)
+export const captionPressed = ref<CaptionButton | null>(null)
+
 const host = (): Host => (typeof window === 'undefined' ? {} : (window as unknown as Host))
-const send = (action: string, extra: Record<string, string> = {}) => host().ipc?.postMessage(JSON.stringify({ op: 'window', action, ...extra }))
+const send = (action: string, extra: Record<string, unknown> = {}) => host().ipc?.postMessage(JSON.stringify({ op: 'window', action, ...extra }))
 
 export const minimizeWindow = () => send('minimize')
 /** Maximize, or restore when maximized. */
@@ -32,6 +38,16 @@ export const toggleMaximize = () => send('maximize')
 export const closeWindow = () => send('close')
 /** Starts the host's own resize drag from the top edge or a top corner; the button must still be down. */
 export const resizeFrom = (edge: 'n' | 'ne' | 'nw') => send('resize', { edge })
+/** Starts the window's move, as a press on Windows' caption does; the button must still be down. For a title bar the
+ *  page's drag regions cannot cover (the AgentHydra pane's frame: WebView2 takes them from the top document only). */
+export const dragWindow = () => send('drag')
+/** Tells the host where the window's buttons are (`r`, the page's pixels; null while there are none), so its caption
+ *  sink goes over exactly them and nowhere else. The host works in the screen's pixels. */
+export function placeButtons(r: { left: number; top: number; width: number; height: number } | null): void {
+  if (!r) return void send('buttons')
+  const px = (v: number) => Math.round(v * window.devicePixelRatio)
+  send('buttons', { rect: [px(r.left), px(r.top), px(r.width), px(r.height)] })
+}
 
 let started = false
 /** Asks the host for its frame; call once the page can draw the title bar. */
@@ -45,6 +61,11 @@ export function startOwnFrame(): void {
     maximized.value = d?.maximized === true
     document.documentElement.classList.toggle(OWN_FRAME_CLASS, ownFrame.value)
     document.documentElement.style.setProperty('--caption-w', `${ownFrame.value ? CAPTION_W : 0}px`)
+  })
+  window.addEventListener('agenthydra:caption', (e) => {
+    const d = (e as CustomEvent<{ hover?: CaptionButton | null; pressed?: CaptionButton | null }>).detail
+    captionHover.value = d?.hover ?? null
+    captionPressed.value = d?.pressed ?? null
   })
   send('ready')
 }

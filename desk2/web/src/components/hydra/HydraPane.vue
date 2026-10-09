@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { AH_SETTINGS_PAGES, type AhMessage, type AhSettingsPage } from '@shared/hydra-embed'
 import { attachHydraFrame, hydraReady, setAhUpdateWaiting, setHydraSidebar, setHydraVisible } from './api'
-import { CAPTION_W, ownFrame } from '@/lib/host-window'
+import { CAPTION_W, dragWindow, ownFrame, toggleMaximize } from '@/lib/host-window'
 
 // Hydra Desk 2: AgentHydra in the pane beside the sidebar (the chrome bar's AgentHydra button slides it in
 // over the chat). It is Desk 2's own copy of AgentHydra's window (desk2/hydra), served by Desk 2 at /ah/
@@ -83,6 +83,8 @@ function onMessage(e: MessageEvent) {
   else if (m?.type === 'ah:open-settings') emit('open-settings', settingsPage(m.section))
   else if (m?.type === 'ah:update-dot') setAhUpdateWaiting(m.on === true)
   else if (m?.type === 'ah:sidebar') setHydraSidebar(m.model && Array.isArray(m.model.sections) ? m.model : null)
+  // The copy's top bar is the title bar over the pane (owner, 2026-10-08: the window could not be dragged from it).
+  else if (m?.type === 'ah:window' && ownFrame.value && props.open) (m.action === 'maximize' ? toggleMaximize : dragWindow)()
 }
 // An Escape that closes a pop-up over the pane (Settings, which a table's gear opens, or a menu) is the
 // pop-up's: the window hears it after the document, while the pop-up is still there.

@@ -256,6 +256,15 @@ mod win {
         fn IsZoomed(h: Hwnd) -> i32;
         fn GetDpiForWindow(h: Hwnd) -> u32;
         fn GetSystemMetricsForDpi(index: i32, dpi: u32) -> i32;
+        fn SetLayeredWindowAttributes(h: Hwnd, key: u32, alpha: u8, flags: u32) -> i32;
+        fn TrackMouseEvent(t: *mut TRACKMOUSEEVENT) -> i32;
+    }
+    #[repr(C)]
+    struct TRACKMOUSEEVENT {
+        size: u32,
+        flags: u32,
+        track: Hwnd,
+        hover_time: u32,
     }
     // wry already subclasses the main window through this, so the exe imports it either way.
     #[link(name = "comctl32")]
@@ -267,6 +276,11 @@ mod win {
             data: usize,
         ) -> i32;
         fn DefSubclassProc(h: Hwnd, msg: u32, wparam: usize, lparam: isize) -> isize;
+        fn RemoveWindowSubclass(
+            h: Hwnd,
+            f: extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize,
+            id: usize,
+        ) -> i32;
     }
     #[link(name = "dwmapi")]
     extern "system" {
@@ -536,6 +550,189 @@ mod win {
         true
     }
 
+    /// One of the page's three window buttons.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum CaptionButton {
+        Minimize,
+        Maximize,
+        Close,
+    }
+
+    impl CaptionButton {
+        /// The hit-test value Windows knows the button by (HTMINBUTTON, HTMAXBUTTON, HTCLOSE).
+        fn hit(self) -> isize {
+            match self {
+                CaptionButton::Minimize => 8,
+                CaptionButton::Maximize => 9,
+                CaptionButton::Close => 20,
+            }
+        }
+        fn from_hit(hit: usize) -> Option<Self> {
+            match hit {
+                8 => Some(CaptionButton::Minimize),
+                9 => Some(CaptionButton::Maximize),
+                20 => Some(CaptionButton::Close),
+                _ => None,
+            }
+        }
+        /// The button under `x` (screen pixels) in a sink spanning `left..right`: the page draws three of equal width.
+        pub fn at(x: i32, left: i32, right: i32) -> Self {
+            let w = (right - left).max(1);
+            match ((x - left).clamp(0, w - 1) * 3) / w {
+                0 => CaptionButton::Minimize,
+                1 => CaptionButton::Maximize,
+                _ => CaptionButton::Close,
+            }
+        }
+    }
+
+    /// What the pointer does over the sink: the page draws hover and press from it, a click is the button's action.
+    #[derive(Debug, PartialEq)]
+    pub enum SinkEvent {
+        Hover(Option<CaptionButton>),
+        Press(Option<CaptionButton>),
+        Click(CaptionButton),
+    }
+
+    struct Sink {
+        tell: Box<dyn Fn(SinkEvent)>,
+        hover: Option<CaptionButton>,
+        pressed: Option<CaptionButton>,
+        tracking: bool,
+    }
+
+    impl Sink {
+        fn hover(&mut self, b: Option<CaptionButton>) {
+            if self.hover != b {
+                self.hover = b;
+                (self.tell)(SinkEvent::Hover(b));
+            }
+        }
+        fn press(&mut self, b: Option<CaptionButton>) {
+            if self.pressed != b {
+                self.pressed = b;
+                (self.tell)(SinkEvent::Press(b));
+            }
+        }
+    }
+
+    const SINK_SUBCLASS: usize = 0x4147_534b; // "AGSK"
+
+    /// The caption sink's messages. Over it Windows asks which part of a window the pointer is on (WM_NCHITTEST), and
+    /// the answer is the page's button there, so Windows 11 shows its snap layouts over Maximize as it does over its
+    /// own. The buttons' pointer messages then come here as non-client ones: hover and press go to the page, which
+    /// draws them, and a release on the button pressed is its click. Windows Terminal draws its caption the same way.
+    extern "system" fn sink_proc(
+        h: Hwnd,
+        msg: u32,
+        wp: usize,
+        lp: isize,
+        _id: usize,
+        data: usize,
+    ) -> isize {
+        const WM_NCDESTROY: u32 = 0x0082;
+        const WM_NCHITTEST: u32 = 0x0084;
+        const WM_NCMOUSEMOVE: u32 = 0x00A0;
+        const WM_NCLBUTTONDOWN: u32 = 0x00A1;
+        const WM_NCLBUTTONUP: u32 = 0x00A2;
+        const WM_NCLBUTTONDBLCLK: u32 = 0x00A3;
+        const WM_NCMOUSELEAVE: u32 = 0x02A2;
+        if msg == WM_NCDESTROY {
+            unsafe { RemoveWindowSubclass(h, sink_proc, SINK_SUBCLASS) };
+            drop(unsafe { Box::from_raw(data as *mut Sink) });
+            return unsafe { DefSubclassProc(h, msg, wp, lp) };
+        }
+        let sink = unsafe { &mut *(data as *mut Sink) };
+        match msg {
+            WM_NCHITTEST => {
+                let x = (lp & 0xffff) as i16 as i32;
+                let mut r = RECT::default();
+                unsafe { GetWindowRect(h, &mut r) };
+                CaptionButton::at(x, r.left, r.right).hit()
+            }
+            WM_NCMOUSEMOVE => {
+                if !sink.tracking {
+                    // TME_LEAVE | TME_NONCLIENT: WM_NCMOUSELEAVE once the pointer leaves.
+                    let mut t = TRACKMOUSEEVENT {
+                        size: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                        flags: 0x2 | 0x10,
+                        track: h,
+                        hover_time: 0,
+                    };
+                    sink.tracking = unsafe { TrackMouseEvent(&mut t) } != 0;
+                }
+                sink.hover(CaptionButton::from_hit(wp));
+                0
+            }
+            WM_NCMOUSELEAVE => {
+                sink.tracking = false;
+                sink.hover(None);
+                sink.press(None);
+                0
+            }
+            WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK => {
+                sink.press(CaptionButton::from_hit(wp));
+                0
+            }
+            WM_NCLBUTTONUP => {
+                let on = CaptionButton::from_hit(wp);
+                let clicked = on.filter(|b| sink.pressed == Some(*b));
+                sink.press(None);
+                if let Some(b) = clicked {
+                    (sink.tell)(SinkEvent::Click(b));
+                }
+                0
+            }
+            _ => unsafe { DefSubclassProc(h, msg, wp, lp) },
+        }
+    }
+
+    /// A see-through child of the main window that goes over the page's window buttons (place_sink), hidden until
+    /// placed. Layered with no surface of its own (WS_EX_LAYERED | WS_EX_NOREDIRECTIONBITMAP), so the page shows
+    /// through; Windows makes a child layered only for an exe that says it is for Windows 8 or later (build.rs's
+    /// manifest). None when Windows refuses it: the page's buttons then take their clicks as before.
+    pub fn caption_sink(parent: Hwnd, tell: Box<dyn Fn(SinkEvent)>) -> Option<Hwnd> {
+        let class = wide("STATIC");
+        let h = unsafe {
+            CreateWindowExW(
+                0x0008_0000 | 0x0020_0000,
+                class.as_ptr(),
+                std::ptr::null(),
+                0x4000_0000 | 0x0400_0000, // WS_CHILD | WS_CLIPSIBLINGS
+                0,
+                0,
+                0,
+                0,
+                parent,
+                0,
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::null(),
+            )
+        };
+        if h == 0 {
+            return None;
+        }
+        // LWA_ALPHA, fully opaque: the whole rectangle takes the pointer, though nothing is drawn in it.
+        unsafe { SetLayeredWindowAttributes(h, 0, 255, 0x2) };
+        let sink = Box::into_raw(Box::new(Sink {
+            tell,
+            hover: None,
+            pressed: None,
+            tracking: false,
+        }));
+        if unsafe { SetWindowSubclass(h, sink_proc, SINK_SUBCLASS, sink as usize) } == 0 {
+            drop(unsafe { Box::from_raw(sink) });
+            unsafe { DestroyWindow(h) };
+            return None;
+        }
+        Some(h)
+    }
+
+    /// Puts the sink over `r` (client pixels of the main window) above the window's page, or hides it.
+    pub fn place_sink(h: Hwnd, r: Option<&Rect>) {
+        place_page_host(h, r);
+    }
+
     pub fn destroy(h: Hwnd) {
         unsafe { DestroyWindow(h) };
     }
@@ -658,6 +855,11 @@ enum WindowCmd {
     Close,
     /// Start a native resize drag from this edge.
     Resize(Edge),
+    /// Start the window's move, as a press on the caption does (a title bar the page's drag regions cannot cover).
+    Drag,
+    /// Where the page's three window buttons are, in client pixels, or None while it shows none: the caption sink
+    /// goes over them (win::caption_sink).
+    Buttons(Option<Rect>),
 }
 
 /// The edges the page starts a resize drag from (the top ones: the page draws those).
@@ -675,6 +877,8 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
         op: String,
         action: String,
         edge: Option<String>,
+        /// left, top, width, height
+        rect: Option<[i32; 4]>,
     }
     let m: Msg = serde_json::from_str(text).ok()?;
     if m.op != "window" {
@@ -685,6 +889,20 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
         "minimize" => WindowCmd::Minimize,
         "maximize" => WindowCmd::Maximize,
         "close" => WindowCmd::Close,
+        "drag" => WindowCmd::Drag,
+        // Three buttons are a few hundred pixels at most; anything else is not the page's buttons.
+        "buttons" => WindowCmd::Buttons(match m.rect {
+            None => None,
+            Some([left, top, w, h]) if (1..=2000).contains(&w) && (1..=400).contains(&h) => {
+                Some(Rect {
+                    left,
+                    top,
+                    right: left + w,
+                    bottom: top + h,
+                })
+            }
+            Some(_) => return None,
+        }),
         "resize" => WindowCmd::Resize(match m.edge.as_deref()? {
             "n" => Edge::North,
             "ne" => Edge::NorthEast,
@@ -698,6 +916,25 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
 /// The script that tells the window's page its frame (the caption is gone) and whether it is maximized.
 fn window_event_script(frame: bool, maximized: bool) -> String {
     format!("window.dispatchEvent(new CustomEvent('agenthydra:window',{{detail:{{frame:{frame},maximized:{maximized}}}}}))")
+}
+
+/// The script that tells the window's page which of its window buttons the pointer is over and which is pressed (the
+/// caption sink takes the pointer there, so the page's own hover never fires).
+fn caption_event_script(
+    hover: Option<win::CaptionButton>,
+    pressed: Option<win::CaptionButton>,
+) -> String {
+    let name = |b: Option<win::CaptionButton>| match b {
+        Some(win::CaptionButton::Minimize) => "\"minimize\"",
+        Some(win::CaptionButton::Maximize) => "\"maximize\"",
+        Some(win::CaptionButton::Close) => "\"close\"",
+        None => "null",
+    };
+    format!(
+        "window.dispatchEvent(new CustomEvent('agenthydra:caption',{{detail:{{hover:{},pressed:{}}}}}))",
+        name(hover),
+        name(pressed)
+    )
 }
 
 /// Where a page tab's view may go: http and https except AgentHydra's own window, and about: and blob: pages.
@@ -901,6 +1138,8 @@ enum Ev {
     Page(String, PageOut),
     /// A page view asked for a new window: the address opens in that view instead.
     OpenHere(String, String),
+    /// The pointer over the caption sink (the page's window buttons).
+    Sink(win::SinkEvent),
 }
 
 /// One page tab's browser view and the child window that holds it (win::page_host).
@@ -1121,6 +1360,9 @@ fn run(
         regions,
         caption_gone: false,
         maximized: zoomed,
+        sink: None,
+        sink_tried: false,
+        caption: (None, None),
         pages: std::collections::HashMap::new(),
         ctx,
     };
@@ -1282,6 +1524,12 @@ struct Host {
     caption_gone: bool,
     /// The main window's maximized state, as the page was last told it.
     maximized: bool,
+    /// The see-through window over the page's window buttons (win::caption_sink), once the page has placed them.
+    sink: Option<isize>,
+    /// The sink was asked for once: Windows refused it, or it is there.
+    sink_tried: bool,
+    /// The button under the pointer and the one pressed, as the page was last told.
+    caption: (Option<win::CaptionButton>, Option<win::CaptionButton>),
     pages: std::collections::HashMap<String, PageView>,
     ctx: wry::WebContext,
     window: tao::window::Window,
@@ -1361,7 +1609,50 @@ impl Host {
                 };
                 let _ = self.window.drag_resize_window(dir);
             }
+            WindowCmd::Drag => {
+                let _ = self.window.drag_window();
+            }
+            WindowCmd::Buttons(r) => self.place_sink(r),
         }
+    }
+
+    /// The sink goes over the page's buttons once Windows' caption is off (the page's buttons are the window's then),
+    /// made the first time they are placed; None hides it.
+    fn place_sink(&mut self, r: Option<Rect>) {
+        let r = r.filter(|_| self.caption_gone);
+        if r.is_some() && !self.sink_tried {
+            self.sink_tried = true;
+            let proxy = self.proxy.clone();
+            self.sink = win::caption_sink(
+                self.hwnd,
+                Box::new(move |e| {
+                    let _ = proxy.send_event(Ev::Sink(e));
+                }),
+            );
+        }
+        if let Some(h) = self.sink {
+            win::place_sink(h, r.as_ref());
+        }
+    }
+
+    fn sink_event(&mut self, e: win::SinkEvent, flow: &mut tao::event_loop::ControlFlow) {
+        use win::{CaptionButton, SinkEvent};
+        let (hover, pressed) = self.caption;
+        self.caption = match e {
+            SinkEvent::Hover(b) => (b, pressed),
+            SinkEvent::Press(b) => (hover, b),
+            SinkEvent::Click(b) => {
+                let cmd = match b {
+                    CaptionButton::Minimize => WindowCmd::Minimize,
+                    CaptionButton::Maximize => WindowCmd::Maximize,
+                    CaptionButton::Close => WindowCmd::Close,
+                };
+                return self.window_cmd(cmd, flow);
+            }
+        };
+        let _ = self
+            .webview
+            .evaluate_script(&caption_event_script(self.caption.0, self.caption.1));
     }
 
     fn user_event(&mut self, ev: Ev, flow: &mut tao::event_loop::ControlFlow) {
@@ -1372,7 +1663,12 @@ impl Host {
                     std::process::exit(0);
                 }
             }
-            Ev::Reloading => self.pages.clear(),
+            Ev::Reloading => {
+                self.pages.clear();
+                // The next document places its own buttons, or has none to place.
+                self.place_sink(None);
+            }
+            Ev::Sink(e) => self.sink_event(e, flow),
             // The window's frame belongs to the main window: a side window's page has no frame to answer for.
             Ev::Window(cmd) => {
                 if !self.side {
@@ -1702,6 +1998,26 @@ mod tests {
         assert_eq!(parse_window_cmd(&op("minimize")), Some(WindowCmd::Minimize));
         assert_eq!(parse_window_cmd(&op("maximize")), Some(WindowCmd::Maximize));
         assert_eq!(parse_window_cmd(&op("close")), Some(WindowCmd::Close));
+        assert_eq!(parse_window_cmd(&op("drag")), Some(WindowCmd::Drag));
+        // Where the page's buttons are (left, top, width, height), none to hide the sink; nothing a few buttons cannot be.
+        let at = Rect {
+            left: 900,
+            top: 6,
+            right: 1107,
+            bottom: 54,
+        };
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"buttons","rect":[900,6,207,48]}"#),
+            Some(WindowCmd::Buttons(Some(at)))
+        );
+        assert_eq!(
+            parse_window_cmd(&op("buttons")),
+            Some(WindowCmd::Buttons(None))
+        );
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"buttons","rect":[0,0,0,48]}"#),
+            None
+        );
         for (edge, want) in [
             ("n", Edge::North),
             ("ne", Edge::NorthEast),
@@ -1735,6 +2051,21 @@ mod tests {
             window_event_script(true, false),
             "window.dispatchEvent(new CustomEvent('agenthydra:window',{detail:{frame:true,maximized:false}}))"
         );
+        // The caption sink's pointer, which the page draws as its buttons' hover and press (host-window.ts).
+        assert_eq!(
+            caption_event_script(Some(win::CaptionButton::Maximize), None),
+            "window.dispatchEvent(new CustomEvent('agenthydra:caption',{detail:{hover:\"maximize\",pressed:null}}))"
+        );
+    }
+
+    #[test]
+    fn the_sink_splits_into_the_three_buttons_left_to_right() {
+        use win::CaptionButton::{Close, Maximize, Minimize};
+        // 138 pixels as three 46-pixel buttons from x = 1000; a point past either end belongs to the end button.
+        let at = |x| win::CaptionButton::at(x, 1000, 1138);
+        assert_eq!([at(990), at(1000), at(1045)], [Minimize; 3]);
+        assert_eq!([at(1046), at(1091)], [Maximize; 2]);
+        assert_eq!([at(1092), at(1137), at(1200)], [Close; 3]);
     }
 
     #[test]

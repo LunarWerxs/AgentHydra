@@ -120,6 +120,9 @@ export type AhMessage =
   | { type: 'ah:update-dot'; on: boolean }
   /** The current tab's sidebar, or null for a tab without one. */
   | { type: 'ah:sidebar'; model: SidebarModel | null }
+  /** The copy's top bar is the window's title bar there: an empty part was pressed (`drag`, the button still down, so
+   *  Desk starts the window's move) or pressed a second time (`maximize`, which also restores). */
+  | { type: 'ah:window'; action: 'drag' | 'maximize' }
 
 /** Desk to the copy. */
 export type DeskMessage =
