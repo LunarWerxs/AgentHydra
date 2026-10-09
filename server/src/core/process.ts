@@ -1106,7 +1106,7 @@ export async function processAncestry(
 /** The same walk as {@link windowsAncestry}'s PowerShell loop, over one in-process snapshot. Null
  *  when the table cannot be read here. */
 function windowsAncestryNative(startPid: number, includeSelf: boolean): AncestorProcess[] | null {
-  const table = nativeProcessTable()
+  const table = nativeProcessTable(startPid)
   if (!table) return null
   const byPid = new Map(table.map((p) => [p.pid, p]))
   const out: AncestorProcess[] = []

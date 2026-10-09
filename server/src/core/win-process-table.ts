@@ -204,10 +204,37 @@ function lib(): Native | null {
   return native
 }
 
-/** Every process on the machine: pid, parent pid and exe name. Null when it cannot be read here. */
-export function nativeProcessTable(): NativeProcess[] | null {
+/**
+ * One snapshot answers every caller within this long. The stall profiler had `table` on top of the daemon's
+ * blocked main thread (2026-10-09): agent-status, the worker list and the live sessions each took a fresh
+ * snapshot of ~1,500 processes, several requests a second from every chat and Desk, ~1 core in all.
+ */
+const TABLE_TTL_MS = 1000
+/** A `mustHave` pid that never shows (exited, or never started) retakes at most this often. */
+const MUST_HAVE_RETAKE_MS = 200
+let lastTable: { at: number; rows: NativeProcess[] } | null = null
+const copyRows = (rows: NativeProcess[]) => rows.map((p) => ({ ...p }))
+
+/**
+ * Every process on the machine: pid, parent pid and exe name (at most TABLE_TTL_MS old). A caller after one
+ * pid that may have just started passes it as `mustHave`: a snapshot without it is retaken. Null when it
+ * cannot be read here.
+ */
+export function nativeProcessTable(mustHave?: number): NativeProcess[] | null {
+  const now = Date.now()
+  if (
+    lastTable &&
+    now - lastTable.at < TABLE_TTL_MS &&
+    !nativeProcessTableForTests.disabled &&
+    (mustHave === undefined ||
+      now - lastTable.at < MUST_HAVE_RETAKE_MS ||
+      lastTable.rows.some((p) => p.pid === mustHave))
+  )
+    return copyRows(lastTable.rows)
   try {
-    return lib()?.table() ?? null
+    const rows = lib()?.table() ?? null
+    lastTable = rows ? { at: now, rows } : null
+    return rows ? copyRows(rows) : null
   } catch {
     return null
   }
