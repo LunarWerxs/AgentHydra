@@ -6,6 +6,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { LaunchError, LIVE_CHROME_FLAGS, readPortFile } from '../cdp'
+import { releaseSignInWindow } from './sign-in-window'
 
 const HOST = '127.0.0.1'
 const LAUNCH_DEADLINE_MS = 15_000
@@ -61,6 +62,7 @@ async function answering(dir: string): Promise<{ port: number; browserWsUrl: str
 }
 
 async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<BrowserEndpoint> {
+  await releaseSignInWindow(dir)
   const live = await answering(dir)
   if (live) return { ...live, launched: false, headless: launchedHeadless(dir) }
 
@@ -185,7 +187,7 @@ function writeMarker(dir: string, headless: boolean): void {
   else rmSync(join(dir, HEADLESS_MARK), { force: true })
 }
 
-function launchedHeadless(dir: string): boolean {
+export function launchedHeadless(dir: string): boolean {
   const wsPath = readPortFile(dir)?.wsPath
   if (!wsPath || !existsSync(join(dir, HEADLESS_MARK))) return false
   return readFileSync(join(dir, HEADLESS_MARK), 'utf8') === wsPath

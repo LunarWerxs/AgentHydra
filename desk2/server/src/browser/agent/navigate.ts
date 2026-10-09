@@ -130,6 +130,11 @@ export function forgetPage(browserKey: string, caller: ToolCaller): string | nul
   return targetId
 }
 
+export function forgetPagesOf(browserKey: string): void {
+  const prefix = `${browserKey}|`
+  for (const key of pages.keys()) if (key.startsWith(prefix)) pages.delete(key)
+}
+
 export function connect(url: string, onEvent?: (method: string, params: unknown) => void): Promise<Link> {
   return new Promise<Link>((resolve, reject) => {
     const ws = new WebSocket(url)

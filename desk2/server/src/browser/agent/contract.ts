@@ -9,6 +9,8 @@ export interface ToolParams {
   browser_frames: { attachPort?: number; profile?: string }
   browser_profile_note: { profile: string; note?: string; title?: string }
   browser_profile_claim: { profile: string; from?: string }
+  browser_handoff: { profile: string; urls?: string[] }
+  browser_profile_login: { profile: string; url?: string; verify?: boolean; note?: string }
   browser_navigate: { url: string; headed?: boolean; waitMs?: number; attachPort?: number; profile?: string }
   browser_snapshot: { mode?: string; maxLines?: number; attachPort?: number; profile?: string }
   browser_get_text: { attachPort?: number; profile?: string }
