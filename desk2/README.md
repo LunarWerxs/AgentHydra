@@ -637,6 +637,22 @@ the CLI table's are, else rolling) and all time. The header's 5h / Week / Total 
 preference (`agenthydra.freeTokens.window`). Messages sent before this count began, or from another PC, are not
 in it.
 
+**Free numbers on Usage history** (owner, 2026-10-08: "total tokens ... for Claude and ChatGPT ... and also the
+success rate across which models"; `server/src/free-instances/stats.ts`). Desk keeps a daily record in
+`free/accounts.json` (`stats`): per day, account and model, the messages sent and failed and their token estimate,
+30 days, counts only. A failure counts on the model it was sent to. `GET /api/free/stats?days=N` returns the rows.
+With the Free rows on screen, Instances' Usage history card shows the Free totals in its header line and, opened,
+the tokens of all Free accounts, of Claude and of ChatGPT in the table's window with the answered share, answered
+by model, and Free tokens per day by provider (`hydra/src/components/FreeSummary.vue`, `lib/free-stats.ts`); it
+lists no row per account (owner, 2026-10-08: "don't need this").
+
+**A red mark means failing, not one failure** (owner, 2026-10-08: no red marks "unless the account is dead";
+`server/src/free-instances/health.ts`). Desk counts each account's messages over the last hour, whoever sent them,
+and `GET /api/free/status` returns them as `health` (`sent`, `failed`, `failing`, `reasons`): failing is 90% or more
+of 5 or more. The triangle shows only on a failing account, with the commonest reason; the page reports its own
+operations' failures, and another caller's message is only the hour's count in the name's hover. A paid plan the
+site reports (ChatGPT Go) is a badge beside the name.
+
 **Keep windows running** (owner, 2026-10-06; `server/src/free-instances/keepalive.ts`) mirrors
 AgentHydra's CLI keepalive for Free Claude logins: every 10 minutes, a signed-in account whose 5-hour
 window is not running gets one temporary chat ("Reply with the single word: ok", the `nudge` command) on
@@ -653,7 +669,10 @@ Usage counters that the provider does not expose stay unknown, and
 historical usage readings retain their observation and reset times. Free web accounts use their own
 allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
 
-ChatGPT messages use only **GPT-5.6 Luna Instant** (`gpt-5-6-mini`). Its usage check reads the account
+ChatGPT messages use **GPT-5.6 Luna Instant** (`gpt-5-6-mini`) unless a new chat asks otherwise: a job's
+`model` of `gpt-6` or `luna-thinking` (Luna's Thinking mini) is used when the account lists it for Temporary
+Chats, else Luna Instant; a continued chat stays on Luna. Luna Instant stays the default: a 2026-10-08 A/B
+of the three on HSwarm's decisions kept it. Its usage check reads the account
 plan and available models over HTTP. When it verifies Free access to this model, the table shows
 **Unlimited** for everyday text, as described in [OpenAI's Free plan](https://chatgpt.com/pricing/).
 Abuse safeguards and separate limits for uploads, images, voice and other tools still apply. This
@@ -681,7 +700,13 @@ Desk does not write Free transcripts to its normal SDK chat store.
 A chat reaches the Free accounts through AgentHydra's MCP (owner, 2026-10-06): `free_chat` sends tasks
 as new threads on idle accounts with room, the one used longest ago first, or continues a thread by its `chat_id`;
 `free_status`, `free_results`, `free_threads` and `free_read` read the rest. They call the routes above
-(`server/src/mcp-free.ts` in the engine; docs/REFERENCE.md has the details).
+(`server/src/mcp-free.ts` in the engine; docs/REFERENCE.md has the details). Every free send on the PC goes
+through that picker, so it paces each ChatGPT account under the burst at which ChatGPT locks it out (2026-10-08:
+40 lockouts in a day, #2 and #6 at exactly 75 new chats in 30 minutes): a cap of new chats per 30 minutes, first
+70, set a tenth under what the window held when a lockout comes and raised by 3 (at most 150) after a window that
+reached it without one. A paced account is busy for now, never ineligible, and an account named in the task is never
+held back; `free_status` says `paced` (until when) or `pace` (new chats of the cap), and HSwarm counts a paced
+account as not idle. The learned caps persist in the daemon's `free-pace.json`.
 
 This folder is part of AgentHydra's public repo: everything committed here is published.
 

@@ -176,8 +176,13 @@ A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `rou
 `decision`, purpose not `evaluation`, at most 100,000 characters) may run on the owner's signed-in Free claude.ai and
 ChatGPT accounts through AgentHydra (`free_status`, `free_chat`, `free_results` on `POST /api/mcp`) before any paid API
 leg, at no cost; `routine` and `general` ask for Haiku 5.5 (the lightest on a free account's limit), the others for the account's usual model. A schema's JSON is parsed and checked as on the API route. The daemon being down, no idle account, a
-failed, slow or unparseable reply keeps the API route. `selection.route` shows it (`via: free`), the ledger line says
-provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
+failed, slow or unparseable reply keeps the API route. With every account busy a task does not wait for one: a Free
+task took 16 s at the median and 42 s at the 90th percentile against about 3 s on the API (2026-10-08), so waiting
+would make a burst's overflow 5-10x slower to save a fraction of a cent a task, and under steady load the accounts
+are full anyway. A ChatGPT account the daemon has paced out of new chats (`server/src/mcp-free.ts`) counts as busy.
+A live burst of 22 tasks ran 11 on Free accounts at once (job `20261009-000737-6a7e`); the fixed cap of 6 at a time
+before it had turned away about 2,800 eligible tasks in a day. `selection.route` shows the route a task took (`via: free`), the
+ledger line says provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
 `hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
 one Free message was measured on Dredd's gold asks and not shipped (2026-10-08,

@@ -20,6 +20,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A CliMayte worker's folder moves its chat too**
 - **A signed-out desktop profile signs in from its synced copy**
 - **Opening a desktop account starts Claude in under a second, and several open at once**
+- **Usage history shows what the Free accounts did**
+- **Tokens per day opens at once**
+- **A Free account wears a red mark only when it is really failing, and shows its plan**
+- **ChatGPT Free accounts slow down before ChatGPT locks them out**
+- **HSwarm uses every idle Free account at once, not six at most**
+- **The Free tab's + menu offers only Free accounts; a slow check no longer looks like a dead login**
+- **A Free ChatGPT chat can ask for GPT-6 or Luna Thinking mini**
+- **Updates install on a PC that is never idle**
 
 **Everything in Unreleased**
 
@@ -66,6 +74,28 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   signed out takes its account's copy from another PC when that copy is still signed in, so its linked CLI
   account stops being refused. A profile still signed in is never replaced, and a copy that is itself signed out
   is never taken.
+- **Usage history shows what the Free accounts did.** With the Free rows on screen, the card's header line gives
+  the Free totals, and opened it shows the tokens of all Free accounts, of Claude and of ChatGPT, how many
+  messages each model answered, and Free tokens per day.
+- **Tokens per day opens at once.** The chart took long enough to load that it went unnoticed; it now reads one
+  summary and appears in a fraction of a second.
+- **A Free account wears a red mark only when it is really failing, and shows its plan.** The warning triangle
+  shows only when nearly all of an account's messages in the last hour failed, with the commonest reason; hover
+  the name for the hour's count. Another tool's refused message no longer marks a working account. A paid plan
+  the site reports, such as ChatGPT Go, is a badge beside the name.
+- **ChatGPT Free accounts slow down before ChatGPT locks them out.** AgentHydra spaces each ChatGPT account's new
+  chats just under the rate at which ChatGPT starts refusing them, and learns that rate per account. A task waits
+  for a paced account instead of failing.
+- **HSwarm uses every idle Free account at once, not six at most.** HSwarm sent at most six tasks to the Free
+  accounts at a time, so the rest went to paid models while accounts sat idle. It now uses as many as are idle.
+- **The Free tab's + menu offers only Free accounts; a slow check no longer looks like a dead login.** The menu
+  says New free Claude account or New free ChatGPT account. A check that times out because AgentHydra was busy
+  asks again, and says AgentHydra was busy instead of reporting the login as dead.
+- **A Free ChatGPT chat can ask for GPT-6 or Luna Thinking mini.** `free_chat` takes either as its model for a
+  new ChatGPT chat when the account offers it; Luna Instant stays the default.
+- **Updates install on a PC that is never idle.** Auto-update waited for every run and CliMayte worker to
+  finish, which never happened on a busy PC. It now waits at most an hour, then installs, and the work that was
+  running carries on after the restart.
 
 ## [2.0.1] - 2026-10-08
 

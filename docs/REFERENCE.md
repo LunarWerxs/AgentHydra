@@ -111,12 +111,18 @@ Mutating tools say `MUTATES:` in their description; there is deliberately no shu
 The **Free accounts** (the claude.ai and chatgpt.com free web logins in AgentHydra 2.0's Instances →
 Free, which Desk 2's server keeps) have **`free_status`**, **`free_chat`**, **`free_results`**,
 **`free_threads`** and **`free_read`** (`server/src/mcp-free.ts`). `free_chat {tasks:[{prompt, chat_id?,
-name?, account?, provider?, web_search?}]}` starts each task as a private thread (Claude incognito,
+name?, account?, provider?, model?, web_search?}]}` starts each task as a private thread (Claude incognito,
 ChatGPT temporary chat) on an idle signed-in account with room (ChatGPT's unlimited text and a Claude
 5-hour window under half used count alike), the one used longest ago first, skipping accounts at 90% of
-their week unless one is named, or continues a thread by `chat_id` on its own account. Each account
-runs one operation at a time, so tasks wait for an idle account. Free threads are private, so unlike
-probe chats they need no deleting. The call answers within 45 s
+their week unless one is named, or continues a thread by `chat_id` on its own account. `model` picks a new
+chat's model: a Claude family (`haiku` or `sonnet`) goes to a Claude account only, and `gpt-6` or `luna-thinking`
+to a ChatGPT account only (Luna Instant when the account does not offer it); a continued thread keeps its
+model. Each account runs one operation at a time, so tasks wait for an idle account. Each ChatGPT account is
+also paced under the burst at which ChatGPT locks it out (a learned cap of new chats per 30 minutes, kept in
+`free-pace.json`); a paced account is busy for now, and one named in the task is never held back.
+`free_status` gives each account's `plan`, its last hour (`lastHour`, marked FAILING at 90% failed of 5 or
+more) and its pace (`paced` until a time, or `pace`: new chats of the cap in the last 30 minutes). Free
+threads are private, so unlike probe chats they need no deleting. The call answers within 45 s
 with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
 hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
 
