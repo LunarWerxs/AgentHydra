@@ -116,6 +116,16 @@ test('an expired login moves the chat to the next healthy account and sends the 
   expect(m.get(chat.id).account.id).toBe(b.id)
 })
 
+test('an identity verification refusal moves the chat like an expired login', async () => {
+  const { m, q, b, chat } = await setup()
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  q.last().push(failed('API Error: 400 Identity verification is required to continue.'))
+  await waitFor(() => q.all.length === 2)
+  expect(q.last().options).toMatchObject({ resume: SID, env: { CLAUDE_CONFIG_DIR: b.configDir } })
+  expect(m.get(chat.id).account.id).toBe(b.id)
+})
+
 test('the sign-in line says the chat is moving and the message goes again by itself, as a warning', async () => {
   const { m, q, chat } = await setup()
   await m.send(chat.id, 'carry on')

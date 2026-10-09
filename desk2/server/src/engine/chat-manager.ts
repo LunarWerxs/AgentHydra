@@ -259,6 +259,9 @@ function importTitle(req: ImportSessionRequest, items: TranscriptItem[], kept: s
 /** How many accounts one message is tried on (the first and the ones it moves to). */
 const MAX_MOVES = 4
 
+/** How long placement skips an account whose sign-in failed (CliMayte's identity wall retries every 6 hours). */
+const SIGN_IN_HOLD_MS = 6 * 60 * 60 * 1000
+
 /** '#126' for a numbered account, else its label. */
 const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
 
@@ -288,6 +291,8 @@ export class ChatManager {
   /** How long every stage took (SPEC "Speed (timings)"). */
   readonly timings: Timings
   private readonly chats = new Map<string, Entry>()
+  /** Accounts a chat's sign-in failed on, until the time given: placement skips them (CliMayte's identity wall retries every 6 hours too). */
+  private readonly signInHeld = new Map<string, number>()
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
   private readonly bridge: ManagerBridge
@@ -671,8 +676,14 @@ export class ChatManager {
   /** The account a title is asked of: the chat's own when it has a login of its own, else the healthiest not tried; null when none is left. */
   private async titleAccount(chat: ChatSummary, tried: string[]): Promise<AccountRef | null> {
     if (chat.account.configDir && !tried.includes(chat.account.id)) return chat.account
-    const next = pickHealthy(await this.bridge.listAccounts().catch(() => []), tried)
+    const next = pickHealthy(this.placeable(await this.bridge.listAccounts().catch(() => [])), tried)
     return next ? accountRef(next) : null
+  }
+
+  /** The accounts placement may pick: a sign-in that failed on one holds it out for SIGN_IN_HOLD_MS. */
+  private placeable(accounts: AccountInfo[]): AccountInfo[] {
+    const now = Date.now()
+    return accounts.map((a) => ((this.signInHeld.get(a.id) ?? 0) > now ? { ...a, signedIn: false } : a))
   }
 
   async send(id: string, text: string, images?: ImageRef[], opts: SendOptions = {}): Promise<{ queued: boolean }> {
@@ -1736,6 +1747,7 @@ export class ChatManager {
     if (!e || !rt || e.chat.workerId !== undefined) return false
     const tried = (e.moved ??= [e.chat.account.id])
     if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
+    if (signIn) this.signInHeld.set(e.chat.account.id, Date.now() + SIGN_IN_HOLD_MS)
     if (tried.length > MAX_MOVES) return false
     let done!: () => void
     e.moving = new Promise<void>((r) => (done = r))
@@ -1753,7 +1765,7 @@ export class ChatManager {
     const tried = e.moved ?? []
     const from = chat.account
     const accounts = await this.bridge.listAccounts().catch(() => [])
-    const next = pickHealthy(accounts, tried)
+    const next = pickHealthy(this.placeable(accounts), tried)
     if (!next) {
       this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
       return
