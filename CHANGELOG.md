@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-10-09
+
 **TL;DR**
 
 - **A babysitter continues chats a usage limit stopped, once the limit resets**
@@ -23,7 +25,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The Free accounts' list keeps a backup, so a power cut cannot wipe it**
 - **A chat can move to another working folder on its own account**
 
-**Everything in Unreleased**
+**Everything in 2.0.3**
 
 - **Moving chats between accounts is about ten times faster, and the old account's copies are archived
   again.** Claude Desktop 2.31226.0 moved a helper AgentHydra reads, so every move left the chat showing on
