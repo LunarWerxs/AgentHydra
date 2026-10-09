@@ -47,12 +47,14 @@ describe('projectSourceGroups', () => {
     project('registry', 'C:/registry', { sources: ['projecthydra'] }),
     project('chatted', 'C:/chatted', { sources: ['chats'] }),
     project('hiddenChat', 'C:/hc', { sources: ['chats'], hidden: true }),
+    project('recentOnly', 'C:/recent', { sources: ['recent'] }),
+    project('added', 'C:/added', { sources: ['added'] }),
   ]
 
   it('files a project in both sources under Project Hydra only, and leaves hidden ones out', () => {
     const groups = projectSourceGroups(list)
     expect(groups.hydra.map((p) => p.name)).toEqual(['both', 'registry'])
-    expect(groups.chats.map((p) => p.name)).toEqual(['chatted'])
+    expect(groups.chats.map((p) => p.name)).toEqual(['chatted', 'recentOnly'])
   })
 })
 

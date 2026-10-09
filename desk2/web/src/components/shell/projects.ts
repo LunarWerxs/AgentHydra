@@ -22,7 +22,7 @@ export function projectSourceGroups(list: ProjectEntry[]): { hydra: ProjectEntry
   const visible = list.filter((p) => !p.hidden)
   return {
     hydra: visible.filter((p) => p.sources.includes('projecthydra')),
-    chats: visible.filter((p) => !p.sources.includes('projecthydra') && p.sources.includes('chats')),
+    chats: visible.filter((p) => !p.sources.includes('projecthydra') && (p.sources.includes('chats') || p.sources.includes('recent'))),
   }
 }
 
