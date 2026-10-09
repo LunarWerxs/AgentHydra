@@ -26,6 +26,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **Opening a chat no longer re-reads its whole transcript on every request.** The server keeps a chat's answer as text for as long as its file is unchanged, so an unchanged chat is sent from memory. A worker's sessions are also read one at a time, so a request can run between two of them.
+
 - **Sending and clicking no longer stall behind the server's background reading of running workers.** The server
   re-read and re-matched every worker's transcript and chat link on each poll, so a click's request could wait
   seconds. It now reads only the new lines of a worker's file, matches chats to workers from an index, stops
