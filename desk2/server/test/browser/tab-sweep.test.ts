@@ -2,13 +2,13 @@
 // whose pages belong to a live chat, a dead owner and a deleted chat.
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { findChrome, LIVE_CHROME_FLAGS, newPage, pageTabs } from '../../src/browser/cdp'
 import { ownPage } from '../../src/browser/ledger'
 import { readLedger } from '../../src/browser/ownership'
-import { closeChatTabs, deadOwnerTargetIds, makeLiveness, ownerLive, sessionOwnerLiveness, sweepDeadOwnerTabs } from '../../src/browser/tab-sweep'
+import { closeChatTabs, deadOwnerTargetIds, makeLiveness, ownerLive, profileFolders, sessionOwnerLiveness, sweepDeadOwnerTabs } from '../../src/browser/tab-sweep'
 
 setDefaultTimeout(60_000)
 
@@ -67,8 +67,46 @@ describe('owner liveness', () => {
   })
 })
 
+function announcedPort(file: string): number {
+  try {
+    const m = /^(\d+)\n/.exec(readFileSync(file, 'utf8'))
+    return m ? Number(m[1]) : 0
+  } catch {
+    return 0
+  }
+}
+
+async function pageIdsOnceClosed(port: number, closed: string): Promise<string[]> {
+  const until = Date.now() + 10_000
+  let ids = (await pageTabs(port)).map((t) => t.id)
+  while (ids.includes(closed) && Date.now() < until) {
+    await Bun.sleep(100)
+    ids = (await pageTabs(port)).map((t) => t.id)
+  }
+  return ids
+}
+
+async function launchChrome(profile: string): Promise<{ proc: Bun.Subprocess; port: number }> {
+  mkdirSync(profile, { recursive: true })
+  const proc = Bun.spawn(
+    [findChrome()!, `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--headless=new', '--no-first-run', '--no-default-browser-check', ...LIVE_CHROME_FLAGS, 'about:blank'],
+    { stdio: ['ignore', 'ignore', 'ignore'] },
+  )
+  const file = join(profile, 'DevToolsActivePort')
+  const until = Date.now() + 20_000
+  let port = announcedPort(file)
+  while (!port) {
+    if (Date.now() > until) {
+      proc.kill()
+      throw new Error('Chrome did not announce its debugging port')
+    }
+    await Bun.sleep(100)
+    port = announcedPort(file)
+  }
+  return { proc, port }
+}
+
 describe('real headless Chrome', () => {
-  const chrome = findChrome()
   let proc: Bun.Subprocess | null = null
   let root: string
   let profile: string
@@ -80,18 +118,9 @@ describe('real headless Chrome', () => {
   beforeAll(async () => {
     root = join(base, 'store')
     profile = join(root, 'ws', 'main', 'default')
-    mkdirSync(profile, { recursive: true })
-    proc = Bun.spawn(
-      [chrome!, `--user-data-dir=${profile}`, '--remote-debugging-port=0', '--headless=new', '--no-first-run', '--no-default-browser-check', ...LIVE_CHROME_FLAGS, 'about:blank'],
-      { stdio: ['ignore', 'ignore', 'ignore'] },
-    )
-    const file = join(profile, 'DevToolsActivePort')
-    const until = Date.now() + 20_000
-    while (!existsSync(file) || !/^\d+\n/.test(readFileSync(file, 'utf8'))) {
-      if (Date.now() > until) throw new Error('Chrome did not announce its debugging port')
-      await Bun.sleep(100)
-    }
-    port = Number(readFileSync(file, 'utf8').split('\n')[0]!.trim())
+    const launched = await launchChrome(profile)
+    proc = launched.proc
+    port = launched.port
     liveId = (await newPage(port, 'about:blank'))!.id
     deadId = (await newPage(port, 'about:blank'))!.id
     deletedId = (await newPage(port, 'about:blank'))!.id
@@ -107,7 +136,7 @@ describe('real headless Chrome', () => {
 
   test('closing a deleted chat closes only its own page and drops its row', async () => {
     expect(await closeChatTabs(['deleted-chat-session'], root)).toBe(1)
-    const ids = (await pageTabs(port)).map((t) => t.id)
+    const ids = await pageIdsOnceClosed(port, deletedId)
     expect(ids).not.toContain(deletedId)
     expect(ids).toContain(liveId)
     expect(ids).toContain(deadId)
@@ -117,7 +146,47 @@ describe('real headless Chrome', () => {
   test('the sweep closes only the dead owner\'s page and drops only its row', async () => {
     const liveness = makeLiveness(new Set(['live-chat-session']), [claudeRoot])
     expect(await sweepDeadOwnerTabs(liveness, root)).toBe(1)
-    const ids = (await pageTabs(port)).map((t) => t.id)
+    const ids = await pageIdsOnceClosed(port, deadId)
+    expect(ids).not.toContain(deadId)
+    expect(ids).toContain(liveId)
+    expect([...readLedger(profile).keys()]).toEqual([liveId])
+  })
+})
+
+describe('a bare profile folder directly under the store root', () => {
+  let proc: Bun.Subprocess | null = null
+  let root: string
+  let profile: string
+  let port: number
+  let deadId: string
+  let liveId: string
+
+  beforeAll(async () => {
+    root = join(base, 'bare-store')
+    profile = join(root, 'bare-example')
+    mkdirSync(join(root, 'ws'), { recursive: true })
+    const launched = await launchChrome(profile)
+    proc = launched.proc
+    port = launched.port
+    liveId = (await newPage(port, 'about:blank'))!.id
+    deadId = (await newPage(port, 'about:blank'))!.id
+    ownPage(profile, liveId, 'live-bare-session')
+    ownPage(profile, deadId, 'dead-bare-session')
+  })
+
+  afterAll(async () => {
+    proc?.kill()
+    await proc?.exited
+  })
+
+  test('ws is never a profile, and a bare folder is', () => {
+    expect(profileFolders(root)).toEqual([profile])
+  })
+
+  test('the sweep closes the dead owner\'s page in a bare profile and drops only its row', async () => {
+    const liveness = makeLiveness(new Set(['live-bare-session']), [claudeRoot])
+    expect(await sweepDeadOwnerTabs(liveness, root)).toBe(1)
+    const ids = await pageIdsOnceClosed(port, deadId)
     expect(ids).not.toContain(deadId)
     expect(ids).toContain(liveId)
     expect([...readLedger(profile).keys()]).toEqual([liveId])

@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { closePage, liveBrowser, pageTabs } from './cdp'
 import { dropPage } from './ledger'
 import { readLedger } from './ownership'
-import { storeRoot } from './store'
+import { realDirs, storeRoot } from './store'
 
 export const SWEEP_MS = 3 * 60_000
 
@@ -110,8 +110,8 @@ export function makeLiveness(deskSessions: ReadonlySet<string>, roots: string[] 
   }
 }
 
-function profileFolders(root: string): string[] {
-  const out: string[] = []
+export function profileFolders(root: string): string[] {
+  const out = realDirs(root).map((n) => join(root, n))
   const ws = join(root, 'ws')
   if (!existsSync(ws)) return out
   for (const workspace of readdirSync(ws, { withFileTypes: true })) {
