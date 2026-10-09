@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { tabOwnerLabel } from '../../../src/browser/agent/registry'
 import { callTool } from '../../../src/browser/agent/tools'
 import { tempDir } from '../../git/helpers'
 
@@ -97,6 +98,15 @@ describe('browser_status and the live tools', () => {
   test('targets and frames refuse to guess a browser', async () => {
     expect(await callTool('browser_targets', {}, { cwd })).toMatchObject({ ok: false, status: 400 })
     expect(await callTool('browser_frames', { profile: 'example-shop' }, { cwd })).toMatchObject({ ok: false, status: 400 })
+  })
+
+  test('a tab belongs to this chat when the ledger names the session of the caller, whatever its chat id is', () => {
+    const caller = { chat: 'chat-1', session: 'session-1', cwd: 'C:/Users/me/work' }
+    expect(tabOwnerLabel('session-1', caller)).toBe('this chat')
+    expect(tabOwnerLabel('session-2', caller)).toBe('another chat')
+    expect(tabOwnerLabel('chat-1', caller)).toBe('another chat')
+    expect(tabOwnerLabel(undefined, caller)).toBe('unowned')
+    expect(tabOwnerLabel('session-1', { chat: 'chat-1' })).toBe('another chat')
   })
 
   test('an unknown tool is a 404', async () => {

@@ -148,6 +148,15 @@ async function cdpOnce(
   })
 }
 
+/**
+ * Whose page a tab is, for browser_status. The ledger records the Claude session that drives a page (ownPage), so it is
+ * compared with the caller's session, never its Desk chat id: those are different ids and never match.
+ */
+export function tabOwnerLabel(ownerSession: string | undefined, caller: ToolCaller): 'unowned' | 'this chat' | 'another chat' {
+  if (!ownerSession) return 'unowned'
+  return caller.session !== undefined && ownerSession === caller.session ? 'this chat' : 'another chat'
+}
+
 export const TOOL_DEFS: ToolDef[] = [
   ...READ_TOOLS,
   ...EXEC_TOOLS,
@@ -289,7 +298,7 @@ export const TOOL_DEFS: ToolDef[] = [
         if (tabs.length === 0) lines.push('  (no pages)')
         for (const t of tabs) {
           const owner = ledger.get(t.id)
-          const who = !owner ? 'unowned' : owner.chat === caller.chat ? 'this chat' : 'another chat'
+          const who = tabOwnerLabel(owner?.chat, caller)
           lines.push(`  · ${t.title.slice(0, 80)} — ${t.url.slice(0, 160)} [${who}]`)
         }
       }
