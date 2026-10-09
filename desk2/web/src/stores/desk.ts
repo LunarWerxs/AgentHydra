@@ -322,10 +322,45 @@ function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
   return kept
 }
 
+/** Chats stopped here, by the start of the turn stopped: until the server ends that turn they read stopped. */
+const stoppedHere = new Map<string, number>()
+const TURN_RUNNING: ReadonlySet<string> = new Set(['starting', 'working', 'needs_you'])
+
+/** A status the server sends for the stopped turn does not flip the chat back; a new turn (another start) is the server's again. */
+function settleStop(chat: ChatSummary): ChatSummary {
+  const turn = stoppedHere.get(chat.id)
+  if (turn === undefined) return chat
+  if (!TURN_RUNNING.has(chat.status) || chat.turnStartedAt !== turn) {
+    stoppedHere.delete(chat.id)
+    return chat
+  }
+  return { ...chat, status: 'stopped', activity: null, turnStartedAt: null }
+}
+
+/** The chat reads stopped in this frame, before the request goes; null when no turn runs. */
+function stopHere(chatId: string): ChatSummary | null {
+  const i = store.chats.findIndex((c) => c.id === chatId)
+  if (i < 0) return null
+  const was = store.chats[i]
+  if (!TURN_RUNNING.has(was.status)) return null
+  if (was.turnStartedAt !== null) stoppedHere.set(chatId, was.turnStartedAt)
+  store.chats[i] = { ...was, status: 'stopped', activity: null, turnStartedAt: null }
+  return was
+}
+
+/** A Stop the server did not take: the chat reads as it did, unless the server has moved it since. */
+function resumeHere(chatId: string, was: ChatSummary): void {
+  stoppedHere.delete(chatId)
+  const i = store.chats.findIndex((c) => c.id === chatId)
+  if (i >= 0 && store.chats[i].status === 'stopped') {
+    store.chats[i] = { ...store.chats[i], status: was.status, activity: was.activity, turnStartedAt: was.turnStartedAt }
+  }
+}
+
 type EventOf<T extends ServerEvent['type']> = Extract<ServerEvent, { type: T }>
 
 function onHello(event: EventOf<'hello'>) {
-  store.chats = event.chats
+  store.chats = event.chats.map(settleStop)
   cacheLater('chats', event.chats)
   store.settings = event.settings
   // Full reload: clear items cache
@@ -343,10 +378,11 @@ function onHello(event: EventOf<'hello'>) {
 
 function onChatUpsert(event: EventOf<'chat.upsert'>) {
   const idx = store.chats.findIndex((c) => c.id === event.chat.id)
+  const chat = settleStop(event.chat)
   if (idx >= 0) {
-    store.chats[idx] = event.chat
+    store.chats[idx] = chat
   } else {
-    store.chats.push(event.chat)
+    store.chats.push(chat)
   }
   cacheLater('chats', store.chats)
 }
@@ -806,7 +842,15 @@ export function useDesk() {
     },
 
     async interrupt(chatId: string): Promise<{ ok: boolean }> {
-      return fetchJson(`/chats/${chatId}/interrupt`, { method: 'POST' })
+      const was = stopHere(chatId)
+      try {
+        const res = await fetchJson<{ ok: boolean }>(`/chats/${chatId}/interrupt`, { method: 'POST' })
+        if (!res.ok) throw new Error('the chat did not stop')
+        return res
+      } catch (err) {
+        if (was) resumeHere(chatId, was)
+        throw err
+      }
     },
 
     /** Send now on a message queued behind a running turn: the turn stops and that message goes at once. */

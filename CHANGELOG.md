@@ -25,6 +25,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 **Everything in Unreleased**
 
+- **Stop stops at once.** Stop, Esc and the sidebar's Stop turn the chat to stopped in the same frame, and Send and the message box come back at once. A Stop the server cannot finish is reported, and a CLI that never answers its interrupt is closed after about a second and a half, so the next message still goes through.
+
 - **Hovering a control or text shows one styled tip after about a second.** Controls and text that had a plain browser tooltip now show the same styled tip as the rest of the app, and the browser's own tooltip is gone. The styled tip waits about a second instead of half a second, so a quick pass of the pointer shows nothing and a pause shows exactly one tip.
 
 - **The New screen's View options menu shows hidden projects.** The filter row has a View options button, with "Folders and git status" and "Show hidden projects" (with a count, disabled when nothing is hidden). With hidden projects shown they sit dimmed with a small hidden mark, and right-click offers Unhide instead of Hide. The choice is remembered.

@@ -284,4 +284,78 @@ describe('useDesk store', () => {
       expect(desk.chats.value.some((c) => c.id === 'fork-left')).toBe(true)
     })
   })
+
+  describe('a Stop the window draws', () => {
+    const chat = (id: string, status: ChatSummary['status'], turnStartedAt: number | null): ChatSummary => ({
+      id,
+      sessionId: null,
+      title: 'Example chat',
+      cwd: 'C:/Users/me/project',
+      account: { id: 'default', label: 'Default', configDir: null },
+      accountAuto: false,
+      model: null,
+      effort: null,
+      permissionMode: 'default',
+      delegateToCliMayte: false,
+      status,
+      activity: status === 'working' ? 'Reading the file' : null,
+      turnStartedAt,
+      lastError: null,
+      limitResetsAt: null,
+      unread: false,
+      pinned: false,
+      archived: false,
+      group: null,
+      forkedFrom: null,
+      createdAt: 1,
+      updatedAt: 1,
+      costUsd: 0,
+      contextPct: null,
+      pendingCount: 0,
+      queuedCount: 0,
+      climayteActive: 0
+    })
+    const statusOf = (desk: ReturnType<typeof useDesk>, id: string) => desk.chats.value.find((c) => c.id === id)
+
+    it('reads stopped before the request answers, and the late status of that turn does not flip it back', async () => {
+      const desk = useDesk()
+      await desk.init()
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-stop', 'working', 100) })
+      let answer: ((body: unknown) => void) | null = null
+      mockFetch.mockImplementationOnce(
+        () => new Promise<Response>((resolve) => (answer = (body) => resolve(new Response(JSON.stringify(body), { status: 200 }))))
+      )
+
+      const stopping = desk.interrupt('chat-stop')
+      expect(statusOf(desk, 'chat-stop')).toMatchObject({ status: 'stopped', activity: null, turnStartedAt: null })
+
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-stop', 'working', 100) })
+      expect(statusOf(desk, 'chat-stop')?.status).toBe('stopped')
+
+      answer!({ ok: true })
+      await stopping
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-stop', 'stopped', null) })
+      expect(statusOf(desk, 'chat-stop')?.status).toBe('stopped')
+    })
+
+    it("a new turn after the stop is the server's again and shows as working", async () => {
+      const desk = useDesk()
+      await desk.init()
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-next', 'working', 100) })
+      await desk.interrupt('chat-next')
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-next', 'working', 250) })
+      expect(statusOf(desk, 'chat-next')).toMatchObject({ status: 'working', turnStartedAt: 250 })
+    })
+
+    it('a failed stop restores the chat as it was and says why', async () => {
+      const desk = useDesk()
+      await desk.init()
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-fail', 'working', 100) })
+      mockFetch.mockImplementationOnce(() => Promise.resolve(new Response('{"error":"down"}', { status: 500 })))
+      await expect(desk.interrupt('chat-fail')).rejects.toThrow()
+      expect(statusOf(desk, 'chat-fail')).toMatchObject({ status: 'working', activity: 'Reading the file', turnStartedAt: 100 })
+      MockWebSocket.last!.simulateMessage({ type: 'chat.upsert', chat: chat('chat-fail', 'working', 100) })
+      expect(statusOf(desk, 'chat-fail')?.status).toBe('working')
+    })
+  })
 })
