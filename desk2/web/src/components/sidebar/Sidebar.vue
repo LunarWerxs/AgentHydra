@@ -26,6 +26,7 @@ import { ChevronRight, EyeOff } from '@lucide/vue'
 import { usePaneApi } from '@/components/panes/api'
 import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
 import { footerUpdate, runUpdateSteps } from '@/lib/desk-update-row'
+import { rememberForUpdate } from '@/lib/whats-new'
 import { checkServerUpdate, restartServer, updateOffer } from '@/lib/server-update'
 import TaskRows from './TaskRows.vue'
 import SubBadges from './SubBadges.vue'
@@ -705,6 +706,7 @@ const updateRow = computed(() =>
 async function clickUpdateRow() {
   const row = updateRow.value
   if (!row?.clickable) return
+  await rememberForUpdate()
   await runUpdateSteps(row.steps, {
     apply: () => applyWaitingRelease(paneApi),
     restartIfStale: async () => {

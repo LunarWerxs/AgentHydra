@@ -15,12 +15,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Chats with long transcripts stop stalling the server on every poll**
 - **The timings log records every server stall over 200 ms**
 - **One click above the account pill restarts you onto an update**
+- **A What's new pop-up lists what changed once the update's restart is done**
 - **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
 - **The New screen highlights the project you picked**
 - **The live browser pane keeps streaming when its Chrome window is covered**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
 
 **Everything in Unreleased**
+
+- **A What's new pop-up lists what changed once the update's restart is done.** After the row restarts onto a newer server, a dialog shows the changelog sections and Unreleased entries added since the last look, read from the CHANGELOG the release ships. Got it, Esc or a click outside clears it.
 
 - **The live browser pane keeps streaming when its Chrome window is covered.** Windows stopped drawing a saved
   Chrome whose window sat behind the Desk, so the pane got no pictures and clicks went nowhere. Every Chrome the

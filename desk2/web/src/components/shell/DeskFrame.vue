@@ -35,6 +35,7 @@ import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
 import { ownFrame, startOwnFrame } from '@/lib/host-window'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
+import WhatsNewDialog from './WhatsNewDialog.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
@@ -1016,6 +1017,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       </DialogContent>
     </Dialog>
 
+    <WhatsNewDialog />
     <WindowControls v-if="ownFrame" />
   </div>
 </template>

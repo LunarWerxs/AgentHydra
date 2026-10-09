@@ -49,6 +49,7 @@ import { putBackDraft } from '@/components/composer/change-project'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { refusalText, serverHello, watchServerUpdate } from '@/lib/server-update'
 import { watchRelease } from '@/lib/ah-release'
+import { checkWhatsNew } from '@/lib/whats-new'
 import { rememberView, restoreView } from '@/lib/view-memory'
 import { readCache, readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
@@ -337,6 +338,7 @@ function onHello(event: EventOf<'hello'>) {
   queueState.value = event.queue ?? null
   void reloadIfStale()
   serverHello()
+  void checkWhatsNew()
 }
 
 function onChatUpsert(event: EventOf<'chat.upsert'>) {

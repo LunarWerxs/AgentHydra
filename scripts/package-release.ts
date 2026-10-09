@@ -307,6 +307,8 @@ removePycache(orch)
 // Desk 2: tracked source, the built dists and production node_modules; it runs on the launcher's Bun.
 const desk2 = join(stage, 'desk2')
 stageTracked('desk2', stage, DESK2_SKIP)
+// The window's What's new pop-up reads the changelog the release ships (desk2/server/src/changelog.ts).
+copyFileSync(join(ROOT, 'CHANGELOG.md'), join(desk2, 'CHANGELOG.md'))
 for (const dist of ['web/dist', 'hydra/dist']) {
   cpSync(join(ROOT, 'desk2', dist), join(desk2, dist), { recursive: true })
 }
