@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import type { ChangelogSection } from '@shared/changelog'
-import { checkWhatsNew, isNewerVersion, markerFor, readMarker, rememberForUpdate, whatsNew, whatsNewSince } from '../../src/lib/whats-new'
+import { checkWhatsNew, dismissWhatsNew, isNewerVersion, markerFor, readMarker, rememberForUpdate, whatsNew, whatsNewSince } from '../../src/lib/whats-new'
 
 const entry = (headline: string) => ({ headline, detail: '' })
 
@@ -83,11 +83,11 @@ describe('markerFor', () => {
 
   test('keeps the Unreleased headlines and the running version only', () => {
     const marker = markerFor('2.0.4', sections(['Chats load faster']), NOW)
-    expect(marker).toEqual({ version: '2.0.4', headlines: ['Chats load faster', 'Row restarts onto an update'], at: NOW })
+    expect(marker).toEqual({ version: '2.0.4', headlines: ['Chats load faster', 'Row restarts onto an update'], at: NOW, startedAt: null })
   })
 
   test('is version-only when the changelog could not be read', () => {
-    expect(markerFor('2.0.4', null, NOW)).toEqual({ version: '2.0.4', headlines: null, at: NOW })
+    expect(markerFor('2.0.4', null, NOW)).toEqual({ version: '2.0.4', headlines: null, at: NOW, startedAt: null })
   })
 })
 
@@ -111,9 +111,9 @@ describe('the update click and the restarted copy', () => {
     whatsNew.value = null
   })
 
-  const serving = (version: string | null, sections: ChangelogSection[] | null) => {
+  const serving = (version: string | null, sections: ChangelogSection[] | null, startedAt = 100) => {
     globalThis.fetch = (async (url: string) =>
-      new Response(JSON.stringify(url === '/api/health' ? { version } : { sections }), { status: 200 })) as typeof fetch
+      new Response(JSON.stringify(url === '/api/health' ? { version, startedAt } : { sections }), { status: 200 })) as typeof fetch
   }
 
   const silent = () => {
@@ -126,7 +126,7 @@ describe('the update click and the restarted copy', () => {
     kept.set('hydra-desk.whatsNew.seenVersion', '2.0.3')
     silent()
     const click = rememberForUpdate()
-    expect(readMarker()).toEqual({ version: '2.0.3', headlines: null, at: expect.any(Number) })
+    expect(readMarker()).toEqual({ version: '2.0.3', headlines: null, at: expect.any(Number), startedAt: null })
     await click
   })
 
@@ -135,7 +135,7 @@ describe('the update click and the restarted copy', () => {
     await checkWhatsNew()
     silent()
     const click = rememberForUpdate()
-    expect(readMarker()).toEqual({ version: '2.0.3', headlines: ['Chats load faster', 'Plain bullet'], at: expect.any(Number) })
+    expect(readMarker()).toEqual({ version: '2.0.3', headlines: ['Chats load faster', 'Plain bullet'], at: expect.any(Number), startedAt: 100 })
     await click
     expect(readMarker()?.version).toBe('2.0.3')
   })
@@ -145,12 +145,48 @@ describe('the update click and the restarted copy', () => {
     await checkWhatsNew()
     silent()
     await rememberForUpdate()
-    serving('2.0.4', sections(['Chats load faster', 'Dialog shows the changes']))
+    serving('2.0.4', sections(['Chats load faster', 'Dialog shows the changes']), 200)
     await checkWhatsNew()
     expect(whatsNew.value?.updated).toBe(true)
     expect(whatsNew.value?.groups.map((g) => [g.version, g.entries.map((e) => e.headline)])).toEqual([
       [null, ['Dialog shows the changes']],
       ['2.0.4', ['Row restarts onto an update']],
     ])
+  })
+
+  test('nothing shows before the restart: the server that was clicked still answering keeps the marker and no pop-up', async () => {
+    serving('2.0.3', sections(['Chats load faster']))
+    await checkWhatsNew()
+    silent()
+    await rememberForUpdate()
+    serving('2.0.3', sections(['Chats load faster', 'Dialog shows the changes']))
+    await checkWhatsNew()
+    expect(whatsNew.value).toBeNull()
+    expect(readMarker()?.version).toBe('2.0.3')
+  })
+
+  test('the restarted server shows What\'s new once, and a reload after that shows nothing', async () => {
+    serving('2.0.3', sections(['Chats load faster']))
+    await checkWhatsNew()
+    silent()
+    await rememberForUpdate()
+    serving('2.0.3', sections(['Chats load faster', 'Dialog shows the changes']), 200)
+    await checkWhatsNew()
+    expect(whatsNew.value?.count).toBe(2)
+    dismissWhatsNew()
+    await checkWhatsNew()
+    expect(whatsNew.value).toBeNull()
+    expect(readMarker()).toBeNull()
+  })
+
+  test('a restart onto the same version with nothing new shows nothing and forgets the marker', async () => {
+    serving('2.0.4', sections(['Chats load faster']))
+    await checkWhatsNew()
+    silent()
+    await rememberForUpdate()
+    serving('2.0.4', sections(['Chats load faster']), 200)
+    await checkWhatsNew()
+    expect(whatsNew.value).toBeNull()
+    expect(readMarker()).toBeNull()
   })
 })

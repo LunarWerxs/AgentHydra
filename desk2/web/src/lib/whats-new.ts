@@ -16,6 +16,8 @@ export interface WhatsNewMarker {
   version: string
   headlines: string[] | null
   at: number
+  /** When the clicked server started: a different start is the restarted server. Null when it was not read. */
+  startedAt: number | null
 }
 
 export interface WhatsNewGroup {
@@ -34,6 +36,7 @@ export interface WhatsNew {
 interface Running {
   version: string
   sections: ChangelogSection[] | null
+  startedAt: number | null
 }
 
 export const whatsNew = ref<WhatsNew | null>(null)
@@ -53,12 +56,12 @@ export function isNewerVersion(a: string, b: string): boolean {
 }
 
 /** What to remember of the running copy's changelog: the Unreleased headlines and the running version's own. */
-export function markerFor(version: string, sections: ChangelogSection[] | null, now: number): WhatsNewMarker {
-  if (!sections) return { version, headlines: null, at: now }
+export function markerFor(version: string, sections: ChangelogSection[] | null, now: number, startedAt: number | null = null): WhatsNewMarker {
+  if (!sections) return { version, headlines: null, at: now, startedAt }
   const headlines = sections
     .filter((s) => s.version === null || s.version === version)
     .flatMap((s) => s.entries.map((e) => e.headline))
-  return { version, headlines, at: now }
+  return { version, headlines, at: now, startedAt }
 }
 
 /** The sections and Unreleased entries that are new since the marker, or null when there are none (or the marker is too old). */
@@ -83,7 +86,7 @@ export function readMarker(): WhatsNewMarker | null {
   try {
     const v = JSON.parse(store()?.getItem(KEY) ?? 'null') as Partial<WhatsNewMarker> | null
     if (!v || typeof v.version !== 'string' || typeof v.at !== 'number') return null
-    return { version: v.version, headlines: Array.isArray(v.headlines) ? v.headlines : null, at: v.at }
+    return { version: v.version, headlines: Array.isArray(v.headlines) ? v.headlines : null, at: v.at, startedAt: typeof v.startedAt === 'number' ? v.startedAt : null }
   } catch {
     return null
   }
@@ -130,7 +133,14 @@ async function readRunning(ms: number): Promise<Running | null> {
   const version = health?.version
   if (typeof version !== 'string') return null
   const sections = changelog?.sections
-  return { version, sections: Array.isArray(sections) ? (sections as ChangelogSection[]) : null }
+  const startedAt = typeof health?.startedAt === 'number' ? health.startedAt : null
+  return { version, sections: Array.isArray(sections) ? (sections as ChangelogSection[]) : null, startedAt }
+}
+
+/** The marker's server is gone and another one answers: a new process (its start differs), or a new version when a start is unknown. */
+function restartedSince(marker: WhatsNewMarker, read: Running): boolean {
+  if (marker.startedAt !== null && read.startedAt !== null) return read.startedAt !== marker.startedAt
+  return read.version !== marker.version
 }
 
 /**
@@ -139,20 +149,24 @@ async function readRunning(ms: number): Promise<Running | null> {
  */
 export async function rememberForUpdate(): Promise<void> {
   const version = seenVersion()
-  if (version) writeMarker(markerFor(version, running?.sections ?? null, Date.now()))
+  if (version) writeMarker(markerFor(version, running?.sections ?? null, Date.now(), running?.startedAt ?? null))
   const read = await readRunning(REFRESH_MS)
   if (!read) return
   noteRunning(read)
-  writeMarker(markerFor(read.version, read.sections, Date.now()))
+  writeMarker(markerFor(read.version, read.sections, Date.now(), read.startedAt))
 }
 
-/** A server said hello: after the restart the row asked for, shows what is new, or forgets the marker when nothing is. */
+/**
+ * A server said hello. The pop-up waits for the restart the click asked for: until a new server answers, the marker
+ * stays and nothing shows. Once it has, the marker is spent, so the same version never shows it twice.
+ */
 export async function checkWhatsNew(): Promise<void> {
   const read = await readRunning(READ_MS)
   if (read) noteRunning(read)
   const marker = readMarker()
-  if (!marker || whatsNew.value || !read?.sections) return
+  if (!marker || whatsNew.value || !read || !restartedSince(marker, read)) return
+  forget()
+  if (!read.sections) return
   const result = whatsNewSince(marker, read.version, read.sections, Date.now())
   if (result) whatsNew.value = result
-  else forget()
 }

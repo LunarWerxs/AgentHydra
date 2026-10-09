@@ -14,6 +14,7 @@ import { cacheControl } from './static-cache'
 import { createWsHub, type WsClient } from './ws'
 
 export const VERSION: string = pkg.version
+const STARTED_AT = Date.now()
 
 const DEFAULT_PLUGINS_DIR = join(import.meta.dir, 'plugins')
 const WEB_DIST = resolve(import.meta.dir, '../../web/dist')
@@ -177,7 +178,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   // First, so it covers every route the plugins add and the built window.
   app.use('*', localOnly)
 
-  app.get('/api/health', (c) => c.json({ ok: true, version: VERSION }))
+  app.get('/api/health', (c) => c.json({ ok: true, version: VERSION, startedAt: STARTED_AT }))
   app.get('/api/settings', (c) => c.json(settings.get()))
   app.put('/api/settings', async (c) => {
     let body: unknown
