@@ -285,6 +285,8 @@ export interface InstanceRowModel {
   tokens?: TokenParts | null
   /** The Tokens hover's second and third lines, for figures that are not a transcript's (a Free login's estimate). */
   tokensNote?: { breakdown: string; source: string }
+  /** CliMayte workers on this account from the other PC right now: shown beside the tokens, not in them. */
+  remoteWorkers?: number
   /** The ⋯ menu: its header's icon actions and its width. Its items come in the `menu` slot. */
   menu?: { name: string; actions: MenuIconAction[]; width?: 'sm' | 'md' | 'lg' }
 }

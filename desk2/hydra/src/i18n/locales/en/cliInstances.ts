@@ -21,8 +21,12 @@ export default {
   poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
   colConfigDir: 'Config dir',
   // The Tokens column: what an account has run, from its own transcripts (account-tokens.ts).
-  colTokens: 'Tokens',
+  colTokens: 'Tokens (this PC)',
   tokensLabel: '{total} tokens',
+  // A CliMayte worker from the other PC running on this account now: its tokens are not in the figure.
+  remoteWorkersLabel: '{n} on other PC',
+  remoteWorkersHint:
+    'CliMayte workers running on this account from your other PC right now; their tokens are not counted here.',
   tokensBreakdown:
     '{output} output · {input} input · {cacheRead} cache read · {cacheWrite} cache write',
   tokensSource:

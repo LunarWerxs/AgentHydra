@@ -1460,6 +1460,9 @@ export interface CliInstance {
   /** What the account signed in here now has run on this PC (core/account-tokens.ts). Set by GET
    *  /api/cli-instances only; null when signed out, and until the first sweep after a daemon start. */
   tokens?: AccountTokens | null
+  /** Workers CliMayte runs on this account from the other PC right now (climayte-remote.ts). Their tokens
+   *  are not in `tokens`, which counts this PC's transcripts only. Set by GET /api/cli-instances only. */
+  remoteWorkers?: number
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null

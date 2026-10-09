@@ -256,6 +256,7 @@ function rowModel(inst: CliInstance): InstanceRowModel {
     },
     plan: plan ? { label: plan } : null,
     tokens: tokenPartsFor(inst.tokens, tokenWindow.value),
+    remoteWorkers: inst.remoteWorkers,
     menu: { name: inst.name, actions: menuActionsFor(inst), width: 'md' },
   }
 }
