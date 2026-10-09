@@ -51,10 +51,12 @@ describe('the browser tools as MCP', () => {
 })
 
 describe('the tool registry', () => {
-  test('lists the five read-only tools, each with a description and an object schema', () => {
+  test('lists the seven browser tools, each with a description and an object schema', () => {
     expect(TOOL_DEFS.map((d) => d.name).sort()).toEqual([
       'browser_frames',
+      'browser_profile_claim',
       'browser_profile_find',
+      'browser_profile_note',
       'browser_profiles',
       'browser_status',
       'browser_targets',

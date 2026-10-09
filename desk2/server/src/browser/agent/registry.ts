@@ -1,13 +1,32 @@
 // The browser tools AgentHydra serves: one ToolDef per tool, with the description and input schema a model sees and
 // the handler that answers it. A new tool is one more entry here; the service lists and calls them from this array.
 
-import { readLedger } from '../ownership'
 import { pageTabs } from '../cdp'
-import { listProfiles, type Listing, type ProfileRef } from '../store'
-import type { BrowserProfile } from '@shared/browser'
+import { readLedger } from '../ownership'
+import {
+  claimProfile,
+  findPayload,
+  profilesPayload,
+  SavedBrowserError,
+  saveProfileNote,
+} from '../profiles-scope'
+import type { Listing } from '../store'
+import { listProfiles } from '../store'
 import type { ToolCaller, ToolName } from './contract'
 
 export class ToolInputError extends Error {}
+
+const refused = async <T>(work: () => Promise<T>): Promise<T> => {
+  try {
+    return await work()
+  } catch (err) {
+    if (err instanceof SavedBrowserError) throw new ToolInputError(err.message)
+    throw err
+  }
+}
+
+const optionalText = (v: unknown): string | undefined =>
+  v === undefined || v === null ? undefined : String(v)
 
 export type ToolHandler = (params: Record<string, unknown>, caller: ToolCaller) => Promise<string>
 
@@ -40,7 +59,8 @@ function numberParam(params: Record<string, unknown>, key: string): number | und
   const v = params[key]
   if (v === undefined || v === null || v === '') return undefined
   const n = Number(v)
-  if (!Number.isInteger(n) || n <= 0 || n > 65535) throw new ToolInputError(`${key} must be a port number`)
+  if (!Number.isInteger(n) || n <= 0 || n > 65535)
+    throw new ToolInputError(`${key} must be a port number`)
   return n
 }
 
@@ -50,31 +70,9 @@ function stringParam(params: Record<string, unknown>, key: string): string | und
 }
 
 function requireCwd(caller: ToolCaller): string {
-  if (!caller.cwd) throw new ToolInputError('the call needs the chat folder (caller.cwd) to pick its workspace')
+  if (!caller.cwd)
+    throw new ToolInputError('the call needs the chat folder (caller.cwd) to pick its workspace')
   return caller.cwd
-}
-
-function listingRows(listing: Listing): Record<string, unknown> {
-  const row = (ref: ProfileRef) => {
-    const p: BrowserProfile = ref.profile
-    return {
-      profile: p.name,
-      scope: p.own ? 'workspace' : 'unowned',
-      key: p.own ? `${listing.result.workspace}/${p.name}` : p.name,
-      open: p.open,
-      lastUsed: p.lastUsedAt,
-      signedInHosts: p.sessionHosts,
-      note: p.note,
-      ...(p.title ? { title: p.title } : {}),
-      sites: p.sites,
-    }
-  }
-  return {
-    workspace: listing.result.workspace,
-    managed: listing.refs.filter((r) => r.profile.own).map(row),
-    unowned: listing.refs.filter((r) => !r.profile.own).map(row),
-    ...(listing.result.error ? { error: listing.result.error } : {}),
-  }
 }
 
 async function profileRefOrPort(
@@ -86,21 +84,33 @@ async function profileRefOrPort(
   const name = stringParam(params, 'profile')
   if (name) {
     const ref = listing.refs.find((r) => r.profile.name === name)
-    if (!ref || ref.port === null) throw new ToolInputError(`profile '${name}' is not open; open it in its own Chrome or pass attachPort`)
+    if (!ref || ref.port === null)
+      throw new ToolInputError(
+        `profile '${name}' is not open; open it in its own Chrome or pass attachPort`,
+      )
     return { port: ref.port, dir: ref.dir }
   }
-  throw new ToolInputError('pass profile (an open saved browser) or attachPort (a Chrome debugging port)')
+  throw new ToolInputError(
+    'pass profile (an open saved browser) or attachPort (a Chrome debugging port)',
+  )
 }
 
 const cdpVersion = async (port: number): Promise<string> => {
-  const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(2000) })
+  const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+    signal: AbortSignal.timeout(2000),
+  })
   if (!res.ok) throw new Error(`/json/version: ${res.status}`)
   const v = (await res.json()) as { webSocketDebuggerUrl?: string }
   if (!v.webSocketDebuggerUrl) throw new Error('the Chrome did not name its debugger socket')
   return v.webSocketDebuggerUrl
 }
 
-async function cdpOnce(wsUrl: string, method: string, params: object, timeoutMs = 5000): Promise<any> {
+async function cdpOnce(
+  wsUrl: string,
+  method: string,
+  params: object,
+  timeoutMs = 5000,
+): Promise<any> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl)
     const timer = setTimeout(() => {
@@ -109,7 +119,11 @@ async function cdpOnce(wsUrl: string, method: string, params: object, timeoutMs 
     }, timeoutMs)
     ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }))
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(String(ev.data)) as { id?: number; result?: unknown; error?: { message: string } }
+      const msg = JSON.parse(String(ev.data)) as {
+        id?: number
+        result?: unknown
+        error?: { message: string }
+      }
       if (msg.id !== 1) return
       clearTimeout(timer)
       ws.close()
@@ -129,7 +143,64 @@ export const TOOL_DEFS: ToolDef[] = [
     description:
       "List THIS WORKSPACE's saved browsers - persistent named profiles (default: one per company), plus the pre-partition ones nobody owns (`unowned`) whose logins and cookies survive across sessions. Shows each profile's name, whether it's open right now (a live Chrome), and when it was last used. `sites` carries, per host a session has driven that profile to, whether the page loaded (`reached`), bounced to a sign-in (`signin-wall`) or hit a bot challenge (`challenged`), with the timestamp. READ THIS BEFORE OPENING ANYTHING: it lets you pick the profile that already holds the login. An entry is a dated observation, never a promise: sessions expire silently, so treat an old `reached` as a hint. Pass profile:'<name>' on browser_targets or browser_frames to read a specific one.",
     inputSchema: { type: 'object', properties: {} },
-    run: async (_params, caller) => pretty(listingRows(await listProfiles(requireCwd(caller)))),
+    run: async (_params, caller) => pretty(await profilesPayload(requireCwd(caller))),
+  },
+  {
+    name: 'browser_profile_note',
+    description:
+      "Write down WHAT A SAVED BROWSER IS LOGGED INTO AND WHAT IT IS FOR, so any later chat in this workspace knows which one to use (browser_profiles and browser_profile_find return the note and title, and browser_profile_find also matches the note's words: for:'stripe' finds the browser whose note mentions Stripe). WHENEVER YOU SAVE A NOTE ALSO GIVE A SHORT TITLE (2-3 words, e.g. 'GitHub' or 'Shop admin'): the title is the name people see for the browser in lists instead of the raw profile name, so the TITLE names the site or the job. Keep the note itself to a FEW WORDS that say only what the title and the sign-in hosts do not: which ACCOUNT (the email or username - NEVER a password, token or any secret) and what the browser is FOR, e.g. 'billing@acme.com, refunds and payouts' or 'example-org/example-repo'. Never repeat the site name or host (the title and the sign-in hosts already show it). Never write sign-in status ('not signed in yet') or instructions to the owner: status in a note goes stale. Pass note, title or both: a field you leave out keeps its current value (title alone keeps the note, note alone keeps the title), and an empty string clears just that field. The note is trimmed and capped at 500 characters; the title is trimmed and CUT to 40 characters (not refused). Same scope as the rest of the browser tools: only this workspace's saved browsers (or an unowned pre-partition one); a profile another workspace owns is refused.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profile: {
+          type: 'string',
+          description: 'the saved browser the note is about, as shown by browser_profiles',
+        },
+        note: {
+          type: 'string',
+          description:
+            'a few words: which account (never a secret) and what it is for; never the site name or host, never sign-in status; empty clears the note; omit to keep it; max 500 chars',
+        },
+        title: {
+          type: 'string',
+          description:
+            "short human name for the site or the job, 2-3 words, e.g. 'GitHub' or 'Shop admin'; trimmed and cut to 40 chars; empty clears it; omit to keep it",
+        },
+      },
+      required: ['profile'],
+    },
+    run: async (params, caller) => {
+      const profile = stringParam(params, 'profile')
+      if (!profile)
+        throw new ToolInputError('browser_profile_note needs profile:<the saved browser>')
+      const fields = { note: optionalText(params.note), title: optionalText(params.title) }
+      return pretty(await refused(() => saveProfileNote(requireCwd(caller), profile, fields)))
+    },
+  },
+  {
+    name: 'browser_profile_claim',
+    description:
+      "Move a saved browser profile INTO this workspace, so this project owns that login from now on. Saved profiles are workspace-scoped - a profile created in another workspace is reported by browser_profiles / browser_profile_find but cannot be driven from here, and this is the one door through that boundary. Two cases: a PRE-PARTITION profile (created before scoping existed, owned by nobody, shown under `unowned`) needs only profile:'<name>'; one owned by another workspace also needs from:'<its workspace path>'. It is a MOVE, never a copy - two workspaces driving one identity's cookies means two Chromes racing the same session and the site invalidating both - so the other workspace loses it. The profile must have no live Chrome: close that Chrome first.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        profile: { type: 'string', description: "the saved profile's name, e.g. 'shop-admin'" },
+        from: {
+          type: 'string',
+          description:
+            'the workspace that currently owns it (its path, as shown by browser_profiles); omit for an unowned pre-partition profile',
+        },
+      },
+      required: ['profile'],
+    },
+    run: async (params, caller) => {
+      const profile = stringParam(params, 'profile')
+      if (!profile)
+        throw new ToolInputError('browser_profile_claim needs profile:<the saved browser name>')
+      return pretty(
+        await refused(() => claimProfile(requireCwd(caller), profile, stringParam(params, 'from'))),
+      )
+    },
   },
   {
     name: 'browser_status',
@@ -142,8 +213,11 @@ export const TOOL_DEFS: ToolDef[] = [
       const lines: string[] = []
       const ports = attachPort
         ? [{ port: attachPort, dir: null as string | null, name: `port ${attachPort}` }]
-        : listing.refs.filter((r) => r.port !== null).map((r) => ({ port: r.port as number, dir: r.dir, name: r.profile.name }))
-      if (ports.length === 0) return "OPEN BROWSER WINDOWS (0): none open on this workspace's saved profiles"
+        : listing.refs
+            .filter((r) => r.port !== null)
+            .map((r) => ({ port: r.port as number, dir: r.dir, name: r.profile.name }))
+      if (ports.length === 0)
+        return "OPEN BROWSER WINDOWS (0): none open on this workspace's saved profiles"
       for (const p of ports) {
         const ledger = p.dir ? readLedger(p.dir) : new Map<string, { chat: string; at: number }>()
         lines.push(`\n${p.name} (debugging port ${p.port}):`)
@@ -161,46 +235,36 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: 'browser_profile_find',
     description:
-      "ASK THIS BEFORE YOU OPEN ANY BROWSER OR ASK ANYONE TO LOG IN. Answers 'which saved browser in this workspace is ALREADY logged in for X?' from the profile index. `for` takes what a person would say: a service word ('gmail', 'cloudflare', 'stripe'), a URL, or an identity. It returns the matching profiles ranked, with the hosts each one is signed into. Matching is on cookie HOST NAMES (values are never read) plus the profile's name and note. A recorded session is a dated observation, not a promise; if the site still asks for a login, the person must sign in again.",
+      "ASK THIS BEFORE YOU OPEN ANY BROWSER OR ASK ANYONE TO LOG IN. Answers 'which saved browser in this workspace is ALREADY logged in for X?' from the profile index. `for` takes what a person would say: a service word ('gmail', 'cloudflare', 'stripe'), a URL, or an identity. It returns `drivableNow` (the managed profile to pass as profile:'<name>', if one holds that session), every other match ranked with the hosts each one is signed into, and matches in other workspaces as evidence only. Matching is on cookie HOST NAMES (values are never read) plus the profile's name and note. A recorded session is a dated observation, not a promise; if the site still asks for a login, the person must sign in again.",
     inputSchema: {
       type: 'object',
       properties: {
-        for: { type: 'string', description: "service word, URL, or identity - 'gmail', 'https://dash.cloudflare.com', 'Example Owner'" },
+        for: {
+          type: 'string',
+          description:
+            "service word, URL, or identity - 'gmail', 'https://dash.cloudflare.com', 'Example Owner'",
+        },
       },
       required: ['for'],
     },
     run: async (params, caller) => {
       const query = stringParam(params, 'for')
-      if (!query) throw new ToolInputError("browser_profile_find needs for:'<service, url or identity>'")
-      const listing = await listProfiles(requireCwd(caller))
-      const hosts = [...query.toLowerCase().matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,}/g)].map((m) => m[0])
-      const words = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3)
-      const word = query.toLowerCase().replace(/[^a-z0-9]+/g, '')
-      const hostMatches = (host: string, want: string) => host === want || want.endsWith(`.${host}`) || host.endsWith(`.${want}`)
-      const matches = listing.refs
-        .map((ref) => {
-          const p = ref.profile
-          const matchedHosts = hosts.filter((w) => p.sessionHosts.some((h) => hostMatches(h, w)))
-          const nameHit = word.length >= 3 && p.name.toLowerCase().replace(/[^a-z0-9]+/g, '').includes(word)
-          const noteHit = word.length >= 3 && (p.note ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '').includes(word)
-          const wordHit = words.some((w) => p.sessionHosts.some((h) => h.includes(w)))
-          const points = matchedHosts.length * 10 + (nameHit ? 3 : 0) + (noteHit ? 3 : 0) + (matchedHosts.length === 0 && wordHit ? 1 : 0)
-          return { profile: p.name, scope: p.own ? 'workspace' : 'unowned', points, matchedHosts, nameHit, noteHit, note: p.note, open: p.open }
-        })
-        .filter((m) => m.points > 0)
-        .sort((a, b) => b.points - a.points)
-      return pretty({ query, matches })
+      if (!query)
+        throw new ToolInputError("browser_profile_find needs for:'<service, url or identity>'")
+      return pretty(await findPayload(requireCwd(caller), query))
     },
   },
   {
     name: 'browser_targets',
     description:
-      'List every CDP target the browser knows about - open tabs, pages, workers and extension background targets - each with its type, title, URL, and whether it is attached. Use it to confirm a page\'s service worker registered, or to see what is there before reading a page. Complements browser_frames, which shows in-page iframe topology rather than the target list.',
+      "List every CDP target the browser knows about - open tabs, pages, workers and extension background targets - each with its type, title, URL, and whether it is attached. Use it to confirm a page's service worker registered, or to see what is there before reading a page. Complements browser_frames, which shows in-page iframe topology rather than the target list.",
     inputSchema: { type: 'object', properties: { ...ATTACH_PORT_PROP, ...PROFILE_PROP } },
     run: async (params, caller) => {
       const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params)
       const wsUrl = await cdpVersion(port)
-      let res: { targetInfos?: { type: string; title?: string; url?: string; attached?: boolean }[] }
+      let res: {
+        targetInfos?: { type: string; title?: string; url?: string; attached?: boolean }[]
+      }
       try {
         res = await cdpOnce(wsUrl, 'Target.getTargets', { filter: [{}] })
       } catch {
@@ -208,7 +272,12 @@ export const TOOL_DEFS: ToolDef[] = [
       }
       const rows = (res.targetInfos ?? [])
         .filter((t) => !String(t.url ?? '').startsWith('devtools:'))
-        .map((t) => ({ type: t.type, title: (t.title ?? '').slice(0, 80), url: (t.url ?? '').slice(0, 160), attached: !!t.attached }))
+        .map((t) => ({
+          type: t.type,
+          title: (t.title ?? '').slice(0, 80),
+          url: (t.url ?? '').slice(0, 160),
+          attached: !!t.attached,
+        }))
       return rows.length ? pretty(rows) : '(no targets)'
     },
   },
@@ -219,7 +288,9 @@ export const TOOL_DEFS: ToolDef[] = [
     inputSchema: { type: 'object', properties: { ...ATTACH_PORT_PROP, ...PROFILE_PROP } },
     run: async (params, caller) => {
       const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params)
-      const list = (await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })).json()) as {
+      const list = (await (
+        await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })
+      ).json()) as {
         id: string
         type: string
         url: string
@@ -237,7 +308,9 @@ export const TOOL_DEFS: ToolDef[] = [
       } catch (err) {
         text = `(eval failed: ${String(err instanceof Error ? err.message : err).slice(0, 40)})`
       }
-      return pretty([{ session: page.id.slice(0, 8), type: 'main', url: page.url.slice(0, 50), text }])
+      return pretty([
+        { session: page.id.slice(0, 8), type: 'main', url: page.url.slice(0, 50), text },
+      ])
     },
   },
 ]

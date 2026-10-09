@@ -12,7 +12,12 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { BrowserProfile, BrowserProfiles, BrowserSite, BrowserSiteState } from '@shared/browser'
+import type {
+  BrowserProfile,
+  BrowserProfiles,
+  BrowserSite,
+  BrowserSiteState,
+} from '@shared/browser'
 import { liveBrowser } from './cdp'
 import { normalizePath, workspaceCandidates } from './workspace'
 
@@ -23,18 +28,19 @@ export function storeRoot(): string {
 /** The store's own bookkeeping, never a profile name. */
 const RESERVED = new Set(['ws', 'registry.json', 'workspaces.json'])
 
-type Json = Record<string, unknown>
-const isObject = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v)
+export type Json = Record<string, unknown>
+export const isObject = (v: unknown): v is Json =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** A file's JSON object: null when the file is missing, throws when it exists and cannot be read as one. */
-function readObject(file: string): Json | null {
+export function readObject(file: string): Json | null {
   if (!existsSync(file)) return null
   const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
   if (!isObject(parsed)) throw new Error('not a JSON object')
   return parsed
 }
 
-function realDirs(dir: string): string[] {
+export function realDirs(dir: string): string[] {
   try {
     return readdirSync(dir).filter((n) => {
       if (n.startsWith('.') || RESERVED.has(n)) return false
@@ -53,18 +59,24 @@ function realDirs(dir: string): string[] {
 
 const STATES: BrowserSiteState[] = ['reached', 'signin-wall', 'challenged']
 
-function sitesOf(ledger: Json, key: string): BrowserSite[] {
+export function sitesOf(ledger: Json, key: string): BrowserSite[] {
   const rows = ledger[key]
   if (!isObject(rows)) return []
   const out: BrowserSite[] = []
   for (const [host, row] of Object.entries(rows)) {
-    if (!isObject(row) || typeof row.at !== 'string' || !STATES.includes(row.state as BrowserSiteState)) continue
+    if (
+      !isObject(row) ||
+      typeof row.at !== 'string' ||
+      !STATES.includes(row.state as BrowserSiteState)
+    )
+      continue
     out.push({ host, state: row.state as BrowserSiteState, at: row.at })
   }
   return out.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
 }
 
-const stringList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((h): h is string => typeof h === 'string') : [])
+const stringList = (v: unknown): string[] =>
+  Array.isArray(v) ? v.filter((h): h is string => typeof h === 'string') : []
 
 /** The newest of the profile's recorded times (registry stamps, ledger sightings) and its folder's own mtime. */
 function lastUsed(dir: string, entry: Json, sites: BrowserSite[]): string | null {
@@ -128,7 +140,9 @@ export async function listProfiles(cwd: string): Promise<Listing> {
         port: live?.port ?? null,
         profile: {
           name,
-          ...(typeof entry.title === 'string' && entry.title.trim() !== '' ? { title: entry.title.trim() } : {}),
+          ...(typeof entry.title === 'string' && entry.title.trim() !== ''
+            ? { title: entry.title.trim() }
+            : {}),
           note: typeof entry.note === 'string' && entry.note.trim() !== '' ? entry.note : null,
           sites,
           sessionHosts: stringList(entry.sessionHosts),
@@ -143,9 +157,12 @@ export async function listProfiles(cwd: string): Promise<Listing> {
   const bare = realDirs(root).filter((n) => !ownNames.includes(n))
   const legacy = join(dirname(root), 'mcp-browser-profile')
   const bareRefs: Promise<ProfileRef>[] = bare.map((n) => make(n, n, join(root, n), false))
-  if (!bare.includes('default') && !ownNames.includes('default') && existsSync(legacy)) bareRefs.push(make('default', 'default', legacy, false))
+  if (!bare.includes('default') && !ownNames.includes('default') && existsSync(legacy))
+    bareRefs.push(make('default', 'default', legacy, false))
 
-  const own = await Promise.all(ownNames.map((n) => make(n, `${slug}/${n}`, join(root, 'ws', slug as string, n), true)))
+  const own = await Promise.all(
+    ownNames.map((n) => make(n, `${slug}/${n}`, join(root, 'ws', slug as string, n), true)),
+  )
   const unowned = (await Promise.all(bareRefs)).filter((r) => r.profile.open)
   const refs = [...own, ...unowned].sort((a, b) => a.profile.name.localeCompare(b.profile.name))
   const result: BrowserProfiles = { workspace: slug, profiles: refs.map((r) => r.profile) }
@@ -157,12 +174,16 @@ export async function listProfiles(cwd: string): Promise<Listing> {
 export function ofAnotherWorkspace(listing: Listing, name: string): boolean {
   if (listing.refs.some((r) => r.profile.name === name)) return false
   const ws = join(storeRoot(), 'ws')
-  return realDirs(ws).some((slug) => slug !== listing.result.workspace && realDirs(join(ws, slug)).includes(name))
+  return realDirs(ws).some(
+    (slug) => slug !== listing.result.workspace && realDirs(join(ws, slug)).includes(name),
+  )
 }
 
-async function matchWorkspace(cwd: string, workspaces: Json): Promise<string | null> {
+export async function matchWorkspace(cwd: string, workspaces: Json): Promise<string | null> {
   const entries = Object.entries(workspaces).flatMap(([slug, v]) =>
-    isObject(v) && typeof v.workspace === 'string' ? [{ slug, path: normalizePath(v.workspace) }] : [],
+    isObject(v) && typeof v.workspace === 'string'
+      ? [{ slug, path: normalizePath(v.workspace) }]
+      : [],
   )
   if (entries.length === 0) return null
   // cwd first, then the repo's top folder, then the main worktree: the most specific one wins.

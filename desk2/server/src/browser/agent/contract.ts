@@ -7,6 +7,8 @@ export interface ToolParams {
   browser_profile_find: { for: string }
   browser_targets: { attachPort?: number; profile?: string }
   browser_frames: { attachPort?: number; profile?: string }
+  browser_profile_note: { profile: string; note?: string; title?: string }
+  browser_profile_claim: { profile: string; from?: string }
 }
 
 export type ToolName = keyof ToolParams

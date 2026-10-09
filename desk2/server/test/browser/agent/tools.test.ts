@@ -68,14 +68,17 @@ describe('browser_profile_find', () => {
     if (!res.ok) return
     const out = JSON.parse(res.text)
     expect(out.query).toBe('https://shop.example.test/cart')
-    expect(out.matches[0]).toMatchObject({ profile: 'example-shop', matchedHosts: ['shop.example.test'] })
+    expect(out.drivableNow).toMatchObject({ profile: 'example-shop', matchedHosts: ['shop.example.test'] })
+    expect(out.managed[0]).toMatchObject({ profile: 'example-shop', matchedHosts: ['shop.example.test'] })
   })
 
   test('names a profile by its note words', async () => {
     const res = await callTool('browser_profile_find', { for: 'example' }, { cwd })
     expect(res.ok).toBe(true)
     if (!res.ok) return
-    expect(JSON.parse(res.text).matches[0]).toMatchObject({ profile: 'example-shop', nameHit: true, noteHit: true })
+    const top = JSON.parse(res.text).managed[0]
+    expect(top).toMatchObject({ profile: 'example-shop' })
+    expect(top.points).toBeGreaterThan(0)
   })
 
   test('refuses a call without a query', async () => {
