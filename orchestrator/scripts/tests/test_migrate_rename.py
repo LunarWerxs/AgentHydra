@@ -493,10 +493,14 @@ class MigrateTest(ActTestBase):
                  mock.patch.object(migrate_chat, "_archive_source_on_disk", return_value=False), \
                  mock.patch.object(migrate_chat.time, "sleep"):
                 code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
-            self.assertEqual(code, 0)  # the landing itself still stands
+            # The landing stands, but a source row still showing is a half-move, never a clean
+            # exit (2026-10-09: a batch called one OK and the owner found the duplicate himself).
+            self.assertEqual(code, 2)
             payload = json.loads(out)
             self.assertEqual(payload["sourceRow"], "visible")
             self.assertFalse(payload["sourceSettled"])
+            self.assertFalse(payload["ok"])
+            self.assertIn("still visible", payload["unfinished"][0])
             self.assertIn("STILL VISIBLE", payload["report"])
             rows = ledgerlib._load()
             annotated = [r for r in rows if r.get("kind") == "migrate" and r.get("session") == SID]
@@ -576,7 +580,7 @@ class MigrateTest(ActTestBase):
                  mock.patch.object(migrate_chat, "_archive_source_on_disk", return_value=False), \
                  mock.patch.object(migrate_chat.time, "sleep"):
                 code, out, _ = run_cli(migrate_chat.main, [SID, "--to", "2claude", "--json"])
-            self.assertEqual(code, 0)
+            self.assertEqual(code, 2)  # a half-move (see the test above)
             self.assertEqual(json.loads(out)["sourceRow"], "visible")
             self.assertTrue(meta.exists(), "a genuinely stuck twin must stay findable")
             self.assertFalse(tomb.exists())
