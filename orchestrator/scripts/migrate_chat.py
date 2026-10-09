@@ -1654,6 +1654,11 @@ def _adjudicate_bypass(session_id: str, chat_title, target: dict, meta_path: str
     # which app holds the record, so every prior confirmation about it is void: drop it first
     # and let the only entry that can exist be the one THIS run's actuator wrote (exit 0).
     _drop_confirmed(session_id)
+    # The app's own memory, read back in the native call that landed the effort: the same
+    # authority the picker reports from, without driving the screen.
+    if _Path(meta_path).stem in _NATIVE_BYPASS:
+        return ("app-confirmed",
+                "the app's own manager read back Bypass permissions (native picker call)", "")
     row = {"sessionId": session_id, "title": chat_title,
            # dir-first (2026-09-06): target is already the unique fleet row; hand its dir
            # rather than re-resolving a bare name that a same-named-leaf sibling could match.
@@ -1705,23 +1710,35 @@ def source_effort(match: dict) -> dict | None:
         return None
 
 
+# Chats whose landing app read Bypass permissions back from its own memory in the same native
+# call that landed their effort (effort_in_app). _adjudicate_bypass takes that as app-confirmed
+# and skips driving the picker on screen, which cost 5.5s a chat (2026-10-09: 15 chats, 208s).
+_NATIVE_BYPASS: set[str] = set()
+
+
 def effort_in_app(target: dict, meta_path: str, want: dict) -> bool | str:
     """Land `want` ({effort, ultracode}) INSIDE the target's running app for the chat whose
-    record is `meta_path`, via the daemon's native route (the app's own applyFlagSettings).
-    True when the app read both back; otherwise the reason, for the report. Module scope so a
-    test can replace it; never raises."""
+    record is `meta_path`, via the daemon's native route (the app's own applyFlagSettings),
+    and Bypass permissions with it (the app's own picker call). True when the app read all of
+    it back; otherwise the reason, for the report. Module scope so a test can replace it;
+    never raises."""
+    session_id = _Path(meta_path).stem
+    _NATIVE_BYPASS.discard(session_id)
     try:
         got = hydralib.api_post_once("/api/claude-native/ultracode", {
             "profileDir": str(target.get("dir") or ""),
-            "sessionId": _Path(meta_path).stem,
+            "sessionId": session_id,
             "effort": want["effort"],
             "ultracode": bool(want["ultracode"]),
+            "bypass": True,
         })
     except hydralib.DaemonError as err:
         return f"app refused: {str(err)[:160]}"
     except Exception as err:  # a transport failure is reported, never fatal to the move
         return f"native route unavailable: {str(err)[:120]}"
     if isinstance(got, dict) and got.get("ok") is True:
+        if ((got.get("after") or {}).get("permissionMode")) == stamplib.BYPASS:
+            _NATIVE_BYPASS.add(session_id)
         return True
     return str((got or {}).get("reason") if isinstance(got, dict) else got)[:160] or "no verdict"
 

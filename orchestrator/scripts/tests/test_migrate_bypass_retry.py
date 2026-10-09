@@ -46,6 +46,31 @@ class BypassRetry(unittest.TestCase):
     def test_any_other_refusal_is_not_retried(self):
         self.assertEqual(self.run_with(["REFUSED: no sidebar row is named 'T'"]), ("disk-only", 1))
 
+    # 2026-10-09: the picker cost 5.5s a chat; the native effort call now reads bypass back.
+    def test_bypass_read_back_natively_never_drives_the_picker(self):
+        def native(path, body, **_):
+            return {"ok": True, "after": {"permissionMode": "bypassPermissions"}}
+
+        with mock.patch.object(migrate_chat.hydralib, "api_post_once", native):
+            self.assertIs(migrate_chat.effort_in_app(
+                TARGET, "c:\\x\\local_s1.json", {"effort": "xhigh", "ultracode": True}), True)
+        try:
+            with mock.patch.object(migrate_chat, "confirm_bypass_in_app",
+                                   lambda row, fleet: self.fail("picker driven")), \
+                 mock.patch.object(migrate_chat, "_drop_confirmed", lambda sid: None):
+                verdict = migrate_chat._adjudicate_bypass(
+                    "s1", "T", TARGET, "c:\\x\\local_s1.json", {}, WATCHED)
+        finally:
+            migrate_chat._NATIVE_BYPASS.clear()
+        self.assertEqual(verdict[0], "app-confirmed")
+
+    def test_native_route_without_bypass_falls_back_to_the_picker(self):
+        with mock.patch.object(migrate_chat.hydralib, "api_post_once",
+                               lambda path, body, **_: {"ok": True, "after": {}}):
+            migrate_chat.effort_in_app(TARGET, "c:\\x\\local_s1.json",
+                                       {"effort": "xhigh", "ultracode": True})
+        self.assertEqual(self.run_with(["ok"]), ("app-confirmed", 1))
+
 
 if __name__ == "__main__":
     unittest.main()

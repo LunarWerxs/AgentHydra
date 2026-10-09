@@ -638,6 +638,70 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     })
     expect(h.other.sessionSettings.ultracode).toBe(true)
   })
+  // 2026-10-09: a move clicked the picker on screen for every landed chat (5.5s each). The
+  // ultracode call now takes bypass too, through the app's own setPermissionMode('picker').
+  test('ultracode with bypass sets the mode through the picker call and reads it back', async () => {
+    const h = harness()
+    const modes: any[] = []
+    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+      const s = h.manager.sessions.get(id)
+      s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
+      s.effort = flags.effortLevel
+    }
+    h.manager.setPermissionMode = async (id: string, mode: string, via: string) => {
+      modes.push({ id, mode, via })
+      h.manager.sessions.get(id).permissionMode = mode
+      return true
+    }
+    expect(await h.run({ action: 'ultracode', effort: 'xhigh', bypass: true })).toMatchObject({
+      ok: true,
+      verified: true,
+      before: { permissionMode: 'acceptEdits' },
+      after: { permissionMode: 'bypassPermissions' },
+    })
+    expect(modes).toEqual([{ id: 'local_target', mode: 'bypassPermissions', via: 'picker' }])
+    expect(h.other.permissionMode).toBe('acceptEdits')
+    // The app refusing (a root or remote-spawned chat) reads back as not verified.
+    const refused = harness()
+    refused.manager.applyFlagSettings = h.manager.applyFlagSettings
+    refused.manager.setPermissionMode = async () => false
+    expect(await refused.run({ action: 'ultracode', effort: 'max', bypass: true })).toMatchObject({
+      ok: false,
+      verified: false,
+    })
+  })
+  // 2026-10-09: each import started a second claude.exe only to hand over a claude://resume link.
+  test('import makes the deep link call directly and reads the landing back', async () => {
+    const h = harness()
+    const cli = '0b0e5c1a-1111-4222-8333-444455556666'
+    const calls: any[] = []
+    h.manager.importCliSession = async (id: string, options: any) => {
+      calls.push({ id, options })
+      h.manager.sessions.set(`local_${id}`, {
+        ...h.target,
+        sessionId: `local_${id}`,
+        cliSessionId: id,
+      })
+      return `local_${id}`
+    }
+    expect(await h.run({ action: 'import', cliSessionId: cli })).toMatchObject({
+      ok: true,
+      verified: true,
+      dispatch: 'sent',
+      importedSessionId: `local_${cli}`,
+    })
+    expect(calls).toEqual([{ id: cli, options: { source: 'deep_link' } }])
+    const archived = harness()
+    archived.manager.importCliSession = async () => archived.target.sessionId
+    archived.target.isArchived = true
+    expect(await archived.run({ action: 'import', cliSessionId: cli })).toMatchObject({
+      ok: false,
+      dispatch: 'sent',
+    })
+    expect(() => nativeProgram({ ...h.request, action: 'import', cliSessionId: 'x"' })).toThrow(
+      'UUID',
+    )
+  })
   test('serialized identifiers cannot inject additional inspector code', async () => {
     const h = harness()
     const value = 'local_target");globalThis.injected=true;//'

@@ -18,17 +18,19 @@ export interface NativeUltracodeOutcome {
   ok: boolean
   /** Why it did not run or did not verify; absent on success. */
   reason?: string
-  before?: { effort: string | null; ultracode: boolean | null }
-  after?: { effort: string | null; ultracode: boolean | null }
+  before?: { effort: string | null; ultracode: boolean | null; permissionMode?: string | null }
+  after?: { effort: string | null; ultracode: boolean | null; permissionMode?: string | null }
 }
 
 /** Land `effort` and `ultracode` on one chat in its running app. Ultracode defaults to on; a move
- *  passes the source's own pair so the chat keeps the level it had (owner, 2026-09-26). */
+ *  passes the source's own pair so the chat keeps the level it had (owner, 2026-09-26). `bypass`
+ *  also puts it on Bypass permissions through the app's own picker call, read back from memory. */
 export async function tryNativeUltracode(
   profileDir: string,
   sessionId: string,
   effort = 'xhigh',
   ultracode = true,
+  bypass = false,
 ): Promise<NativeUltracodeOutcome> {
   if (!/^local_[A-Za-z0-9_-]{1,160}$/.test(sessionId)) {
     return { ok: false, reason: 'expected the exact native chat id (local_...)' }
@@ -60,6 +62,7 @@ export async function tryNativeUltracode(
         sessionId,
         effort,
         ultracode,
+        ...(bypass ? { bypass } : {}),
       }),
     )
     if (result?.ok === true && result.verified === true) {

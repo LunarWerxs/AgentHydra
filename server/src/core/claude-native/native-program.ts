@@ -15,7 +15,7 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause'
+  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import'
   /** idle only: how long a chat that is not on screen keeps its idle engine before the app's own
    *  pause releases it. Applies only where the app's own setting is "never" (0). */
   idleMs?: number
@@ -28,6 +28,9 @@ export interface NativeProgramRequest {
   /** ultracode only: the ultracode flag to land. Default true; false lands a source that ran
    *  without it, so a moved chat keeps the level it had (owner, 2026-09-26). */
   ultracode?: boolean
+  /** ultracode only: also put the chat on Bypass permissions through the app's own picker call,
+   *  so a move confirms the mode in memory instead of clicking the picker (5.5s a chat). */
+  bypass?: boolean
   /** archive only: CLI ids of chats leaving this profile in the same move; their servers are
    *  not bystanders of this archive. */
   leavingCliSessionIds?: string[]
@@ -768,6 +771,7 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
   const pick = (s: any) => ({
     effort: s.effort ?? null,
     ultracode: s.sessionSettings?.ultracode ?? null,
+    ...(request.bypass === true ? { permissionMode: s.permissionMode ?? null } : {}),
   })
   const session = nativeSelect(manager, request)
   const before = pick(session)
@@ -778,8 +782,19 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
     effortLevel: request.effort,
   })
   nativeCheckIdentity(env, found, request, settled)
+  // The picker's own path ('picker'): the app refuses it for a root or remote-spawned chat, and
+  // the read-back below is what says whether it took.
+  if (request.bypass === true && session.permissionMode !== 'bypassPermissions') {
+    if (typeof manager.setPermissionMode !== 'function')
+      nativeRefuse('native method unavailable: setPermissionMode')
+    await manager.setPermissionMode(session.sessionId, 'bypassPermissions', 'picker')
+    nativeCheckIdentity(env, found, request, settled)
+  }
   const after = pick(nativeSelect(manager, request))
-  const verified = (after.ultracode === true) === wantUltracode && after.effort === request.effort
+  const verified =
+    (after.ultracode === true) === wantUltracode &&
+    after.effort === request.effort &&
+    (request.bypass !== true || after.permissionMode === 'bypassPermissions')
   return {
     ok: verified,
     verified,
@@ -993,6 +1008,47 @@ async function nativePause(env: any, found: any, request: any, settled: any, sta
   }
 }
 
+/**
+ * Lands a CLI transcript as a chat in this app: the exact call the app's claude://resume handler
+ * makes (importCliSession, source deep_link), minus the window it then navigates. The deep link
+ * needed a second claude.exe started per chat only to hand the URL over (~4.5s a chat,
+ * 2026-10-09). The app's own call is idempotent: a chat it already holds is unarchived and its
+ * id returned. The landing is read back from the manager's memory.
+ */
+async function nativeImport(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (typeof manager.importCliSession !== 'function')
+    nativeRefuse('native method unavailable: importCliSession')
+  state.dispatch = 'sent'
+  const importedSessionId = await manager.importCliSession(request.cliSessionId, {
+    source: 'deep_link',
+  })
+  nativeCheckIdentity(env, found, request, settled)
+  const session = manager.sessions.get(importedSessionId)
+  const verified =
+    !!session && session.cliSessionId === request.cliSessionId && session.isArchived !== true
+  return {
+    ok: verified,
+    verified,
+    dispatch: state.dispatch,
+    action: 'import',
+    importedSessionId: importedSessionId ?? null,
+    reason: verified ? undefined : 'the app did not hold the imported chat unarchived',
+    identity: nativeIdentity(env, found, null),
+    session: session
+      ? {
+          sessionId: session.sessionId,
+          cliSessionId: session.cliSessionId ?? null,
+          title: session.title ?? null,
+          isArchived: session.isArchived === true,
+          permissionMode: session.permissionMode ?? null,
+          cwd: session.cwd ?? null,
+        }
+      : null,
+    evidence: "native manager state read back after the app's own importCliSession",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -1007,6 +1063,7 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
     return await nativeUltracode(env, found, request, settled, state)
   if (request.action === 'idle') return await nativeIdle(env, found, request, settled, state)
   if (request.action === 'pause') return await nativePause(env, found, request, settled, state)
+  if (request.action === 'import') return await nativeImport(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -1086,6 +1143,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeStopPrewarmShells,
     nativeIdle,
     nativePause,
+    nativeImport,
     nativeRun,
     nativeRuntime,
   ]
@@ -1094,8 +1152,15 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 }
 
 export function nativeProgram(request: NativeProgramRequest): string {
-  if (!['inspect', 'archive', 'ultracode', 'idle', 'pause'].includes(request.action))
+  if (!['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import'].includes(request.action))
     throw Error('Unsupported native action')
+  if (
+    request.action === 'import' &&
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      String(request.cliSessionId),
+    )
+  )
+    throw Error('Import requires the CLI session id (a UUID)')
   checkIdleAndPause(request)
   if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
   if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
@@ -1142,6 +1207,8 @@ function checkArchiveAndUltracode(request: NativeProgramRequest): void {
       throw Error(`Ultracode requires sessionId and an effort of ${NATIVE_EFFORTS.join('/')}`)
     if (request.ultracode !== undefined && typeof request.ultracode !== 'boolean')
       throw Error('ultracode must be a boolean')
+    if (request.bypass !== undefined && typeof request.bypass !== 'boolean')
+      throw Error('bypass must be a boolean')
     if (request.ultracode !== false && !['xhigh', 'max'].includes(String(request.effort)))
       throw Error('Ultracode on requires an effort of xhigh or max')
   }

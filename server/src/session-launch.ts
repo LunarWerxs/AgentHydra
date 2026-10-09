@@ -54,6 +54,7 @@ import {
   chooseStoreLeaf,
 } from './chat-settings-carry'
 import { GENERIC_CHAT_TITLE, isGenericChatTitle, PLUMBING_CHAT_TITLE } from './chat-title'
+import { tryNativeImport } from './claude-native-import'
 import { resolveInstanceToken } from './core/accounts'
 import { collectChats, collectChatsAsync } from './core/chat-store-scan'
 import { getCliInstance } from './core/cli-instances'
@@ -886,6 +887,8 @@ async function importSessionToDesktopUnclaimed(opts: {
   setAsideStale?: (instanceDir: string, sessionId: string) => SetAsideRecord[]
   /** Seam for tests; the default is awaitChatRecord (the signed-in folder only). */
   awaitVisible?: typeof awaitChatRecord
+  /** Seam for tests; the default is the app's own importCliSession over its debugger. */
+  nativeImport?: typeof tryNativeImport
 }): Promise<{
   ok: boolean
   reason?: string
@@ -948,9 +951,6 @@ async function importSessionToDesktopUnclaimed(opts: {
     : renderedInStore(opts.instanceDir, opts.sessionId)
   if (alreadyRendersIn(rendered, opts.instanceDir))
     return { ok: true, alreadyRendered: true, titled: false, titleDurable: false }
-  const binary = await resolveLaunchBinary()
-  if (!binary) return { ok: false, reason: 'desktop-binary-not-found' }
-  const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)
   // A record of this chat under a PREVIOUS login of this profile is set aside first (see
   // setAsideStaleLoginRecords): the stamps below find the record by walking every account folder,
   // and must find the one the app is about to create, not the invisible twin.
@@ -958,13 +958,29 @@ async function importSessionToDesktopUnclaimed(opts: {
     opts.instanceDir,
     opts.sessionId,
   )
-  try {
-    // A GUI hand-off spawn: windowsHide deliberately absent (this file is exempt from the
-    // console-window guard for exactly this class of spawn).
-    Bun.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
-  } catch (err) {
+  // The app's own importCliSession first, over its debugger: the call the deep link makes, with
+  // no second claude.exe started to deliver it (~4.5s a chat). The deep link stays for a profile
+  // without native control; a native import that was SENT and failed is never retried that way.
+  const native = await (opts.nativeImport ?? tryNativeImport)(opts.instanceDir, opts.sessionId)
+  if (!native.ok && !native.unavailable) {
     restoreSetAsideRecords(setAside)
-    return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
+    return { ok: false, reason: `native import failed: ${native.reason}` }
+  }
+  if (!native.ok) {
+    const binary = await resolveLaunchBinary()
+    if (!binary) {
+      restoreSetAsideRecords(setAside)
+      return { ok: false, reason: 'desktop-binary-not-found' }
+    }
+    const argv = buildImportPlan(process.platform, binary, opts.instanceDir, opts.sessionId)
+    try {
+      // A GUI hand-off spawn: windowsHide deliberately absent (this file is exempt from the
+      // console-window guard for exactly this class of spawn).
+      Bun.spawn(argv, { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' })
+    } catch (err) {
+      restoreSetAsideRecords(setAside)
+      return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
+    }
   }
   const titled = await stampImportedChat(
     opts.instanceDir,

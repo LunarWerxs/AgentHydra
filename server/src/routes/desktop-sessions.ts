@@ -276,7 +276,13 @@ app.post('/api/claude-native/ultracode', async (c) => {
     return c.json({ ok: false, reason: `effort must be one of ${NATIVE_EFFORTS.join('/')}` }, 400)
   if (ultracode && effort !== 'xhigh' && effort !== 'max')
     return c.json({ ok: false, reason: 'ultracode on requires an effort of xhigh or max' }, 400)
-  const out = await tryNativeUltracode(body.profileDir, body.sessionId, effort, ultracode)
+  const out = await tryNativeUltracode(
+    body.profileDir,
+    body.sessionId,
+    effort,
+    ultracode,
+    body.bypass === true,
+  )
   return c.json(out, out.ok ? 200 : 409)
 })
 
