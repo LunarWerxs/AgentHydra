@@ -2,7 +2,11 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { ensureBrowserEndpoint, forgetLaunches } from '../../../src/browser/agent/session'
+import {
+  ensureBrowserEndpoint,
+  forgetLaunches,
+  launchArgs,
+} from '../../../src/browser/agent/session'
 import { closeBrowser } from '../../../src/browser/cdp'
 
 const folders: string[] = []
@@ -21,10 +25,8 @@ async function versionOf(port: number): Promise<{ webSocketDebuggerUrl?: string 
   return (await res.json()) as { webSocketDebuggerUrl?: string }
 }
 
-// Chrome releases its profile files a moment after Browser.close answers, so removal retries until they unlock.
-async function closeAndRemove(dir: string): Promise<void> {
-  await closeBrowser(dir).catch(() => false)
-  const until = Date.now() + 10_000
+// Chrome releases its profile files several seconds after Browser.close answers, so every folder is closed first and removal waits on one shared deadline.
+async function removeWhenUnlocked(dir: string, until: number): Promise<void> {
   for (;;) {
     try {
       rmSync(dir, { recursive: true, force: true })
@@ -37,8 +39,10 @@ async function closeAndRemove(dir: string): Promise<void> {
 }
 
 afterAll(async () => {
-  for (const dir of folders) await closeAndRemove(dir)
-})
+  await Promise.all(folders.map((dir) => closeBrowser(dir).catch(() => false)))
+  const until = Date.now() + 40_000
+  for (const dir of folders) await removeWhenUnlocked(dir, until)
+}, 120_000)
 
 describe('browser session endpoint', () => {
   test('a launch on an empty folder answers /json/version, and concurrent calls share it', async () => {
@@ -67,7 +71,27 @@ describe('browser session endpoint', () => {
     const again = await ensureBrowserEndpoint(dir)
     expect(again.launched).toBe(false)
     expect(again.browserWsUrl).toBe(first.browserWsUrl)
+    expect(again.headless).toBe(true)
   }, 30_000)
+
+  test('a marker from another endpoint does not make the running Chrome report headless', async () => {
+    const dir = newFolder()
+    const first = await ensureBrowserEndpoint(dir)
+    writeFileSync(join(dir, '.connections-headless'), '/devtools/browser/some-other-launch')
+    forgetLaunches()
+    const again = await ensureBrowserEndpoint(dir)
+    expect(again.launched).toBe(false)
+    expect(again.browserWsUrl).toBe(first.browserWsUrl)
+    expect(again.headless).toBe(false)
+  }, 30_000)
+
+  test('a headed request launches without the headless flags, which only the headless request adds', () => {
+    const headedArgs = launchArgs('/tmp/profile', '/nonexistent/chrome', false)
+    expect(headedArgs.some((a) => a.startsWith('--headless'))).toBe(false)
+    expect(headedArgs.some((a) => a.startsWith('--window-position'))).toBe(false)
+    const headlessArgs = launchArgs('/tmp/profile', '/nonexistent/chrome', true)
+    expect(headlessArgs).toContain('--headless=new')
+  })
 
   test('a stale DevToolsActivePort from a dead Chrome does not fool the attach', async () => {
     const dir = newFolder()

@@ -3,7 +3,7 @@
 // Connections' browser.mjs (startBrowserSession, reconnectToProfile, markLaunch), which it never edits.
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { LaunchError, LIVE_CHROME_FLAGS, readPortFile } from '../cdp'
 
@@ -62,10 +62,9 @@ async function answering(dir: string): Promise<{ port: number; browserWsUrl: str
 
 async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<BrowserEndpoint> {
   const live = await answering(dir)
-  if (live) return { ...live, launched: false, headless: existsSync(join(dir, HEADLESS_MARK)) }
+  if (live) return { ...live, launched: false, headless: launchedHeadless(dir) }
 
-  // Headless unless a window is asked for, and a folder whose Chrome was launched headless stays headless.
-  const headless = !opts.headed || existsSync(join(dir, HEADLESS_MARK))
+  const headless = !opts.headed
   const bin = findBrowserBinary()
   if (!bin)
     throw new LaunchError('No installed Chrome or Edge (looked in the standard install folders)')
@@ -97,7 +96,7 @@ async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<Browser
   throw new LaunchError('Chrome did not announce its debugging port within 15 seconds')
 }
 
-function launchArgs(dir: string, bin: string, headless: boolean): string[] {
+export function launchArgs(dir: string, bin: string, headless: boolean): string[] {
   return [
     '--remote-debugging-port=0',
     `--user-data-dir=${dir}`,
@@ -179,11 +178,17 @@ function findBrowserBinary(): string | null {
   return candidates.find((c) => existsSync(c)) ?? null
 }
 
-// Connections browser.mjs:121-129: the marker holds this launch's endpoint path, so a later launch never matches it.
+// Connections browser.mjs:121-138: the marker holds this launch's endpoint path, so only the Chrome that wrote it matches.
 function writeMarker(dir: string, headless: boolean): void {
   const wsPath = readPortFile(dir)?.wsPath
   if (headless && wsPath) writeFileSync(join(dir, HEADLESS_MARK), wsPath)
   else rmSync(join(dir, HEADLESS_MARK), { force: true })
+}
+
+function launchedHeadless(dir: string): boolean {
+  const wsPath = readPortFile(dir)?.wsPath
+  if (!wsPath || !existsSync(join(dir, HEADLESS_MARK))) return false
+  return readFileSync(join(dir, HEADLESS_MARK), 'utf8') === wsPath
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
