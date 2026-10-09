@@ -23,4 +23,11 @@ describe('a window that outlived its bundle', () => {
     expect(mayReload(false, now - 1000, now)).toBe(false)
     expect(mayReload(false, now - QUIET_MS, now)).toBe(true)
   })
+
+  test('holds the reload while an update click runs, so its restart step is not thrown away', () => {
+    const now = 1_000_000
+    expect(mayReload(true, now - QUIET_MS, now, QUIET_MS, true)).toBe(false)
+    expect(mayReload(false, now - QUIET_MS, now, QUIET_MS, true)).toBe(false)
+    expect(mayReload(false, now - QUIET_MS, now, QUIET_MS, false)).toBe(true)
+  })
 })

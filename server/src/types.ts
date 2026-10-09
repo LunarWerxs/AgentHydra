@@ -658,7 +658,7 @@ export interface RunCost {
  *  large majority of a real store, so including it buries live work; 'only' makes old work findable. */
 export type ArchivedScope = 'hide' | 'include' | 'only'
 
-/**
+/*
  * How a session list treats work AgentHydra queued.
  *
  * 'all' is the default and stays the default: this narrows a list on request, and is never applied
@@ -762,7 +762,7 @@ export interface SessionSearchResult {
   }
 }
 
-/**
+/*
  * A whole body-search answer, hits plus how complete they are.
  *
  * The completeness is not a nicety. The search runs under a wall-clock budget and returns whatever
@@ -1468,6 +1468,9 @@ export interface CliInstance {
   /** What the account signed in here now has run on this PC (core/account-tokens.ts). Set by GET
    *  /api/cli-instances only; null when signed out, and until the first sweep after a daemon start. */
   tokens?: AccountTokens | null
+  /** Workers CliMayte runs on this account from the other PC right now (climayte-remote.ts). Their tokens
+   *  are not in `tokens`, which counts this PC's transcripts only. Set by GET /api/cli-instances only. */
+  remoteWorkers?: number
   /** What the CLI said the last time its `/limit-reset` was run from AgentHydra (core/cli-limit-reset.ts).
    *  Undefined until then. The only honest reading there is: the usage endpoint will not say. */
   lastLimitReset?: CliLimitResetResult | null

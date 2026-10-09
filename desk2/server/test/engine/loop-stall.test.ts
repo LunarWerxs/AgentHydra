@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { watchLoopStalls } from '../../src/engine/loop-stall'
+import { LOOP_STALL_MS, watchLoopStalls } from '../../src/engine/loop-stall'
 import { Timings } from '../../src/engine/timings'
 
 const hold = (ms: number) => {
@@ -12,6 +12,9 @@ const hold = (ms: number) => {
   }
 }
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
+function stallingWork(ms: number): void {
+  hold(ms)
+}
 
 describe('event-loop stall probe', () => {
   test('logs a loop_stall span for a blocked thread', async () => {
@@ -45,6 +48,28 @@ describe('event-loop stall probe', () => {
       const cpu = stalls.map((s) => s.cpu ?? 0)
       expect(cpu.length).toBeGreaterThanOrEqual(2)
       expect(Math.max(...cpu)).toBeGreaterThan(Math.min(...cpu) + 20)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 20_000)
+
+  test('a long stall is written with the functions that ran in it', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-stall-'))
+    const file = join(home, 'logs', 'loop-stalls.jsonl')
+    try {
+      const stop = watchLoopStalls(new Timings(home), LOOP_STALL_MS, { file, afterMs: 150 })
+      await pause(60)
+      // The first long stall starts the profiler; the next is written with what ran in it.
+      hold(200)
+      await pause(120)
+      stallingWork(400)
+      await pause(120)
+      stop()
+      const lines = readFileSync(file, 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => JSON.parse(l) as { ms: number; total: [string, number][] })
+      expect(lines.some((l) => l.ms >= 300 && l.total.some(([f]) => f.startsWith('stallingWork ')))).toBe(true)
     } finally {
       rmSync(home, { recursive: true, force: true })
     }

@@ -229,7 +229,7 @@ export interface DshSessionRecord {
   path: string
 }
 
-/**
+/*
  * Every session under one DSH home.
  *
  * The DIRECTORY WALK is the source of truth for what exists, not the workspace store and not the
@@ -354,7 +354,7 @@ export interface DshSessionContent {
   messageCount: number
 }
 
-/**
+/*
  * One session's conversation, as the same display DTO every other source produces.
  *
  * WHAT IS SHOWN, AND WHAT IS DELIBERATELY NOT. A DSH log records fifty-odd event types, most of

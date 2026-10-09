@@ -249,8 +249,16 @@ test('a session under the size cap is still copied and resumed', async () => {
   expect(userTexts(q.last())[0]).toContain('carry on')
 })
 
-test('pickHealthy skips signed-out, full and tried accounts and prefers the least used', () => {
-  const list = [account(1, { signedIn: false }), account(2, { fiveHourPct: 100 }), account(3, { fiveHourPct: 60 }), account(4, { fiveHourPct: 20 }), account(5)]
+test('pickHealthy skips signed-out, tried, unread and at-the-85%-line accounts and prefers the least used', () => {
+  const list = [
+    account(1, { signedIn: false }),
+    account(2, { fiveHourPct: 100 }),
+    account(3, { fiveHourPct: 60 }),
+    account(4, { fiveHourPct: 20 }),
+    account(5),
+    account(6, { weeklyPct: 85 }),
+    account(7, { fiveHourPct: null })
+  ]
   expect(pickHealthy(list, [])?.number).toBe(5)
   expect(pickHealthy(list, ['acct-5'])?.number).toBe(4)
   expect(pickHealthy(list, ['acct-5', 'acct-4', 'acct-3'])).toBeNull()

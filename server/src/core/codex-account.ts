@@ -587,7 +587,7 @@ export interface CodexAccountResult {
   usage: UsageSnapshot | null
 }
 
-/**
+/*
  * Identity from LOCAL FILES ONLY — auth.json's token claims overlaid on our identity cache. No
  * network, no decryption, synchronous.
  *

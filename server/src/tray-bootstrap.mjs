@@ -184,6 +184,10 @@ export function parseTrayHostCount(stdout) {
   return Number.isFinite(count) ? count > 0 : null
 }
 
+/** The tray-host probe is one process-table read. Past ten seconds it is not slow, it is
+ *  stuck - and a caller waiting on the tray's state must never be the thing that hangs. */
+const TRAY_PROBE_TIMEOUT_MS = 10_000
+
 /**
  * Is a tray host FOR THIS APP alive right now? `true` / `false` / `null` = could not tell.
  *
@@ -195,10 +199,6 @@ export function parseTrayHostCount(stdout) {
  * The count cannot raise an error record at all, which is the other half of this function's story
  * (see the file header). PowerShell is a console program, hence windowsHide.
  */
-/** The tray-host probe is one process-table read. Past ten seconds it is not slow, it is
- *  stuck - and a caller waiting on the tray's state must never be the thing that hangs. */
-const TRAY_PROBE_TIMEOUT_MS = 10_000
-
 export async function trayHostProcessState({ spawnProbe, configFile }) {
   try {
     const run =
@@ -292,10 +292,6 @@ function defaultSpawnHost(exe, cwd, configFile) {
   child.unref()
 }
 
-/**
- * Start the tray host if nothing else has. `toolkitDir` is where a materialized copy landed; without
- * one this looks in `<appRoot>/misc`, which is the source checkout and the extracted zip.
- */
 /** A build agent, not a person's desktop. The standard markers every major CI sets; an explicit
  *  `headless` in deps wins, so a caller (or a test) can state it outright. */
 export function isHeadlessEnv(env = process.env) {
@@ -304,6 +300,10 @@ export function isHeadlessEnv(env = process.env) {
   )
 }
 
+/**
+ * Start the tray host if nothing else has. `toolkitDir` is where a materialized copy landed; without
+ * one this looks in `<appRoot>/misc`, which is the source checkout and the extracted zip.
+ */
 export async function startTrayHostIfMissing(deps) {
   const toolkitDir = deps.toolkitDir || join(deps.appRoot, 'misc')
   const exe = join(toolkitDir, trayHostExeFor(deps.configFile))

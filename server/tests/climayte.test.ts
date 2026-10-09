@@ -182,10 +182,12 @@ describe('classifyAttempt', () => {
     expect(r).toMatchObject({ outcome: 'done', result: 'all good' })
   })
 
-  test('an organization that disabled subscription access is auth', () => {
+  test.each([
     // Real notice, 237 occurrences, `error:"oauth_org_not_allowed"`.
-    const text =
-      'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access'
+    'Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access',
+    // Real notice (2026-10-09, `api_error_status: 400`): it failed three tasks as errors.
+    'API Error: 400 Identity verification is required to continue.',
+  ])('a login the API refuses is auth: %s', (text) => {
     const synthetic = {
       type: 'assistant',
       message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] },
@@ -1017,7 +1019,11 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
         prompt: 'call connections_execute',
       })
       expect(status).toBe('done')
-      expect([id, servers]).toEqual([id, ['climayte-worker', 'connections-local', 'hswarm']])
+      // `browser` is Desk's browser tools, which every worker that is not a chat gets.
+      expect([id, servers]).toEqual([
+        id,
+        ['browser', 'climayte-worker', 'connections-local', 'hswarm'],
+      ])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([
         existsSync(join(HOOKS, `${wid}.json`)),

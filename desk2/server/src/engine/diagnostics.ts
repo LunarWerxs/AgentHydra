@@ -2,7 +2,8 @@
 // these. Email masking, a JSON-lines log that rolls monthly or at a size cap and never throws on write, and the
 // route prefix: every diagnostics route is GET /api/diagnostics/<name>, behind the server's loopback guard.
 
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readSync, renameSync, statSync } from 'node:fs'
+import { closeSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+import { appendFile, mkdir, rename, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 
@@ -44,6 +45,11 @@ export class JsonlLog {
   private known: { size: number; month: string } | null = null
   /** Per file: its rows as parsed when it stood at this size and mtime. */
   private readonly parsed = new Map<string, ParsedFile>()
+  /** Lines appended and not yet handed to the disk: written in order, off the server's thread (a busy disk held an append for seconds). */
+  private queued: string[] = []
+  private writing = false
+  /** While an append runs: the file's size before it, so a read takes the file up to there and the queued lines from memory. */
+  private appendBase: number | null = null
 
   constructor(
     readonly home: string,
@@ -57,32 +63,62 @@ export class JsonlLog {
   }
 
   append(line: object): void {
+    let text: string
     try {
-      if (!this.homeMade) {
-        mkdirSync(this.home, { recursive: true })
-        this.homeMade = true
-      }
-      this.roll()
-      const text = JSON.stringify(line) + '\n'
-      appendFileSync(this.file, text)
-      this.known = { size: (this.known?.size ?? 0) + Buffer.byteLength(text), month: monthOf(this.now()) }
+      text = JSON.stringify(line) + '\n'
     } catch (err) {
-      this.homeMade = false
-      this.known = null
       console.warn(`[desk] ${this.name}.jsonl could not be written: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    this.queued.push(text)
+    if (!this.writing && this.queued.length === 1) setImmediate(() => void this.drain())
+  }
+
+  /** Waits until every appended line is on disk (tests). */
+  async settled(): Promise<void> {
+    while (this.writing || this.queued.length) await new Promise((r) => setTimeout(r, 5))
+  }
+
+  private async drain(): Promise<void> {
+    if (this.writing) return
+    this.writing = true
+    try {
+      while (this.queued.length) {
+        const text = this.queued.join('')
+        const n = this.queued.length
+        try {
+          if (!this.homeMade) {
+            await mkdir(this.home, { recursive: true })
+            this.homeMade = true
+          }
+          await this.roll()
+          this.appendBase = (await stat(this.file).catch(() => null))?.size ?? 0
+          await appendFile(this.file, text)
+          this.known = { size: (this.known?.size ?? 0) + Buffer.byteLength(text), month: monthOf(this.now()) }
+        } catch (err) {
+          this.homeMade = false
+          this.known = null
+          console.warn(`[desk] ${this.name}.jsonl could not be written: ${err instanceof Error ? err.message : String(err)}`)
+        }
+        this.queued.splice(0, n)
+        this.appendBase = null
+      }
+    } finally {
+      this.writing = false
     }
   }
 
-  private roll(): void {
+  private async roll(): Promise<void> {
+    const exists = (f: string) => stat(f).then(() => true, () => false)
     if (!this.known) {
-      if (!existsSync(this.file)) return
-      const st = statSync(this.file)
+      const st = await stat(this.file).catch(() => null)
+      if (!st) return
       this.known = { size: st.size, month: monthOf(st.mtimeMs) }
     }
     if (this.known.month === monthOf(this.now()) && this.known.size < this.maxBytes) return
     let name = `${this.name}-${this.known.month}.jsonl`
-    for (let n = 2; existsSync(join(this.home, name)); n++) name = `${this.name}-${this.known.month}-${n}.jsonl`
-    renameSync(this.file, join(this.home, name))
+    for (let n = 2; await exists(join(this.home, name)); n++) name = `${this.name}-${this.known.month}-${n}.jsonl`
+    await rename(this.file, join(this.home, name))
     this.known = null
   }
 
@@ -107,7 +143,8 @@ export class JsonlLog {
         this.parsed.delete(f)
         continue
       }
-      const hit = parseFile(f, st, this.parsed.get(f))
+      const base = f === this.file ? this.appendBase : null
+      const hit = parseFile(f, base === null ? st : { size: Math.min(st.size, base), mtimeMs: st.mtimeMs }, this.parsed.get(f))
       if (!hit) continue
       this.parsed.set(f, hit)
       for (const row of hit.rows) out.push(row)
@@ -120,6 +157,8 @@ export class JsonlLog {
       const keep = new Set(files.slice(-PARSED_FILES_MAX))
       for (const f of [...this.parsed.keys()]) if (!keep.has(f)) this.parsed.delete(f)
     }
+    // Queued lines from memory: the current file was read only up to where a running append began, so none shows twice.
+    for (const t of this.queued) out.push(JSON.parse(t))
     return out
   }
 }

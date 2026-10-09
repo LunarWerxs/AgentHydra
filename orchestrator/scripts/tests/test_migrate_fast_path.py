@@ -101,9 +101,14 @@ class ActTestBase(unittest.TestCase):
             self.picker_calls.append(row)
             return "REFUSED: no window (test)"
 
+        # These suites are about resolving, scoping and the mode; the source settle has its own
+        # (test_migrate_settle_writeback, test_nativearchivelib). A stub with no settle route
+        # left every source row 'visible', which is a half-move and grades the move unfinished.
         self._patches = [mock.patch.object(migrate_chat, "BYPASS_WATCH_SECS", 0),
                          mock.patch.object(migrate_chat, "confirm_bypass_in_app", _no_picker),
-                         mock.patch.object(migrate_chat, "_pretrust_workspace", lambda *_a, **_k: None)]
+                         mock.patch.object(migrate_chat, "_pretrust_workspace", lambda *_a, **_k: None),
+                         mock.patch.object(migrate_chat, "_settle_source_row",
+                                           lambda *_a, **_k: ("", "settled"))]
         for p in self._patches:
             p.start()
 

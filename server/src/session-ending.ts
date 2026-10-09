@@ -52,7 +52,7 @@ const INTERRUPTED = /^\[Request interrupted by user[^\]]*\]$/
  *  model name, because the model in it changes with every release and the sentence does not. */
 const REFUSED = /\bsafeguards flagged this message\b/i
 
-/**
+/*
  * Classify ONE record — the last meaningful one in a transcript.
  *
  * Callers feed every user/assistant/result record as they stream past and keep the latest answer;

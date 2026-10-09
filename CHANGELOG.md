@@ -7,28 +7,67 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A chat that runs out of usage no longer moves to an account that is almost full.** When a chat hit its limit,
+  AgentHydra moved it to any other account under 100%, so it could push an account from 99% to its limit. It now
+  moves only to an account under 85% on both its 5-hour and weekly windows, as CliMayte does, and waits for a reset
+  when none is. The orchestrator's checks on running chats follow the same line.
+- **A new chat shows once while it is being made.** Sending a message in a new chat could flash a second row for the
+  chat, titled from the message, for a moment before the real one replaced it. The chat now takes the row it was
+  shown in from the start, and a message already in the chat's history is not drawn a second time.
+- **The sidebar no longer empties and refills, or shows chats by their ID.** When AgentHydra was briefly busy or
+  restarting after an update, the sidebar dropped its chats and brought them back seconds later, and running chats
+  showed an 8-character ID instead of their title. It now keeps what it showed until AgentHydra answers again.
+- **Live chats that continue an archived one stay in the session lists.** A chat moved to another account, or
+  continued from a chat that was archived later, was left out of every unarchived list, the cloud list included,
+  though it was live.
+- **AgentHydra's window no longer freezes for up to a minute while Free accounts refresh.** Reading a Free account's
+  list of chats saved all of Free's records once for every chat on it, which on a busy PC held the window's server for
+  seconds to over a minute at a time, many times an hour. It now saves once per list, and the server records what it
+  was doing whenever it does freeze.
+- **An account that needs identity verification no longer fails CliMayte tasks.** When Anthropic asks an account to
+  verify its identity, CliMayte moves its task to another account and stops using it, and the instance list says
+  "Needs identity verification". Verify it on claude.ai and sign in again to use it again.
+- **The window no longer freezes while the disk is busy.** Saving chats, recording finished replies, logging timings and reading workers' token counts now happen in the background, so a slow disk no longer holds up your sends and clicks for seconds.
+
+## [2.0.4] - 2026-10-09
+
 **TL;DR**
 
-- **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
-- **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
-- **A new chat no longer pulls you back into it after you moved on**
-- **Chats with long transcripts stop stalling the server on every poll**
-- **The timings log records every server stall over 200 ms**
-- **One click above the account pill restarts you onto an update**
-- **A What's new pop-up lists what changed once the update's restart is done**
-- **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
-- **The New screen highlights the project you picked**
-- **The New screen's View options menu shows hidden projects, and Manage folders says where each folder came from**
-- **The live browser pane keeps streaming when its Chrome window is covered**
+- **Your message shows the moment you press Send, and Stop stops at once**
+- **Chats open and answer without the server stalling, however long their transcripts are**
+- **Restart to update is one click above the account pill, takes seconds, and shows What's new afterwards**
+- **The orchestrator's judge is a frontier model you pick, signed in with any account that has room**
+- **The babysitter can wake a Desktop chat a usage limit stopped**
+- **The Instances page has a search box, and each tab's + creates its own kind**
+- **Login sync tells you when it brings in a new account**
+- **The CLI Tokens column says it counts this PC, and shows work running from your other PC**
 - **Drop any file in a chat: PDFs, notes, emails, zips**
+- **Opening a chat lands on its newest message, and a new chat no longer pulls you back into it**
+- **The New screen highlights your pick, can show hidden projects, and finds more project logos**
+- **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
+- **The live browser pane keeps streaming when its Chrome window is covered**
 - **Hovering a control shows one tip after a second, not two**
-- **Opening a chat lands on its newest message**
-- **The folder pill above the message box shows the project's logo**
-- **Restart to update takes seconds and shows What's new afterwards**
-- **Sending and clicking no longer stall behind the server's background reading of running workers**
 
-**Everything in Unreleased**
+**Everything in 2.0.4**
 
+- **The Instances page has a search box.** The magnifier at the top right (or Ctrl+F) opens a box that narrows every
+  table as you type, by instance number, name, account or plan: "#171" finds #171 and "20x" finds the Max 20× accounts.
+  Esc or the X clears it.
+- **Each Instances tab's + creates its own kind.** On the CLI tab the + adds a CLI account instead of a desktop
+  instance, Desktop offers only the apps, Free only Free accounts, and All lists every kind under its own heading.
+- **Click to restart and update really restarts.** The click's update step rebuilt the window, which then reloaded
+  itself and dropped the click before its restart, so the server was never restarted. The window now waits for the
+  restart, a busy server gets 20 seconds to answer instead of 4, and a restart that never happens says so and can be
+  clicked again instead of showing Restarting… for good.
+- **Login sync tells you when it brings in a new account.** When a sync from your other PC adds an instance this PC did
+  not have, one notification per sync lists them, e.g. "Claude CLI account #7 (Max 20×)". It names instances by number,
+  never by email.
+- **The CLI Tokens column says it counts this PC.** The header reads Tokens (this PC), and a row shows "3 on other PC"
+  when your other PC has CliMayte workers on that account, so an account busy there no longer looks unused here.
+- **The babysitter can wake a Desktop chat a usage limit stopped.** Its continue now goes in through the Claude app's own
+  chat-to-chat messaging, which starts the chat again by itself, instead of waiting for a running chat that was
+  no longer there. Nothing is typed into the window, the message shows as from AgentHydra rather than from you, and a
+  chat you stopped yourself stays stopped.
 - **A worker transcript is read in slices, so opening a worker chat no longer holds the server.** The first read of a worker transcript parsed the whole file in one run, which held every request for seconds at startup and on the first chat open. It now parses in slices and lets other requests run between them.
 - **Stop on a CliMayte worker's chat is never silent, and a stopped worker stays stopped.** A Stop the server refuses or cannot finish now shows as Stop failed and the chat goes back to its real state. A message another worker or ping sends to a stopped worker waits in its queue until you send your next message.
 - **Your message shows the moment you press Send.** It is drawn in its chat at once, before the server answers, and a new chat appears in the sidebar as soon as you send its first message. A send that fails stays on screen as Not sent, with Retry and the text kept.

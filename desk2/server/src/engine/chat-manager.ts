@@ -41,6 +41,7 @@ import type {
   TranscriptItem,
 } from '@shared/protocol'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
+import { hasRoom } from '../bridge/accounts'
 import type { AhWorker } from '../bridge/client'
 import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
@@ -262,10 +263,10 @@ const MAX_MOVES = 4
 /** '#126' for a numbered account, else its label. */
 const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
 
-/** The healthiest account not tried yet: signed in and under both limits, the least used first; the default login (unmeasured) last. */
+/** The healthiest account not tried yet: one with room (hasRoom), the least used first; the default login last. */
 export function pickHealthy(accounts: AccountInfo[], tried: string[]): AccountInfo | null {
-  const ok = accounts.filter((a) => a.signedIn && !tried.includes(a.id) && (a.fiveHourPct ?? 0) < 100 && (a.weeklyPct ?? 0) < 100)
-  const load = (a: AccountInfo): number => (a.id === DEFAULT_ACCOUNT.id ? 1000 : Math.max(a.fiveHourPct ?? 50, a.weeklyPct ?? 50))
+  const ok = accounts.filter((a) => !tried.includes(a.id) && hasRoom(a))
+  const load = (a: AccountInfo): number => (a.id === DEFAULT_ACCOUNT.id ? 1000 : Math.max(a.fiveHourPct ?? 0, a.weeklyPct ?? 0))
   return ok.sort((a, b) => load(a) - load(b))[0] ?? null
 }
 

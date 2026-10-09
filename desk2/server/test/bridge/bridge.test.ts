@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import type { ServerEvent } from '@shared/protocol'
 import { BridgeError, createBridge } from '../../src/bridge'
 import { createClient } from '../../src/bridge/client'
-import { createPoller } from '../../src/bridge/poller'
+import { createPoller, DOWN_GRACE_MS } from '../../src/bridge/poller'
 import { encodeProjectDir } from '../../src/bridge/session-jsonl'
 import { deadUrl, type FakeHydra, NOW, remoteAnswer, startFakeHydra } from './fake-hydra'
 
@@ -92,6 +92,30 @@ describe('bridge', () => {
     await f.start()
     t += 4000 // past the worker list's own 3 s tick; the sessions and chats reads (10 s) are still fresh
     expect((await b.externalSessions()).length).toBe(7)
+  })
+
+  test('a chat list that fails, or comes back untitled, keeps every chat listed under its title', async () => {
+    const f = await fake()
+    // Their index rows are not in the 24-hour list (a chat continued from an archived one was left out of it,
+    // 2026-10-09), so each chat's title is its record's alone.
+    const chatIds = new Set(f.state.chats.rows.map((c) => c.sessionId))
+    f.state.sessions = f.state.sessions.filter((s) => !chatIds.has(s.session_id))
+    let t = NOW
+    const b = createBridge({ url: f.url, now: () => t })
+    const shown = async () => new Map((await b.externalSessions()).map((s) => [s.id, s.title]))
+    const before = await shown()
+    expect(before.get(sid(2))).toBe('Desktop chat 1')
+
+    // One read of the chat list fails (as one past its timeout does): every chat stays, titled.
+    f.state.chatsError = 'the event loop was busy'
+    t += 11_000 // past the chat list's 10 s freshness
+    expect(await shown()).toEqual(before)
+
+    // The records come back untitled (a chat just moved to another account): the titles stay.
+    f.state.chatsError = undefined
+    f.state.chats = { rows: f.state.chats.rows.map((c) => ({ ...c, title: '' })) }
+    t += 11_000
+    expect(await shown()).toEqual(before)
   })
 
   test('external sessions leave out the ids the engine registers', async () => {
@@ -293,13 +317,22 @@ describe('poller', () => {
     expect(reads()).toBe(5)
   })
 
-  test('AgentHydra going down then up: status flips, lists empty then refill', async () => {
+  test('AgentHydra out of reach: the lists stand through a short spell, empty once it lasts, refill when it is back', async () => {
     const f = await fake()
     const h = harness(f.url)
     await h.poller.tick()
     h.events.length = 0
 
+    // As its relaunch after an update: nothing is said and every list stands (owner, 2026-10-09: chats
+    // "mass disappear, then they mass reappear").
     await f.stop()
+    await h.poller.tick()
+    h.advance(3000)
+    await h.poller.tick()
+    expect(h.events).toEqual([])
+
+    // Out of reach for longer: down, and the lists empty.
+    h.advance(DOWN_GRACE_MS)
     await h.poller.tick()
     expect(h.events).toEqual([
       { type: 'bridge.status', up: false, url: f.url },

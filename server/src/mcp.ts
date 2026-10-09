@@ -2216,7 +2216,7 @@ export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpE
   )
 }
 
-/**
+/*
  * STANDING INSTRUCTIONS, handed to the model in the MCP `initialize` handshake, before it calls
  * anything.
  *

@@ -51,6 +51,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import type { LoginArrival } from '../login-sync-arrivals'
 import { deleteAccountsCacheEntry } from './accounts'
 import {
   decryptSafeStorage,
@@ -609,7 +610,13 @@ export interface DesktopSyncContext {
     action: 'pushed' | 'pulled' | 'created' | 'skipped' | 'signedOut',
     text: string,
   ): void
-  out: { pushed: number; landed: number; unchanged: number; problems: string[] }
+  out: {
+    pushed: number
+    landed: number
+    unchanged: number
+    problems: string[]
+    arrived: LoginArrival[]
+  }
 }
 
 /** Logins this PC signed in on its own while the store holds the other PC's (left alone), and
@@ -678,6 +685,7 @@ async function landFromStore(
       cookies: mtimeOf(cookieDb(r.dir)),
     }
     ctx.out.landed++
+    if (r.created) ctx.out.arrived.push({ kind: 'desktop', num: r.num, plan: null })
     ctx.note(r.num, r.created ? 'created' : 'pulled', r.message)
   } else {
     ctx.out.problems.push(`#${r.num ?? '?'}: ${r.message}`)

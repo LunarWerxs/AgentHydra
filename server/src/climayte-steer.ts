@@ -247,7 +247,7 @@ export function haikuFailFloor(
   }
 }
 
-/** Judge a finished task's result (owner, 2026-09-30: "if it works, it gives it a thumbs up ... if
+/* Judge a finished task's result (owner, 2026-09-30: "if it works, it gives it a thumbs up ... if
  *  it does not, it reports the failure, and what model it tries next"). The verdict is kept with the
  *  setting that produced the result and what that work cost, and the scorecard learns from it. A
  *  fail (with `note`, required: the worker gets it) sends the task back to the same session one

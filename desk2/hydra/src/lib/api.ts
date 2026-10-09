@@ -848,7 +848,7 @@ export const launchCliInstance = (id: string, opts: { model?: string; effort?: s
     method: 'POST',
     body: JSON.stringify(opts),
   })
-/** Open a terminal for the USER to /login this CLI instance (the daemon never logs in itself). */
+/* Open a terminal for the USER to /login this CLI instance (the daemon never logs in itself). */
 /** Use this CLI account's limit reset through the CLI's own `/limit-reset` (up to about a minute).
  *  Spends what it finds; the answer is the CLI's own words. See server/src/core/cli-limit-reset.ts. */
 export const cliLimitReset = (id: string, opts: { check?: boolean } = {}) =>
@@ -902,7 +902,7 @@ export const moveCliLoginsOut = (ids: string[], passphrase: string, signOut = fa
     method: 'POST',
     body: JSON.stringify({ ids, passphrase, signOut }),
   })
-/** Login sync through the owner's own store (server/src/core/cli-login-sync.ts). */
+/* Login sync through the owner's own store (server/src/core/cli-login-sync.ts). */
 /** The status plus the queue switch (the server half adds both fields to CliLoginSyncStatus; the
  *  intersection keeps this file compiling whichever side lands first). */
 export type CliLoginSyncStatusQueue = CliLoginSyncStatus & {

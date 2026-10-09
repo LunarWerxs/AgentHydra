@@ -3,7 +3,7 @@ import {
   connectClaudeInspector,
   type InspectorDependencies,
   type InspectorSocket,
-} from './inspector-client'
+} from '../src/core/claude-native/inspector-client'
 
 const identity = {
   pid: 4321,

@@ -11,7 +11,7 @@
 // refresh, and only when the worker's updatedAt moved. A transcript that cannot be found leaves the
 // settled figure (or null): the window shows a dash, never a guess.
 
-import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from 'node:fs'
+import { open, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CliMayteWorker } from '@shared/protocol'
 import type { AhWorker } from './client'
@@ -61,38 +61,38 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
   const tallies = new Map<string, Tally>()
   const seen = new Map<string, { updatedAt: number; tokens: number | null }>()
 
-  function locate(sessionId: string, dirs: Iterable<string>): string | null {
+  async function locate(sessionId: string, dirs: Iterable<string>): Promise<string | null> {
     for (const dir of dirs) {
       const root = join(dir, 'projects')
       let subs: string[] = []
       try {
-        subs = readdirSync(root)
+        subs = await readdir(root)
       } catch {
         continue
       }
       for (const d of subs) {
         const file = join(root, d, `${sessionId}.jsonl`)
-        if (existsSync(file)) return file
+        if (await stat(file).then(() => true, () => false)) return file
       }
     }
     return null
   }
 
-  function read(t: Tally): void {
+  async function read(t: Tally): Promise<void> {
     let size = 0
     try {
-      size = statSync(t.path).size
+      size = (await stat(t.path)).size
     } catch {
       return
     }
     if (size <= t.offset) return
     const len = Math.min(size - t.offset, chunk)
     const buf = Buffer.alloc(len)
-    const fd = openSync(t.path, 'r')
+    const fh = await open(t.path, 'r')
     try {
-      readSync(fd, buf, 0, len, t.offset)
+      await fh.read(buf, 0, len, t.offset)
     } finally {
-      closeSync(fd)
+      await fh.close()
     }
     t.offset += len
     const lines = (t.rest + buf.toString('utf8')).split('\n')
@@ -100,12 +100,12 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
     for (const line of lines) addLine(t, line)
   }
 
-  function sessionTokens(sessionId: string, dirs: string[]): number | null {
+  async function sessionTokens(sessionId: string, dirs: string[]): Promise<number | null> {
     let t = tallies.get(sessionId)
     if (!t) {
       const missed = misses.get(sessionId)
       if (missed !== undefined && now() - missed < MISS_MS) return null
-      const path = locate(sessionId, dirs)
+      const path = await locate(sessionId, dirs)
       if (!path) {
         misses.set(sessionId, now())
         return null
@@ -114,12 +114,12 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
       t = { path, offset: 0, rest: '', byMessage: new Map(), total: 0 }
       tallies.set(sessionId, t)
     }
-    read(t)
+    await read(t)
     return t.total
   }
 
   /** The worker's tokens: the larger of what AgentHydra charged and what its transcripts show. */
-  function live(w: AhWorker, configDirs: ReadonlyMap<string, string>, settled: number | null): number | null {
+  async function live(w: AhWorker, configDirs: ReadonlyMap<string, string>, settled: number | null): Promise<number | null> {
     const dirs = [
       ...new Set(
         [w.accountId, ...(w.attempts ?? []).map((a) => a.account.id)]
@@ -130,7 +130,7 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
     const sessions = [...new Set([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])])]
     let sum: number | null = null
     for (const s of sessions) {
-      const n = sessionTokens(s, dirs)
+      const n = await sessionTokens(s, dirs)
       if (n !== null) sum = (sum ?? 0) + n
     }
     if (sum === null) return settled
@@ -139,7 +139,7 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
 
   return {
     /** Fills `tokens` on the active workers in `list` (mapped from `raw`), in place. */
-    apply(list: CliMayteWorker[], raw: readonly AhWorker[], configDirs: ReadonlyMap<string, string>): void {
+    async apply(list: CliMayteWorker[], raw: readonly AhWorker[], configDirs: ReadonlyMap<string, string>): Promise<void> {
       const byId = new Map(raw.map((w) => [w.id, w]))
       const activeIds = new Set<string>()
       const activeSessions = new Set<string>()
@@ -154,7 +154,7 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
           w.tokens = last.tokens ?? w.tokens
           continue
         }
-        w.tokens = live(r, configDirs, w.tokens)
+        w.tokens = await live(r, configDirs, w.tokens)
         seen.set(w.id, { updatedAt: r.updatedAt, tokens: w.tokens })
       }
       // A worker that finished or is no longer listed keeps nothing: its settled figure comes from AgentHydra.

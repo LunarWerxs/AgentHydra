@@ -106,6 +106,7 @@ import {
   classifyAttempt,
   climaytePriority,
   contextTokens,
+  IDENTITY_WALL,
 } from './climayte-lib'
 import {
   type CliMayteOrigin,
@@ -1564,7 +1565,7 @@ export function sweepWorkerFiles(): number {
   return swept
 }
 
-/** Idempotent: load the store and start watching. Called at daemon boot. */
+/* Idempotent: load the store and start watching. Called at daemon boot. */
 /** Settles once startCliMayte's first load has run. The /api/corch routes wait on it, so a request
  *  that lands at boot never does the blocking read of done/ that preloadDone exists to avoid. */
 let ready: Promise<void> = Promise.resolve()

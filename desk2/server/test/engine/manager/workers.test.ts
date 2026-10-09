@@ -108,6 +108,7 @@ test('the Desk file keeps every session of the chat in order, once, however ofte
 
   const ids = (): string[] => m.listItems(chat.id).map((i) => i.id)
   expect(ids()).toEqual(['u-1', 'a-1', 'a-2'])
+  await m.store.settledItems()
   const lines = readFileSync(join(home, 'chats', `${chat.id}.jsonl`), 'utf8').trim().split('\n')
   expect(lines.filter((l) => l.includes('"u-1"')).length).toBe(1)
   // A torn last line from a crash is tolerated.

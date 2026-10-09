@@ -159,7 +159,7 @@ const reads = (stats: StatementStat[]) =>
 
 type Hour = { stats: StatementStat[]; reads: number }
 
-/** The sim: a store holding 55 logins and 24 chats (18 this PC started, and six of the other PC's whose
+/* The sim: a store holding 55 logins and 24 chats (18 this PC started, and six of the other PC's whose
  *  copies sit in this PC's chat list, which this PC never sends), and one hour of both PCs polling it.
  *  `busy` adds the changes a
  *  working hour brings: another PC refreshing a login a few times, a queue that changes, a chat that

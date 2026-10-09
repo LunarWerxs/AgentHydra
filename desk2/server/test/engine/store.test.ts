@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { ChatStore } from '../../src/engine/store'
+import { renameOverAsync } from '../../src/write-flushed'
 
 const temps: string[] = []
 function home(): string {
@@ -80,6 +81,7 @@ describe('ChatStore chats.json', () => {
     store.saveChats([chat('a')])
     store.saveChats([chat('a'), chat('b')])
     await Bun.sleep(30)
+    await store.settled()
     expect(new ChatStore(h).loadChats().map((c) => c.id)).toEqual(['a', 'b'])
   })
 
@@ -88,6 +90,36 @@ describe('ChatStore chats.json', () => {
     expect(new ChatStore(h).loadChats()).toEqual([])
     writeFileSync(join(h, 'chats.json'), '{not json')
     expect(new ChatStore(h).loadChats()).toEqual([])
+  })
+
+  test('a timer save whose rename is overtaken by a forced save leaves the newer list on disk', async () => {
+    const h = home()
+    const names = () => JSON.parse(readFileSync(join(h, 'chats.json'), 'utf8')).map((c: ChatSummary) => c.id)
+    let reached!: () => void
+    const inRename = new Promise<void>((r) => (reached = r))
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const store = new ChatStore(h, {
+      debounceMs: 5,
+      renameAsync: async (from, to) => {
+        reached()
+        await gate
+        return renameOverAsync(from, to)
+      },
+    })
+    store.saveChats([chat('a')])
+    await inRename
+    store.saveChats([chat('a'), chat('b')])
+    store.flush()
+    expect(names()).toEqual(['a', 'b'])
+    release()
+    await Bun.sleep(30)
+    await store.settled()
+    expect(names()).toEqual(['a', 'b'])
+    store.saveChats([chat('a')])
+    await Bun.sleep(30)
+    await store.settled()
+    expect(names()).toEqual(['a'])
   })
 })
 
@@ -116,10 +148,11 @@ describe('ChatStore items', () => {
     ])
   })
 
-  test('a torn last line is skipped, and the next append starts on its own line', () => {
+  test('a torn last line is skipped, and the next append starts on its own line', async () => {
     const h = home()
     const store = new ChatStore(h)
     store.appendItem('c2', text('a', 'ok'))
+    await store.settledItems()
     appendFileSync(join(h, 'chats', 'c2.jsonl'), '{"kind":"assistant_text","id":"b","te') // crash mid-write
     const again = new ChatStore(h)
     expect(again.loadItems('c2').map((i) => i.id)).toEqual(['a'])

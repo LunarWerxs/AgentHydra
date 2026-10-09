@@ -10,13 +10,13 @@ values the code looks for. What replaced the pins is structural, in
 [Managed launch](#managed-launch-and-ashley-production-proof).
 
 Scope: moving, archiving and migrating **Code** chats between desktop instances.
-Message delivery is outside this work.
+Message delivery has one native action of its own, the native send
+([Sending a message into a chat](#sending-a-message-into-a-chat-native-send)).
 
 ## Operating instructions for agents
 
 Use AgentHydra's production native route for archive and migration-source cleanup before
-considering Lua, sidebar menus or UIA. The archive and migration scripts already do this;
-the POC runner is for diagnostics and bounded experiments, not the general move API.
+considering Lua, sidebar menus or UIA. The archive and migration scripts already do this.
 
 1. Resolve the intended account to its exact full profile path with
    `GET /api/instances` or `/api/instance-numbers/resolve?ref=<reference>`. Read current
@@ -142,8 +142,7 @@ source rows visible and every effort unconfirmed (2026-10-09). When an archive r
 it moved.
 
 A native live proof on **another_meh
-(#8)** imported a disposable chat, restored its settings and archived it. See the
-[results](CLAUDE-DESKTOP-POC-RESULTS.md) for timings and preservation checks.
+(#8)** imported a disposable chat, restored its settings and archived it.
 
 ## Connection requirement
 
@@ -182,15 +181,6 @@ No stock automatic activation path has been identified. AgentHydra now has an
 opt-in managed-copy launcher that enables only `EnableNodeCliInspectArguments`
 and starts the inspector from a launch flag. Full startup and native chat archive
 were verified on Ashley #15; see the production proof below.
-
-The native-only POC runner under `scripts/claude-native-poc/native-control.ts`
-connects to an explicitly selected loopback inspector port and checks the PID
-and full profile path. It never launches an instance or invokes a UI fallback.
-Its native program requires the already-loaded manager in `require.cache` and
-refuses a different app version or source hash. The live proof verified the
-connection, native state, unchanged transcript bytes and before/after native
-screenshots. Capturing those screenshots does not send window input or change
-foreground focus.
 
 A native bridge needs an enabled developer connection and verified per-instance
 discovery. Launching stock Claude with a Chromium remote debugging port
@@ -435,15 +425,45 @@ background_task`), and two had been left `isStopping` with no engine by an earli
 accounts (`chat-busy`). The native archive refuses `isStopping` too, so going around that flag
 would land the copy and then fail to archive the old chat.
 
+One exception, for a move's own source row only (`sourceSuperseded`, sent once the landing on the
+target is verified): a stale stop, meaning `isStopping` with no engine, no query, nothing starting,
+pending or losable, is archived. On 2026-10-09 a batch move left one source row in that state;
+the 15 s busy retry and `migrate_reconcile --finish` were both refused, and the flag cleared by
+itself about ten minutes later. Every other archive still treats `isStopping` as busy. A move whose
+source row still shows is reported as unfinished, never as OK (`source_unsettled` in
+`migrate_chat.py`, shared by `migrate_batch`).
+
+## Sending a message into a chat (native send)
+
+`nativeProgram({ action: 'send', pid, profileDir, cliSessionId, text, fromName })` sends `text`
+into the chat holding that CLI session the way one of the app's chats messages another: the
+manager's own `sendPeerMessage`, the `<cross-session-message from=... name=...>` envelope the
+app's SendMessage tool builds, and a peer origin (`{ kind: 'peer', from: 'agenthydra', name }`).
+The app's `sendMessage` treats only an origin-less or `human` message as the person's, so a peer
+message never counts as the person, and the app keeps its own refusals. The program also refuses
+before sending a chat that is archived or `stoppedUntilPersonSends`. When the chat has no engine,
+the app's delivery retries once "through the cold-start path" and starts one itself, so nothing is
+typed into the window. The answer is the app's receipt: `delivered` (a turn started), `queued`
+(it runs when the chat is free) or, past a 35 s wait inside the program (the inspector's call
+limit is 60 s, and Desk's bridge gives the whole route 50 s), `sent`. The route answers
+`delivered: true` for all three, the way the pipe's queued note does, with `confirmed` and `queued`
+saying which.
+
+`server/src/claude-native-send.ts` (`tryNativeSend`) runs it. `POST /api/sessions/:id/message`
+uses it first for a `peer_only` caller, the ones that must never type (Desk's bridge, so the
+babysitter and the orchestrator): before, the only routes were the peer pipe, which exists only
+while an engine is live and whose note waits unread in an idle engine's queue, and the composer,
+which types. On 2026-10-09 the babysitter's 44 overnight continues for seven chats a usage limit
+stopped all ended that way (`no peer pipe`, or `wrote-but-no-transcript-growth`). A send that
+reached the app is never retried another way; a refusal before dispatch falls back to the pipe.
+
 ## Remaining migration work
 
 - Support for reviewed future Claude versions and explicit opt-in for new profiles.
   Desktop shortcuts launch Claude directly, so covering those requires routing
   them through AgentHydra's launch path too.
-- General destination settings restoration beyond the deliberately restricted
-  disposable-chat POC. The proof restored effort and permission/Chrome mode
-  through the native setters, but the general migration pipeline still owns its
-  existing destination settings handling.
+- Chrome permission mode on landing. A move restores effort, ultracode and Bypass permissions
+  natively (the `ultracode` action); the Chrome mode is still left to the import.
 - Native unarchive with archive-watcher cancellation before dispatch.
 
 The installed `claude://resume` handler accepts only the session ID. It does not

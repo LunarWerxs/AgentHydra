@@ -10,12 +10,22 @@ export default {
   createClaude: 'New Claude instance',
   createCodex: 'New Codex instance',
   createDeepseek: 'New DeepSeek instance',
+  // A Claude Code CLI account, which the CLI view offers alone.
+  createCli: 'New Claude CLI account',
   // Free web accounts (claude.ai, chatgpt.com), which the Free view offers alone.
   createFreeClaude: 'New free Claude account',
   createFreeChatgpt: 'New free ChatGPT account',
   // The All view's + menu headings, so its two Claude items read as two different things.
   createSectionApps: 'Apps',
+  createSectionCli: 'CLI',
   createSectionFree: 'Free web accounts',
+  // The header's search box (InstanceSearch.vue).
+  search: 'Search',
+  searchHint: 'Find instances by number, name, account or plan (Ctrl+F)',
+  searchPlaceholder: 'Number, name, account, plan',
+  searchClear: 'Clear search',
+  searchNoMatch: 'No instances match "{query}".',
+  searchNoMatchHint: 'Check the spelling, or clear the search to see every instance.',
   empty: 'No instances found.',
   emptyHint: 'Create your first instance with the + button to get started.',
   sortByStatus: 'Sort by status',

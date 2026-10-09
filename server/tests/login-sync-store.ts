@@ -129,7 +129,7 @@ const worker = workerModule.default as {
 }
 /** The Worker's StoreHead Durable Object class, for a test that builds its own HEAD binding. */
 export const StoreHead = workerModule.StoreHead
-/** The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
+/* The Worker's bindings; a test may set CHAT_STORE_MB and must delete it again. */
 /** The store's D1, for counting the rows a call reads. */
 export const storeDb = d1(new Database(':memory:'))
 export const env: {

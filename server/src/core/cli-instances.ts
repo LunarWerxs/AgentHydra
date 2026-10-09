@@ -228,7 +228,7 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
   return join(CLI_INSTANCES_ROOT, rec.id)
 }
 
-/** A stored record hydrated with its LIVE loggedIn state (the store value is only a hint).
+/* A stored record hydrated with its LIVE loggedIn state (the store value is only a hint).
  *  Also backfills fields added after a store was first written (records predating the desktop link
  *  have no `associatedDesktop*` keys at all), so callers never see `undefined` where they expect null. */
 /** The plan a CLI login is on, from the non-secret fields of its `.credentials.json`

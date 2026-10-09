@@ -32,6 +32,8 @@ export const TIMING_STAGES = [
   'warm',
   // The event loop was blocked this long (engine/loop-stall.ts)
   'loop_stall',
+  // A synchronous call held the thread (engine/sync-block.ts): its label in `name`
+  'sync_block',
 ] as const
 
 export type TimingStage = (typeof TIMING_STAGES)[number]

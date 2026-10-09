@@ -104,10 +104,9 @@ debugger startup, exact-profile requests and result verification. The mechanics:
   exact profile/PID and session identity. The production scripts already attempt
   `/api/sessions/:id/native-archive`, and `desktop-archive` tries native before disk/UI.
   A verified native result requires no sidebar lookup, Lua, focus change or legacy retry.
-  Portable guard/transport tests are under `server/tests/claude-native-*.test.ts` and
-  `scripts/claude-native-poc/*.test.ts`; Python routing coverage is in
-  `test_nativearchivelib.py` and `test_native_archive_paths.py`. Live evidence is recorded
-  separately in [the proof results](../../docs/CLAUDE-DESKTOP-POC-RESULTS.md).
+  Portable guard/transport tests are `server/tests/native-program.test.ts`,
+  `server/tests/inspector-client.test.ts` and `server/tests/claude-native-*.test.ts`; Python
+  routing coverage is in `test_nativearchivelib.py` and `test_native_archive_paths.py`.
 - **Automatic connection startup is per profile**: set `launchDebugger:true` through
   `/api/claude-native/settings` or Instances tab → gear (Instances settings) → Claude native control, then use the
   next authorized AgentHydra Open. Do not restart an active desktop to test this. Setting

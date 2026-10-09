@@ -83,6 +83,7 @@ import { join } from 'node:path'
 import { clearRemote } from '../climayte-remote'
 import { CONFIG_DIR } from '../config'
 import { seal, unseal } from '../dpapi-seal.mjs'
+import { type LoginArrival, notifyLoginArrivals } from '../login-sync-arrivals'
 import type { CliInstance, CliLoginSyncStatus } from '../types'
 import { dropCachedUsage } from '../usage-cache'
 import { cliKey, desktopKey } from '../usage-service'
@@ -495,6 +496,8 @@ export interface LoginSyncPassResult {
   landed: number
   unchanged: number
   problems: string[]
+  /** Instances this pass made here (an account this PC did not have): the owner is told once per pass. */
+  arrived: LoginArrival[]
 }
 
 let running: Promise<LoginSyncPassResult> | null = null
@@ -657,6 +660,8 @@ async function landPortableLogin(
       row.matchedBy === 'created' ? 'created' : 'pulled',
       row.ok ? row.message : `Landed; ${row.message}`,
     )
+    if (row.matchedBy === 'created')
+      out.arrived.push({ kind: 'cli', num: row.num, plan: login.plan })
   } else if (row.blocked === 'running') {
     // It lands once the session there finishes: a wait, not a sync failure.
     cliWaitingPass.add(login.id)
@@ -1251,7 +1256,14 @@ function chatsPass(l: Live, c: SyncConfig, by: string): void {
 }
 
 async function pass(): Promise<LoginSyncPassResult> {
-  const out: LoginSyncPassResult = { ok: true, pushed: 0, landed: 0, unchanged: 0, problems: [] }
+  const out: LoginSyncPassResult = {
+    ok: true,
+    pushed: 0,
+    landed: 0,
+    unchanged: 0,
+    problems: [],
+    arrived: [],
+  }
   const c = readConfig()
   if (!c?.enabled) return out
   const l = live(c)
@@ -1286,6 +1298,7 @@ async function pass(): Promise<LoginSyncPassResult> {
   // over by itself when this pass was not quiet.
   pace.afterPass(quiet && !asked, Date.now())
   asked = false
+  void notifyLoginArrivals(out.arrived)
   return out
 }
 

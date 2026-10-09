@@ -127,7 +127,7 @@ function utf8DecodeOrNull(bytes: Uint8Array): string | null {
   }
 }
 
-/**
+/*
  * Decrypts an Electron `safeStorage` base64 blob to its plaintext UTF-8 string.
  *
  * @param base64Blob The base64-encoded safeStorage value (e.g. config.json's

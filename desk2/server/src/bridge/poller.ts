@@ -1,6 +1,10 @@
 // While at least one window is connected: every 3 s read outside sessions and CliMayte workers, every
 // 30 s the accounts, and broadcast each list only when it changed. bridge.status goes out when
-// AgentHydra goes up or down (and on the first poll after a window connects). Down = empty lists.
+// AgentHydra goes up or down (and on the first poll that reaches it after a window connects). Down = empty lists.
+// AgentHydra out of reach for less than DOWN_GRACE_MS is not down: its relaunch after an update or a
+// stalled event loop kept emptying the sidebar and filling it again (owner, 2026-10-09: chats "mass
+// disappear, then they mass reappear"), so the lists stand, answered from their last read meanwhile (a
+// window that just connected keeps the lists it painted from its cache).
 // A window that connects is sent the last of each at once (welcome): broadcasts carry changes only, so
 // a window joining one already open, or reloaded before the old one closed, would otherwise show no
 // sessions until one of them next changed (Michael, 2026-10-04: a refresh showed none).
@@ -16,6 +20,8 @@ export const ACCOUNTS_POLL_MS = 30_000
 export const IDLE_POLL_MS = 9000
 /** While windows are connected but none is on screen; one coming back on screen polls at once. */
 export const HIDDEN_POLL_MS = 30_000
+/** How long AgentHydra may be out of reach before it is down and the lists empty (under the bridge's KEEP_LAST_MS). */
+export const DOWN_GRACE_MS = 60_000
 
 /** Structural equality of two JSON-shaped values, without building a string of either. */
 function sameJson(a: unknown, b: unknown): boolean {
@@ -47,6 +53,7 @@ export interface PollerOptions {
   accountsMs?: number
   idleMs?: number
   hiddenMs?: number
+  downGraceMs?: number
   now?: () => number
 }
 
@@ -55,6 +62,7 @@ export function createPoller(o: PollerOptions) {
   const accountsMs = o.accountsMs ?? ACCOUNTS_POLL_MS
   const idleMs = o.idleMs ?? IDLE_POLL_MS
   const hiddenMs = o.hiddenMs ?? HIDDEN_POLL_MS
+  const downGraceMs = o.downGraceMs ?? DOWN_GRACE_MS
   const now = o.now ?? Date.now
   const visibleCount = o.wsVisibleCount ?? o.wsClientCount
   let timer: ReturnType<typeof setInterval> | null = null
@@ -64,6 +72,8 @@ export function createPoller(o: PollerOptions) {
   let running = false
   let clients = 0
   let up: boolean | null = null
+  /** When AgentHydra first failed to answer since it last did; null while it answers. */
+  let downSince: number | null = null
   let accountsAt = 0
   /** The last event broadcast for each type: compared structurally, so no list is stringified to find out it did not change. */
   const sent = new Map<string, ServerEvent>()
@@ -104,9 +114,20 @@ export function createPoller(o: PollerOptions) {
     accountsAt = 0
   }
 
-  /** A strict sessions read that could not reach AgentHydra: down, said once, and the rest of this poll's reads are dropped. */
+  /**
+   * AgentHydra did not answer: down once it has been out of reach for downGraceMs. Until then nothing is said and
+   * the lists stand; once down, the rest of a poll's reads are dropped.
+   */
+  function outOfReach(): void {
+    downSince ??= now()
+    if (up !== false && now() - downSince < downGraceMs) return
+    setUp(false)
+    emitDown()
+  }
+
+  /** A strict sessions read that could not reach AgentHydra. */
   function readFailed(err: unknown): null {
-    if (err instanceof BridgeError && err.unreachable && setUp(false)) emitDown()
+    if (err instanceof BridgeError && err.unreachable) outOfReach()
     return null
   }
 
@@ -118,6 +139,7 @@ export function createPoller(o: PollerOptions) {
     const dueAccounts = flipped || now() - accountsAt >= accountsMs
     const [sessions, workers] = await Promise.all([
       o.bridge.externalSessions({ strict: true }).then((sessions) => {
+        downSince = null
         if (up) emitIfChanged({ type: 'external.update', sessions })
         return sessions
       }, readFailed),
@@ -151,6 +173,7 @@ export function createPoller(o: PollerOptions) {
       // A window (re)connected after none were: it gets everything once, then changes only.
       sent.clear()
       up = null
+      downSince = null
       accountsAt = 0
     }
     clients = n
@@ -158,8 +181,9 @@ export function createPoller(o: PollerOptions) {
     // While the last poll's reads reached AgentHydra they stand in for the ping: the strict sessions read says down itself.
     let flipped = false
     if (up !== true) {
-      flipped = setUp(await o.bridge.ping())
-      if (!up) return emitDown()
+      if (!(await o.bridge.ping())) return outOfReach()
+      downSince = null
+      flipped = setUp(true)
     }
     await readLists(flipped)
   }

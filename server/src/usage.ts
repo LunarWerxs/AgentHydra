@@ -430,7 +430,7 @@ export function rememberCliProbe(key: string, now: number, snap?: UsageSnapshot)
   if (snap && !isNoData(snap)) lastCliSnapshot.set(key, snap)
 }
 
-/**
+/*
  * Read one account's remaining quota.
  *
  * TWO PATHS, fast first:

@@ -186,7 +186,9 @@ computer-use and the rest) for that run only; its environment sets
 
 **A worker's MCP servers are the owner's** (2026-10-02): `--mcp-config <hooks>/<id>.mcp.json`
 gives it the servers in the owner's own user scope ([`~/.claude.json`](CLAUDE-CONFIG-LAYOUT.md)), less the two denied, so
-connections-local and hswarm are there whatever its account's `.claude.json` says. That copy is
+connections-local and hswarm are there whatever its account's `.claude.json` says. AgentHydra adds
+`climayte-worker`, and a worker that is not a chat also gets `browser` (Desk's browser tools for its folder,
+unless the owner has a server of that name). That copy is
 seeded once, when the account is made, and drifts: one of 33 accounts listed no server at all. Only
 an entry with no credential is carried: a URL and at most its `headersHelper`, the command that signs
 in at connect time through this machine's own session (connections-local's `node <loader.mjs>
@@ -540,7 +542,7 @@ append follows `CHAT_NOTE`, on every launch, continuations and account moves inc
 | Appended prompt | `WORKER_BRIEF` (`--append-system-prompt`) | `CHAT_NOTE` (it runs headless, and a markdown image of a local picture or video shows in the chat), then the owner's `~/.claude/CLAUDE.md` unless the CLI's own walk already reads it from the chat's folder (`--append-system-prompt-file <hooks>/<id>.chat.md`) |
 | Account folder's CLAUDE.md (the lean worker profile) | loaded | left out with `claudeMdExcludes` in its `--settings` |
 | Skills | the lean profile's | also every owner skill, command and agent, through `--add-dir <home>` |
-| MCP servers | the owner's less AgentHydra's and magnific; `deniedMcpServers` | all the owner's, AgentHydra's included; no denial |
+| MCP servers | the owner's less AgentHydra's and magnific, plus `climayte-worker` and `browser`; `deniedMcpServers` | all the owner's, AgentHydra's included; no denial |
 | claude.ai connectors and synced skills | off (`ENABLE_CLAUDEAI_MCP_SERVERS=false`, `syncClaudeAiSkills: false`, humanizer off) | on, as in his own `claude` |
 | Prompt cache | 5 minutes | 1 hour (a person's next message is often more than 5 minutes away) |
 | Model and effort | the scorecard's pick unless named with `modelWhy` | Opus xhigh unless the task (or its run) names its own; no `modelWhy` needed; never `auto`, never split by sizing |
@@ -592,7 +594,7 @@ on the worker record (`CliMayteWorker.sealed`), so it holds through moves, resen
 | System prompt | the CLI's own, plus `WORKER_BRIEF` (`--append-system-prompt`) | `--system-prompt-file <systemPromptFile>`, in place of the CLI's own; no `WORKER_BRIEF`, no `CHAT_NOTE`, no ETA note |
 | Settings sources | the account folder's (the lean CLAUDE.md, skills, user settings) | `--setting-sources ""`: no CLAUDE.md, no hook, no skill, no user setting; `syncOwnerClaude` is not run for the launch |
 | Built-in tools | all | `--tools ""`: none |
-| MCP servers | the owner's and `climayte-worker`, written to `<hooks>/<id>.mcp.json`, never AgentHydra's own or magnific (`deniedMcpServers` by name and AgentHydra's endpoint by URL) | `--strict-mcp-config --mcp-config <mcpConfig>`: exactly that file's, AgentHydra's own when it names it (no deny list); no `climayte-worker`, so no `climayte_ask` |
+| MCP servers | the owner's, `climayte-worker` and `browser` (Desk's browser tools for its folder, unless the owner has one of that name), written to `<hooks>/<id>.mcp.json`, never AgentHydra's own or magnific (`deniedMcpServers` by name and AgentHydra's endpoint by URL) | `--strict-mcp-config --mcp-config <mcpConfig>`: exactly that file's, AgentHydra's own when it names it (no deny list); no `climayte-worker`, so no `climayte_ask` |
 | Permissions | `--dangerously-skip-permissions` | `--permission-mode default` and `--allowedTools` exactly as given |
 | Folder | the task's `cwd` | an empty folder of its own, `corch/sealed/<worker id>`, made at dispatch and again at launch if it was cleaned away; the storage pass clears it with the worker's other files |
 | Usage stops | the wind-down ask at the stop line, then the ceiling | the ceiling only: it has no Write tool for a handoff note, so it is never asked for one (`climayte_handoff` refuses it); stopped at the ceiling, its session moves to another account and resumes from its transcript |
@@ -1359,6 +1361,11 @@ same logins signed in; a refresh on one reaches the other within a pass.
   the dialog's copy button, for the other PC's Join.
 - Left out on a PC (`excluded`): the dialog's per-login switch, a Log out there, a move away. Neither
   uploaded nor landed there.
+- A pass that makes an instance this PC did not have (a CLI login or a desktop profile from the other
+  PC) says so once, at the end of the pass, over the OS notification channel when notifications are on
+  (`server/src/login-sync-arrivals.ts`; owner, 2026-10-09: "if his finds a new account, add a
+  notification that says ... what was added"): one notification listing each arrival by kind, number
+  and plan, e.g. "Claude CLI account #7 (Max 20×)", never by email. Desktop arrivals carry no plan.
 - Routes: `GET /api/cli-instances/sync` (status, no secrets), `POST .../sync/setup {url, token}`,
   `.../sync/join {code}`, `.../sync/run`, `.../sync/enabled {enabled}`, `.../sync/exclude {id,
   excluded}`, `.../sync/pairing` (the copy button's code), `.../sync/disconnect`. No MCP tools.

@@ -18,6 +18,7 @@
 import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol'
 import type { BabysitterChat, BabysitterChatState, BabysitterSource } from '@shared/babysitter'
 import { BABYSITTER_FROM } from '@shared/babysitter'
+import { hasRoom } from '../bridge/accounts'
 
 /** A limit window's longest span: an unnamed reset is looked at this long after the stop. */
 export const FIVE_HOURS_MS = 5 * 60 * 60_000
@@ -92,9 +93,9 @@ function accountReset(accounts: readonly AccountInfo[] | null, id: string): numb
   return full.length ? Math.max(...full) : null
 }
 
-/** Some signed-in account under both limits: a Desk chat on auto is moved there by the engine (chat-manager pickHealthy). */
+/** Some account the engine would move a Desk chat on auto to (chat-manager pickHealthy): one with room under the 85% line. */
 function someRoom(accounts: readonly AccountInfo[] | null): boolean {
-  return (accounts ?? []).some((a) => a.signedIn && (a.fiveHourPct ?? 0) < 100 && (a.weeklyPct ?? 0) < 100)
+  return (accounts ?? []).some(hasRoom)
 }
 
 interface Stop {

@@ -363,8 +363,7 @@ export function getCodexInstance(id: string): CodexInstance | null {
  *
  * Falls back to the (cached) process scan only when the id is not in the store, so the common
  * stored-row lookup stays a pure file read.
- */
-/**
+ *
  * Resolve an id that may be a DISCOVERED instance rather than one this app created.
  *
  * Takes the same process-listing override as listCodexInstances, and forwards it. Without that a

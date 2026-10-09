@@ -292,9 +292,18 @@ export class FreeInstances {
     void run.then(() => this.runs.delete(job.id))
     return job
   }
-  /** `used` false for a chat-list refresh: it records the chat but is not a use, so "last used" stays. */
+  /** noteThread, then the store saved. */
   private markThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true): void {
-    if (!chatId || !UUID.test(chatId)) return
+    if (this.noteThread(r, status, chatId, error, serverId, title, createdAt, used)) this.store.save()
+  }
+  /**
+   * Marks a thread (adding it when new) without saving the store; true when one was marked. apply() notes a whole
+   * chat list and saves once: a save per chat wrote the whole store (5 MB, fsync'd) for each, and one account's list
+   * of 1,493 chats held the server's one thread for 16 s, 30 to 80 s on a busy PC, the sidebar frozen meanwhile
+   * (2026-10-09). `used` false for a chat-list refresh: it records the chat but is not a use, so "last used" stays.
+   */
+  private noteThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true): boolean {
+    if (!chatId || !UUID.test(chatId)) return false
     const id = `${r.instanceId}/${chatId}`
     // A forgotten chat used again (a message, a track, a read) is wanted again: the chat-list read keeps it current.
     const forgotten = this.store.data.forgotten
@@ -306,7 +315,7 @@ export class FreeInstances {
       this.store.data.threads.push(thread)
     }
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
-    this.store.save()
+    return true
   }
   private async execute(job: FreeJob, r: FreeRequest, controller: AbortController, before?: Promise<void>): Promise<void> {
     let spent: TokenEntry | null = null
@@ -370,7 +379,7 @@ export class FreeInstances {
     if (result.chats) for (const chat of result.chats) {
       if (chat.is_temporary === true && !this.store.data.forgotten?.includes(`${r.instanceId}/${chat.chat_id}`)) {
         const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chat.chat_id)
-        this.markThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false)
+        this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false)
       }
     }
     if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {
@@ -378,7 +387,7 @@ export class FreeInstances {
       const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
       const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
       if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
-      this.markThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
+      this.noteThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
     }
     const spent = result.ok ? this.countTokens(r, result) : null
     this.store.save()

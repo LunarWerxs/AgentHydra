@@ -15,7 +15,12 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import'
+  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import' | 'send'
+  /** send only: the message, sent into the chat named by cliSessionId as a message from another
+   *  session (never as the person). */
+  text?: string
+  /** send only: the sender's name the chat shows beside the message. */
+  fromName?: string
   /** idle only: how long a chat that is not on screen keeps its idle engine before the app's own
    *  pause releases it. Applies only where the app's own setting is "never" (0). */
   idleMs?: number
@@ -558,6 +563,26 @@ function nativeBusyFlags(manager: any, before: any, session: any): string[] {
   return Object.keys(flags).filter((name) => !!flags[name])
 }
 
+/**
+ * A stop the app never finished: `isStopping` with no engine, no query and nothing pending or
+ * losable. A move leaves its source row this way, and the app can hold the flag for minutes
+ * (2026-10-09: the batch's 15 s busy retry and migrate_reconcile --finish were both refused,
+ * and the row cleared by itself about ten minutes later). Nothing is left to interrupt.
+ */
+function nativeStaleStop(before: any, session: any): boolean {
+  return (
+    before.isStopping &&
+    !before.isRunning &&
+    !before.hasQuery &&
+    !before.starting &&
+    !before.losableWork &&
+    !before.pendingInput &&
+    !before.pendingPermission &&
+    !before.pendingDialog &&
+    !session.startResumeInFlight
+  )
+}
+
 function nativeArchivePreconditions(
   found: any,
   session: any,
@@ -570,8 +595,11 @@ function nativeArchivePreconditions(
   if (session.spawnedFrom && !session.lineageDetached && !sourceSuperseded) {
     nativeRefuse('attached parent could receive side effects')
   }
+  // A move's superseded source (landing verified on the target) is archived over a stale stop;
+  // every other caller still treats `isStopping` as busy.
+  const staleSupersededStop = sourceSuperseded && nativeStaleStop(before, session)
   if (
-    nativeSessionIsBusy(before, session) ||
+    (nativeSessionIsBusy(before, session) && !staleSupersededStop) ||
     nativeManagerIsBusy(found.manager, session.sessionId)
   ) {
     nativeRefuse(
@@ -1049,6 +1077,70 @@ async function nativeImport(env: any, found: any, request: any, settled: any, st
   }
 }
 
+/**
+ * Sends a message into a chat the way one of the app's chats messages another (its SendMessage
+ * tool): the app's own peerMessageDelivery.sendPeerMessage, wrapped in the same
+ * <cross-session-message> envelope, with a peer origin. The app starts the chat's engine itself
+ * when none runs (its cold-start retry), so a chat a usage limit stopped is reached with nothing
+ * typed into its window (2026-10-09: the babysitter's 44 continues overnight all found no engine to
+ * take one). A peer origin is never the person: the app keeps the chat's "stopped until a person
+ * sends" and archive refusals, and this refuses both before sending.
+ */
+async function nativeSend(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (typeof manager.sendPeerMessage !== 'function')
+    nativeRefuse('native method unavailable: sendPeerMessage')
+  const matches = [...manager.sessions.values()].filter(
+    (s: any) => s?.cliSessionId === request.cliSessionId && !s.prewarmHidden,
+  )
+  if (matches.length > 1) nativeRefuse('more than one chat holds this CLI session')
+  const session = matches[0]
+  if (!session) nativeRefuse('no chat in this app holds this CLI session')
+  if (session.isArchived === true) nativeRefuse('the chat is archived')
+  if (session.stoppedUntilPersonSends)
+    nativeRefuse('the chat was stopped until a person sends; it waits for them')
+  const attr = (value: string) =>
+    value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const body = String(request.text).replace(
+    /<(\/?)cross-session-message/gi,
+    '&lt;$1cross-session-message',
+  )
+  const name = attr(String(request.fromName))
+  const wrapped = `<cross-session-message from="agenthydra" name="${name}">\n${body}\n</cross-session-message>`
+  const messageId = env.crypto.randomUUID()
+  state.dispatch = 'sent'
+  // The app answers once the chat's turn has started, which can outlast the inspector's 60s call
+  // limit and Desk's 50s wait for the route: past 35s the message is in the app's hands and the
+  // answer is "sent", not confirmed.
+  let timer: any
+  const sent = await Promise.race([
+    manager.sendPeerMessage(session.sessionId, wrapped, {
+      messageId,
+      origin: { kind: 'peer', from: 'agenthydra', name: String(request.fromName) },
+    }),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ delivery: 'sent' }), 35_000)
+      timer?.unref?.()
+    }),
+  ]).finally(() => clearTimeout(timer))
+  nativeCheckIdentity(env, found, request, settled)
+  const delivery = (sent as any)?.delivery ?? null
+  const confirmed = delivery === 'delivered' || delivery === 'queued'
+  const ok = confirmed || delivery === 'sent'
+  return {
+    ok,
+    verified: confirmed,
+    dispatch: state.dispatch,
+    action: 'send',
+    sessionId: session.sessionId,
+    delivery,
+    reason: ok ? undefined : String((sent as any)?.reason ?? 'the app did not deliver it'),
+    identity: nativeIdentity(env, found, null),
+    evidence:
+      "the app's own peer-message receipt (delivered: a turn started; queued: it runs when the chat is free; sent: no answer within 35s)",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -1064,6 +1156,7 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   if (request.action === 'idle') return await nativeIdle(env, found, request, settled, state)
   if (request.action === 'pause') return await nativePause(env, found, request, settled, state)
   if (request.action === 'import') return await nativeImport(env, found, request, settled, state)
+  if (request.action === 'send') return await nativeSend(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -1128,6 +1221,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeSessionIsBusy,
     nativeManagerIsBusy,
     nativeBusyFlags,
+    nativeStaleStop,
     nativeArchivePreconditions,
     nativeArchiveFlags,
     nativeBystanderChanges,
@@ -1144,6 +1238,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeIdle,
     nativePause,
     nativeImport,
+    nativeSend,
     nativeRun,
     nativeRuntime,
   ]
@@ -1152,15 +1247,31 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 }
 
 export function nativeProgram(request: NativeProgramRequest): string {
-  if (!['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import'].includes(request.action))
+  if (
+    !['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import', 'send'].includes(request.action)
+  )
     throw Error('Unsupported native action')
   if (
-    request.action === 'import' &&
+    (request.action === 'import' || request.action === 'send') &&
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       String(request.cliSessionId),
     )
   )
-    throw Error('Import requires the CLI session id (a UUID)')
+    throw Error(
+      `${request.action === 'send' ? 'Send' : 'Import'} requires the CLI session id (a UUID)`,
+    )
+  if (
+    request.action === 'send' &&
+    !(
+      typeof request.text === 'string' &&
+      request.text.trim() &&
+      request.text.length <= 20_000 &&
+      typeof request.fromName === 'string' &&
+      request.fromName.trim() &&
+      request.fromName.length <= 80
+    )
+  )
+    throw Error('Send requires text (at most 20000 characters) and fromName (at most 80)')
   checkIdleAndPause(request)
   if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
   if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')

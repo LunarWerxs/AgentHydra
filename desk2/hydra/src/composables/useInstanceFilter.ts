@@ -38,7 +38,7 @@
 // flyout and the compact quick window all read this, and a per-component ref would let them disagree.
 
 import { useStorage } from '@vueuse/core'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import type { Provider } from '@/components/ProviderLogo.vue'
 import {
   decodePlans,
@@ -47,6 +47,8 @@ import {
   type InstanceFilterRule,
   isEmptyInstanceRule,
   matchesInstanceFilter,
+  matchesSearch,
+  searchTerms,
   STATUS_FILTERS,
   type StatusFilter,
 } from '@/lib/instance-filter'
@@ -112,6 +114,11 @@ export type KindView = (typeof KIND_VIEWS)[number]
 /** A segmented control, not toggles (owner, 2026-10-07): on and off read as a filter you could switch off,
  *  and "Instances" read as the one that was on. */
 const kindView = useStorage<KindView>(`${KEY}.kindView`, 'all')
+
+/** The header's search box. Not stored: a search is for now, and an old one left in place would hide
+ *  rows the next time the tab opens with nothing on screen to say why but the box. */
+const searchQuery = ref('')
+const terms = computed(() => searchTerms(searchQuery.value))
 
 // Every switch, threshold and selection above is ALSO mirrored through the daemon, because the
 // quick-instances window can be served from a different PORT and browser storage is scoped per
@@ -215,11 +222,15 @@ export function useInstanceFilter() {
     return kindView.value === 'all' || kindView.value === kind
   }
 
-  /** Drop the hidden rows from a list. Sort first, then filter — the filter removes rows, it
-   *  never reorders them. Takes a readonly array because that is what useSortable hands back. */
+  /** Drop the hidden rows from a list: those the search does not find, then those the filter hides.
+   *  Sort first, then filter — the filter removes rows, it never reorders them. Takes a readonly
+   *  array because that is what useSortable hands back. */
   function visible<T>(rows: readonly T[], factsOf: (row: T) => InstanceFacts): readonly T[] {
-    if (!active.value || !hideMatches.value) return rows
-    return rows.filter((row) => !matches(factsOf(row)))
+    const found = terms.value.length
+      ? rows.filter((row) => matchesSearch(factsOf(row).search, terms.value))
+      : rows
+    if (!active.value || !hideMatches.value) return found
+    return found.filter((row) => !matches(factsOf(row)))
   }
 
   return {
@@ -260,6 +271,10 @@ export function useInstanceFilter() {
     kindView,
     kinds,
     kindShown,
+    /** The header's search box (see `visible`). */
+    searchQuery,
+    /** Something is typed in the search box. */
+    searching: computed(() => terms.value.length > 0),
     setKindView: (view: KindView) => {
       kindView.value = view
     },

@@ -12,11 +12,11 @@ export interface TranscriptCtx {
   children: ComputedRef<Map<string, TranscriptItem[]>>
   /** The chat's items, for counting what an undo takes out (MessageActions asks first when it takes out more than one message). */
   items?: ComputedRef<TranscriptItem[]>
-  /** Background tasks the chat dispatched that still run, and the id of its latest result line (the only one they hold back). */
   /** Profile -> id of its newest browser call in this transcript: only that Browser card previews live. */
   newestBrowser?: ComputedRef<Map<string, string>>
   /** ReDesign picks and the person's replies, for the ReDesign cards. */
   redesign?: ComputedRef<RedesignState>
+  /** Background tasks the chat dispatched that still run, and the id of its latest result line (the only one they hold back). */
   background?: Ref<{ count: number; resultId: string | null }>
   isOpen(key: string, fallback?: boolean): boolean
   toggle(key: string, fallback?: boolean): void
