@@ -1,0 +1,9 @@
+- heading "Example Shop" [level=1]
+- navigation "Main":
+  - link "Browse catalog" [ref=eN]
+  - link "Open cart" [ref=eN]: Cart
+  - link "Returns and exchanges" [ref=eN]
+- heading "Find a part" [level=2]
+- form:
+  - textbox "Search the catalog" [ref=eN]
+# ... 26 more lines (pass maxLines to see more)

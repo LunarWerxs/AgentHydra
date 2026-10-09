@@ -1,0 +1,34 @@
+- heading "Example Shop" [level=1]
+- navigation "Main":
+  - link "Browse catalog" [ref=eN]
+  - link "Open cart" [ref=eN]: Cart
+  - link "Returns and exchanges" [ref=eN]
+- heading "Find a part" [level=2]
+- form:
+  - textbox "Search the catalog" [ref=eN]
+  - combobox "Sort order" [ref=eN]:
+    - option "Most relevant" [selected] [ref=eN]
+    - option "Lowest price" [ref=eN]
+  - checkbox "In stock only" [checked] [ref=eN]
+  - radio "Small" [ref=eN]
+  - textbox "Order notes" [ref=eN]
+  - button "Search" [ref=eN]
+  - button "Clear filters" [disabled] [ref=eN]
+- heading "Saved lists" [level=2]
+- list:
+  - listitem:
+    - link "Garden tools" [ref=eN]
+  - listitem: Workshop bench, two shelves
+  - listitem:
+    - button "Show more lists" [ref=eN]
+- heading "Order summary" [level=2]
+- paragraph: Three items wait in the cart. The longest product name on this page is deliberately long so that the...
+- image "Blue storage tote"
+- button "Save draft" [ref=eN]
+- button "Gift wrap" [pressed] [ref=eN]
+- heading "Shipping partner" [level=2]
+- Iframe "Partner widget"
+- heading "Hidden controls" [level=2]
+- link "Zero size link" [ref=eN]
+- status: Saved 0 items
+- generic "Note field" [ref=eN]: Editable note

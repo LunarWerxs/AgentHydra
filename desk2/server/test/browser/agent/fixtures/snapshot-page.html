@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Example Shop fixture</title>
+<style>
+  body { font-family: sans-serif; margin: 12px; }
+  .gone { display: none; }
+  .veiled { visibility: hidden; }
+  .zero { width: 0; height: 0; overflow: hidden; display: inline-block; }
+</style>
+</head>
+<body>
+<h1>Example Shop</h1>
+<nav aria-label="Main">
+  <a href="https://shop.example.test/catalog">Browse catalog</a>
+  <a href="https://shop.example.test/cart" aria-label="Open cart">Cart</a>
+  <a href="https://shop.example.test/help/returns?ref=nav">Returns and exchanges</a>
+</nav>
+
+<h2>Find a part</h2>
+<form id="search-form" action="https://shop.example.test/search" method="get">
+  <input id="q" type="text" name="q" aria-label="Search the catalog" placeholder="Part number">
+  <select name="sort" aria-label="Sort order">
+    <option value="rel">Most relevant</option>
+    <option value="price">Lowest price</option>
+  </select>
+  <label><input type="checkbox" name="instock" checked> In stock only</label>
+  <label><input type="radio" name="size" value="s"> Small</label>
+  <textarea name="notes" aria-label="Order notes">typed value that must stay out of the snapshot</textarea>
+  <button type="submit" id="go">Search</button>
+  <button type="button" disabled>Clear filters</button>
+</form>
+
+<h2>Saved lists</h2>
+<ul>
+  <li><a href="https://shop.example.test/lists/garden">Garden tools</a></li>
+  <li>Workshop bench, two shelves</li>
+  <li><button type="button" aria-expanded="false">Show more lists</button></li>
+</ul>
+
+<h2>Order summary</h2>
+<p>Three items wait in the cart. The longest product name on this page is deliberately long so that the name clip rule has something to cut: Adjustable Two-Stage Brass Garden Hose Nozzle With Thumb Trigger And Spare Gasket Kit.</p>
+<img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Blue storage tote">
+<button type="button" onclick="void 0">Save draft</button>
+<button type="button" aria-pressed="true">Gift wrap</button>
+
+<h2>Shipping partner</h2>
+<iframe title="Partner widget" srcdoc="<h3>Partner widget</h3><p>Ships in two days.</p><a href='https://shop.example.test/partner/track'>Track a parcel</a><button>Check rates</button>" width="420" height="120"></iframe>
+
+<h2>Hidden controls</h2>
+<button type="button" class="gone">Secret staging button</button>
+<button type="button" class="veiled">Veiled button</button>
+<button type="button" aria-hidden="true">Hidden from assistive tech</button>
+<a href="https://shop.example.test/zero" class="zero">Zero size link</a>
+<div role="status">Saved 0 items</div>
+<div contenteditable="true" aria-label="Note field">Editable note</div>
+</body>
+</html>

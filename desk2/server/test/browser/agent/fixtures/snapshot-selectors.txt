@@ -1,0 +1,16 @@
+[0] a "Browse catalog" → a
+[1] a "Cart" → a
+[2] a "Returns and exchanges" → a
+[3] input "Search the catalog" → #q
+[4] select "Most relevant Lowest price" → select[name="sort"]
+[5] input "on" → input[name="instock"]
+[6] input "s" → input[name="size"]
+[7] textarea "typed value that must stay out of the snapshot" → textarea[name="notes"]
+[8] button "Search" → #go
+[9] button "Clear filters" → button
+[10] a "Garden tools" → a
+[11] button "Show more lists" → button
+[12] button "Save draft" → button
+[13] button "Gift wrap" → button
+[14] button "Hidden from assistive tech" → button
+[15] div "Editable note" → div
