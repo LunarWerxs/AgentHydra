@@ -16,6 +16,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **An account that needs identity verification no longer fails CliMayte tasks.** When Anthropic asks an account to
   verify its identity, CliMayte moves its task to another account and stops using it, and the instance list says
   "Needs identity verification". Verify it on claude.ai and sign in again to use it again.
+- **The window no longer freezes while the disk is busy.** Saving chats, recording finished replies, logging timings and reading workers' token counts now happen in the background, so a slow disk no longer holds up your sends and clicks for seconds.
 
 ## [2.0.4] - 2026-10-09
 

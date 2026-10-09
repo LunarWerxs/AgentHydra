@@ -35,11 +35,11 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { claudeProjectRoots, findSessionJsonl, sessionJsonlItems, workerJsonlItems } from './session-jsonl'
+import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
-import { statSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -339,7 +339,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       if (missing.length) raw.push(...(await client.workersByIds(missing).catch(() => [])))
       if (!o.all) await addAncestors(raw)
       const list = mapWorkers(raw)
-      if (list.some((w) => w.active)) workerTokens.apply(list, raw, await instanceDirs())
+      if (list.some((w) => w.active)) await workerTokens.apply(list, raw, await instanceDirs())
       // This PC's alone: the engine matches chats to these and counts them, and their ids may repeat the other PCs'.
       const stable = reuseWorkers(lastWorkers?.workers, list)
       lastWorkers = { at: now(), workers: stable }
@@ -492,7 +492,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const known = foundAt.get(sessionId)
     const items = known ? readItems(known) : null
     if (items) return items
-    const file = findSessionJsonl(sessionId, await projectRoots())
+    const file = await findSessionJsonlAsync(sessionId, await projectRoots())
     if (file) {
       rememberFile(sessionId, file)
       return sessionJsonlItems(file)
@@ -615,9 +615,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     if (notFound.size > 2048) notFound.delete(notFound.keys().next().value as string)
   }
 
-  function statOf(file: string): Pick<WorkerPart, 'ino' | 'size' | 'mtimeMs'> | null {
+  async function statOf(file: string): Promise<Pick<WorkerPart, 'ino' | 'size' | 'mtimeMs'> | null> {
     try {
-      const st = statSync(file)
+      const st = await stat(file)
       return { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
@@ -626,8 +626,8 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** A session's part as any worker list of this folder read it, while its file is unchanged: a stat, no parse. */
-  function unchangedPart(sid: string, file: string, cwd: string | null): WorkerPart | null {
-    const st = statOf(file)
+  async function unchangedPart(sid: string, file: string, cwd: string | null): Promise<WorkerPart | null> {
+    const st = await statOf(file)
     if (!st) return null
     for (const read of workerReads.values()) {
       const prev = read.cwd === cwd ? read.parts.get(sid) : undefined
@@ -638,7 +638,7 @@ export function createBridge(opts: BridgeOptions = {}) {
 
   /** The file read now, its stat taken first: a file that changes during the read is read again next poll. */
   async function readPart(file: string, cwd: string | null): Promise<WorkerPart | null> {
-    const st = statOf(file)
+    const st = await statOf(file)
     if (!st) return null
     try {
       return { file, ...st, items: await workerJsonlItems.readAsync(file, cwd) }
@@ -675,19 +675,19 @@ export function createBridge(opts: BridgeOptions = {}) {
       let known = o.rescan ? null : foundAt.get(sid)
       if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
         const ownKey = `${ownRoot}|${sid}`
-        const own = !o.rescan && searchedLately(ownKey) ? null : findSessionJsonl(sid, [ownRoot], cwd)
+        const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
         if (own) {
           notFound.delete(ownKey)
           rememberFile(sid, own)
           known = own
         } else if (!o.rescan) rememberMiss(ownKey)
       }
-      let part = known ? (unchangedPart(sid, known, cwd) ?? (await readPart(known, cwd))) : null
+      let part = known ? ((await unchangedPart(sid, known, cwd)) ?? (await readPart(known, cwd))) : null
       if (!part) {
         // A session with no file yet: every project folder of every account is looked in, so not on every poll.
         if (!o.rescan && searchedLately(sid)) continue
         roots ??= await projectRoots()
-        const file = findSessionJsonl(sid, roots, cwd)
+        const file = await findSessionJsonlAsync(sid, roots, cwd)
         if (file) {
           rememberFile(sid, file)
           part = await readPart(file, cwd)

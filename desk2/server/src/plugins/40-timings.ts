@@ -5,6 +5,7 @@ import { CLIENT_STAGES, type TimingStage } from '@shared/timings'
 import type { ServerContext } from '../context'
 import { DIAGNOSTICS_API, diagnosticsRoute } from '../engine/diagnostics'
 import { watchLoopStalls } from '../engine/loop-stall'
+import { setSyncBlockSink } from '../engine/sync-block'
 import { Timings } from '../engine/timings'
 
 /** The longest wait the window may report: anything past it is a sleeping laptop, not a wait. */
@@ -13,6 +14,7 @@ const MAX_CLIENT_MS = 600_000
 export default async function plugin(app: Hono, ctx: ServerContext): Promise<void> {
   const timings = Timings.for(ctx.home)
   ctx.onStop(watchLoopStalls(timings))
+  setSyncBlockSink((b) => timings.span({ stage: 'sync_block', name: b.label, ms: b.ms }))
 
   diagnosticsRoute(app, 'timings', () => timings.report())
 
