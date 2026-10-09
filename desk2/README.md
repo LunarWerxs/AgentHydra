@@ -183,7 +183,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   animation ... Let's get a few options"). There are seven looks (`transcript/parts/WorkingMark.vue`); no setting
   picks one: the window shows one for five minutes, every mark the same, then another, never the same twice in a row
   (`transcript/lib/working-mark.ts`; owner, 2026-10-08: "instead of an option for animation, just occasionally have
-  it, randomly one"), each at half the speed it first had. A tool run opened shows its
+  it, randomly one"), each at half the speed it first had. A tool run takes in the thinking blocks between its
+  calls, so one stretch of work is one row whose sentence says it thought too (`transcript/lib/groups.ts`); an
+  outside session (Claude Desktop, a terminal) folds the same way unless a view passes `unfoldThinking`
+  (2026-10-08: one session drew eleven "Thought process" rows). A tool run opened shows its
   steps in one rounded box split by hairlines, as Claude Desktop does; whatever a row opens slides open and
   shut (`transcript/parts/Collapse.vue`), and the row clicked stays where it is while the content under it
   moves down (TranscriptView's `holdRow`). Reduced motion turns all of it off.

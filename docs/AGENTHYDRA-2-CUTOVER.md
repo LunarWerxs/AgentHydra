@@ -5,8 +5,9 @@ Desk 2, which carries the name AgentHydra. The old AgentHydra window (`web/`, se
 7787) is removed in 2.0.0, and Hydra Desk 1 (`desk/`) is removed from the repo (2026-10-07). The daemon (`server/`, 7787) stays: it is
 Desk 2's engine, and Desk 2 reaches it through its `/ah/api` proxy.
 
-This file is the checklist for that move. Every step is done; 2.0.0 is the first release without the old
-window.
+This file is the checklist for that move. Every step is done; 2.0.0 is the first version without the old
+window. Its tag build stopped before publishing, 2.0.1 went out as a pre-release, and 2.0.2 (2026-10-08) is
+the first full release, the one installed copies update to ([RELEASING.md](RELEASING.md)).
 
 ## Done
 
