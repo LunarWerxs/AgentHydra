@@ -30,6 +30,8 @@ export const TIMING_STAGES = [
   'chat_open',
   'title',
   'warm',
+  // The event loop was blocked this long (engine/loop-stall.ts)
+  'loop_stall',
 ] as const
 
 export type TimingStage = (typeof TIMING_STAGES)[number]

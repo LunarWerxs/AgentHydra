@@ -12,10 +12,20 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
 - **A new chat no longer pulls you back into it after you moved on**
+- **Chats with long transcripts stop stalling the server on every poll**
+- **The timings log records every server stall over 200 ms**
 - **One click above the account pill restarts you onto an update**
 - **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
 
 **Everything in Unreleased**
+
+- **The server stops re-reading a CliMayte chat's transcripts on every poll.** A chat whose sessions added up to
+  more than the 64 MB cache held was read again in full on each window poll, blocking the server for one to
+  several seconds every time. Each session's file check is now kept with its items, so an unchanged session costs
+  one stat however large the chat is.
+
+- **The timings log records every server stall over 200 ms.** When the server's thread is blocked that long, a
+  "Server event loop blocked" line goes into Speed with its length, so the next slowdown is measured, not guessed.
 
 - **A restart that updates you is one click, above the account pill.** When a newer AgentHydra is waiting or the
   window's server is older than its files, a row says "Click to restart and update" (with the version when known).

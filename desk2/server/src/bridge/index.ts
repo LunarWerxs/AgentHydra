@@ -32,6 +32,7 @@ import { claudeProjectRoots, findSessionJsonl, sessionJsonlItems } from './sessi
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
+import { statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 
@@ -489,10 +490,46 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
-  /** Each worker's list as last answered, with the per-file lists it was made of (sessionJsonlItems answers the
-   *  same array for a file that has not changed): while none changed, the same list goes back. The newest few. */
-  const workerReads = new Map<string, { parts: TranscriptItem[][]; items: TranscriptItem[] }>()
+  /** A session file as its part of a worker's list was read: the stat taken before the read, and the items made from it. */
+  interface WorkerPart {
+    file: string
+    ino: number
+    size: number
+    mtimeMs: number
+    items: TranscriptItem[]
+  }
+  /** Each worker's list as last answered, with the part each session was read as: while none changed, the same list goes back. The newest few. */
+  const workerReads = new Map<string, { cwd: string | null; parts: Map<string, WorkerPart>; items: TranscriptItem[] }>()
   const WORKER_READS_KEPT = 16
+
+  function statOf(file: string): Pick<WorkerPart, 'ino' | 'size' | 'mtimeMs'> | null {
+    try {
+      const st = statSync(file)
+      return { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
+  }
+
+  /** A session's part as any worker list of this folder read it, while its file is unchanged: a stat, no parse. */
+  function unchangedPart(sid: string, file: string, cwd: string | null): WorkerPart | null {
+    const st = statOf(file)
+    if (!st) return null
+    for (const read of workerReads.values()) {
+      const prev = read.cwd === cwd ? read.parts.get(sid) : undefined
+      if (prev && prev.file === file && prev.ino === st.ino && prev.size === st.size && prev.mtimeMs === st.mtimeMs) return prev
+    }
+    return null
+  }
+
+  /** The file read now, its stat taken first: a file that changes during the read is read again next poll. */
+  function readPart(file: string, cwd: string | null): WorkerPart | null {
+    const st = statOf(file)
+    if (!st) return null
+    const items = readItems(file, cwd)
+    return items && { file, ...st, items }
+  }
 
   /**
    * A worker's transcript from its own .jsonl files, in session order (`sessions` then `sessionId`). A move
@@ -514,7 +551,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     let roots: string[] | null = null
     const ownDir = o.writing ? (await instanceDirs()).get(o.writing.accountId) : undefined
     const ownRoot = ownDir ? join(ownDir, 'projects') : null
-    const parts: TranscriptItem[][] = []
+    const parts = new Map<string, WorkerPart>()
     for (const sid of new Set(sessionIds)) {
       let known = o.rescan ? null : foundAt.get(sid)
       if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
@@ -524,24 +561,26 @@ export function createBridge(opts: BridgeOptions = {}) {
           known = own
         }
       }
-      let part = known ? readItems(known, cwd) : null
+      let part = known ? (unchangedPart(sid, known, cwd) ?? readPart(known, cwd)) : null
       if (!part) {
         roots ??= await projectRoots()
         const file = findSessionJsonl(sid, roots, cwd)
-        if (!file) continue
-        rememberFile(sid, file)
-        part = sessionJsonlItems(file, cwd)
+        if (file) {
+          rememberFile(sid, file)
+          part = readPart(file, cwd)
+        }
+        if (!part) continue
       }
-      parts.push(part)
+      parts.set(sid, part)
     }
     const key = `${sessionIds.join(',')}|${cwd ?? ''}`
     const last = workerReads.get(key)
-    if (last && last.parts.length === parts.length && last.parts.every((p, i) => p === parts[i])) return last.items
+    if (last && last.parts.size === parts.size && [...parts].every(([sid, part]) => last.parts.get(sid) === part)) return last.items
     const out = new Map<string, TranscriptItem>()
-    for (const part of parts) for (const item of part) out.set(item.id, item)
+    for (const part of parts.values()) for (const item of part.items) out.set(item.id, item)
     const items = [...out.values()]
     workerReads.delete(key)
-    workerReads.set(key, { parts, items })
+    workerReads.set(key, { cwd, parts, items })
     if (workerReads.size > WORKER_READS_KEPT) workerReads.delete(workerReads.keys().next().value as string)
     return items
   }

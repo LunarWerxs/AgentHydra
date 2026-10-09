@@ -422,3 +422,26 @@ ${line('assistant', 4, 'second answer')}
     expect(await m.texts('new-acct')).toEqual(['first answer', 'second answer'])
   })
 })
+
+describe('a chat with more session data than the settled cache holds', () => {
+  const CWD = 'C:/Users/me/Desktop/Project/Example'
+  test('answers an unchanged set of sessions again without reading any of them', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-many-'))
+    temps.push(home)
+    const root = join(home, 'projects')
+    const folder = join(root, encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const text = 'a plain reply in ordinary words, repeated to size. '.repeat(90)
+    const ids = Array.from({ length: 17 }, (_, i) => sid(200 + i))
+    ids.forEach((id, i) => {
+      const rows = Array.from({ length: 1700 }, (_, k) =>
+        JSON.stringify({ type: 'user', uuid: `u${i}-${k}`, timestamp: new Date(NOW).toISOString(), message: { role: 'user', content: text } }),
+      )
+      writeFileSync(join(folder, `${id}.jsonl`), `${rows.join('\n')}\n`)
+    })
+    const b = createBridge({ url: 'http://127.0.0.1:9', now: () => NOW, home, projectRoots: () => [root] })
+    const first = await b.workerItems(ids, CWD)
+    expect(first.length).toBeGreaterThan(0)
+    expect(await b.workerItems(ids, CWD)).toBe(first)
+  }, 120_000)
+})

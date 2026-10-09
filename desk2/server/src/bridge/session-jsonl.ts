@@ -180,7 +180,7 @@ const FINGERPRINT = 64
  */
 const settled = new Map<string, Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>>()
 const SETTLED_MAX = 1024
-/** Source bytes the settled items were made from, oldest dropped first past this; the items take a multiple of it. */
+/** Source bytes of the settled items, oldest dropped past it. */
 const SETTLED_MAX_BYTES = 64 * 1024 * 1024
 let settledBytes = 0
 
