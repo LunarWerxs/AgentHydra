@@ -13,11 +13,32 @@ import { createDevServersMcp } from '../devservers/mcp'
 import { createBrowserAgentClient } from '../browser/agent/client'
 import { createBrowserMcp } from '../browser/agent/mcp'
 import type { ToolCaller } from '../browser/agent/contract'
-import { callerSession } from '../browser/agent/caller-session'
+import { type CallerIds, type CallerSessionDeps, callerSession } from '../browser/agent/caller-session'
 import { type Bridge, bridge } from '../bridge'
 
 /** The address of Desk itself, which the devservers tools call at /dw/api. */
 const deskUrl = () => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`
+
+type Workers = readonly { id: string; sessionId: string | null }[]
+
+/** Whether a JSON-RPC body (or a batch of them) calls a tool. */
+export function isToolCall(body: unknown): boolean {
+  return (Array.isArray(body) ? body : [body]).some((m) => (m as { method?: unknown } | null)?.method === 'tools/call')
+}
+
+/** Calls load at most once per ttl; concurrent callers share the one pending lookup. */
+export function cachedLookup<T>(load: () => Promise<T>, ttlMs = 5_000): () => Promise<T> {
+  let cache: { at: number; value: Promise<T> } | null = null
+  return () => {
+    if (!cache || Date.now() - cache.at > ttlMs) cache = { at: Date.now(), value: load() }
+    return cache.value
+  }
+}
+
+/** Only a tools/call needs the caller's session, so initialize, tools/list and ping never look the workers up. */
+export async function sessionForRequest(body: unknown, ids: CallerIds, deps: CallerSessionDeps): Promise<string | undefined> {
+  return isToolCall(body) ? callerSession(ids, deps) : undefined
+}
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   // One handler per chat folder (the tools' default cwd) and one per ReDesign address: each is a few closures.
@@ -25,20 +46,17 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const redesign = new Map<string, McpHandler>()
   const outDir = join(ctx.home, 'design-options')
   const browserClient = createBrowserAgentClient({ home: ctx.home })
-  const workersCache = { at: 0, list: [] as readonly { id: string; sessionId: string | null }[] }
-  const cachedWorkers = async () => {
-    if (Date.now() - workersCache.at > 5_000) {
-      const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
-      workersCache.list = await b.workers({ all: true }).catch(() => [])
-      workersCache.at = Date.now()
-    }
-    return workersCache.list
-  }
+  const cachedWorkers = cachedLookup<Workers>(async () => {
+    const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
+    return b.workers({ all: true }).catch(() => [])
+  })
 
   app.all('/mcp/browser', async (c) => {
     const chat = c.req.query('chat')?.trim() || undefined
     const worker = c.req.query('worker')?.trim() || undefined
-    const session = await callerSession(
+    const body = c.req.method === 'POST' ? await c.req.raw.clone().json().catch(() => undefined) : undefined
+    const session = await sessionForRequest(
+      body,
       { chat, worker },
       {
         chatSessions: (id) => (ctx.deps.chatSessions as ((id: string) => string[]) | undefined)?.(id) ?? [],

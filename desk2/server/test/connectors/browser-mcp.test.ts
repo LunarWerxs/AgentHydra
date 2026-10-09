@@ -3,6 +3,7 @@ import type { BrowserAgentClient } from '../../src/browser/agent/client'
 import type { CallResult, ToolCaller, ToolInfo } from '../../src/browser/agent/contract'
 import { createBrowserMcp } from '../../src/browser/agent/mcp'
 import { TOOL_DEFS } from '../../src/browser/agent/registry'
+import { cachedLookup, sessionForRequest } from '../../src/plugins/68-mcp'
 
 const TOOLS: ToolInfo[] = [{ name: 'browser_status', description: 'Where the browser is.', inputSchema: { type: 'object', properties: {} } }]
 
@@ -66,5 +67,30 @@ describe('the tool registry', () => {
       expect(def.description.length).toBeGreaterThan(20)
       expect(def.inputSchema.type).toBe('object')
     }
+  })
+})
+
+describe('the caller session is looked up only for a tool call', () => {
+  const rpc = (method: string) => ({ jsonrpc: '2.0', id: 1, method, params: method === 'tools/call' ? { name: 'browser_status', arguments: {} } : {} })
+  const countedWorkers = () => {
+    const seen = { calls: 0 }
+    const workers = cachedLookup(async () => {
+      seen.calls++
+      return [{ id: 'w-1', sessionId: 's-1' }]
+    })
+    return { seen, deps: { chatSessions: () => [], workers } }
+  }
+
+  test('initialize, tools/list and ping never reach the workers lookup', async () => {
+    const { seen, deps } = countedWorkers()
+    for (const method of ['initialize', 'tools/list', 'ping']) expect(await sessionForRequest(rpc(method), { worker: 'w-1' }, deps)).toBeUndefined()
+    expect(seen.calls).toBe(0)
+  })
+
+  test('two tool calls within five seconds look the workers up once', async () => {
+    const { seen, deps } = countedWorkers()
+    expect(await sessionForRequest(rpc('tools/call'), { worker: 'w-1' }, deps)).toBe('s-1')
+    expect(await sessionForRequest(rpc('tools/call'), { worker: 'w-1' }, deps)).toBe('s-1')
+    expect(seen.calls).toBe(1)
   })
 })
