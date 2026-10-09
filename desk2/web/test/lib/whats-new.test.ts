@@ -72,6 +72,15 @@ describe('whatsNewSince', () => {
 })
 
 describe('markerFor', () => {
+  test('headlines null on the same version shows every Unreleased entry', () => {
+    const marker = markerFor('2.0.4', null, NOW)
+    const result = whatsNewSince(marker, '2.0.4', sections(['Chats load faster', 'Dialog shows the changes']), NOW)
+    expect(result?.updated).toBe(false)
+    expect(result?.groups.map((g) => [g.version, g.entries.map((e) => e.headline)])).toEqual([
+      [null, ['Chats load faster', 'Dialog shows the changes']],
+    ])
+  })
+
   test('keeps the Unreleased headlines and the running version only', () => {
     const marker = markerFor('2.0.4', sections(['Chats load faster']), NOW)
     expect(marker).toEqual({ version: '2.0.4', headlines: ['Chats load faster', 'Row restarts onto an update'], at: NOW })
