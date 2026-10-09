@@ -17,10 +17,27 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **One click above the account pill restarts you onto an update**
 - **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too**
 - **The New screen highlights the project you picked**
+- **The live browser pane keeps streaming when its Chrome window is covered**
+- **Drop any file in a chat: PDFs, notes, emails, zips**
 
 **Everything in Unreleased**
 
+- **The live browser pane keeps streaming when its Chrome window is covered.** Windows stopped drawing a saved
+  Chrome whose window sat behind the Desk, so the pane got no pictures and clicks went nowhere. Every Chrome the
+  Desk opens now keeps drawing (about 47 frames a second in a test, from none), and scrolling sends one message per
+  frame. A saved Chrome that is already open picks this up once it is closed and opened again.
+
+- **Drop any file in a chat: PDFs, notes, emails, zips.** The chat box took only small PNG, JPEG, GIF and WebP
+  pictures. Now any file up to 100 MB attaches as a chip, and Claude gets its path to read it. A file dropped
+  anywhere on the chat attaches, and a large or unusual picture goes as a file instead of being refused.
+
 - **The New screen highlights the project you picked.** The tile for the folder your next chat starts in gets a thin accent ring and reads as pressed, however it was picked: a click, the composer's folder pill or New chat here.
+
+- **The New screen shows Connections' logo, and reads a project's logo from its top-level icon too.** Connections
+  had a second Project Hydra entry for its repo with no logo, so its row showed none. A logo-less entry now takes the
+  logo of another entry for the same repo, and a project with no launch row reads its top-level `icon` (a launch
+  row's icon still wins), only from Project Hydra's icons folder.
+
 - **The server stops re-reading a CliMayte chat's transcripts on every poll.** A chat whose sessions added up to
   more than the 64 MB cache held was read again in full on each window poll, blocking the server for one to
   several seconds every time. Each session's file check is now kept with its items, so an unchanged session costs
