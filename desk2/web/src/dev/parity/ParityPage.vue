@@ -132,3 +132,5 @@ onMounted(() => {
     <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" />
   </div>
 </template>
+import { applyHeadlessAudio } from '@/lib/chat-audio'
+  if (scene.audio) applyHeadlessAudio(scene.audio)

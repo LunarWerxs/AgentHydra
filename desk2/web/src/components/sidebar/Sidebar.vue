@@ -1047,3 +1047,5 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     </Dialog>
   </aside>
 </template>
+import HeadlessAudioButton from '@/components/sidebar/HeadlessAudioButton.vue'
+      <HeadlessAudioButton />

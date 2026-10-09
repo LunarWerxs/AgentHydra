@@ -242,3 +242,23 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     patchFreeSettings: async (p) => ({ ...FREE_SETTINGS_DEFAULTS, ...p })
   }
 }
+import type { HeadlessAudioState } from '@shared/headless-audio'
+  /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
+  audio?: HeadlessAudioState
+// One chat makes sound, one chat is muted, and a headless page no chat owns makes sound: the speakers and the footer's one speaker.
+const headlessAudio: ParityScene = {
+  layout: 'frame',
+  chats: windowChats,
+  items: windowItems,
+  view: { kind: 'chat', id: 'ccd' },
+  git: WINDOW_GIT,
+  suggestion: WINDOW_DRAFT,
+  audio: {
+    audible: ['nvw'],
+    muted: ['cfn'],
+    unattributed: [{ profile: 'C:/Users/me/AppData/Local/HydraDesk2/headless/Work', url: 'https://example.test/player' }],
+    unattributedMuted: false
+  }
+}
+
+  'headless-audio': headlessAudio,

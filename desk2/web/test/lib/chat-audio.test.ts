@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'bun:test'
-import { clearVideos, isAudible, isMuted, registerView, resetChatAudio, setMuted, speakerFor, toggleMuted, videoChanged, viewAudio, type VideoLike } from '../../src/lib/chat-audio'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { applyHeadlessAudio, loadHeadlessAudio, setUnattributedMuted, unattributedSound, clearVideos, isAudible, isMuted, registerView, resetChatAudio, setMuted, speakerFor, toggleMuted, videoChanged, viewAudio, type VideoLike } from '../../src/lib/chat-audio'
 import { HostView, type HostBrowserIn } from '../../src/components/servers/native-browser'
 import { chatRow, rowMenu, type RowMenuItem } from '../../src/components/sidebar/logic'
 
@@ -157,5 +157,50 @@ describe('the row', () => {
     toggleMuted('a')
     expect(speakerFor('a')).toEqual({ muted: true, label: 'Unmute this chat' })
     expect(speakerFor('b')).toBeNull()
+  })
+})
+
+describe('headless audio from the Desk', () => {
+  const realFetch = globalThis.fetch
+  const posts: { url: string; body: unknown }[] = []
+  let reply: unknown = {}
+  beforeEach(() => {
+    posts.length = 0
+    reply = { audible: [], muted: [], unattributed: [], unattributedMuted: false }
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST') posts.push({ url, body: JSON.parse(String(init.body)) })
+      return new Response(JSON.stringify(reply), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+  })
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  it('the one fetch on load makes a chat audible, and each event replaces that', async () => {
+    reply = { audible: ['h1'], muted: [], unattributed: [], unattributedMuted: false }
+    await loadHeadlessAudio()
+    expect(isAudible('h1')).toBe(true)
+    expect(isAudible('h2')).toBe(false)
+    expect(speakerFor('h1')).toEqual({ muted: false, label: 'Mute this chat' })
+    applyHeadlessAudio({ audible: [], muted: [], unattributed: [], unattributedMuted: false })
+    expect(isAudible('h1')).toBe(false)
+  })
+
+  it('the server muted list is the truth after a reload, and muting posts the chat', () => {
+    applyHeadlessAudio({ audible: [], muted: ['h2'], unattributed: [], unattributedMuted: false })
+    expect(isMuted('h2')).toBe(true)
+    expect(speakerFor('h2')).toEqual({ muted: true, label: 'Unmute this chat' })
+    setMuted('h2', false)
+    expect(posts).toEqual([{ url: '/api/browser/audio/mute', body: { chat: 'h2', muted: false } }])
+    setMuted('h3', true)
+    expect(posts.at(-1)).toEqual({ url: '/api/browser/audio/mute', body: { chat: 'h3', muted: true } })
+  })
+
+  it('unattributed pages are listed, and their mute posts unattributed', () => {
+    const page = { profile: 'C:/profiles/one', url: 'https://example.test/x' }
+    applyHeadlessAudio({ audible: [], muted: [], unattributed: [page], unattributedMuted: false })
+    expect(unattributedSound()).toEqual([page])
+    setUnattributedMuted(true)
+    expect(posts).toEqual([{ url: '/api/browser/audio/mute', body: { unattributed: true, muted: true } }])
   })
 })

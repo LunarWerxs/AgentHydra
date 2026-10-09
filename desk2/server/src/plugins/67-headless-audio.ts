@@ -43,10 +43,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.post(HEADLESS_AUDIO_MUTE, async (c: Context) => {
     const why = notOwnPage(c.req.raw.headers)
     if (why) return c.json({ error: why }, 403)
-    const body = (await c.req.json().catch(() => null)) as Partial<HeadlessAudioMuteIn> | null
-    if (typeof body?.chat !== 'string' || body.chat === '' || typeof body.muted !== 'boolean') {
-      return c.json({ error: 'chat and muted required' }, 400)
-    }
+    const body = (await c.req.json().catch(() => null)) as Partial<HeadlessAudioMuteIn & { chat: string }> | null
+    if (typeof body?.muted !== 'boolean') return c.json({ error: 'muted required' }, 400)
+    if (body.unattributed === true) return c.json(await runtime.setUnattributed(body.muted))
+    if (typeof body.chat !== 'string' || body.chat === '') return c.json({ error: 'chat or unattributed required' }, 400)
     return c.json(await runtime.setMuted(body.chat, body.muted))
   })
 }

@@ -11,9 +11,8 @@ export interface HeadlessAudioState {
   muted: string[]
   /** Audible pages no chat owns (no ledger entry, or an mcp:/pid: owner). */
   unattributed: { profile: string; url: string }[]
+  /** The pages no chat owns are muted (the Desk's mute for them). */
+  unattributedMuted: boolean
 }
 
-export interface HeadlessAudioMuteIn {
-  chat: string
-  muted: boolean
-}
+export type HeadlessAudioMuteIn = { chat: string; muted: boolean } | { unattributed: true; muted: boolean }

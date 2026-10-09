@@ -1246,3 +1246,9 @@ if (typeof window !== 'undefined' && !initialized) {
   const desk = useDesk()
   desk.init().catch(console.error)
 }
+import { applyHeadlessAudio, loadHeadlessAudio } from '@/lib/chat-audio'
+    void loadHeadlessAudio()
+
+    case 'browser.audio':
+      applyHeadlessAudio(event.state)
+      break

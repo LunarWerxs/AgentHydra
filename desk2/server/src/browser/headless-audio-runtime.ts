@@ -41,6 +41,7 @@ export interface HeadlessAudioDeps {
   now?(): number
 }
 
+const UNATTRIBUTED = '*unattributed'
 const RESTART_MIN_MS = 1000
 const RESTART_MAX_MS = 30000
 const HEALTHY_MS = 60000
@@ -71,6 +72,7 @@ export class HeadlessAudio {
   private audibleOf = new Map<string, (string | null)[]>()
   private audible: string[] = []
   private unattributed: { profile: string; url: string }[] = []
+  private unattributedMuted = false
   private readonly muting = new Set<string>()
   private readonly book = new MuteBook()
   private readonly pageDir = new Map<string, string>()
@@ -86,7 +88,7 @@ export class HeadlessAudio {
   }
 
   state(): HeadlessAudioState {
-    return { audible: this.audible, muted: [...this.muting].sort(), unattributed: this.unattributed }
+    return { audible: this.audible, muted: [...this.muting].sort(), unattributed: this.unattributed, unattributedMuted: this.unattributedMuted }
   }
 
   start(): void {
@@ -100,6 +102,7 @@ export class HeadlessAudio {
       this.muting.delete(chat)
       await this.unmuteChat(chat)
     }
+    await this.unmuteChat(UNATTRIBUTED)
     this.helper?.send('{"op":"quit"}')
     const killer = setTimeout(() => this.helper?.kill(), QUIT_GRACE_MS)
     killer.unref?.()
@@ -113,6 +116,14 @@ export class HeadlessAudio {
       this.muting.delete(chat)
       await this.unmuteChat(chat)
     }
+    this.publish()
+    return this.state()
+  }
+
+  async setUnattributed(on: boolean): Promise<HeadlessAudioState> {
+    this.unattributedMuted = on
+    if (on) await this.tick()
+    else await this.unmuteChat(UNATTRIBUTED)
     this.publish()
     return this.state()
   }
@@ -199,8 +210,10 @@ export class HeadlessAudio {
         const sound = await this.sound(port, tab.id)
         if (sound === null || !pageIsAudible(sound)) continue
         found.push(chat)
-        if (chat === null) unattributed.push({ profile: prof.dir, url: tab.url })
-        else {
+        if (chat === null) {
+          unattributed.push({ profile: prof.dir, url: tab.url })
+          if (this.unattributedMuted) await this.muteOne(prof.dir, port, tab.id, UNATTRIBUTED)
+        } else {
           audible.add(chat)
           if (muted.has(chat)) await this.muteOne(prof.dir, port, tab.id, chat)
         }
