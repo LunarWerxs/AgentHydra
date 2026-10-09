@@ -227,44 +227,80 @@ export async function profilesPayload(cwd: string): Promise<Json> {
 const hostMatches = (host: string, want: string) =>
   host === want || want.endsWith(`.${host}`) || host.endsWith(`.${want}`)
 
-function scoreProfile(query: string, name: string, sessionHosts: string[], note: unknown) {
-  const hosts = [...query.toLowerCase().matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,}/g)].map((m) => m[0])
-  const words = query
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((w) => w.length >= 3)
-  const word = query.toLowerCase().replace(/[^a-z0-9]+/g, '')
+// Mirrors SERVICE_HOSTS in the Connections MCP's browser.mjs; keep the two in step.
+const SERVICE_HOSTS: Record<string, string[]> = {
+  gmail: ['mail.google.com', 'accounts.google.com', 'google.com'],
+  google: ['accounts.google.com', 'google.com'],
+  youtube: ['youtube.com'],
+  cloudflare: ['dash.cloudflare.com', 'cloudflare.com'],
+  github: ['github.com'],
+  stripe: ['dashboard.stripe.com', 'stripe.com'],
+  aws: ['console.aws.amazon.com', 'signin.aws.amazon.com', 'amazon.com'],
+  discord: ['discord.com'],
+  linkedin: ['linkedin.com'],
+  x: ['x.com', 'twitter.com'],
+  twitter: ['x.com', 'twitter.com'],
+  reddit: ['reddit.com'],
+  notion: ['notion.so'],
+  slack: ['slack.com'],
+  figma: ['figma.com'],
+  vercel: ['vercel.com'],
+  netlify: ['netlify.com'],
+  namecheap: ['namecheap.com'],
+  godaddy: ['godaddy.com'],
+  shopify: ['shopify.com'],
+  openai: ['chatgpt.com', 'platform.openai.com', 'openai.com'],
+  anthropic: ['claude.ai', 'console.anthropic.com', 'anthropic.com'],
+  supabase: ['supabase.com'],
+  mongodb: ['cloud.mongodb.com', 'mongodb.com'],
+  apple: ['appleid.apple.com', 'apple.com'],
+  microsoft: ['login.microsoftonline.com', 'microsoft.com'],
+}
+
+function wantedHosts(query: string): string[] {
+  const raw = query.trim()
+  if (!raw) return []
+  let direct: string | null
+  try {
+    direct = new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.replace(/^www\./, '')
+  } catch {
+    direct = null
+  }
+  if (raw.includes('.') && direct) return [direct]
+  const key = raw.toLowerCase()
+  return Object.prototype.hasOwnProperty.call(SERVICE_HOSTS, key) ? SERVICE_HOSTS[key] : []
+}
+
+function scoreProfile(hosts: string[], word: string, name: string, sessionHosts: string[], note: unknown) {
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
-  const matchedHosts = hosts.filter((w) => sessionHosts.some((h) => hostMatches(h, w)))
+  const hostHit = hosts.filter((w) => sessionHosts.some((h) => hostMatches(h, w)))
   const nameHit = word.length >= 3 && norm(name).includes(word)
   const noteHit = word.length >= 3 && norm(typeof note === 'string' ? note : '').includes(word)
-  const wordHit = words.some((w) => sessionHosts.some((h) => h.includes(w)))
-  const points =
-    matchedHosts.length * 10 +
-    (nameHit ? 3 : 0) +
-    (noteHit ? 3 : 0) +
-    (matchedHosts.length === 0 && wordHit ? 1 : 0)
-  return { points, matchedHosts }
+  return {
+    points: hostHit.length * 10 + (nameHit ? 3 : 0) + (noteHit ? 3 : 0),
+    hostHit,
+    nameHit,
+    noteHit,
+  }
 }
 
 export async function findPayload(cwd: string, query: string): Promise<Json> {
   const g = await gather(cwd)
-  const resolvedHosts = [...query.toLowerCase().matchAll(/(?:[a-z0-9-]+\.)+[a-z]{2,}/g)].map(
-    (m) => m[0],
-  )
+  const resolvedHosts = wantedHosts(query)
+  const word = query.toLowerCase().replace(/[^a-z0-9]+/g, '')
   return mutateRegistry((reg) => {
     const managed = [...g.own, ...g.unowned]
       .map((c) => {
         const sessionHosts = refreshProfileHosts(reg, c.key, c.dir)
         const entry = registryEntry(reg, c.key)
-        const s = scoreProfile(query, c.name, sessionHosts, entry.note)
+        const s = scoreProfile(resolvedHosts, word, c.name, sessionHosts, entry.note)
         return {
           profile: c.name,
           managed: true,
           scope: c.scope,
           ...noteFields(entry),
-          points: s.points,
-          matchedHosts: s.matchedHosts,
+          ...s,
+          matchedHosts: s.hostHit,
           use:
             c.scope === 'unowned'
               ? `profile:'${c.name}' works from here (it predates workspace partitioning and nobody owns it). Make it this workspace's for good: ${claimHint(c.name)}`
@@ -277,12 +313,12 @@ export async function findPayload(cwd: string, query: string): Promise<Json> {
       .flatMap((p) =>
         p.profiles.map((n) => {
           const sessionHosts = refreshProfileHosts(reg, `${p.slug}/${n}`, join(p.dir, n))
-          const s = scoreProfile(query, n, sessionHosts, undefined)
+          const s = scoreProfile(resolvedHosts, word, n, sessionHosts, undefined)
           return {
             profile: n,
             workspace: p.workspace || `(unrecorded: ${p.slug})`,
-            points: s.points,
-            matchedHosts: s.matchedHosts,
+            ...s,
+            matchedHosts: s.hostHit,
             use: otherWorkspaceUse(p, n),
           }
         }),
@@ -292,13 +328,13 @@ export async function findPayload(cwd: string, query: string): Promise<Json> {
     const external = g.externals
       .map((p) => {
         const sessionHosts = refreshProfileHosts(reg, `external:${p.browser}:${p.dir}`, p.path)
-        const s = scoreProfile(query, `${p.displayName} ${p.dir}`, sessionHosts, undefined)
+        const s = scoreProfile(resolvedHosts, word, `${p.displayName} ${p.dir}`, sessionHosts, undefined)
         return {
           profile: `chrome:${p.dir}`,
           external: true,
           browser: p.browser,
-          points: s.points,
-          matchedHosts: s.matchedHosts,
+          ...s,
+          matchedHosts: s.hostHit,
           use: "the person's own browser: it cannot be driven in place from here, and its session cannot be copied",
         }
       })
