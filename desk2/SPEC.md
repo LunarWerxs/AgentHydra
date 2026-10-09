@@ -952,7 +952,8 @@ drafts are saved as they are typed).
 server started or the file count changed, `restartable` when `~/.hydra-desk-2/server.pid` names this server
 (the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
 `POST /api/server/restart` turns into `launcher/restart.ps1`, started hidden outside the server's process tree
-(stop.ps1 ends that tree) with its output in `logs/restart.log`; the chats run on and the window reconnects.
+(stop.ps1 ends that tree) with its output in `logs/restart-run.log` (`logs/restart.log` holds the server's ask lines only, so a
+locked file cannot fail a stop); the chats run on and the window reconnects.
 Only the window may ask: the route and `POST /api/server/shutdown` answer 409 to any other caller (an agent, a
 script, curl; `server/src/caller.ts`, identified by `X-Desk-Caller: window|launcher` and `User-Agent`), with the
 owner's message, and log every ask with its caller and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends

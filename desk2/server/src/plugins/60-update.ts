@@ -115,9 +115,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       return c.json({ error: "This server was not started by AgentHydra's window launcher, so the window cannot restart it. Leave it to the owner." }, 409)
     }
     logRestartAsk(ctx.home, `restart asked: ${who} -> accepted`)
-    const log = join(ctx.home, 'logs', 'restart.log')
+    // The script's output goes to its own file: the server appends its ask lines to restart.log while the script runs.
+    const runLog = join(ctx.home, 'logs', 'restart-run.log')
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
-    deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& ${quote(RESTART_SCRIPT)} *>> ${quote(log)}`])
+    deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`])
     return c.json({ ok: true }, 202)
   })
 }

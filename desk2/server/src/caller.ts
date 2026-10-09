@@ -18,9 +18,14 @@ export function describeCaller(headers: Headers): string {
   return `caller=${callerKind(headers)} chat=${chat} user-agent="${agent}"`
 }
 
+/** A log line never fails the ask it describes: a locked or unwritable file is reported on the server log and dropped. */
 export function logRestartAsk(home: string, line: string): void {
-  mkdirSync(join(home, 'logs'), { recursive: true })
-  appendFileSync(join(home, 'logs', 'restart.log'), `${new Date().toISOString()} ${line}\n`)
+  try {
+    mkdirSync(join(home, 'logs'), { recursive: true })
+    appendFileSync(join(home, 'logs', 'restart.log'), `${new Date().toISOString()} ${line}\n`)
+  } catch (err) {
+    console.error(`[restart] could not write restart.log (${(err as Error).message}): ${line}`)
+  }
 }
 
 export const OWNER_ONLY_RESTART =

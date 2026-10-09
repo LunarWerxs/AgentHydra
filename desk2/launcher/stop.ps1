@@ -2,7 +2,8 @@
 # AgentHydra runs itself is in its own host process, outside the server's tree, and a CliMayte worker chat runs
 # in AgentHydra; the next server takes them over.
 #
-#   1. POST /api/server/shutdown: the server writes its state and lets go of the chats, then exits.
+#   1. POST /api/server/shutdown: the server writes its state and lets go of the chats, then exits. No answer
+#      within 10 s (60 s with -Chats, which closes every chat first) means a frozen server: go on to step 2 now.
 #   2. Whatever is still running after 15 s goes the hard way: taskkill /T on the pids start.ps1 wrote to
 #      ~/.hydra-desk-2/server.pid, each only while the process still has the start time the pid file
 #      recorded (a recycled pid is never touched; bun processes at large never are).
@@ -18,6 +19,7 @@ $DeskHome = if ($env:HYDRA_DESK_HOME) { $env:HYDRA_DESK_HOME } else { Join-Path 
 $PidFile = Join-Path $DeskHome 'server.pid'
 $HostsDir = Join-Path $DeskHome 'hosts'
 $GraceSec = 15
+$AskTimeoutSec = if ($Chats) { 60 } else { 10 }
 
 $info = $null
 if (Test-Path $PidFile) { try { $info = Get-Content -Raw -Path $PidFile | ConvertFrom-Json } catch { } }
@@ -59,7 +61,7 @@ function Get-ChatHosts {
 function Ask-Shutdown {
   try {
     $body = if ($Chats) { '{"chats":true}' } else { '{}' }
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/server/shutdown" -ContentType 'application/json' -Body $body -Headers @{ 'X-Desk-Caller' = 'launcher' } -TimeoutSec 60 | Out-Null
+    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/server/shutdown" -ContentType 'application/json' -Body $body -Headers @{ 'X-Desk-Caller' = 'launcher' } -TimeoutSec $AskTimeoutSec | Out-Null
     return $true
   } catch { return $false }
 }

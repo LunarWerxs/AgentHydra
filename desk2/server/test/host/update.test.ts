@@ -6,10 +6,12 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { logRestartAsk } from '../../src/caller'
 import { codeStamp, startedByLauncher, type CodeStamp, type UpdateDeps } from '../../src/plugins/60-update'
 import { createServer, type DeskServer } from '../../src/index'
 
 const PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '60-update.ts')
+const ENGINE_PLUGIN = join(import.meta.dir, '..', '..', 'src', 'plugins', '20-engine.ts')
 const temps: string[] = []
 const stops: (() => unknown)[] = []
 
@@ -69,7 +71,34 @@ test('restart starts launcher/restart.ps1, logging to the data home, only for th
   expect(log).toContain('refused (not started by the launcher)')
   const command = started[0]!.at(-1)!
   expect(command).toContain(join('launcher', 'restart.ps1'))
-  expect(command).toContain(`*>> '${join(home, 'logs', 'restart.log')}'`)
+  expect(command).toContain(`-FilePath '${join(home, 'logs', 'restart-run.log')}'`)
+  expect(command).not.toContain(`'${join(home, 'logs', 'restart.log')}'`)
+})
+
+test('logRestartAsk drops a line its file cannot take instead of throwing', () => {
+  const home = temp('desk-update-home-')
+  mkdirSync(join(home, 'logs', 'restart.log'), { recursive: true })
+  expect(() => logRestartAsk(home, 'restart asked: caller=window -> accepted')).not.toThrow()
+})
+
+test('a restart and a shutdown are still answered when restart.log cannot be written', async () => {
+  const { desk, home, started } = await boot()
+  mkdirSync(join(home, 'logs', 'restart.log'), { recursive: true })
+  pidFile(home, 4242)
+  const windowAsk = { 'X-Desk-Caller': 'window', 'User-Agent': 'Desk2Window/1' }
+  expect((await fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: windowAsk })).status).toBe(202)
+  expect(started).toHaveLength(1)
+
+  const engine = temp('desk-update-engine-')
+  writeFileSync(join(engine, '20-engine.ts'), `export { default } from ${JSON.stringify(pathToFileURL(ENGINE_PLUGIN).href)}\n`)
+  let shutdowns = 0
+  const engineDesk = await createServer({ port: 0, home, pluginsDir: engine, deps: { shutdown: () => void shutdowns++ } })
+  stops.push(() => engineDesk.stop())
+  const res = await fetch(`${engineDesk.url}/api/server/shutdown`, { method: 'POST', headers: { 'X-Desk-Caller': 'launcher', 'Content-Type': 'application/json' }, body: '{}' })
+  expect(res.status).toBe(200)
+  expect(await res.json()).toEqual({ ok: true, chats: false })
+  await new Promise((r) => setTimeout(r, 100))
+  expect(shutdowns).toBe(1)
 })
 
 test('an agent or script asking for a restart is refused with the owner message, and its ask is logged', async () => {
