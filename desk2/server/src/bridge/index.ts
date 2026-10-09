@@ -482,9 +482,9 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** A file's items, or null when the file is gone (the stat of the read says so; no separate existence check). */
-  function readItems(file: string, cwd?: string | null, read = sessionJsonlItems): TranscriptItem[] | null {
+  function readItems(file: string, cwd?: string | null): TranscriptItem[] | null {
     try {
-      return read(file, cwd)
+      return sessionJsonlItems(file, cwd)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
       throw err
@@ -538,11 +538,15 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
 
   /** The file read now, its stat taken first: a file that changes during the read is read again next poll. */
-  function readPart(file: string, cwd: string | null): WorkerPart | null {
+  async function readPart(file: string, cwd: string | null): Promise<WorkerPart | null> {
     const st = statOf(file)
     if (!st) return null
-    const items = readItems(file, cwd, workerJsonlItems)
-    return items && { file, ...st, items }
+    try {
+      return { file, ...st, items: await workerJsonlItems.readAsync(file, cwd) }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+      throw err
+    }
   }
 
   /**
@@ -579,7 +583,7 @@ export function createBridge(opts: BridgeOptions = {}) {
           known = own
         } else if (!o.rescan) rememberMiss(ownKey)
       }
-      let part = known ? (unchangedPart(sid, known, cwd) ?? readPart(known, cwd)) : null
+      let part = known ? (unchangedPart(sid, known, cwd) ?? (await readPart(known, cwd))) : null
       if (!part) {
         // A session with no file yet: every project folder of every account is looked in, so not on every poll.
         if (!o.rescan && searchedLately(sid)) continue
@@ -587,7 +591,7 @@ export function createBridge(opts: BridgeOptions = {}) {
         const file = findSessionJsonl(sid, roots, cwd)
         if (file) {
           rememberFile(sid, file)
-          part = readPart(file, cwd)
+          part = await readPart(file, cwd)
         }
         if (!part) {
           rememberMiss(sid)

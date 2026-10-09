@@ -148,6 +148,18 @@ describe('outside session .jsonl', () => {
     expect(parsed).toBeLessThan(20 * 400)
   })
 
+  test('an async read answers what a sync read answers, and lets the loop run while it parses', async () => {
+    const dir = temp()
+    const f = join(dir, 'long.jsonl')
+    writeFileSync(f, Array.from({ length: 350 }, (_, n) => userRec(n, `slice ${n}`)).join('\n') + '\n')
+    const options = { tailBytes: 1024 * 1024, keepBytes: 1024 * 1024, maxFiles: 4, maxBytes: 1024 * 1024, settledFiles: 8, settledBytes: 1024 * 1024 }
+    let ticks = 0
+    setImmediate(() => { ticks += 1 })
+    const answer = await createJsonlReader(options).readAsync(f)
+    expect(ticks).toBe(1)
+    expect(answer).toEqual(createJsonlReader(options)(f))
+  })
+
   test('a windowed reader answers the whole tail once, then only the records it keeps', () => {
     const dir = temp()
     const f = join(dir, 'big.jsonl')
