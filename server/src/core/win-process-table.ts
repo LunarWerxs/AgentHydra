@@ -217,12 +217,17 @@ const copyRows = (rows: NativeProcess[]) => rows.map((p) => ({ ...p }))
 
 /**
  * Every process on the machine: pid, parent pid and exe name (at most TABLE_TTL_MS old). A caller after one
- * pid that may have just started passes it as `mustHave`: a snapshot without it is retaken. Null when it
+ * pid that may have just started passes it as `mustHave`: a snapshot without it is retaken; `fresh`
+ * always retakes (a check that a pid is gone). Null when it
  * cannot be read here.
  */
-export function nativeProcessTable(mustHave?: number): NativeProcess[] | null {
+export function nativeProcessTable(
+  o: { mustHave?: number; fresh?: boolean } = {},
+): NativeProcess[] | null {
+  const { mustHave, fresh = false } = o
   const now = Date.now()
   if (
+    !fresh &&
     lastTable &&
     now - lastTable.at < TABLE_TTL_MS &&
     !nativeProcessTableForTests.disabled &&

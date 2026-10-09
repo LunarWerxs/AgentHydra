@@ -26,7 +26,7 @@ test.skipIf(process.platform !== 'win32')(
     try {
       // The process exists once spawn returns; give its command line a moment to be mapped.
       await Bun.sleep(200)
-      const table = nativeProcessTable()
+      const table = nativeProcessTable({ mustHave: child.pid })
       expect(table).not.toBeNull()
       expect(table!.length).toBeGreaterThan(10)
 
@@ -48,7 +48,7 @@ test.skipIf(process.platform !== 'win32')(
     }
     // Bun still holds the exited child's handle, so the process object opens; what callers rely
     // on is that it leaves the table and its command line stops reading.
-    expect(nativeProcessTable()!.some((p) => p.pid === child.pid)).toBe(false)
+    expect(nativeProcessTable({ fresh: true })!.some((p) => p.pid === child.pid)).toBe(false)
     expect(nativeCommandLines([child.pid])?.has(child.pid)).toBe(false)
     expect(nativeProcessInfo(0x7ffffffc)).toBeNull()
   },
