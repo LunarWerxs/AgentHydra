@@ -48,6 +48,7 @@ import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type Put
 import { putBackDraft } from '@/components/composer/change-project'
 import { reloadIfStale, watchBundle } from '@/lib/stale-bundle'
 import { refusalText, serverHello, watchServerUpdate } from '@/lib/server-update'
+import { watchRelease } from '@/lib/ah-release'
 import { rememberView, restoreView } from '@/lib/view-memory'
 import { readCache, readListCache, writeCache } from '@/lib/list-cache'
 import { wantsDesktopNotice } from './notify'
@@ -759,6 +760,7 @@ export function useDesk() {
       connectWebSocket()
       watchBundle()
       watchServerUpdate()
+      watchRelease()
     },
 
     select(

@@ -9,6 +9,7 @@
 import { useStorage } from '@vueuse/core'
 import { computed, reactive, ref, watch } from 'vue'
 import { tellHydra } from '@/components/hydra/api'
+import { applyRelease, type AhUpdateProgress } from '@/lib/ah-release'
 import type { PaneApi } from './api'
 import type { SettingsCondition } from './settings'
 
@@ -71,13 +72,6 @@ interface AhUpdateStatus {
   reason: string | null
 }
 
-interface AhUpdateProgress {
-  phase: string
-  message: string
-  receivedBytes: number | null
-  totalBytes: number | null
-}
-
 interface AhSyncStatus {
   enabled: boolean
   connected: boolean
@@ -99,9 +93,6 @@ export type UpdateState = 'checking' | 'up-to-date' | 'available' | 'blocked' | 
 const TOOLTIPS_KEY = 'lunarwerx-tooltips-enabled'
 const PRIVACY_KEY = 'agenthydra.privacyMode'
 const THEME_KEY = 'lunarwerx-theme'
-
-// An update downloads ~100 MB or pulls, installs and rebuilds: minutes, so its request waits up to 20.
-const APPLY_TIMEOUT_MS = 20 * 60_000
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
@@ -219,46 +210,17 @@ export function useAgentHydraSettings(api: PaneApi) {
     }
   }
 
-  // The daemon restarts itself after an update, so the apply request may end with the connection
-  // dropped: then it is the version AgentHydra comes back with that says whether it took.
-  async function waitForRestart(): Promise<string | null> {
-    const deadline = Date.now() + 90_000
-    await new Promise((r) => setTimeout(r, 2000))
-    while (Date.now() < deadline) {
-      try {
-        return (await api.agentHydra<{ version: string }>('/health', { signal: AbortSignal.timeout(2000) })).version
-      } catch {
-        await new Promise((r) => setTimeout(r, 1000))
-      }
-    }
-    return null
-  }
-
   async function applyUpdate() {
     applying.value = true
     applyNote.value = null
     applyError.value = null
     progress.value = null
     const before = update.value?.currentVersion ?? null
-    const poll = setInterval(() => {
-      api
-        .agentHydra<AhUpdateProgress>('/update/progress')
-        .then((p) => (progress.value = p))
-        .catch(() => {}) // floor-ok: one missed progress read; the next second reads again
-    }, 1000)
     try {
-      const r = await api.agentHydra<{ message: string; restartRequired: boolean }>('/update/apply', {
-        method: 'POST',
-        signal: AbortSignal.timeout(APPLY_TIMEOUT_MS)
-      })
-      applyNote.value = r.restartRequired ? `${r.message} Restart AgentHydra from its tray icon to run the new code.` : r.message
-    } catch (e) {
-      const version = await waitForRestart()
-      if (version) applyNote.value = version === before ? `AgentHydra restarted and runs v${version}.` : `Updated to v${version}.`
-      else applyError.value = message(e)
+      const r = await applyRelease(api, before, (p) => (progress.value = p))
+      applyNote.value = r.note
+      applyError.value = r.error
     } finally {
-      clearInterval(poll)
-      progress.value = null
       applying.value = false
       void checkUpdate()
     }

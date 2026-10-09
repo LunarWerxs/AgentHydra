@@ -22,7 +22,11 @@ import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
-import { EyeOff } from '@lucide/vue'
+import { ChevronRight, EyeOff } from '@lucide/vue'
+import { usePaneApi } from '@/components/panes/api'
+import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
+import { footerUpdate, runUpdateSteps } from '@/lib/desk-update-row'
+import { checkServerUpdate, restartServer, updateOffer } from '@/lib/server-update'
 import TaskRows from './TaskRows.vue'
 import SubBadges from './SubBadges.vue'
 import { expanded, rowSubItems, subModes } from './subitems'
@@ -694,6 +698,22 @@ function confirmDelete() {
 // Footer
 const face = computed(() => accountFace(src.settings.value?.defaultAccountId ?? 'auto', src.accounts.value))
 
+const paneApi = usePaneApi()
+const updateRow = computed(() =>
+  footerUpdate({ release: releaseWaiting.value, server: updateOffer.value, applying: releaseApplying.value, applyError: releaseApplyError.value })
+)
+async function clickUpdateRow() {
+  const row = updateRow.value
+  if (!row?.clickable) return
+  await runUpdateSteps(row.steps, {
+    apply: () => applyWaitingRelease(paneApi),
+    restartIfStale: async () => {
+      await checkServerUpdate()
+      if (updateOffer.value?.restartable) await restartServer()
+    },
+  })
+}
+
 // Resize handle
 const root = ref<HTMLElement | null>(null)
 function clampWidth(w: number) {
@@ -930,6 +950,24 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
         </p>
       </div>
+    </div>
+
+    <!-- The update row sits above the footer while an update can be done (desk-update-row.ts) -->
+    <div v-if="updateRow" class="shrink-0 px-2.5 pt-2 pb-2 ps-2">
+      <Tip label="Your chats are saved and keep running while it restarts" side="top">
+        <button
+          type="button"
+          :disabled="!updateRow.clickable"
+          :aria-busy="updateRow.busy || undefined"
+          class="flex h-8 w-full min-w-0 items-center gap-2 rounded-(--radius-6) border border-border ps-2.5 pe-2 text-start text-[13px] leading-[19.5px] text-text-2 transition-colors duration-60 hover:bg-fill-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent) disabled:cursor-default disabled:hover:bg-transparent"
+          @click="clickUpdateRow"
+        >
+          <span class="size-1.5 shrink-0 rounded-full bg-accent" :class="updateRow.busy ? 'animate-pulse' : ''" aria-hidden="true" />
+          <span class="min-w-0 flex-1 truncate">{{ updateRow.label }}</span>
+          <ChevronRight v-if="updateRow.clickable" class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
+        </button>
+      </Tip>
+      <p v-if="updateRow.error" role="alert" class="px-1 pt-1.5 text-[12px] leading-4 text-danger-text">{{ updateRow.error }}</p>
     </div>
 
     <!-- Footer: the profile pill opens the account popup above it; the gear opens Settings itself -->

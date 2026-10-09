@@ -12,8 +12,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The orchestrator's judge is a frontier model, not fixed rules, and you pick which one**
 - **Stats count Codex sub-agents, Codex's packed archives and every OpenCode call**
 - **A new chat no longer pulls you back into it after you moved on**
+- **One click above the account pill restarts you onto an update**
 
 **Everything in Unreleased**
+
+- **A restart that updates you is one click, above the account pill.** When a newer AgentHydra is waiting or the
+  window's server is older than its files, a row says "Click to restart and update" (with the version when known).
+  It shows without opening AgentHydra, and your chats keep running while it restarts.
 
 - **A new chat no longer pulls you back into it after you moved on.** Sending the first message of a new chat
   and opening another chat before it answered used to switch you back to the new one a few seconds later. It
