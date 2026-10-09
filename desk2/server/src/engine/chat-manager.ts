@@ -902,9 +902,13 @@ export class ChatManager {
   async interrupt(id: string): Promise<void> {
     const e = this.entry(id)
     if (e.chat.workerId) {
-      // Stopping a worker cancels it; the next message revives it in the same session.
-      await this.bridge.cancelWorker(e.chat.workerId).catch(() => {})
-      await this.syncWorkers(id)
+      // Stopping a worker cancels it; the next message revives it in the same session. A refused or
+      // timed-out cancel reaches the window, which says so and restores the chat's state.
+      try {
+        await this.bridge.cancelWorker(e.chat.workerId)
+      } finally {
+        await this.syncWorkers(id).catch(() => {})
+      }
       return
     }
     if (e.runtime?.running) await e.runtime.interrupt()

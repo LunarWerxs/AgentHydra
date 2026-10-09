@@ -428,7 +428,11 @@ export interface CliMaytePingDeps {
   /** Calls `cb` on every worker change (onCliMayteChange); returns the unsubscribe. */
   subscribe(cb: (w: PingWorker) => void): () => void
   /** A non-urgent message to a manager worker (climayteSend). */
-  climayteSend(workerId: string, text: string): { ok: boolean; message: string }
+  climayteSend(
+    workerId: string,
+    text: string,
+    opts?: { ping: true },
+  ): { ok: boolean; message: string }
   clock?: PingClock
   /** deliverPeerMessage by default. */
   deliverPeer?(
@@ -721,7 +725,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   const sendWorker = (box: OriginBox, workerId: string, batch: QueuedPing[], text: string) => {
     let r: { ok: boolean; message: string }
     try {
-      r = deps.climayteSend(workerId, text)
+      r = deps.climayteSend(workerId, text, { ping: true })
     } catch (err) {
       r = { ok: false, message: String(err) }
     }

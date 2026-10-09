@@ -978,7 +978,14 @@ function sendUrgent(
 export function climayteSend(
   id: string,
   text: string,
-  opts: { urgent?: boolean; model?: string; effort?: string; cwd?: string; desk?: unknown } = {},
+  opts: {
+    urgent?: boolean
+    model?: string
+    effort?: string
+    cwd?: string
+    desk?: unknown
+    ping?: true
+  } = {},
 ): {
   ok: boolean
   message: string
@@ -1000,6 +1007,17 @@ export function climayteSend(
   }
   applySendSetting(w, setting)
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
+  // A stopped worker stays stopped for a ping: its text waits with the owner's next message.
+  if (opts.ping && w.status === 'cancelled') {
+    queueFollowUp(w, text, setting)
+    changed(w)
+    return {
+      ok: true,
+      message: "Held: the worker was stopped, so it resumes on its owner's next message.",
+      model: w.model,
+      effort: w.effort,
+    }
+  }
   if (w.status === 'running' && opts.urgent) {
     const sent = sendUrgent(w, text, setting)
     if (sent) return sent
@@ -1662,7 +1680,7 @@ function startPing(): void {
     dir: PING_DIR,
     workers: () => [...workers.values()],
     subscribe: onCliMayteChange,
-    climayteSend: (id, text) => climayteSend(id, text),
+    climayteSend: (id, text, opts) => climayteSend(id, text, opts),
     composer,
     desk,
     ...pingOverrides,
