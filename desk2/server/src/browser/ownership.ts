@@ -24,7 +24,7 @@ interface Owned {
 const deskPages = new Map<string, Map<string, Owned>>()
 
 /** The ledger's owners by page id (empty when the file is missing or unreadable). */
-function readLedger(dir: string): Map<string, Owned> {
+export function readLedger(dir: string): Map<string, Owned> {
   const out = new Map<string, Owned>()
   try {
     const parsed = JSON.parse(readFileSync(join(dir, TABS_LEDGER), 'utf8')) as { tabs?: Record<string, { chat?: unknown; at?: unknown }> }
