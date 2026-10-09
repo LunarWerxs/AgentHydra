@@ -68,6 +68,8 @@ interface TotalsTally {
   placedPast: PlacedPast[]
   /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
   allAttempts: TotalsAttempt[]
+  /** allAttempts by account id, built on the first ceiling stop that asks. */
+  byAccount?: Map<string, TotalsAttempt[]>
   tasksInScope: Set<string>
   hits: LimitHit[]
   peaks: Map<string, WindowPeak>
@@ -118,11 +120,22 @@ function kitSessions(ids: string[], store?: KitStore): Set<string> {
 }
 
 /** How many runs were on an account at a moment, the one that asks included. */
-const runsOnAccount = (all: TotalsAttempt[], accountId: string, t: number): number =>
-  all.filter(
-    (a) =>
-      a.account.id === accountId && a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t,
-  ).length
+// Each ceiling stop used to filter every attempt on record (stops x attempts per totals call): the
+// stall profiler had that filter on top of AgentHydra at 10-12% of its samples (2026-10-09).
+function runsOnAccount(tally: TotalsTally, accountId: string, t: number): number {
+  if (!tally.byAccount) {
+    tally.byAccount = new Map()
+    for (const a of tally.allAttempts) {
+      const list = tally.byAccount.get(a.account.id)
+      if (list) list.push(a)
+      else tally.byAccount.set(a.account.id, [a])
+    }
+  }
+  let n = 0
+  for (const a of tally.byAccount.get(accountId) ?? [])
+    if (a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t) n++
+  return n
+}
 
 /** Over the whole record a task counts with its own sums; with `since` it only counts as a task
  *  when it was created after it (its runs are counted one by one, tallyRecentRun). */
@@ -167,7 +180,7 @@ function tallyStops(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): v
       at: new Date(t).toISOString(),
       pct: at.ceiling.pct,
       askedPct: at.windDown ? at.windDown.pct : null,
-      workers: runsOnAccount(tally.allAttempts, at.account.id, t),
+      workers: runsOnAccount(tally, at.account.id, t),
       t,
     })
   }
