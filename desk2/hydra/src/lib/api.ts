@@ -550,8 +550,10 @@ export const getInstanceAccount = (dir: string, opts: { noNetwork?: boolean } = 
 /** Every account this profile has been signed into, the current one first, then newest first. */
 export const getInstanceLoginHistory = (dir: string) =>
   j<CMLoginHistory>(`/api/instances/${encodeURIComponent(dir)}/login-history`)
+/** The person's own Open: `raise` brings the new window in front of AgentHydra's (the daemon launches it from the
+ *  background, so Windows would leave it behind; owner 2026-10-09: Open "just sitting there"). */
 export const openInstance = (dir: string) =>
-  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, { method: 'POST' })
+  j<CMActionResult>(`/api/instances/${encodeURIComponent(dir)}/open`, { method: 'POST', body: JSON.stringify({ raise: true }) })
 /** `confirmExternal` is the explicit opt-in required to quit the DEFAULT (non-isolated) Claude
  *  Desktop — the server refuses that dir without it (see core/instances.ts quitInstance guard). */
 export const quitInstance = (dir: string, opts: { confirmExternal?: boolean } = {}) =>

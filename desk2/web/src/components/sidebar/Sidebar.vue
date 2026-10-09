@@ -74,17 +74,18 @@ import {
   HIDE_TITLE,
   hideable,
   isOrange,
-  moveInOrder,
   raiseNewlyOrange,
   recordDeskOrder,
   moveTarget,
   parseFilter,
+  projectOfGroup,
   resumeCommand,
   revealChat,
   rowIdentity,
   rowPatch,
   runningSessionIds,
   deskGlyphs,
+  deskNewFolder,
   rowMenu,
   runPulse,
   SWARM_RUNNING,
@@ -187,8 +188,9 @@ function onCloudSearchKey(e: KeyboardEvent) {
   }
 }
 
-// The order groups and rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; groups
-// are dragged into the order wanted), the one the cloud list keeps too (order.ts). New ones join at the top.
+// The order rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; rows are dragged into the
+// order wanted), the one the cloud list keeps too (order.ts). New ones join at the top. Folder groups are not kept
+// in it: they are listed A-Z (logic.ts sortFolders).
 const { order, save: saveOrder } = useSidebarOrder()
 
 // While AgentHydra is open, a tab of it with a sidebar of its own (HSwarm's tree) has it drawn here.
@@ -196,6 +198,19 @@ const hydraModel = computed(() => hydraShown.value?.model ?? null)
 
 // Groups hidden with their header's right-click (hidden.ts), out of the list unless the Filter menu's Show hidden.
 const hiddenGroups = useHiddenGroups()
+
+// The Project Hydra projects the New screen loaded (its icon goes left of a group's heading). Read from the cache that screen
+// keeps, so the list never waits for it and nothing polls: read at start (asked once when nothing is cached yet), and again
+// whenever the screen changes, by when a New screen that just showed has refreshed it.
+const keptProjects = ref(src.cachedProjects?.()?.projects ?? [])
+if (!keptProjects.value.length)
+  void src
+    .projects?.()
+    .then((r) => (keptProjects.value = r.projects))
+    .catch(() => {})
+watch(selected, () => {
+  keptProjects.value = src.cachedProjects?.()?.projects ?? keptProjects.value
+})
 
 // Show only local (the Filter menu's Computer filter) narrows this list as it does the cloud list, once the cloud
 // store knows this PC's name (it asks with the cloud off too): another PC's synced chats leave it.
@@ -213,31 +228,6 @@ const groups = computed(() =>
     showHidden: hiddenGroups.showHidden.value
   })
 )
-// Dragging a folder group's header onto another puts it just above that one.
-const dragging = ref<string | null>(null)
-const dropOn = ref<string | null>(null)
-const draggable = (g: ChatGroup) => g.key !== 'pinned' && g.key !== 'archived'
-function onGroupDragStart(ev: DragEvent, g: ChatGroup) {
-  dragging.value = groupOrderKey(g)
-  ev.dataTransfer?.setData('text/plain', g.label)
-  if (ev.dataTransfer) ev.dataTransfer.effectAllowed = 'move'
-}
-function onGroupDragOver(ev: DragEvent, g: ChatGroup) {
-  if (!dragging.value || !draggable(g)) return
-  ev.preventDefault()
-  dropOn.value = groupOrderKey(g)
-}
-function onGroupDrop(ev: DragEvent, g: ChatGroup) {
-  ev.preventDefault()
-  const from = dragging.value
-  const to = groupOrderKey(g)
-  dragging.value = dropOn.value = null
-  if (!from || from === to || !draggable(g)) return
-  saveOrder({ ...order.value, groups: moveInOrder(order.value.groups, from, to) })
-}
-function onGroupDragEnd() {
-  dragging.value = dropOn.value = null
-}
 /** The desk list's own groups, without the rows added for running work (`deskShown` below has those too). */
 const ownGroups = computed<ChatGroup[]>(() => {
   const g = groups.value
@@ -338,19 +328,19 @@ const groupList = computed<ChatGroup[]>(() => {
   const list = [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
   return activeOnly.value ? onlyActive(list, entryGlyph) : list
 })
-// A group or row the plain list shows that the order lacks joins it at the top, so it keeps the place it
-// appeared in, and so does one only the cloud list had shown (recordDeskOrder); any other saved one never
-// moves; a row that just turned orange goes to the top of its group. An added row joins as a new row does; a
-// group only added rows make stays after the list's own (tasks.ts), so it is not recorded.
+/** Each group's heading icon, by group key: its Project Hydra project's icon, or null for none (projectOfGroup). */
+const groupIcons = computed(() => new Map(groupList.value.map((g) => [g.key, projectOfGroup(g, keptProjects.value)?.icon ?? null])))
+// A row the plain list shows that the order lacks joins it at the top, so it keeps the place it appeared in, and
+// so does one only the cloud list had shown (recordDeskOrder); any other saved one never moves; a row that just
+// turned orange goes to the top of its group. An added row joins as a new row does.
 const wasOrange = new Map<string, boolean>()
 watch(
   deskShown,
   (g) => {
     if (query.value.trim() || filter.value !== 'active') return
     const shownEntries = [...(g.pinned?.entries ?? []), ...g.folders.flatMap((f) => f.entries)]
-    const shownGroups = g.folders.filter((f) => !f.entries.every((e) => isAddedRow(e.id))).map(groupOrderKey)
     const shownRows = shownEntries.map((e) => e.id)
-    const next = recordDeskOrder(order.value, shownGroups, shownRows)
+    const next = recordDeskOrder(order.value, shownRows)
     const rows = raiseNewlyOrange(next.rows, shownEntries, wasOrange)
     for (const e of shownEntries) wasOrange.set(e.id, isOrange(e))
     saveOrder({ ...next, rows })
@@ -752,20 +742,23 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     <span class="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-linear-to-l from-black/20 to-transparent" aria-hidden="true" />
     <div class="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-1 pt-2">
       <nav class="flex shrink-0 flex-col gap-[0.5px] pe-0.5">
-        <button
-          type="button"
-          :class="[NAV_ROW, selected.kind === 'new' ? 'bg-fill-selected text-text' : 'text-text hover:bg-fill-hover']"
-          @click="src.select({ kind: 'new' })"
-        >
-          <span class="flex size-6 shrink-0 items-center justify-center text-text-2">
-            <span class="flex size-4.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-2)_15%,transparent)]">
-              <component :is="shellGlyphs.newPlus" class="size-4" />
+        <div class="flex items-center gap-0.5">
+          <button
+            type="button"
+            :class="[NAV_ROW, 'min-w-0 flex-1', selected.kind === 'new' ? 'bg-fill-hover text-text' : 'bg-fill-5 text-text hover:bg-fill-hover']"
+            @click="src.select({ kind: 'new' })"
+          >
+            <span class="flex size-6 shrink-0 items-center justify-center text-text-2">
+              <span class="flex size-4.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-2)_15%,transparent)]">
+                <component :is="shellGlyphs.newPlus" class="size-4" />
+              </span>
             </span>
-          </span>
-          <span class="min-w-0 flex-1 truncate">New</span>
-          <kbd class="pe-1.5 font-sans text-[12px] text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
-        </button>
-
+            <span class="min-w-0 flex-1 truncate">New</span>
+            <kbd class="pe-1.5 font-sans text-[12px] text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
+          </button>
+          <!-- The Search and Filter buttons (SidebarTools.vue) sit beside New, over the desk list and the cloud list alike. -->
+          <SidebarTools v-if="!hydraModel && !devServers.on.value" :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
+        </div>
       </nav>
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
@@ -794,27 +787,18 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>
-          <template #tools>
-            <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
-          </template>
         </CloudList>
 
         <template v-else>
         <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
         <TransitionGroup :css="false" @leave="rowLeave">
-        <section v-for="(group, gi) in groupList" :key="group.key" :aria-label="group.label">
+        <section v-for="group in groupList" :key="group.key" :aria-label="group.label">
           <!-- A project group's right-click hides it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
           <ContextMenu>
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
             class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
-            :class="[dropOn === groupOrderKey(group) && dragging !== dropOn && 'shadow-[inset_0_2px_0_var(--accent)]', group.hidden && 'opacity-60']"
-            :draggable="draggable(group) && !filtering"
-            @dragstart="onGroupDragStart($event, group)"
-            @dragover="onGroupDragOver($event, group)"
-            @dragleave="dropOn === groupOrderKey(group) && (dropOn = null)"
-            @drop="onGroupDrop($event, group)"
-            @dragend="onGroupDragEnd"
+            :class="group.hidden && 'opacity-60'"
           >
             <Tip :label="group.cwd ?? ''" align="start">
               <button
@@ -823,6 +807,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 :aria-expanded="!collapsed.has(group.key)"
                 @click="toggleGroup(group.key)"
               >
+                <img v-if="groupIcons.get(group.key)" :src="groupIcons.get(group.key)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
                 <span class="truncate">{{ group.label }}</span>
                 <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
                 <component
@@ -834,14 +819,11 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               </button>
             </Tip>
             <span class="flex-1" />
-            <Tip v-if="group.cwd" :label="`New session in ${group.label}`">
-              <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: group.cwd })">
+            <Tip v-if="deskNewFolder(group)" :label="`New session in ${group.label}`">
+              <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: deskNewFolder(group)! })">
                 <component :is="shellGlyphs.groupNew" class="size-4" />
               </button>
             </Tip>
-            <template v-if="gi === 0">
-              <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
-            </template>
           </header>
           </ContextMenuTrigger>
           <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
@@ -855,7 +837,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               v-for="entry in group.entries"
               :key="`${entry.kind}:${entry.id}`"
               :data-search-cursor="cursorKey === `${entry.kind}:${entry.id}` || undefined"
-              :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-(--radius-6) bg-fill-hover' : '', rowDrag.line(entry.id)]"
+              :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-(--radius-6) bg-fill-hover' : '', entry.under && 'ms-2.75 border-s border-border ps-1', rowDrag.line(entry.id)]"
               :draggable="rowsDraggable(group)"
               @dragstart="rowsDraggable(group) && rowDrag.start($event, group.key, entry.id)"
               @dragover="rowsDraggable(group) && rowDrag.onOver($event, group.key, entry.id)"
@@ -899,7 +881,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <button v-if="activeOnly" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="showAll">Show all</button>
           </template>
           <button v-if="groups.hiddenOut" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
-          <SidebarTools :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
         </div>
 
         <p v-if="rowNote" role="status" class="px-1.5 pt-3 text-[12px] leading-4 text-text-2">{{ rowNote }}</p>

@@ -215,7 +215,12 @@ app.post('/api/ui-prefs', async (c) => {
 app.post('/api/instances/:dir/open', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
-  return c.json(await openInstance(dir))
+  // The chooser page (served here, so it sends Origin) or a caller asking with `raise: true` is a person's
+  // Open and brings the new window forward; a script or MCP call leaves focus where it is.
+  const body = await c.req.json().catch(() => ({}))
+  const raise =
+    c.req.header('origin') !== undefined || (body as { raise?: unknown })?.raise === true
+  return c.json(await openInstance(dir, { raise }))
 })
 app.post('/api/instances/:dir/focus', async (c) => {
   const dir = await instanceDirParam(c)

@@ -17,8 +17,10 @@ import plugin from '../../src/plugins/70-orchestrator'
 const NOW = Date.now()
 const temps: string[] = []
 const servers: DeskServer[] = []
+const stops: (() => void | Promise<void>)[] = []
 const saved = { tool: process.env.HYDRA_DESK_CREAITOR, python: process.env.HYDRA_DESK_PYTHON }
 afterEach(async () => {
+  for (const s of stops.splice(0)) await s()
   for (const s of servers.splice(0)) await s.stop()
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
   for (const [k, v] of [['HYDRA_DESK_CREAITOR', saved.tool], ['HYDRA_DESK_PYTHON', saved.python]] as const)
@@ -112,7 +114,9 @@ function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS): { app: 
   )
   app.get('/api/external/sessions', (c) => c.json(OUTSIDE.map(([s]) => s)))
   app.get('/api/external/sessions/:id/items', (c) => c.json(OUTSIDE.find(([s]) => s.id === c.req.param('id'))?.[1] ?? []))
-  plugin(app, { onStop: () => {} } as unknown as ServerContext)
+  // The `orchestrator` setting is what arming saves.
+  const settings = { orchestrator: false }
+  plugin(app, { onStop: (fn: () => void) => stops.push(fn), settings: () => settings, updateSettings: (p: object) => Object.assign(settings, p) } as unknown as ServerContext)
   return { app, sent, queued }
 }
 
@@ -201,6 +205,33 @@ test('a disarm part-way through a look stops it before the next send', async () 
   expect(queued.map((q) => q.chatId)).toEqual(['error'])
   const plan = (await (await app.request('/api/diagnostics/orchestrator')).json()) as OrchestratorPlan
   expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['error']])
+})
+
+// The foreman (orchestrator/foreman.ts): one check-in per episode, never into a chat a person is writing in, and a chat
+// that stopped writing is only flagged.
+test('armed, the foreman checks in once on a running chat that keeps failing the same step, and only flags one that stopped writing', async () => {
+  process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
+  const failed = (n: number, status: 'error' | 'done' = 'error'): TranscriptItem => ({
+    id: `t${n}`, ts: NOW - (10 - n) * 60_000, kind: 'tool_use', name: 'Bash', input: { command: 'bun test' }, status, startedAt: NOW - (10 - n) * 60_000
+  })
+  const { app, queued } = desk(undefined, [
+    [chat('spinning', { status: 'working', activity: 'Bash: bun test' }), [failed(1), failed(2), failed(3)]],
+    [chat('quiet', { status: 'working' }), [said('Starting on it.', 30 * 60_000)]],
+    [chat('moving', { status: 'working' }), [failed(4), failed(5, 'done')]],
+    [chat('person', { status: 'working' }), [failed(6), failed(7), failed(8), wrote(60_000)]]
+  ])
+  const first = await arm(app, true)
+  expect(queued.map((q) => q.chatId)).toEqual(['spinning'])
+  expect(queued[0].text).toStartWith(`[${ORCHESTRATOR_FROM}] Not from the user.\nA check-in: the same Bash call failed 3 times.`)
+  expect(first.acts.map((a) => [a.id, a.did, a.detail])).toEqual([
+    ['quiet', 'flagged', 'nothing new for 30 min while it says it is working'],
+    ['spinning', 'nudged', 'the same Bash call failed 3 times']
+  ])
+  expect(first.rows.find((r) => r.id === 'spinning')?.reason).toBe('working: Bash: bun test; the foreman saw: the same Bash call failed 3 times')
+  // The next look, inside the peek interval, sends nothing more.
+  queued.splice(0)
+  expect((await arm(app, true)).acts).toHaveLength(2)
+  expect(queued).toEqual([])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {

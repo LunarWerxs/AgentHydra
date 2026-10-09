@@ -109,7 +109,9 @@ CASES.push({ page: 'pane', what: 'name cell copies once, no tooltip (300 ms rest
 each(['long-press'], { page: 'pane', what: 'name cell long-press shows its tooltip, no copy', pick: NAME, ok: `${TOASTS} === 0 && (${TIP_OPEN})`, tab: '3', diag: `[${TOASTS}, ${TIP_OPEN}]` })
 // Owner, 2026-10-06 ("these stupid popups won't stop"): every tooltip and breakdown the pointer passed stayed on screen.
 each(['hover-leave'], { page: 'pane', what: 'name cell tooltip goes with the pointer, window unfocused', pick: NAME, ok: TIP_OPEN, tab: '3', paused: true })
-each(['hover-leave'], { page: 'pane', what: 'usage breakdown goes with the pointer, window unfocused', pick: USAGE, ok: POPOVER_OPEN, paused: true, diag: POPOVER_STATES })
+// Owner, 2026-10-09 ("these hover card things are super fucking annoying"): the usage breakdown opens on a click or a key
+// only, so the first press on an untouched one must open it.
+each(['tap', 'press', 'hover-press', 'key'], { page: 'pane', what: 'usage breakdown opens on a press', pick: USAGE, ok: POPOVER_OPEN, diag: POPOVER_STATES })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Tip button: Hide sidebar hides it', pick: HIDE, ok: HIDDEN })
 each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outside a session) is selected', pick: ROW, ok: SELECTED })
 each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pick: ROW, ok: MENU_OPEN })

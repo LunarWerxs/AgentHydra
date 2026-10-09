@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import type { ComponentPublicInstance } from 'vue'
 import { Folder, FolderPlus, LayoutList, MessagesSquare } from '@lucide/vue'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -62,6 +63,39 @@ onMounted(load)
 
 const listed = computed(() => filterProjects(answer.value?.projects ?? [], query.value))
 
+// Six rows at most until the owner asks for all (owner, 2026-10-09). A row is as many tiles as the grid has columns,
+// read from the browser so the cap follows the width. A filter shows every match, with no cap and no button.
+const ROWS = 6
+const grid = ref<ComponentPublicInstance | null>(null)
+const cols = ref(3)
+const expanded = ref(false)
+function measureCols(): void {
+  const el = grid.value?.$el as HTMLElement | undefined
+  const tracks = el ? getComputedStyle(el).gridTemplateColumns.split(' ').filter(Boolean).length : 0
+  if (tracks) cols.value = tracks
+}
+let columns: ResizeObserver | null = null
+watch(
+  grid,
+  (c) => {
+    columns?.disconnect()
+    columns = null
+    measureCols()
+    const el = c?.$el as HTMLElement | undefined
+    if (el && typeof ResizeObserver !== 'undefined') {
+      columns = new ResizeObserver(measureCols)
+      columns.observe(el)
+    }
+  },
+  { flush: 'post' },
+)
+onBeforeUnmount(() => columns?.disconnect())
+const overflow = computed(() => !query.value.trim() && listed.value.length > cols.value * ROWS)
+const shown = computed(() => (overflow.value && !expanded.value ? listed.value.slice(0, cols.value * ROWS) : listed.value))
+const moreLabel = computed(() => (expanded.value ? 'Show fewer' : `Show all (${listed.value.length})`))
+const iconSize = computed(() => (showProjectDetails.value ? 'size-7' : 'size-6'))
+const folderSize = computed(() => (showProjectDetails.value ? 'size-4' : 'size-3.5'))
+
 function open(p: ProjectEntry): void {
   src.select({ kind: 'new', cwd: p.path })
 }
@@ -105,8 +139,9 @@ function pinLeaving(el: Element): void {
 // the tile that shows on hover or keyboard focus and takes no room, so the grid never moves (owner, 2026-10-08: "only
 // display that on hover. So it fits more vertically").
 // w-full: a button is only as wide as its content, so a long name ran into the next tile (owner, 2026-10-08: "they run
-// into each other").
-const TILE = 'group/tile relative flex w-full min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 p-3 text-start hover:bg-fill-hover'
+// into each other"). The padding follows the toggle: roomy with the details in flow, tighter and one line without
+// (owner, 2026-10-09: "shorter vertically ... so that more fits vertically").
+const TILE = 'group/tile relative flex w-full min-w-0 gap-2 rounded-(--radius-12) bg-fill-5 text-start hover:bg-fill-hover'
 const DETAILS_HOVER = 'pointer-events-none absolute inset-x-0 top-full z-20 mt-1 hidden min-w-0 flex-col gap-2 rounded-(--radius-8) bg-(--bg-popover) p-2 group-hover/tile:flex group-focus-visible/tile:flex'
 const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2'
 // The project's open chats, at the end of its name (owner, 2026-10-08: "a little badge on them, with how many active
@@ -159,6 +194,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
         <p v-else-if="!listed.length" class="mt-4 text-[12px] leading-4 text-text-muted">{{ query ? 'No project matches that.' : 'No projects yet. Start a chat in a folder and it shows up here.' }}</p>
         <TransitionGroup
           v-else
+          ref="grid"
           tag="div"
           class="relative mt-3 grid w-full grid-cols-3 gap-2"
           enter-active-class="transition-[opacity,scale] duration-[220ms] ease-(--ease-out) motion-reduce:transition-none"
@@ -168,14 +204,14 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
           move-class="transition-transform duration-[220ms] ease-(--ease-snap) motion-reduce:transition-none"
           @before-leave="pinLeaving"
         >
-          <div v-for="p in listed" :key="p.path" class="min-w-0">
+          <div v-for="p in shown" :key="p.path" class="min-w-0">
             <ContextMenu>
               <ContextMenuTrigger as-child>
-                <button type="button" :title="p.path" :class="[TILE, showProjectDetails ? 'flex-col' : 'items-center']" @click="open(p)">
+                <button type="button" :title="p.path" :class="[TILE, showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
                   <span class="flex w-full min-w-0 items-center gap-2">
-                    <img v-if="p.icon" :src="p.icon" alt="" class="size-7 shrink-0 rounded-(--radius-6)" />
-                    <span v-else class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted">
-                      <Folder class="size-4" aria-hidden="true" />
+                    <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
+                    <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
+                      <Folder :class="folderSize" aria-hidden="true" />
                     </span>
                     <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
                     <span v-if="p.openChats" :class="OPEN_CHATS" :title="openChatsLabel(p.openChats)" :aria-label="openChatsLabel(p.openChats)">
@@ -196,6 +232,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
             </ContextMenu>
           </div>
         </TransitionGroup>
+        <button v-if="overflow" type="button" :aria-expanded="expanded" class="mt-3 h-7 rounded-(--radius-8) bg-fill-5 px-3 text-[12px] leading-4 text-text-2 hover:bg-fill-hover" @click="expanded = !expanded">{{ moreLabel }}</button>
         <p v-if="answer?.hydra.found && answer.hydra.problem" class="mt-3 text-[11px] leading-4 text-text-muted">Project Hydra: {{ answer.hydra.problem }}</p>
         <ProjectFoldersDialog :open="managing" :choices="choices" @update:open="(o: boolean) => (managing = o)" @changed="load" @failed="fail" />
       </template>

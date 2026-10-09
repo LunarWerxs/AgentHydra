@@ -111,6 +111,14 @@ export function mapExternal(
   const hooks = new Map(inp.agentStatus.filter((h) => !h.restoredUnconfirmed).map((h) => [h.sessionId, h]))
   const index = new Map(inp.sessions.map((s) => [s.session_id, s]))
   const chats = new Map(inp.chats.filter((c) => c.sessionId && !c.archived).map((c) => [c.sessionId, c]))
+  // A chat's parent is the listed chat whose local id its spawnedFrom names: same instance first, else any.
+  const byLocalId = new Map<string, AhChatRow[]>()
+  for (const c of chats.values()) byLocalId.set(c.chatId, [...(byLocalId.get(c.chatId) ?? []), c])
+  const parentIdOf = (c: AhChatRow): string | undefined => {
+    if (!c.spawnedFrom || c.spawnedFrom === c.chatId) return undefined
+    const named = (byLocalId.get(c.spawnedFrom) ?? []).filter((p) => p.sessionId !== c.sessionId)
+    return (named.find((p) => p.instance === c.instance) ?? named[0])?.sessionId
+  }
   const out = new Map<string, ExternalSession>()
   const add = (s: ExternalSession) => {
     if (!s.id || exclude.has(s.id) || out.has(s.id)) return
@@ -144,7 +152,7 @@ export function mapExternal(
   const fromIndex = (
     id: string,
     source: ExternalSession['source'],
-    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean },
+    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean; parentId?: string },
   ) => {
     const row = index.get(id)
     const h = hooks.get(id)
@@ -170,6 +178,7 @@ export function mapExternal(
       canResume: canResume({ status, source }),
       // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
       fromPc: row?.from_pc || null,
+      ...(base.parentId ? { parentId: base.parentId } : {}),
       ...limitOf(row),
       ...UNMARKED,
       unread: base.unread ?? false,
@@ -177,7 +186,7 @@ export function mapExternal(
   }
 
   for (const c of chats.values())
-    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread })
+    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
   for (const l of inp.live)
     fromIndex(l.sessionId, l.hostSessionId ? 'desktop' : 'cli', { cwd: l.cwd, last: l.startedAt, root: configRootOf(l.transcriptPath) })
   for (const h of hooks.values())

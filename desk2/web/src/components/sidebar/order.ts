@@ -1,19 +1,18 @@
 // The one order the sidebar keeps, one per window, read by both lists: the desk list (Sidebar.vue) and the
 // cloud list (cloud/store.ts), so turning the chrome bar's cloud button on or off moves nothing (owner,
 // 2026-10-04: "examine what happens when you enable and disable the cloud icon. For some reason they change
-// order"). A saved order wins over activity (Jacob, 2026-10-04): sending a message reorders nothing, groups
-// are dragged into the order wanted. Each list adds the keys it shows that the order lacks (logic.ts
-// recordOrder: the desk list's at the top, the cloud list's own at the end) and never moves a saved one,
-// but for one the cloud list added: the first time the desk list shows it, it is new there and goes to the
-// top (SidebarOrder.cloud). This viewer's browser remembers it.
+// order"). It keeps the rows' order only: the folder groups are listed A-Z (logic.ts sortFolders). A saved
+// order wins over activity (Jacob, 2026-10-04): sending a message reorders nothing, rows are dragged into the
+// order wanted. Each list adds the rows it shows that the order lacks (logic.ts recordOrder: the desk list's
+// at the top, the cloud list's own at the end) and never moves a saved one, but for one the cloud list added:
+// the first time the desk list shows it, it is new there and goes to the top (SidebarOrder.cloud). This
+// viewer's browser remembers it.
 import { ref } from 'vue'
 import type { SidebarOrder } from './logic'
 
 const ORDER_KEY = 'hydra-desk.sidebar.order'
 /** The rows remembered, the desk list's and the cloud list's together; the cloud's own, at the end, go first. */
 const MAX_ROWS = 6000
-/** The groups remembered: keys are only ever added, so the oldest (last) go once there are this many. */
-const MAX_GROUPS = 1000
 /** How long a changed order waits before it is written, so a burst of changes writes once. */
 const PERSIST_MS = 1000
 
@@ -25,16 +24,16 @@ function createOrder() {
   function read(): SidebarOrder {
     try {
       const o = JSON.parse(storage?.getItem(ORDER_KEY) ?? 'null') as Partial<SidebarOrder> | null
-      return { groups: strings(o?.groups), rows: strings(o?.rows), cloud: strings(o?.cloud) }
+      return { rows: strings(o?.rows), cloud: strings(o?.cloud) }
     } catch {
-      return { groups: [], rows: [], cloud: [] }
+      return { rows: [], cloud: [] }
     }
   }
   const order = ref<SidebarOrder>(read())
   /** Keeps `next` as the order (nothing happens when it is the same). */
   function save(next: SidebarOrder): void {
     const cloud = next.cloud ?? []
-    if (same(next.groups, order.value.groups) && same(next.rows, order.value.rows) && same(cloud, order.value.cloud ?? [])) return
+    if (same(next.rows, order.value.rows) && same(cloud, order.value.cloud ?? [])) return
     order.value = next
     // The memory is current at once; the disk follows once the order settles.
     if (timer) clearTimeout(timer)
@@ -46,7 +45,7 @@ function createOrder() {
     try {
       // The cloud list's marks are added at the end, so its trim keeps the end.
       const next = order.value
-      const kept = { groups: next.groups.slice(0, MAX_GROUPS), rows: next.rows.slice(0, MAX_ROWS), cloud: (next.cloud ?? []).slice(-MAX_ROWS) }
+      const kept = { rows: next.rows.slice(0, MAX_ROWS), cloud: (next.cloud ?? []).slice(-MAX_ROWS) }
       storage?.setItem(ORDER_KEY, JSON.stringify(kept))
     } catch {
       // storage full or blocked: the order holds for this window only

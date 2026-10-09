@@ -5,6 +5,8 @@
 // so the first list read of a list view is that request (shown as 'starting' while it is in flight). It is made once per
 // page load: a service stopped from Settings stays stopped until a request or `tryAgain` starts it. A Settings-only view
 // (`use({ quiet: true })`) reads the status and asks for nothing. `on` is the title bar's Dev servers button (the sidebar shows the list, remembered like the cloud's, and the page slides in).
+// Its last answer is kept in memory and in a versioned localStorage snapshot (a day old at most), so a return paints at once and
+// `refreshing` says a live answer is on its way; a few seconds after the window starts one basic read fills the first open (never starting the service).
 // `focus` is the list's request to the pane: show this server of this project, whatever chat is open (DeskFrame).
 import { ref, shallowRef } from 'vue'
 import type { DevWebFound, DevWebProcess, DevWebProject, DevWebStatus } from '@shared/devwebui'
@@ -33,13 +35,43 @@ const FOUND_EVERY_MS = 15_000
  */
 const MISSES_SHOWN = 3
 const storage = typeof localStorage === 'undefined' ? null : localStorage
+/**
+ * The last answer (status and project list only), kept so the first paint after a window reload is not blank. Versioned by
+ * its key; a snapshot older than a day is ignored. Written only when it changes, or once a minute at most.
+ */
+const SNAPSHOT_KEY = 'hydra-desk.devservers.snapshot.v1'
+const SNAPSHOT_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const SNAPSHOT_EVERY_MS = 60_000
+/** The one basic read the window makes on its own, a few seconds after it starts, so the first open is already filled. */
+const WARM_MS = 3000
+
+interface Snapshot {
+  v: 1
+  at: number
+  status: DevWebStatus
+  projects: DevWebProject[] | null
+}
+
+function readSnapshot(): Snapshot | null {
+  try {
+    const snap = JSON.parse(storage?.getItem(SNAPSHOT_KEY) ?? 'null') as Partial<Snapshot> | null
+    if (!snap || snap.v !== 1 || typeof snap.at !== 'number' || !snap.status) return null
+    if (Date.now() - snap.at > SNAPSHOT_MAX_AGE_MS) return null
+    return snap as Snapshot
+  } catch {
+    return null
+  }
+}
 
 function createDevServers() {
   const on = ref(storage?.getItem(ON_KEY) === '1')
-  const status = ref<DevWebStatus | null>(null)
+  // A snapshot from the last day paints at once and is marked as refreshing until the live answer arrives.
+  const shot = readSnapshot()
+  const status = ref<DevWebStatus | null>(shot?.status ?? null)
   const statusMissing = ref(false)
+  const refreshing = ref(!!shot)
   // Replaced whole by each answer, never edited in place.
-  const projects = shallowRef<DevWebProject[] | null>(null)
+  const projects = shallowRef<DevWebProject[] | null>(shot?.projects ?? null)
   const projectsError = ref<string | null>(null)
   const found = shallowRef<DevWebFound | null>(null)
   const busy = ref(new Set<string>())
@@ -140,13 +172,19 @@ function createDevServers() {
   let queued = false
   let lastAt = 0
   async function drain(): Promise<void> {
-    do {
-      queued = false
-      lastAt = Date.now()
-      await once()
-      lastAt = Date.now()
-      answered.value++
-    } while (queued)
+    refreshing.value = true
+    try {
+      do {
+        queued = false
+        lastAt = Date.now()
+        await once()
+        lastAt = Date.now()
+        persist()
+        answered.value++
+      } while (queued)
+    } finally {
+      refreshing.value = false
+    }
   }
   let foundNow = true
   let foundAt = 0
@@ -154,6 +192,48 @@ function createDevServers() {
     if (foundToo) foundNow = true
     if (running) queued = true
     else running = drain().finally(() => (running = null))
+    return running
+  }
+
+  // The snapshot: written when the answer changed, and at most once a minute otherwise.
+  let savedBody = ''
+  let savedAt = 0
+  function persist(): void {
+    const s = status.value
+    // A status still starting is not an answer to keep.
+    if (!s || s.state === 'starting' || !storage) return
+    const body = JSON.stringify({ status: s, projects: projects.value })
+    if (body === savedBody && Date.now() - savedAt < SNAPSHOT_EVERY_MS) return
+    const shot: Snapshot = { v: 1, at: Date.now(), status: s, projects: projects.value }
+    try {
+      storage.setItem(SNAPSHOT_KEY, JSON.stringify(shot))
+      savedBody = body
+      savedAt = Date.now()
+    } catch {
+      // floor-ok: a full or blocked store: the first paint after a reload just waits for the live answer
+    }
+  }
+
+  /**
+   * The window's own first read, a few seconds after it starts. It never starts the service (a stopped one answers
+   * 'stopped'), and it yields to a view on screen, which reads for itself.
+   */
+  function warm(): Promise<void> {
+    if (running || viewers) return running ?? Promise.resolve()
+    running = (async () => {
+      refreshing.value = true
+      try {
+        const read = await readStatus()
+        if (read) {
+          status.value = read
+          if (read.state === 'running') await readProjects()
+          else projects.value = null
+          persist()
+        }
+      } finally {
+        refreshing.value = false
+      }
+    })().finally(() => (running = null))
     return running
   }
   const refresh = (): Promise<void> => request(true)
@@ -280,7 +360,9 @@ function createDevServers() {
     selection.value = null
   }
 
-  return { on, setOn, status, statusMissing, projects, projectsError, found, busy, actionError, answered, focus, reused, page, selection, select, openPage, closePage, refresh, use, tryAgain, service, run, act, actAll, star, show }
+  if (typeof window !== 'undefined') setTimeout(() => void warm(), WARM_MS)
+
+  return { on, setOn, status, statusMissing, refreshing, projects, projectsError, found, busy, actionError, answered, focus, reused, page, selection, select, openPage, closePage, refresh, use, tryAgain, service, run, act, actAll, star, show }
 }
 
 let servers: ReturnType<typeof createDevServers> | null = null

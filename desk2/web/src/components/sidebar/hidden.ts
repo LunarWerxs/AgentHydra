@@ -2,7 +2,7 @@
 // Show hidden, one per window, read by both lists (the desk list and the cloud list, logic.ts dropHidden),
 // so the cloud button hides the same groups. Not archive: the chats stay as they are (owner, 2026-10-05:
 // "I don't want to like archive because they're meant to be there, but I also don't feel like seeing").
-// A group is known by its place in the saved order (logic.ts groupOrderKey). This viewer's browser
+// A group is known by its key (logic.ts groupOrderKey: its folder, or its moved-to name). This viewer's browser
 // remembers both.
 import { ref } from 'vue'
 import { setHidden } from './logic'

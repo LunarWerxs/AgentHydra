@@ -6,7 +6,7 @@
 // instance, queued work, usage limits, archived and the time period are applied by AgentHydra; shape
 // and computer narrow the rows already fetched.
 import type { ChatSummary, CloudSession, ExternalSession } from '@shared/protocol'
-import { folderKey, folderLabel, NO_FOLDER, namesakeFolder, stableOrder, type SidebarOrder } from '../sidebar/logic'
+import { folderKey, folderLabel, NO_FOLDER, namesakeFolder, sortFolders, stableOrder, type SidebarOrder } from '../sidebar/logic'
 
 /** claude-opus-5-5 -> Opus 5.5, the way AgentHydra's rows name it; any other model as it is. */
 export function modelName(m: string | null | undefined): string | null {
@@ -267,7 +267,7 @@ export interface CloudGroup {
   key: string
   label: string
   cwd: string | null
-  /** Its key in the saved order, the desk list's spelling (sidebar/logic.ts groupOrderKey): the folder however spelled, '' for none, or `group:<name>`. */
+  /** Its key for Hide (sidebar/logic.ts groupOrderKey, the desk list's spelling): the folder however spelled, '' for none, or `group:<name>`. */
   orderKey: string
   rows: CloudSession[]
   /** Hidden (its right-click's Hide), shown because Show hidden is on (sidebar/logic.ts dropHidden). */
@@ -383,10 +383,10 @@ export interface GroupCloudOptions {
  * AgentHydra's answer left it out (keepsDeskRow: the period never drops it), and sits where it sits there:
  * under its desk row's folder, or in the group it was moved to, which joins a folder group of the same
  * name as in groupChats (owner, 2026-10-04: a chat jumped to another folder's group). Every other row goes
- * under the folder AgentHydra gives, the one it started in (server bridge/cloud.ts). With the saved
- * `order`, groups and rows keep the desk list's places (a row by its desk row's id, rowOrderKey); the rows
- * only the cloud list has come after the desk's in their group, and their groups after the desk's groups,
- * newest first until the cloud list records them (cloudOnlyKeys) and kept there after. A search's answer
+ * under the folder AgentHydra gives, the one it started in (server bridge/cloud.ts). Groups are listed A-Z
+ * (sortFolders), as the desk list lists them. With the saved `order`, rows keep the desk list's places (a row by
+ * its desk row's id, rowOrderKey); the rows only the cloud list has come after the desk's in their group
+ * (cloudOnlyKeys records them). A search's answer
  * (`ranked`) keeps AgentHydra's order instead, best match first (a title hit before a folder hit before
  * letters in order), as one group.
  */
@@ -422,25 +422,20 @@ export function groupCloud(rows: CloudSession[], s: CloudScopes, thisPc: string,
     else groups.push(g)
   }
   for (const g of groups) g.rows.sort(newestFirst)
-  groups.sort((a, b) => b.rows[0]!.lastActivityAt - a.rows[0]!.lastActivityAt)
+  const sorted = sortFolders(groups)
   const order = opts.order
-  if (!order) return groups
+  if (!order) return sorted
   const cloudOnly = (r: CloudSession) => !desk.has(r.id)
-  for (const g of groups) g.rows = stableOrder(g.rows, (r) => rowOrderKey(r, desk), order.rows, cloudOnly)
-  return stableOrder(groups, (g) => g.orderKey, order.groups, (g) => g.rows.every(cloudOnly))
+  for (const g of sorted) g.rows = stableOrder(g.rows, (r) => rowOrderKey(r, desk), order.rows, cloudOnly)
+  return sorted
 }
 
 /**
- * What the cloud list adds to the saved order, at its end (sidebar/logic.ts recordOrder), the way the desk
- * list adds what it shows at the top: its rows the desk list does not list, and its groups holding none
- * the desk list does, as shown. Recorded once, they keep their places when new rows come.
+ * What the cloud list adds to the saved order, at its end (sidebar/logic.ts recordCloudOrder): its rows the desk
+ * list does not list, as shown. Recorded once, they keep their places when new rows come.
  */
-export function cloudOnlyKeys(groups: CloudGroup[], desk: ReadonlyMap<string, DeskPlace>): SidebarOrder {
-  const cloudOnly = (r: CloudSession) => !desk.has(r.id)
-  return {
-    groups: groups.filter((g) => g.rows.every(cloudOnly)).map((g) => g.orderKey),
-    rows: groups.flatMap((g) => g.rows.filter(cloudOnly).map((r) => r.id))
-  }
+export function cloudOnlyKeys(groups: CloudGroup[], desk: ReadonlyMap<string, DeskPlace>): string[] {
+  return groups.flatMap((g) => g.rows.filter((r) => !desk.has(r.id)).map((r) => r.id))
 }
 
 /** A filter's right-hand text in the menu: All, None, the one name, or the first and a count. */

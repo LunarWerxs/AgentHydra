@@ -177,6 +177,24 @@ describe('external sessions', () => {
     expect(list.some((x) => x.id === sid(891))).toBe(false)
   })
 
+  test('a chat started from a chip is parented to the chat it names; an unknown parent leaves it out', () => {
+    const chat = (n: number, spawnedFrom: string | null) => ({
+      instance: 'Claude-9',
+      chatId: `local_chat${n}`,
+      sessionId: sid(n),
+      title: 'Invented chat',
+      archived: false,
+      lastActivityAt: new Date(NOW - 3 * 3600_000).toISOString(),
+      cwd: null,
+      live: false,
+      unread: false,
+      spawnedFrom,
+    })
+    const list = mapExternal({ ...inputs, chats: [chat(893, null), chat(894, 'local_chat893'), chat(895, 'local_chat-unknown')] }, new Set(), NOW)
+    expect(list.find((x) => x.id === sid(894))).toMatchObject({ parentId: sid(893) })
+    expect(list.find((x) => x.id === sid(895))).not.toHaveProperty('parentId')
+  })
+
   test('merges workers, desktop chats, the live registry, hooks and fresh transcripts', () => {
     const list = mapExternal(inputs, new Set(), NOW)
     const by = new Map(list.map((x) => [x.id, x]))

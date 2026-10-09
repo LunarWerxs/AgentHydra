@@ -31,6 +31,7 @@ export type SettingsRowId =
   | 'notifications'
   | 'idle'
   | 'babysitter'
+  | 'orchestrator'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -128,13 +129,22 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Close idle chats after',
     description: "An idle chat's process stops; your next message resumes it."
   },
+  // Two watchers side by side (owner, 2026-10-09: "two toggles ... integrated into the same area ... easy to turn on").
   {
     id: 'babysitter',
     section: 'general',
-    group: 'Behaviour',
+    group: 'Watching chats',
     label: 'Babysitter',
     description:
       'When a usage limit stops a chat (here or in Claude Desktop), continue it once the limit resets. It checks every 5 minutes; no model is asked.'
+  },
+  {
+    id: 'orchestrator',
+    section: 'general',
+    group: 'Watching chats',
+    label: 'Orchestrator',
+    description:
+      'A foreman for running chats: every 10 minutes it peeks in, and nudges one that keeps failing the same step or is stuck on a command. It also continues a chat an error stopped. What it saw and did: Diagnostics > Orchestrator.'
   },
   {
     id: 'ahTooltips',

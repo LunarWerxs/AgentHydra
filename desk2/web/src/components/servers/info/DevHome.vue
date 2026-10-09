@@ -32,6 +32,7 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
       <div class="min-w-0 flex-1">
         <h2 class="text-[20px] font-semibold leading-7 text-text">Dev servers</h2>
         <p class="text-[13px] leading-5 text-text-muted">The projects AgentHydra runs, and their servers. Pick one to see it.</p>
+        <p v-if="servers.refreshing.value" class="text-[12px] leading-4 text-text-muted">Refreshing…</p>
       </div>
       <button type="button" :class="BTN" @click="servers.select({ kind: 'add' })"><Plus class="size-3.5" aria-hidden="true" />Add project</button>
     </section>

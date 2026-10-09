@@ -145,8 +145,8 @@ describe('groupCloud', () => {
   })
   const listed = (groups: ReturnType<typeof groupCloud>) => groups.map((g) => [g.label, g.rows.map((r) => r.id)])
 
-  test('the plain list is grouped by folder, newest first', () => {
-    expect(groupCloud(rows, all, 'PC').map((g) => g.rows.map((r) => r.id))).toEqual([['new-match'], ['mid-match', 'old-match']])
+  test('the plain list is grouped by folder, folders A-Z, rows newest first', () => {
+    expect(groupCloud(rows, all, 'PC').map((g) => g.rows.map((r) => r.id))).toEqual([['mid-match', 'old-match'], ['new-match']])
   })
 
   test("a search's answer keeps AgentHydra's best-match order", () => {
@@ -184,7 +184,7 @@ describe('groupCloud', () => {
       [outside('vector', { cwd: 'D:/new' }), outside('rust', { cwd: 'D:/new' }), outside('pub', { cwd: 'D:/pub' })]
     )
     // The desk list's order: a Desk chat is kept by its own id, not its session's.
-    let order: SidebarOrder = { groups: ['d:/pub', 'd:/new'], rows: ['chat-split', 'vector', 'rust', 'pub'] }
+    let order: SidebarOrder = { rows: ['chat-split', 'vector', 'rust', 'pub'] }
     const answer = [
       row('rust', 'D:/new', 100),
       row('split', 'D:/new', 50),
@@ -196,12 +196,12 @@ describe('groupCloud', () => {
     ]
     const first = groupCloud(answer, all, 'PC', { desk, order })
     expect(listed(first)).toEqual([
-      ['pub', ['pub']],
       ['new', ['split', 'vector', 'rust', 'cloud-a', 'cloud-c']],
-      ['other', ['cloud-b']]
+      ['other', ['cloud-b']],
+      ['pub', ['pub']]
     ])
     const added = cloudOnlyKeys(first, desk)
-    expect(added).toEqual({ groups: ['d:/other'], rows: ['cloud-a', 'cloud-c', 'cloud-b'] })
+    expect(added).toEqual(['cloud-a', 'cloud-c', 'cloud-b'])
     order = recordCloudOrder(order, added)
 
     // The next refresh: new activity everywhere and two newcomers. Nothing recorded moves; they follow.
@@ -217,23 +217,23 @@ describe('groupCloud', () => {
       row('cloud-e', 'D:/zeta', 2000)
     ]
     expect(listed(groupCloud(later, all, 'PC', { desk, order }))).toEqual([
-      ['pub', ['pub']],
       ['new', ['split', 'vector', 'rust', 'cloud-a', 'cloud-c', 'cloud-d']],
       ['other', ['cloud-b']],
+      ['pub', ['pub']],
       ['zeta', ['cloud-e']]
     ])
     order = recordCloudOrder(order, cloudOnlyKeys(groupCloud(later, all, 'PC', { desk, order }), desk))
 
     // A Desk chat goes on in the folder only the cloud list had. New to the desk list, which shows it last
-    // (the order knows it), its group goes to the top of both lists, as a new desk group does, and stays.
+    // (the order knows it), its row goes to the top of the saved order, and its folder sorts A-Z as ever.
     const withOther = deskPlaces(
       [deskChat('chat-split', 'split', { cwd: 'D:/new' }), deskChat('chat-other', 'cloud-b', { cwd: 'D:/other' })],
       [outside('vector', { cwd: 'D:/new' }), outside('rust', { cwd: 'D:/new' }), outside('pub', { cwd: 'D:/pub' })]
     )
-    order = recordDeskOrder(order, ['d:/pub', 'd:/new', 'd:/other'], ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])
-    expect(order.groups[0]).toBe('d:/other')
-    expect(recordDeskOrder(order, ['d:/other', 'd:/pub', 'd:/new'], ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])).toEqual(order)
-    expect(listed(groupCloud(later, all, 'PC', { desk: withOther, order })).map(([label]) => label)).toEqual(['other', 'pub', 'new', 'zeta'])
+    order = recordDeskOrder(order, ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])
+    expect(order.rows[0]).toBe('chat-other')
+    expect(recordDeskOrder(order, ['chat-other', 'chat-split', 'vector', 'rust', 'pub'])).toEqual(order)
+    expect(listed(groupCloud(later, all, 'PC', { desk: withOther, order })).map(([label]) => label)).toEqual(['new', 'other', 'pub', 'zeta'])
   })
 
   // Two folders share a name: a session moved to a group of that name joins the same one of them in both
@@ -276,8 +276,8 @@ describe('groupCloud', () => {
     expect(listed(dropHidden(cloud, (g) => g.orderKey, hidden, false).shown)).toEqual([['gamma', ['kept']]])
     expect(dropHidden(cloud, (g) => g.orderKey, hidden, true).shown.map((g) => [g.label, g.hidden])).toEqual([
       ['Alpha', true],
-      ['Reading', true],
-      ['gamma', undefined]
+      ['gamma', undefined],
+      ['Reading', true]
     ])
   })
 

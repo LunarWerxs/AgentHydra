@@ -1457,12 +1457,13 @@ export function loginSyncStatus(): CliLoginSyncStatus {
 }
 
 /** Before AgentHydra opens a desktop profile: one pass first, so a newer login lands while the
- *  profile is still closed. At most ten seconds: a launch never waits long on the store. */
+ *  profile is still closed. At most three seconds: a pass normally takes about 0.5 s, and Open must
+ *  launch immediately (owner, 2026-10-09). */
 export async function syncBeforeLaunch(_dir: string): Promise<void> {
   if (!readConfig()?.enabled) return
   await Promise.race([
     runLoginSync().catch(() => undefined),
-    new Promise((resolve) => setTimeout(resolve, 10_000)),
+    new Promise((resolve) => setTimeout(resolve, 3_000)),
   ])
 }
 

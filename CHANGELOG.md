@@ -11,6 +11,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **A babysitter continues chats a usage limit stopped, once the limit resets**
 - **Moving chats between accounts is about ten times faster, and the old account's copies are archived again**
+- **The orchestrator gets a switch beside the babysitter's, and a foreman that checks in on running chats**
+- **Usage cards in the accounts table open on a click, not on hover**
+- **The Dev servers page shows its last list at once and refreshes behind it**
+- **New's project grid: shorter tiles without details, six rows and Show all**
+- **Sidebar group headings show their project's icon**
+- **Sidebar: groups in A-Z order, + on every group, Search and Filter beside New**
+- **Background work reaches the Free accounts, and their answers count tokens**
+- **Open brings the account's Claude window to the front**
+- **The Free accounts' list keeps a backup, so a power cut cannot wipe it**
 
 **Everything in Unreleased**
 
@@ -24,6 +33,24 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   checks which chats, in its own window or in Claude Desktop, a usage limit stopped, and continues each one
   when its limit resets, with a note that says it came from the babysitter. Settings > General shows what is
   stopped on each account and when it resets, and turns it off.
+- **The orchestrator gets a switch beside the babysitter's, and a foreman that checks in on running chats.**
+  Settings > General > Watching chats has both switches. Turned on, the orchestrator continues chats an error
+  stopped, and every 10 minutes peeks at running chats: one that keeps failing the same step or sits in one
+  command for 45 minutes gets a short check-in note.
+- **Usage cards in the accounts table open on a click, not on hover.** Only one is open at a time.
+- **The Dev servers page shows its last list at once and refreshes behind it.** It also reads the list once
+  shortly after the window starts, so the first open is already filled.
+- **New's project grid: shorter tiles without details, six rows and Show all.** Filtering still shows every match.
+- **Sidebar group headings show their project's icon** when the group is one of your Project Hydra projects.
+- **Sidebar: groups in A-Z order, + on every group, Search and Filter beside New.** Every folder group has its
+  own + for a new chat there, and the New button is a quieter colour.
+- **Background work reaches the Free accounts, and their answers count tokens.** Asks made by CliMayte workers,
+  most of the background work, never went to an idle Free account; now they do. A Free answer also records an
+  estimate of its tokens instead of zero.
+- **Open brings the account's Claude window to the front.** It could open behind AgentHydra's own window and
+  look like nothing happened. AgentHydra also waits at most 3 seconds for login sync before launching.
+- **The Free accounts' list keeps a backup, so a power cut cannot wipe it.** If the list is ever found empty or
+  unreadable, it comes back from a backup at most 10 minutes old, with its chats and token counts.
 
 ## [2.0.2] - 2026-10-08
 

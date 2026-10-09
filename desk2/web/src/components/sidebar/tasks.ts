@@ -11,7 +11,7 @@
 import { ref, watch } from 'vue'
 import type { CliMayteWorker, CloudSession, ExternalSession, SwarmJob } from '@shared/protocol'
 import type { CloudGroup } from '../cloud/logic'
-import { folderKey, folderLabel, NO_FOLDER, stableOrder, type ChatGroup, type SidebarEntry, type SidebarOrder } from './logic'
+import { folderKey, folderLabel, NO_FOLDER, sortFolders, stableOrder, type ChatGroup, type SidebarEntry, type SidebarOrder } from './logic'
 
 const KEY = 'hydra-desk.sidebar.tasks'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
@@ -511,11 +511,10 @@ const NAME_KEY = 'name:'
  * differ between PCs, so another PC's folder often has no group here). A row known only by its folder's last
  * name (another PC's, AddedRow.folder) goes in the one group whose folder has that name, whatever the path
  * before it; when none has it, or two do (a guess), it goes in a group of that name. Each is put where the list puts its own
- * rows (`sort`, given them newest first). A folder no group has gets one after the list's groups, newest
- * first, as the cloud list puts the groups only it has; a folder the owner hid keeps them out unless hidden
- * groups are shown, as it does its own rows.
+ * rows (`sort`, given them newest first). A folder no group has gets one; the groups are listed A-Z (sortFolders),
+ * the added ones too; a folder the owner hid keeps them out unless hidden groups are shown, as it does its own rows.
  */
-function placeAdded<G, R>(
+function placeAdded<G extends { label: string }, R>(
   groups: readonly G[],
   rows: readonly R[],
   p: AddedPlacing & {
@@ -575,7 +574,7 @@ function placeAdded<G, R>(
     const cwd = list.map(p.cwdOf).find(Boolean) ?? null
     out.push(p.make(folder, cwd, cwd ? folderLabel(cwd) : (labels.get(folder) ?? NO_FOLDER), p.sort(list), p.hidden.has(folder)))
   }
-  return out
+  return sortFolders(out)
 }
 
 /** The desk list's folder groups (logic.ts groupChats) with this PC's added rows, each drawn as an outside session's row (addedEntry) and ordered as a new row of the list. */
@@ -598,8 +597,8 @@ export function addToDeskGroups(groups: readonly ChatGroup[], rows: readonly Add
 
 /**
  * The cloud list's groups (cloud/logic.ts groupCloud) with the added rows of every PC, each drawn as one of its
- * rows (addedCloudRow) and ordered as the rows only it has: after the desk list's, unless the saved order places
- * them. `orderKey` and `onDesk` are the cloud store's.
+ * rows (addedCloudRow) and ordered as the rows only it has: after the desk list's in their group. The groups are
+ * listed A-Z (sortFolders). `orderKey` and `onDesk` are the cloud store's.
  */
 export function addToCloudGroups(
   groups: readonly CloudGroup[],

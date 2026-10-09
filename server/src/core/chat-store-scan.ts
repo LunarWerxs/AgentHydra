@@ -28,6 +28,9 @@ export interface DossierChat {
   /** Continuations this chat rolled through (auto-compact keeps the chat, rolls the id).
    *  A mark can be filed under ANY of these and still be about this chat. */
   priorCliSessionIds: string[]
+  /** The chat that started this one (Claude Desktop's `spawnedFrom.sessionId`): the parent's own
+   *  `local_<id>`, the same form as its chatId. Null when the record names no parent. */
+  spawnedFrom: string | null
   title: string | null
   cwd: string | null
   createdAt: string | null
@@ -102,6 +105,11 @@ function ultracodeOf(meta: unknown): boolean | null {
   return typeof flag === 'boolean' ? flag : null
 }
 
+/** The parent chat's local id from `spawnedFrom.sessionId`, or null when the record names none. */
+function spawnedFromOf(meta: unknown): string | null {
+  return nonEmptyText(metaField(metaField(meta, 'spawnedFrom'), 'sessionId'))
+}
+
 /** Unread as the app shows it: the last activity is newer than the last time the app focused the chat. */
 function unreadOf(meta: unknown): boolean {
   const activity = metaField(meta, 'lastActivityAt')
@@ -123,6 +131,7 @@ function recordFields(path: string, rel: string, text: string, mtimeMs: number):
     chatId: rel.slice(rel.lastIndexOf('local_'), -'.json'.length) || null,
     cliSessionId: nonEmptyText(metaField(meta, 'cliSessionId')),
     priorCliSessionIds: textList(metaField(meta, 'priorCliSessionIds')),
+    spawnedFrom: spawnedFromOf(meta),
     title: trimmedText(metaField(meta, 'title')),
     cwd: nonEmptyText(metaField(meta, 'cwd')),
     createdAt: iso(metaField(meta, 'createdAt')),

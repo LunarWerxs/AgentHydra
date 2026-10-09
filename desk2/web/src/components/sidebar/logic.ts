@@ -1,5 +1,5 @@
 // Pure sidebar logic (tested in web/test/shell). No Vue, no store.
-import type { ChatStatus, ChatSummary, ExternalSession } from '@shared/protocol'
+import type { ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
 import { accountTitle } from '../accounts/format'
 
 /** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
@@ -51,9 +51,12 @@ const ACTIVE: ChatStatus[] = ['starting', 'working', 'needs_you']
 const RUNNING: ChatStatus[] = ['starting', 'working']
 
 /** One row of the list: a Hydra Desk chat, or a session running elsewhere (read-only until continued here). */
-export type SidebarEntry =
+export type SidebarEntry = (
   | { kind: 'chat'; id: string; at: number; chat: ChatSummary }
   | { kind: 'external'; id: string; at: number; session: ExternalSession }
+) & {
+  under?: string // a nested row (nestChildren): the entryKey of the row it sits under, one step in
+}
 
 export interface ChatGroup {
   key: string // the cwd, '' for no folder, 'group:<name>' for a moved-to group, 'name:<folder>' for another PC's folder known only by its last name (tasks.ts), or 'pinned' / 'archived'
@@ -114,7 +117,7 @@ const entryCwd = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat.cwd : (e.sessi
 
 /**
  * Active: Pinned first (its own group, newest first), then one group per folder, and one per group a
- * row was moved to, ordered by its newest row; sessions running elsewhere sit in the same groups,
+ * row was moved to, listed A-Z by label (sortFolders); sessions running elsewhere sit in the same groups,
  * except CliMayte's own workers and sessions that already are one of our chats. A moved-to group named
  * like a folder group joins it. Archived: only the archived rows, grouped the same way. All: Active plus
  * an Archived group last. Search drops rows; a group left empty is dropped. A `hidden` group (by its
@@ -172,19 +175,87 @@ export function groupChats(
     else groups.push({ key: `group:${name}`, label: marksOf(list.sort(newestFirst)[0]!).group!, cwd: null, entries: list })
   }
   for (const g of groups) g.entries.sort(newestFirst)
-  groups.sort((a, b) => b.entries[0]!.at - a.entries[0]!.at)
   const archived = filter === 'all' ? archivedRows.sort(newestFirst) : []
-  // A saved order wins over activity, so sending a message moves nothing (Jacob, 2026-10-04).
+  // A saved order wins over activity, so sending a message moves nothing (Jacob, 2026-10-04). Groups are not saved: they are listed A-Z.
   const order = opts.order
   const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
   for (const g of groups) g.entries = rows(g.entries)
-  const folders = dropHidden(order ? stableOrder(groups, groupOrderKey, order.groups) : groups, groupOrderKey, opts.hidden, !!opts.showHidden || !!query)
+  const folders = dropHidden(sortFolders(groups), groupOrderKey, opts.hidden, !!opts.showHidden || !!query)
 
-  return {
+  return nestChildren({
     pinned: pinned.length ? { key: 'pinned', label: 'Pinned', cwd: null, entries: rows(pinned) } : null,
     folders: folders.shown,
     archived: archived.length ? { key: 'archived', label: 'Archived', cwd: null, entries: archived } : null,
     hiddenOut: folders.out
+  })
+}
+
+/** A row's key for nesting: a Desk chat answers to its session id, an outside session to its own id (the parentId an outside session carries). */
+const sessionKeyOf = (e: SidebarEntry): string | null => (e.kind === 'chat' ? e.chat.sessionId : e.session.id)
+/** A row's key in a list (as the template keys it), which `under` names. */
+export const entryKey = (e: SidebarEntry): string => `${e.kind}:${e.id}`
+
+/**
+ * Chats started from another chat's chip sit under it, as in the newest Claude Desktop (owner, 2026-10-09). A row whose
+ * parentId names a row shown in the same section (both live or both archived) moves into the parent's group, right after
+ * the parent and the parent's earlier children; a grandchild goes under the top of its chain, one step in. A pinned row
+ * stays in Pinned; a child whose parent is not shown (archived, filtered out, hidden, another list) stays an ordinary row
+ * where it is. Runs on the groups as built, so search, filters and Hide already decided what is shown.
+ */
+export function nestChildren(groups: SidebarGroups): SidebarGroups {
+  const all = [groups.pinned, ...groups.folders, groups.archived].flatMap((g) => (g ? [g] : []))
+  const byKey = new Map<string, SidebarEntry>()
+  for (const g of all) for (const e of g.entries) {
+    const key = sessionKeyOf(e)
+    if (key) byKey.set(key, e)
+  }
+  const parentOf = (e: SidebarEntry): SidebarEntry | undefined => {
+    if (e.kind !== 'external' || !e.session.parentId || marksOf(e).pinned) return undefined
+    const parent = byKey.get(e.session.parentId)
+    return parent && parent !== e && marksOf(parent).archived === marksOf(e).archived ? parent : undefined
+  }
+  // Each child's top row (its chain's last shown ancestor). A chain that loops back on itself stays ordinary rows.
+  const under = new Map<string, SidebarEntry>()
+  for (const g of all) for (const e of g.entries) {
+    let top = e
+    const seen = new Set<SidebarEntry>([e])
+    let cyclic = false
+    for (let p = parentOf(top); p; p = parentOf(top)) {
+      if (seen.has(p)) {
+        cyclic = true
+        break
+      }
+      seen.add(p)
+      top = p
+    }
+    if (top !== e && !cyclic) under.set(entryKey(e), top)
+  }
+  if (!under.size) return groups
+
+  // The children of each top, in the order the lists showed them (groups in order, each as its group lists them).
+  const kids = new Map<string, SidebarEntry[]>()
+  for (const g of all) for (const e of g.entries) {
+    const top = under.get(entryKey(e))
+    if (!top) continue
+    const topKey = entryKey(top)
+    const list = kids.get(topKey)
+    const child: SidebarEntry = { ...e, under: topKey }
+    if (list) list.push(child)
+    else kids.set(topKey, [child])
+  }
+  const place = (g: ChatGroup): ChatGroup => ({
+    ...g,
+    entries: g.entries.filter((e) => !under.has(entryKey(e))).flatMap((e) => [e, ...(kids.get(entryKey(e)) ?? [])])
+  })
+  const kept = (g: ChatGroup | null): ChatGroup | null => {
+    const placed = g && place(g)
+    return placed?.entries.length ? placed : null
+  }
+  return {
+    pinned: kept(groups.pinned),
+    folders: groups.folders.map(place).filter((g) => g.entries.length),
+    archived: kept(groups.archived),
+    hiddenOut: groups.hiddenOut
   }
 }
 
@@ -205,20 +276,67 @@ export function namesakeFolder<T extends { cwd: string | null; label: string }>(
 }
 
 /**
- * The order the sidebar keeps (order.ts), each first to last: group keys (groupOrderKey) and row keys, a
- * desk row's id (a Desk chat's id, an outside session's session id) or the session id of a row only the
- * cloud list has. `cloud`: the keys the cloud list added at the end that the desk list has not shown since;
- * the first time it does (a desk chat started in another PC's folder), it lifts them to the top as new.
+ * The order the sidebar keeps (order.ts), each first to last: row keys, a desk row's id (a Desk chat's id, an
+ * outside session's session id) or the session id of a row only the cloud list has. Groups are not kept in it:
+ * the folder groups are listed A-Z (sortFolders). `cloud`: the rows the cloud list added at the end that the desk
+ * list has not shown since; the first time it does (a desk chat started in another PC's folder), it lifts them to
+ * the top as new.
  */
 export interface SidebarOrder {
-  groups: readonly string[]
   rows: readonly string[]
   cloud?: readonly string[]
 }
 
-/** A group's place in the saved order: its folder however spelled, or its moved-to group key. */
+/** A group's key for Hide (hidden.ts): its folder however spelled, or its moved-to group key. */
 export function groupOrderKey(g: ChatGroup): string {
   return g.cwd ? folderKey(g.cwd) : g.key
+}
+
+/**
+ * Folder groups in the order the lists show them: A-Z by the label shown, ignoring case, numbers in their own order
+ * (scratch-2 before scratch-10). Pinned and Archived are never among them.
+ */
+export function sortFolders<T extends { label: string }>(groups: readonly T[]): T[] {
+  return [...groups].sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base', numeric: true }))
+}
+
+/**
+ * The folder a group's '+' starts a new chat in: its own folder, else the folder of its newest chat that has one (a
+ * moved-to group has none of its own). Null when no chat has one.
+ */
+export function newChatFolder(cwd: string | null, chats: readonly { cwd: string | null; at: number }[]): string | null {
+  if (cwd) return cwd
+  return [...chats].sort((a, b) => b.at - a.at).find((c) => c.cwd)?.cwd ?? null
+}
+
+/** The desk list's group's '+' folder (newChatFolder); Pinned and Archived are not folders, so they get none. */
+export function deskNewFolder(group: ChatGroup): string | null {
+  if (group.key === 'pinned' || group.key === 'archived') return null
+  return newChatFolder(group.cwd, group.entries.map((e) => ({ cwd: entryCwd(e) || null, at: e.at })))
+}
+
+/**
+ * The New screen's project a group's heading stands for (its icon goes left of the name). By folder first: the
+ * project whose folder holds the group's folder, the chats working in it or in a folder inside it (the deepest such
+ * project when several hold it). Else by name: the project whose name is the group's name. Null when neither matches.
+ */
+export function projectOfGroup(group: Pick<ChatGroup, 'key' | 'cwd' | 'label'>, projects: readonly ProjectEntry[]): ProjectEntry | null {
+  if (group.key === 'pinned' || group.key === 'archived') return null
+  if (group.cwd) {
+    const cwd = folderKey(group.cwd)
+    let best: ProjectEntry | null = null
+    let bestLength = -1
+    for (const p of projects) {
+      const key = folderKey(p.path)
+      if (key && (cwd === key || cwd.startsWith(`${key}/`)) && key.length > bestLength) {
+        best = p
+        bestLength = key.length
+      }
+    }
+    if (best) return best
+  }
+  const name = group.label.toLowerCase()
+  return projects.find((p) => p.name.toLowerCase() === name) ?? null
 }
 
 const ranks = new WeakMap<readonly string[], Map<string, number>>()
@@ -231,7 +349,7 @@ function rankOf(saved: readonly string[]): Map<string, number> {
 
 /**
  * Items in their saved order; ones the order does not know yet go first, as they came (newest first),
- * except the ones `last` picks, which go after the known ones (the cloud list's own rows and groups).
+ * except the ones `last` picks, which go after the known ones (the cloud list's own rows).
  */
 export function stableOrder<T>(items: T[], keyOf: (t: T) => string, saved: readonly string[], last: (t: T) => boolean = () => false): T[] {
   const rank = rankOf(saved)
@@ -253,29 +371,26 @@ export function recordOrder(saved: readonly string[], shown: readonly string[], 
 }
 
 /**
- * The saved order after the desk list showed these groups and rows: theirs join at the top, and a key the
- * cloud list added (`cloud`) counts as new the first time the desk list shows it, so a group or row that
- * gains a desk row (a desk chat started in another PC's folder) joins at the top whichever list saw it first.
+ * The saved order after the desk list showed these rows: theirs join at the top, and a row the cloud list added
+ * (`cloud`) counts as new the first time the desk list shows it, so a row that gains a desk row (a desk chat
+ * started in another PC's folder) joins at the top whichever list saw it first.
  */
-export function recordDeskOrder(order: SidebarOrder, shownGroups: readonly string[], shownRows: readonly string[]): SidebarOrder {
+export function recordDeskOrder(order: SidebarOrder, shownRows: readonly string[]): SidebarOrder {
   const cloud = new Set(order.cloud ?? [])
-  const lifted = new Set([...shownGroups, ...shownRows].filter((k) => cloud.has(k)))
+  const lifted = new Set(shownRows.filter((k) => cloud.has(k)))
   const unlifted = (saved: readonly string[]) => (lifted.size ? saved.filter((k) => !lifted.has(k)) : saved)
   return {
-    groups: recordOrder(unlifted(order.groups), shownGroups, 'top'),
     rows: recordOrder(unlifted(order.rows), shownRows, 'top'),
     cloud: unlifted(order.cloud ?? [])
   }
 }
 
-/** The saved order after the cloud list showed its own groups and rows (`added`): at the end, marked as its. */
-export function recordCloudOrder(order: SidebarOrder, added: SidebarOrder): SidebarOrder {
-  const known = new Set([...order.groups, ...order.rows])
-  const fresh = [...added.groups, ...added.rows].filter((k) => !known.has(k))
+/** The saved order after the cloud list showed its own rows (`rows`): at the end, marked as its. */
+export function recordCloudOrder(order: SidebarOrder, rows: readonly string[]): SidebarOrder {
+  const known = new Set(order.rows)
   return {
-    groups: recordOrder(order.groups, added.groups, 'end'),
-    rows: recordOrder(order.rows, added.rows, 'end'),
-    cloud: recordOrder(order.cloud ?? [], fresh, 'end')
+    rows: recordOrder(order.rows, rows, 'end'),
+    cloud: recordOrder(order.cloud ?? [], rows.filter((k) => !known.has(k)), 'end')
   }
 }
 
@@ -453,7 +568,10 @@ export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion:
 /** Active only's rows: each group's entries whose dot is active, a group with none left dropped (Sidebar.vue). */
 export function onlyActive(groups: ChatGroup[], glyphOf: (e: SidebarEntry) => StatusGlyph | undefined): ChatGroup[] {
   return groups.flatMap((g) => {
-    const entries = g.entries.filter((e) => isActive(glyphOf(e)))
+    const active = g.entries.filter((e) => isActive(glyphOf(e)))
+    // A nested row whose parent is not active any more shows as an ordinary row (nestChildren).
+    const shown = new Set(active.map(entryKey))
+    const entries = active.map((e): SidebarEntry => (e.under && !shown.has(e.under) ? { ...e, under: undefined } : e))
     return entries.length ? [{ ...g, entries }] : []
   })
 }

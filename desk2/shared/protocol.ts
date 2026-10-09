@@ -255,6 +255,8 @@ export interface ExternalSession {
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
   fromPc: string | null
+  /** The ExternalSession id of the chat whose chip started this one, when that chat is in the list; the sidebar nests it under that chat. Left out when the parent is not known. */
+  parentId?: string
   /** Set while a usage limit stopped it and nothing has followed (AgentHydra's `limit_stop`, pending): the babysitter's. */
   limit?: ExternalLimit
   // Hydra Desk's own marks (its session-meta overlay; the session's files are never touched). The title above is the overlay's when renamed.
@@ -482,6 +484,8 @@ export interface DeskSettings {
   hiddenProjects: string[]
   /** The babysitter continues chats a usage limit stopped once the limit resets (shared/babysitter.ts). */
   babysitter: boolean
+  /** The orchestrator, armed: it continues chats an error stopped and its foreman peeks at running ones (shared/orchestrator.ts). Off by default. */
+  orchestrator: boolean
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)

@@ -1,8 +1,10 @@
 // The orchestrator's plan: for each open chat, the one move the orchestrator would make next and why, and, when
 // asked, what the CreAitor says the owner would answer. The server computes it (server/src/orchestrator/plan.ts,
 // GET /api/diagnostics/orchestrator); Settings > Diagnostics > Orchestrator draws it. Phase A, shadow: the plan is
-// only what it WOULD do. Phase B, armed by the owner (POST the same path { armed }): it also continues a Desk chat
-// an error stopped (server/src/orchestrator/act.ts); one a usage limit stopped is the babysitter's (shared/babysitter.ts).
+// only what it WOULD do. Phase B, armed by the owner (Settings > General > Orchestrator, the `orchestrator` setting, or
+// POST the same path { armed }): it also continues a Desk chat an error stopped (server/src/orchestrator/act.ts), and its
+// foreman peeks at running chats and sends a note to one that keeps failing the same step or hangs on a call
+// (server/src/orchestrator/foreman.ts); a chat a usage limit stopped is the babysitter's (shared/babysitter.ts).
 // Plain types only.
 
 /** The one next move for a chat, most urgent first. */
@@ -53,18 +55,23 @@ export const ORCHESTRATOR_FROM = "Desk 2's orchestrator"
 /** One thing the armed orchestrator did on its own, newest first in the plan. */
 export interface OrchestratorAct {
   at: number
-  id: string // the Desk chat
+  id: string // the Desk chat, or for the foreman an outside session's id too
   title: string
   move: OrchestratorMove
-  /** What it did: queued "continue", or stopped continuing a chat that keeps stopping. */
-  did: 'continued' | 'gave-up'
+  /** What it did: queued "continue", stopped continuing a chat that keeps stopping, sent a running chat the foreman's
+   *  check-in note, or flagged a running chat that stopped writing (shown only). */
+  did: 'continued' | 'gave-up' | 'nudged' | 'flagged'
+  /** The foreman's acts: which app runs the chat, and what it saw. */
+  source?: OrchestratorRow['source']
+  detail?: string
   /** Why the send failed, when it did. */
   error?: string
 }
 
 export interface OrchestratorPlan {
   at: number
-  /** shadow: it plans only. armed: the owner armed it, and it continues Desk chats a limit or an error stopped. */
+  /** shadow: it plans only. armed: the owner turned it on; it continues Desk chats an error stopped and its foreman
+   *  peeks at running chats. */
   mode: 'shadow' | 'armed'
   days: number // chats and outside sessions active in the last `days` days
   creaitor: boolean // this machine has the CreAitor
@@ -74,7 +81,8 @@ export interface OrchestratorPlan {
   acts: OrchestratorAct[]
 }
 
-/** POST /api/diagnostics/orchestrator: arm or disarm it. Armed lasts until Desk stops; it never starts armed. */
+/** POST /api/diagnostics/orchestrator: arm or disarm it. Armed is the `orchestrator` setting (off by default): it lasts
+ *  until it is turned off (owner, 2026-10-09: a switch beside the babysitter's, "easy to turn on"). */
 export interface OrchestratorArm {
   armed: boolean
 }

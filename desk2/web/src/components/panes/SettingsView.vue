@@ -514,6 +514,13 @@ onBeforeUnmount(() => {
                 />
 
                 <PaneSwitch
+                  v-else-if="r.id === 'orchestrator'"
+                  label="Orchestrator"
+                  :model-value="local.orchestrator"
+                  @update:model-value="(v: boolean) => save({ orchestrator: v })"
+                />
+
+                <PaneSwitch
                   v-else-if="r.id === 'delegate'"
                   label="Delegate to CliMayte"
                   :model-value="local.delegateToCliMayte"

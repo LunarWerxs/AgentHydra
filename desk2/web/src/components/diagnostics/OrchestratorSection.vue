@@ -7,8 +7,9 @@ import { usePaneApi } from '@/components/panes/api'
 import { relativeTime } from '@/components/sidebar/search'
 
 // Orchestrator: each open chat's next move as the orchestrator sees it, and on request what the CreAitor says the
-// owner would answer. Shadow until the owner arms it here; armed, it continues Desk chats a limit or an error
-// stopped (server/src/orchestrator/act.ts) and lists what it did. Nothing else here sends, answers or moves anything.
+// owner would answer. Shadow until the owner arms it (here or Settings > General > Orchestrator); armed, it continues
+// Desk chats an error stopped (server/src/orchestrator/act.ts), its foreman peeks at running chats and nudges one that
+// is going nowhere (server/src/orchestrator/foreman.ts), and it lists what it did. Nothing else here sends anything.
 const api = usePaneApi()
 const src = useShellSource()
 const plan = ref<OrchestratorPlan | null>(null)
@@ -64,13 +65,17 @@ const where = (r: OrchestratorRow): string => [SOURCE[r.source], r.account].filt
 const verdictText = (v: string): string => (v === 'decide' ? 'The owner would say' : v === 'reversible' ? 'Take the reversible option' : 'Only the owner can answer')
 const armed = computed(() => plan.value?.mode === 'armed')
 const actText = (a: OrchestratorAct): string =>
-  `${a.did === 'continued' ? 'Continued' : 'Gave up on'} ${a.move === 'resume-after-limit' ? 'after the limit' : 'after an error'}`
+  a.did === 'nudged'
+    ? `Checked in: ${a.detail ?? 'it was going nowhere'}`
+    : a.did === 'flagged'
+      ? `Flagged: ${a.detail ?? 'it stopped writing'}`
+      : `${a.did === 'continued' ? 'Continued' : 'Gave up on'} after an error`
 </script>
 
 <template>
   <div class="text-[13px] leading-4.75" data-testid="orchestrator">
     <p v-if="armed" class="text-text-muted">
-      What the orchestrator does next in each open chat. Armed: it continues Desk chats a limit or an error stopped; the rest it only plans.
+      What the orchestrator does next in each open chat. Armed: it continues Desk chats an error stopped and its foreman checks in on running ones; the rest it only plans. A usage limit's stop is the babysitter's.
     </p>
     <p v-else class="text-text-muted">What the orchestrator would do next in each open chat. Shadow: it only plans, nothing is sent.</p>
     <p v-if="error" class="mt-2 text-danger-text">Could not load the plan: {{ error }}</p>

@@ -74,6 +74,7 @@ function fakeChat(over: Partial<import('../src/core/chat-store-scan').DossierCha
     chatId: null,
     cliSessionId: null,
     priorCliSessionIds: [],
+    spawnedFrom: null,
     title: null,
     cwd: null,
     createdAt: null,

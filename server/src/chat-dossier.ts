@@ -174,6 +174,9 @@ export interface ChatListRow {
   /** The chat's effort level and ultracode flag as its record holds them (DossierChat). */
   effort: string | null
   ultracode: boolean | null
+  /** The parent chat's local id (`local_<id>`, the parent's chatId) when another chat started this
+   *  one from its chip; null otherwise (DossierChat.spawnedFrom). */
+  spawnedFrom: string | null
   /** An engine process is hosting this chat RIGHT NOW — the one thing that decides whether a
    *  move will be refused, and the reason a caller had to attempt the move to find out. */
   live: boolean
@@ -347,6 +350,7 @@ export function listChats(
       cwd: c.cwd,
       effort: c.effort,
       ultracode: c.ultracode,
+      spawnedFrom: c.spawnedFrom,
       live: pid !== undefined,
       livePid: pid ?? null,
       done: markFor(lineage)?.done === true,

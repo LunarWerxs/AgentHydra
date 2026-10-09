@@ -9,8 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import os from 'node:os'
 import { join } from 'node:path'
 import { appxOutputHasPfn, detectDesktopInstall } from '../src/core/desktop-install'
-import { openInstance } from '../src/core/instances'
+import { openInstance, raiseLaunchedWindow } from '../src/core/instances'
 import { resolveLaunchBinary } from '../src/core/paths'
+import type { CMActionResult } from '../src/core/shared'
 
 const isWin = process.platform === 'win32'
 
@@ -375,6 +376,28 @@ describe('openInstance — no-binary failure message', () => {
       }
     },
   )
+})
+
+// Focus after a launch: the window comes forward only for the person's own Open, and only when the
+// launch answered ok. A launch cannot be made to succeed inside a test (it would start Claude), so
+// this drives the raise decision directly with an injected focus.
+test('a successful person-initiated open raises its window; an agent open and a failed open do not', () => {
+  const calls: string[] = []
+  const focus = async (dir: string): Promise<CMActionResult> => {
+    calls.push(dir)
+    return { ok: true, action: 'focus', dir, message: 'focused', data: {} }
+  }
+  const dir = 'C:\\Users\\me\\.claude-instances\\work'
+  const launched: CMActionResult = { ok: true, action: 'open', dir, message: 'launched', data: {} }
+  raiseLaunchedWindow(launched, { focus })
+  expect(calls).toEqual([])
+  raiseLaunchedWindow(
+    { ...launched, ok: false, message: 'Failed to launch' },
+    { raise: true, focus },
+  )
+  expect(calls).toEqual([])
+  raiseLaunchedWindow(launched, { raise: true, focus })
+  expect(calls).toEqual([dir])
 })
 
 // Golden (this machine): the real classic install at %LOCALAPPDATA%\AnthropicClaude resolves.

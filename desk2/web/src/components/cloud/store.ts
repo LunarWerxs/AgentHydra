@@ -164,9 +164,8 @@ ${rows}`
   const groups = computed(() => visible.value.shown)
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
 
-  // The rows and groups only this list has join the saved order at its end once shown, newest first, and
-  // keep their places from then on; the desk list records its own at the top (Sidebar.vue). A search's
-  // answer records nothing.
+  // The rows only this list has join the saved order at its end once shown, newest first, and keep their
+  // places from then on; the desk list records its own at the top (Sidebar.vue). A search's answer records nothing.
   watch(
     () => (on.value && !searching.value ? groups.value : null),
     (shown) => {

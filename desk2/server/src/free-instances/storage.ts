@@ -6,6 +6,8 @@ import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
 import { writeFlushed } from '../write-flushed'
 
+/** accounts.json.bak is rewritten at most this often (and on the first save after load). */
+const BACKUP_EVERY_MS = 10 * 60_000
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** A name nobody had to type ("Claude", "ChatGPT 2") follows the account; a deliberate one stays. */
 const generic = (name: string): boolean => /^(claude|chatgpt)\s*#?\d*$/i.test(name.trim())
@@ -52,12 +54,17 @@ function load(text: string): Data {
 export class FreeStorage {
   data: Data = { instances: [], threads: [] }
   private file: string
+  private backedUpAt = 0
   constructor(private home: string) {
     this.file = join(home, 'free', 'accounts.json')
     const bytes = existsSync(this.file) ? readFileSync(this.file) : null
     if (!bytes) this.migrate()
-    else if (bytes.every(b => b === 0)) this.rebuild()
-    else this.data = load(bytes.toString('utf8'))
+    // A power cut must never cost the Free accounts' history: the last-good backup comes before any rebuild.
+    else if (bytes.every(b => b === 0)) { if (!this.restore('unwritten')) this.rebuild() }
+    else {
+      try { this.data = load(bytes.toString('utf8')) }
+      catch (error) { if (!this.restore('damaged')) throw error }
+    }
   }
   create(provider: FreeProvider, name?: string): FreeInstance {
     const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
@@ -95,8 +102,27 @@ export class FreeStorage {
   }
   save(): void {
     mkdirSync(join(this.home, 'free'), { recursive: true })
-    writeFlushed(`${this.file}.tmp`, JSON.stringify(this.data), { mode: 0o600 })
+    const json = JSON.stringify(this.data)
+    writeFlushed(`${this.file}.tmp`, json, { mode: 0o600 })
     renameSync(`${this.file}.tmp`, this.file)
+    if (Date.now() - this.backedUpAt < BACKUP_EVERY_MS) return
+    const backup = `${this.file}.bak`
+    writeFlushed(`${backup}.tmp`, json, { mode: 0o600 })
+    renameSync(`${backup}.tmp`, backup)
+    this.backedUpAt = Date.now()
+  }
+  /** Restores accounts.json from its last-good backup, setting the damaged file aside (never deleted). False if there is no usable backup. */
+  private restore(aside: 'unwritten' | 'damaged'): boolean {
+    const backup = `${this.file}.bak`
+    if (!existsSync(backup)) return false
+    let data: Data
+    try { data = load(readFileSync(backup, 'utf8')) } catch { return false }
+    renameSync(this.file, `${this.file}.${aside}-${Date.now()}`)
+    this.data = data
+    const minutes = Math.round((Date.now() - statSync(backup).mtimeMs) / 60_000)
+    console.error(`[free] accounts.json was ${aside === 'unwritten' ? 'empty (NUL bytes)' : 'unreadable'}: set aside and restored from accounts.json.bak, saved ${minutes} min ago`)
+    this.save()
+    return true
   }
   /**
    * accounts.json is only NUL bytes (or empty): an unclean shutdown kept its length and lost its data, as on 2026-10-08,

@@ -4,6 +4,7 @@ import {
   accountFace,
   chatRow,
   elapsedLabel,
+  entryKey,
   entryRunning,
   externalGlyph,
   externalRename,
@@ -12,7 +13,6 @@ import {
   glyphDotClass,
   groupChats,
   groupChoices,
-  groupOrderKey,
   hideable,
   moveInOrder,
   setHidden,
@@ -28,11 +28,13 @@ import {
   runningSessionIds,
   runPulse,
   shortcutItem,
+  sortFolders,
   statusGlyph,
   SWARM_RUNNING,
   type AccountChoice,
   type ChatGroup,
   type RowMenuEntry,
+  type SidebarGroups,
   type RowMenuItem
 } from '@/components/sidebar/logic'
 import { runShortcut } from '@/components/sidebar/menuClasses'
@@ -86,11 +88,11 @@ describe('sidebar groups', () => {
     expect(folderLabel('/home/j/nexuscode-2d/')).toBe('nexuscode-2d')
   })
 
-  it('puts pinned chats in their own group and orders folders and rows newest first', () => {
+  it('puts pinned chats in their own group, folders A-Z by label and rows newest first', () => {
     const g = groupChats(chats)
     expect(ids(g.pinned)).toEqual(['p'])
-    expect(g.folders.map((f) => f.label)).toEqual(['Beta', 'alpha'])
-    expect(ids(g.folders[1])).toEqual(['a2', 'a1'])
+    expect(g.folders.map((f) => f.label)).toEqual(['alpha', 'Beta'])
+    expect(ids(g.folders[0])).toEqual(['a2', 'a1'])
     expect(g.archived).toBeNull()
   })
 
@@ -120,7 +122,7 @@ describe('sidebar groups', () => {
   it('All shows the active list with an Archived group last', () => {
     const g = groupChats(chats, { filter: 'all' })
     expect(ids(g.pinned)).toEqual(['p'])
-    expect(g.folders.map((f) => f.label)).toEqual(['Beta', 'alpha'])
+    expect(g.folders.map((f) => f.label)).toEqual(['alpha', 'Beta'])
     expect(ids(g.archived)).toEqual(['z'])
   })
 
@@ -182,8 +184,8 @@ describe('sessions running elsewhere in the same list', () => {
       external: [ext('same'), ext('cm', { source: 'climayte' }), ext('loose', { cwd: null, lastActivityAt: 99 })]
     })
     expect(g.folders.map((f) => [f.label, f.cwd, ids(f)])).toEqual([
-      ['No folder', null, ['loose']],
-      ['alpha', 'C:/work/alpha', ['a']]
+      ['alpha', 'C:/work/alpha', ['a']],
+      ['No folder', null, ['loose']]
     ])
   })
 
@@ -213,8 +215,8 @@ describe('sessions running elsewhere in the same list', () => {
     expect(ids(g.pinned)).toEqual(['pin'])
     expect(ids(g.archived)).toEqual(['arc'])
     expect(g.folders.map((f) => [f.key, f.label, f.cwd, ids(f)])).toEqual([
-      ['group:ops', 'Ops', null, ['grp']],
-      ['C:/work/alpha', 'alpha', 'C:/work/alpha', ['plain']]
+      ['C:/work/alpha', 'alpha', 'C:/work/alpha', ['plain']],
+      ['group:ops', 'Ops', null, ['grp']]
     ])
     expect(groupChats([], { external, filter: 'archived' }).folders.flatMap((f) => ids(f))).toEqual(['arc'])
   })
@@ -230,8 +232,8 @@ describe('moved-to groups', () => {
     ])
     expect(ids(g.pinned)).toEqual(['p'])
     expect(g.folders.map((f) => [f.label, f.cwd, ids(f)])).toEqual([
-      ['Launch', null, ['m', 'n']],
-      ['alpha', 'C:/work/alpha', ['a']]
+      ['alpha', 'C:/work/alpha', ['a']],
+      ['Launch', null, ['m', 'n']]
     ])
   })
 
@@ -261,8 +263,8 @@ describe('moved-to groups', () => {
     const hidden = new Set(['c:/work/beta'])
     const shown = groupChats(list, { hidden, showHidden: true })
     expect(shown.folders.map((f) => [f.label, f.hidden])).toEqual([
-      ['Beta', true],
-      ['alpha', undefined]
+      ['alpha', undefined],
+      ['Beta', true]
     ])
     expect(shown.hiddenOut).toBe(0)
     expect(groupChats(list, { hidden, query: 'shader' }).folders.map((f) => [f.label, f.hidden])).toEqual([['Beta', true]])
@@ -572,28 +574,38 @@ describe('footer account', () => {
 })
 
 describe('sidebar order', () => {
-  // Jacob, 2026-10-04: sending into Connections shot it to the top; groups and rows keep their place.
-  it('a message sent later moves neither its group nor its row; a new group joins at the top; a drag reorders', () => {
+  // Jacob, 2026-10-04: sending into Connections shot it to the top; rows keep their place. Owner, 2026-10-09: folder
+  // groups are never saved, they are listed A-Z by label whatever the order of their rows.
+  it('a message sent later moves no row; a new folder joins in its A-Z place; a row drag reorders inside its group', () => {
     const before = [chat('a1', { cwd: 'C:/work/alpha', updatedAt: 30 }), chat('a2', { cwd: 'C:/work/alpha', updatedAt: 20 }), chat('c1', { cwd: 'C:/work/conn', updatedAt: 10 })]
-    const first = groupChats(before, { order: { groups: [], rows: [] } })
-    let order = {
-      groups: recordOrder([], first.folders.map(groupOrderKey), 'top'),
-      rows: recordOrder([], first.folders.flatMap((f) => f.entries.map((e) => e.id)), 'top'),
-    }
+    const first = groupChats(before, { order: { rows: [] } })
+    let order = { rows: recordOrder([], first.folders.flatMap((f) => f.entries.map((e) => e.id)), 'top') }
     expect(first.folders.map((f) => f.label)).toEqual(['alpha', 'conn'])
 
     const sent = [chat('a1', { cwd: 'C:/work/alpha', updatedAt: 30 }), chat('a2', { cwd: 'C:/work/alpha', updatedAt: 99 }), chat('c1', { cwd: 'C:/work/conn', updatedAt: 100 })]
     const after = groupChats(sent, { order })
     expect(after.folders.map((f) => f.label)).toEqual(['alpha', 'conn'])
     expect(ids(after.folders[0])).toEqual(['a1', 'a2'])
-    // without a saved order it is still by activity
-    expect(groupChats(sent).folders.map((f) => f.label)).toEqual(['conn', 'alpha'])
+    // without a saved order the folders are still A-Z, not by activity
+    expect(groupChats(sent).folders.map((f) => f.label)).toEqual(['alpha', 'conn'])
 
     const added = groupChats([...sent, chat('n1', { cwd: 'C:/work/new', updatedAt: 1 })], { order })
-    expect(added.folders.map((f) => f.label)).toEqual(['new', 'alpha', 'conn'])
+    expect(added.folders.map((f) => f.label)).toEqual(['alpha', 'conn', 'new'])
 
-    order = { ...order, groups: moveInOrder(order.groups, 'c:/work/conn', 'c:/work/alpha') }
-    expect(groupChats(sent, { order }).folders.map((f) => f.label)).toEqual(['conn', 'alpha'])
+    order = { ...order, rows: moveInOrder(order.rows, 'a2', 'a1') }
+    const dragged = groupChats(sent, { order })
+    expect(ids(dragged.folders[0])).toEqual(['a2', 'a1'])
+    expect(dragged.folders.map((f) => f.label)).toEqual(['alpha', 'conn'])
+  })
+
+  it('folders sort A-Z by label, ignoring case, numbers in their own order (scratch-2 before scratch-10)', () => {
+    const cases: [string[], string[]][] = [
+      [['scratch-10', 'scratch-2', 'Connections', 'monkeyWerx'], ['Connections', 'monkeyWerx', 'scratch-2', 'scratch-10']],
+      [['No folder', 'alpha', 'Beta'], ['alpha', 'Beta', 'No folder']]
+    ]
+    for (const [labels, sorted] of cases) {
+      expect(sortFolders(labels.map((label) => ({ label }))).map((g) => g.label)).toEqual(sorted)
+    }
   })
 
   // Owner, 2026-10-04: the desk list and the cloud list share one order, so one recording what it shows
@@ -623,4 +635,42 @@ describe('a chat that turns orange', () => {
     // nothing new turned orange: nothing moves
     expect(raiseNewlyOrange(afterB, entries([working('a'), done('b'), done('c')]), was)).toEqual(['b', 'c', 'a'])
   })
+})
+
+describe('a chat started from another chat nests under it', () => {
+  function ext(id: string, over: Partial<ExternalSession> = {}): ExternalSession {
+    return { id, title: `Ext ${id}`, cwd: 'C:/work/alpha', source: 'desktop', instance: null, status: 'idle', activity: null, lastActivityAt: 20, model: null, accountId: null, canResume: false, fromPc: null, pinned: false, archived: false, unread: false, group: null, ...over }
+  }
+  // Each shown row as "group row" (and "<- the row it sits under"), in the order the sidebar lists them.
+  const layout = (g: SidebarGroups) => [g.pinned, ...g.folders, g.archived].flatMap((x) => (x ? x.entries.map((e) => `${x.key} ${entryKey(e)}${e.under ? ` <- ${e.under}` : ''}`) : []))
+  const cases: [string, ExternalSession[], string[]][] = [
+    [
+      'a child is placed under its parent, even when newer',
+      [ext('p', { lastActivityAt: 30 }), ext('c', { parentId: 'p', lastActivityAt: 40 }), ext('x', { lastActivityAt: 10 })],
+      ['C:/work/alpha external:p', 'C:/work/alpha external:c <- external:p', 'C:/work/alpha external:x']
+    ],
+    [
+      'a grandchild is one step in, under the top parent',
+      [ext('p', { lastActivityAt: 30 }), ext('c', { parentId: 'p', lastActivityAt: 20 }), ext('g', { parentId: 'c', lastActivityAt: 10 })],
+      ['C:/work/alpha external:p', 'C:/work/alpha external:c <- external:p', 'C:/work/alpha external:g <- external:p']
+    ],
+    [
+      'a child whose parent is not shown is an ordinary row',
+      [ext('c', { parentId: 'gone', lastActivityAt: 20 }), ext('x', { lastActivityAt: 10 })],
+      ['C:/work/alpha external:c', 'C:/work/alpha external:x']
+    ],
+    [
+      'a pinned child stays in Pinned, not under its parent',
+      [ext('p', { lastActivityAt: 30 }), ext('c', { parentId: 'p', pinned: true })],
+      ['pinned external:c', 'C:/work/alpha external:p']
+    ],
+    [
+      'a child in another folder joins its parent\'s group',
+      [ext('p', { lastActivityAt: 30 }), ext('c', { parentId: 'p', cwd: 'C:/work/beta', lastActivityAt: 20 })],
+      ['C:/work/alpha external:p', 'C:/work/alpha external:c <- external:p']
+    ]
+  ]
+  for (const [name, external, want] of cases) {
+    it(name, () => expect(layout(groupChats([], { external }))).toEqual(want))
+  }
 })

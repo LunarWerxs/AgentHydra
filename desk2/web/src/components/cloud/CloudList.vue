@@ -17,7 +17,7 @@ import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
-import { glyphDotClass, HIDE_TITLE, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
+import { glyphDotClass, HIDE_TITLE, newChatFolder, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
 import { fromPcLabel, modelName, originLabel, RESULTS_KEY, rowLead, scopesNarrowed, sessionShape, SHAPE_LABELS, type CloudGroup } from './logic'
 import { appMark } from './appMarks'
@@ -30,8 +30,7 @@ import { useCloud } from './store'
 // cloud (owner, 2026-10-04: "they change order and none display a cloud icon"). A row opens the session
 // (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in select mode it
 // ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (Michael,
-// 2026-10-04). The search and filter buttons (the `tools` slot) sit at the right end of the first folder's
-// header, as on the desk list, or alone in a header while there is no folder to show.
+// 2026-10-04). The search and filter buttons sit beside the New button (Sidebar.vue), as on the desk list.
 const props = defineProps<{
   /** The groups to draw: the store's with the rows Sidebar adds for running work no row lists (sidebar/tasks.ts addToCloudGroups); else the store's. */
   groups?: CloudGroup[]
@@ -161,6 +160,8 @@ async function copyIds() {
 }
 
 const ROW = LIST_ROW
+/** A group's '+' folder (sidebar/logic.ts newChatFolder): its own, else its newest row's; none for the results group. */
+const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFolder(g.cwd, g.rows.map((r) => ({ cwd: r.cwd, at: r.lastActivityAt }))))
 </script>
 
 <template>
@@ -190,8 +191,6 @@ const ROW = LIST_ROW
     </DefineRowBody>
     <header v-if="shownGroups.length === 0" class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
-      <span class="flex-1" />
-      <slot name="tools" />
     </header>
 
     <p v-if="cloud.error.value" role="alert" class="px-1.5 pt-2 text-[12px] leading-4 text-danger-text">
@@ -208,7 +207,7 @@ const ROW = LIST_ROW
     </p>
 
     <TransitionGroup :css="false" @leave="rowLeave">
-    <section v-for="(g, gi) in shownGroups" :key="g.key" :aria-label="g.label">
+    <section v-for="g in shownGroups" :key="g.key" :aria-label="g.label">
       <ContextMenu>
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
       <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
@@ -225,12 +224,11 @@ const ROW = LIST_ROW
           </button>
         </Tip>
         <span class="flex-1" />
-        <Tip v-if="g.cwd && g.key !== RESULTS_KEY" :label="`New session in ${g.label}`">
-          <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', g.cwd)">
+        <Tip v-if="newFolderOf(g)" :label="`New session in ${g.label}`">
+          <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', newFolderOf(g)!)">
             <component :is="shellGlyphs.groupNew" class="size-4" />
           </button>
         </Tip>
-        <slot v-if="gi === 0" name="tools" />
       </header>
       </ContextMenuTrigger>
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">

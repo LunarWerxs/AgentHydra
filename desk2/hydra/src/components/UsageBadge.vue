@@ -1,9 +1,17 @@
+<script lang="ts">
+import { shallowRef } from 'vue'
+
+// The badge whose breakdown is open, by its own symbol (owner, 2026-10-09: opening one closes any
+// other). Module-level, so every badge in the table sees the same one.
+const openOwner = shallowRef<symbol | null>(null)
+</script>
+
 <script setup lang="ts">
-// Color-coded usage Badge + hover/click Popover breakdown, shared by the desktop Instances
+// Color-coded usage Badge + click Popover breakdown, shared by the desktop Instances
 // table and the CLI Instances table (both key into useUsage by a different string, so this
 // component just takes the already-resolved snapshot rather than a key).
 import { Loader2, RefreshCw } from '@lucide/vue'
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -151,62 +159,43 @@ async function onTurnOffExtraUsage(): Promise<void> {
   }
 }
 
-// --- open on HOVER as well as on click ----------------------------------------------------------
-// The breakdown (both reset times, the per-model sub-limit, how stale the reading is) is the whole
-// reason the badge is interactive, and requiring a click to see it made the badge look like a plain
-// label. Hover reveals it; click still works and PINS it open, so the "Check now" button inside is
-// reachable without racing the pointer out of the trigger.
-//
-// The delays are what make this usable rather than twitchy: a short open delay so sweeping the
-// pointer across a table column doesn't strobe popovers, and a longer close delay so travelling
-// from the badge INTO the popover doesn't dismiss it mid-move.
-const OPEN_DELAY_MS = 130
-const CLOSE_DELAY_MS = 220
-
+// --- open on CLICK (owner, 2026-10-09) ----------------------------------------------------------
+// The card never opens on hover: it opens on a click, or Enter/Space when the pill is focused, and
+// closes on a second click, Escape or a click outside (reka's Popover reports all of those through
+// onRootOpenChange). Opening one badge's card closes any other, through `openOwner` above.
 const open = ref(false)
-/** Set by an explicit click; a pinned popover ignores mouseleave until dismissed. */
-const pinned = ref(false)
-let openTimer: number | null = null
-let closeTimer: number | null = null
+const me = Symbol('usage-badge')
 
-function clearTimers(): void {
-  if (openTimer !== null) window.clearTimeout(openTimer)
-  if (closeTimer !== null) window.clearTimeout(closeTimer)
-  openTimer = null
-  closeTimer = null
-}
-onUnmounted(clearTimers)
+watch(openOwner, (owner) => {
+  if (owner !== me) open.value = false
+})
+onUnmounted(() => {
+  if (openOwner.value === me) openOwner.value = null
+})
 
-function onEnter(): void {
-  clearTimers()
-  if (open.value) return
-  openTimer = window.setTimeout(() => {
-    open.value = true
-  }, OPEN_DELAY_MS)
-}
-
-function onLeave(): void {
-  clearTimers()
-  if (pinned.value) return
-  closeTimer = window.setTimeout(() => {
-    open.value = false
-  }, CLOSE_DELAY_MS)
-}
-
-/** Root open changes come from the trigger's own click, Escape, and outside-click. A click is the
- *  only one that arrives with `v` true here (hover sets `open` directly), so pinning tracks it. */
+/** Every open change: the pill's click, Escape and outside-click (reka), and the close when another
+ *  badge opens. */
 function onRootOpenChange(v: boolean): void {
-  clearTimers()
   open.value = v
-  pinned.value = v
+  if (v) openOwner.value = me
+  else if (openOwner.value === me) openOwner.value = null
+}
+
+/** Enter and Space on the focused pill toggle the card, as a button's click would. A held key repeats
+ *  its keydown, which must not flip the card back and forth. */
+function onKeyToggle(e: KeyboardEvent): void {
+  if (e.repeat) return
+  onRootOpenChange(!open.value)
 }
 </script>
 
 <template>
-  <!-- A badge nobody has hovered, focused or pressed is its trigger alone (LazyOverlay); the stand-in
-       carries what reka's PopoverTrigger sets while closed. The hover timers live on the Badge itself, so
-       they run in both states. -->
+  <!-- A badge nobody has clicked, focused or pressed is its trigger alone (LazyOverlay); the stand-in
+       carries what reka's PopoverTrigger sets while closed. A press or a focus mounts the real popover;
+       Enter and Space on the focused pill are replayed onto it, and the real pill's keydown toggles
+       the card. The pill is a div, so role and tabindex make it reachable and announce it as a button. -->
   <LazyOverlay
+    :interest="['focus', 'press', 'key']"
     first-press="click"
     :armed="open"
     :stand-in="{
@@ -222,12 +211,11 @@ function onRootOpenChange(v: boolean): void {
         :variant="variant"
         tabular
         interactive
+        role="button"
+        tabindex="0"
         class="relative min-w-11"
         :dimmed="stale"
-        :title="noData ? reasonMessage : undefined"
         :aria-busy="checking || undefined"
-        @mouseenter="onEnter"
-        @mouseleave="onLeave"
       >
         <Loader2 v-if="checking" class="absolute animate-spin" />
         <span :class="checking ? 'opacity-0' : undefined">{{ label }}</span>
@@ -243,28 +231,26 @@ function onRootOpenChange(v: boolean): void {
         :variant="variant"
         tabular
         interactive
+        role="button"
+        tabindex="0"
         class="relative min-w-11"
         :dimmed="stale"
-        :title="noData ? reasonMessage : undefined"
         :aria-busy="checking || undefined"
-        @mouseenter="onEnter"
-        @mouseleave="onLeave"
+        @keydown.enter.prevent="onKeyToggle"
+        @keydown.space.prevent="onKeyToggle"
       >
         <Loader2 v-if="checking" class="absolute animate-spin" />
         <span :class="checking ? 'opacity-0' : undefined">{{ label }}</span>
       </Badge>
     </PopoverTrigger>
-    <!-- trap-focus off + open-auto-focus prevented: this opens on HOVER now, and a popover that
-         grabs the caret because the pointer drifted over a table cell would be hostile. The
-         "Check now" action inside is duplicated in the row's kebab menu, which stays keyboard-
-         reachable. -->
+    <!-- trap-focus off + open-auto-focus prevented: the card is a read-out, so it does not take the
+         caret when it opens; the pill keeps focus. The "Check now" action inside is duplicated in the
+         row's kebab menu, which stays keyboard-reachable. -->
     <PopoverContent
       align="start"
       class="w-64"
       :trap-focus="false"
       @open-auto-focus.prevent
-      @mouseenter="onEnter"
-      @mouseleave="onLeave"
     >
       <div v-if="noData" class="text-muted-foreground">
         {{ reasonMessage }}

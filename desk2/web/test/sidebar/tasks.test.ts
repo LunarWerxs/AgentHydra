@@ -383,22 +383,22 @@ function deskRow(id: string, at: number, cwd: string | null): SidebarEntry {
   return { kind: 'external', id, at, session }
 }
 
-test("the desk list draws an added row in its folder's group among its own rows, a folder it has no group for after its groups", () => {
+test("the desk list draws an added row in its folder's group among its own rows; the groups, added ones included, are A-Z", () => {
   const app: ChatGroup = { key: 'C:/Users/me/Projects/app', label: 'app', cwd: 'C:/Users/me/Projects/app', entries: [deskRow('s-a', 30, 'C:/Users/me/Projects/app'), deskRow('s-b', 10, 'C:/Users/me/Projects/app')] }
   const moved: ChatGroup = { key: 'group:Example', label: 'Example', cwd: null, entries: [deskRow('s-c', 20, 'C:/Users/me/Projects/app')] }
   // The same folder spelled another way; a row the saved order already places, and one it does not.
   const recorded = addedRow('recorded', 'c:\\users\\me\\projects\\app\\', 20)
   const fresh = addedRow('fresh', 'C:/Users/me/Projects/app', 40)
   const out = addToDeskGroups([app, moved], [recorded, fresh, addedRow('new-folder', 'C:/Users/me/Projects/new', 5), addedRow('no-folder', null, 7), addedRow('hidden', 'C:/Users/me/Projects/hid', 50)], {
-    order: { groups: [], rows: ['s-a', recorded.id, 's-b'] },
+    order: { rows: ['s-a', recorded.id, 's-b'] },
     hidden: new Set(['c:/users/me/projects/hid']),
     showHidden: false
   })
   expect(out.map((g) => [g.label, g.cwd, g.entries.map((e) => e.id)])).toEqual([
     ['app', 'C:/Users/me/Projects/app', [fresh.id, 's-a', recorded.id, 's-b']],
     ['Example', null, ['s-c']],
-    ['No folder', null, ['added::task:no-folder']],
-    ['new', 'C:/Users/me/Projects/new', ['added::task:new-folder']]
+    ['new', 'C:/Users/me/Projects/new', ['added::task:new-folder']],
+    ['No folder', null, ['added::task:no-folder']]
   ])
   // A moved-to group is no folder's: it is left as it was.
   expect(out[1]).toBe(moved)
@@ -412,7 +412,7 @@ test("the cloud list draws another PC's chat in the group of its synced folder a
   const { added } = nestTasks([], [worker('t', 1, { pc: 'PC-X', originSessionId: 's-synced' }), worker('u', 2, { pc: 'PC-X', originSessionId: 's-other' })], [], known)
   const app: CloudGroup = { key: 'cloud:d:/work/app', label: 'app', cwd: 'D:/Work/app', orderKey: 'd:/work/app', rows: [cloudRow('s-desk', 70, 'D:/Work/app'), cloudRow('s-cloud', 50, 'D:/Work/app')] }
   const out = addToCloudGroups([app], added, {
-    order: { groups: [], rows: [] },
+    order: { rows: [] },
     hidden: new Set<string>(),
     showHidden: false,
     orderKey: (id) => id,
@@ -444,18 +444,19 @@ test("another PC's chat known only by its folder's last name goes in the one gro
   const group = (cwd: string, at: number): CloudGroup => ({ key: `cloud:${cwd.toLowerCase()}`, label: cwd.split('/').pop()!, cwd, orderKey: cwd.toLowerCase(), rows: [cloudRow(`s-${at}`, at, cwd)] })
   // Two folders here are named "shared": which one is a guess, so that chat gets a group of its own.
   const out = addToCloudGroups([group('D:/Work/app', 70), group('D:/Work/shared', 60), group('E:/Other/shared', 50)], added, {
-    order: { groups: [], rows: [] },
+    order: { rows: [] },
     hidden: new Set<string>(),
     showHidden: false,
     orderKey: (id) => id,
     onDesk: (id) => !id.startsWith('added:')
   })
+  // A-Z by label; the three "shared" groups keep the order they were built in.
   expect(out.map((g) => [g.label, g.orderKey, g.rows.map((r) => r.id)])).toEqual([
     ['app', 'd:/work/app', ['s-70', 'added:PC-X:chat:s-app']],
-    ['shared', 'd:/work/shared', ['s-60']],
-    ['shared', 'e:/other/shared', ['s-50']],
     ['Example-repo', 'name:example-repo', [`added:PC-X:chat:${sid}`, 'added:PC-X:chat:s-repo']],
     ['No folder', '', ['added:PC-X:chat:s-none']],
+    ['shared', 'd:/work/shared', ['s-60']],
+    ['shared', 'e:/other/shared', ['s-50']],
     ['shared', 'name:shared', ['added:PC-X:chat:s-shared']]
   ])
 })

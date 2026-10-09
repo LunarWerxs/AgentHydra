@@ -130,7 +130,10 @@ app.get('/api/instances/:dir/login-history', async (c) => {
 app.post('/api/instances/:dir/open', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
-  const result = await openInstance(dir)
+  // `raise: true` is the person's own Open (AgentHydra's Open button sends it) and brings the new window
+  // forward; a script or MCP call leaves focus where it is. Not the Origin header: Desk 2's proxy strips it.
+  const body = await jsonBody(c)
+  const result = await openInstance(dir, { raise: body.raise === true })
   // A banked reset or credit shows on the row now instead of at the next usage sweep.
   if (result.ok)
     void readAppAfterOpen(dir).catch((err) =>

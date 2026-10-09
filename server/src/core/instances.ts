@@ -389,8 +389,41 @@ const nativeInstanceOpens = new Map<string, Promise<CMActionResult>>()
 // protocol/browser registrations; the guard every managed launch shares
 // (claude-native-launch-registry.ts) reads its baseline once for launches that overlap, so none can
 // take another's temporary registration for the original.
-export async function openInstance(dir: string): Promise<CMActionResult> {
+/** How an Open was asked for. `raise` is set only for the person's own Open (AgentHydra's Open button sends
+ *  `raise: true`); an agent's or a script's Open leaves focus where it is. `focus`
+ *  is the raise itself, injectable so a test can see the call. */
+export interface OpenInstanceOptions {
+  raise?: boolean
+  focus?: (dir: string) => Promise<CMActionResult>
+}
+
+export async function openInstance(
+  dir: string,
+  opts: OpenInstanceOptions = {},
+): Promise<CMActionResult> {
+  const result = await answerOpenInstance(dir)
+  raiseLaunchedWindow(result, opts)
+  return result
+}
+
+/**
+ * Brings a launched window to the front, best-effort. Fired once the answer is computed and never
+ * awaited, so it can neither fail nor delay the Open; a failure is logged and dropped.
+ */
+export function raiseLaunchedWindow(result: CMActionResult, opts: OpenInstanceOptions): void {
+  if (!opts.raise || !result.ok || !result.dir) return
+  const dir = result.dir
+  const focus = opts.focus ?? focusInstance
+  void focus(dir)
+    .then((raised) => {
+      if (!raised.ok) console.log(`[open] ${basename(dir)} not raised: ${raised.message}`)
+    })
+    .catch((err) => console.error(`[open] ${basename(dir)} raise failed:`, err))
+}
+
+async function answerOpenInstance(dir: string): Promise<CMActionResult> {
   const normDir = normalizePath(dir)
+  const clock = new OpenClock()
   let nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>
   try {
     // Every desktop profile runs native control unless a person opted it out (2026-09-20).
@@ -400,18 +433,20 @@ export async function openInstance(dir: string): Promise<CMActionResult> {
         ? ensureClaudeNativeProfileConfig(normDir)
         : null) ?? getClaudeNativeProfileConfig(normDir)
   } catch (error) {
-    return {
+    const result: CMActionResult = {
       ok: false,
       action: 'open',
       dir: normDir,
       message: `Invalid native launch configuration: ${error instanceof Error ? error.message : String(error)}`,
       data: {},
     }
+    logOpen(normDir, clock, result)
+    return result
   }
-  if (!nativeConfig?.launchDebugger) return openConfiguredInstance(normDir, nativeConfig)
+  if (!nativeConfig?.launchDebugger) return openConfiguredInstance(normDir, nativeConfig, clock)
   const pending = nativeInstanceOpens.get(normDir)
   if (pending) return pending
-  const operation = openConfiguredInstance(normDir, nativeConfig)
+  const operation = openConfiguredInstance(normDir, nativeConfig, clock)
   nativeInstanceOpens.set(normDir, operation)
   try {
     return await operation
@@ -525,17 +560,90 @@ export function launchStartedSince(dir: string, since: number): boolean {
   return (launchStarts.get(pathKey(dir, true)) ?? Number.NEGATIVE_INFINITY) >= since
 }
 
+/** The phases of one Open, in the order the daemon log lists them. */
+const OPEN_PHASES = ['running-check', 'hooks', 'copy', 'registry', 'start-to-ready', 'restore']
+
+const seconds = (ms: number): string => (ms / 1000).toFixed(1)
+
+/**
+ * The phase times of one Open, read back by logOpen. Phases overlap (hooks, copy and registry run at
+ * once), so each times its own work; the first phase to throw is the one a failure names.
+ */
+class OpenClock {
+  readonly startedAt = Date.now()
+  private readonly elapsed = new Map<string, number>()
+  private failedPhase: string | null = null
+
+  async time<T>(phase: string, work: () => Promise<T>): Promise<T> {
+    const at = Date.now()
+    try {
+      return await work()
+    } catch (err) {
+      this.fail(phase)
+      throw err
+    } finally {
+      this.elapsed.set(phase, Date.now() - at)
+    }
+  }
+
+  fail(phase: string): void {
+    this.failedPhase ??= phase
+  }
+
+  failed(): string | null {
+    return this.failedPhase
+  }
+
+  phaseTimes(): string {
+    return OPEN_PHASES.filter((phase) => this.elapsed.has(phase))
+      .map((phase) => `${phase} ${seconds(this.elapsed.get(phase) ?? 0)} s`)
+      .join(', ')
+  }
+}
+
+/**
+ * The one daemon-log line for an Open. Only the profile folder's name is written, never its path:
+ * a failure message that carries the path has it replaced with the name first.
+ */
+function logOpen(normDir: string, clock: OpenClock, result: CMActionResult): void {
+  const name = basename(normDir)
+  const total = seconds(Date.now() - clock.startedAt)
+  if (!result.ok) {
+    const message = (result.message ?? '').split(normDir).join(name)
+    console.log(`[open] ${name} failed after ${total} s at ${clock.failed() ?? 'open'}: ${message}`)
+  } else if (result.message === 'launched') {
+    console.log(`[open] ${name} ready in ${total} s: ${clock.phaseTimes()}`)
+  } else {
+    console.log(`[open] ${name} ${result.message} in ${total} s`)
+  }
+}
+
 async function openConfiguredInstance(
   normDir: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+  clock: OpenClock,
 ): Promise<CMActionResult> {
-  const running = await probeRunningInstance(normDir, nativeConfig)
-  if (running) return running
+  const running = await clock.time('running-check', () =>
+    probeRunningInstance(normDir, nativeConfig),
+  )
+  if (running && !running.ok) clock.fail('running-check')
+  const result = running ?? (await launchConfiguredInstance(normDir, nativeConfig, clock))
+  logOpen(normDir, clock, result)
+  return result
+}
 
+async function launchConfiguredInstance(
+  normDir: string,
+  nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+  clock: OpenClock,
+): Promise<CMActionResult> {
   const binary = await resolveLaunchBinaryOrNull()
-  if (!binary) return await noLaunchBinaryResult(normDir)
+  if (!binary) {
+    clock.fail('binary')
+    return await noLaunchBinaryResult(normDir)
+  }
 
-  return dispatchConfiguredLaunch(normDir, binary, nativeConfig)
+  return dispatchConfiguredLaunch(normDir, binary, nativeConfig, clock)
 }
 
 async function runBeforeLaunchHooks(normDir: string): Promise<void> {
@@ -573,17 +681,18 @@ async function dispatchConfiguredLaunch(
   normDir: string,
   binary: string,
   nativeConfig: ReturnType<typeof getClaudeNativeProfileConfig>,
+  clock: OpenClock,
 ): Promise<CMActionResult> {
   const attempt: LaunchAttempt = { dispatched: false }
-  const hooks = runBeforeLaunchHooks(normDir)
+  const hooks = clock.time('hooks', () => runBeforeLaunchHooks(normDir))
   const leasing: Promise<NativeLaunchRegistryLease | null> =
     nativeConfig?.launchDebugger === true
-      ? nativeLaunchRegistryGuard.begin(normDir)
+      ? clock.time('registry', () => nativeLaunchRegistryGuard.begin(normDir))
       : Promise.resolve(null)
   // Read below, after the copy is ready; a launch that fails before then gives it back (finally).
   leasing.catch(() => undefined)
   try {
-    const plan = await prepareClaudeNativeLaunch(binary, nativeConfig)
+    const plan = await clock.time('copy', () => prepareClaudeNativeLaunch(binary, nativeConfig))
     if (plan.nativeDebugger)
       attempt.nativeData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
     const { argv, detached } = buildInstanceLaunch(process.platform, plan.binary, [
@@ -600,6 +709,7 @@ async function dispatchConfiguredLaunch(
       detached,
       lease,
       attempt,
+      clock,
     })
     // The world just changed under the cached snapshot — drop it so the poll tick that follows
     // this click shows the row as running instead of waiting out the TTL.
@@ -672,14 +782,17 @@ async function spawnVerifyAndRestore(args: {
   detached: boolean
   lease: NativeLaunchRegistryLease | null
   attempt: LaunchAttempt
+  clock: OpenClock
 }): Promise<VerifiedLaunch> {
-  const { normDir, plan, argv, detached, lease, attempt } = args
+  const { normDir, plan, argv, detached, lease, attempt, clock } = args
   let pid = 0
   let launchError: unknown
   let restorationError: unknown
   let registryRestoration: NativeLaunchRegistryResult | null = null
   try {
-    pid = await spawnAndAwaitReady(normDir, plan, argv, detached, attempt)
+    pid = await clock.time('start-to-ready', () =>
+      spawnAndAwaitReady(normDir, plan, argv, detached, attempt),
+    )
   } catch (error) {
     launchError = error
   } finally {
@@ -687,7 +800,7 @@ async function spawnVerifyAndRestore(args: {
       // The managed copy also aims Claude's Start-menu shortcut at itself; pointing it back at the
       // install touches a file, not the registry, so the two repairs run at once.
       const [restoration] = await Promise.allSettled([
-        lease.restore(plan.binary),
+        clock.time('restore', () => lease.restore(plan.binary)),
         repointClaudeStartShortcut(),
       ])
       if (restoration.status === 'fulfilled') registryRestoration = restoration.value

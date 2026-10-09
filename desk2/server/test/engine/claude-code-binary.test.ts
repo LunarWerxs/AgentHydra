@@ -253,7 +253,7 @@ describe('a chat without the binary', () => {
     projectFolders: [],
     projectRoots: [],
     hiddenProjects: [],
-    babysitter: true,
+    babysitter: true, orchestrator: false,
   }
 
   /** A Query that does nothing until it is closed. */

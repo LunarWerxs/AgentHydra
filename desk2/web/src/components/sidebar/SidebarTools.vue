@@ -1,17 +1,5 @@
-<script lang="ts">
-import { ref } from 'vue'
-
-// One open Filter menu for every Filter button. The button sits in the list's first header, and a filter
-// that takes that group away (or a cloud filter that switches lists) mounts it again in the next one: the
-// menu stays open there (owner, 2026-10-05). The newest button holds it, so a header still fading out
-// shows no second menu.
-const filterOpen = ref(false)
-const mountedTools = ref<number[]>([])
-let lastTools = 0
-</script>
-
 <script setup lang="ts">
-import { computed, onUnmounted } from 'vue'
+import { computed, ref } from 'vue'
 import { Activity } from '@lucide/vue'
 import { icons, shellGlyphs } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -24,8 +12,8 @@ import { useHiddenGroups } from './hidden'
 import { activeOnly } from './active'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from './menuClasses'
 
-// The Search and Filter buttons at the right end of the sidebar list's first header, the desk list's or
-// the cloud list's. The Filter menu holds both lists' filters (cloud/FilterMenuItems.vue).
+// The Search and Filter buttons beside the New button (Sidebar.vue), whichever list is shown (owner, 2026-10-09).
+// The Filter menu holds both lists' filters (cloud/FilterMenuItems.vue).
 const props = defineProps<{ searchOpen: boolean; filter: SidebarFilter }>()
 const emit = defineEmits<{ search: []; 'update:filter': [filter: SidebarFilter] }>()
 
@@ -39,17 +27,7 @@ const ACTIVE_TIP = 'Show only the sessions running or starting, those with backg
 const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] hover:bg-fill-hover'
 const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`
 
-const toolsId = ++lastTools
-mountedTools.value.push(toolsId)
-onUnmounted(() => (mountedTools.value = mountedTools.value.filter((id) => id !== toolsId)))
-const menuOpen = computed({
-  get: () => filterOpen.value && mountedTools.value.at(-1) === toolsId,
-  set: (open: boolean) => (filterOpen.value = open),
-})
-// A menu handed to a newer button keeps the focus where that one put it, not on this button.
-function keepFocus(e: Event): void {
-  if (filterOpen.value) e.preventDefault()
-}
+const menuOpen = ref(false)
 </script>
 
 <template>
@@ -66,7 +44,7 @@ function keepFocus(e: Event): void {
             <component :is="shellGlyphs.viewOptions" class="size-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" :class="`${MENU_CONTENT} w-64`" @open-auto-focus="focusFirstItem" @close-auto-focus="keepFocus">
+        <DropdownMenuContent align="start" :class="`${MENU_CONTENT} w-64`" @open-auto-focus="focusFirstItem">
           <FilterMenuItems :filter="filter" @update:filter="(f: SidebarFilter) => emit('update:filter', f)" />
           <DropdownMenuSeparator :class="MENU_SEPARATOR" />
           <DropdownMenuItem

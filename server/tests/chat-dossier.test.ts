@@ -39,6 +39,7 @@ function fixtureRoot(): { dir: string; label: string } {
       cliSessionId: 'other-id',
       title: 'Unrelated work',
       isArchived: false,
+      spawnedFrom: { sessionId: 'local_chat-one', taskId: 'task-1', title: 'Invented chat' },
     }),
   )
   return { dir, label: 'fixture' }
@@ -55,6 +56,7 @@ describe('chat-dossier', () => {
     expect(one?.archived).toBe(true)
     expect(one?.priorCliSessionIds).toEqual(['prior-id-a', 'prior-id-b'])
     expect(one?.lastActivityAt).toBe(new Date(2000).toISOString())
+    expect(chats.find((c) => c.title === 'Unrelated work')?.spawnedFrom).toBe('local_chat-one')
   })
 
   test('a chat answers to its title, its current id, any PRIOR id, and its filename id', () => {

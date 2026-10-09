@@ -70,6 +70,8 @@ export interface AhChatRow {
   unread: boolean // Claude Desktop's dot: a turn finished after the app last had the chat in focus
   cwd: string | null
   effort?: string | null
+  /** The parent chat's local id (`local_<id>`) when another chat started this one; null or absent otherwise. */
+  spawnedFrom?: string | null
   live: boolean
   livePid?: number | null
 }
