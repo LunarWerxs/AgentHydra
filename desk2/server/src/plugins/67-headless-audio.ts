@@ -8,30 +8,17 @@ import { compileHelper, livePages, spawnHelper } from '../browser/headless-audio
 import { HeadlessAudio, chatResolver } from '../browser/headless-audio-runtime'
 import { readPortFile } from '../browser/cdp'
 import { notOwnPage } from '../browser/guard'
+import { workerOrigins } from '../browser/worker-origins'
 import { type Bridge, bridge } from '../bridge'
 import type { ServerContext } from '../context'
-
-const WORKERS_TTL_MS = 5000
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
   const directChat = ctx.deps.chatForSession as ((sessionId: string) => string | null) | undefined
-
-  let cached: { at: number; map: Map<string, string> } | null = null
-  async function workerParents(): Promise<Map<string, string>> {
-    const now = Date.now()
-    if (cached && now - cached.at < WORKERS_TTL_MS) return cached.map
-    const map = new Map<string, string>()
-    for (const w of await b.workers({ all: true }).catch(() => [])) {
-      if (!w.originSessionId) continue
-      for (const s of w.sessions ?? []) map.set(s, w.originSessionId)
-    }
-    cached = { at: now, map }
-    return map
-  }
+  const parents = workerOrigins(b)
 
   async function chatOf(): Promise<(sessionId: string) => string | null> {
-    return chatResolver(directChat ?? (() => null), await workerParents())
+    return chatResolver(directChat ?? (() => null), await parents())
   }
 
   const runtime = new HeadlessAudio({

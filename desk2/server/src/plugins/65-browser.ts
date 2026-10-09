@@ -13,6 +13,8 @@ import { notOwnPage } from '../browser/guard'
 import { askedTab, TabScope } from '../browser/ownership'
 import { previewHub } from '../browser/preview'
 import { listProfiles, ofAnotherWorkspace, type ProfileRef } from '../browser/store'
+import { withWorkerSessions, workerOrigins } from '../browser/worker-origins'
+import { type Bridge, bridge } from '../bridge'
 import type { ServerContext } from '../context'
 
 /** The profile `name` as this chat's workspace may use it: its own, or an unowned one that is open. */
@@ -39,11 +41,12 @@ type Ws = ServerWebSocket<unknown>
 const sessions = new WeakMap<object, LiveSession>()
 const previews = new WeakMap<object, () => void>()
 
-/** What the chat named in a request may see of the profile: its own pages and unowned ones. No chat named: every page (the person's own servers pane). */
-function scopeOf(ctx: ServerContext, ref: ProfileRef, chat: unknown): TabScope | null {
+/** What the chat named in a request may see of the profile: its own pages, its CliMayte workers' and unowned ones. No chat named: every page (the person's own servers pane). */
+async function scopeOf(ctx: ServerContext, ref: ProfileRef, chat: unknown): Promise<TabScope | null> {
   if (typeof chat !== 'string' || chat === '') return null
   const sessionsOf = ctx.deps.chatSessions as ((id: string) => string[]) | undefined
-  return new TabScope(ref.dir, chat, sessionsOf?.(chat) ?? [])
+  const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
+  return new TabScope(ref.dir, chat, withWorkerSessions(sessionsOf?.(chat) ?? [], await workerOrigins(b)()))
 }
 
 function isHttpUrl(s: string): boolean {
@@ -67,7 +70,7 @@ async function profilesRoute(c: Context): Promise<Response> {
 
 /** An open profile: the page this chat should see (none started). */
 async function openedTab(ctx: ServerContext, ref: ProfileRef & { port: number }, chat: unknown): Promise<BrowserTab | null> {
-  const scope = scopeOf(ctx, ref, chat)
+  const scope = await scopeOf(ctx, ref, chat)
   try {
     return scope ? await scope.pickOrOpen(ref.port) : ((await pageTabs(ref.port).catch(() => []))[0] ?? null)
   } catch {
@@ -94,7 +97,7 @@ async function openRoute(c: Context, ctx: ServerContext): Promise<Response> {
     const login = body.login === true
     const port = await launchChrome(ref.dir, url, login)
     const first = port === null ? null : await firstTab(port)
-    if (first) scopeOf(ctx, ref, body.chat)?.adopt(first.id)
+    if (first) (await scopeOf(ctx, ref, body.chat))?.adopt(first.id)
     const opened: BrowserOpened = { profile: ref.profile.name, started: true, tab: first }
     return c.json(opened)
   } catch (err) {
@@ -130,7 +133,7 @@ async function tabsRoute(c: Context, ctx: ServerContext): Promise<Response> {
   if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 409)
   try {
     const tabs = await pageTabs(ref.port)
-    return c.json(scopeOf(ctx, ref, c.req.query('chat'))?.visible(tabs) ?? tabs)
+    return c.json((await scopeOf(ctx, ref, c.req.query('chat')))?.visible(tabs) ?? tabs)
   } catch {
     return c.json({ error: `'${profile}' did not answer` }, 502)
   }
@@ -148,7 +151,7 @@ async function pageArgs(c: Context, ctx: ServerContext, need: 'url' | 'tab'): Pr
   const ref = await usable(body.cwd, body.profile)
   if (!ref) return { fail: c.json({ error: `no browser '${body.profile}' for this chat's workspace` }, 404) }
   if (ref.port === null) return { fail: c.json({ error: `'${body.profile}' is not open` }, 409) }
-  return { port: ref.port, arg, scope: scopeOf(ctx, ref, body.chat) }
+  return { port: ref.port, arg, scope: await scopeOf(ctx, ref, body.chat) }
 }
 
 async function newPageRoute(c: Context, ctx: ServerContext): Promise<Response> {
@@ -190,7 +193,7 @@ async function previewRoute(c: Context, ctx: ServerContext): Promise<Response> {
   if (ref.port === null) return c.json({ error: `'${profile}' is not open` }, 404)
   try {
     // A page the pane is showing live already streams frames: answer from the newest, never a second capture.
-    const scope = scopeOf(ctx, ref, c.req.query('chat'))
+    const scope = await scopeOf(ctx, ref, c.req.query('chat'))
     const frame = liveFrame(ref.port, scope?.key ?? '')
     if (frame) return jpeg(frame)
     const tab = scope ? scope.best(await pageTabs(ref.port)) : await LiveSession.pick(ref.port, null)
@@ -212,7 +215,7 @@ async function acceptPreview(req: Request, ctx: ServerContext): Promise<Response
   const ref = listing.refs.find((r) => r.profile.name === profile)
   if (!ref) return Response.json({ error: `no browser '${profile}' for this chat's workspace` }, { status: ofAnotherWorkspace(listing, profile) ? 403 : 404 })
   if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
-  return { data: { port: ref.port, scope: scopeOf(ctx, ref, q.get('chat')) } }
+  return { data: { port: ref.port, scope: await scopeOf(ctx, ref, q.get('chat')) } }
 }
 
 function openPreview(ws: Ws, data: PreviewData): void {
@@ -257,7 +260,7 @@ async function acceptLive(req: Request, ctx: ServerContext): Promise<Response | 
   const ref = await usable(cwd, profile)
   if (!ref) return Response.json({ error: `no browser '${profile}' for this chat's workspace` }, { status: 404 })
   if (ref.port === null) return Response.json({ error: `'${profile}' is not open` }, { status: 409 })
-  const scope = scopeOf(ctx, ref, q.get('chat'))
+  const scope = await scopeOf(ctx, ref, q.get('chat'))
   const asked = q.get('tab')
   const tab = await liveTab(ref.port, scope, asked)
   if (tab && 'error' in tab) return Response.json({ error: tab.error }, { status: tab.status })

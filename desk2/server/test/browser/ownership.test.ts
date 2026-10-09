@@ -74,14 +74,23 @@ function setup(ids: string[], ledger?: Record<string, { chat: string; at: string
   return { dir, tabs }
 }
 
-async function boot(): Promise<DeskServer> {
+/** A CliMayte worker as the bridge reports it: its own sessions and the session that dispatched it. */
+interface FakeWorker {
+  originSessionId: string
+  sessions: string[]
+}
+
+async function boot(workers: FakeWorker[] = []): Promise<DeskServer> {
   const plugins = tempDir('desk-plugins-')
   write(join(plugins, '65-browser.ts'), `export { default } from ${JSON.stringify(join(import.meta.dir, '../../src/plugins/65-browser.ts'))}\n`)
   const desk = await createServer({
     port: 0,
     home: tempDir('desk-home-'),
     pluginsDir: plugins,
-    deps: { chatSessions: (id: string) => SESSIONS[id] ?? [] },
+    deps: {
+      chatSessions: (id: string) => SESSIONS[id] ?? [],
+      bridge: { workers: async () => workers },
+    },
   })
   servers.push(desk)
   return desk
@@ -160,6 +169,35 @@ describe('two chats on one profile', () => {
     const desk = await boot()
     const res = await fetch(`${desk.url}/api/browser/preview?${q({ cwd: CWD, profile: 'alpha', chat: 'c1' })}`)
     expect(res.status).toBe(404)
+  })
+})
+
+describe('pages of the CliMayte workers a chat dispatched', () => {
+  const WORKERS: FakeWorker[] = [
+    { originSessionId: 'sess-1', sessions: ['worker-sess'] },
+    { originSessionId: 'worker-sess', sessions: ['sub-worker-sess'] },
+    { originSessionId: 'sess-2-new', sessions: ['other-worker-sess'] },
+  ]
+  const WORKER_LEDGER = {
+    w1: { chat: 'worker-sess', at: '2020-01-07T10:00:00.000Z' },
+    s1: { chat: 'sub-worker-sess', at: '2020-01-07T10:01:00.000Z' },
+    o1: { chat: 'other-worker-sess', at: '2020-01-07T10:02:00.000Z' },
+  }
+
+  test('a page a worker opens is in its parent chat’s list, its sub-worker’s too, and not in an unrelated chat’s', async () => {
+    setup(['w1', 's1', 'o1', 'free1'], WORKER_LEDGER)
+    const desk = await boot(WORKERS)
+    expect(await tabsOf(desk, 'c1')).toEqual(['w1', 's1', 'free1'])
+    expect(await tabsOf(desk, 'c2')).toEqual(['o1', 'free1'])
+  })
+
+  test('the parent chat can close its worker’s page, and another chat cannot', async () => {
+    const f = setup(['w1', 'free1'], WORKER_LEDGER)
+    const desk = await boot(WORKERS)
+    const close = (chat: string) => fetch(`${desk.url}/api/browser/page/close`, { method: 'POST', headers: json, body: JSON.stringify({ cwd: CWD, profile: 'alpha', chat, tab: 'w1' }) })
+    expect((await close('c2')).status).toBe(403)
+    expect((await close('c1')).status).toBe(200)
+    expect(f.tabs.map((t) => t.id)).toEqual(['free1'])
   })
 })
 
