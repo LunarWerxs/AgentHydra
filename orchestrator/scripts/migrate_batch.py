@@ -1059,6 +1059,9 @@ def _finish_one(item: _Item) -> None:
         item.landing = None
         return
     item.payload["chat"] = item.query
+    unsettled = migrate_chat.source_unsettled(item.payload)
+    if unsettled:
+        item.errors.append(unsettled)
     if item.errors:
         item.payload["ok"] = False
         item.payload["exitCode"] = 1

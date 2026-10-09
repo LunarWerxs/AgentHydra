@@ -269,5 +269,25 @@ class ReportProseTest(unittest.TestCase):
         self.assertEqual(got["report"], "the body")
 
 
+class VisibleSourceRowTest(unittest.TestCase):
+    """2026-10-09: a batch printed OK, ok true and unfinished 0 for a chat whose old copy the
+    source app refused to archive, and the owner found the duplicate on the old account himself."""
+
+    def test_a_landed_chat_whose_source_row_is_still_visible_is_not_a_finished_move(self):
+        item = migrate_batch._Item("a chat")
+        item.landing = _Landing(running=True)
+        payload = {"landed": True, "title": "a chat", "sessionId": "sid-1", "from": "old-account",
+                   "to": "new-account", "sourceRow": "visible", "sourceSettled": False,
+                   "sourceRowProvisional": False, "report": "r"}
+        with mock.patch.object(migrate_chat, "landing_payload", lambda land: dict(payload)):
+            migrate_batch._finish_one(item)
+        got = migrate_batch._build_batch_payload([item], ReportProseTest._Parsed(), "", 1.0, None)
+        self.assertFalse(got["ok"])
+        self.assertEqual((got["moved"], got["unfinished"]), (1, 1))
+        self.assertIn("LANDED but not finished: a chat", got["report"])
+        self.assertNotIn("  OK ", got["report"])
+        self.assertIn("still visible on old-account", got["report"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,10 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { win32 as path } from 'node:path'
 import { runInNewContext } from 'node:vm'
-import {
-  type NativeRequest,
-  nativeProgram,
-} from '../../server/src/core/claude-native/native-program'
+import { type NativeRequest, nativeProgram } from '../src/core/claude-native/native-program'
 
 // The shapes the generated program hands to, and reads from, Claude's managers.
 interface FixtureSession {
@@ -18,8 +15,8 @@ interface HtmlPreview {
   cwd: string
 }
 
-// Tests the generated program's own guards in an inert runtime. Actual installed archive
-// behavior is separately tested by native-archive.poc.ts; this suite needs no installed app.
+// Tests the generated program's own guards in an inert runtime against stand-in managers;
+// this suite needs no installed app.
 function harness() {
   const profileDir = 'D:\\profiles\\target'
   // Content-hashed bundle names: the program must find these by export, not by file name.
@@ -536,6 +533,34 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
         dispatch: 'not-sent',
       })
       expect(h.calls).toEqual([])
+    }
+  })
+  test("a move's superseded source left 'stopping' with no engine is archived; outside a move it is busy", async () => {
+    // 2026-10-09: a move left its source row isStopping with nothing running, and every settle
+    // was refused for about ten minutes while the batch reported the move as finished.
+    const moved = harness()
+    moved.target.isStopping = true
+    expect(await moved.run({ sourceSuperseded: true })).toMatchObject({ ok: true, verified: true })
+    expect(moved.calls).toHaveLength(1)
+
+    const ordinary = harness()
+    ordinary.target.isStopping = true
+    expect(await ordinary.run()).toMatchObject({
+      ok: false,
+      dispatch: 'not-sent',
+      reason: expect.stringContaining('(isStopping)'),
+    })
+    expect(ordinary.calls).toEqual([])
+
+    // A stop with its engine or query still attached is real work, superseded or not.
+    for (const live of [{ isRunning: true }, { query: {} }]) {
+      const busy = harness()
+      Object.assign(busy.target, { isStopping: true, ...live })
+      expect(await busy.run({ sourceSuperseded: true })).toMatchObject({
+        ok: false,
+        dispatch: 'not-sent',
+      })
+      expect(busy.calls).toEqual([])
     }
   })
   test('shared cwd aliases, missing managers and malformed resource state fail closed', async () => {
