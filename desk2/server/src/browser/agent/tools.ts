@@ -14,7 +14,8 @@ export async function callTool(name: string, params: Record<string, unknown> = {
   const etsy = etsyWebsiteHostIn(params)
   if (etsy) return { ok: false, status: 403, error: etsyRefusal(etsy) }
   try {
-    return { ok: true, text: await def.run(params, caller) }
+    const reply = await def.run(params, caller)
+    return typeof reply === 'string' ? { ok: true, text: reply } : { ok: true, ...reply }
   } catch (err) {
     if (err instanceof ToolInputError) return { ok: false, status: 400, error: err.message }
     return { ok: false, status: 500, error: err instanceof Error ? err.message : String(err) }

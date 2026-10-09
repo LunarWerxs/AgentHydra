@@ -12,9 +12,10 @@ import {
 } from '../profiles-scope'
 import type { Listing } from '../store'
 import { listProfiles } from '../store'
-import type { ToolCaller, ToolName } from './contract'
+import type { ToolCaller, ToolName, ToolReply } from './contract'
 import { ToolInputError } from './errors'
 import { navigate } from './navigate'
+import { PAGE_TOOLS } from './page-tools'
 import { READ_TOOLS } from './reads'
 
 export { ToolInputError }
@@ -31,7 +32,7 @@ const refused = async <T>(work: () => Promise<T>): Promise<T> => {
 const optionalText = (v: unknown): string | undefined =>
   v === undefined || v === null ? undefined : String(v)
 
-export type ToolHandler = (params: Record<string, unknown>, caller: ToolCaller) => Promise<string>
+export type ToolHandler = (params: Record<string, unknown>, caller: ToolCaller) => Promise<ToolReply>
 
 export interface ToolDef {
   name: ToolName
@@ -142,6 +143,7 @@ async function cdpOnce(
 
 export const TOOL_DEFS: ToolDef[] = [
   ...READ_TOOLS,
+  ...PAGE_TOOLS,
   {
     name: 'browser_profiles',
     description:

@@ -31,7 +31,13 @@ export function createBrowserMcp({ client, caller }: BrowserMcpDeps): McpHandler
           const name = typeof msg.params?.name === 'string' ? msg.params.name : ''
           const args = (msg.params?.arguments ?? {}) as Record<string, unknown>
           const res = await client.call(name, args, caller)
-          if (res.ok) return reply({ content: [{ type: 'text', text: res.text }] })
+          if (res.ok)
+            return reply({
+              content: [
+                ...(res.image ? [{ type: 'image', data: res.image.data, mimeType: res.image.mimeType }] : []),
+                { type: 'text', text: res.text },
+              ],
+            })
           return reply({ content: [{ type: 'text', text: res.error }], isError: true })
         }
         default:

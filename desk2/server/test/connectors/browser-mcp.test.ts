@@ -38,6 +38,22 @@ describe('the browser tools as MCP', () => {
     expect(seen).toEqual([{ name: 'browser_status', params: { attachPort: 9222 }, caller: { chat: 'chat-1', cwd: 'C:/Users/me/proj' } }])
   })
 
+  test('a tool that returns an image answers the image item before its text', async () => {
+    const client = fakeClient(() => ({ ok: true, text: 'screenshot jpeg 3KB', image: { data: 'AAAA', mimeType: 'image/jpeg' } }))
+    const mcp = createBrowserMcp({ client, caller: {} })
+    const res = await mcp.handle({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'browser_take_screenshot', arguments: {} } })
+    expect(res).toEqual({
+      jsonrpc: '2.0',
+      id: 5,
+      result: {
+        content: [
+          { type: 'image', data: 'AAAA', mimeType: 'image/jpeg' },
+          { type: 'text', text: 'screenshot jpeg 3KB' },
+        ],
+      },
+    })
+  })
+
   test('a tool that fails answers isError with its message', async () => {
     const mcp = createBrowserMcp({ client: fakeClient(() => ({ ok: false, status: 400, error: 'pass profile' })), caller: {} })
     const res = await mcp.handle({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'browser_frames', arguments: {} } })
@@ -52,7 +68,7 @@ describe('the browser tools as MCP', () => {
 })
 
 describe('the tool registry', () => {
-  test('lists the eleven browser tools, each with a description and an object schema', () => {
+  test('lists the sixteen browser tools, each with a description and an object schema', () => {
     expect(TOOL_DEFS.map((d) => d.name).sort()).toEqual([
       'browser_frames',
       'browser_get_text',
@@ -62,9 +78,14 @@ describe('the tool registry', () => {
       'browser_profile_note',
       'browser_profiles',
       'browser_read',
+      'browser_resize',
       'browser_snapshot',
       'browser_status',
+      'browser_tab_errors',
+      'browser_take_screenshot',
       'browser_targets',
+      'browser_wait_idle',
+      'browser_wait_tab',
     ])
     for (const def of TOOL_DEFS) {
       expect(def.description.length).toBeGreaterThan(20)

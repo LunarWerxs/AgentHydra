@@ -26,7 +26,7 @@ export interface Browser {
   exe: string
 }
 
-interface Link {
+export interface Link {
   send(method: string, params: object): Promise<unknown>
   close(): void
 }
@@ -79,7 +79,7 @@ async function browserWsOf(port: number): Promise<string> {
   return v.webSocketDebuggerUrl
 }
 
-async function resolveBrowser(params: Params, caller: ToolCaller): Promise<Browser> {
+export async function resolveBrowser(params: Params, caller: ToolCaller): Promise<Browser> {
   const exe = basename(findBrowserBinary() ?? 'chrome.exe')
   const attachPort = attachPortParam(params.attachPort)
   if (attachPort)
@@ -119,15 +119,23 @@ async function drive(port: number, targetId: string, url: string, waitMs: number
   }
 }
 
-export function connect(url: string): Promise<Link> {
+export function adopt(browser: Browser, caller: ToolCaller, targetId: string): void {
+  pages.set(`${browser.key}|${callerKey(caller)}`, targetId)
+}
+
+export function connect(url: string, onEvent?: (method: string, params: unknown) => void): Promise<Link> {
   return new Promise<Link>((resolve, reject) => {
     const ws = new WebSocket(url)
     const pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }>()
     let seq = 0
     ws.onmessage = (ev) => {
-      const msg = JSON.parse(String(ev.data)) as { id?: number; result?: unknown; error?: { message: string } }
-      const waiting = msg.id === undefined ? undefined : pending.get(msg.id)
-      if (!waiting || msg.id === undefined) return
+      const msg = JSON.parse(String(ev.data)) as { id?: number; method?: string; params?: unknown; result?: unknown; error?: { message: string } }
+      if (msg.id === undefined) {
+        onEvent?.(msg.method ?? '', msg.params)
+        return
+      }
+      const waiting = pending.get(msg.id)
+      if (!waiting) return
       clearTimeout(waiting.timer)
       pending.delete(msg.id)
       if (msg.error) waiting.reject(new Error(msg.error.message))

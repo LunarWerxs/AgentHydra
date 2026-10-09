@@ -13,6 +13,22 @@ export interface ToolParams {
   browser_snapshot: { mode?: string; maxLines?: number; attachPort?: number; profile?: string }
   browser_get_text: { attachPort?: number; profile?: string }
   browser_read: { selector: string; attr?: string; attachPort?: number; profile?: string }
+  browser_take_screenshot: {
+    path?: string
+    fullPage?: boolean
+    grid?: boolean
+    gridStep?: number
+    detail?: string
+    format?: string
+    quality?: number
+    maxWidth?: number
+    attachPort?: number
+    profile?: string
+  }
+  browser_resize: { width: number; height: number; mobile?: boolean; attachPort?: number; profile?: string }
+  browser_wait_idle: { idleMs?: number; timeoutMs?: number; attachPort?: number; profile?: string }
+  browser_wait_tab: { match?: string; timeoutMs?: number; attachPort?: number; profile?: string }
+  browser_tab_errors: { match?: string; timeoutMs?: number; attachPort?: number; profile?: string }
 }
 
 export type ToolName = keyof ToolParams
@@ -35,4 +51,12 @@ export interface ToolCaller {
   session?: string
 }
 
-export type CallResult = { ok: true; text: string } | { ok: false; status: number; error: string }
+export interface ToolImage {
+  data: string
+  mimeType: string
+}
+
+/** What a tool answers: its text, and optionally an image the model sees inline. */
+export type ToolReply = string | { text: string; image?: ToolImage }
+
+export type CallResult = { ok: true; text: string; image?: ToolImage } | { ok: false; status: number; error: string }

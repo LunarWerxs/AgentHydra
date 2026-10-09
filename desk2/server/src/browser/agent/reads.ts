@@ -76,7 +76,7 @@ export const READ_TOOLS: ToolDef[] = [
   {
     name: 'browser_get_text',
     description:
-      "Get the visible text content of the current page (innerText), for reading what's on it. A page over 50,000 characters is cut there and the whole text saved on this machine; the cut answer names a retrieve_output handle that reads any range of the rest.",
+      "Get the visible text content of the current page (innerText), for reading what's on it. A page over 50,000 characters is cut at 50,000 characters and the rest is not kept.",
     inputSchema: { type: 'object', properties: { ...ATTACH_PORT_PROP, ...PROFILE_PROP } },
     run: async (params, caller) => {
       const text = await withPage(params, caller, async (send) => {
