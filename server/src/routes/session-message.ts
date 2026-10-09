@@ -96,7 +96,10 @@ app.post('/api/sessions/:id/message', async (c) => {
       return c.json({
         ok: true,
         route: 'native',
-        delivered: native.delivery === 'delivered',
+        // delivered means in the chat's hands, as the pipe's queued note is (route 1): Desk's bridge
+        // takes anything else as a failed delivery.
+        delivered: true,
+        confirmed: native.delivery === 'delivered',
         queued: native.delivery === 'queued',
         typed: false,
         detail:
@@ -104,7 +107,7 @@ app.post('/api/sessions/:id/message', async (c) => {
             ? "sent through the app's own peer delivery; the chat runs it when it is free"
             : native.delivery === 'delivered'
               ? "sent through the app's own peer delivery; the chat started a turn on it"
-              : "sent through the app's own peer delivery; the app had not confirmed a turn start within 45s",
+              : "sent through the app's own peer delivery; the app had not confirmed a turn start within 35s",
       })
     if (!native.unavailable)
       // The send was made and the app did not take it: never also try another route.

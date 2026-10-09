@@ -446,8 +446,10 @@ message never counts as the person, and the app keeps its own refusals. The prog
 before sending a chat that is archived or `stoppedUntilPersonSends`. When the chat has no engine,
 the app's delivery retries once "through the cold-start path" and starts one itself, so nothing is
 typed into the window. The answer is the app's receipt: `delivered` (a turn started), `queued`
-(it runs when the chat is free) or, past a 45 s wait inside the program (the inspector's call
-limit is 60 s), `sent`.
+(it runs when the chat is free) or, past a 35 s wait inside the program (the inspector's call
+limit is 60 s, and Desk's bridge gives the whole route 50 s), `sent`. The route answers
+`delivered: true` for all three, the way the pipe's queued note does, with `confirmed` and `queued`
+saying which.
 
 `server/src/claude-native-send.ts` (`tryNativeSend`) runs it. `POST /api/sessions/:id/message`
 uses it first for a `peer_only` caller, the ones that must never type (Desk's bridge, so the

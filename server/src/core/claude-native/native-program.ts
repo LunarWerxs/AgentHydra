@@ -1087,7 +1087,8 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
   const messageId = env.crypto.randomUUID()
   state.dispatch = 'sent'
   // The app answers once the chat's turn has started, which can outlast the inspector's 60s call
-  // limit: past 45s the message is in the app's hands and the answer is "sent", not confirmed.
+  // limit and Desk's 50s wait for the route: past 35s the message is in the app's hands and the
+  // answer is "sent", not confirmed.
   let timer: any
   const sent = await Promise.race([
     manager.sendPeerMessage(session.sessionId, wrapped, {
@@ -1095,7 +1096,7 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
       origin: { kind: 'peer', from: 'agenthydra', name: String(request.fromName) },
     }),
     new Promise((resolve) => {
-      timer = setTimeout(() => resolve({ delivery: 'sent' }), 45_000)
+      timer = setTimeout(() => resolve({ delivery: 'sent' }), 35_000)
       timer?.unref?.()
     }),
   ]).finally(() => clearTimeout(timer))
@@ -1113,7 +1114,7 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
     reason: ok ? undefined : String((sent as any)?.reason ?? 'the app did not deliver it'),
     identity: nativeIdentity(env, found, null),
     evidence:
-      "the app's own peer-message receipt (delivered: a turn started; queued: it runs when the chat is free; sent: no answer within 45s)",
+      "the app's own peer-message receipt (delivered: a turn started; queued: it runs when the chat is free; sent: no answer within 35s)",
   }
 }
 

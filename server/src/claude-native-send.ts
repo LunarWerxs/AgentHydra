@@ -19,12 +19,13 @@ export interface NativeSendOutcome {
    *  sending): the caller may try another route. False once the send was made: never resend it. */
   unavailable: boolean
   /** The app's receipt: delivered (a turn started on it), queued (it runs when the chat is free), or
-   *  sent (in the app's hands, no answer within the program's 45s wait). */
+   *  sent (in the app's hands, no answer within the program's 35s wait). */
   delivery?: 'delivered' | 'queued' | 'sent' | null
   reason?: string
 }
 
-/** The inspector's ceiling: the program stops waiting for the app's answer at 45s, inside it. */
+/** The inspector's ceiling: the program stops waiting for the app's answer at 35s, inside it
+ *  (Desk's bridge gives the whole route 50s). */
 const SEND_CALL_TIMEOUT_MS = 60_000
 
 export async function tryNativeSend(
