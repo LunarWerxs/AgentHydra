@@ -100,15 +100,15 @@ describe('redesign connector', () => {
     expect((await def.detect()).state).toBe('running')
   })
 
-  test('chat: stdio MCP with REDESIGN_URL and the design-first paragraph, only while running', () => {
+  test("chat: Desk's HTTP MCP route carrying ReDesign's address, and the design-first paragraph, only while running", () => {
     const def = factory({ home: join(tmp, 'desk') })
     const status = { id: 'redesign', state: 'running', url: 'http://127.0.0.1:5178' } as ConnectorStatus
     const chat = def.chat?.('C:/Users/me/app', status)
-    const server = chat?.mcpServers?.redesign as { type: string; command: string; args: string[]; env: Record<string, string> }
-    expect(server.type).toBe('stdio')
-    expect(server.command).toBe(process.execPath)
-    expect(existsSync(server.args[0] as string)).toBe(true)
-    expect(server.env.REDESIGN_URL).toBe('http://127.0.0.1:5178')
+    const server = chat?.mcpServers?.redesign as { type: string; url: string }
+    expect(server.type).toBe('http')
+    const url = new URL(server.url)
+    expect(url.pathname).toBe('/mcp/redesign')
+    expect(url.searchParams.get('url')).toBe('http://127.0.0.1:5178')
     expect(chat?.prompt).toContain('design_options')
     expect(chat?.prompt).toContain('design_pick')
     expect(def.chat?.('C:/Users/me/app', { ...status, state: 'installed', url: null })).toBeNull()

@@ -4,12 +4,8 @@
 // AgentHydra's own process, which Desk starts the moment a tool or the pane asks (client.ts), so it counts as usable
 // as long as Desk can start it.
 
-import { join } from 'node:path'
 import { devServicesClient } from '../../devservers/client'
 import type { ConnectorFactory } from '../types'
-
-/** The chat's tool server. */
-const MCP_ENTRY = join(import.meta.dir, '..', '..', 'devservers', 'mcp.ts')
 
 const PROMPT =
   'Dev servers here are run by AgentHydra, one copy of each for every chat and person on this PC. To run or open one (vite, next, `bun run dev`, `npm run dev`, a preview), call `dev_server_start`: it answers with the address of the copy already running, whoever started it, or starts it and waits until it answers. Never start a dev server from the shell: a second copy fights the first for its port. `dev_servers` lists this folder\'s servers and the other dev servers running on this PC; stop one only when asked.'
@@ -36,12 +32,8 @@ const factory: ConnectorFactory = ({ home }) => {
       const port = Number(process.env.HYDRA_DESK_PORT) || 7798
       return {
         mcpServers: {
-          devservers: {
-            type: 'stdio',
-            command: process.execPath,
-            args: [MCP_ENTRY],
-            env: { AGENTHYDRA_DESK_URL:`http://127.0.0.1:${port}`, DEVSERVERS_CWD: cwd }
-          }
+          // Served by Desk itself (plugins/68-mcp.ts): one handler for every chat, no bun child per chat.
+          devservers: { type: 'http', url: `http://127.0.0.1:${port}/mcp/devservers?cwd=${encodeURIComponent(cwd)}` }
         },
         prompt: PROMPT
       }

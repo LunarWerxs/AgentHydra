@@ -8,8 +8,9 @@
 //            (<home>/apps/redesign, from installFromRelease) or REDESIGN_EXE / `redesign` on PATH is there.
 //   install: release asset redesign-windows-x64.exe of LunarWerxs/ReDesign (checked against SHA256SUMS.txt), then start.
 //   start:   `<exe> serve` hidden, REDESIGN_NO_OPEN=1 so it opens no browser, log <home>/logs/redesign.log.
-//   chat:    stdio MCP server redesign-mcp.ts (design_options, design_pick) run with Desk's own bun, pointed at the
-//            running ReDesign by REDESIGN_URL, its pictures written to <home>/design-options; plus one paragraph.
+//   chat:    MCP server redesign-mcp.ts (design_options, design_pick) served over HTTP by Desk's own process at
+//            /mcp/redesign (plugins/68-mcp.ts), pointed at the running ReDesign, its pictures written to
+//            <home>/design-options; plus one paragraph. (Until 2026-10-09 a bun child per chat: 19 of them, ~1.6 GB.)
 //   keys:    real runs need provider keys, added in ReDesign's own page (the pane); `mock: true` needs none.
 
 import { existsSync, readFileSync } from 'node:fs'
@@ -119,12 +120,8 @@ const factory: ConnectorFactory = ({ home }): ConnectorDef => {
       if (status.state !== 'running' || !status.url) return null
       return {
         mcpServers: {
-          redesign: {
-            type: 'stdio',
-            command: process.execPath,
-            args: [join(import.meta.dir, '..', 'redesign-mcp.ts')],
-            env: { REDESIGN_URL: status.url, DESIGN_OPTIONS_DIR: join(home, 'design-options') }
-          }
+          // Served by Desk itself (plugins/68-mcp.ts), writing to <home>/design-options: no bun child per chat.
+          redesign: { type: 'http', url: `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}/mcp/redesign?url=${encodeURIComponent(status.url)}` }
         },
         prompt: PROMPT
       }
