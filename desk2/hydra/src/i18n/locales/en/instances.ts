@@ -10,11 +10,14 @@ export default {
   createClaude: 'New Claude instance',
   createCodex: 'New Codex instance',
   createDeepseek: 'New DeepSeek instance',
+  // A Claude Code CLI account, which the CLI view offers alone.
+  createCli: 'New Claude CLI account',
   // Free web accounts (claude.ai, chatgpt.com), which the Free view offers alone.
   createFreeClaude: 'New free Claude account',
   createFreeChatgpt: 'New free ChatGPT account',
   // The All view's + menu headings, so its two Claude items read as two different things.
   createSectionApps: 'Apps',
+  createSectionCli: 'CLI',
   createSectionFree: 'Free web accounts',
   empty: 'No instances found.',
   emptyHint: 'Create your first instance with the + button to get started.',

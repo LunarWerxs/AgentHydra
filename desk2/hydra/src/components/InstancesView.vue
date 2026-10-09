@@ -802,28 +802,34 @@ const CREATE_LABEL: Record<Provider, string> = {
   codex: 'instances.createCodex',
   deepseek: 'instances.createDeepseek',
 }
-/** The header's + menu (InstanceSectionHeader): what the chosen kind can create. The Free view offers
- *  only Free accounts, Desktop and CLI only the providers switched on, and All both under their own
- *  headings (owner, 2026-10-08: the Free view's menu listed "New Claude instance" and a bare "Claude",
- *  two Claudes nobody could tell apart). Free's ids carry a prefix because its 'claude' would
+/** The header's + menu (InstanceSectionHeader): what the chosen kind can create. Each view offers
+ *  only its own kind: Desktop the apps switched on, CLI a CLI account, Free the Free accounts, and
+ *  All every kind under its own heading (owner, 2026-10-08: the Free view's menu listed "New Claude
+ *  instance" and a bare "Claude", two Claudes nobody could tell apart; 2026-10-09: the CLI view's
+ *  plus made a desktop instance). CLI and Free ids carry a prefix because their 'claude' would
  *  otherwise be Claude's id. */
 const FREE_CREATE_PREFIX = 'free:'
+const CLI_CREATE_ID = 'cli:claude'
 const createOptions = computed(() => {
   const desktop = createProviders.value.map((provider) => ({
     id: provider,
     provider,
     label: t(CREATE_LABEL[provider]),
   }))
+  const cli = showCliInstances.value
+    ? [{ id: CLI_CREATE_ID, provider: 'claude' as const, label: t('instances.createCli') }]
+    : []
   const free = FREE_PROVIDERS.map((p) => ({
     id: `${FREE_CREATE_PREFIX}${p}`,
     provider: freeLogo(p),
     label: t(p === 'claude' ? 'instances.createFreeClaude' : 'instances.createFreeChatgpt'),
   }))
+  if (kindView.value === 'desktop') return desktop
+  if (kindView.value === 'cli') return cli
   if (kindView.value === 'free') return free
-  if (kindView.value !== 'all' && desktop.length) return desktop
-  if (!desktop.length) return free
   return [
     ...desktop.map((o) => ({ ...o, section: t('instances.createSectionApps') })),
+    ...cli.map((o) => ({ ...o, section: t('instances.createSectionCli') })),
     ...free.map((o) => ({ ...o, section: t('instances.createSectionFree') })),
   ]
 })
@@ -838,6 +844,12 @@ async function onCreateFor(id: string) {
     showKind('free')
     await nextTick()
     freeRows.value?.openCreate(id.slice(FREE_CREATE_PREFIX.length))
+    return
+  }
+  if (id === CLI_CREATE_ID) {
+    showKind('cli')
+    await nextTick()
+    cliRows.value?.openCreate()
     return
   }
   const provider = id as Provider
