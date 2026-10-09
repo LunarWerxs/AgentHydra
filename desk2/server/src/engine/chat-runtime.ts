@@ -151,6 +151,8 @@ interface PendingElicitation {
 const STDERR_TAIL_CHARS = 4000
 /** Stderr chunks that arrive within this many ms of a write are gathered into the next one. */
 const STDERR_FLUSH_MS = 200
+/** How long a Stop waits for the CLI to answer its interrupt before the process is closed. */
+export const INTERRUPT_GRACE_MS = 1500
 const STDERR_TAIL_LINES = 20
 /** Images larger than this (base64 chars) are kept out of the stored transcript. */
 const MAX_STORED_IMAGE_CHARS = 200_000
@@ -797,14 +799,20 @@ ${swap.real}` }
     return c.status === 'working' || c.status === 'needs_you' || (c.status === 'starting' && c.turnStartedAt !== null) || c.queuedCount > 0
   }
 
-  async interrupt(): Promise<void> {
-    if (!this.q) return
+  /**
+   * Stops the turn at once: the chat reads stopped now, and the CLI's answer is not waited for. A CLI that does not
+   * answer within the grace (a hosted query's call can stall) is closed, unless sends wait in its queue: closing
+   * would take them with it. The transcript stays on disk and the next send resumes the chat.
+   */
+  interrupt(): void {
+    const q = this.q
+    if (!q) return
     this.stopTurn()
-    try {
-      await this.q.interrupt()
-    } catch {
-      // the process may already be gone; the status already says stopped
-    }
+    const escalate = setTimeout(() => {
+      if (this.q === q && this.chat.queuedCount === 0) void this.close()
+    }, INTERRUPT_GRACE_MS)
+    const answered = () => clearTimeout(escalate)
+    q.interrupt().then(answered, answered)
   }
 
   /**

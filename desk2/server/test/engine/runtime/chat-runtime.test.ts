@@ -13,7 +13,7 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatSummary, DeskSettings, ServerEvent, TranscriptItem } from '@shared/protocol'
-import { ChatRuntime, isUsageLimitText, type QueryImpl } from '../../../src/engine/chat-runtime'
+import { ChatRuntime, INTERRUPT_GRACE_MS, isUsageLimitText, type QueryImpl } from '../../../src/engine/chat-runtime'
 import { DESK_APPEND, DESK_APPEND_NO_DELEGATE } from '../../../src/engine/desk-prompt'
 import { ElicitationAnswerError } from '../../../src/engine/requests'
 import { ChatStore } from '../../../src/engine/store'
@@ -102,8 +102,11 @@ class FakeQuery {
   [Symbol.asyncIterator]() {
     return this
   }
+  /** A CLI (or its hosted query) that never answers the interrupt. */
+  hangInterrupt = false
   async interrupt() {
     this.calls.interrupt++
+    if (this.hangInterrupt) await new Promise(() => {})
     return undefined
   }
   async setPermissionMode(mode: string) {
@@ -602,6 +605,32 @@ describe('ChatRuntime: AskUserQuestion and plans', () => {
 })
 
 describe('ChatRuntime: interrupt', () => {
+  test('a CLI that never answers the interrupt is closed after the grace, and the chat reads stopped at once', async () => {
+    const t = setup()
+    t.rt.send('go')
+    t.fake().push(hand.init(), state('running'))
+    await settle()
+    t.fake().hangInterrupt = true
+    t.rt.interrupt()
+    expect(t.rt.chat.status).toBe('stopped')
+    expect(t.fake().calls.close).toBe(0)
+    await Bun.sleep(INTERRUPT_GRACE_MS + 200)
+    expect(t.fake().calls.close).toBe(1)
+    expect(t.rt.send('again')).toEqual({ queued: false })
+    expect(t.rt.chat.status).toBe('starting')
+  })
+
+  test('an interrupt the CLI answers is not escalated', async () => {
+    const t = setup()
+    t.rt.send('go')
+    t.fake().push(hand.init(), state('running'))
+    await settle()
+    t.rt.interrupt()
+    await Bun.sleep(INTERRUPT_GRACE_MS + 200)
+    expect(t.fake().calls.interrupt).toBe(1)
+    expect(t.fake().calls.close).toBe(0)
+  })
+
   test('stopped, pending requests expire, the error result does not overwrite it', async () => {
     const t = setup()
     t.rt.send('go')
