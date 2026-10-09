@@ -39,16 +39,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The working mark picks its own look every five minutes, and moves more slowly.** The Working animation
   picker is gone from Settings -> General -> Appearance: every mark in the window shows the same randomly chosen
   look and swaps to another every five minutes, never the same one twice in a row. The marks move more slowly,
-  keep moving while the window is in the background, and the sidebar slides smoothly.
+  keep moving while the window is on screen but not focused, and the sidebar slides smoothly.
 - **Background tasks slides in and out, opens narrower and drags to any width.** The panel slides in from the
   right instead of appearing at once, opens narrower, and its left edge drags it to the width you want, which is
   remembered. What a task was told is no longer a paragraph in its card: hover its name to read it.
 - **Thinking folds into the tool runs around it in outside chats too.** A Claude Desktop or terminal session
   open in AgentHydra showed each thinking block as its own row between the commands; it is one row again, as in
   AgentHydra's own chats.
-- **With the cloud off, every local Desktop chat is listed.** The Active filter keeps only chats with unread
-  messages or errors, and clicking one app while all are shown shows just that one. A row's menu names the chat
-  and its account, and offers Move to account.
+- **With the cloud off, every local Desktop chat is listed.** Active only also keeps a reply you have not read
+  and a chat that hit an error, and clicking one app while all are shown shows just that one. A row's menu names
+  the chat and its account, and offers Move to account.
 - **New shows your projects at once.** Clicking New opens a grid of the folders you work in, each with its logo,
   its path and whether its git checkout is up to date, behind, ahead or has uncommitted changes, without waiting
   for every folder's git state first. Projects with chats that are not archived come first, with a count; a
