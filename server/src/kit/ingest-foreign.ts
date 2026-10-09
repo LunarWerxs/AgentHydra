@@ -721,7 +721,6 @@ async function ingestDshSession(
 
 /** One model call: a `step-finish` part, which carries that step's own tokens and cost. */
 interface OpenCodeStep {
-  rid: number
   id: string
   session_id: string
   ts: number
@@ -736,15 +735,17 @@ interface OpenCodeStep {
 }
 
 // Parts are read past the last rowid taken: a step-finish part is written once, when its step ends, and
-// the rowid search never touches the older parts' blobs (the store holds GBs of them).
-const OPENCODE_STEPS = `select p.rowid as rid, p.id, p.session_id, p.time_created as ts,
+// the rowid search never touches the older parts' blobs (the store holds GBs of them). A first read goes a
+// page of rowids at a time with a loop turn between: one query over every part held the daemon for 2 s.
+const OPENCODE_PAGE = 2000
+const OPENCODE_STEPS = `select p.id, p.session_id, p.time_created as ts,
     json_extract(m.data, '$.modelID') as model, json_extract(m.data, '$.providerID') as provider,
     json_extract(p.data, '$.tokens.input') as input, json_extract(p.data, '$.tokens.output') as output,
     json_extract(p.data, '$.tokens.reasoning') as reasoning,
     json_extract(p.data, '$.tokens.cache.read') as cache_read,
     json_extract(p.data, '$.tokens.cache.write') as cache_write, json_extract(p.data, '$.cost') as cost
   from part p left join message m on m.id = p.message_id
-  where p.rowid > ? and json_extract(p.data, '$.type') = 'step-finish'
+  where p.rowid > ? and p.rowid <= ? and json_extract(p.data, '$.type') = 'step-finish'
   order by p.rowid`
 
 /** Set once the per-session events are gone: the per-call read replaces them, never adds to them. */
@@ -771,8 +772,12 @@ function dropOpenCodeSessionTotals(store: KitStore): void {
   })()
 }
 
-/** The steps past rowid `since`, or null when the store cannot be read (or predates the part table). */
-function readOpenCodeSteps(dbPath: string, since: number): OpenCodeStep[] | null {
+/** The steps past rowid `since` and the newest rowid read, or null when the store cannot be read (or predates
+ *  the part table). */
+async function readOpenCodeSteps(
+  dbPath: string,
+  since: number,
+): Promise<{ steps: OpenCodeStep[]; newest: number } | null> {
   let db: Database
   try {
     db = new Database(dbPath, { readonly: true })
@@ -780,7 +785,14 @@ function readOpenCodeSteps(dbPath: string, since: number): OpenCodeStep[] | null
     return null
   }
   try {
-    return db.query<OpenCodeStep, [number]>(OPENCODE_STEPS).all(since)
+    const top = db.query<{ n: number | null }, []>('select max(rowid) as n from part').get()?.n ?? 0
+    const page = db.query<OpenCodeStep, [number, number]>(OPENCODE_STEPS)
+    const steps: OpenCodeStep[] = []
+    for (let lo = since; lo < top; lo += OPENCODE_PAGE) {
+      for (const s of page.all(lo, Math.min(top, lo + OPENCODE_PAGE))) steps.push(s)
+      await yieldLoop()
+    }
+    return { steps, newest: Math.max(since, top) }
   } catch {
     return null
   } finally {
@@ -835,17 +847,20 @@ async function ingestOpenCode(
   const cur = store.getCursor(o.dbPath)
   if (cursorUnchanged(cur, stamp.size, stamp.mtime)) return null
   const since = cur && cur.version === FOREIGN_INGEST_VERSION ? cur.offset : 0
-  const steps = readOpenCodeSteps(o.dbPath, since)
-  if (!steps) return null
+  const read = await readOpenCodeSteps(o.dbPath, since)
+  if (!read) return null
   const events: UsageEventInput[] = []
-  let newest = since
-  for (const s of steps) {
-    newest = Math.max(newest, s.rid)
+  for (const s of read.steps) {
     const ev = openCodeEvent(s, o.tool, opts.pc ?? null)
     if (ev) events.push(ev)
   }
   await flush(store, events)
-  store.setCursor({ path: o.dbPath, ...stamp, offset: newest, version: FOREIGN_INGEST_VERSION })
+  store.setCursor({
+    path: o.dbPath,
+    ...stamp,
+    offset: read.newest,
+    version: FOREIGN_INGEST_VERSION,
+  })
   return events.length
 }
 
