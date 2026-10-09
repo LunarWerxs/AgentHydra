@@ -98,7 +98,7 @@ function externalNames(root: string): Record<string, string> {
   }
 }
 
-function externalProfiles(): External[] {
+export function externalProfiles(): External[] {
   const out: External[] = []
   for (const [browser, root] of EXTERNAL_ROOTS()) {
     if (!existsSync(root)) continue

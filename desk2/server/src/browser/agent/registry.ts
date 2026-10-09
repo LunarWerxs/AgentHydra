@@ -10,6 +10,7 @@ import {
   SavedBrowserError,
   saveProfileNote,
 } from '../profiles-scope'
+import { adoptProfile } from '../profiles-adopt'
 import type { Listing } from '../store'
 import { listProfiles } from '../store'
 import type { ToolCaller, ToolName, ToolReply } from './contract'
@@ -191,6 +192,51 @@ export const TOOL_DEFS: ToolDef[] = [
         throw new ToolInputError('browser_profile_note needs profile:<the saved browser>')
       const fields = { note: optionalText(params.note), title: optionalText(params.title) }
       return pretty(await refused(() => saveProfileNote(requireCwd(caller), profile, fields)))
+    },
+  },
+  {
+    name: 'browser_profile_adopt',
+    description:
+      "Copy one of the MACHINE's own Chrome/Edge/Brave profiles into this MCP's managed store (see browser_profiles for the list of real profiles and what each is signed into). ⛔ READ THIS BEFORE REACHING FOR IT: on a modern Chrome it REFUSES, by design - app-bound cookie encryption means a copied session cannot be decrypted and Chrome deletes it silently on first launch, so a 'successful' copy would hand you a signed-out browser that claims to be the owner's. Use browser_profile_login instead; it is one human sign-in and the MCP owns the identity afterwards. Adoption still works on stores without an app-bound key (older Chrome, some Edge/Brave/Linux setups), and force:true copies the non-session files (preferences, storage) for the rare case that is what you want.",
+    inputSchema: {
+      type: 'object',
+      properties: {
+        from: {
+          type: 'string',
+          description:
+            "the real profile: a friendly name ('SaddleGauge'), a dir ('Profile 11'), or 'chrome:<either>'",
+        },
+        as: {
+          type: 'string',
+          description: 'managed profile name to create; defaults to the friendly name, slugified',
+        },
+        refresh: {
+          type: 'boolean',
+          description: 're-copy over an existing managed profile (it must have no live Chrome)',
+        },
+        force: {
+          type: 'boolean',
+          description:
+            'copy even when the source is app-bound encrypted - the session will NOT come with it',
+        },
+      },
+      required: ['from'],
+    },
+    run: async (params, caller) => {
+      const from = stringParam(params, 'from')
+      if (!from)
+        throw new ToolInputError('browser_profile_adopt needs from:<the real profile: a friendly name, a dir, or chrome:<either>>')
+      return pretty(
+        await refused(() =>
+          adoptProfile(
+            requireCwd(caller),
+            from,
+            stringParam(params, 'as'),
+            params.refresh === true,
+            params.force === true,
+          ),
+        ),
+      )
     },
   },
   {
