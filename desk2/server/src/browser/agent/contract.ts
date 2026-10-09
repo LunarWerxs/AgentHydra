@@ -13,6 +13,15 @@ export interface ToolParams {
   browser_snapshot: { mode?: string; maxLines?: number; attachPort?: number; profile?: string }
   browser_get_text: { attachPort?: number; profile?: string }
   browser_read: { selector: string; attr?: string; attachPort?: number; profile?: string }
+  browser_evaluate: { expression: string; timeoutMs?: number; attachPort?: number; profile?: string }
+  browser_upload_file: {
+    file?: string
+    files?: string[]
+    selector?: string
+    waitMs?: number
+    attachPort?: number
+    profile?: string
+  }
   browser_click: {
     ref?: string
     text?: string

@@ -14,6 +14,7 @@ import type { Listing } from '../store'
 import { listProfiles } from '../store'
 import type { ToolCaller, ToolName, ToolReply } from './contract'
 import { ToolInputError } from './errors'
+import { EXEC_TOOLS } from './exec'
 import { INPUT_TOOLS } from './input'
 import { navigate } from './navigate'
 import { PAGE_TOOLS } from './page-tools'
@@ -144,6 +145,7 @@ async function cdpOnce(
 
 export const TOOL_DEFS: ToolDef[] = [
   ...READ_TOOLS,
+  ...EXEC_TOOLS,
   ...INPUT_TOOLS,
   ...PAGE_TOOLS,
   {
