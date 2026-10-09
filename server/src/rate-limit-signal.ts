@@ -141,6 +141,10 @@ export interface LimitStop {
   at: number | null
 }
 
+/** A session row's stop: the notice's reset as an ISO instant too, read against the moment of the
+ *  stop (sessions.ts withResetsAt), or null when the notice names none or the stop has no time. */
+export type SessionLimitStop = LimitStop & { resets_at: string | null }
+
 /** Accumulates one verdict from a stream of transcript events. */
 export interface LimitStopTracker {
   /** Feed one parsed JSONL record, in file order. Anything irrelevant is ignored. */

@@ -15,11 +15,11 @@ export type {
 // SessionSummary.limit_stop is this exact shape. It is DEFINED in rate-limit-signal.ts because the
 // detector and the DTO must never drift, and that module is a zero-import leaf, so pulling it in
 // here costs the web app's vue-tsc pass nothing.
-import type { LimitStop } from './rate-limit-signal'
+import type { LimitStop, SessionLimitStop } from './rate-limit-signal'
 // Same reasoning: session-ending.ts imports only that leaf, so this stays free of Bun runtime.
 import type { SessionEnding } from './session-ending'
 
-export type { LimitStop, SessionEnding }
+export type { LimitStop, SessionEnding, SessionLimitStop }
 
 /** "Sync my settings with Connections" DTO, defined HERE (not re-exported from
  * ./connections.ts) because that module imports Bun-only runtime files (db.ts), which
@@ -237,7 +237,7 @@ export interface SessionSummary {
    * Claude only, today. Codex and OpenCode record an error but not one this detector is willing to
    * trust, and a false badge here is worse than a missing one.
    */
-  limit_stop: LimitStop | null
+  limit_stop: SessionLimitStop | null
   /**
    * WHERE this row's `title` came from — the answer to "why is this thread called that?".
    *

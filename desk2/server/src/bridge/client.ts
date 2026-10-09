@@ -7,6 +7,8 @@ import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 
 export const DEFAULT_HYDRA_URL = 'http://127.0.0.1:7787'
 export const REQUEST_TIMEOUT_MS = 4000
+/** A message into a Claude Desktop chat: AgentHydra confirms it from the transcript within 45 s. */
+const DELIVERY_TIMEOUT_MS = 50_000
 /** A transcript search may scan for up to 7 s before AgentHydra's index is built (session-search.ts budget). */
 export const SEARCH_TIMEOUT_MS = 10_000
 
@@ -84,6 +86,8 @@ export interface AhSessionRow {
   instance_num: number | null
   /** The other PC's name on a Desktop chat the chat sync took from it; absent on this PC's rows. */
   from_pc?: string
+  /** A usage limit's stop in the transcript (AgentHydra's SessionLimitStop): `pending` while nothing has followed it. */
+  limit_stop?: { notice: string; pending: boolean; at: number | null; resets_at?: string | null } | null
 }
 
 export interface AhUsageLimit {
@@ -495,8 +499,10 @@ export function createClient(opts: HydraClientOptions = {}) {
     deliverNow: (id: string, text?: string) =>
       post<{ ok: boolean; stopped?: boolean; message: string }>(`/api/corch/workers/${enc(id)}/deliver-now`, text ? { text } : {}),
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
+    // AgentHydra answers once the chat's transcript shows the message, which takes seconds and may take its 45 s
+    // confirm window: the 4 s every other call gets gave up on deliveries that went through.
     sendToDesktopChat: (sessionId: string, text: string) =>
-      post<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>(`/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }),
+      request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }, DELIVERY_TIMEOUT_MS),
     /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
     branchSession: (sessionId: string, uuid: string, title: string) =>
       post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),

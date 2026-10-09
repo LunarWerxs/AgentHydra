@@ -227,6 +227,7 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     models: async () => MODELS,
     health: async () => ({ ok: true, version: '0.1.0' }),
     bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
+    babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),
     accounts: async () => sceneAccounts(scene),

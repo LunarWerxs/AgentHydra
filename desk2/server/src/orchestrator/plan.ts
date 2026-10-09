@@ -120,12 +120,13 @@ function recentMove(chat: Subject, all: readonly TranscriptItem[], now: number):
   return null
 }
 
-/** A chat its account's usage limit stopped: on auto the engine moves it, otherwise it resumes after the reset. */
+/** A chat its account's usage limit stopped: on auto the engine moves it, otherwise the babysitter continues it after
+ *  the reset (plugins/72-babysitter.ts). */
 function limitMove(chat: Subject, now: number): Move {
   if (chat.accountAuto) return { move: 'watch', reason: 'placed on auto: the engine moves it to another account itself' }
   const left = chat.limitResetsAt === null ? null : Math.ceil((chat.limitResetsAt - now) / 60_000)
-  const when = left === null ? 'resume when it resets' : left > 0 ? `it resets in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}` : 'it has reset since'
-  return { move: 'resume-after-limit', reason: `its account hit the usage limit; ${when}` }
+  const when = left === null ? 'once it resets' : left > 0 ? `in ${left < 120 ? `${left} min` : `about ${Math.round(left / 60)} h`}, when it resets` : 'now: it has reset since'
+  return { move: 'resume-after-limit', reason: `its account hit the usage limit; the babysitter continues it ${when}` }
 }
 
 /** The move for one chat. `items` is its transcript, or null when it was not read (a working chat needs none). */

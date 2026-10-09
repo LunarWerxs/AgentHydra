@@ -117,6 +117,9 @@ test(
       notice: NOTICE,
       pending: true,
       at: Date.parse('2026-08-19T04:10:00.000Z'),
+      // "resets 3am (America/Chicago)" read against the stop (23:10 there), not against today:
+      // the babysitter continues the chat at this instant.
+      resets_at: '2026-08-19T08:00:00.000Z',
     })
     expect(by[RESUMED]?.stop).toMatchObject({ notice: NOTICE, pending: false })
     // The one that only DISCUSSED a limit gets no verdict at all.

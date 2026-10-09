@@ -137,7 +137,8 @@ describe('useDesk store', () => {
         notifications: true,
         projectFolders: [],
         projectRoots: [],
-        hiddenProjects: []
+        hiddenProjects: [],
+        babysitter: true
       }
     }
 

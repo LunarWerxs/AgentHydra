@@ -33,6 +33,7 @@ const SETTINGS: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
+  babysitter: true,
 }
 
 /** A Query whose messages the test pushes; records every control call and every prompt it reads. */

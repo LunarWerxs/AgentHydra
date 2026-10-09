@@ -16,6 +16,7 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
+  babysitter: true,
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -33,6 +34,7 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   projectFolders: [isPathList, 'a list of folder paths'],
   projectRoots: [isPathList, 'a list of folder paths'],
   hiddenProjects: [isPathList, 'a list of folder paths'],
+  babysitter: [(v) => typeof v === 'boolean', 'true or false'],
 }
 
 function isPathList(v: unknown): boolean {

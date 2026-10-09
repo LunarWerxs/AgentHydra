@@ -9,6 +9,7 @@ import type {
   ModelChoice,
   TranscriptItem
 } from '@shared/protocol'
+import type { BabysitterStatus } from '@shared/babysitter'
 import type { FreeSettings } from '@shared/free-instances'
 
 export interface PaneApi {
@@ -17,6 +18,8 @@ export interface PaneApi {
   models(): Promise<ModelChoice[]>
   health(): Promise<{ ok: boolean; version: string }>
   bridgeStatus(): Promise<{ up: boolean; url: string }>
+  /** GET /api/babysitter: the chats a usage limit stopped and what the babysitter did (plugins/72-babysitter.ts). */
+  babysitter(): Promise<BabysitterStatus>
   getSettings(): Promise<DeskSettings>
   putSettings(patch: Partial<DeskSettings>): Promise<DeskSettings>
   accounts(): Promise<AccountInfo[]>
@@ -56,6 +59,7 @@ export const httpPaneApi: PaneApi = {
   models: () => json('/models'),
   health: () => json('/health'),
   bridgeStatus: () => json('/bridge/status'),
+  babysitter: () => json('/babysitter'),
   getSettings: () => json('/settings'),
   putSettings: (patch) =>
     json('/settings', {

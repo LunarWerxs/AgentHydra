@@ -85,7 +85,7 @@ const OUTSIDE: [ExternalSession, TranscriptItem[]][] = [
 /** The plugin over a stand-in engine; `sent` counts every request that would change something, and `queued` holds
  *  each message handed to the send queue and not yet delivered (a test delivers them by emptying it). `onQueue` runs
  *  while the queue takes a message. */
-function desk(onQueue?: (app: Hono) => Promise<unknown>): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
+function desk(onQueue?: (app: Hono) => Promise<unknown>, chats = CHATS): { app: Hono; sent: string[]; queued: { chatId: string; text: string }[] } {
   const app = new Hono()
   const sent: string[] = []
   const queued: { chatId: string; text: string }[] = []
@@ -106,9 +106,9 @@ function desk(onQueue?: (app: Hono) => Promise<unknown>): { app: Hono; sent: str
     })
   )
   app.post('/api/queue/chats/:id/resume', (c) => c.json({ items: [] }))
-  app.get('/api/chats', (c) => c.json(CHATS.map(([ch]) => ch)))
+  app.get('/api/chats', (c) => c.json(chats.map(([ch]) => ch)))
   app.get('/api/chats/:id/items', (c) =>
-    c.req.param('id') === 'unreadable' ? c.json({ error: 'no transcript' }, 500) : c.json(CHATS.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? [])
+    c.req.param('id') === 'unreadable' ? c.json({ error: 'no transcript' }, 500) : c.json(chats.find(([ch]) => ch.id === c.req.param('id'))?.[1] ?? [])
   )
   app.get('/api/external/sessions', (c) => c.json(OUTSIDE.map(([s]) => s)))
   app.get('/api/external/sessions/:id/items', (c) => c.json(OUTSIDE.find(([s]) => s.id === c.req.param('id'))?.[1] ?? []))
@@ -159,49 +159,48 @@ test('each open chat and outside session gets its one next move, most urgent fir
   expect(sent).toEqual([])
 })
 
-test('armed, it continues each Desk chat a limit or an error stopped, once per stop and twice at most', async () => {
+test('armed, it continues each Desk chat an error stopped, once per stop and twice at most, and leaves a limit stop to the babysitter', async () => {
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
   const { app, sent, queued } = desk()
   const lead = `[${ORCHESTRATOR_FROM}] Not from the user.\n`
-  const continued = ['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue', 'POST /api/queue/chats/error/resume']
-  // Arming looks at once: each stopped chat it could read gets one continue, never 'unreadable', whose transcript
-  // did not load (a person may have just written in it).
+  const continued = ['POST /api/diagnostics/orchestrator', 'POST /api/queue', 'POST /api/queue/chats/error/resume']
+  // Arming looks at once: the chat an error stopped gets one continue; never 'unreadable', whose transcript did not
+  // load (a person may have just written in it), nor 'limited', which the babysitter continues after its reset.
   const first = await arm(app, true)
   expect(first.mode).toBe('armed')
   expect(sent.splice(0)).toEqual(continued)
-  const [limited, error] = queued
-  expect([limited.chatId, error.chatId]).toEqual(['limited', 'error'])
-  expect(limited.text).toStartWith(`${lead}Your account's usage limit stopped the last turn`)
-  expect(error.text).toStartWith(`${lead}Your last turn stopped on an error: network down`)
-  expect(first.acts.map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined], ['limited', 'resume-after-limit', 'continued', undefined]])
-  // While those wait in the send queue (through the reset, say), another look sends nothing.
-  expect((await arm(app, true)).acts).toHaveLength(2)
+  expect(queued.map((q) => q.chatId)).toEqual(['error'])
+  expect(queued[0].text).toStartWith(`${lead}Your last turn stopped on an error: network down`)
+  expect(first.acts.map((a) => [a.id, a.move, a.did, a.error])).toEqual([['error', 'retry-error', 'continued', undefined]])
+  // While it waits in the send queue, another look sends nothing.
+  expect((await arm(app, true)).acts).toHaveLength(1)
   expect(sent.splice(0)).toEqual(['POST /api/diagnostics/orchestrator'])
-  // Delivered, and both stopped again (the stand-ins never change): one more each.
+  // Delivered, and stopped again (the stand-ins never change): one more.
   queued.splice(0)
-  expect((await arm(app, true)).acts).toHaveLength(4)
+  expect((await arm(app, true)).acts).toHaveLength(2)
   expect(sent.splice(0)).toEqual(continued)
-  // The third stop: it gives up, sends nothing, and the plan leaves both to a person, for good.
+  // The third stop: it gives up, sends nothing, and the plan leaves it to a person, for good.
   queued.splice(0)
   const third = await arm(app, true)
   expect([sent.splice(0), queued]).toEqual([['POST /api/diagnostics/orchestrator'], []])
-  expect(third.acts.slice(0, 2).map((a) => [a.id, a.did])).toEqual([['error', 'gave-up'], ['limited', 'gave-up']])
+  expect(third.acts[0]).toMatchObject({ id: 'error', did: 'gave-up' })
   const by = Object.fromEntries(third.rows.map((r) => [r.id, r]))
-  expect([by.error.move, by.limited.move, by.unreadable.move]).toEqual(['leave', 'leave', 'retry-error'])
+  expect([by.error.move, by.limited.move, by.unreadable.move]).toEqual(['leave', 'resume-after-limit', 'retry-error'])
   expect(by.error.reason).toBe('the orchestrator continued it 2 times and it stopped again: network down')
-  for (const _ of [5, 6]) expect((await arm(app, true)).acts).toHaveLength(6)
+  expect(by.limited.reason).toBe('its account hit the usage limit; the babysitter continues it in 60 min, when it resets')
+  for (const _ of [5, 6]) expect((await arm(app, true)).acts).toHaveLength(3)
   const off = await arm(app, false)
   expect([off.mode, sent.splice(0), queued]).toEqual(['shadow', Array(3).fill('POST /api/diagnostics/orchestrator'), []])
 })
 
 test('a disarm part-way through a look stops it before the next send', async () => {
   process.env.HYDRA_DESK_CREAITOR = join(tmpdir(), 'no-such-creaitor.py')
-  // The owner's Disarm lands while the queue takes the look's first continue.
-  const { app, queued } = desk((self) => arm(self, false))
+  // The owner's Disarm lands while the queue takes the look's first continue, with a second chat still to continue.
+  const { app, queued } = desk((self) => arm(self, false), [...CHATS, [chat('error-2', { status: 'error', lastError: 'timed out' }), []]])
   await arm(app, true)
-  expect(queued.map((q) => q.chatId)).toEqual(['limited'])
+  expect(queued.map((q) => q.chatId)).toEqual(['error'])
   const plan = (await (await app.request('/api/diagnostics/orchestrator')).json()) as OrchestratorPlan
-  expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['limited']])
+  expect([plan.mode, plan.acts.map((a) => a.id)]).toEqual(['shadow', ['error']])
 })
 
 test('?ask=1 hands each waiting question and its choices to the CreAitor and shows its answer', async () => {

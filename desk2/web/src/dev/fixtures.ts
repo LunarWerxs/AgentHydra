@@ -590,5 +590,6 @@ export const settingsFixtures: DeskSettings = {
   notifications: true,
   projectFolders: [],
   projectRoots: [],
-  hiddenProjects: []
+  hiddenProjects: [],
+  babysitter: true
 }

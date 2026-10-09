@@ -3,7 +3,8 @@
 // the orchestrator would make next and why; `?ask=1` also asks the CreAitor, when this machine has it, what the owner
 // would answer each one that waits on a question. Phase A, shadow: that is all it does. Phase B: POST the same path
 // { armed: true } and, until it is disarmed or Desk stops, it looks at Desk's own chats every TICK_MS and continues
-// the ones a limit or an error stopped (orchestrator/act.ts) through Desk's send queue. It never starts armed (owner,
+// the ones an error stopped (orchestrator/act.ts) through Desk's send queue; a usage limit's stop is the babysitter's
+// (plugins/72-babysitter.ts). It never starts armed (owner,
 // 2026-09-07: nothing starts on boot) and never acts blind: no read of Desk's chats, no act. Own page only.
 // README "What Desk 2 adds", the orchestrator.
 

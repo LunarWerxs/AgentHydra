@@ -2,7 +2,8 @@
 // asked, what the CreAitor says the owner would answer. The server computes it (server/src/orchestrator/plan.ts,
 // GET /api/diagnostics/orchestrator); Settings > Diagnostics > Orchestrator draws it. Phase A, shadow: the plan is
 // only what it WOULD do. Phase B, armed by the owner (POST the same path { armed }): it also continues a Desk chat
-// stopped by its account's limit or by an error (server/src/orchestrator/act.ts). Plain types only.
+// an error stopped (server/src/orchestrator/act.ts); one a usage limit stopped is the babysitter's (shared/babysitter.ts).
+// Plain types only.
 
 /** The one next move for a chat, most urgent first. */
 export type OrchestratorMove =

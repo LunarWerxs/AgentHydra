@@ -30,6 +30,7 @@ export type SettingsRowId =
   | 'permission'
   | 'notifications'
   | 'idle'
+  | 'babysitter'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -126,6 +127,14 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Behaviour',
     label: 'Close idle chats after',
     description: "An idle chat's process stops; your next message resumes it."
+  },
+  {
+    id: 'babysitter',
+    section: 'general',
+    group: 'Behaviour',
+    label: 'Babysitter',
+    description:
+      'When a usage limit stops a chat (here or in Claude Desktop), continue it once the limit resets. It checks every 5 minutes; no model is asked.'
   },
   {
     id: 'ahTooltips',

@@ -224,6 +224,20 @@ describe('external sessions', () => {
     expect(by.get(sid(500))?.fromPc).toBeNull()
   })
 
+  // The babysitter continues what carries `limit` (babysitter/decide.ts): a stop already resumed must not.
+  test('a session still stopped at a usage limit carries the stop and its reset; a resumed stop or one with no time does not', () => {
+    const notice = "You've hit your session limit · resets 11:40pm (America/Chicago)"
+    const stops: Record<string, unknown> = {
+      [sid(3)]: { notice, pending: true, at: NOW - 3_600_000, resets_at: new Date(NOW + 600_000).toISOString() },
+      [sid(4)]: { notice, pending: false, at: NOW - 3_600_000, resets_at: null },
+      [sid(1)]: { notice, pending: true, at: null }
+    }
+    const stopped = { ...inputs, sessions: inputs.sessions.map((r) => (stops[r.session_id] ? { ...r, limit_stop: stops[r.session_id] } : r)) }
+    const by = new Map(mapExternal(stopped, new Set(), NOW).map((x) => [x.id, x]))
+    expect(by.get(sid(3))?.limit).toEqual({ notice, at: NOW - 3_600_000, resetsAt: NOW + 600_000 })
+    expect([by.get(sid(4))?.limit, by.get(sid(1))?.limit, by.get(sid(2))?.limit]).toEqual([undefined, undefined, undefined])
+  })
+
   test("Hydra Desk's own chats are left out", () => {
     const list = mapExternal(inputs, new Set([sid(1), sid(500)]), NOW)
     expect(list.map((x) => x.id)).not.toContain(sid(1))

@@ -18,7 +18,7 @@ import {
   sessionMetaMap,
 } from './instance-sessions'
 import { readOpenCodeSession } from './opencode-sessions'
-import { createLimitStopTracker, type LimitStop } from './rate-limit-signal'
+import { createLimitStopTracker, type LimitStop, type SessionLimitStop } from './rate-limit-signal'
 import { classifyEnding, endingEventText, type SessionEnding } from './session-ending'
 import { makeLocator, storeKeyOf } from './session-locator'
 import {
@@ -49,6 +49,7 @@ import type {
   TailEvent,
   TitleSource,
 } from './types'
+import { parseResetTime } from './usage'
 
 /**
  * Bump whenever parseMeta learns to extract something new.
@@ -1170,6 +1171,19 @@ function transcriptMatchesProject(f: TranscriptFile, needle: string): boolean {
   )
 }
 
+/** A stop as a row shows it: the notice's reset ("resets 11:40pm (America/Chicago)") as an instant,
+ *  read against the moment of the stop, so a time-only reset is the next such time after the stop
+ *  rather than after now (which, once it passed, would read as tomorrow). */
+export function withResetsAt(stop: LimitStop | null): SessionLimitStop | null {
+  if (!stop) return null
+  const at = stop.notice.search(/\bresets\b/i)
+  return {
+    ...stop,
+    resets_at:
+      stop.at !== null && at >= 0 ? parseResetTime(stop.notice.slice(at), new Date(stop.at)) : null,
+  }
+}
+
 /** Which usage-wall state a parsed row is in. */
 function rateLimitStateOf(m: ScannedMeta): RateLimitState {
   if (!m.limit_stop) return 'clear'
@@ -1255,7 +1269,7 @@ function buildSessionSummary(
       false,
     dispatched: tf.source === 'claude' && qmap.has(tf.session_id),
     subagent_count: collapsed.counts.get(`${tf.source}:${storeKeyOf(tf)}:${tf.session_id}`) ?? 0,
-    limit_stop: m.limit_stop,
+    limit_stop: withResetsAt(m.limit_stop),
     title_source: m.title_source,
     title_tag: m.title_tag,
     copy_index: 1,
@@ -2003,7 +2017,7 @@ export async function getSession(
       collapseSubagents(listTranscriptFiles()).counts.get(
         `${tf.source}:${storeKeyOf(tf)}:${tf.session_id}`,
       ) ?? 0,
-    limit_stop: m.limit_stop,
+    limit_stop: withResetsAt(m.limit_stop),
     title_source: m.title_source,
     title_tag: m.title_tag,
     // This route answers about ONE session and never builds the group, so it does not claim to

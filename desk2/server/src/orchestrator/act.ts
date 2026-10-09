@@ -1,8 +1,9 @@
 // The orchestrator, phase B (armed): what it does on its own once the owner has armed it. Only Desk chats, and only
-// the two moves a person makes without having to think: a chat its account's limit stopped, and a chat whose last
-// turn failed, each get one "continue" through Desk's send queue (which waits out a known reset itself; an errored
-// chat's hold is released so the message goes). A chat that stops again is continued at most RETRIES times before
-// a turn ends well; then it is left to a person. Everything else stays a plan: a question waits for the CreAitor's
+// the move a person makes without having to think: a chat whose last turn failed gets one "continue" through Desk's
+// send queue (its hold is released so the message goes). A chat that stops again is continued at most RETRIES times
+// before a turn ends well; then it is left to a person. A chat a usage limit stopped is the babysitter's, which
+// continues it once the limit resets whether or not the orchestrator is armed (plugins/72-babysitter.ts): the plan
+// shows it and the orchestrator sends it nothing. Everything else stays a plan: a question waits for the CreAitor's
 // promotion (phase C), an outside session is only shown, and a chat a person wrote in is theirs (plan.ts).
 // Pure: the plugin (plugins/70-orchestrator.ts) reads, this decides, the plugin sends.
 
@@ -16,10 +17,9 @@ export type Act =
   | { row: OrchestratorRow; kind: 'continue'; text: string; release: boolean; count: number }
   | { row: OrchestratorRow; kind: 'give-up'; count: number }
 
-/** The message that continues a stopped chat; Desk shows it as a note from the orchestrator. */
+/** The message that continues a chat an error stopped; Desk shows it as a note from the orchestrator. */
 export function continueText(row: OrchestratorRow): string {
-  const why = row.move === 'resume-after-limit' ? "Your account's usage limit stopped the last turn, and it can run again now." : `Your last turn stopped on an error: ${row.reason}`
-  return `[${ORCHESTRATOR_FROM}] Not from the user.\n${why} Continue the task exactly where you left off. Do not redo steps that are already finished.`
+  return `[${ORCHESTRATOR_FROM}] Not from the user.\nYour last turn stopped on an error: ${row.reason} Continue the task exactly where you left off. Do not redo steps that are already finished.`
 }
 
 /** This look's acts. `tries` (chat id -> continues since its last good turn) carries across looks; a chat that is
@@ -32,19 +32,20 @@ export function decide(rows: readonly OrchestratorRow[], tries: Map<string, numb
   const acts: Act[] = []
   for (const row of rows) {
     if (row.source !== 'desk' || skip.has(row.id)) continue
-    if (row.move !== 'retry-error' && row.move !== 'resume-after-limit') {
-      if (row.move !== 'watch') tries.delete(row.id)
+    if (row.move !== 'retry-error') {
+      // A limit stop is the babysitter's: it neither counts here nor ends a run of continues.
+      if (row.move !== 'watch' && row.move !== 'resume-after-limit') tries.delete(row.id)
       continue
     }
     const n = tries.get(row.id) ?? 0
     if (n > RETRIES) continue
-    acts.push(n === RETRIES ? { row, kind: 'give-up', count: n + 1 } : { row, kind: 'continue', text: continueText(row), release: row.move === 'retry-error', count: n + 1 })
+    acts.push(n === RETRIES ? { row, kind: 'give-up', count: n + 1 } : { row, kind: 'continue', text: continueText(row), release: true, count: n + 1 })
   }
   return acts
 }
 
 /** A row as the plan shows it once the orchestrator gave up on its chat: left to a person. */
 export function afterGivingUp(row: OrchestratorRow, tries: ReadonlyMap<string, number>): OrchestratorRow {
-  if ((tries.get(row.id) ?? 0) <= RETRIES || (row.move !== 'retry-error' && row.move !== 'resume-after-limit')) return row
+  if ((tries.get(row.id) ?? 0) <= RETRIES || row.move !== 'retry-error') return row
   return { ...row, move: 'leave', reason: `the orchestrator continued it ${RETRIES} times and it stopped again: ${row.reason}` }
 }

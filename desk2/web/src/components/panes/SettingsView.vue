@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
+import type { BabysitterStatus } from '@shared/babysitter'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
@@ -59,6 +60,7 @@ const models = ref<ModelChoice[]>([])
 const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
+const babysitter = ref<BabysitterStatus | null>(null)
 const loadError = ref<string | null>(null)
 const saveError = ref<string | null>(null)
 const showSaved = ref(false)
@@ -158,6 +160,26 @@ async function testNotification() {
   notifyNote.value = 'Sent.'
 }
 
+async function loadBabysitter() {
+  try {
+    babysitter.value = await api.babysitter()
+  } catch {
+    babysitter.value = null
+  }
+}
+
+const clock = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+/** Under the Babysitter row: what a usage limit has stopped now, by account, and what it last continued. */
+const babysitterNote = computed(() => {
+  const s = babysitter.value
+  if (!s) return null
+  const stopped = s.accounts.length
+    ? `Stopped by a limit: ${s.accounts.map((a) => `${a.account} ${a.stopped} (${a.resetsAt === null ? 'reset unknown' : `resets ${clock(a.resetsAt)}`})`).join(', ')}.`
+    : 'Nothing is stopped by a limit.'
+  const last = s.acts.find((a) => a.did === 'resumed')
+  return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
+})
+
 async function loadBridge() {
   try {
     bridge.value = await api.bridgeStatus()
@@ -233,6 +255,16 @@ function onVisibility() {
 }
 document.addEventListener('visibilitychange', onVisibility)
 
+// The babysitter's status is read when its row comes on screen and when the window is shown again.
+const showsBabysitter = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'babysitter')))
+watch(showsBabysitter, (on) => {
+  if (on) void loadBabysitter()
+}, { immediate: true })
+document.addEventListener('visibilitychange', onBabysitterVisibility)
+function onBabysitterVisibility() {
+  if (showsBabysitter.value && !document.hidden) void loadBabysitter()
+}
+
 // AgentHydra's update check asks its Git remote, so it runs when its row is first on screen.
 const showsUpdate = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'ahVersion')))
 watch(
@@ -305,6 +337,7 @@ onMounted(async () => {
 })
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
+  document.removeEventListener('visibilitychange', onBabysitterVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
@@ -386,6 +419,7 @@ onBeforeUnmount(() => {
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.description }}
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
+                <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
@@ -471,6 +505,13 @@ onBeforeUnmount(() => {
                   />
                   minutes
                 </div>
+
+                <PaneSwitch
+                  v-else-if="r.id === 'babysitter'"
+                  label="Babysitter"
+                  :model-value="local.babysitter"
+                  @update:model-value="(v: boolean) => save({ babysitter: v })"
+                />
 
                 <PaneSwitch
                   v-else-if="r.id === 'delegate'"

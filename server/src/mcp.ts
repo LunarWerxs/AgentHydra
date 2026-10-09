@@ -32,6 +32,7 @@
 import { RECENT_FINISHED } from './climayte-lib'
 import { VERSION } from './config'
 import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
+import { BABYSITTER_TOOLS } from './mcp-babysitter'
 import {
   AUTO_DETACH_MS,
   api,
@@ -1824,6 +1825,7 @@ export const TOOLS: McpEngineTool[] = [
   // --- fan-out: one task list -> N visible chats on N accounts (mcp-fan-out.ts)
   ...FAN_OUT_TOOLS,
   ...FREE_TOOLS,
+  ...BABYSITTER_TOOLS,
   ...DEV_SERVERS_TOOLS,
   ...FAMILY_TOOLS,
   {

@@ -61,6 +61,13 @@ const maxOf = (...xs: (number | null | undefined)[]): number | null => {
   return ok.length ? Math.max(...ok) : null
 }
 
+/** The usage limit an index row's transcript still sits at, as ExternalSession.limit; nothing once anything followed it. */
+function limitOf(row: AhSessionRow | undefined): Pick<ExternalSession, 'limit'> {
+  const stop = row?.limit_stop
+  if (!stop?.pending || stop.at === null) return {}
+  return { limit: { notice: stop.notice, at: stop.at, resetsAt: iso(stop.resets_at) } }
+}
+
 function recencyStatus(last: number | null, now: number): ExternalSession['status'] {
   if (last !== null && now - last <= WORKING_WINDOW_MS) return 'working'
   if (last === null || now - last > STALE_AFTER_MS) return 'stale'
@@ -163,6 +170,7 @@ export function mapExternal(
       canResume: canResume({ status, source }),
       // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
       fromPc: row?.from_pc || null,
+      ...limitOf(row),
       ...UNMARKED,
       unread: base.unread ?? false,
     })
