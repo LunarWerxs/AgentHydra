@@ -158,6 +158,16 @@ if (existsSync(join(configDir, 'fake-org-disabled'))) {
   process.exit(1)
 }
 
+if (existsSync(join(configDir, 'fake-identity'))) {
+  // An account whose identity is not verified yet: the CLI refuses the turn with a 400 and writes nothing.
+  rmSync(join(configDir, 'projects'), { recursive: true, force: true })
+  const text = 'API Error: 400 Identity verification is required to continue.'
+  init()
+  emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text }] } })
+  emit({ type: 'result', subtype: 'success', is_error: true, result: text, session_id: sessionId, total_cost_usd: 0, num_turns: 1 })
+  process.exit(1)
+}
+
 if (existsSync(join(configDir, 'fake-overage'))) {
   // An account with paid extra usage switched on: the window runs out, the CLI says so in its own
   // rate_limit_event (shape measured live 2026-09-30) and carries on, billing overage, for as

@@ -25,6 +25,8 @@ import {
   type CliMayteAccount,
   type CliMayteWorker,
   type classifyAttempt,
+  IDENTITY_WALL,
+  isIdentityRequired,
   isInstantEmptyDeath,
   isOrgDisabled,
   joinResults,
@@ -109,9 +111,10 @@ function wallSignedOut(
 ): void {
   const dir = getCliInstance(at.account.id)?.configDir
   const org = isOrgDisabled(v.notice)
+  const identity = isIdentityRequired(v.notice)
   walls[at.account.id] = {
-    until: org ? now + ORG_WALL_MS : now,
-    reason: org ? ORG_DISABLED_WALL : 'signed out',
+    until: org || identity ? now + ORG_WALL_MS : now,
+    reason: org ? ORG_DISABLED_WALL : identity ? IDENTITY_WALL : 'signed out',
     cred: dir ? credStamp(dir) : null,
   }
   trySaveWalls()

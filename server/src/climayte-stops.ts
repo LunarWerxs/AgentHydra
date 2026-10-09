@@ -42,6 +42,7 @@ import {
   ceilingNotice,
   type classifyAttempt,
   contextTokens,
+  IDENTITY_WALL,
   isLoginWall,
   ORG_DISABLED_WALL,
   OVERAGE_NOTICE,
@@ -124,14 +125,14 @@ export function trySaveWalls(): void {
   }
 }
 
-/** `auth status` passes a login whose organization turned Claude Code off, so only a new login
- *  (the credential file changing) lifts that wall; the next attempt then tells. True when `a`'s
- *  wall is that wall and the signed-out recheck must skip it. */
-export function recheckOrgWall(
+/** `auth status` passes a login whose organization turned Claude Code off, or whose identity is not
+ *  verified yet, so only a new login (the credential file changing) lifts those walls; the next
+ *  attempt then tells. True when `a`'s wall is one of those and the signed-out recheck must skip it. */
+export function recheckCredentialWall(
   a: CliMayteAccount,
   wall: CliMayteWalls[string] | undefined,
 ): boolean {
-  if (wall?.reason !== ORG_DISABLED_WALL) return false
+  if (wall?.reason !== ORG_DISABLED_WALL && wall?.reason !== IDENTITY_WALL) return false
   // A wall from before walls kept the credential's stamp takes today's, so a new login can
   // still lift it.
   if (wall.cred === undefined) {
@@ -158,6 +159,8 @@ export function climayteSignedOutReason(id: string, configDir: string): string |
   if (wall!.cred !== undefined && wall!.cred !== credStamp(configDir)) return null
   if (wall!.reason === ORG_DISABLED_WALL)
     return 'Claude Code is turned off for this account\'s organization ("Your organization has disabled Claude subscription access for Claude Code"), so CliMayte does not use it. Sign it in with a different login to use it again.'
+  if (wall!.reason === IDENTITY_WALL)
+    return 'Identity verification is required for this account (sign in at claude.ai and verify it), so CliMayte does not use it until then.'
   return 'Signed out: its credential file is there, but the login failed when CliMayte used it and has not worked since. It is used again once it signs in again. Sign in again: Quick add, or Log in.'
 }
 

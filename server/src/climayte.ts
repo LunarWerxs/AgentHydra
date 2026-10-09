@@ -154,7 +154,7 @@ import {
   killLateStarts,
   noteReading,
   readLog,
-  recheckOrgWall,
+  recheckCredentialWall,
   saveLive,
   signedOutRecheckDue,
   stopAtCeilingOrOverage,
@@ -276,7 +276,7 @@ function checkAuth(a: CliMayteAccount): void {
 function recheckSignedOut(accounts: CliMayteAccount[]): void {
   for (const a of accounts) {
     const wall = walls[a.id]
-    if (recheckOrgWall(a, wall)) continue
+    if (recheckCredentialWall(a, wall)) continue
     if (wall?.reason !== 'signed out' || authChecks.has(a.id)) continue
     const cred = credStamp(a.configDir)
     if (wall.cred === undefined) {

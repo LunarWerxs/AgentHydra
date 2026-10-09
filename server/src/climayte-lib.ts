@@ -924,7 +924,7 @@ export const ENV_SCRUB =
 // for Claude Code (`error:"oauth_org_not_allowed"`). It is the account's problem, not the task's,
 // so the task moves on and the account is walled like a signed-out one.
 const AUTH_RE =
-  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access/i
+  /please run \/login|not logged in|invalid api key|failed to authenticate|oauth (?:token|session) (?:has )?(?:expired|been revoked)|authentication_error|disabled claude subscription access|identity verification is required/i
 
 /** The wall reason for an account whose organization turned Claude Code off. `claude auth status`
  *  still says such a login works, so the 30-minute signed-out recheck lifted its wall every time,
@@ -934,9 +934,15 @@ export const ORG_DISABLED_WALL = 'organization disabled Claude Code'
 const ORG_DISABLED_RE = /disabled claude subscription access|oauth_org_not_allowed/i
 export const isOrgDisabled = (notice: string | null): boolean =>
   !!notice && ORG_DISABLED_RE.test(notice)
+/** The account's identity must be verified again (400 "Identity verification is required to
+ *  continue"): an account problem like a disabled organization, lifted only by a new login. */
+export const IDENTITY_WALL = 'identity verification required'
+const IDENTITY_RE = /identity verification is required/i
+export const isIdentityRequired = (notice: string | null): boolean =>
+  !!notice && IDENTITY_RE.test(notice)
 /** A wall about the login, not the usage: its `until` is a recheck time, never when it frees up. */
 export const isLoginWall = (reason: string | undefined): boolean =>
-  reason === 'signed out' || reason === ORG_DISABLED_WALL
+  reason === 'signed out' || reason === ORG_DISABLED_WALL || reason === IDENTITY_WALL
 /** The account takes no work now: a usage wall until it ends, a login wall until its recheck lifts
  *  it (climayte.ts recheckSignedOut, on a new credential file only). 2026-10-03
  *  00:53Z: #135's wall lapsed while no tick ran, and a handoff placed before the tick's recheck sent
