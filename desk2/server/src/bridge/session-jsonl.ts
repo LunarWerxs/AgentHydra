@@ -265,13 +265,23 @@ function trimWindow(m: Memo, items: TranscriptItem[], keep: number, cap: number)
  * again. A window never starts inside an API message, and keeps back to the launch of a tool or task still running
  * (up to `pinBytes`; a tool that long without an answer loses it, and its result is then skipped).
  */
-export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: string | null) => TranscriptItem[] {
+export interface JsonlReader {
+  (path: string, cwd?: string | null): TranscriptItem[]
+  /** The same answer, parsed in slices that let the event loop run between them. */
+  readAsync(path: string, cwd?: string | null): Promise<TranscriptItem[]>
+}
+
+/** Lines parsed between two slices of an async read: about a few milliseconds of JSON.parse. */
+const LINES_PER_SLICE = 100
+
+export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
   const memo = new Map<string, Memo>()
   let memoBytes = 0
   const settled = new Map<string, Settled>()
   let settledBytes = 0
   const windowed = o.keepBytes < o.tailBytes
   const pinCap = o.pinBytes ?? o.keepBytes
+  const reading = new Map<string, Promise<unknown>>()
 
   function unsettle(path: string): void {
     const kept = settled.get(path)
@@ -280,7 +290,7 @@ export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: s
     settledBytes -= kept.bytes
   }
 
-  return (path, cwd) => {
+  function* step(path: string, cwd?: string | null): Generator<void, TranscriptItem[]> {
     const st = statSync(path)
     let m = memo.get(path)
     if (m && unchanged(m, st)) return m.items
@@ -319,7 +329,9 @@ export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: s
     const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
     // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
     // not valid UTF-8 (decoded, such a byte would count as three).
+    let parsed = 0
     for (let nl = buf.indexOf(10, start); nl >= 0; start = nl + 1, nl = buf.indexOf(10, start)) {
+      if (++parsed % LINES_PER_SLICE === 0) yield
       const bytes = nl + 1 - start
       fresh.offset += bytes
       sessionJsonlWork.parsedBytes += bytes
@@ -338,6 +350,7 @@ export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: s
     fresh.mtimeMs = st.mtimeMs
     fresh.ino = st.ino
     if (!windowed) while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
+    yield
     const answer = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
     fresh.items = answer
     if (windowed) {
@@ -359,6 +372,34 @@ export function createJsonlReader(o: JsonlReaderOptions): (path: string, cwd?: s
     }
     return answer
   }
+
+  const drive = (path: string, cwd?: string | null): TranscriptItem[] => {
+    const g = step(path, cwd)
+    let r = g.next()
+    while (!r.done) r = g.next()
+    return r.value
+  }
+
+  const readAsync = async (path: string, cwd?: string | null): Promise<TranscriptItem[]> => {
+    for (let prev = reading.get(path); prev; prev = reading.get(path)) await prev.catch(() => undefined)
+    const run = (async () => {
+      const g = step(path, cwd)
+      let r = g.next()
+      while (!r.done) {
+        await new Promise((done) => setImmediate(done))
+        r = g.next()
+      }
+      return r.value
+    })()
+    reading.set(path, run)
+    try {
+      return await run
+    } finally {
+      if (reading.get(path) === run) reading.delete(path)
+    }
+  }
+
+  return Object.assign(drive, { readAsync })
 }
 
 const SETTLED = { settledFiles: 1024, settledBytes: 64 * 1024 * 1024 }
