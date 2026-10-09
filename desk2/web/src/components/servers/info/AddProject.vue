@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { DevWebAddResult, DevWebProposal, DevWebScanPreset, DevWebScanResult, DevWebTrigger } from '@shared/devwebui'
 import { FileCode, Folder, FolderOpen, FolderPlus, FolderSearch, GitBranch, HardDrive, LoaderCircle, ScanSearch, Search } from '@lucide/vue'
+import { Tip } from '@/components/ui/tooltip'
 import { ref } from 'vue'
 import { cloneDest, cloneProject, ignoreFolder, ignoredFolders, loadProject, pickFolder, scaffoldProject, scanProjects, unignoreFolder } from '../api'
 import { useDevServers } from '../store'
@@ -243,7 +244,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
                     <span class="text-[12px] text-text-muted">{{ plural(f.processes) }}</span>
                     <span v-if="!f.valid" :class="chip('danger')">Does not parse</span>
                   </div>
-                  <div :class="[MONO, 'truncate text-text-muted']" :title="f.path">{{ f.path }}</div>
+                  <Tip :label="f.path"><div :class="[MONO, 'truncate text-text-muted']">{{ f.path }}</div></Tip>
                 </div>
                 <button type="button" :class="BTN" :disabled="busy || !f.valid" @click="addFound(f.path)">Add</button>
                 <button type="button" :class="BTN_GHOST" :disabled="busy" @click="ignore(f.path)">Ignore</button>
@@ -257,7 +258,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
                     <span :class="CHIP">No .devwebui</span>
                     <span v-if="d.framework" :class="CHIP">{{ d.framework }}</span>
                   </div>
-                  <div :class="[MONO, 'truncate text-text-muted']" :title="d.path">{{ d.path }}</div>
+                  <Tip :label="d.path"><div :class="[MONO, 'truncate text-text-muted']">{{ d.path }}</div></Tip>
                 </div>
                 <!-- The path is copied into the folder field so its scaffold step reads as that folder's. -->
                 <button type="button" :class="BTN" :disabled="busy" @click="path = d.path; addFound(d.path)">Add</button>
@@ -271,7 +272,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <p v-if="!ignored.length" class="px-4 pb-4 text-[12px] text-text-muted">No folders are ignored.</p>
           <ul v-else class="divide-y divide-border border-t border-border">
             <li v-for="p in ignored" :key="p" class="flex min-h-10 items-center gap-3 px-4 py-1.5">
-              <span :class="[MONO, 'min-w-0 flex-1 truncate text-text-2']" :title="p">{{ p }}</span>
+              <Tip :label="p"><span :class="[MONO, 'min-w-0 flex-1 truncate text-text-2']">{{ p }}</span></Tip>
               <button type="button" :class="BTN_GHOST" :disabled="busy" @click="unignore(p)">Unignore</button>
             </li>
           </ul>

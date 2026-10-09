@@ -2,6 +2,7 @@
 import type { DevWebAddResult, DevWebFoundItem, DevWebPreview, DevWebProposal } from '@shared/devwebui'
 import { FileCode, Folder } from '@lucide/vue'
 import { ref, watch } from 'vue'
+import { Tip } from '@/components/ui/tooltip'
 import { ignoreFolder, loadProject, previewFound, scaffoldProject, unignoreFolder } from '../api'
 import { useDevServers } from '../store'
 import Card from './kit/Card.vue'
@@ -104,7 +105,7 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
           <li v-for="p in preview.processes" :key="p.id" class="flex min-h-11 items-center gap-2 px-4 py-2">
             <span class="shrink-0 text-[13px] text-text">{{ p.name }}</span>
             <span v-if="p.port" :class="[CHIP, 'tnum']">:{{ p.port }}</span>
-            <span :class="[MONO, 'min-w-0 flex-1 truncate text-end text-text-muted']" :title="p.command">{{ p.command }}</span>
+            <Tip :label="p.command"><span :class="[MONO, 'min-w-0 flex-1 truncate text-end text-text-muted']">{{ p.command }}</span></Tip>
           </li>
         </ul>
       </Card>

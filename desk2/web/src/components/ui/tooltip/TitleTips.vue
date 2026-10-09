@@ -2,9 +2,9 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 
 // The real app shows no browser-native tooltips. One listener turns every title="" in the window
-// into the same tooltip Tip draws (#20201f on #f0efec, 500ms in, below the control, flipped above
+// into the same tooltip Tip draws (#20201f on #f0efec, 1s in, below the control, flipped above
 // at the window's edge), so a control that only sets a title still looks like the real thing.
-const SHOW_MS = 500
+const SHOW_MS = 1000
 const EDGE = 8
 const GAP = 4
 

@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { FailuresResponse } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
+import { Tip } from '@/components/ui/tooltip'
 import { causeLabel, dayStart, duration, ranked } from './failures'
 
 // Failures: counts by cause (today, 7 days), by account over 7 days (a dead account stands out), the latest rows.
@@ -80,7 +81,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
             </button>
             <span v-else class="ms-auto truncate text-text-muted">{{ r.title }}</span>
           </div>
-          <div class="mt-0.5 truncate font-mono text-[12px] text-text-muted" :title="r.message">{{ r.message }}</div>
+          <Tip :label="r.message"><div class="mt-0.5 truncate font-mono text-[12px] text-text-muted">{{ r.message }}</div></Tip>
         </li>
       </ul>
     </template>

@@ -124,9 +124,9 @@ function onMenuClosed(e: Event) {
           <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
           <!-- A chat of another app on this PC: its muted mark beside the dot, never in its place, so working and needs-you still show. -->
-          <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" :title="app.label" class="size-3.5 shrink-0 text-text-muted" />
+          <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" class="size-3.5 shrink-0 text-text-muted" />
           <!-- A CliMayte task drawn as a row of its own (nothing says which chat started it): the CliMayte toggle's mark, so it never reads as a chat (owner, 2026-10-07). -->
-          <component :is="shellIcons.climayte" v-if="isTaskRow(session.id)" role="img" aria-label="CliMayte task" title="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
+          <component :is="shellIcons.climayte" v-if="isTaskRow(session.id)" role="img" aria-label="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
           <input
             v-if="renaming"
             ref="input"

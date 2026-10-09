@@ -317,7 +317,7 @@ defineExpose({ refresh })
         <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" :disabled="!page" @click="history('reload')"><RotateCw class="size-4" /></button></Tip>
         <input ref="addressEl" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address" :class="INPUT" />
       </form>
-      <div v-if="note" class="truncate border-b border-border px-3 py-1 text-[12px] text-(--text-muted)" data-testid="browser-note" :title="note">{{ note }}</div>
+      <Tip v-if="note" :label="note"><div class="truncate border-b border-border px-3 py-1 text-[12px] text-(--text-muted)" data-testid="browser-note">{{ note }}</div></Tip>
       <div class="relative min-h-0 flex-1 bg-(--bg-page)">
         <div ref="stage" class="absolute inset-0" :class="phase === 'live' || phase === 'connecting' ? '' : 'invisible'">
           <canvas

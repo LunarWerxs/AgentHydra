@@ -54,6 +54,7 @@ function watchColumn(column: Element, f: Fitter) {
 // sit above the bubble as 8px-rounded tiles that open in the lightbox.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ImageRef } from '@shared/protocol'
+import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import MessageActions from './MessageActions.vue'
@@ -168,15 +169,16 @@ watch(() => props.text, () => nextTick(fit))
         <span>{{ noTurnYet ? 'Queued, goes first when CliMayte starts this chat' : 'Queued, sends when this turn ends' }}</span>
         <template v-if="canSendNow">
           <span aria-hidden="true">·</span>
-          <button
-            type="button"
-            class="cursor-pointer hover:text-text disabled:cursor-default disabled:opacity-60"
-            :disabled="sendNowState === 'sending'"
-            title="Stop this turn and send this message now"
-            @click="sendNow"
-          >
-            {{ sendNowState === 'sending' ? 'Sending…' : 'Send now' }}
-          </button>
+          <Tip label="Stop this turn and send this message now">
+            <button
+              type="button"
+              class="cursor-pointer hover:text-text disabled:cursor-default disabled:opacity-60"
+              :disabled="sendNowState === 'sending'"
+              @click="sendNow"
+            >
+              {{ sendNowState === 'sending' ? 'Sending…' : 'Send now' }}
+            </button>
+          </Tip>
         </template>
       </template>
     </div>

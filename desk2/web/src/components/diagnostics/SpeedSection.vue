@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { GroupStats, StageStats, TimingsResponse } from '@shared/timings'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
+import { Tip } from '@/components/ui/tooltip'
 import { barPct, ms, partLabel, rowLabel, stageParts } from './speed'
 
 // Speed: what is slow right now (today, by time lost), per-stage p50/p90 bars, the slowest turns, what a cold
@@ -55,7 +56,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
       <p v-if="!slowNow.length" class="mt-1 text-text-muted">Nothing measured today.</p>
       <ol v-else class="mt-1">
         <li v-for="r in slowNow" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
-          <span class="truncate text-text-2" :title="rowLabel(r)">{{ rowLabel(r) }}</span>
+          <Tip :label="rowLabel(r)"><span class="truncate text-text-2">{{ rowLabel(r) }}</span></Tip>
           <span class="tnum shrink-0 text-text-muted">{{ r.count }}× · p50 {{ ms(r.p50) }}</span>
           <span class="tnum w-20 shrink-0 text-end text-text">{{ ms(r.totalMs) }}</span>
         </li>
@@ -117,7 +118,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
           <p v-if="!coldStart.length" class="mt-1 text-text-muted">No cold starts measured yet.</p>
           <ul v-else class="mt-1">
             <li v-for="r in coldStart" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
-              <span class="truncate text-text-2" :title="rowLabel(r)">{{ rowLabel(r) }}</span>
+              <Tip :label="rowLabel(r)"><span class="truncate text-text-2">{{ rowLabel(r) }}</span></Tip>
               <span class="tnum shrink-0 text-text">{{ r.count }}× · p50 {{ ms(r.p50) }} · max {{ ms(r.max) }}</span>
             </li>
           </ul>
@@ -135,7 +136,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
           <p v-if="!workers.length" class="mt-1 text-text-muted">No worker waits measured yet.</p>
           <ul v-else class="mt-1">
             <li v-for="r in workers" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
-              <span class="truncate text-text-2" :title="rowLabel(r)">{{ rowLabel(r) }}</span>
+              <Tip :label="rowLabel(r)"><span class="truncate text-text-2">{{ rowLabel(r) }}</span></Tip>
               <span class="tnum shrink-0 text-text">{{ r.count }}× · p50 {{ ms(r.p50) }} · p90 {{ ms(r.p90) }}</span>
             </li>
           </ul>
@@ -148,7 +149,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
           <p v-if="!g.d.length" class="mt-1 text-text-muted">None</p>
           <ul v-else class="mt-1">
             <li v-for="r in g.d" :key="r.key" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
-              <span class="truncate text-text-2" :title="r.key">{{ r.key }} <span class="tnum text-text-muted">({{ r.turns }})</span></span>
+              <Tip :label="r.key"><span class="truncate text-text-2">{{ r.key }} <span class="tnum text-text-muted">({{ r.turns }})</span></span></Tip>
               <span class="tnum shrink-0 text-text">p50 {{ ms(r.p50) }}</span>
             </li>
           </ul>

@@ -19,7 +19,7 @@ const props = withDefaults(
     delay?: number
     disabled?: boolean
   }>(),
-  { side: 'bottom', align: 'center', delay: 500, disabled: false }
+  { side: 'bottom', align: 'center', delay: 1000, disabled: false }
 )
 
 // reka's disabled only stops the next open: a tooltip already showing would stay up (as an empty pill

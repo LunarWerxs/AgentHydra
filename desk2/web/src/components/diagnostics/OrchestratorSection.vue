@@ -5,6 +5,7 @@ import type { View } from '@/components/shell/logic'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { relativeTime } from '@/components/sidebar/search'
+import { Tip } from '@/components/ui/tooltip'
 
 // Orchestrator: each open chat's next move as the orchestrator sees it, and on request what the CreAitor says the
 // owner would answer. Shadow until the owner arms it (here or Settings > General > Orchestrator); armed, a model judges
@@ -96,15 +97,16 @@ const actText = (a: OrchestratorAct): string =>
           >
             {{ asking ? 'Asking the CreAitor…' : 'Ask the CreAitor' }}
           </button>
-          <button
-            type="button"
-            class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
-            :disabled="arming"
-            :title="armed ? 'Stop acting; it goes back to only planning' : 'Continue Desk chats a limit or an error stopped, until Desk stops'"
-            @click="setArmed(!armed)"
-          >
-            {{ armed ? 'Disarm' : 'Arm' }}
-          </button>
+          <Tip :label="armed ? 'Stop acting; it goes back to only planning' : 'Continue Desk chats a limit or an error stopped, until Desk stops'">
+            <button
+              type="button"
+              class="cursor-default text-text-2 underline-offset-2 hover:text-text hover:underline disabled:text-text-muted"
+              :disabled="arming"
+              @click="setArmed(!armed)"
+            >
+              {{ armed ? 'Disarm' : 'Arm' }}
+            </button>
+          </Tip>
         </span>
       </div>
       <p v-if="!rows.length" class="mt-2 text-text-muted">Nothing waits on the orchestrator.</p>
@@ -125,12 +127,12 @@ const actText = (a: OrchestratorAct): string =>
             </button>
             <span v-else class="ms-auto truncate text-text-muted">{{ r.title }}</span>
           </div>
-          <div v-if="r.question" class="mt-0.5 truncate text-text-2" :title="r.question">{{ r.question }}</div>
+          <Tip v-if="r.question" :label="r.question"><div class="mt-0.5 truncate text-text-2">{{ r.question }}</div></Tip>
           <div v-if="r.options?.length" class="mt-0.5 truncate text-text-muted">{{ r.options.join(' · ') }}</div>
           <div v-if="r.judgment" class="mt-0.5 text-text-2" :class="{ 'text-danger-text': r.judgment.error }" data-testid="judgment">
             {{ judgedText(r.judgment) }}
             <span class="text-text-muted">({{ judgedWhere(r.judgment) }}{{ r.judgment.held ? `; held: ${r.judgment.held}` : '' }})</span>
-            <div v-if="r.judgment.message" class="mt-0.5 truncate text-text-muted" :title="r.judgment.message">Message: {{ r.judgment.message }}</div>
+            <Tip v-if="r.judgment.message" :label="r.judgment.message"><div class="mt-0.5 truncate text-text-muted">Message: {{ r.judgment.message }}</div></Tip>
           </div>
           <div v-if="r.creaitor && 'error' in r.creaitor" class="mt-0.5 text-danger-text">{{ r.creaitor.error }}</div>
           <div v-else-if="r.creaitor" class="mt-0.5 text-text-2">

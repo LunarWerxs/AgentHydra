@@ -135,22 +135,23 @@ watch(
         <div ref="list" class="min-h-0 max-h-[min(50vh,264px)] overflow-y-auto">
           <DropdownMenuItem v-for="c in matches" :key="c.companyId" :class="[MENU_ITEM, 'group data-[current=true]:font-medium']" :data-current="isCurrent(ws, c)" :disabled="busy" :title="chatOk ? undefined : NO_SESSION" @select="pick(c.companyId)">
             <span class="flex-1 truncate">{{ c.name }}</span>
-            <button
-              type="button"
-              tabindex="-1"
-              data-star
-              :data-on="starState(ws, c).on"
-              :title="starState(ws, c).title"
-              :aria-label="starState(ws, c).title"
-              :aria-pressed="starState(ws, c).on"
-              class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
-              :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100 group-data-highlighted:opacity-100'"
-              @click.stop.prevent="toggleDefault(c)"
-              @pointerup.stop
-              @pointerdown.stop
-            >
-              <component :is="icons.star" class="size-3.5" :class="starState(ws, c).on ? 'fill-current' : ''" />
-            </button>
+            <Tip :label="starState(ws, c).title">
+              <button
+                type="button"
+                tabindex="-1"
+                data-star
+                :data-on="starState(ws, c).on"
+                :aria-label="starState(ws, c).title"
+                :aria-pressed="starState(ws, c).on"
+                class="flex size-4 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) hover:bg-fill-hover"
+                :class="starState(ws, c).on ? 'text-text-2' : 'text-text-muted opacity-0 group-hover:opacity-100 group-data-highlighted:opacity-100'"
+                @click.stop.prevent="toggleDefault(c)"
+                @pointerup.stop
+                @pointerdown.stop
+              >
+                <component :is="icons.star" class="size-3.5" :class="starState(ws, c).on ? 'fill-current' : ''" />
+              </button>
+            </Tip>
             <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
           </DropdownMenuItem>
           <p v-if="!matches.length" class="flex h-6 items-center px-2 text-[13px] leading-4.75 text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>

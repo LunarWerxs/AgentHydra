@@ -110,7 +110,7 @@ describe('the pane markup', () => {
   it('a page tab carries a badge naming its profile, the full name on hover, and closing it closes the page, not the Chrome', () => {
     const pane = read('ServersPane.vue')
     expect(pane).toContain('data-testid="profile-badge"')
-    expect(pane).toContain(':title="`Chrome profile: ${t.target}`"')
+    expect(pane).toContain(':label="`Chrome profile: ${t.target}`"')
     expect(pane).toContain('browserClosePage(cwd, profile, page, props.chatId)')
     expect(pane).not.toContain('browserClose(')
   })

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { RefreshCw } from '@lucide/vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Tip } from '@/components/ui/tooltip'
 import PaneSwitch from './PaneSwitch.vue'
 import { BUTTON, FIELD, SELECT_CONTENT, SELECT_ITEM, SELECT_TRIGGER } from './settings-styles'
 import type { InstanceSettings } from './instances'
@@ -42,16 +43,17 @@ function saveFloor(e: Event) {
         <SelectItem v-for="p in inst.profiles.value" :key="p.dir" :class="SELECT_ITEM" :value="p.dir">{{ inst.accountLabel(p) }}</SelectItem>
       </SelectContent>
     </Select>
-    <button
-      type="button"
-      aria-label="Read the native control settings again"
-      title="Read the native control settings again"
-      class="flex size-7 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text disabled:opacity-50"
-      :disabled="inst.nativeLoading.value || inst.nativeSaving.value"
-      @click="inst.loadNative()"
-    >
-      <RefreshCw class="size-3.5" :class="inst.nativeLoading.value ? 'animate-spin' : ''" />
-    </button>
+    <Tip label="Read the native control settings again">
+      <button
+        type="button"
+        aria-label="Read the native control settings again"
+        class="flex size-7 shrink-0 cursor-default items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text disabled:opacity-50"
+        :disabled="inst.nativeLoading.value || inst.nativeSaving.value"
+        @click="inst.loadNative()"
+      >
+        <RefreshCw class="size-3.5" :class="inst.nativeLoading.value ? 'animate-spin' : ''" />
+      </button>
+    </Tip>
   </div>
 
   <PaneSwitch

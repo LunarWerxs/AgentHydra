@@ -235,7 +235,7 @@ const MENU_ITEM = 'text-[13px]'
           </div>
           <div class="flex min-w-0 items-center gap-1 text-[12px] leading-5">
             <template v-if="address">
-              <a :href="address" target="_blank" rel="noopener" class="min-w-0 truncate font-mono text-accent-text hover:underline" :title="address">{{ address }}</a>
+              <Tip :label="address"><a :href="address" target="_blank" rel="noopener" class="min-w-0 truncate font-mono text-accent-text hover:underline">{{ address }}</a></Tip>
               <Tip :label="copied === 'address' ? 'Copied' : 'Copy the address'">
                 <button type="button" :class="ICON_BTN_SM" aria-label="Copy the address" @click="copy('address', address)">
                   <component :is="copied === 'address' ? Check : Copy" class="size-3.5" />

@@ -221,7 +221,7 @@ onBeforeUnmount(() => {
               {{ ev.metric === 'cpu' ? 'CPU' : 'Memory' }} reached <span class="font-medium text-text tnum">{{ amount(ev.metric, ev.value) }}</span>
               (over {{ amount(ev.metric, ev.threshold) }})
               <span class="block text-[12px] leading-4.5 text-text-muted">
-                <template v-if="!processId">{{ serverName(ev) }} · </template><span :title="clockTime(ev.firedAt)">{{ ago(ev.firedAt) }}</span>
+                <template v-if="!processId">{{ serverName(ev) }} · </template><Tip :label="clockTime(ev.firedAt)"><span>{{ ago(ev.firedAt) }}</span></Tip>
               </span>
             </p>
             <span :class="chip(stillFiring(ev) ? 'warning' : 'neutral')">{{ stillFiring(ev) ? 'Firing' : 'Resolved' }}</span>

@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { CheckCircle2, Code2, Zap } from '@lucide/vue'
 import { restoreTakeover, takeOver, takeoverCheck } from '../api'
 import { BTN, BTN_GHOST, BTN_PRIMARY, CARD, MONO } from './kit/kit'
+import { Tip } from '@/components/ui/tooltip'
 import Card from './kit/Card.vue'
 import EmptyState from './kit/EmptyState.vue'
 import Notice from './kit/Notice.vue'
@@ -77,12 +78,12 @@ const any = computed(() => !!(found.value.length || backups.value.length || resu
         <div class="flex min-w-0 flex-1 flex-col gap-1">
           <span class="text-[13px] font-medium leading-5 text-text">{{ t.label }}</span>
           <span class="text-[12px] leading-4 text-text-2">{{ WHAT[t.kind] }} {{ t.detail }}</span>
-          <span :class="MONO" class="truncate text-text-muted" :title="t.file">{{ t.file }}</span>
+          <Tip :label="t.file"><span :class="MONO" class="truncate text-text-muted">{{ t.file }}</span></Tip>
         </div>
       </div>
 
       <Notice v-if="result && result.disabled.length" tone="success" :title="`Turned off ${result.disabled.length} ${result.disabled.length === 1 ? 'trigger' : 'triggers'}`">
-        <p v-for="b in result.backups" :key="b" :class="MONO" class="truncate" :title="b">Backup: {{ b }}</p>
+        <Tip v-for="b in result.backups" :key="b" :label="b"><p :class="MONO" class="truncate">Backup: {{ b }}</p></Tip>
       </Notice>
       <Notice v-if="result && result.skipped.length" tone="danger" title="Some files were left alone">
         <p v-for="s in result.skipped" :key="s.file">Left <span :class="MONO">{{ s.file }}</span> alone: {{ s.reason }}</p>

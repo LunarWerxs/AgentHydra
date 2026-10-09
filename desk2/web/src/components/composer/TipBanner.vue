@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { newSessionGlyphs } from '@/lib/icons'
+import { Tip as TipHint } from '@/components/ui/tooltip'
 import type { Tip } from './logic'
 
 // The tip banner between the env pills and the new-session box (new-session-tip-and-composer.png):
@@ -26,14 +27,15 @@ const emit = defineEmits<{ try: [tip: Tip]; dismiss: [tip: Tip] }>()
     >
       <span class="relative top-[-1.5px]">Try it</span>
     </button>
-    <button
-      type="button"
-      class="ms-3 flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-muted transition-colors duration-60 hover:bg-(--fill-hover) hover:text-text"
-      aria-label="Dismiss"
-      title="Dismiss this tip"
-      @click="emit('dismiss', tip)"
-    >
-      <newSessionGlyphs.dismiss class="size-4" />
-    </button>
+    <TipHint label="Dismiss this tip">
+      <button
+        type="button"
+        class="ms-3 flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-muted transition-colors duration-60 hover:bg-(--fill-hover) hover:text-text"
+        aria-label="Dismiss"
+        @click="emit('dismiss', tip)"
+      >
+        <newSessionGlyphs.dismiss class="size-4" />
+      </button>
+    </TipHint>
   </div>
 </template>

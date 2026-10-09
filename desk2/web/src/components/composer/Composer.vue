@@ -1198,15 +1198,16 @@ onBeforeUnmount(() => {
           header="Move this draft to a new chat in"
           @choose="moveDraft"
         >
-          <button
-            type="button"
-            aria-label="More"
-            title="More"
-            class="absolute -right-2.5 -top-2.5 z-10 flex size-6 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-focus-within/box:opacity-100 group-hover/box:opacity-100"
-            :class="moveOpen ? 'opacity-100' : 'opacity-0'"
-          >
-            <component :is="shellGlyphs.rowMore" class="size-4" />
-          </button>
+          <Tip label="More">
+            <button
+              type="button"
+              aria-label="More"
+              class="absolute -right-2.5 -top-2.5 z-10 flex size-6 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-focus-within/box:opacity-100 group-hover/box:opacity-100"
+              :class="moveOpen ? 'opacity-100' : 'opacity-0'"
+            >
+              <component :is="shellGlyphs.rowMore" class="size-4" />
+            </button>
+          </Tip>
         </ChangeProjectMenu>
         <!-- Slash command menu -->
         <div

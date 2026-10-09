@@ -10,6 +10,7 @@ import type { DevServerSettingsContext } from './devservers'
 import type { SettingsRowId } from './settings'
 import AlertRules from '@/components/servers/info/AlertRules.vue'
 import { serviceLine } from '@/components/servers/logic'
+import { Tip } from '@/components/ui/tooltip'
 
 const props = defineProps<{ id: SettingsRowId; label: string; ctx: DevServerSettingsContext }>()
 
@@ -228,7 +229,7 @@ function saveExclude(e: Event) {
     <div v-if="ignoredError" class="text-[12px] leading-4.5 text-danger-text">{{ ignoredError }}</div>
     <div v-if="!ignored.length" class="text-[13px] leading-4.75 text-text-muted">No ignored folders.</div>
     <div v-for="p in ignored" :key="p" class="flex items-center gap-2">
-      <span class="min-w-0 flex-1 truncate font-mono text-[12px] text-text-2" :title="p">{{ p }}</span>
+      <Tip :label="p"><span class="min-w-0 flex-1 truncate font-mono text-[12px] text-text-2">{{ p }}</span></Tip>
       <button type="button" :class="BUTTON" :disabled="unignoring === p" :aria-busy="unignoring === p" @click="unignore(p)">Unignore</button>
     </div>
   </div>

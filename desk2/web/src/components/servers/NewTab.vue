@@ -136,7 +136,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <span class="truncate font-medium">{{ p.name }}</span>
                   <span v-if="p.port" class="tnum shrink-0 text-[12px] text-(--text-muted)">:{{ p.port }}</span>
                   <span class="shrink-0 text-[12px] text-(--text-muted)">{{ pendingText(p) }}</span>
-                  <span v-if="outsideNote(p)" class="truncate text-[12px] text-(--text-muted)" :title="OUTSIDE_TIP">{{ outsideNote(p) }}</span>
+                  <Tip v-if="outsideNote(p)" :label="OUTSIDE_TIP"><span class="truncate text-[12px] text-(--text-muted)">{{ outsideNote(p) }}</span></Tip>
                 </button>
                 <Tip :label="isUp(p.status) ? 'Stop' : (startBlock(p) ?? 'Start and open')">
                   <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id) || !!startBlock(p)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start and open'} ${p.name}`" @click="isUp(p.status) ? emit('toggle', p) : emit('server', p)">
@@ -163,7 +163,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                 <span class="truncate font-medium">{{ r.proc.name }}</span>
                 <span class="truncate text-[12px] text-(--text-muted)">{{ r.project.name }}</span>
                 <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-(--text-muted)">:{{ r.proc.port }}</span>
-                <span v-if="outsideNote(r.proc)" class="truncate text-[12px] text-(--text-muted)" :title="OUTSIDE_TIP">{{ outsideNote(r.proc) }}</span>
+                <Tip v-if="outsideNote(r.proc)" :label="OUTSIDE_TIP"><span class="truncate text-[12px] text-(--text-muted)">{{ outsideNote(r.proc) }}</span></Tip>
               </button>
               <Tip label="Stop">
                 <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="emit('toggle', r.proc)"><Square class="size-3.5" /></button>
@@ -201,15 +201,15 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
             <li v-for="r in saved" :key="r.name">
               <button type="button" class="flex w-full flex-col gap-0.5 rounded-(--radius-6) px-2 py-1.5 text-start transition-colors duration-60 hover:bg-(--fill-hover) focus-visible:shadow-(--focus-ring) focus-visible:outline-none" :aria-label="`Show ${r.name}`" @click="emit('saved', r.name)">
                 <span class="flex items-center gap-1.5">
-                  <span class="size-2 shrink-0 rounded-full" :class="r.open ? DOT.run : DOT.off" :title="r.open ? 'Open' : 'Not open'" aria-hidden="true" />
-                  <span class="truncate font-medium" :title="r.label && r.label !== r.name ? r.name : undefined">{{ r.label ?? r.name }}</span>
+                  <Tip :label="r.open ? 'Open' : 'Not open'"><span class="size-2 shrink-0 rounded-full" :class="r.open ? DOT.run : DOT.off" aria-hidden="true" /></Tip>
+                  <Tip :label="r.label && r.label !== r.name ? r.name : ''"><span class="truncate font-medium">{{ r.label ?? r.name }}</span></Tip>
                   <span class="flex-1" />
                   <span class="shrink-0 text-[12px] text-(--text-muted)">{{ r.open ? 'open · ' : '' }}{{ r.lastUsed }}</span>
                 </span>
-                <span class="truncate text-[12px]" :class="r.note ? 'text-(--text-2)' : 'text-(--text-muted)'" :title="r.note ?? undefined">{{ r.note ?? 'no note' }}</span>
+                <Tip :label="r.note ?? ''"><span class="truncate text-[12px]" :class="r.note ? 'text-(--text-2)' : 'text-(--text-muted)'">{{ r.note ?? 'no note' }}</span></Tip>
                 <span v-if="chipsOf(r).length" class="flex flex-wrap gap-1">
                   <span v-for="h in splitChips(chipsOf(r)).shown" :key="h" class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-[11px] text-(--text-2)">{{ h }}</span>
-                  <span v-if="splitChips(chipsOf(r)).more.length" class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-[11px] text-(--text-2)" :title="moreTitle(chipsOf(r))">+{{ splitChips(chipsOf(r)).more.length }}</span>
+                  <Tip v-if="splitChips(chipsOf(r)).more.length" :label="moreTitle(chipsOf(r))"><span class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-[11px] text-(--text-2)">+{{ splitChips(chipsOf(r)).more.length }}</span></Tip>
                 </span>
               </button>
             </li>

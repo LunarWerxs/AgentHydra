@@ -236,7 +236,7 @@ const PANE_BTN =
 
     <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
     <div v-if="chat || external || alert" class="col-start-3 flex min-w-0 items-center justify-end gap-1">
-    <p v-if="alert" role="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text" :title="alert">{{ alert }}</p>
+    <Tip v-if="alert" :label="alert"><p role="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text">{{ alert }}</p></Tip>
     <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">

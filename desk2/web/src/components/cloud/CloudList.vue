@@ -180,9 +180,9 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
               <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
             <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->
-            <component :is="appIcon(r)!" v-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" :title="cloudMark(r)!.label" class="size-3.5 shrink-0 text-text-muted" />
+            <component :is="appIcon(r)!" v-if="appIcon(r)" role="img" :aria-label="cloudMark(r)!.label" class="size-3.5 shrink-0 text-text-muted" />
             <!-- A CliMayte task drawn as a row of its own: the CliMayte toggle's mark, as the desk list draws it (owner, 2026-10-07). -->
-            <component :is="shellIcons.climayte" v-if="isTaskRow(r.id)" role="img" aria-label="CliMayte task" title="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
+            <component :is="shellIcons.climayte" v-if="isTaskRow(r.id)" role="img" aria-label="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
             <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>

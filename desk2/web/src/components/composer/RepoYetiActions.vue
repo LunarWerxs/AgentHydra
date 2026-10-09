@@ -297,7 +297,7 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
           <li v-for="f in plan.files" :key="f.path" class="flex items-start gap-1.5 text-[13px] leading-4.75">
             <input type="checkbox" class="mt-0.75 size-3.5 shrink-0" :checked="picked.has(f.path)" :disabled="f.state !== 'ready'" :aria-label="undoLine(f)" @change="toggle(f.path)" />
             <span class="min-w-0 flex-1">
-              <span class="block truncate font-mono" :title="f.path">{{ f.path }}</span>
+              <Tip :label="f.path"><span class="block truncate font-mono">{{ f.path }}</span></Tip>
               <span v-if="f.state === 'ready'" class="tnum text-[12px]">
                 <span class="text-(--git-add)">+{{ f.added }}</span> <span class="text-(--git-del)">−{{ f.removed }}</span>
                 <span v-if="f.kind === 'delete'" class="text-(--text-muted)"> · created by the chat, deleted</span>

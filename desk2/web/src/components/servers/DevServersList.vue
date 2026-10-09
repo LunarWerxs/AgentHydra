@@ -387,7 +387,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen(l.key) ? 'rotate-90' : ''" />
             </button>
             <span class="flex-1" />
-            <span class="tnum" :title="`${l.up} of ${l.total} running`">{{ l.up }}/{{ l.total }}</span>
+            <Tip :label="`${l.up} of ${l.total} running`"><span class="tnum">{{ l.up }}/{{ l.total }}</span></Tip>
           </header>
 
           <header v-else-if="l.kind === 'project'" :class="l.depth ? [SUB_HEADER, HEAD_INDENT[1]] : LIST_HEADER">
@@ -410,7 +410,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
                 <button type="button" :class="HEADER_BTN" :disabled="servers.busy.value.has(allKey(l.g.project))" :aria-label="`Stop all in ${l.g.project.name}`" @click="servers.actAll(l.g.project, 'stop')"><Square class="size-3.5" /></button>
               </Tip>
             </template>
-            <span class="tnum" :title="`${upCount(l.g)} of ${l.g.total} running`">{{ upCount(l.g) }}/{{ l.g.total }}</span>
+            <Tip :label="`${upCount(l.g)} of ${l.g.total} running`"><span class="tnum">{{ upCount(l.g) }}/{{ l.g.total }}</span></Tip>
           </header>
 
           <p v-else-if="l.kind === 'none'" class="pb-1 text-[12px] leading-4 text-text-muted" :class="HEAD_INDENT[l.depth]">No servers in this project.</p>
@@ -439,7 +439,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
                 </span>
                 <CountBadge v-if="l.p.errorCount" :count="l.p.errorCount" :title="`${l.p.errorCount} errors`" />
                 <AlertTriangle v-if="l.p.alertsFiring" class="size-3 shrink-0 text-warning-text" aria-label="An alert is firing" />
-                <span v-if="outsideNote(l.p)" class="shrink-0 text-[11px] leading-4 text-text-muted" :title="OUTSIDE_TIP">{{ outsideNote(l.p) }}</span>
+                <Tip v-if="outsideNote(l.p)" :label="OUTSIDE_TIP"><span class="shrink-0 text-[11px] leading-4 text-text-muted">{{ outsideNote(l.p) }}</span></Tip>
                 <!-- The port steps aside for the hover buttons: with a running server's three and the star, it pushed the star
                      to the middle of the row, where a click meant for the row starred the server. -->
                 <span v-if="l.p.port" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(l.p) }}</span>
@@ -468,7 +468,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             <component :is="shellGlyphs.groupChevron" class="size-3 shrink-0 transition-transform duration-(--dur-fast)" :class="isOpen('o', true) ? 'rotate-90' : ''" />
           </button>
           <span class="flex-1" />
-          <span class="tnum" :title="`${others.length} running`">{{ others.length }}</span>
+          <Tip :label="`${others.length} running`"><span class="tnum">{{ others.length }}</span></Tip>
         </header>
         <template v-for="l in otherLines" :key="l.key">
           <header v-if="l.kind === 'company'" :class="[SUB_HEADER, HEAD_INDENT[1]]">

@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import type { AccountInfo, AccountRef } from '@shared/protocol'
 import { accountTitle } from '@/components/accounts/format'
+import { Tip } from '@/components/ui/tooltip'
 import type { ComposerApi } from './api'
 
 // The account a new session will run on, as a quiet pill at the right end of the env pills. It is
@@ -48,7 +49,9 @@ watch(
 </script>
 
 <template>
-  <span class="flex h-6 min-w-0 shrink items-center truncate px-1.5 text-[12px] leading-4 text-text-muted" :title="hint" :aria-label="`Account: ${label}`">
-    {{ label }}
-  </span>
+  <Tip :label="hint">
+    <span class="flex h-6 min-w-0 shrink items-center truncate px-1.5 text-[12px] leading-4 text-text-muted" :aria-label="`Account: ${label}`">
+      {{ label }}
+    </span>
+  </Tip>
 </template>
