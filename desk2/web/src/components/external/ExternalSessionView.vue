@@ -8,6 +8,8 @@ import { useDesk } from '@/stores/desk'
 import { outsideTasks } from '@/components/tasks/api'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
 import WorkingMark from '@/components/transcript/parts/WorkingMark.vue'
+import { nowDoing, runningFor } from '@/components/transcript/lib/now-doing'
+import { useClock } from '@/lib/clock'
 import Composer from '@/components/composer/Composer.vue'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
@@ -86,6 +88,19 @@ const dotClass = computed(() => glyphDotClass(glyph.value ?? { shape: 'ring', to
 // Working there, the window's orange working mark stands in for the blinking dot (owner, 2026-10-08: "a fun ...
 // orange animation"); waiting on you keeps the amber dot, and anything else its own dot.
 const working = computed(() => session.value?.status === 'working')
+// Working there, the line under the transcript says what it is doing now, in a size a person reads, and how long since
+// the person last wrote, as Claude Desktop's working line does (owner, 2026-10-08: "make the text a little larger ...
+// dynamically change ... what task it's running right now" and "a timer for how long ... since the last human-written
+// message"). Where it runs is in the tooltip.
+const clock = useClock()
+const doing = computed(() => nowDoing(items.value, session.value?.cwd))
+const liveText = computed(() => {
+  const s = session.value
+  if (!s) return ''
+  return s.status === 'needs_you' ? 'Waiting for you' : doing.value.text || s.activity || 'Working'
+})
+const liveFor = computed(() => (isWorking.value && doing.value.since ? runningFor(clock.value - doing.value.since) : ''))
+const liveWhere = computed(() => (session.value ? `${session.value.status === 'needs_you' ? 'Waiting for you' : 'Working'} in ${whereLabel(session.value)}` : ''))
 // Said before the first message: in place or as a copy, and on which account (the title bar's menu changes it).
 const continueNote = computed(() => {
   const s = session.value
@@ -213,6 +228,7 @@ onUnmounted(() => {
         :find="find"
         :compact="displayPrefs.compact"
         :inset-top="inset"
+        :running="isWorking"
       />
     </div>
 
@@ -224,16 +240,17 @@ onUnmounted(() => {
     </template>
 
     <template v-else-if="desktopChat && session">
-      <!-- A little room above and more below (owner, 2026-10-08: "it's too close" to the composer). -->
-      <div class="shrink-0 px-8 pb-4 pt-3">
-        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[12px] leading-4 text-(--text-muted)" role="status">
+      <!-- Room below (owner, 2026-10-08: "it's too close" to the composer); above, the transcript's own 20px is the gap, a
+           turn's, as between any two rows (owner, 2026-10-08: the last ones had "way too big of gaps"). -->
+      <div class="shrink-0 px-8 pb-4 pt-1">
+        <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[14px] leading-5 text-(--text-muted)" role="status" :title="liveWhere">
           <span class="flex size-6 shrink-0 items-center justify-center">
             <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
             <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
-          <span class="min-w-0 flex-1 truncate">
-            {{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}<span v-if="session.activity"> · {{ session.activity }}</span>
-          </span>
+          <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
+          <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
+          <span class="sr-only">{{ liveWhere }}</span>
         </p>
         <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
@@ -248,7 +265,12 @@ onUnmounted(() => {
           <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
           <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
-        <span class="min-w-0 flex-1 truncate">{{ session.status === 'needs_you' ? 'Waiting for you' : 'Working' }} in {{ whereLabel(session) }}</span>
+        <template v-if="isWorking">
+          <span class="min-w-0 truncate text-[14px] leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'" :title="liveWhere">{{ liveText }}</span>
+          <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
+          <span class="sr-only">{{ liveWhere }}</span>
+        </template>
+        <span v-else class="min-w-0 flex-1 truncate">{{ liveWhere }}</span>
       </p>
     </div>
 
@@ -263,8 +285,9 @@ onUnmounted(() => {
         </span>
         <span class="min-w-0 flex-1 truncate text-(--text-2)">
           <span>{{ isWorking ? 'Running in' : 'Read-only from' }} {{ where }}</span>
-          <span v-if="session.activity" class="text-(--text-muted)"> · {{ session.activity }}</span>
+          <span v-if="isWorking" class="text-(--text-muted)"> · {{ liveText }}</span>
         </span>
+        <span v-if="liveFor" class="shrink-0 tabular-nums text-[13px] text-(--text-muted)" aria-hidden="true">{{ liveFor }}</span>
         <span v-if="error" class="max-w-[40%] shrink truncate text-(--danger-text)" :title="error">{{ error }}</span>
       </div>
     </div>

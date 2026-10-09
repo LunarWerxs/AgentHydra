@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The muted '1 running task · 2 finished' line the real app shows under the last message
-// (real-running-task-and-attachments.png: 14px #898781, 64px below the status row above it, text at
-// the status rows' x). It counts the Background tasks panel's running and finished units for this chat
+// (real-running-task-and-attachments.png: 14px #898781, text at the status rows' x), 12px under the row above it as
+// a reply is under a status row: the real app's 64 read as a hole (owner, 2026-10-08: "way too big of gaps"). It counts the Background tasks panel's running and finished units for this chat
 // and opens the panel; nothing renders when there are neither. When a running worker gave an estimate
 // (its `ETA:` line) it also says about how long is left, by the latest one.
 import { computed, effectScope, onBeforeUnmount, shallowRef, watch, type EffectScope, type Ref } from 'vue'
@@ -50,7 +50,7 @@ const label = computed(() =>
   <button
     v-if="label"
     type="button"
-    class="mt-10 flex h-6 items-center rounded-md px-1 text-[14px] text-(--text-muted) outline-none transition-colors duration-60 hover:text-(--text-2) focus-visible:shadow-(--focus-ring)"
+    class="mt-3 flex h-6 items-center rounded-md px-1 text-[14px] text-(--text-muted) outline-none transition-colors duration-60 hover:text-(--text-2) focus-visible:shadow-(--focus-ring)"
     data-running-tasks
     @click="openBackgroundTasks()"
   >

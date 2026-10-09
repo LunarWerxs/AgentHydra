@@ -2,28 +2,30 @@
 // The Working row under a running turn: the window's working mark (WorkingMark.vue, the one Settings
 // picks; its "spark" is the real Claude Code spinner) and shimmering text, plus Hydra Desk's elapsed time
 // and queued count. Stop lives in the composer, as in the real app. Needs-you shows the amber dot instead.
+// The text is the turn's step in its own words and the time counts from the person's last message, as Claude
+// Desktop's working line does (lib/now-doing.ts; owner, 2026-10-08).
 import { computed } from 'vue'
-import type { ChatSummary } from '@shared/protocol'
-import { formatElapsed } from '../lib/tools'
+import type { ChatSummary, TranscriptItem } from '@shared/protocol'
+import { nowDoing, runningFor } from '../lib/now-doing'
 import { useClock } from '@/lib/clock'
 import { waitingLine } from '@/components/sidebar/logic'
 import WorkingMark from './WorkingMark.vue'
 
-const props = defineProps<{ chat: ChatSummary }>()
+const props = defineProps<{ chat: ChatSummary; items?: readonly TranscriptItem[] }>()
 
 const clock = useClock()
 const needsYou = computed(() => props.chat.status === 'needs_you')
+const doing = computed(() => nowDoing(props.items ?? [], props.chat.cwd))
 const text = computed(() => {
   if (needsYou.value) return 'Waiting for you'
   // A CliMayte chat waiting for an account says so and when it starts, the reason in the tooltip, not "Starting…" for half an hour.
   // A first start that downloads Claude Code says how far it is ("Getting Claude Code 2.1.288 (104 MB): 37%").
   if (props.chat.status === 'starting') return props.chat.waiting ? waitingLine(props.chat.waiting, clock.value) : props.chat.activity || 'Starting…'
-  return props.chat.activity || 'Working…'
+  return doing.value.text || props.chat.activity || 'Working…'
 })
 const why = computed(() => (props.chat.status === 'starting' && props.chat.waiting ? `${props.chat.waiting.reason}` : text.value))
-const elapsed = computed(() =>
-  props.chat.turnStartedAt ? formatElapsed(Math.max(0, clock.value - props.chat.turnStartedAt)).replace(/^\d+ms$/, '0s') : '',
-)
+const since = computed(() => doing.value.since ?? props.chat.turnStartedAt)
+const elapsed = computed(() => (since.value ? runningFor(clock.value - since.value) : ''))
 </script>
 
 <template>

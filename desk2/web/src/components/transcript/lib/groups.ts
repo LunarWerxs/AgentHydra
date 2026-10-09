@@ -152,8 +152,11 @@ function placeRow(out: DisplayRow[], it: TranscriptItem, i: number, bounds: { la
   else out.push(it.kind === 'assistant_text' ? { id: it.id, kind: 'item', item: it, endOfTurn: false, prompt } : { id: it.id, kind: 'item', item: it, endOfTurn: false })
 }
 
-/** Rows of a transcript. `foldThinking` (default) lets each thinking block join the tool run around it; off, every block is its own row. */
-export function groupRows(items: TranscriptItem[], foldThinking = true): DisplayRow[] {
+/**
+ * Rows of a transcript. `foldThinking` (default) lets each thinking block join the tool run around it; off, every block is
+ * its own row. `running`: the last turn is still going (the chat works or waits on the person), so no reply of it ends it.
+ */
+export function groupRows(items: TranscriptItem[], foldThinking = true, running = false): DisplayRow[] {
   const out: DisplayRow[] = []
   const bounds = turnBounds(items)
   let prompt: TurnPrompt | null = null
@@ -165,14 +168,26 @@ export function groupRows(items: TranscriptItem[], foldThinking = true): Display
     if (isHandoffContinuation(it, out[out.length - 1])) continue
     placeRow(out, it, i, bounds, prompt, foldThinking)
   }
+  // A step after the turn's last reply (a tool run, a browser card, a sub-agent, a thinking block) means the turn is still
+  // going, so that reply is not its end and keeps no room for the end-of-turn actions (owner, 2026-10-08: a reply over a
+  // running command stood 28px further off than any other row). A result row closes the turn: steps before it do not count.
   let seenText = false
+  let stepAfter = running
+  let closed = false
   for (let i = out.length - 1; i >= 0; i--) {
     const r = out[i]
+    if (r.kind === 'tools' || r.kind === 'browser') {
+      stepAfter ||= !closed
+      continue
+    }
     if (r.kind !== 'item') continue
-    if (r.item.kind === 'user' || r.item.kind === 'note') seenText = false
-    else if (r.item.kind === 'assistant_text' && !seenText) {
+    const k = r.item.kind
+    if (k === 'user' || k === 'note') seenText = stepAfter = closed = false
+    else if (k === 'result') closed = true
+    else if (k === 'tool_use' || k === 'thinking') stepAfter ||= !closed
+    else if (k === 'assistant_text' && !seenText) {
       seenText = true
-      r.endOfTurn = !r.item.streaming
+      r.endOfTurn = !r.item.streaming && !stepAfter
     }
   }
   return out

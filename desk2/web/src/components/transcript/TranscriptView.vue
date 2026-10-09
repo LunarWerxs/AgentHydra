@@ -43,6 +43,8 @@ const props = defineProps<{
   compact?: boolean
   /** Thinking blocks fold into the tool runs around them (the default); off, each one keeps its own row. */
   foldThinking?: boolean
+  /** The last turn is running somewhere else (an outside session working there): its latest reply is not its end yet. */
+  running?: boolean
   /** How much of the top something lying over the transcript covers (Hydra Desk 2's session header): the first row starts below it. */
   insetTop?: number
   /** The history is not loaded yet; with `loadError`, the last try at it failed and another is coming. */
@@ -87,8 +89,11 @@ const chat = computed<ChatSummary | null>(() =>
   props.chat !== undefined ? props.chat : ((desk.chats.value as ChatSummary[]).find((c) => c.id === props.chatId) ?? null),
 )
 const rows = computed(() => buildRows(props.items))
+const showWorking = computed(() => !!chat.value && ['working', 'starting', 'needs_you'].includes(chat.value.status))
 // What is laid out: tool runs folded into status rows, end-of-turn replies marked.
-const display = computed(() => groupRows(rows.value.top, props.foldThinking !== false))
+// A turn still going has no end-of-turn actions under its latest reply, nor their room (owner, 2026-10-08: the last rows
+// stood further apart than any other).
+const display = computed(() => groupRows(rows.value.top, props.foldThinking !== false, !!props.running || showWorking.value))
 
 provideTranscript(
   {
@@ -107,7 +112,6 @@ provideTranscript(
   props.expandedIds,
 )
 
-const showWorking = computed(() => !!chat.value && ['working', 'starting', 'needs_you'].includes(chat.value.status))
 /** What an empty transcript says: an unloaded one never claims to have no messages. */
 const emptyText = computed(() => {
   if (!props.loading) return 'No messages yet'
@@ -537,8 +541,10 @@ watch(
       @click.capture="holdRow"
       @contextmenu.capture="onContextCapture"
     >
-      <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane); the last line sits 114px above the composer strip (whole-window.png) -->
-      <div class="mx-auto w-full max-w-210 px-9 pb-21.5 @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane). The
+           last row ends 20px over what is under the column, a turn's gap (owner, 2026-10-08: the last rows stood "way too big
+           of gaps" off it; the real app's 86 reads as a hole once its actions bar is not under a finished reply). -->
+      <div class="mx-auto w-full max-w-210 px-9 pb-5 @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">{{ emptyText }}</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
@@ -548,7 +554,7 @@ watch(
           <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :prompt="r.prompt" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
         </div>
         <div :style="{ height: `${padBottom}px` }" />
-        <WorkingFooter v-if="showWorking && chat" :chat="chat" class="mt-4" />
+        <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" class="mt-4" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
       </div>

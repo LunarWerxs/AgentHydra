@@ -4,10 +4,17 @@ import type { AhInstance, AhSecrets, AhSessionRow, AhUsage } from './logic'
 
 const BASE = '/ah/api'
 
+// An answer that is not JSON (a dev server's index page sent back for an address it does not know) is an error, apart
+// from a JSON null, which some calls answer (instanceAccount): before, it came back as null and the instance list's .map
+// threw outside any catch.
+const NOT_JSON = Symbol('not JSON')
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, init?.body ? { ...init, headers: { 'content-type': 'application/json' } } : init)
-  const body = (await res.json().catch(() => null)) as (T & { error?: unknown }) | null
+  const read = (await res.json().catch(() => NOT_JSON)) as (T & { error?: unknown }) | null | typeof NOT_JSON
+  const body = read === NOT_JSON ? null : read
   if (!res.ok) throw new Error(typeof body?.error === 'string' && body.error ? body.error : `${res.status} ${res.statusText}`)
+  if (read === NOT_JSON) throw new Error(`${res.status} ${res.statusText}: not a JSON answer`)
   return body as T
 }
 

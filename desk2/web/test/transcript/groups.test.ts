@@ -45,6 +45,14 @@ describe('groupRows', () => {
     const rows = groupRows([user('u1'), text('t1'), tool('a', 'Bash'), text('t2'), user('u2'), text('t3', true)])
     const end = Object.fromEntries(rows.flatMap((r) => (r.kind === 'item' ? [[r.id, r.endOfTurn]] : [])))
     expect(end).toEqual({ u1: false, t1: false, t2: true, u2: false, t3: false })
+    // A turn still running after its last reply has not ended there; a result row closes it.
+    const ends = (items: TranscriptItem[]) => groupRows(items).flatMap((r) => (r.kind === 'item' && r.item.kind === 'assistant_text' ? [r.endOfTurn] : []))
+    expect(ends([user('u1'), text('t1'), tool('a', 'Bash', {}, 'running')])).toEqual([false])
+    const result: TranscriptItem = { id: 'r', ts: 1, kind: 'result', ok: true, durationMs: 1, costUsd: 0, turns: 1 }
+    expect(ends([user('u1'), text('t1'), tool('a', 'Bash'), result])).toEqual([true])
+    // A chat still working has not ended its turn at its latest reply; the turn before it has.
+    const running = (items: TranscriptItem[]) => groupRows(items, true, true).flatMap((r) => (r.kind === 'item' && r.item.kind === 'assistant_text' ? [r.endOfTurn] : []))
+    expect(running([user('u1'), text('t1'), user('u2'), text('t2')])).toEqual([true, false])
   })
 
   test("a program's note starts a turn of its own, and its reply has no prompt of the person's to send again", () => {
