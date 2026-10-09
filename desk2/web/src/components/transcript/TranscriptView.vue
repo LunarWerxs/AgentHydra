@@ -41,8 +41,10 @@ const props = defineProps<{
   find?: { query: string; active: { itemId: string; nth: number } | null } | null
   /** Tighter gaps between rows (the session header's Compact layout). */
   compact?: boolean
-  /** Thinking blocks fold into the tool runs around them (the default); off, each one keeps its own row. */
-  foldThinking?: boolean
+  /** Each thinking block keeps its own row; left out, they fold into the tool runs around them. Named so that left out is
+   *  the default: Vue reads a boolean prop left out as false, so a `foldThinking` prop left out by the outside-session view
+   *  drew every thinking block as a row (owner, 2026-10-08: "what happened to.... less of these?"). */
+  unfoldThinking?: boolean
   /** The last turn is running somewhere else (an outside session working there): its latest reply is not its end yet. */
   running?: boolean
   /** How much of the top something lying over the transcript covers (Hydra Desk 2's session header): the first row starts below it. */
@@ -93,7 +95,7 @@ const showWorking = computed(() => !!chat.value && ['working', 'starting', 'need
 // What is laid out: tool runs folded into status rows, end-of-turn replies marked.
 // A turn still going has no end-of-turn actions under its latest reply, nor their room (owner, 2026-10-08: the last rows
 // stood further apart than any other).
-const display = computed(() => groupRows(rows.value.top, props.foldThinking !== false, !!props.running || showWorking.value))
+const display = computed(() => groupRows(rows.value.top, !props.unfoldThinking, !!props.running || showWorking.value))
 
 provideTranscript(
   {

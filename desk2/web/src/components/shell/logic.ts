@@ -244,6 +244,16 @@ export const splitChat = (want: number, stage: number): number => Math.round(Mat
 /** splitChat as the stage's grid columns, so the split is right before anything is measured and as the window resizes. */
 export const splitColumns = (want: number): string => `max(${CHAT_MIN}px, min(${Math.round(want)}px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`
 
+// The Background tasks panel docked beside the chat opens narrower than its first 440px and its left edge drags it (owner, 2026-10-08: "should be resizeable, and
+// probably open narrower, it is currently VERY wide"). The chat keeps CHAT_MIN however wide it is dragged.
+export const TASKS_MIN = 300
+export const TASKS_MAX = 720
+export const TASKS_DEFAULT = 360
+
+/** The panel's width in a stage `stage` px wide (0 before it is measured), for `want`. */
+export const tasksPanelWidth = (want: number, stage: number): number =>
+  Math.round(Math.max(TASKS_MIN, Math.min(want, TASKS_MAX, stage > 0 ? stage - CHAT_MIN : TASKS_MAX)))
+
 // ---- the archived notice at the bottom of the chat on screen ----
 export type ArchivedNotice = { kind: 'chat' | 'external'; id: string; patch: { archived: false } }
 

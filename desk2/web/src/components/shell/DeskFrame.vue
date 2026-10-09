@@ -38,7 +38,7 @@ import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { CHAT_DEFAULT, CHAT_MIN, NavHistory, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, viewUnder, type View } from './logic'
+import { CHAT_DEFAULT, CHAT_MIN, NavHistory, TASKS_DEFAULT, TASKS_MAX, TASKS_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, tasksPanelWidth, viewUnder, type View } from './logic'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
@@ -610,6 +610,62 @@ function onOpenTasks(e: Event) {
 watch(pane, (p) => {
   if (p) tasks.value = null
 })
+// Docked, the panel slides in from the right and back out (owner, 2026-10-08: "still snaps open, ZERO nice
+// animations") on transforms alone, as the sidebar does: the chat takes its new width once, as the panel starts in or
+// once it has gone, and is drawn half the panel's width off its place meanwhile, so its centred column glides there
+// with the panel instead of jumping. Another chat, a pane taking the panel's place, or the expanded panel show at once.
+const TASKS_KEY = 'hydra-desk.tasks.width'
+const tasksWidth = ref(Number(storage?.getItem(TASKS_KEY)) || TASKS_DEFAULT)
+const tasksAt = computed(() => tasksPanelWidth(tasksWidth.value, stageWidth.value))
+const tasksSlide = ref<{ open: boolean; at: 'from' | 'to' } | null>(null)
+/** The panel on its way out, drawn with the state it closed with until the slide ends. */
+const tasksLeaving = ref<TasksState | null>(null)
+const tasksShown = computed(() => tasks.value ?? tasksLeaving.value)
+/** The slide's out end: the panel past the window's right edge, the chat where it was before the panel came. */
+const tasksOut = computed(() => !!tasksSlide.value && tasksSlide.value.open === (tasksSlide.value.at === 'from'))
+let tasksTimer: ReturnType<typeof setTimeout> | undefined
+function endTasksSlide() {
+  clearTimeout(tasksTimer)
+  tasksSlide.value = null
+  tasksLeaving.value = null
+}
+watch([tasks, viewKey], ([t, key], [was, wasKey]) => {
+  if (!t === !was && key === wasKey) return
+  endTasksSlide()
+  if (key !== wasKey || (t ?? was)?.expanded || (!t && pane.value)) return
+  tasksLeaving.value = t ? null : was
+  tasksSlide.value = { open: !!t, at: 'from' }
+  void nextTick(() => {
+    // The 'from' places must be laid out before 'to' changes them, or there is nothing to animate from.
+    void splitEl.value?.offsetWidth
+    if (tasksSlide.value?.at === 'from') tasksSlide.value = { ...tasksSlide.value, at: 'to' }
+  })
+  tasksTimer = setTimeout(endTasksSlide, 340)
+})
+// The divider on the panel's left edge drags its width, or arrow keys move it; the width is the window's, saved once it rests.
+function setTasksWidth(want: number) {
+  tasksWidth.value = tasksPanelWidth(want, stageWidth.value)
+}
+const saveTasksWidth = () => storage?.setItem(TASKS_KEY, String(tasksWidth.value))
+function onTasksResizeDown(e: PointerEvent) {
+  const el = e.currentTarget as HTMLElement
+  el.setPointerCapture(e.pointerId)
+  const right = el.parentElement?.getBoundingClientRect().right ?? 0
+  const move = (ev: PointerEvent) => setTasksWidth(right - ev.clientX)
+  const up = () => {
+    el.removeEventListener('pointermove', move)
+    el.removeEventListener('pointerup', up)
+    saveTasksWidth()
+  }
+  el.addEventListener('pointermove', move)
+  el.addEventListener('pointerup', up)
+}
+function onTasksResizeKey(e: KeyboardEvent) {
+  if (e.key === 'ArrowLeft') setTasksWidth(tasksAt.value + 16)
+  else if (e.key === 'ArrowRight') setTasksWidth(tasksAt.value - 16)
+  else return
+  saveTasksWidth()
+}
 
 // A session running elsewhere. One the composer can carry on has a stand-in chat until its first
 // message; the title bar's Account menu picks where it continues.
@@ -829,11 +885,15 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
             />
           </div>
 
-          <main class="col-start-1 row-start-2 flex min-h-0 min-w-0">
+          <main
+            class="col-start-1 row-start-2 flex min-h-0 min-w-0"
+            :class="tasksSlide && ['will-change-transform', tasksSlide.at === 'to' && SLIDE_EASE]"
+            :style="tasksSlide ? { transform: `translateX(${tasksOut ? tasksAt / 2 : 0}px)` } : undefined"
+          >
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col">
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :fold-thinking="!showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
@@ -886,18 +946,36 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
           <!-- Docked, the panel is a full-height third column: the title bar's buttons end left of it instead of
                sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
           <aside
-            v-if="tasks"
-            class="flex min-w-0 pb-2 pe-2"
-            :class="tasks.expanded ? 'col-start-1 row-start-2 ps-2 pt-0.5' : ownFrame ? 'col-start-2 row-start-2 w-110 pt-0.5' : 'col-start-2 row-span-2 row-start-1 w-110 pt-2'"
+            v-if="tasksShown"
+            class="relative flex min-w-0 pb-2 pe-2"
+            :class="
+              tasksShown.expanded
+                ? 'col-start-1 row-start-2 ps-2 pt-0.5'
+                : [ownFrame ? 'col-start-2 row-start-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 pt-2', tasksSlide?.at === 'to' && SLIDE_EASE]
+            "
+            :style="tasksShown.expanded ? undefined : { width: `${tasksAt}px`, transform: tasksSlide ? `translateX(${tasksOut ? '100%' : '0'})` : undefined }"
           >
+            <div
+              v-if="!tasksShown.expanded"
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize Background tasks"
+              tabindex="0"
+              :aria-valuenow="tasksAt"
+              :aria-valuemin="TASKS_MIN"
+              :aria-valuemax="TASKS_MAX"
+              class="absolute -left-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+              @pointerdown.prevent="onTasksResizeDown"
+              @keydown="onTasksResizeKey"
+            />
             <BackgroundTasksPanel
               :session-id="tasksSessionId"
               :worker-ids="tasksWorkerIds"
               :items="tasksItems"
               :chat-id="outsideId ? null : chat?.id"
               :climayte="!outsideId && chat?.workerId !== undefined"
-              :focus-id="tasks.focus"
-              :expanded="tasks.expanded"
+              :focus-id="tasksShown.focus"
+              :expanded="tasksShown.expanded"
               @close="tasks = null"
               @toggle-expand="tasks && (tasks = { ...tasks, expanded: !tasks.expanded })"
             />
