@@ -469,7 +469,9 @@ picks the account and moves the worker when that account hits its limit or its l
   cannot start as a worker. Instead, when a turn fails on its account (expired/revoked login, 401/403 auth,
   org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `ChatManager.carryToAnotherAccount`
   asks `listAccounts()` (AgentHydra's word: `signedIn`, usage percentages, never a token) for the least used
-  signed-in account not yet tried (`pickHealthy`), copies the session there (`seedSession`), restarts the
+  signed-in account not yet tried whose 5-hour and weekly readings are both under the fleet's 85% line
+  (`pickHealthy`, `hasRoom`; an unread window, the default login's always, is not room; the orchestrator's judge
+  and the babysitter's "room now" use the same line), copies the session there (`seedSession`), restarts the
   runtime and resends the unanswered message once, with the muted line 'Moved from #126 (signed out) to #61.'.
   At most 4 accounts per message, then one clear error. Any other error (tool failure, bad request) never moves.
   - **A move mid-turn continues the work** (`ChatRuntime.carrySends`): a turn cut before it replied sends its

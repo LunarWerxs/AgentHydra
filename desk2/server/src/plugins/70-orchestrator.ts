@@ -20,7 +20,7 @@ import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { DIAGNOSTICS_API } from '../engine/diagnostics'
 import { afterGivingUp, decide } from '../orchestrator/act'
 import { askCreaitor, creaitorTool } from '../orchestrator/creaitor'
-import { DEFAULT_ACCOUNT } from '../bridge/accounts'
+import { DEFAULT_ACCOUNT, ROOM_PCT } from '../bridge/accounts'
 import { pickHealthy } from '../engine/chat-manager'
 import {
   askOf,
@@ -232,14 +232,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
    *  chats run on (owner, 2026-10-09: "just use ... anything that's available"): one nobody is using first, the least
    *  used first (chat-manager's pickHealthy), then a busy one, and the next when a login is refused. The default
    *  ~/.claude login comes last: its token expires (every judgment failed "OAuth session expired" on it, 2026-10-09).
-   *  With no account listed, the default login is what there is, and its refusal shows on the row. */
+   *  With no account listed, the default login is what there is, and its refusal shows on the row. With accounts
+   *  listed and none under the 85% line (hasRoom), no judgment runs: the unread default login is no way around it. */
   async function judgeOnAnAccount(c: Candidate, model: string): Promise<JudgeResult> {
     const accounts = (await get<AccountInfo[]>('/api/accounts')) ?? []
-    const idle = accounts.filter((a) => !a.inUse && a.id !== DEFAULT_ACCOUNT.id)
+    const managed = accounts.filter((a) => a.id !== DEFAULT_ACCOUNT.id)
+    const idle = managed.filter((a) => !a.inUse)
     const tried: string[] = []
     let result: JudgeResult | null = null
     for (let attempt = 0; attempt < JUDGE_ACCOUNT_TRIES; attempt++) {
       const account = pickHealthy(idle, tried) ?? pickHealthy(accounts, tried)
+      if (!account && !tried.length && managed.length)
+        return { ok: false, error: `no account has room: every signed-in account is at or past ${ROOM_PCT}% or unread`, resolved: null, read: null }
       if (!account && tried.length) break
       if (account) tried.push(account.id)
       const now = Date.now()

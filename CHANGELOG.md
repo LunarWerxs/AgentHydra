@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A chat that runs out of usage no longer moves to an account that is almost full.** When a chat hit its limit,
+  AgentHydra moved it to any other account under 100%, so it could push an account from 99% to its limit. It now
+  moves only to an account under 85% on both its 5-hour and weekly windows, as CliMayte does, and waits for a reset
+  when none is. The orchestrator's checks on running chats follow the same line.
 - **The sidebar no longer empties and refills, or shows chats by their ID.** When AgentHydra was briefly busy or
   restarting after an update, the sidebar dropped its chats and brought them back seconds later, and running chats
   showed an 8-character ID instead of their title. It now keeps what it showed until AgentHydra answers again.

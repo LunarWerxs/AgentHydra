@@ -370,17 +370,20 @@ test("the judge signs in with the least used account that has room, one nobody i
     id, label: id, configDir, email: null, plan: 'Pro', signedIn: true, fiveHourPct: pct, weeklyPct: pct, fiveHourResetsAt: null, weeklyResetsAt: null, inUse
   })
   const dir = (id: string): string => `C:/Users/me/.claude-instances/${id}`
-  const cases: [AccountInfo[], string[], string[]][] = [
-    [[account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)], [dir('a')], [dir('a'), dir('b')]],
-    [[account('default', null, 0), account('x', dir('x'), 30, true), account('y', dir('y'), 10, true), account('full', dir('full'), 100, true)], [dir('y')], [dir('y'), dir('x')]]
+  // With every managed account at or past the 85% line, no judgment runs, not even on the unread default login.
+  const unread: AccountInfo = { ...account('default', null, 0), fiveHourPct: null, weeklyPct: null }
+  const cases: [AccountInfo[], string[], string[], string[]][] = [
+    [[account('default', null, 0), account('busy', dir('busy'), 1, true), account('a', dir('a'), 5), account('b', dir('b'), 40), account('full', dir('full'), 100)], [dir('a')], [dir('a'), dir('b')], ['error']],
+    [[account('default', null, 0), account('x', dir('x'), 30, true), account('y', dir('y'), 10, true), account('full', dir('full'), 100, true)], [dir('y')], [dir('y'), dir('x')], ['error']],
+    [[unread, account('hot', dir('hot'), 85), account('full', dir('full'), 100)], [], [], []]
   ]
-  for (const [accounts, refused, signedIn] of cases) {
+  for (const [accounts, refused, signedIn, sends] of cases) {
     const model = judge({ error: { verdict: 'continue', message: 'Pick up where you stopped.' } })
     for (const d of refused) model.refused.add(d)
     const { app, queued } = desk(undefined, CHATS, model, accounts)
     await arm(app, true)
     expect(model.signedIn.filter(([id]) => id === 'error').map(([, d]) => d)).toEqual(signedIn)
-    expect(queued.map((q) => q.chatId)).toEqual(['error'])
+    expect(queued.map((q) => q.chatId)).toEqual(sends)
   }
 })
 
