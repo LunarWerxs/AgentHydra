@@ -453,6 +453,14 @@ applied whether or not a title was given.
 Restoring `bypassPermissions` on a migrated chat is not an escalation; the thread already ran that
 way before the move.
 
+**In a running target with native control (2026-10-09),** the import is the app's own
+`importCliSession` called over its debugger, and the mode is set by the same native call that lands
+the effort (`setPermissionMode(..., 'picker')`, read back from the app's memory, verdict
+`app-confirmed`). Before that, each chat paid ~4.5s for a second `claude.exe` delivering the
+`claude://resume` link and ~5.5s for the on-screen picker: 15 chats took 208s. Both calls now take
+milliseconds; the deep link and the picker are used only where native control is unavailable. See
+[CLAUDE-DESKTOP-NATIVE-CONTROL.md](CLAUDE-DESKTOP-NATIVE-CONTROL.md).
+
 ## ⛔ `send_message` always delivers into YOUR app, and steals the chat to do it
 
 The worst trap here, because it looks like it worked.

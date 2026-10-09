@@ -5,6 +5,26 @@ project was called CC Manager UI and are left in its name, because that is what 
 is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**TL;DR**
+
+- **A babysitter continues chats a usage limit stopped, once the limit resets**
+- **Moving chats between accounts is about ten times faster, and the old account's copies are archived again**
+
+**Everything in Unreleased**
+
+- **Moving chats between accounts is about ten times faster, and the old account's copies are archived
+  again.** Claude Desktop 2.31226.0 moved a helper AgentHydra reads, so every move left the chat showing on
+  the old account and its effort unconfirmed on the new one. That works again. A move also now lands each
+  chat and sets Bypass permissions inside the target app directly, instead of starting a second Claude
+  process per chat and clicking the permission picker on screen: about 10 seconds a chat saved.
+
+- **A babysitter continues chats a usage limit stopped, once the limit resets.** Every 5 minutes AgentHydra
+  checks which chats, in its own window or in Claude Desktop, a usage limit stopped, and continues each one
+  when its limit resets, with a note that says it came from the babysitter. Settings > General shows what is
+  stopped on each account and when it resets, and turns it off.
+
 ## [2.0.2] - 2026-10-08
 
 **TL;DR**

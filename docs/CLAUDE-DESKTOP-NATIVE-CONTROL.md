@@ -134,7 +134,10 @@ Helpers do move between builds, and the program reads each one from every place 
 keeps it. 2.9939.4 moved the starting-session set to `manager.inFlightStarts.startingSessionIds`;
 2.26454.0 moved `hasPendingUserInput` to `manager.heldInputChecks`. Before that second change was
 handled, every archive on 2.26454.0 refused with `native method unavailable: hasPendingUserInput`,
-and a move's source copies stayed visible (2026-10-07). When an archive refuses with
+and a move's source copies stayed visible (2026-10-07). 2.31226.0 moved `localLineageIds` to
+`manager.transcriptIdClaims`; until that was handled every native action (archive, ultracode,
+pause) refused with `native method unavailable: localLineageIds`, and a 15-chat move left all 15
+source rows visible and every effort unconfirmed (2026-10-09). When an archive refuses with
 `native method unavailable: <name>`, search the new build's `app.asar` for `<name>` to see where
 it moved.
 
@@ -389,6 +392,17 @@ accept extra title, model, or permission query parameters. Import derives some
 settings from the transcript and deliberately changes imported
 `bypassPermissions` to `acceptEdits`; disk settings propagation alone cannot
 replace destination permission confirmation.
+
+Since 2026-10-09 a move uses neither the deep link nor the picker where the target profile has
+native control. The handler only calls `importCliSession(id)`, so the native `import` action
+makes that call directly (`source: 'deep_link'`) and reads the landing back from the manager
+(`claude-native-import.ts`); the deep link needed a second `claude.exe` per chat just to hand
+the URL over (~4.5s a chat). The `ultracode` action takes `bypass: true` and calls the manager's
+`setPermissionMode(id, 'bypassPermissions', 'picker')`, the picker's own path, after landing the
+effort; migrate_chat counts that read-back as `app-confirmed` and skips driving the on-screen
+picker (~5.5s a chat). Measured on 2.31226.0: 7ms for each call. The deep link and the picker
+remain the path only where native control is unavailable; a native import that was sent and
+failed is never retried through the deep link.
 
 The live proof establishes import, selected settings restoration, archive and
 passive capture on this installed build. It does not establish a completely
