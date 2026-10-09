@@ -126,6 +126,15 @@ threads are private, so unlike probe chats they need no deleting. The call answe
 with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
 hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
 
+**`babysitter`** (`server/src/mcp-babysitter.ts`) answers which chats a usage limit stopped right now: each
+one (a Desk chat, a Claude Desktop or CLI session) with its account, when it stopped, when its limit resets,
+its state (`waiting`, `resumed`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
+the last 10 continues the babysitter sent. It reads Desk 2's `GET /api/babysitter`, which answers from the
+babysitter's last look (every 5 minutes and when a known reset passes; no model is asked), so a call costs
+milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off. Each session row's
+`limit_stop` carries `resets_at` for it: the notice's "resets 11:40pm (America/Chicago)" read against the
+moment of the stop.
+
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
 rest; a Pi session shows its active branch, and each branch left behind with /tree lists as a
@@ -319,6 +328,29 @@ near 100, and switching the flagship model doesn't dodge the shared weekly bucke
 check its own quota before a heavy multi-agent fan-out and pace accordingly, routing heavy work to
 whichever account has the lowest weekly %.
 
+### The Hydra family
+
+AgentHydra is one of three products on a PC that should know each other exist: AgentHydra (accounts,
+quota, sessions, CliMayte, HSwarm), Project Hydra (every codebase, its state and marketability) and
+MonkeyWerx (the marketing platform). Each member writes one manifest file of its own, atomically,
+into `~/.hydra-family/` (`HYDRA_FAMILY_DIR` moves it), and reads the others' to learn what they are
+for and how to reach them. No member needs another: a peer that is not installed or does not answer
+is reported down and the caller carries on.
+
+- **The manifest.** The daemon writes `agenthydra.json` (schema `hydra-family/1`: name, what it is
+  for, what to ask it, its HTTP root, health URL and MCP endpoint, version) on every start, with the
+  port it actually bound (`server/src/hydra-family.ts`). A failed write is logged and never stops
+  the daemon. A side-run daemon, or one under a scratch `AGENTHYDRA_HOME`, leaves the machine's
+  folder alone unless `HYDRA_FAMILY_DIR` names one of its own.
+- **`hydra_family {}`** lists the three members with `up` (health URL answers 2xx within 1.5 s, or,
+  with no health URL, the member's command line exists), what each is for and how to reach it.
+- **`project_context {cwd}`** asks Project Hydra which project a folder belongs to, by running the
+  command line its manifest names (`which <cwd> --json`, 20 s limit): the project's name, group, the
+  owner's mark (watch or retired means hands off) and its production and marketability scores. It
+  answers `{available: false, reason}` when Project Hydra is not installed or fails.
+
+Both tools are read-only and answer without the daemon.
+
 ### Behavioural eval: can an agent reach the answer?
 
 `bun run eval:mcp` (`scripts/mcp-eval/`) checks the tools by USE, not by lint. It starts a frozen,
@@ -401,6 +433,7 @@ stable interface and must not be assumed by product logic.
 | `HOST` | `127.0.0.1` | loopback bind host; only `127.0.0.1`, `localhost`, and `::1` are accepted because the local API is intentionally passwordless |
 | `AGENTHYDRA_PORT_FIXED` | unset | `1` = bind `PORT` exactly, skip the single-instance/port-hop |
 | `AGENTHYDRA_HOME` | `~/.agenthydra` | config dir (`runtime.json`, instance-identity cache) |
+| `HYDRA_FAMILY_DIR` | `~/.hydra-family` | folder of the [Hydra family](#the-hydra-family) manifests, one JSON file per member |
 | `AGENTHYDRA_SHUTDOWN_TOKEN` | unset | if set, `/api/shutdown` requires a matching `x-agenthydra-shutdown-token` header (the tray sets it) |
 | `AGENTHYDRA_DATA_DIR` | `~/.agenthydra/data` | state directory (sqlite db, run logs, caches) |
 | `AGENTHYDRA_DB` | `~/.agenthydra/data/agenthydra.db` | sqlite path |

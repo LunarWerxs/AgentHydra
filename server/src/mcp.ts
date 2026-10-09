@@ -53,6 +53,7 @@ import {
   withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
+import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { FREE_TOOLS } from './mcp-free'
 import { withOutputShaping } from './mcp-output'
@@ -1824,6 +1825,7 @@ export const TOOLS: McpEngineTool[] = [
   ...FAN_OUT_TOOLS,
   ...FREE_TOOLS,
   ...DEV_SERVERS_TOOLS,
+  ...FAMILY_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:

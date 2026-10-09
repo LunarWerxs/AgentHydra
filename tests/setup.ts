@@ -82,3 +82,6 @@ mkdirSync(process.env.AGENTHYDRA_CLAUDE_PROJECTS_ROOT, { recursive: true })
 process.env.ORCHESTRATOR_STATE_DIR = path.join(scratch, 'orchestrator-state')
 mkdirSync(process.env.ORCHESTRATOR_STATE_DIR, { recursive: true })
 process.env.ORCH_NO_TUNNEL = '1'
+// The Hydra family's manifest folder is machine-wide (~/.hydra-family): a daemon a test boots must
+// not advertise its throwaway port there, and a peer's real manifest must not leak into a test.
+process.env.HYDRA_FAMILY_DIR = path.join(scratch, 'hydra-family')

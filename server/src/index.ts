@@ -85,6 +85,7 @@ import {
 } from './github-updater'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { app } from './http-app'
+import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
   clearInstanceInfo,
   findLiveInstance,
@@ -122,6 +123,7 @@ import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
 import {
   createMcpReasserter,
+  homeRelocated,
   mcpRegisterEnabled,
   mcpRegistrationStatus,
   setMcpRegisterEnabled,
@@ -1140,6 +1142,19 @@ mcpUseOwnDaemon(daemonSelfUrl)
 // resolved would write a URL nothing is listening on. Runs on every boot so a hop cannot leave a
 // stale one behind, writes only when the entry actually differs, and never throws.
 mcpReasserter.run()
+// Tell the rest of the Hydra family this daemon exists: its health URL and MCP endpoint, in the
+// manifest folder the family shares (hydra-family.ts). Here for the same reason as the line above,
+// the file carries the bound port; a scratch daemon stays out of the machine's folder; a failed
+// write is said and never fatal, since no member needs another to run.
+if (!familyWriteBarred(IS_PRIMARY_INSTALL, homeRelocated(process.env))) {
+  try {
+    writeSelfManifest(daemonSelfUrl)
+  } catch (e) {
+    console.warn(
+      `[agenthydra] could not write the Hydra family manifest: ${e instanceof Error ? e.message : e}`,
+    )
+  }
+}
 // Installed status hooks (status-hooks.ts) carry the same URL, so a port hop re-points them too.
 // Hooks nobody installed are never added. A side-run (relocated store) leaves them alone: they
 // belong to the primary daemon, and a scratch daemon must not take them. Synchronous, never throws.

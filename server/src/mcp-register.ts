@@ -97,7 +97,7 @@ export function registrationBarred(
  * whose env carries that variable, wrote its random port into the account's real .claude.json, dead
  * once the daemon exited (4 of 42 accounts). Without its own AGENTHYDRA_MCP_CONFIG it must not register.
  */
-function homeRelocated(env: NodeJS.ProcessEnv): boolean {
+export function homeRelocated(env: NodeJS.ProcessEnv): boolean {
   const home = (env.AGENTHYDRA_HOME ?? env.CCMANAGERUI_HOME)?.trim()
   if (!home) return false
   const norm = (p: string) =>
