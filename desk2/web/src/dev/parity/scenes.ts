@@ -3,6 +3,7 @@
 import { ref } from 'vue'
 import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
+import type { HeadlessAudioState } from '@shared/headless-audio'
 import { cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
 import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
@@ -51,6 +52,12 @@ export interface ParityScene {
   openTasks?: boolean
   /** Views visited before `view` (the window capture has Back enabled). */
   history?: View[]
+  /** A failed action's message, shown in the title bar (the app's action-error ref). */
+  alert?: string
+  /** The sidebar starts hidden, so the title bar spans the window. */
+  sidebarHidden?: boolean
+  /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
+  audio?: HeadlessAudioState
 }
 
 const whole: ParityScene = {
@@ -63,12 +70,43 @@ const whole: ParityScene = {
   history: [{ kind: 'chat', id: 'pc' }]
 }
 
+const headerFit: ParityScene = {
+  ...whole,
+  chats: () =>
+    harvestChats().map((c) =>
+      c.id === 'ccd'
+        ? { ...c, title: 'Northwind regional rollout planning and vendor review notes', cwd: 'C:/Users/me/code/northwind-rollout-planning-workspace', status: 'working', turnStartedAt: PARITY_NOW - 31 * 60_000, climayteActive: 2 }
+        : c
+    )
+}
+
+// One chat makes sound, one chat is muted, and a headless page no chat owns makes sound: the speakers and the footer's one speaker.
+const headlessAudio: ParityScene = {
+  layout: 'frame',
+  chats: windowChats,
+  items: windowItems,
+  view: { kind: 'chat', id: 'ccd' },
+  git: WINDOW_GIT,
+  suggestion: WINDOW_DRAFT,
+  audio: {
+    audible: ['nvw'],
+    muted: ['cfn'],
+    unattributed: [{ profile: 'C:/Users/me/AppData/Local/HydraDesk2/headless/Work', url: 'https://example.test/player' }],
+    unattributedMuted: false
+  }
+}
+
 export const PARITY_SCENES: Record<string, ParityScene> = {
   window: { layout: 'frame', chats: windowChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT, history: [{ kind: 'chat', id: 'avg' }] },
   'sidebar-user': { layout: 'frame', chats: sidebarUserChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT },
+  'headless-audio': headlessAudio,
   'whole-window': whole,
   'new-session': { ...whole, view: { kind: 'new', cwd: CWD }, suggestion: undefined },
   'diff-pane': { ...whole, openDiff: true },
+  // The chat title bar with every item showing, for e2e/header-fit.e2e.ts: long invented title and folder, working with elapsed time, CliMayte workers.
+  'header-fit': headerFit,
+  // The same bar with a failed action's alert in its right block.
+  'header-fit-alert': { ...headerFit, alert: 'The change failed: the Northwind workspace did not answer, so the last edit is not saved yet' },
   'background-tasks': { ...whole, workers: backgroundTaskWorkers, openTasks: true },
   // The Settings dialog over the chat it was opened from.
   settings: { ...whole, view: { kind: 'settings' }, history: [{ kind: 'chat', id: 'pc' }, { kind: 'chat', id: 'ccd' }] },
@@ -242,23 +280,5 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     patchFreeSettings: async (p) => ({ ...FREE_SETTINGS_DEFAULTS, ...p })
   }
 }
-import type { HeadlessAudioState } from '@shared/headless-audio'
-  /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
-  audio?: HeadlessAudioState
-// One chat makes sound, one chat is muted, and a headless page no chat owns makes sound: the speakers and the footer's one speaker.
-const headlessAudio: ParityScene = {
-  layout: 'frame',
-  chats: windowChats,
-  items: windowItems,
-  view: { kind: 'chat', id: 'ccd' },
-  git: WINDOW_GIT,
-  suggestion: WINDOW_DRAFT,
-  audio: {
-    audible: ['nvw'],
-    muted: ['cfn'],
-    unattributed: [{ profile: 'C:/Users/me/AppData/Local/HydraDesk2/headless/Work', url: 'https://example.test/player' }],
-    unattributedMuted: false
-  }
-}
 
-  'headless-audio': headlessAudio,
+PARITY_SCENES['header-fit-external'] = { ...PARITY_SCENES['external-session']!, sidebarHidden: true }

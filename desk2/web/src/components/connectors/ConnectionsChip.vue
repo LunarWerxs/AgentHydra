@@ -98,19 +98,19 @@ watch(
 <template>
   <!-- Tip wraps the WHOLE menu: it swaps its subtree on the first hover, and a trigger remounted under a DropdownMenu leaves the menu anchored to a detached button (top-left of the window). -->
   <Tip v-if="shown" label="Connections workspace">
-    <span class="inline-flex min-w-0 shrink">
+    <span class="inline-flex min-w-7 shrink-[500]">
   <DropdownMenu v-model:open="menuOpen" @update:open="onOpen">
     <DropdownMenuTrigger as-child>
       <button
         type="button"
-        class="ms-1 flex h-5 min-w-0 max-w-45 shrink cursor-default items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+        class="ms-1 flex h-5 min-w-6 max-w-45 shrink cursor-default items-center gap-1 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         :class="text.muted ? 'text-text-muted' : 'text-text-2'"
         :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
       >
         <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
         <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
-        <span class="truncate">{{ text.text }}</span>
-        <span v-if="text.pinned" class="shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] leading-3.5 text-text-muted">this chat</span>
+        <span class="min-w-0 truncate">{{ text.text }}</span>
+        <span v-if="text.pinned" class="min-w-0 truncate rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] leading-3.5 text-text-muted">this chat</span>
       </button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex w-64 flex-col']" @open-auto-focus="focusSearch" @keydown.capture="contentKey">

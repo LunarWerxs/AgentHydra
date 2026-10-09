@@ -56,6 +56,8 @@ const emit = defineEmits<{
 }>()
 
 const menu = computed(() => (props.chat ? rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups) : []))
+// The right block's floor: its buttons. An alert shrinks into whatever room is left beside them.
+const side = computed(() => `${props.chat ? 146 : props.external ? 58 : 0}px`)
 
 // Hydra Desk status cue: only states the real app hides (idle and stopped show nothing). Only a working or
 // limited chat's cue reads the clock, so the bar redraws on the tick only while its time moves.
@@ -141,13 +143,13 @@ const PANE_BTN =
        title bar (lib/host-window.ts) this row is the title bar: its right end keeps clear of the window's buttons
        (--caption-w), so the pane buttons sit beside them (owner, 2026-10-08: "move these icons, here"). -->
   <header
-    class="grid h-8 min-w-0 grid-cols-[minmax(var(--side),1fr)_minmax(0,auto)_minmax(var(--side),1fr)] items-center ps-1 pe-[calc(0.75rem_+_var(--caption-w))] text-[13px] leading-[19.5px]"
-    :style="{ '--side': chat ? '144px' : external ? '58px' : '0px' }"
+    class="@container flex h-8 min-w-0 items-center gap-x-2 ps-1 pe-[calc(0.75rem_+_var(--caption-w))] text-[13px] leading-[19.5px]"
+    :style="{ '--side': side }"
   >
-    <span aria-hidden="true" />
-    <div class="col-start-2 flex min-w-0 items-center">
+    <span aria-hidden="true" class="min-w-0 flex-1" />
+    <div class="flex min-w-0 flex-[0_1_auto] items-center overflow-hidden" :class="chat && '@max-[346px]:-ms-2'">
     <template v-if="chat">
-      <span class="flex size-6 shrink-0 items-center justify-center text-text" aria-hidden="true">
+      <span class="flex size-6 shrink-0 items-center justify-center text-text @max-[346px]:hidden" aria-hidden="true">
         <component :is="shellGlyphs.local" class="size-4" />
       </span>
       <input
@@ -164,7 +166,7 @@ const PANE_BTN =
         <button
           type="button"
           :aria-label="`${chat.title}, rename session`"
-          class="flex h-6 min-w-0 cursor-default items-center rounded-(--radius-6) px-1 font-medium text-text hover:bg-fill-hover"
+          class="flex h-6 min-w-16 shrink cursor-default items-center rounded-(--radius-6) px-1 font-medium text-text hover:bg-fill-hover"
           @click="startRename"
         >
           <span class="truncate">{{ chat.title }}</span>
@@ -175,12 +177,13 @@ const PANE_BTN =
           <button
             type="button"
             :aria-label="`More options for ${chat.title}`"
-            class="-ms-1 flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text data-[state=open]:bg-fill-hover"
+            class="-ms-1 flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 hover:bg-fill-hover hover:text-text data-[state=open]:bg-fill-hover @max-[286px]:size-5"
           >
             <component :is="shellGlyphs.more" class="size-4" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
+          <p class="max-w-72 truncate px-2 py-1 text-[12px] leading-4 text-text-muted" :title="chat.cwd">{{ chat.cwd }}</p>
           <RowMenuList :entries="menu" kind="dropdown" @run="run" />
           <template v-if="accounts.length">
             <DropdownMenuSeparator :class="MENU_SEPARATOR" />
@@ -189,20 +192,20 @@ const PANE_BTN =
         </DropdownMenuContent>
       </DropdownMenu>
       <Tip :label="chat.cwd">
-        <span class="ms-1 flex h-5 shrink-0 items-center rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2">
-          {{ folderLabel(chat.cwd) }}
+        <span data-fit="folder" class="ms-1 flex h-5 min-w-16 shrink-[100] items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2">
+          <span class="truncate">{{ folderLabel(chat.cwd) }}</span>
         </span>
       </Tip>
 
       <!-- Hydra Desk extras -->
-      <span v-if="cue" class="ms-2 flex h-5 shrink-0 items-center gap-1.5 text-[12px] leading-4" :class="cue.tone" role="status">
-        <span v-if="cue.dot" class="size-1.5 rounded-full" :class="cue.dot" />
-        <span class="tnum">{{ cue.text }}</span>
+      <span v-if="cue" data-fit="status" class="ms-1 flex h-5 shrink-0 items-center gap-1.5 text-[12px] leading-4 @max-[286px]:ms-0" :class="cue.tone" role="status" :aria-label="cue.text">
+        <span v-if="cue.dot" class="size-1.5 shrink-0 rounded-full" :class="cue.dot" />
+        <span class="tnum @max-[430px]:hidden">{{ cue.text }}</span>
       </span>
       <Tip v-if="chat.climayteActive > 0" label="CliMayte workers">
         <button
           type="button"
-          class="ms-2 flex h-5 shrink-0 cursor-default items-center gap-1 rounded-(--radius-6) px-1.25 text-[12px] leading-4 text-text-2 hover:bg-fill-hover"
+          class="ms-1 flex h-5 shrink-0 cursor-default items-center gap-1 rounded-(--radius-6) px-1.25 text-[12px] leading-4 text-text-2 hover:bg-fill-hover"
           :aria-label="`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`"
           :aria-pressed="pane === 'climayte'"
           @click="emit('toggle-pane', 'climayte')"
@@ -211,7 +214,7 @@ const PANE_BTN =
           <span class="tnum">{{ chat.climayteActive }}</span>
         </button>
       </Tip>
-      <ConnectionsChip :chat="chat" />
+      <div class="contents @max-[314px]:hidden"><ConnectionsChip :chat="chat" /></div>
     </template>
     <template v-else-if="external">
       <span class="truncate px-1 font-medium text-text">{{ external.title }}</span>
@@ -235,8 +238,8 @@ const PANE_BTN =
     </div>
 
     <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
-    <div v-if="chat || external || alert" class="col-start-3 flex min-w-0 items-center justify-end gap-1">
-    <Tip v-if="alert" :label="alert"><p role="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text">{{ alert }}</p></Tip>
+    <div class="flex min-w-[var(--side)] flex-1 shrink-0 items-center justify-end gap-1" :class="chat && '@max-[286px]:-ms-2'">
+    <Tip v-if="alert" :label="alert"><p role="alert" data-fit="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text @max-[286px]:sr-only">{{ alert }}</p></Tip>
     <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">

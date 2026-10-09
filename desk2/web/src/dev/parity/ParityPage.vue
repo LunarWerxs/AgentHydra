@@ -8,6 +8,8 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { PANE_API } from '@/components/panes/api'
 import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 import { PARITY_SCENES, sceneComposerApi, scenePaneApi, sceneSource, type MenuName } from './scenes'
+import { actionError } from '@/lib/action-error'
+import { applyHeadlessAudio } from '@/lib/chat-audio'
 
 // '#/parity/<scene>?open=<plus|mode|model|effort>&hover=<css selector | text:Label>&draft=<text>'
 // renders one scene of docs/reference/real/scenes.json with the real components on fixtures, then sets
@@ -25,6 +27,7 @@ if (scene) {
   provide(SHELL_SOURCE, sceneSource(scene))
   provide(COMPOSER_API, sceneComposerApi(scene))
   provide(PANE_API, scenePaneApi(scene))
+  if (scene.audio) applyHeadlessAudio(scene.audio)
 }
 const draft = query.get('draft') ?? undefined
 
@@ -65,6 +68,7 @@ const settle = async () => {
 
 async function setUp(): Promise<{ hover: { x: number; y: number } | null }> {
   if (!scene) throw new Error(`unknown parity scene '${name}'; known: ${Object.keys(PARITY_SCENES).join(', ')}`)
+  if (scene.alert) actionError.value = scene.alert
   await document.fonts.ready
   await settle()
   await new Promise((r) => setTimeout(r, 50))
@@ -129,8 +133,6 @@ onMounted(() => {
 <template>
   <div class="size-full overflow-hidden bg-bg-page text-text">
     <p v-if="!scene" class="p-6 text-sm">Unknown parity scene '{{ name }}'. Known: {{ Object.keys(PARITY_SCENES).join(', ') }}</p>
-    <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" />
+    <DeskFrame v-else demo :accounts-open="scene.accountsOpen" :history="scene.history" :sidebar-hidden="!!(scene.alert || scene.sidebarHidden)" />
   </div>
 </template>
-import { applyHeadlessAudio } from '@/lib/chat-audio'
-  if (scene.audio) applyHeadlessAudio(scene.audio)
