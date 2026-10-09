@@ -59,6 +59,36 @@ export interface InstanceFacts {
   /** Is anyone signed in on this row? `false` = signed out, `null`/absent = not known.
    *  See isSignedOutSetAside for why this one is not just another facet. */
   signedIn?: boolean | null
+  /** What the header's search reads on this row (searchText): its number, name, account and plan.
+   *  Absent = nothing to search, so a search leaves the row out. */
+  search?: string
+}
+
+// --- search: the header's search box (owner, 2026-10-09: "needs a search icon ... so we can
+// filter/search the results"). Not a facet: it narrows every table whether the filter is on or not,
+// and it always hides, never dims, because a search is "show me these", not "set those aside".
+
+/** Lower-cased, with "×" read as "x" so "20x" finds "Max 20×". */
+const fold = (s: string) => s.toLowerCase().replace(/×/g, 'x')
+
+/** The search box's words. A leading "#" is dropped, so "#171" and "171" ask the same thing. */
+export function searchTerms(query: string): string[] {
+  return fold(query)
+    .split(/\s+/)
+    .map((w) => w.replace(/^#+/, ''))
+    .filter(Boolean)
+}
+
+/** One row's searchable text from its parts (number, name, account, plan); empty parts are skipped. */
+export function searchText(...parts: (string | number | null | undefined)[]): string {
+  return fold(parts.filter((p) => p !== null && p !== undefined && p !== '').join(' '))
+}
+
+/** Every word is somewhere in the row's text. No words matches every row. */
+export function matchesSearch(text: string | undefined, terms: readonly string[]): boolean {
+  if (terms.length === 0) return true
+  const hay = text ?? ''
+  return terms.every((t) => hay.includes(t))
 }
 
 /** The whole filter in one value, so the tables and the flyout cannot drift on what it means. */

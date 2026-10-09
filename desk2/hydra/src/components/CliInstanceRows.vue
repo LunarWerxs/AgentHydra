@@ -58,6 +58,7 @@ import { useUsageMode } from '@/composables/useUsageMode'
 import type { CliInstance } from '@/lib/api'
 import { formatUsd, timeAgo } from '@/lib/format'
 import { shortDisplayName } from '@/lib/instance-appearance'
+import { searchText } from '@/lib/instance-filter'
 import {
   type InstanceColumn,
   type InstanceRowModel,
@@ -150,7 +151,18 @@ function planFor(inst: CliInstance): string | null {
  * offers no CLI plans (InstancesView's presentPlans), so a plan the menu cannot name never sets a
  * CLI row aside.
  */
-const filterFacts = (inst: CliInstance) => ({ usage: usageFor(inst), signedIn: inst.loggedIn })
+const filterFacts = (inst: CliInstance) => ({
+  usage: usageFor(inst),
+  signedIn: inst.loggedIn,
+  search: searchText(
+    inst.num,
+    inst.name,
+    inst.associatedAccountLabel,
+    inst.associatedDesktopLabel,
+    inst.planLabel,
+    'cli',
+  ),
+})
 
 // One token window for the whole table (owner, 2026-10-07): the desktop table's.
 const tokenWindow = useDesktopTokenWindow()

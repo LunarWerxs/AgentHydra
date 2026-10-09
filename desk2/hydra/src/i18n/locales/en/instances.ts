@@ -19,6 +19,13 @@ export default {
   createSectionApps: 'Apps',
   createSectionCli: 'CLI',
   createSectionFree: 'Free web accounts',
+  // The header's search box (InstanceSearch.vue).
+  search: 'Search',
+  searchHint: 'Find instances by number, name, account or plan (Ctrl+F)',
+  searchPlaceholder: 'Number, name, account, plan',
+  searchClear: 'Clear search',
+  searchNoMatch: 'No instances match "{query}".',
+  searchNoMatchHint: 'Check the spelling, or clear the search to see every instance.',
   empty: 'No instances found.',
   emptyHint: 'Create your first instance with the + button to get started.',
   sortByStatus: 'Sort by status',

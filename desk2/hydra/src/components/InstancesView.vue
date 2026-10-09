@@ -20,6 +20,7 @@ import {
   Play,
   RefreshCw,
   RotateCcw,
+  Search,
   Settings2,
   Square,
   Terminal,
@@ -43,6 +44,7 @@ import FreeInstanceRows from '@/components/FreeInstanceRows.vue'
 import InstanceCard from '@/components/InstanceCard.vue'
 import InstanceChatsDialog from '@/components/InstanceChatsDialog.vue'
 import InstanceFilterMenu from '@/components/InstanceFilterMenu.vue'
+import InstanceSearch from '@/components/InstanceSearch.vue'
 import type { MenuIconAction } from '@/components/InstanceMenuHeader.vue'
 import InstanceRow from '@/components/InstanceRow.vue'
 import InstanceSectionHeader from '@/components/InstanceSectionHeader.vue'
@@ -104,7 +106,7 @@ import {
   labelDisagreesWithAccount,
   shortDisplayName,
 } from '@/lib/instance-appearance'
-import type { InstanceFacts } from '@/lib/instance-filter'
+import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import {
   type InstanceColumnKey,
   type InstanceRowModel,
@@ -202,6 +204,8 @@ const {
   kindShown,
   setKindView,
   showKind,
+  searchQuery,
+  searching,
 } = useInstanceFilter()
 
 /** What one row is, as far as the filter is concerned. A desktop instance knows all three facts:
@@ -214,6 +218,14 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   // refresh, which would make signed-in rows flicker out of a filtered table. loginUuid is read
   // straight off config.json with every list.
   signedIn: inst.loginUuid != null,
+  search: searchText(
+    inst.num,
+    inst.name,
+    inst.account?.name,
+    inst.account?.email,
+    inst.account?.planLabel,
+    'desktop',
+  ),
 })
 
 const tokenWindow = useDesktopTokenWindow()
@@ -781,6 +793,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
 const emptyState = computed(() =>
   shownRows.value > 0 || claudeSkeleton.value
     ? null
+    : allHiddenByFilter.value && searching.value
+      ? {
+          icon: Search,
+          title: t('instances.searchNoMatch', { query: searchQuery.value.trim() }),
+          hint: t('instances.searchNoMatchHint'),
+        }
     : allHiddenByFilter.value
       ? {
           icon: Funnel,
@@ -1506,6 +1524,7 @@ onUnmounted(() => {
                screen, and only the QUOTA facet stands down with them (see
                composables/useInstanceFilter.ts). A dimmed or short table must always have the
                control that explains it visible in the same toolbar. -->
+          <InstanceSearch />
           <InstanceFilterMenu :present-plans="presentPlans" />
           <template v-if="cliShown">
             <IconTooltip :label="$t('cliInstances.sync')" :description="$t('cliInstances.syncHint')">
